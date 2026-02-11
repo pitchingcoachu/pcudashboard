@@ -20,6 +20,10 @@ type SessionPayload = {
   exp: number;
 };
 
+type CookieStoreLike = {
+  get(name: string): { value: string } | undefined;
+};
+
 function base64urlEncode(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64url');
 }
@@ -77,7 +81,13 @@ export async function validateLoginCredentials(
   password: string
 ): Promise<Omit<SessionPayload, 'exp'> | null> {
   const dbUser = await validateLoginWithDatabase(email, password);
-  if (dbUser) return dbUser;
+  if (dbUser) {
+    if (dbUser.name) return dbUser;
+    const fallbackName = getConfiguredUsers().find(
+      (u) => u.email.trim().toLowerCase() === dbUser.email.trim().toLowerCase()
+    )?.name;
+    return { ...dbUser, name: fallbackName ?? undefined };
+  }
   return validateLogin(email, password);
 }
 
@@ -114,6 +124,17 @@ export function verifySessionToken(token: string): SessionPayload | null {
   } catch {
     return null;
   }
+}
+
+export function getSessionFromCookies(cookieStore: CookieStoreLike): SessionPayload | null {
+  const cookieNames = [SESSION_COOKIE_NAME, DOMAIN_SESSION_COOKIE_NAME, ...LEGACY_SESSION_COOKIE_NAMES];
+  for (const cookieName of cookieNames) {
+    const token = cookieStore.get(cookieName)?.value;
+    if (!token) continue;
+    const parsed = verifySessionToken(token);
+    if (parsed) return parsed;
+  }
+  return null;
 }
 
 type SessionCookieOptions = {

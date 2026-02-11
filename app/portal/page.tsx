@@ -1,27 +1,12 @@
 import { cookies } from 'next/headers';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import {
-  DOMAIN_SESSION_COOKIE_NAME,
-  LEGACY_SESSION_COOKIE_NAMES,
-  SESSION_COOKIE_NAME,
-  verifySessionToken,
-} from '../../lib/auth';
+import { getSessionFromCookies } from '../../lib/auth';
 import LogoutButton from './logout-button';
 
 export default async function PortalPage() {
   const cookieStore = await cookies();
-  const cookieNames = [SESSION_COOKIE_NAME, DOMAIN_SESSION_COOKIE_NAME, ...LEGACY_SESSION_COOKIE_NAMES];
-  let session = null;
-  for (const cookieName of cookieNames) {
-    const token = cookieStore.get(cookieName)?.value;
-    if (!token) continue;
-    const parsed = verifySessionToken(token);
-    if (parsed) {
-      session = parsed;
-      break;
-    }
-  }
+  const session = getSessionFromCookies(cookieStore);
 
   if (!session) {
     redirect('/login');

@@ -170,8 +170,8 @@ export async function ensureAuthDbReady(): Promise<void> {
   for (const user of configuredUsers) {
     const normalizedEmail = user.email.trim().toLowerCase();
     const passwordHash = hashPassword(user.password);
-    const existing = await pool.query<{ email: string; app_url: string | null }>(
-      `SELECT email, app_url FROM auth_users WHERE email = $1 LIMIT 1`,
+    const existing = await pool.query<{ email: string; name: string | null; app_url: string | null }>(
+      `SELECT email, name, app_url FROM auth_users WHERE email = $1 LIMIT 1`,
       [normalizedEmail]
     );
     if (existing.rowCount === 0) {
@@ -186,14 +186,28 @@ export async function ensureAuthDbReady(): Promise<void> {
     }
 
     const existingRow = existing.rows[0];
+    const updates: string[] = [];
+    const values: Array<string | null> = [normalizedEmail];
+
     if (!existingRow.app_url || !existingRow.app_url.trim()) {
+      updates.push(`app_url = $${values.length + 1}`);
+      values.push(user.appUrl);
+    }
+
+    if ((!existingRow.name || !existingRow.name.trim()) && user.name && user.name.trim()) {
+      updates.push(`name = $${values.length + 1}`);
+      values.push(user.name);
+    }
+
+    if (updates.length > 0) {
+      updates.push('updated_at = NOW()');
       await pool.query(
         `
         UPDATE auth_users
-        SET app_url = $2, updated_at = NOW()
+        SET ${updates.join(', ')}
         WHERE email = $1
         `,
-        [normalizedEmail, user.appUrl]
+        values
       );
     }
   }

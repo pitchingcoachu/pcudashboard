@@ -4,6 +4,11 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 
+type HomeSession = {
+  name: string | null;
+  email: string;
+};
+
 const outcomeCards = [
   {
     title: 'Clear and Precise Data Visuals',
@@ -219,12 +224,38 @@ export default function Home() {
   const [contactCopied, setContactCopied] = useState(false);
   const [isSubmittingDemo, setIsSubmittingDemo] = useState(false);
   const [demoFormMessage, setDemoFormMessage] = useState<string>('');
+  const [homeSession, setHomeSession] = useState<HomeSession | null>(null);
   const contactEmail = 'info@pitchingcoachu.com';
   const contactPopoverRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setIsLoaded(true), 40);
     return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadSession = async () => {
+      try {
+        const response = await fetch('/api/auth/session', { credentials: 'include' });
+        if (!response.ok) return;
+        const data = (await response.json()) as
+          | { authenticated: false }
+          | { authenticated: true; name: string | null; email: string };
+        if (cancelled) return;
+        if (data.authenticated) {
+          setHomeSession({ name: data.name, email: data.email });
+        } else {
+          setHomeSession(null);
+        }
+      } catch {
+        if (!cancelled) setHomeSession(null);
+      }
+    };
+    void loadSession();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -339,6 +370,8 @@ export default function Home() {
     }
     setIsContactOpen(false);
   };
+  const profileLabel = homeSession?.name?.trim() || homeSession?.email || 'Profile';
+  const profileInitial = profileLabel.charAt(0).toUpperCase();
 
   return (
     <div className={`page-shell ${isLoaded ? 'page-loaded' : ''}`}>
@@ -381,9 +414,21 @@ export default function Home() {
               </div>
             )}
           </div>
-          <Link href="/login" className="btn btn-primary as-link">
-            Log In
-          </Link>
+          {homeSession ? (
+            <Link href="/portal" className="profile-chip as-link" aria-label="Open dashboard">
+              <span className="profile-avatar" aria-hidden="true">
+                {profileInitial}
+              </span>
+              <span className="profile-meta">
+                <span className="profile-name">{profileLabel}</span>
+                <span className="profile-link-label">Dashboard</span>
+              </span>
+            </Link>
+          ) : (
+            <Link href="/login" className="btn btn-primary as-link">
+              Log In
+            </Link>
+          )}
           <Link
             href="https://x.com/pitchingcoachu"
             target="_blank"
