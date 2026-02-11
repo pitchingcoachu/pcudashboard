@@ -170,8 +170,8 @@ export async function ensureAuthDbReady(): Promise<void> {
   for (const user of configuredUsers) {
     const normalizedEmail = user.email.trim().toLowerCase();
     const passwordHash = hashPassword(user.password);
-    const existing = await pool.query<{ email: string }>(
-      `SELECT email FROM auth_users WHERE email = $1 LIMIT 1`,
+    const existing = await pool.query<{ email: string; app_url: string | null }>(
+      `SELECT email, app_url FROM auth_users WHERE email = $1 LIMIT 1`,
       [normalizedEmail]
     );
     if (existing.rowCount === 0) {
@@ -181,6 +181,19 @@ export async function ensureAuthDbReady(): Promise<void> {
         VALUES ($1, $2, $3, $4)
         `,
         [normalizedEmail, user.name ?? null, passwordHash, user.appUrl]
+      );
+      continue;
+    }
+
+    const existingRow = existing.rows[0];
+    if (!existingRow.app_url || !existingRow.app_url.trim()) {
+      await pool.query(
+        `
+        UPDATE auth_users
+        SET app_url = $2, updated_at = NOW()
+        WHERE email = $1
+        `,
+        [normalizedEmail, user.appUrl]
       );
     }
   }
@@ -198,7 +211,7 @@ export async function validateLoginWithDatabase(email: string, password: string)
     email: string;
     name: string | null;
     password_hash: string;
-    app_url: string;
+    app_url: string | null;
   }>(
     `SELECT email, name, password_hash, app_url FROM auth_users WHERE email = $1 LIMIT 1`,
     [normalizedEmail]
@@ -207,11 +220,13 @@ export async function validateLoginWithDatabase(email: string, password: string)
   if (result.rowCount !== 1) return null;
   const row = result.rows[0];
   if (!verifyPassword(row.password_hash, password)) return null;
+  const appUrl = row.app_url?.trim();
+  if (!appUrl) return null;
 
   return {
     email: row.email,
     name: row.name ?? undefined,
-    appUrl: row.app_url,
+    appUrl,
   };
 }
 
