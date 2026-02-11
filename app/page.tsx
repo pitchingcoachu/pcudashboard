@@ -215,6 +215,18 @@ const testimonials = [
     logoAlt: 'LSU logo',
     logoClass: 'logo-lsu',
   },
+  {
+    paragraphs: [
+      'The dashboard is very user-friendly and efficient, especially for those who want straightforward tools and information without digging through complicated tabs and settings.',
+    ],
+    name: 'David Kopp',
+    school: 'University of Florida',
+    role: 'Pitching Coach',
+    headshotSrc: '/david-kopp-headshot.webp',
+    headshotAlt: 'David Kopp headshot',
+    logoSrc: '/florida-logo.png',
+    logoAlt: 'University of Florida logo',
+  },
 ];
 
 export default function Home() {
