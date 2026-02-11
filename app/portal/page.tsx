@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getSessionFromCookies } from '../../lib/auth';
+import DashboardSelector from './dashboard-selector';
 import LogoutButton from './logout-button';
 
 type PortalPageProps = {
@@ -29,55 +30,47 @@ export default async function PortalPage({ searchParams }: PortalPageProps) {
     ...app,
     id: `${slugifyAppName(app.name) || 'dashboard'}-${index + 1}`,
   }));
-  const activeApp =
-    appsWithId.find((app) => app.id === appId) ??
-    appsWithId.find((app) => app.url === session.appUrl) ??
-    appsWithId[0];
+  const activeApp = appsWithId.find((app) => app.id === appId) ?? null;
 
   return (
     <div className="portal-shell">
       <header className="portal-header">
-        <div>
-          <p className="hero-eyebrow">Logged In As</p>
-          <h1>{session.name ?? session.email}</h1>
+        <div className="portal-header-left">
+          <DashboardSelector apps={appsWithId.map((app) => ({ id: app.id, name: app.name }))} selectedAppId={activeApp?.id} />
         </div>
-        <nav className="portal-nav" aria-label="Portal Navigation">
-          <Link href="/portal" className="portal-nav-link active">
-            Dashboard
-          </Link>
-          <Link href="/tutorials" className="portal-nav-link">
-            Tutorials
-          </Link>
-        </nav>
-        <details className="portal-app-dropdown">
-          <summary className="portal-app-summary" aria-label="Select dashboard app">
-            <span className="portal-app-current">{activeApp.name}</span>
-          </summary>
-          <div className="portal-app-menu" role="menu" aria-label="App Selection">
-            {appsWithId.map((app) => {
-              const isActive = app.id === activeApp.id;
-              return (
-                <Link
-                  key={app.id}
-                  href={`/portal?app=${encodeURIComponent(app.id)}`}
-                  className={`portal-app-option${isActive ? ' active' : ''}`}
-                >
-                  {app.name}
-                </Link>
-              );
-            })}
+        <div className="portal-header-center">
+          <nav className="portal-nav" aria-label="Portal Navigation">
+            <Link href="/portal" className="portal-nav-link active">
+              Dashboard
+            </Link>
+            <Link href="/tutorials" className="portal-nav-link">
+              Tutorials
+            </Link>
+          </nav>
+        </div>
+        <div className="portal-header-right">
+          <div className="portal-user-meta" aria-label="Logged in user">
+            <p>Logged In As</p>
+            <h1>{session.name ?? session.email}</h1>
           </div>
-        </details>
-        <LogoutButton />
+          <LogoutButton />
+        </div>
       </header>
       <section className="portal-frame-wrap">
-        <iframe
-          src={activeApp.url}
-          title="PCU Dashboard App"
-          className="portal-frame"
-          allow="fullscreen"
-          loading="lazy"
-        />
+        {activeApp ? (
+          <iframe
+            src={activeApp.url}
+            title="PCU Dashboard App"
+            className="portal-frame"
+            allow="fullscreen"
+            loading="lazy"
+          />
+        ) : (
+          <div className="portal-empty-state">
+            <h2>Select Dashboard</h2>
+            <p>Choose a school dashboard from the dropdown in the top left.</p>
+          </div>
+        )}
       </section>
     </div>
   );

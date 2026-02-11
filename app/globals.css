@@ -1128,16 +1128,45 @@ main {
   border-radius: 14px;
   padding: 0.8rem 1rem;
   background: rgba(8, 8, 8, 0.85);
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) auto minmax(280px, 1fr);
   align-items: center;
   gap: 0.7rem;
-  flex-wrap: wrap;
 }
 
-.portal-header h1 {
-  margin: 0.35rem 0 0;
-  font-size: 1.1rem;
+.portal-header-left {
+  justify-self: start;
+  position: relative;
+}
+
+.portal-header-center {
+  justify-self: center;
+}
+
+.portal-header-right {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.portal-user-meta {
+  display: grid;
+  justify-items: end;
+  gap: 0.12rem;
+}
+
+.portal-user-meta p {
+  margin: 0;
+  color: var(--text-muted);
+  font: 700 0.66rem/1 Manrope, sans-serif;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.portal-user-meta h1 {
+  margin: 0;
+  font: 700 0.92rem/1.1 Manrope, sans-serif;
 }
 
 .portal-frame-wrap {
@@ -1162,8 +1191,7 @@ main {
   position: relative;
 }
 
-.portal-app-summary {
-  list-style: none;
+.portal-app-trigger {
   cursor: pointer;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 999px;
@@ -1173,13 +1201,12 @@ main {
   font: 700 0.78rem/1 Manrope, sans-serif;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
 }
 
-.portal-app-summary::-webkit-details-marker {
-  display: none;
-}
-
-.portal-app-summary::after {
+.portal-app-trigger::after {
   content: '▾';
   margin-left: 0.45rem;
   color: var(--text-muted);
@@ -1197,7 +1224,7 @@ main {
 .portal-app-menu {
   position: absolute;
   top: calc(100% + 0.35rem);
-  right: 0;
+  left: 0;
   z-index: 20;
   min-width: 220px;
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -1210,9 +1237,13 @@ main {
 }
 
 .portal-app-option {
+  cursor: pointer;
+  width: 100%;
   border: 1px solid transparent;
   border-radius: 8px;
   padding: 0.5rem 0.65rem;
+  background: transparent;
+  text-align: left;
   color: var(--text-muted);
   text-decoration: none;
   font: 700 0.75rem/1.1 Manrope, sans-serif;
@@ -1258,6 +1289,26 @@ main {
   min-height: calc(100vh - 130px);
 }
 
+.portal-empty-state {
+  min-height: calc(100vh - 130px);
+  display: grid;
+  place-content: center;
+  gap: 0.45rem;
+  text-align: center;
+  padding: 1.2rem;
+}
+
+.portal-empty-state h2 {
+  margin: 0;
+  font: 400 clamp(1.5rem, 3vw, 2.1rem) / 0.95 'Bebas Neue', sans-serif;
+  letter-spacing: 0.03em;
+}
+
+.portal-empty-state p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
 .portal-panel {
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 14px;
@@ -1273,4 +1324,26 @@ main {
 .portal-panel p {
   margin: 0;
   color: var(--text-muted);
+}
+
+@media (max-width: 1020px) {
+  .portal-header {
+    grid-template-columns: 1fr;
+    justify-items: stretch;
+  }
+
+  .portal-header-left,
+  .portal-header-center,
+  .portal-header-right {
+    justify-self: stretch;
+  }
+
+  .portal-header-center {
+    display: flex;
+    justify-content: center;
+  }
+
+  .portal-header-right {
+    justify-content: space-between;
+  }
 }
