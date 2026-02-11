@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { validateLoginWithDatabase } from './auth-db';
 
-export const SESSION_COOKIE_NAME = 'pcu_session';
+export const SESSION_COOKIE_NAME = 'pcu_session_v2';
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 15;
 
 type UserRecord = {
@@ -114,10 +114,26 @@ export function verifySessionToken(token: string): SessionPayload | null {
   }
 }
 
-export const sessionCookieOptions = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: 'lax' as const,
-  path: '/',
-  maxAge: SESSION_TTL_SECONDS,
-};
+export function getSessionCookieOptions(hostname?: string) {
+  const options: {
+    httpOnly: true;
+    secure: boolean;
+    sameSite: 'lax';
+    path: '/';
+    maxAge: number;
+    domain?: string;
+  } = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+    maxAge: SESSION_TTL_SECONDS,
+  };
+
+  // Share auth cookie across root + www on the production domain.
+  if (hostname && (hostname === 'pcudashboard.com' || hostname.endsWith('.pcudashboard.com'))) {
+    options.domain = '.pcudashboard.com';
+  }
+
+  return options;
+}

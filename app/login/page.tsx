@@ -1,48 +1,20 @@
-'use client';
-
 import Image from 'next/image';
 import Link from 'next/link';
-import { FormEvent, useState } from 'react';
-import { useRouter } from 'next/navigation';
 
-export default function LoginPage() {
-  const router = useRouter();
-  const [error, setError] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+type LoginPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setError('');
-    setIsSubmitting(true);
+function getErrorMessage(errorParam?: string): string {
+  if (errorParam === 'invalid') return 'Invalid login. Please check your email and password.';
+  if (errorParam === 'missing') return 'Email and password are required.';
+  if (errorParam === 'server') return 'Could not log in right now. Please try again.';
+  return '';
+}
 
-    const form = event.currentTarget;
-    const formData = new FormData(form);
-
-    const payload = {
-      email: String(formData.get('email') ?? ''),
-      password: String(formData.get('password') ?? ''),
-    };
-
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        setError('Invalid login. Please check your email and password.');
-        return;
-      }
-
-      router.push('/portal');
-      router.refresh();
-    } catch {
-      setError('Could not log in right now. Please try again.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+export default async function LoginPage({ searchParams }: LoginPageProps) {
+  const params = await searchParams;
+  const error = typeof params.error === 'string' ? getErrorMessage(params.error) : '';
 
   return (
     <div className="auth-shell">
@@ -57,7 +29,7 @@ export default function LoginPage() {
         />
         <p className="hero-eyebrow">PCU Dashboard Access</p>
         <h1>Log In</h1>
-        <form className="auth-form" onSubmit={handleSubmit}>
+        <form className="auth-form" method="post" action="/api/auth/login?mode=web">
           <label>
             Email
             <input type="email" name="email" autoComplete="email" required />
@@ -67,7 +39,7 @@ export default function LoginPage() {
             <input type="password" name="password" autoComplete="current-password" required />
           </label>
           <button type="submit" className="btn btn-primary">
-            {isSubmitting ? 'Signing In...' : 'Log In'}
+            Log In
           </button>
           {error && <p className="auth-error">{error}</p>}
           <Link href="/forgot-password" className="auth-link">
