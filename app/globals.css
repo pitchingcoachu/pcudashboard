@@ -667,8 +667,8 @@ main {
   display: grid;
   align-content: start;
   gap: 0.55rem;
-  min-height: 19rem;
-  height: 19rem;
+  min-height: 17.5rem;
+  height: 17.5rem;
 }
 
 .testimonial-quote p {
