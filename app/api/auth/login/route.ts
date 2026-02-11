@@ -27,7 +27,7 @@ export async function POST(request: Request) {
 
     if (!email || !password) {
       if (isWebMode) {
-        return NextResponse.redirect(new URL('/login?error=missing', request.url));
+        return NextResponse.redirect(new URL('/login?error=missing', request.url), 303);
       }
       return NextResponse.json({ error: 'Email and password are required.' }, { status: 400 });
     }
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     const user = await validateLoginCredentials(email, password);
     if (!user) {
       if (isWebMode) {
-        return NextResponse.redirect(new URL('/login?error=invalid', request.url));
+        return NextResponse.redirect(new URL('/login?error=invalid', request.url), 303);
       }
       return NextResponse.json({ error: 'Invalid credentials.' }, { status: 401 });
     }
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     const hostname = requestUrl.hostname;
 
     if (isWebMode) {
-      const response = NextResponse.redirect(new URL('/portal', request.url));
+      const response = NextResponse.redirect(new URL('/portal', request.url), 303);
       response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions(hostname));
       return response;
     }
@@ -56,7 +56,7 @@ export async function POST(request: Request) {
     const requestUrl = new URL(request.url);
     const isWebMode = requestUrl.searchParams.get('mode') === 'web';
     if (isWebMode) {
-      return NextResponse.redirect(new URL('/login?error=server', request.url));
+      return NextResponse.redirect(new URL('/login?error=server', request.url), 303);
     }
     return NextResponse.json(
       { error: `Login failed: ${error instanceof Error ? error.message : String(error)}` },

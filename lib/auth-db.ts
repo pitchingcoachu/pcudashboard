@@ -21,9 +21,7 @@ type ResetTokenRecord = {
 };
 
 declare global {
-  // eslint-disable-next-line no-var
   var __pcuPool: Pool | undefined;
-  // eslint-disable-next-line no-var
   var __pcuAuthDbReady: boolean | undefined;
 }
 

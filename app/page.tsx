@@ -492,7 +492,7 @@ export default function Home() {
 
         <section id="includes" className="content-panel includes-panel reveal-section" data-reveal>
           <div className="section-head">
-            <h3>What's included in the PCU Dashboard</h3>
+            <h3>What&apos;s included in the PCU Dashboard</h3>
           </div>
           <div className="includes-grid">
             {dashboardIncludes.map((item, index) => (
