@@ -224,6 +224,7 @@ const testimonials = [
     role: 'Pitching Coach',
     headshotSrc: '/david-kopp-headshot.webp',
     headshotAlt: 'David Kopp headshot',
+    headshotClass: 'headshot-david',
     logoSrc: '/florida-logo.png',
     logoAlt: 'University of Florida logo',
   },
