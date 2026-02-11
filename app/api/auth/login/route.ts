@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import {
   createSessionToken,
+  DOMAIN_SESSION_COOKIE_NAME,
+  getDomainSessionCookieOptions,
   getSessionCookieOptions,
   LEGACY_SESSION_COOKIE_NAMES,
   SESSION_COOKIE_NAME,
@@ -51,17 +53,25 @@ export async function POST(request: Request) {
 
     if (isWebMode) {
       const response = NextResponse.redirect(new URL('/portal', request.url), 303);
-      response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions(hostname));
+      response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
+      const domainOptions = getDomainSessionCookieOptions(hostname);
+      if (domainOptions) {
+        response.cookies.set(DOMAIN_SESSION_COOKIE_NAME, token, domainOptions);
+      }
       for (const legacyCookieName of LEGACY_SESSION_COOKIE_NAMES) {
-        response.cookies.set(legacyCookieName, '', { ...getSessionCookieOptions(hostname), maxAge: 0 });
+        response.cookies.set(legacyCookieName, '', { ...getSessionCookieOptions(), maxAge: 0 });
       }
       return response;
     }
 
     const response = NextResponse.json({ ok: true });
-    response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions(hostname));
+    response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
+    const domainOptions = getDomainSessionCookieOptions(hostname);
+    if (domainOptions) {
+      response.cookies.set(DOMAIN_SESSION_COOKIE_NAME, token, domainOptions);
+    }
     for (const legacyCookieName of LEGACY_SESSION_COOKIE_NAMES) {
-      response.cookies.set(legacyCookieName, '', { ...getSessionCookieOptions(hostname), maxAge: 0 });
+      response.cookies.set(legacyCookieName, '', { ...getSessionCookieOptions(), maxAge: 0 });
     }
     return response;
   } catch (error) {

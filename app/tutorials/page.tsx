@@ -1,12 +1,17 @@
 import { cookies } from 'next/headers';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { LEGACY_SESSION_COOKIE_NAMES, SESSION_COOKIE_NAME, verifySessionToken } from '../../lib/auth';
+import {
+  DOMAIN_SESSION_COOKIE_NAME,
+  LEGACY_SESSION_COOKIE_NAMES,
+  SESSION_COOKIE_NAME,
+  verifySessionToken,
+} from '../../lib/auth';
 import LogoutButton from '../portal/logout-button';
 
 export default async function TutorialsPage() {
   const cookieStore = await cookies();
-  const cookieNames = [SESSION_COOKIE_NAME, ...LEGACY_SESSION_COOKIE_NAMES];
+  const cookieNames = [SESSION_COOKIE_NAME, DOMAIN_SESSION_COOKIE_NAME, ...LEGACY_SESSION_COOKIE_NAMES];
   let session = null;
   for (const cookieName of cookieNames) {
     const token = cookieStore.get(cookieName)?.value;

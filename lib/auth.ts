@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { validateLoginWithDatabase } from './auth-db';
 
 export const SESSION_COOKIE_NAME = 'pcu_session_v3';
+export const DOMAIN_SESSION_COOKIE_NAME = 'pcu_session_v3_domain';
 export const LEGACY_SESSION_COOKIE_NAMES = ['pcu_session_v2'] as const;
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 15;
 
@@ -115,7 +116,30 @@ export function verifySessionToken(token: string): SessionPayload | null {
   }
 }
 
-export function getSessionCookieOptions(_hostname?: string) {
+type SessionCookieOptions = {
+  httpOnly: true;
+  secure: boolean;
+  sameSite: 'lax';
+  path: '/';
+  maxAge: number;
+  domain?: string;
+};
+
+function resolveCookieDomain(hostname?: string): string | undefined {
+  const configuredDomain = process.env.AUTH_COOKIE_DOMAIN?.trim();
+  if (configuredDomain) {
+    return configuredDomain.startsWith('.') ? configuredDomain : `.${configuredDomain}`;
+  }
+
+  // Production fallback for the known public domain.
+  if (hostname && (hostname === 'pcudashboard.com' || hostname.endsWith('.pcudashboard.com'))) {
+    return '.pcudashboard.com';
+  }
+
+  return undefined;
+}
+
+export function getSessionCookieOptions(): SessionCookieOptions {
   const options: {
     httpOnly: true;
     secure: boolean;
@@ -131,12 +155,11 @@ export function getSessionCookieOptions(_hostname?: string) {
     maxAge: SESSION_TTL_SECONDS,
   };
 
-  const configuredDomain = process.env.AUTH_COOKIE_DOMAIN?.trim();
-  // Only set a cookie domain when explicitly configured.
-  // This avoids conflicting host-only/domain cookies that can cause login loops.
-  if (configuredDomain) {
-    options.domain = configuredDomain.startsWith('.') ? configuredDomain : `.${configuredDomain}`;
-  }
-
   return options;
+}
+
+export function getDomainSessionCookieOptions(hostname?: string): SessionCookieOptions | null {
+  const domain = resolveCookieDomain(hostname);
+  if (!domain) return null;
+  return { ...getSessionCookieOptions(), domain };
 }
