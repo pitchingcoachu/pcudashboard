@@ -1158,6 +1158,38 @@ main {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.portal-app-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding: 0.1rem;
+}
+
+.portal-app-link {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  padding: 0.5rem 0.9rem;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  text-decoration: none;
+  font: 700 0.78rem/1 Manrope, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.portal-app-link:hover {
+  color: var(--text-main);
+  border-color: rgba(200, 16, 46, 0.68);
+}
+
+.portal-app-link.active {
+  color: var(--text-main);
+  border-color: rgba(200, 16, 46, 0.9);
+  background: rgba(200, 16, 46, 0.2);
+}
+
 .portal-nav-link {
   padding: 0.45rem 0.8rem;
   border-radius: 999px;

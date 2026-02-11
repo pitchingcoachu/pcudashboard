@@ -6,16 +6,27 @@ export const DOMAIN_SESSION_COOKIE_NAME = 'pcu_session_v3_domain';
 export const LEGACY_SESSION_COOKIE_NAMES = ['pcu_session_v2'] as const;
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 15;
 
+type AppLink = {
+  name: string;
+  url: string;
+};
+
 type UserRecord = {
   email: string;
   password: string;
-  appUrl: string;
+  appUrl?: string;
+  apps?: Array<{
+    name?: string;
+    label?: string;
+    url?: string;
+  }>;
   name?: string;
 };
 
 type SessionPayload = {
   email: string;
   appUrl: string;
+  apps: AppLink[];
   name?: string;
   exp: number;
 };
@@ -45,7 +56,7 @@ function getConfiguredUsers(): UserRecord[] {
   if (rawJson) {
     try {
       const parsed = JSON.parse(rawJson) as UserRecord[];
-      return parsed.filter((u) => u.email && u.password && u.appUrl);
+      return parsed.filter((u) => u.email && u.password && getConfiguredUserApps(u).length > 0);
     } catch {
       return [];
     }
@@ -63,15 +74,36 @@ function getConfiguredUsers(): UserRecord[] {
   return [];
 }
 
+function getConfiguredUserApps(user: UserRecord): AppLink[] {
+  const fromApps =
+    user.apps
+      ?.map((app) => {
+        const url = app.url?.trim();
+        if (!url) return null;
+        const name = app.name?.trim() || app.label?.trim() || 'Dashboard';
+        return { name, url };
+      })
+      .filter((app): app is AppLink => Boolean(app)) ?? [];
+
+  if (fromApps.length > 0) return fromApps;
+
+  const fallbackUrl = user.appUrl?.trim();
+  if (!fallbackUrl) return [];
+  return [{ name: 'Dashboard', url: fallbackUrl }];
+}
+
 export function validateLogin(email: string, password: string): Omit<SessionPayload, 'exp'> | null {
   const normalized = email.trim().toLowerCase();
   const users = getConfiguredUsers();
   const match = users.find((u) => u.email.trim().toLowerCase() === normalized && u.password === password);
   if (!match) return null;
+  const apps = getConfiguredUserApps(match);
+  if (apps.length === 0) return null;
 
   return {
     email: match.email,
-    appUrl: match.appUrl,
+    appUrl: apps[0].url,
+    apps,
     name: match.name,
   };
 }
@@ -82,11 +114,18 @@ export async function validateLoginCredentials(
 ): Promise<Omit<SessionPayload, 'exp'> | null> {
   const dbUser = await validateLoginWithDatabase(email, password);
   if (dbUser) {
-    if (dbUser.name) return dbUser;
-    const fallbackName = getConfiguredUsers().find(
+    const configured = getConfiguredUsers().find(
       (u) => u.email.trim().toLowerCase() === dbUser.email.trim().toLowerCase()
-    )?.name;
-    return { ...dbUser, name: fallbackName ?? undefined };
+    );
+    const configuredApps = configured ? getConfiguredUserApps(configured) : [];
+    const apps = configuredApps.length > 0 ? configuredApps : [{ name: 'Dashboard', url: dbUser.appUrl }];
+
+    return {
+      ...dbUser,
+      name: dbUser.name ?? configured?.name ?? undefined,
+      appUrl: apps[0].url,
+      apps,
+    };
   }
   return validateLogin(email, password);
 }
@@ -119,8 +158,21 @@ export function verifySessionToken(token: string): SessionPayload | null {
   try {
     const parsed = JSON.parse(base64urlDecode(encodedPayload)) as SessionPayload;
     if (!parsed.email || !parsed.appUrl || !parsed.exp) return null;
+    const apps = Array.isArray(parsed.apps)
+      ? parsed.apps
+          .map((app) => ({
+            name: app?.name?.trim() || 'Dashboard',
+            url: app?.url?.trim() || '',
+          }))
+          .filter((app) => app.url.length > 0)
+      : [{ name: 'Dashboard', url: parsed.appUrl }];
+    if (apps.length === 0) return null;
     if (parsed.exp < Math.floor(Date.now() / 1000)) return null;
-    return parsed;
+    return {
+      ...parsed,
+      appUrl: parsed.appUrl,
+      apps,
+    };
   } catch {
     return null;
   }

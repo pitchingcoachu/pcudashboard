@@ -4,7 +4,12 @@ import { Pool } from 'pg';
 type UserRecord = {
   email: string;
   password: string;
-  appUrl: string;
+  appUrl?: string;
+  apps?: Array<{
+    name?: string;
+    label?: string;
+    url?: string;
+  }>;
   name?: string;
 };
 
@@ -51,7 +56,7 @@ function parseConfiguredUsers(): UserRecord[] {
   if (rawJson) {
     try {
       const parsed = JSON.parse(rawJson) as UserRecord[];
-      return parsed.filter((u) => u.email && u.password && u.appUrl);
+      return parsed.filter((u) => u.email && u.password && getPrimaryConfiguredAppUrl(u));
     } catch {
       return [];
     }
@@ -67,6 +72,18 @@ function parseConfiguredUsers(): UserRecord[] {
   }
 
   return [];
+}
+
+function getPrimaryConfiguredAppUrl(user: UserRecord): string | null {
+  const fromApps =
+    user.apps
+      ?.map((app) => app.url?.trim() ?? '')
+      .find((url) => url.length > 0) ?? '';
+  if (fromApps) return fromApps;
+
+  const fallbackUrl = user.appUrl?.trim();
+  if (fallbackUrl) return fallbackUrl;
+  return null;
 }
 
 function hashPassword(password: string): string {
@@ -170,6 +187,8 @@ export async function ensureAuthDbReady(): Promise<void> {
   for (const user of configuredUsers) {
     const normalizedEmail = user.email.trim().toLowerCase();
     const passwordHash = hashPassword(user.password);
+    const primaryAppUrl = getPrimaryConfiguredAppUrl(user);
+    if (!primaryAppUrl) continue;
     const existing = await pool.query<{ email: string; name: string | null; app_url: string | null }>(
       `SELECT email, name, app_url FROM auth_users WHERE email = $1 LIMIT 1`,
       [normalizedEmail]
@@ -180,7 +199,7 @@ export async function ensureAuthDbReady(): Promise<void> {
         INSERT INTO auth_users (email, name, password_hash, app_url)
         VALUES ($1, $2, $3, $4)
         `,
-        [normalizedEmail, user.name ?? null, passwordHash, user.appUrl]
+        [normalizedEmail, user.name ?? null, passwordHash, primaryAppUrl]
       );
       continue;
     }
@@ -191,7 +210,7 @@ export async function ensureAuthDbReady(): Promise<void> {
 
     if (!existingRow.app_url || !existingRow.app_url.trim()) {
       updates.push(`app_url = $${values.length + 1}`);
-      values.push(user.appUrl);
+      values.push(primaryAppUrl);
     }
 
     if ((!existingRow.name || !existingRow.name.trim()) && user.name && user.name.trim()) {

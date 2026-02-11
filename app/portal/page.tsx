@@ -4,13 +4,35 @@ import { redirect } from 'next/navigation';
 import { getSessionFromCookies } from '../../lib/auth';
 import LogoutButton from './logout-button';
 
-export default async function PortalPage() {
+type PortalPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+function slugifyAppName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+export default async function PortalPage({ searchParams }: PortalPageProps) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
+  const params = await searchParams;
 
   if (!session) {
     redirect('/login');
   }
+  const apps = session.apps.length > 0 ? session.apps : [{ name: 'Dashboard', url: session.appUrl }];
+  const appId = typeof params.app === 'string' ? params.app : '';
+  const appsWithId = apps.map((app, index) => ({
+    ...app,
+    id: `${slugifyAppName(app.name) || 'dashboard'}-${index + 1}`,
+  }));
+  const activeApp =
+    appsWithId.find((app) => app.id === appId) ??
+    appsWithId.find((app) => app.url === session.appUrl) ??
+    appsWithId[0];
 
   return (
     <div className="portal-shell">
@@ -29,9 +51,19 @@ export default async function PortalPage() {
         </nav>
         <LogoutButton />
       </header>
+      <nav className="portal-app-nav" aria-label="App Selection">
+        {appsWithId.map((app) => {
+          const isActive = app.id === activeApp.id;
+          return (
+            <Link key={app.id} href={`/portal?app=${encodeURIComponent(app.id)}`} className={`portal-app-link${isActive ? ' active' : ''}`}>
+              {app.name}
+            </Link>
+          );
+        })}
+      </nav>
       <section className="portal-frame-wrap">
         <iframe
-          src={session.appUrl}
+          src={activeApp.url}
           title="PCU Dashboard App"
           className="portal-frame"
           allow="fullscreen"
