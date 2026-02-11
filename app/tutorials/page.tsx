@@ -15,19 +15,24 @@ export default async function TutorialsPage() {
   return (
     <div className="portal-shell">
       <header className="portal-header">
-        <div>
-          <p className="hero-eyebrow">Logged In As</p>
-          <h1>{session.name ?? session.email}</h1>
+        <div className="portal-header-left" aria-hidden="true" />
+        <div className="portal-header-center">
+          <nav className="portal-nav" aria-label="Portal Navigation">
+            <Link href="/portal" className="portal-nav-link">
+              Dashboard
+            </Link>
+            <Link href="/tutorials" className="portal-nav-link active">
+              Tutorials
+            </Link>
+          </nav>
         </div>
-        <nav className="portal-nav" aria-label="Portal Navigation">
-          <Link href="/portal" className="portal-nav-link">
-            Dashboard
-          </Link>
-          <Link href="/tutorials" className="portal-nav-link active">
-            Tutorials
-          </Link>
-        </nav>
-        <LogoutButton />
+        <div className="portal-header-right">
+          <div className="portal-user-meta" aria-label="Logged in user">
+            <p>Logged In As</p>
+            <h1>{session.name ?? session.email}</h1>
+          </div>
+          <LogoutButton />
+        </div>
       </header>
 
       <section className="portal-panel">

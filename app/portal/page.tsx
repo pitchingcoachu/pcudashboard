@@ -30,7 +30,7 @@ export default async function PortalPage({ searchParams }: PortalPageProps) {
     ...app,
     id: `${slugifyAppName(app.name) || 'dashboard'}-${index + 1}`,
   }));
-  const activeApp = appsWithId.find((app) => app.id === appId) ?? null;
+  const activeApp = appsWithId.find((app) => app.id === appId) ?? (appsWithId.length === 1 ? appsWithId[0] : null);
 
   return (
     <div className="portal-shell">
