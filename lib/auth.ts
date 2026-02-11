@@ -1,7 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { validateLoginWithDatabase } from './auth-db';
 
-export const SESSION_COOKIE_NAME = 'pcu_session_v2';
+export const SESSION_COOKIE_NAME = 'pcu_session_v3';
+export const LEGACY_SESSION_COOKIE_NAMES = ['pcu_session_v2'] as const;
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 15;
 
 type UserRecord = {
@@ -114,7 +115,7 @@ export function verifySessionToken(token: string): SessionPayload | null {
   }
 }
 
-export function getSessionCookieOptions(hostname?: string) {
+export function getSessionCookieOptions(_hostname?: string) {
   const options: {
     httpOnly: true;
     secure: boolean;
@@ -130,9 +131,11 @@ export function getSessionCookieOptions(hostname?: string) {
     maxAge: SESSION_TTL_SECONDS,
   };
 
-  // Share auth cookie across root + www on the production domain.
-  if (hostname && (hostname === 'pcudashboard.com' || hostname.endsWith('.pcudashboard.com'))) {
-    options.domain = '.pcudashboard.com';
+  const configuredDomain = process.env.AUTH_COOKIE_DOMAIN?.trim();
+  // Only set a cookie domain when explicitly configured.
+  // This avoids conflicting host-only/domain cookies that can cause login loops.
+  if (configuredDomain) {
+    options.domain = configuredDomain.startsWith('.') ? configuredDomain : `.${configuredDomain}`;
   }
 
   return options;
