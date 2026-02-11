@@ -657,8 +657,8 @@ main {
   border-radius: 14px;
   padding: 0.95rem;
   background: rgba(12, 12, 12, 0.84);
-  display: grid;
-  grid-template-rows: 1fr auto;
+  display: flex;
+  flex-direction: column;
   gap: 0.7rem;
   height: 100%;
 }
@@ -699,7 +699,7 @@ main {
 }
 
 .testimonial-headshot.headshot-david {
-  object-position: center 30%;
+  object-position: center 14%;
 }
 
 .testimonial-logo-image {
