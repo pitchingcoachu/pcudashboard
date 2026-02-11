@@ -1158,33 +1158,75 @@ main {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.portal-app-nav {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  overflow-x: auto;
-  padding: 0.1rem;
+.portal-app-dropdown {
+  position: relative;
 }
 
-.portal-app-link {
-  border: 1px solid rgba(255, 255, 255, 0.18);
+.portal-app-summary {
+  list-style: none;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 999px;
   padding: 0.5rem 0.9rem;
-  color: var(--text-muted);
   background: rgba(255, 255, 255, 0.04);
-  text-decoration: none;
+  color: var(--text-main);
   font: 700 0.78rem/1 Manrope, sans-serif;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.portal-app-summary::-webkit-details-marker {
+  display: none;
+}
+
+.portal-app-summary::after {
+  content: '▾';
+  margin-left: 0.45rem;
+  color: var(--text-muted);
+}
+
+.portal-app-current {
+  display: inline-block;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
   white-space: nowrap;
 }
 
-.portal-app-link:hover {
-  color: var(--text-main);
-  border-color: rgba(200, 16, 46, 0.68);
+.portal-app-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 20;
+  min-width: 220px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  padding: 0.4rem;
+  background: rgba(10, 10, 10, 0.97);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.45);
+  display: grid;
+  gap: 0.25rem;
 }
 
-.portal-app-link.active {
+.portal-app-option {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  font: 700 0.75rem/1.1 Manrope, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.portal-app-option:hover {
+  color: var(--text-main);
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.portal-app-option.active {
   color: var(--text-main);
   border-color: rgba(200, 16, 46, 0.9);
   background: rgba(200, 16, 46, 0.2);

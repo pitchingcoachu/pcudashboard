@@ -49,18 +49,27 @@ export default async function PortalPage({ searchParams }: PortalPageProps) {
             Tutorials
           </Link>
         </nav>
+        <details className="portal-app-dropdown">
+          <summary className="portal-app-summary" aria-label="Select dashboard app">
+            <span className="portal-app-current">{activeApp.name}</span>
+          </summary>
+          <div className="portal-app-menu" role="menu" aria-label="App Selection">
+            {appsWithId.map((app) => {
+              const isActive = app.id === activeApp.id;
+              return (
+                <Link
+                  key={app.id}
+                  href={`/portal?app=${encodeURIComponent(app.id)}`}
+                  className={`portal-app-option${isActive ? ' active' : ''}`}
+                >
+                  {app.name}
+                </Link>
+              );
+            })}
+          </div>
+        </details>
         <LogoutButton />
       </header>
-      <nav className="portal-app-nav" aria-label="App Selection">
-        {appsWithId.map((app) => {
-          const isActive = app.id === activeApp.id;
-          return (
-            <Link key={app.id} href={`/portal?app=${encodeURIComponent(app.id)}`} className={`portal-app-link${isActive ? ' active' : ''}`}>
-              {app.name}
-            </Link>
-          );
-        })}
-      </nav>
       <section className="portal-frame-wrap">
         <iframe
           src={activeApp.url}

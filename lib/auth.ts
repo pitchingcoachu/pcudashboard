@@ -4,7 +4,7 @@ import { validateLoginWithDatabase } from './auth-db';
 export const SESSION_COOKIE_NAME = 'pcu_session_v3';
 export const DOMAIN_SESSION_COOKIE_NAME = 'pcu_session_v3_domain';
 export const LEGACY_SESSION_COOKIE_NAMES = ['pcu_session_v2'] as const;
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 15;
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 type AppLink = {
   name: string;
