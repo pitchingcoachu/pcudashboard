@@ -6,8 +6,8 @@ export const metadata: Metadata = {
   description:
     'PCU Dashboard helps coaches, players, and programs track development, improve decisions, and align communication with one clear pitching performance platform.',
   icons: {
-    icon: '/pitching-coach-u-logo.png',
-    shortcut: '/pitching-coach-u-logo.png',
+    icon: '/favicon.ico?v=20260211',
+    shortcut: '/favicon.ico?v=20260211',
     apple: '/pitching-coach-u-logo.png',
   },
 };
