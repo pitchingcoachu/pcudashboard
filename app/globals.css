@@ -647,6 +647,8 @@ main {
 .testimonials-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
+  align-items: stretch;
   gap: 0.8rem;
 }
 
@@ -655,16 +657,15 @@ main {
   border-radius: 14px;
   padding: 0.95rem;
   background: rgba(12, 12, 12, 0.84);
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: 1fr auto;
   gap: 0.7rem;
   height: 100%;
 }
 
 .testimonial-quote {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
+  display: grid;
+  align-content: start;
   gap: 0.55rem;
 }
 
@@ -696,7 +697,7 @@ main {
 }
 
 .testimonial-headshot.headshot-david {
-  object-position: center 22%;
+  object-position: center 34%;
 }
 
 .testimonial-logo-image {

@@ -527,8 +527,12 @@ export default function Home() {
             {testimonials.map((item, index) => (
               <article key={`${item.name}-${index}`} className="testimonial-card reveal-item" data-reveal>
                 <div className="testimonial-quote">
-                  {item.paragraphs.map((paragraph) => (
-                    <p key={paragraph}>{paragraph}</p>
+                  {item.paragraphs.map((paragraph, paragraphIndex) => (
+                    <p key={paragraph}>
+                      {paragraphIndex === 0 ? '“' : ''}
+                      {paragraph}
+                      {paragraphIndex === item.paragraphs.length - 1 ? '”' : ''}
+                    </p>
                   ))}
                 </div>
                 <div className="testimonial-meta">
