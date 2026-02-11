@@ -6,8 +6,12 @@ export const metadata: Metadata = {
   description:
     'PCU Dashboard helps coaches, players, and programs track development, improve decisions, and align communication with one clear pitching performance platform.',
   icons: {
-    icon: '/favicon.ico?v=20260211',
-    shortcut: '/favicon.ico?v=20260211',
+    icon: [
+      { url: '/favicon.ico', type: 'image/x-icon' },
+      { url: '/favicon-32x32.png', sizes: '32x32', type: 'image/png' },
+      { url: '/favicon-16x16.png', sizes: '16x16', type: 'image/png' },
+    ],
+    shortcut: '/favicon.ico',
     apple: '/pitching-coach-u-logo.png',
   },
 };
