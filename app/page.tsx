@@ -228,10 +228,47 @@ const testimonials = [
     logoSrc: '/florida-logo.png',
     logoAlt: 'University of Florida logo',
   },
+  {
+    paragraphs: [
+      'It has been great to work alongside Jared.',
+      'It isn’t often that you find baseball tech that is built by a coach. Because of that, he has thought of almost everything that coaches need to turn data and video into actionable player development insights.',
+      'One of the other things that sets Jared apart is that he works more as a partner than just someone providing a service.',
+      'We are really excited about the partnership and are looking forward to using the dashboard this spring, but we are even more excited to see how he is going to continue to build and improve it in the future.',
+    ],
+    name: 'Mike Current',
+    school: 'Creighton University',
+    role: 'Assistant Coach and Recruiting Coordinator',
+    headshotSrc: '/mike-current-headshot.webp',
+    headshotAlt: 'Mike Current headshot',
+    headshotClass: 'headshot-current',
+    logoSrc: '/creighton-logo.png',
+    logoAlt: 'Creighton University logo',
+    logoClass: 'logo-creighton',
+  },
+  {
+    paragraphs: [
+      'The PCU Dashboard has been a total game changer for our pitching staff.',
+      'Easy to navigate and grab the information and data you are looking for to assist in your player development.',
+      'Always updating and adding new great features.',
+    ],
+    name: 'Matt Silberman',
+    school: 'Cal Baptist University',
+    role: 'Pitching Coach and Recruiting Coordinator',
+    headshotSrc: '/matt-silberman-headshot.webp',
+    headshotAlt: 'Matt Silberman headshot',
+    headshotClass: 'headshot-silberman',
+    logoSrc: '/cbu-logo.webp',
+    logoAlt: 'Cal Baptist University logo',
+    logoClass: 'logo-cbu',
+  },
 ];
+
+const topTestimonials = testimonials.filter((item) => item.name !== 'Mike Current' && item.name !== 'Matt Silberman');
+const lowerTestimonials = testimonials.filter((item) => item.name === 'Mike Current' || item.name === 'Matt Silberman');
 
 export default function Home() {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [isHeroMuted, setIsHeroMuted] = useState(true);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isContactOpen, setIsContactOpen] = useState(false);
   const [contactCopied, setContactCopied] = useState(false);
@@ -495,14 +532,23 @@ export default function Home() {
               </div>
             </div>
             <figure className="hero-preview">
-              <Image
-                src="/dashboard-shot-14.png"
-                alt="PCU dashboard hero preview screenshot"
-                fill
-                priority
-                sizes="(max-width: 980px) 100vw, 42vw"
-                className="hero-preview-image"
+              <video
+                src="/intro-video.mov"
+                className="hero-preview-video"
+                autoPlay
+                muted={isHeroMuted}
+                loop
+                playsInline
+                aria-label="PCU dashboard intro video"
               />
+              <button
+                type="button"
+                className="hero-video-audio-toggle"
+                onClick={() => setIsHeroMuted((prev) => !prev)}
+                aria-label={isHeroMuted ? 'Unmute intro video' : 'Mute intro video'}
+              >
+                {isHeroMuted ? 'Unmute' : 'Mute'}
+              </button>
             </figure>
           </div>
         </section>
@@ -524,7 +570,7 @@ export default function Home() {
 
         <section className="content-panel testimonials-panel reveal-section" data-reveal>
           <div className="testimonials-grid">
-            {testimonials.map((item, index) => (
+            {topTestimonials.map((item, index) => (
               <article key={`${item.name}-${index}`} className="testimonial-card reveal-item" data-reveal>
                 <div className="testimonial-quote">
                   {item.paragraphs.map((paragraph, paragraphIndex) => (
@@ -610,6 +656,47 @@ export default function Home() {
                 <span className="who-icon">{item.icon}</span>
                 <h4>{item.title}</h4>
                 <p>{item.detail}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="content-panel testimonials-panel reveal-section" data-reveal>
+          <div className="testimonials-grid testimonials-grid-two">
+            {lowerTestimonials.map((item, index) => (
+              <article key={`${item.name}-${index}`} className="testimonial-card reveal-item" data-reveal>
+                <div className="testimonial-quote">
+                  {item.paragraphs.map((paragraph, paragraphIndex) => (
+                    <p key={paragraph}>
+                      {paragraphIndex === 0 ? '“' : ''}
+                      {paragraph}
+                      {paragraphIndex === item.paragraphs.length - 1 ? '”' : ''}
+                    </p>
+                  ))}
+                </div>
+                <div className="testimonial-meta">
+                  {item.headshotSrc && (
+                    <Image
+                      src={item.headshotSrc}
+                      alt={item.headshotAlt ?? `${item.name} headshot`}
+                      width={54}
+                      height={54}
+                      className={`testimonial-headshot ${item.headshotClass ?? ''}`}
+                    />
+                  )}
+                  <p>{item.name}</p>
+                  <p>{item.role}</p>
+                  <p>{item.school}</p>
+                  {item.logoSrc && (
+                    <Image
+                      src={item.logoSrc}
+                      alt={item.logoAlt ?? `${item.school} logo`}
+                      width={48}
+                      height={48}
+                      className={`testimonial-logo-image ${item.logoClass ?? ''}`}
+                    />
+                  )}
+                </div>
               </article>
             ))}
           </div>
