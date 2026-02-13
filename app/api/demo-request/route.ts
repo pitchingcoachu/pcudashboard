@@ -22,12 +22,14 @@ export async function POST(request: Request) {
 
   const resendApiKey = process.env.RESEND_API_KEY;
   const sheetsWebhookUrl = process.env.GOOGLE_SHEETS_WEBHOOK_URL;
+  const requireEmailDelivery = process.env.REQUIRE_DEMO_REQUEST_EMAIL !== 'false';
   if (!resendApiKey && !sheetsWebhookUrl) {
     return NextResponse.json({ error: 'No delivery method configured' }, { status: 500 });
   }
 
   const deliveryResults: string[] = [];
   const deliveryErrors: string[] = [];
+  let emailDelivered = false;
 
   if (resendApiKey) {
     const toEmail = process.env.DEMO_REQUEST_TO_EMAIL ?? 'info@pitchingcoachu.com';
@@ -74,11 +76,14 @@ export async function POST(request: Request) {
         const errorText = await resendResponse.text();
         deliveryErrors.push(`Email provider error: ${errorText}`);
       } else {
+        emailDelivered = true;
         deliveryResults.push('email');
       }
     } catch (error) {
       deliveryErrors.push(`Email provider error: ${String(error)}`);
     }
+  } else if (requireEmailDelivery) {
+    deliveryErrors.push('Email provider error: RESEND_API_KEY is not configured');
   }
 
   if (sheetsWebhookUrl) {
@@ -108,10 +113,23 @@ export async function POST(request: Request) {
   }
 
   if (deliveryResults.length === 0) {
+    console.error('Demo request delivery failed:', deliveryErrors.join(' | '));
     return NextResponse.json({ error: deliveryErrors.join(' | ') }, { status: 502 });
   }
 
-  return NextResponse.json({ ok: true, delivered_via: deliveryResults });
+  const warnings: string[] = [];
+  if (requireEmailDelivery && !emailDelivered) {
+    warnings.push('Request saved, but email notification failed.');
+  }
+  if (deliveryErrors.length > 0) {
+    console.error('Demo request delivery issues:', deliveryErrors.join(' | '));
+  }
+
+  return NextResponse.json({
+    ok: true,
+    delivered_via: deliveryResults,
+    warnings,
+  });
 }
 
 function escapeHtml(value: string): string {

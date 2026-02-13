@@ -399,14 +399,28 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      const data = (await response.json().catch(() => ({}))) as {
+        warnings?: string[];
+        error?: string;
+      };
 
       if (!response.ok) {
-        setDemoFormMessage('Could not submit right now. Please email info@pitchingcoachu.com.');
+        const errorMessage =
+          typeof data.error === 'string' && data.error.length > 0
+            ? data.error
+            : 'Could not submit right now. Please email info@pitchingcoachu.com.';
+        setDemoFormMessage(errorMessage);
         return;
       }
 
       form.reset();
-      setDemoFormMessage('Thank you for your interest in the PCU Dashboard! We will contact you within 24 hours.');
+      if (data.warnings && data.warnings.length > 0) {
+        setDemoFormMessage(
+          'Thanks. Your request was saved, but email notification failed. Please verify RESEND settings.'
+        );
+      } else {
+        setDemoFormMessage('Thank you for your interest in the PCU Dashboard! We will contact you within 24 hours.');
+      }
     } catch {
       setDemoFormMessage('Could not submit right now. Please email info@pitchingcoachu.com.');
     } finally {
