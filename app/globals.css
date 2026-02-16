@@ -809,7 +809,11 @@ main {
 .faq-item summary::after {
   content: '+';
   width: 1.45rem;
+  min-width: 1.45rem;
   height: 1.45rem;
+  min-height: 1.45rem;
+  aspect-ratio: 1 / 1;
+  flex: 0 0 1.45rem;
   border: 1px solid rgba(200, 16, 46, 0.88);
   border-radius: 999px;
   display: inline-grid;
@@ -817,6 +821,8 @@ main {
   color: var(--accent);
   background: rgba(200, 16, 46, 0.12);
   font-weight: 700;
+  line-height: 1;
+  box-sizing: border-box;
 }
 
 .faq-item[open] summary::after {
