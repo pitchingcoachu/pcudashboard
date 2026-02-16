@@ -261,10 +261,26 @@ const testimonials = [
     logoAlt: 'Cal Baptist University logo',
     logoClass: 'logo-cbu',
   },
+  {
+    paragraphs: [
+      'The PCU Dashboard has been a huge outside help in terms of player development.',
+      'Creating individual goals based on our needs and letting guys have access to their own data has kept everyone on the same page. I think this has allowed for guys to eliminate clutter in the player development aspect and focus in on 2-3 key individual areas.',
+      'The other important feature that we utilize is the trending/comparing tool. It allows us to track progress as well as make adjustments easier by being able to look back at previous bullpens/Lives and see what small changes need to be made on a week to week basis.',
+    ],
+    name: 'Michael Lopez',
+    school: 'University of New Mexico',
+    role: 'Pitching Coach',
+    headshotSrc: '/michael-lopez-headshot.webp',
+    headshotAlt: 'Michael Lopez headshot',
+    headshotClass: 'headshot-lopez',
+    logoSrc: '/unm-logo.png',
+    logoAlt: 'University of New Mexico logo',
+    logoClass: 'logo-unm',
+  },
 ];
 
-const topTestimonials = testimonials.filter((item) => item.name !== 'Mike Current' && item.name !== 'Matt Silberman');
-const lowerTestimonials = testimonials.filter((item) => item.name === 'Mike Current' || item.name === 'Matt Silberman');
+const topTestimonials = testimonials.slice(0, 3);
+const lowerTestimonials = testimonials.slice(3);
 
 export default function Home() {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -676,7 +692,7 @@ export default function Home() {
         </section>
 
         <section className="content-panel testimonials-panel reveal-section" data-reveal>
-          <div className="testimonials-grid testimonials-grid-two">
+          <div className="testimonials-grid">
             {lowerTestimonials.map((item, index) => (
               <article key={`${item.name}-${index}`} className="testimonial-card reveal-item" data-reveal>
                 <div className="testimonial-quote">
