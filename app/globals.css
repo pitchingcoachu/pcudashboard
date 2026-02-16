@@ -99,6 +99,19 @@ body::before {
   flex-wrap: wrap;
 }
 
+.nav-menu-toggle {
+  display: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.45rem 0.85rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-main);
+  font: 700 0.78rem/1 Manrope, sans-serif;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
 .contact-popover-wrap {
   position: relative;
 }
@@ -1089,17 +1102,50 @@ main {
   .top-nav {
     position: relative;
     top: auto;
-    flex-direction: column;
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
   }
 
   .audience-grid {
     grid-template-columns: 1fr;
   }
 
+  .brand-row {
+    min-width: 0;
+  }
+
+  .brand-block h1 {
+    font-size: clamp(1.1rem, 6vw, 1.5rem);
+  }
+
+  .nav-menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
   .nav-actions {
+    grid-column: 1 / -1;
     width: 100%;
-    flex-wrap: wrap;
+    display: none;
+    margin-top: 0.6rem;
+    padding-top: 0.65rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.55rem;
+  }
+
+  .nav-actions.is-open {
+    display: flex;
+  }
+
+  .nav-actions .btn,
+  .nav-actions .as-link {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
   }
 
   .lightbox-panel {

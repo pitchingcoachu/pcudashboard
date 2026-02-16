@@ -286,6 +286,7 @@ export default function Home() {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [isHeroMuted, setIsHeroMuted] = useState(true);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isContactOpen, setIsContactOpen] = useState(false);
   const [contactCopied, setContactCopied] = useState(false);
   const [isSubmittingDemo, setIsSubmittingDemo] = useState(false);
@@ -448,7 +449,15 @@ export default function Home() {
     if (demoSection) {
       demoSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+    setIsMobileNavOpen(false);
     setIsContactOpen(false);
+  };
+  const handleNavActionsClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest('a,button')) {
+      setIsMobileNavOpen(false);
+    }
   };
   const profileLabel = homeSession?.name?.trim() || homeSession?.email || 'Profile';
   const profileInitial = profileLabel.charAt(0).toUpperCase();
@@ -469,7 +478,20 @@ export default function Home() {
             <h1>PCU Dashboard</h1>
           </div>
         </div>
-        <div className="nav-actions">
+        <button
+          type="button"
+          className="nav-menu-toggle"
+          onClick={() => setIsMobileNavOpen((prev) => !prev)}
+          aria-expanded={isMobileNavOpen}
+          aria-controls="site-nav-actions"
+        >
+          {isMobileNavOpen ? 'Close' : 'Menu'}
+        </button>
+        <div
+          id="site-nav-actions"
+          className={`nav-actions ${isMobileNavOpen ? 'is-open' : ''}`}
+          onClickCapture={handleNavActionsClickCapture}
+        >
           <Link href="https://pitchingcoachu.com" target="_blank" rel="noopener noreferrer" className="btn btn-ghost as-link">
             PCU Website
           </Link>
