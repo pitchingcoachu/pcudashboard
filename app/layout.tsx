@@ -3,7 +3,10 @@ import './globals.css';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://www.pcudashboard.com'),
-  title: 'PCU Dashboard | Performance Data Built for Coaches and Players',
+  title: {
+    default: 'PCU Dashboard | Performance Data Built for Coaches and Players',
+    template: '%s',
+  },
   description:
     'PCU Dashboard helps coaches, players, and programs track development, improve decisions, and align communication with one clear pitching performance platform.',
   openGraph: {
@@ -11,7 +14,6 @@ export const metadata: Metadata = {
     description:
       'PCU Dashboard helps coaches, players, and programs track development, improve decisions, and align communication with one clear pitching performance platform.',
     url: 'https://www.pcudashboard.com',
-    siteName: 'PCU Dashboard',
     images: [
       {
         url: '/dashboard-shot-14.png',
