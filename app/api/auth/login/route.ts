@@ -52,7 +52,8 @@ export async function POST(request: Request) {
     const hostname = requestUrl.hostname;
 
     if (isWebMode) {
-      const response = NextResponse.redirect(new URL('/portal', request.url), 303);
+      const destination = user.role === 'player' ? '/portal/player' : '/portal/admin';
+      const response = NextResponse.redirect(new URL(destination, request.url), 303);
       response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
       const domainOptions = getDomainSessionCookieOptions(hostname);
       if (domainOptions) {
