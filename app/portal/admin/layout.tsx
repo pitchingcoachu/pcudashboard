@@ -20,9 +20,6 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         </div>
         <div className="portal-header-center">
           <nav className="portal-nav" aria-label="Portal Navigation">
-            <Link href="/portal" className="portal-nav-link">
-              Dashboard
-            </Link>
             <Link href="/portal/admin" className="portal-nav-link">
               Admin Home
             </Link>
@@ -40,6 +37,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             </Link>
             <Link href="/portal/player?preview=self" className="portal-nav-link">
               Player Preview
+            </Link>
+            <Link href="/portal" className="portal-nav-link">
+              Dashboard
             </Link>
           </nav>
         </div>
