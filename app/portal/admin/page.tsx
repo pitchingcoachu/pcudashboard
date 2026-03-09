@@ -49,18 +49,6 @@ export default async function AdminHomePage() {
           Open Schedule
         </Link>
       </article>
-      <article className="portal-admin-card portal-admin-card-wide">
-        <h2>What You Can Do Here</h2>
-        <ul className="portal-admin-list">
-          <li>Add clients with player logins</li>
-          <li>Create custom exercise categories</li>
-          <li>Build your exercise/drill library and attach video links</li>
-          <li>Create workouts from saved exercises</li>
-          <li>Assign workout blocks day by day</li>
-          <li>Preview exactly what each player sees</li>
-          <li>Review completion and loaded weight progress over time</li>
-        </ul>
-      </article>
     </div>
   );
 }
