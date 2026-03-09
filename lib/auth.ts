@@ -1,10 +1,11 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { validateLoginWithDatabase } from './auth-db';
+import { getSessionUserByEmail, validateLoginWithDatabase } from './auth-db';
 
 export const SESSION_COOKIE_NAME = 'pcu_session_v3';
 export const DOMAIN_SESSION_COOKIE_NAME = 'pcu_session_v3_domain';
 export const LEGACY_SESSION_COOKIE_NAMES = ['pcu_session_v2'] as const;
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
+const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 
 type AppLink = {
   name: string;
@@ -24,10 +25,14 @@ type UserRecord = {
 };
 
 type SessionPayload = {
+  userId?: number;
   email: string;
   appUrl: string;
   apps: AppLink[];
   name?: string;
+  role?: 'admin' | 'player';
+  organizationId?: number;
+  playerId?: number | null;
   exp: number;
 };
 
@@ -64,7 +69,7 @@ function getConfiguredUsers(): UserRecord[] {
 
   const email = process.env.AUTH_LOGIN_EMAIL;
   const password = process.env.AUTH_LOGIN_PASSWORD;
-  const appUrl = process.env.AUTH_APP_URL;
+  const appUrl = DEFAULT_DASHBOARD_URL;
   const name = process.env.AUTH_LOGIN_NAME;
 
   if (email && password && appUrl) {
@@ -75,21 +80,7 @@ function getConfiguredUsers(): UserRecord[] {
 }
 
 function getConfiguredUserApps(user: UserRecord): AppLink[] {
-  const fromApps =
-    user.apps
-      ?.map((app) => {
-        const url = app.url?.trim();
-        if (!url) return null;
-        const name = app.name?.trim() || app.label?.trim() || 'Dashboard';
-        return { name, url };
-      })
-      .filter((app): app is AppLink => Boolean(app)) ?? [];
-
-  if (fromApps.length > 0) return fromApps;
-
-  const fallbackUrl = user.appUrl?.trim();
-  if (!fallbackUrl) return [];
-  return [{ name: 'Dashboard', url: fallbackUrl }];
+  return [{ name: 'Dashboard', url: DEFAULT_DASHBOARD_URL }];
 }
 
 export function validateLogin(email: string, password: string): Omit<SessionPayload, 'exp'> | null {
@@ -112,22 +103,44 @@ export async function validateLoginCredentials(
   email: string,
   password: string
 ): Promise<Omit<SessionPayload, 'exp'> | null> {
-  const dbUser = await validateLoginWithDatabase(email, password);
-  if (dbUser) {
-    const configured = getConfiguredUsers().find(
-      (u) => u.email.trim().toLowerCase() === dbUser.email.trim().toLowerCase()
-    );
-    const configuredApps = configured ? getConfiguredUserApps(configured) : [];
-    const apps = configuredApps.length > 0 ? configuredApps : [{ name: 'Dashboard', url: dbUser.appUrl }];
+  const configured = getConfiguredUsers().find((u) => u.email.trim().toLowerCase() === email.trim().toLowerCase());
+  const configuredApps = configured ? getConfiguredUserApps(configured) : [];
 
-    return {
-      ...dbUser,
-      name: dbUser.name ?? configured?.name ?? undefined,
-      appUrl: apps[0].url,
-      apps,
-    };
+  try {
+    const dbUser = await validateLoginWithDatabase(email, password);
+    if (dbUser) {
+      const apps = configuredApps.length > 0 ? configuredApps : [{ name: 'Dashboard', url: dbUser.appUrl }];
+
+      return {
+        ...dbUser,
+        name: dbUser.name ?? configured?.name ?? undefined,
+        appUrl: apps[0].url,
+        apps,
+      };
+    }
+  } catch {
+    // If the DB is temporarily unavailable, allow env-configured users to log in.
   }
-  return validateLogin(email, password);
+
+  const fallback = validateLogin(email, password);
+  if (!fallback) return null;
+
+  try {
+    const dbUser = await getSessionUserByEmail(fallback.email);
+    if (dbUser) {
+      const apps = configuredApps.length > 0 ? configuredApps : [{ name: 'Dashboard', url: dbUser.appUrl }];
+      return {
+        ...dbUser,
+        appUrl: apps[0].url,
+        apps,
+        name: dbUser.name ?? fallback.name,
+      };
+    }
+  } catch {
+    // Preserve fallback behavior if DB lookup fails.
+  }
+
+  return fallback;
 }
 
 export function createSessionToken(payload: Omit<SessionPayload, 'exp'>): string {
@@ -168,11 +181,15 @@ export function verifySessionToken(token: string): SessionPayload | null {
       : [{ name: 'Dashboard', url: parsed.appUrl }];
     if (apps.length === 0) return null;
     if (parsed.exp < Math.floor(Date.now() / 1000)) return null;
-    return {
-      ...parsed,
-      appUrl: parsed.appUrl,
-      apps,
-    };
+  return {
+    userId: parsed.userId,
+    ...parsed,
+    appUrl: parsed.appUrl,
+    apps,
+    role: parsed.role === 'player' ? 'player' : 'admin',
+    organizationId: parsed.organizationId,
+    playerId: parsed.playerId ?? null,
+  };
   } catch {
     return null;
   }

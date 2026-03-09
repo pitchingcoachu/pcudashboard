@@ -1,13 +1,14 @@
-import { cookies } from 'next/headers';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { getSessionFromCookies } from '../../lib/auth';
+import { requirePortalSession } from '../../lib/portal-session';
 import DashboardSelector from './dashboard-selector';
 import LogoutButton from './logout-button';
 
 type PortalPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
+
+const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 
 function slugifyAppName(name: string): string {
   return name
@@ -17,14 +18,13 @@ function slugifyAppName(name: string): string {
 }
 
 export default async function PortalPage({ searchParams }: PortalPageProps) {
-  const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = await requirePortalSession();
   const params = await searchParams;
 
-  if (!session) {
-    redirect('/login');
+  if (session.role === 'player') {
+    redirect('/portal/player');
   }
-  const apps = session.apps.length > 0 ? session.apps : [{ name: 'Dashboard', url: session.appUrl }];
+  const apps = [{ name: 'Dashboard', url: DEFAULT_DASHBOARD_URL }];
   const appId = typeof params.app === 'string' ? params.app : '';
   const appsWithId = apps.map((app, index) => ({
     ...app,
@@ -42,6 +42,12 @@ export default async function PortalPage({ searchParams }: PortalPageProps) {
           <nav className="portal-nav" aria-label="Portal Navigation">
             <Link href="/portal" className="portal-nav-link active">
               Dashboard
+            </Link>
+            <Link href="/portal/admin" className="portal-nav-link">
+              Admin
+            </Link>
+            <Link href="/portal/player?preview=self" className="portal-nav-link">
+              Player View
             </Link>
             <Link href="/tutorials" className="portal-nav-link">
               Tutorials

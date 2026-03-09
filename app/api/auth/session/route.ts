@@ -14,5 +14,8 @@ export async function GET() {
     authenticated: true,
     name: session.name ?? null,
     email: session.email,
+    role: session.role ?? 'admin',
+    organizationId: session.organizationId ?? null,
+    playerId: session.playerId ?? null,
   });
 }

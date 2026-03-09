@@ -1,7 +1,5 @@
-import { cookies } from 'next/headers';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
-import { getSessionFromCookies } from '../../lib/auth';
+import { requirePortalSession } from '../../lib/portal-session';
 import LogoutButton from '../portal/logout-button';
 
 const tutorialVideos = [
@@ -16,12 +14,7 @@ const tutorialVideos = [
 ];
 
 export default async function TutorialsPage() {
-  const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
-
-  if (!session) {
-    redirect('/login');
-  }
+  const session = await requirePortalSession();
 
   return (
     <div className="portal-shell">
@@ -31,6 +24,14 @@ export default async function TutorialsPage() {
           <nav className="portal-nav" aria-label="Portal Navigation">
             <Link href="/portal" className="portal-nav-link">
               Dashboard
+            </Link>
+            {session.role === 'admin' && (
+              <Link href="/portal/admin" className="portal-nav-link">
+                Admin
+              </Link>
+            )}
+            <Link href="/portal/player" className="portal-nav-link">
+              Player View
             </Link>
             <Link href="/tutorials" className="portal-nav-link active">
               Tutorials

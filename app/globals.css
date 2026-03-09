@@ -1468,6 +1468,702 @@ main {
   color: var(--text-muted);
 }
 
+.portal-admin-panel {
+  min-height: calc(100vh - 130px);
+}
+
+.portal-admin-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.portal-admin-card {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  padding: 0.95rem;
+  background: rgba(10, 10, 10, 0.76);
+  display: grid;
+  gap: 0.65rem;
+}
+
+.portal-admin-card h2,
+.portal-admin-card h3,
+.portal-admin-card h4 {
+  margin: 0;
+}
+
+.portal-admin-card p {
+  margin: 0;
+}
+
+.portal-admin-card-wide {
+  grid-column: span 2;
+}
+
+.portal-admin-list {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.portal-admin-stack {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.portal-admin-headline {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.portal-admin-headline h2 {
+  margin: 0;
+}
+
+.portal-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.portal-tag {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font: 700 0.68rem/1 Manrope, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.portal-inline-link {
+  margin-left: 0.5rem;
+  color: var(--text-main);
+}
+
+.portal-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.portal-form-grid label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.86rem;
+}
+
+.portal-form-grid input,
+.portal-form-grid textarea,
+.portal-form-grid select,
+.portal-inline-filter input,
+.portal-preview-form select {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.62rem 0.72rem;
+  font: 500 0.9rem/1.2 Manrope, sans-serif;
+  color: var(--text-main);
+  background: rgba(10, 10, 10, 0.9);
+}
+
+.portal-form-grid button {
+  width: fit-content;
+}
+
+.portal-fieldset {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  padding: 0.7rem;
+  margin: 0;
+}
+
+.portal-fieldset legend {
+  padding: 0 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.portal-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.portal-choice-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.84rem;
+}
+
+.portal-choice-row input {
+  width: auto;
+}
+
+.portal-checkbox-label {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 0.45rem;
+  align-self: end;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.portal-checkbox-label input {
+  width: auto;
+}
+
+.portal-workout-exercise-row {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.portal-workout-exercise-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.portal-workout-prescription-grid {
+  display: none;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+  flex: 1;
+  min-width: min(720px, 100%);
+}
+
+.portal-workout-prescription-grid label {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.portal-workout-prescription-grid.is-visible {
+  display: grid;
+}
+
+.portal-selected-item .portal-workout-prescription-grid {
+  display: grid !important;
+}
+
+.portal-workout-exercise-row:has(input[name='exerciseIds']:checked) .portal-workout-prescription-grid {
+  display: grid;
+}
+
+.portal-selected-block {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  padding: 0.7rem;
+  background: rgba(255, 255, 255, 0.02);
+  display: grid;
+  gap: 0.55rem;
+}
+
+.portal-selected-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.portal-selected-header h4 {
+  margin: 0;
+}
+
+.portal-selected-header span {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  font: 700 0.68rem/1 Manrope, sans-serif;
+  color: var(--text-muted);
+}
+
+.portal-selected-stack {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.portal-selected-item {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 0.55rem;
+  background: rgba(0, 0, 0, 0.28);
+  display: grid;
+  gap: 0.45rem;
+}
+
+.portal-selected-item.is-dragging {
+  opacity: 0.55;
+}
+
+.portal-form-grid .portal-selected-inline-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: 0.55rem;
+  row-gap: 0.4rem;
+}
+
+.portal-selected-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.portal-selected-item-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.portal-drag-handle {
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  cursor: grab;
+}
+
+.portal-form-grid .portal-selected-inline-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.portal-form-grid .portal-small-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.portal-form-grid .portal-small-field input {
+  width: 58px;
+  min-height: 30px;
+  padding: 0.2rem 0.35rem;
+  border-radius: 7px;
+  flex: 0 0 auto;
+}
+
+.portal-form-grid .portal-small-field-notes input {
+  width: 120px;
+}
+
+.portal-choice-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.portal-choice-line {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.portal-choice-line-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.portal-choice-line-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.portal-selected-pill {
+  border: 1px solid rgba(16, 176, 125, 0.45);
+  border-radius: 999px;
+  padding: 0.18rem 0.48rem;
+  font: 700 0.68rem/1 Manrope, sans-serif;
+  letter-spacing: 0.03em;
+  color: #b3f3d9;
+  background: rgba(16, 176, 125, 0.18);
+}
+
+.portal-workout-action-btn {
+  width: 170px;
+  justify-content: center;
+}
+
+.portal-category-chip {
+  border-radius: 999px;
+  padding: 0.18rem 0.55rem;
+  font: 700 0.66rem/1 Manrope, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  color: #fff;
+}
+
+.portal-category-chip.tone-lift {
+  background: rgba(0, 120, 255, 0.24);
+  border-color: rgba(0, 120, 255, 0.5);
+}
+
+.portal-category-chip.tone-throw {
+  background: rgba(255, 110, 32, 0.24);
+  border-color: rgba(255, 110, 32, 0.5);
+}
+
+.portal-category-chip.tone-drill {
+  background: rgba(125, 74, 255, 0.24);
+  border-color: rgba(125, 74, 255, 0.5);
+}
+
+.portal-category-chip.tone-recovery {
+  background: rgba(16, 176, 125, 0.24);
+  border-color: rgba(16, 176, 125, 0.5);
+}
+
+.portal-category-chip.tone-mobility {
+  background: rgba(255, 199, 48, 0.26);
+  border-color: rgba(255, 199, 48, 0.55);
+  color: #161616;
+}
+
+.portal-form-span-2 {
+  grid-column: span 2;
+}
+
+.portal-table-wrap {
+  overflow-x: auto;
+}
+
+.portal-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.portal-table th,
+.portal-table td {
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 0.55rem 0.45rem;
+  font-size: 0.88rem;
+}
+
+.portal-table-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.portal-exercise-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.portal-library-toolbar {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.portal-library-search {
+  width: min(440px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  padding: 0.58rem 0.84rem;
+  font: 500 0.88rem/1.2 Manrope, sans-serif;
+  color: var(--text-main);
+  background: rgba(10, 10, 10, 0.9);
+}
+
+.portal-folder-stack {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.portal-folder {
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: rgba(255, 255, 255, 0.02);
+  display: grid;
+  gap: 0.65rem;
+}
+
+.portal-folder-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.portal-folder-header h4 {
+  margin: 0;
+  font: 700 0.92rem/1.1 Manrope, sans-serif;
+}
+
+.portal-folder-header span {
+  border-radius: 999px;
+  padding: 0.16rem 0.52rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--text-muted);
+  font: 700 0.68rem/1 Manrope, sans-serif;
+}
+
+.portal-delete-form {
+  margin-top: 0.5rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.portal-exercise-card {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 11px;
+  padding: 0.7rem;
+  background: rgba(0, 0, 0, 0.3);
+  display: grid;
+  gap: 0.45rem;
+}
+
+.portal-exercise-type {
+  margin: 0;
+  color: var(--text-muted);
+  font: 700 0.68rem/1 Manrope, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.portal-muted-text {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.portal-month-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.portal-month-header h2,
+.portal-month-header h3 {
+  margin: 0;
+}
+
+.portal-month-header form {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.portal-inline-filter {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.portal-day-stack {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.portal-day-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.26);
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.portal-day-card h3,
+.portal-day-card h4 {
+  margin: 0;
+}
+
+.portal-day-card ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.portal-day-card li {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.portal-day-card li a {
+  color: var(--text-main);
+}
+
+.portal-player-panel {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.portal-player-items {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.portal-player-item-form {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 0.7rem;
+  background: rgba(11, 11, 11, 0.74);
+  display: grid;
+  gap: 0.55rem;
+}
+
+.portal-player-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.portal-player-item-head h4 {
+  margin: 0;
+}
+
+.portal-workout-player-block {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.portal-workout-player-exercise {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 0.55rem;
+  background: rgba(255, 255, 255, 0.03);
+  display: grid;
+  gap: 0.35rem;
+}
+
+.portal-history-list {
+  display: grid;
+  gap: 0.12rem;
+  padding: 0.25rem 0.45rem;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.portal-workout-player-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.portal-exercise-video-link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(200, 16, 46, 0.7);
+  text-underline-offset: 2px;
+}
+
+.portal-set-weights {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.portal-set-weights label {
+  display: grid;
+  gap: 0.18rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.portal-set-weights input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.5rem 0.62rem;
+  font: 500 0.84rem/1.1 Manrope, sans-serif;
+  color: var(--text-main);
+  background: rgba(5, 5, 5, 0.92);
+}
+
+.portal-log-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.portal-log-grid label {
+  display: grid;
+  gap: 0.24rem;
+  font-size: 0.84rem;
+}
+
+.portal-log-grid input,
+.portal-log-grid textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.55rem 0.68rem;
+  font: 500 0.86rem/1.2 Manrope, sans-serif;
+  color: var(--text-main);
+  background: rgba(5, 5, 5, 0.92);
+}
+
+.portal-checkbox-row {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 0.5rem;
+  grid-column: span 2;
+}
+
+.portal-checkbox-row input {
+  width: auto;
+}
+
+.portal-preview-form {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.portal-preview-form label {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.portal-admin-badge-link {
+  text-decoration: none;
+}
+
 .tutorial-video-grid {
   margin-top: 1rem;
   display: grid;
@@ -1505,6 +2201,362 @@ main {
   border: 0;
 }
 
+.portal-schedule-toolbar {
+  display: flex;
+  align-items: end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.portal-schedule-toolbar label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+}
+
+.portal-schedule-toolbar input,
+.portal-schedule-toolbar select {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  background: rgba(10, 10, 10, 0.9);
+  color: var(--text-main);
+}
+
+.portal-schedule-view-switch,
+.portal-schedule-nav {
+  display: inline-flex;
+  gap: 0.35rem;
+}
+
+.portal-schedule-layout {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 0.7rem;
+}
+
+.portal-workout-palette {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  padding: 0.65rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.portal-workout-palette h4 {
+  margin: 0 0 0.25rem;
+}
+
+.portal-workout-palette-list {
+  display: grid;
+  gap: 0.45rem;
+  max-height: 620px;
+  overflow: auto;
+}
+
+.portal-search-wrap {
+  position: relative;
+}
+
+.portal-search-dropdown {
+  margin-top: 0.32rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.portal-search-option {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main);
+  text-align: center;
+  padding: 0.38rem 0.7rem;
+  cursor: pointer;
+  user-select: none;
+  font: 700 0.76rem/1 Manrope, sans-serif;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.portal-search-option:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.portal-workout-palette-item {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.24);
+  display: grid;
+  gap: 0.2rem;
+  cursor: grab;
+}
+
+.portal-workout-palette-item span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.portal-schedule-calendar {
+  display: grid;
+  gap: 0.4rem;
+  overflow-x: auto;
+}
+
+.portal-schedule-period {
+  margin: 0;
+  font: 700 1rem/1.1 Manrope, sans-serif;
+  color: var(--text-main);
+}
+
+.portal-schedule-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.35rem;
+  min-width: 980px;
+}
+
+.portal-schedule-weekdays span {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.portal-schedule-month-grid,
+.portal-schedule-week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.35rem;
+  min-width: 980px;
+}
+
+.portal-schedule-day-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.35rem;
+}
+
+.portal-schedule-day {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 0.45rem;
+  background: rgba(0, 0, 0, 0.28);
+  min-height: 220px;
+  aspect-ratio: 1 / 1;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 0.35rem;
+}
+
+.portal-schedule-day.is-compact {
+  min-height: 220px;
+}
+
+.portal-schedule-day.is-outside {
+  opacity: 0.55;
+}
+
+.portal-schedule-day-empty {
+  background: rgba(0, 0, 0, 0.14);
+  min-height: 220px;
+  aspect-ratio: 1 / 1;
+}
+
+.portal-schedule-day.is-today {
+  border-color: rgba(200, 16, 46, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(200, 16, 46, 0.35);
+}
+
+.portal-schedule-day header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+}
+
+.portal-schedule-day header strong {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+
+.portal-schedule-day-num {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.portal-schedule-day-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.portal-schedule-day header span {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  padding: 0.1rem 0.42rem;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.portal-schedule-day-body {
+  display: grid;
+  gap: 0.3rem;
+  align-content: start;
+  margin: 0;
+}
+
+.portal-schedule-item {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(200, 16, 46, 0.45);
+  border-radius: 6px;
+  padding: 0.35rem 0.45rem;
+  background: rgba(200, 16, 46, 0.14);
+  color: var(--text-main);
+  display: grid;
+  gap: 0.1rem;
+  justify-items: center;
+  align-items: center;
+  text-align: center;
+  cursor: pointer;
+}
+
+.portal-schedule-item span {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.74rem;
+}
+
+.portal-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  z-index: 50;
+}
+
+.portal-modal-card {
+  width: min(640px, 96vw);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  padding: 0.85rem;
+  background: #000;
+  display: grid;
+  gap: 0.6rem;
+  position: relative;
+}
+
+.portal-modal-card h3 {
+  margin: 0;
+}
+
+.portal-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.portal-modal-logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  border-radius: 4px;
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+}
+
+.portal-profile-stack {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.portal-profile-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.portal-profile-vitals {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+.portal-profile-vitals span {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  padding: 0.3rem 0.85rem;
+  font: 700 0.72rem/1 Manrope, sans-serif;
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.portal-profile-vitals-text {
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.portal-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.portal-profile-three-col {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.portal-profile-three-col > * {
+  min-width: 0;
+}
+
+.portal-row-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.portal-chart-wrap {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.portal-chart {
+  width: 100%;
+  height: auto;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.portal-chart-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.portal-chart-foot span {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.portal-log-list {
+  display: grid;
+  gap: 0.15rem;
+}
+
 @media (max-width: 1020px) {
   .portal-header {
     grid-template-columns: 1fr;
@@ -1527,6 +2579,48 @@ main {
   }
 
   .tutorial-video-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-admin-grid,
+  .portal-profile-grid,
+  .portal-exercise-grid,
+  .portal-form-grid,
+  .portal-log-grid,
+  .portal-checkbox-grid,
+  .portal-workout-prescription-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-set-weights {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-profile-three-col {
+    grid-template-columns: 1fr !important;
+  }
+
+  .portal-admin-card-wide,
+  .portal-form-span-2,
+  .portal-checkbox-row {
+    grid-column: span 1;
+  }
+
+  .portal-form-grid .portal-selected-inline-fields {
+    justify-content: flex-start;
+  }
+
+  .portal-form-grid .portal-small-field input,
+  .portal-form-grid .portal-small-field-notes input {
+    width: 100%;
+  }
+
+  .portal-form-grid .portal-selected-inline-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .portal-schedule-layout {
     grid-template-columns: 1fr;
   }
 }
