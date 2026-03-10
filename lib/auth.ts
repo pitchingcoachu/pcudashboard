@@ -30,7 +30,7 @@ type SessionPayload = {
   appUrl: string;
   apps: AppLink[];
   name?: string;
-  role?: 'admin' | 'player';
+  role?: 'admin' | 'coach' | 'player';
   organizationId?: number;
   playerId?: number | null;
   exp: number;
@@ -186,7 +186,7 @@ export function verifySessionToken(token: string): SessionPayload | null {
     ...parsed,
     appUrl: parsed.appUrl,
     apps,
-    role: parsed.role === 'player' ? 'player' : 'admin',
+    role: parsed.role === 'player' ? 'player' : parsed.role === 'coach' ? 'coach' : 'admin',
     organizationId: parsed.organizationId,
     playerId: parsed.playerId ?? null,
   };

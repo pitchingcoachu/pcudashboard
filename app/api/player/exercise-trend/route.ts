@@ -1,26 +1,14 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { getPlayerByIdInOrganization, getPlayerForUser, listExerciseTrendForPlayer } from '../../../../lib/training-db';
+import { listExerciseTrendForPlayer } from '../../../../lib/training-db';
+import { canManagePlayer } from '../../../../lib/portal-access';
 
 async function ensurePlayerAccess(session: { role?: string; organizationId?: number; userId?: number; playerId?: number | null } | null, playerId: number) {
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
-  if (session.role === 'player') {
-    const ownPlayer = await getPlayerForUser({
-      organizationId: session.organizationId ?? 0,
-      userId: session.userId ?? 0,
-    });
-    const allowed = ownPlayer?.id ?? session.playerId ?? 0;
-    if (allowed !== playerId) return { ok: false as const, status: 403, error: 'Forbidden' };
-    return { ok: true as const, playerId: allowed };
-  }
-
-  const player = await getPlayerByIdInOrganization({
-    organizationId: session.organizationId ?? 0,
-    playerId,
-  });
-  if (!player) return { ok: false as const, status: 404, error: 'Player not found.' };
-  return { ok: true as const, playerId: player.id };
+  const allowed = await canManagePlayer(session, playerId);
+  if (!allowed) return { ok: false as const, status: 403, error: 'Forbidden' };
+  return { ok: true as const, playerId };
 }
 
 export async function GET(request: Request) {

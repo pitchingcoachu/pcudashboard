@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requirePortalSession } from '../../../../../lib/portal-session';
+import { canManagePlayer } from '../../../../../lib/portal-access';
 import {
   getPlayerByIdInOrganization,
   listExercisesByOrganization,
@@ -30,11 +31,13 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 
 export default async function AdminProgramBuilderPage({ params, searchParams }: ProgramPageProps) {
   const session = await requirePortalSession();
-  if (session.role !== 'admin') notFound();
+  if (session.role === 'player') notFound();
 
   const { playerId: playerIdRaw } = await params;
   const playerId = Number(playerIdRaw);
   if (!Number.isFinite(playerId)) notFound();
+  const allowed = await canManagePlayer(session, playerId);
+  if (!allowed) notFound();
 
   const player = await getPlayerByIdInOrganization({ organizationId: session.organizationId, playerId });
   if (!player) notFound();

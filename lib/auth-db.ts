@@ -13,7 +13,7 @@ type UserRecord = {
   name?: string;
 };
 
-type UserRole = 'admin' | 'player';
+type UserRole = 'admin' | 'coach' | 'player';
 
 export type SessionUser = {
   userId: number;
@@ -152,8 +152,18 @@ function preferredDashboardUrl(): string {
 
 export async function ensureAuthDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
-  if (global.__pcuAuthDbReady) return;
   const pool = getDbPool();
+
+  if (global.__pcuAuthDbReady) {
+    await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
+    await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
+    await pool.query(
+      `ALTER TABLE players ADD COLUMN IF NOT EXISTS assigned_coach_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL;`
+    );
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
+    await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
+    return;
+  }
   const migrationLockId = 14840321;
 
   // Prevent concurrent schema bootstrap from multiple requests/processes.
@@ -181,8 +191,10 @@ export async function ensureAuthDbReady(): Promise<void> {
       id SERIAL PRIMARY KEY,
       email TEXT NOT NULL,
       name TEXT,
+      phone TEXT,
       password_hash TEXT NOT NULL,
       app_url TEXT NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT TRUE,
       role TEXT NOT NULL DEFAULT 'admin',
       organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -204,12 +216,15 @@ export async function ensureAuthDbReady(): Promise<void> {
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS password TEXT;`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS password_hash TEXT;`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS app_url TEXT;`);
+  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
+  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin';`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL;`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
   await pool.query(`UPDATE auth_users SET username = LOWER(email) WHERE username IS NULL OR LENGTH(TRIM(username)) = 0;`);
   await pool.query(`UPDATE auth_users SET password = password_hash WHERE password IS NULL OR LENGTH(TRIM(password)) = 0;`);
+  await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
   await pool.query(`UPDATE auth_users SET app_url = $1 WHERE COALESCE(TRIM(app_url), '') <> $1`, [preferredDashboardUrl()]);
 
   await pool.query(`
@@ -236,6 +251,9 @@ export async function ensureAuthDbReady(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS college_commitment TEXT;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS bats_hand TEXT;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS throws_hand TEXT;`);
+  await pool.query(
+    `ALTER TABLE players ADD COLUMN IF NOT EXISTS assigned_coach_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL;`
+  );
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS body_weight_logs (
@@ -378,6 +396,7 @@ export async function ensureAuthDbReady(): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_users_email ON auth_users (LOWER(email));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_users_org ON auth_users (organization_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_org ON players (organization_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_body_weight_logs_player_date ON body_weight_logs (player_id, log_date);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_categories_org ON exercise_categories (organization_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_library_org ON exercise_library (organization_id);`);
@@ -531,6 +550,7 @@ export async function validateLoginWithDatabase(email: string, password: string)
     password_hash: string;
     app_url: string | null;
     role: string | null;
+    is_active: boolean | null;
     organization_id: number | null;
     player_id: number | null;
   }>(
@@ -542,6 +562,7 @@ export async function validateLoginWithDatabase(email: string, password: string)
         u.password_hash,
         u.app_url,
         u.role,
+        u.is_active,
         u.organization_id,
         p.id AS player_id
       FROM auth_users u
@@ -554,6 +575,7 @@ export async function validateLoginWithDatabase(email: string, password: string)
 
   if ((result.rowCount ?? 0) !== 1) return null;
   const row = result.rows[0];
+  if (row.is_active === false) return null;
   if (!verifyPassword(row.password_hash, password)) return null;
   const appUrl = row.app_url?.trim();
   if (!appUrl) return null;
@@ -563,7 +585,7 @@ export async function validateLoginWithDatabase(email: string, password: string)
     email: row.email,
     name: row.name ?? undefined,
     appUrl,
-    role: row.role === 'player' ? 'player' : 'admin',
+    role: row.role === 'player' ? 'player' : row.role === 'coach' ? 'coach' : 'admin',
     organizationId: row.organization_id ?? 0,
     playerId: row.player_id ?? null,
   };
@@ -581,6 +603,7 @@ export async function getSessionUserByEmail(email: string): Promise<SessionUser 
     name: string | null;
     app_url: string | null;
     role: string | null;
+    is_active: boolean | null;
     organization_id: number | null;
     player_id: number | null;
   }>(
@@ -591,11 +614,13 @@ export async function getSessionUserByEmail(email: string): Promise<SessionUser 
         u.name,
         u.app_url,
         u.role,
+        u.is_active,
         u.organization_id,
         p.id AS player_id
       FROM auth_users u
       LEFT JOIN players p ON p.user_id = u.id
       WHERE LOWER(u.email) = LOWER($1)
+        AND COALESCE(u.is_active, TRUE) = TRUE
       LIMIT 1
     `,
     [normalizedEmail]
@@ -611,7 +636,7 @@ export async function getSessionUserByEmail(email: string): Promise<SessionUser 
     email: row.email,
     name: row.name ?? undefined,
     appUrl,
-    role: row.role === 'player' ? 'player' : 'admin',
+    role: row.role === 'player' ? 'player' : row.role === 'coach' ? 'coach' : 'admin',
     organizationId: row.organization_id ?? 0,
     playerId: row.player_id ?? null,
   };

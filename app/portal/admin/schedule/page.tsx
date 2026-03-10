@@ -9,7 +9,9 @@ export default async function AdminSchedulePage() {
     listWorkoutsByOrganization(session.organizationId),
   ]);
 
-  const players = clients.map((client) => ({ id: client.playerId, name: client.fullName }));
+  const visibleClients =
+    session.role === 'coach' ? clients.filter((client) => client.assignedCoachUserId === session.userId) : clients;
+  const players = visibleClients.map((client) => ({ id: client.playerId, name: client.fullName }));
   const workoutChoices = workouts.map((workout) => ({
     id: workout.id,
     name: workout.name,

@@ -12,8 +12,20 @@ export type ClientRow = {
   collegeCommitment: string | null;
   batsHand: string | null;
   throwsHand: string | null;
+  assignedCoachUserId: number | null;
+  assignedCoachName: string | null;
   status: string;
-  userRole: 'admin' | 'player' | null;
+  userRole: 'admin' | 'coach' | 'player' | null;
+};
+
+export type CoachRow = {
+  userId: number;
+  name: string;
+  email: string;
+  phone: string | null;
+  role: 'admin' | 'coach';
+  isActive: boolean;
+  assignedPlayerCount: number;
 };
 
 export type PlayerProfileRow = {
@@ -26,6 +38,8 @@ export type PlayerProfileRow = {
   collegeCommitment: string | null;
   batsHand: string | null;
   throwsHand: string | null;
+  assignedCoachUserId: number | null;
+  assignedCoachName: string | null;
   age: number | null;
 };
 
@@ -142,6 +156,14 @@ export type ExerciseLoadHistoryEntry = {
 export async function ensureTrainingDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
   await ensureAuthDbReady();
+  const pool = getDbPool();
+  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
+  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(
+    `ALTER TABLE players ADD COLUMN IF NOT EXISTS assigned_coach_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL;`
+  );
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
+  await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
 }
 
 function validateHttpUrl(value: string): { ok: true; value: string } | { ok: false; error: string } {
@@ -199,6 +221,8 @@ export async function listClientsByOrganization(organizationId: number): Promise
     college_commitment: string | null;
     bats_hand: string | null;
     throws_hand: string | null;
+    assigned_coach_user_id: number | null;
+    assigned_coach_name: string | null;
     status: string;
     user_role: string | null;
   }>(
@@ -214,10 +238,13 @@ export async function listClientsByOrganization(organizationId: number): Promise
         p.college_commitment,
         p.bats_hand,
         p.throws_hand,
+        p.assigned_coach_user_id,
+        coach.name AS assigned_coach_name,
         p.status,
         u.role AS user_role
       FROM players p
       LEFT JOIN auth_users u ON u.id = p.user_id
+      LEFT JOIN auth_users coach ON coach.id = p.assigned_coach_user_id
       WHERE p.organization_id = $1
       ORDER BY p.full_name ASC
     `,
@@ -235,9 +262,82 @@ export async function listClientsByOrganization(organizationId: number): Promise
     collegeCommitment: row.college_commitment,
     batsHand: row.bats_hand,
     throwsHand: row.throws_hand,
+    assignedCoachUserId: row.assigned_coach_user_id,
+    assignedCoachName: row.assigned_coach_name,
     status: row.status,
-    userRole: row.user_role === 'admin' || row.user_role === 'player' ? row.user_role : null,
+    userRole: row.user_role === 'admin' || row.user_role === 'coach' || row.user_role === 'player' ? row.user_role : null,
   }));
+}
+
+export async function listCoachesByOrganization(organizationId: number): Promise<CoachRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const result = await pool.query<{
+    user_id: number;
+    name: string | null;
+    email: string;
+    phone: string | null;
+    role: string;
+    is_active: boolean | null;
+    assigned_player_count: string;
+  }>(
+    `
+      SELECT
+        u.id AS user_id,
+        u.name,
+        u.email,
+        u.phone,
+        u.role,
+        u.is_active,
+        COUNT(p.id)::text AS assigned_player_count
+      FROM auth_users u
+      LEFT JOIN players p ON p.assigned_coach_user_id = u.id
+      WHERE u.organization_id = $1
+        AND u.role IN ('admin', 'coach')
+      GROUP BY u.id, u.name, u.email, u.phone, u.role, u.is_active
+      ORDER BY
+        CASE WHEN u.role = 'admin' THEN 0 ELSE 1 END,
+        COALESCE(u.name, u.email) ASC
+    `,
+    [organizationId]
+  );
+
+  return result.rows
+    .map((row): CoachRow => ({
+      userId: row.user_id,
+      name: (row.name ?? '').trim() || row.email,
+      email: row.email,
+      phone: row.phone,
+      role: row.role === 'coach' ? 'coach' : 'admin',
+      isActive: row.is_active !== false,
+      assignedPlayerCount: Number(row.assigned_player_count ?? '0') || 0,
+    }))
+    .filter((row) => row.role === 'admin' || row.role === 'coach');
+}
+
+export async function isCoachAssignedToPlayer(input: {
+  organizationId: number;
+  coachUserId: number;
+  playerId: number;
+}): Promise<boolean> {
+  if (!isDatabaseConfigured()) return false;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const result = await pool.query<{ id: number }>(
+    `
+      SELECT p.id
+      FROM players p
+      WHERE p.organization_id = $1
+        AND p.id = $2
+        AND p.assigned_coach_user_id = $3
+      LIMIT 1
+    `,
+    [input.organizationId, input.playerId, input.coachUserId]
+  );
+  return (result.rowCount ?? 0) === 1;
 }
 
 export async function createClientWithLogin(input: {
@@ -245,6 +345,7 @@ export async function createClientWithLogin(input: {
   fullName: string;
   email: string;
   password: string;
+  assignedCoachUserId?: number;
   dateOfBirth?: string;
   schoolTeam?: string;
   phone?: string;
@@ -261,6 +362,11 @@ export async function createClientWithLogin(input: {
   if (!normalizedEmail || !fullName || !input.password) {
     return { ok: false, error: 'Name, email, and password are required.' };
   }
+
+  const assignedCoachUserId =
+    Number.isFinite(Number(input.assignedCoachUserId ?? 0)) && Number(input.assignedCoachUserId ?? 0) > 0
+      ? Number(input.assignedCoachUserId)
+      : null;
 
   const client = await pool.connect();
   try {
@@ -293,12 +399,30 @@ export async function createClientWithLogin(input: {
       ]
     );
 
+    if (assignedCoachUserId) {
+      const coachResult = await client.query<{ id: number }>(
+        `
+          SELECT id
+          FROM auth_users
+          WHERE id = $1
+            AND organization_id = $2
+            AND role IN ('admin', 'coach')
+          LIMIT 1
+        `,
+        [assignedCoachUserId, input.organizationId]
+      );
+      if ((coachResult.rowCount ?? 0) !== 1) {
+        await client.query('ROLLBACK');
+        return { ok: false, error: 'Assigned coach was not found in your organization.' };
+      }
+    }
+
     await client.query(
       `
         INSERT INTO players (
-          organization_id, user_id, full_name, email, date_of_birth, school_team, phone, college_commitment, bats_hand, throws_hand, status
+          organization_id, user_id, full_name, email, date_of_birth, school_team, phone, college_commitment, bats_hand, throws_hand, assigned_coach_user_id, status
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active')
       `,
       [
         input.organizationId,
@@ -311,6 +435,7 @@ export async function createClientWithLogin(input: {
         (input.collegeCommitment ?? '').trim() || null,
         (input.batsHand ?? '').trim() || null,
         (input.throwsHand ?? '').trim() || null,
+        assignedCoachUserId,
       ]
     );
 
@@ -322,6 +447,105 @@ export async function createClientWithLogin(input: {
   } finally {
     client.release();
   }
+}
+
+export async function createStaffUser(input: {
+  organizationId: number;
+  name: string;
+  email: string;
+  password: string;
+  phone?: string;
+  role: 'admin' | 'coach';
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const normalizedEmail = input.email.trim().toLowerCase();
+  const name = input.name.trim();
+  if (!name || !normalizedEmail || !input.password) {
+    return { ok: false, error: 'Name, email, and password are required.' };
+  }
+  if (input.role !== 'admin' && input.role !== 'coach') {
+    return { ok: false, error: 'Role must be admin or coach.' };
+  }
+
+  const existing = await pool.query<{ id: number }>(
+    `SELECT id FROM auth_users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+    [normalizedEmail]
+  );
+  if ((existing.rowCount ?? 0) > 0) {
+    return { ok: false, error: 'A login already exists with that email.' };
+  }
+
+  const passwordHash = createPasswordHash(input.password);
+  await pool.query(
+    `
+      INSERT INTO auth_users (
+        email, username, name, phone, password, password_hash, app_url, role, organization_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `,
+    [
+      normalizedEmail,
+      deriveUsernameFromEmail(normalizedEmail),
+      name,
+      (input.phone ?? '').trim() || null,
+      passwordHash,
+      passwordHash,
+      DEFAULT_DASHBOARD_URL,
+      input.role,
+      input.organizationId,
+    ]
+  );
+
+  return { ok: true };
+}
+
+export async function setStaffActiveStatus(input: {
+  organizationId: number;
+  staffUserId: number;
+  isActive: boolean;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const updated = await pool.query<{ id: number }>(
+    `
+      UPDATE auth_users
+      SET is_active = $1, updated_at = NOW()
+      WHERE id = $2
+        AND organization_id = $3
+        AND role IN ('admin', 'coach')
+      RETURNING id
+    `,
+    [input.isActive, input.staffUserId, input.organizationId]
+  );
+  if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Coach user not found.' };
+  return { ok: true };
+}
+
+export async function deleteStaffUser(input: {
+  organizationId: number;
+  staffUserId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const deleted = await pool.query<{ id: number }>(
+    `
+      DELETE FROM auth_users
+      WHERE id = $1
+        AND organization_id = $2
+        AND role IN ('admin', 'coach')
+      RETURNING id
+    `,
+    [input.staffUserId, input.organizationId]
+  );
+  if ((deleted.rowCount ?? 0) !== 1) return { ok: false, error: 'Coach user not found.' };
+  return { ok: true };
 }
 
 export async function listExerciseCategoriesByOrganization(organizationId: number): Promise<ExerciseCategoryRow[]> {
@@ -1839,6 +2063,8 @@ export async function getPlayerByIdInOrganization(input: {
     college_commitment: string | null;
     bats_hand: string | null;
     throws_hand: string | null;
+    assigned_coach_user_id: number | null;
+    assigned_coach_name: string | null;
     age_years: string | null;
   }>(
     `
@@ -1852,11 +2078,14 @@ export async function getPlayerByIdInOrganization(input: {
         college_commitment,
         bats_hand,
         throws_hand,
+        assigned_coach_user_id,
+        coach.name AS assigned_coach_name,
         CASE
           WHEN date_of_birth IS NULL THEN NULL
           ELSE DATE_PART('year', AGE(CURRENT_DATE, date_of_birth))::text
         END AS age_years
       FROM players
+      LEFT JOIN auth_users coach ON coach.id = players.assigned_coach_user_id
       WHERE id = $1 AND organization_id = $2
       LIMIT 1
     `,
@@ -1874,6 +2103,8 @@ export async function getPlayerByIdInOrganization(input: {
     collegeCommitment: result.rows[0].college_commitment,
     batsHand: result.rows[0].bats_hand,
     throwsHand: result.rows[0].throws_hand,
+    assignedCoachUserId: result.rows[0].assigned_coach_user_id,
+    assignedCoachName: result.rows[0].assigned_coach_name,
     age: result.rows[0].age_years ? Number(result.rows[0].age_years) : null,
   };
 }
@@ -1896,6 +2127,8 @@ export async function getPlayerForUser(input: {
     college_commitment: string | null;
     bats_hand: string | null;
     throws_hand: string | null;
+    assigned_coach_user_id: number | null;
+    assigned_coach_name: string | null;
     age_years: string | null;
   }>(
     `
@@ -1909,11 +2142,14 @@ export async function getPlayerForUser(input: {
         college_commitment,
         bats_hand,
         throws_hand,
+        assigned_coach_user_id,
+        coach.name AS assigned_coach_name,
         CASE
           WHEN date_of_birth IS NULL THEN NULL
           ELSE DATE_PART('year', AGE(CURRENT_DATE, date_of_birth))::text
         END AS age_years
       FROM players
+      LEFT JOIN auth_users coach ON coach.id = players.assigned_coach_user_id
       WHERE organization_id = $1 AND user_id = $2
       LIMIT 1
     `,
@@ -1931,6 +2167,8 @@ export async function getPlayerForUser(input: {
     collegeCommitment: result.rows[0].college_commitment,
     batsHand: result.rows[0].bats_hand,
     throwsHand: result.rows[0].throws_hand,
+    assignedCoachUserId: result.rows[0].assigned_coach_user_id,
+    assignedCoachName: result.rows[0].assigned_coach_name,
     age: result.rows[0].age_years ? Number(result.rows[0].age_years) : null,
   };
 }
@@ -1940,6 +2178,7 @@ export async function updatePlayerProfile(input: {
   playerId: number;
   fullName: string;
   email: string;
+  assignedCoachUserId?: number | null;
   dateOfBirth?: string;
   schoolTeam?: string;
   phone?: string;
@@ -1955,6 +2194,26 @@ export async function updatePlayerProfile(input: {
   const email = input.email.trim().toLowerCase();
   if (!fullName || !email) return { ok: false, error: 'Name and email are required.' };
 
+  const assignedCoachProvided = input.assignedCoachUserId !== undefined;
+  let assignedCoachUserId: number | null = null;
+  if (assignedCoachProvided && input.assignedCoachUserId && Number.isFinite(Number(input.assignedCoachUserId)) && Number(input.assignedCoachUserId) > 0) {
+    assignedCoachUserId = Number(input.assignedCoachUserId);
+    const coachResult = await pool.query<{ id: number }>(
+      `
+        SELECT id
+        FROM auth_users
+        WHERE id = $1
+          AND organization_id = $2
+          AND role IN ('admin', 'coach')
+        LIMIT 1
+      `,
+      [assignedCoachUserId, input.organizationId]
+    );
+    if ((coachResult.rowCount ?? 0) !== 1) {
+      return { ok: false, error: 'Assigned coach was not found in your organization.' };
+    }
+  }
+
   const updated = await pool.query<{ id: number }>(
     `
       UPDATE players
@@ -1967,8 +2226,9 @@ export async function updatePlayerProfile(input: {
         college_commitment = $6,
         bats_hand = $7,
         throws_hand = $8,
+        assigned_coach_user_id = CASE WHEN $9::boolean THEN $10 ELSE assigned_coach_user_id END,
         updated_at = NOW()
-      WHERE id = $9 AND organization_id = $10
+      WHERE id = $11 AND organization_id = $12
       RETURNING id
     `,
     [
@@ -1980,6 +2240,8 @@ export async function updatePlayerProfile(input: {
       (input.collegeCommitment ?? '').trim() || null,
       (input.batsHand ?? '').trim() || null,
       (input.throwsHand ?? '').trim() || null,
+      assignedCoachProvided,
+      assignedCoachUserId,
       input.playerId,
       input.organizationId,
     ]

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../../lib/portal-session';
+import { canManagePlayer } from '../../../../lib/portal-access';
 import {
   getPlayerByIdInOrganization,
   getPlayerForUser,
@@ -54,7 +55,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
 
   let effectivePlayerId: number | null = null;
 
-  if (session.role === 'admin') {
+  if (session.role === 'admin' || session.role === 'coach') {
     if (previewPlayerIdRaw) {
       const parsed = Number(previewPlayerIdRaw);
       if (Number.isFinite(parsed)) {
@@ -63,7 +64,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
     }
 
     if (!effectivePlayerId && !previewSelf) {
-      redirect('/portal/admin/clients');
+      redirect(session.role === 'coach' ? '/portal/admin/schedule' : '/portal/admin/clients');
     }
   }
 
@@ -87,9 +88,9 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           <div className="portal-header-center">
             <nav className="portal-nav" aria-label="Portal Navigation">
               <Link href="/portal" className="portal-nav-link">
-                Dashboard
+                PCU Dashboard
               </Link>
-              {session.role === 'admin' && (
+              {(session.role === 'admin' || session.role === 'coach') && (
                 <Link href="/portal/admin" className="portal-nav-link">
                   Admin
                 </Link>
@@ -118,16 +119,26 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
     );
   }
 
+  if (session.role === 'coach') {
+    const allowed = await canManagePlayer(session, effectivePlayerId);
+    if (!allowed) redirect('/portal/admin/schedule');
+  }
+
   const [player, items] = await Promise.all([
     getPlayerByIdInOrganization({ organizationId: session.organizationId, playerId: effectivePlayerId }),
     listProgramItemsForPlayerByMonth({ playerId: effectivePlayerId, month }),
   ]);
 
   if (!player) {
-    redirect('/portal/admin/clients');
+    redirect(session.role === 'coach' ? '/portal/admin/schedule' : '/portal/admin/clients');
   }
 
-  const previewClients = session.role === 'admin' ? await listClientsByOrganization(session.organizationId) : [];
+  const previewClients =
+    session.role === 'admin' || session.role === 'coach'
+      ? (await listClientsByOrganization(session.organizationId)).filter(
+          (client) => session.role === 'admin' || client.assignedCoachUserId === session.userId
+        )
+      : [];
   const initialRange = monthRange(month);
 
   return (
@@ -137,7 +148,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           <Link href="/portal/player" className="portal-header-logo-link" aria-label="PCU Home">
             <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
           </Link>
-          {session.role === 'admin' ? (
+          {session.role === 'admin' || session.role === 'coach' ? (
             <form method="get" className="portal-preview-form">
               <label>
                 Preview Athlete
@@ -160,14 +171,16 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
         </div>
         <div className="portal-header-center">
           <nav className="portal-nav" aria-label="Portal Navigation">
-            {session.role === 'admin' && (
+            {(session.role === 'admin' || session.role === 'coach') && (
               <Link href="/portal/admin" className="portal-nav-link">
                 Admin
               </Link>
             )}
             <Link
               href={
-                session.role === 'admin' ? `/portal/player?previewPlayerId=${effectivePlayerId}` : '/portal/player'
+                session.role === 'admin' || session.role === 'coach'
+                  ? `/portal/player?previewPlayerId=${effectivePlayerId}`
+                  : '/portal/player'
               }
               className="portal-nav-link"
             >
@@ -183,8 +196,8 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
         </div>
         <div className="portal-header-right">
           <div className="portal-user-meta" aria-label="Logged in user">
-            <p>{session.role === 'admin' ? 'Previewing' : 'Logged In As'}</p>
-            <h1>{session.role === 'admin' ? player.fullName : session.name ?? session.email}</h1>
+            <p>{session.role === 'admin' || session.role === 'coach' ? 'Previewing' : 'Logged In As'}</p>
+            <h1>{session.role === 'admin' || session.role === 'coach' ? player.fullName : session.name ?? session.email}</h1>
           </div>
           <LogoutButton />
         </div>
@@ -196,7 +209,9 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
             <h2>{player.fullName}</h2>
           </div>
           <form method="get" className="portal-month-filter">
-            {session.role === 'admin' && <input type="hidden" name="previewPlayerId" value={String(effectivePlayerId)} />}
+            {(session.role === 'admin' || session.role === 'coach') && (
+              <input type="hidden" name="previewPlayerId" value={String(effectivePlayerId)} />
+            )}
             <label className="portal-inline-filter">
               Month
               <input type="month" name="month" defaultValue={month} />

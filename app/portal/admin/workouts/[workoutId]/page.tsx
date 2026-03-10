@@ -20,7 +20,7 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 
 export default async function EditWorkoutPage({ params, searchParams }: EditWorkoutPageProps) {
   const session = await requirePortalSession();
-  if (session.role !== 'admin') notFound();
+  if (session.role === 'player') notFound();
 
   const { workoutId: rawWorkoutId } = await params;
   const workoutId = Number(rawWorkoutId);

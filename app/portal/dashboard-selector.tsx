@@ -44,7 +44,7 @@ export default function DashboardSelector({ apps, selectedAppId }: DashboardSele
   }, []);
 
   const selected = apps.find((app) => app.id === selectedAppId);
-  const label = selected?.name ?? 'Select Dashboard';
+  const label = selected?.name ?? 'Select PCU Dashboard';
 
   const handleSelect = (appId: string) => {
     setIsOpen(false);

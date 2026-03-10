@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { getPlayerByIdInOrganization, getPlayerForUser, listExerciseLoadHistoryForPlayer } from '../../../../lib/training-db';
+import { listExerciseLoadHistoryForPlayer } from '../../../../lib/training-db';
+import { canManagePlayer } from '../../../../lib/portal-access';
 
 function parseDate(value: string): string | null {
   const trimmed = value.trim();
@@ -26,20 +27,8 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'playerId and exerciseIds are required.' }, { status: 400 });
   }
 
-  if (session.role === 'player') {
-    const ownPlayer = await getPlayerForUser({
-      organizationId: session.organizationId ?? 0,
-      userId: session.userId ?? 0,
-    });
-    const allowed = ownPlayer?.id ?? session.playerId ?? 0;
-    if (allowed !== playerId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  } else {
-    const player = await getPlayerByIdInOrganization({
-      organizationId: session.organizationId ?? 0,
-      playerId,
-    });
-    if (!player) return NextResponse.json({ error: 'Player not found.' }, { status: 404 });
-  }
+  const allowed = await canManagePlayer(session, playerId);
+  if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const history = await listExerciseLoadHistoryForPlayer({
     playerId,

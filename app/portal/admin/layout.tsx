@@ -6,7 +6,7 @@ import LogoutButton from '../logout-button';
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const session = await requirePortalSession();
 
-  if (session.role !== 'admin') {
+  if (session.role === 'player') {
     redirect('/portal/player');
   }
 
@@ -23,9 +23,16 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/portal/admin" className="portal-nav-link">
               Admin Home
             </Link>
-            <Link href="/portal/admin/clients" className="portal-nav-link">
-              Clients
-            </Link>
+            {session.role === 'admin' && (
+              <Link href="/portal/admin/clients" className="portal-nav-link">
+                Clients
+              </Link>
+            )}
+            {session.role === 'admin' && (
+              <Link href="/portal/admin/coaches" className="portal-nav-link">
+                Coaches
+              </Link>
+            )}
             <Link href="/portal/admin/exercises" className="portal-nav-link">
               Exercise Library
             </Link>
@@ -35,11 +42,14 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/portal/admin/schedule" className="portal-nav-link">
               Schedule
             </Link>
-            <Link href="/portal/player?preview=self" className="portal-nav-link">
+            <Link
+              href={session.role === 'coach' ? '/portal/admin/schedule' : '/portal/player?preview=self'}
+              className="portal-nav-link"
+            >
               Player Preview
             </Link>
             <Link href="/portal" className="portal-nav-link">
-              Dashboard
+              PCU Dashboard
             </Link>
           </nav>
         </div>

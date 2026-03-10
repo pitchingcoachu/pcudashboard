@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { getPlayerByIdInOrganization, getPlayerForUser, upsertExerciseLog } from '../../../../lib/training-db';
+import { upsertExerciseLog } from '../../../../lib/training-db';
+import { canManagePlayer } from '../../../../lib/portal-access';
 
 function redirectWithMessage(request: Request, target: string, params: Record<string, string>) {
   const url = new URL(target, request.url);
@@ -33,34 +34,11 @@ export async function POST(request: Request) {
     return redirectWithMessage(request, '/portal/player', { error: 'Invalid log payload.' });
   }
 
-  const role = session.role === 'player' ? 'player' : 'admin';
-  let allowedPlayerId: number | null = null;
-
-  if (role === 'player') {
-    const ownPlayer = await getPlayerForUser({
-      organizationId: session.organizationId ?? 0,
-      userId: session.userId ?? 0,
-    });
-    allowedPlayerId = ownPlayer?.id ?? session.playerId ?? null;
-    if (allowedPlayerId !== playerId) {
-      return redirectWithMessage(request, '/portal/player', { error: 'You can only log your own program.' });
-    }
-  }
-
-  if (role === 'admin') {
-    const player = await getPlayerByIdInOrganization({
-      organizationId: session.organizationId ?? 0,
-      playerId,
-    });
-    if (!player) {
-      return redirectWithMessage(request, '/portal/admin/clients', { error: 'Player not found in your organization.' });
-    }
-    allowedPlayerId = player.id;
-  }
-
-  if (!allowedPlayerId) {
+  const allowed = await canManagePlayer(session, playerId);
+  if (!allowed) {
     return redirectWithMessage(request, '/portal/player', { error: 'Unable to resolve player access.' });
   }
+  const allowedPlayerId = playerId;
 
   try {
     await upsertExerciseLog({
@@ -81,7 +59,9 @@ export async function POST(request: Request) {
 
   const redirectParams: Record<string, string> = { ok: 'Training log saved.' };
   if (/^\d{4}-\d{2}$/.test(month)) redirectParams.month = month;
-  if (role === 'admin' && /^\d+$/.test(previewPlayerId)) redirectParams.previewPlayerId = previewPlayerId;
+  if ((session.role === 'admin' || session.role === 'coach') && /^\d+$/.test(previewPlayerId)) {
+    redirectParams.previewPlayerId = previewPlayerId;
+  }
 
   return redirectWithMessage(request, '/portal/player', redirectParams);
 }

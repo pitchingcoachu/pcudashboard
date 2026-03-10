@@ -30,8 +30,11 @@ type ProfileDashboardProps = {
     collegeCommitment: string | null;
     batsHand: string | null;
     throwsHand: string | null;
+    assignedCoachUserId: number | null;
     age: number | null;
   };
+  coachOptions: Array<{ userId: number; name: string; role: 'admin' | 'coach' }>;
+  canAssignCoach: boolean;
   todayItems: ProgramItemRow[];
   initialWeightLogs: BodyWeightLogRow[];
   trackedExercises: TrackedExercise[];
@@ -196,6 +199,8 @@ export default function ProfileDashboard({
   isAdminPreview,
   fullProgramHref,
   initialProfile,
+  coachOptions,
+  canAssignCoach,
   todayItems,
   initialWeightLogs,
   trackedExercises,
@@ -211,6 +216,7 @@ export default function ProfileDashboard({
     collegeCommitment: initialProfile.collegeCommitment ?? '',
     batsHand: initialProfile.batsHand ?? '',
     throwsHand: initialProfile.throwsHand ?? '',
+    assignedCoachUserId: initialProfile.assignedCoachUserId ? String(initialProfile.assignedCoachUserId) : '',
   });
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMessage, setProfileMessage] = useState('');
@@ -363,6 +369,7 @@ export default function ProfileDashboard({
                     collegeCommitment: profile.collegeCommitment,
                     batsHand: profile.batsHand,
                     throwsHand: profile.throwsHand,
+                    assignedCoachUserId: profile.assignedCoachUserId ? Number(profile.assignedCoachUserId) : null,
                   }),
                 });
                 const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -436,6 +443,21 @@ export default function ProfileDashboard({
                 <option value="">-</option>
                 <option value="Right">Right</option>
                 <option value="Left">Left</option>
+              </select>
+            </label>
+            <label>
+              Assigned Coach
+              <select
+                value={profile.assignedCoachUserId}
+                onChange={(event) => setProfile((prev) => ({ ...prev, assignedCoachUserId: event.target.value }))}
+                disabled={!canAssignCoach}
+              >
+                <option value="">Unassigned</option>
+                {coachOptions.map((coach) => (
+                  <option key={coach.userId} value={String(coach.userId)}>
+                    {coach.name} ({coach.role})
+                  </option>
+                ))}
               </select>
             </label>
             <div className="portal-choice-line-actions">

@@ -27,9 +27,9 @@ export default async function TutorialsPage() {
         <div className="portal-header-center">
           <nav className="portal-nav" aria-label="Portal Navigation">
             <Link href="/portal" className="portal-nav-link">
-              Dashboard
+              PCU Dashboard
             </Link>
-            {session.role === 'admin' && (
+            {(session.role === 'admin' || session.role === 'coach') && (
               <Link href="/portal/admin" className="portal-nav-link">
                 Admin
               </Link>

@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { addProgramItem } from '../../../../lib/training-db';
+import { canManagePlayer } from '../../../../lib/portal-access';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -17,8 +18,7 @@ export async function POST(request: Request) {
       return NextResponse.redirect(new URL('/login', request.url), 303);
     }
 
-    const role = session.role === 'player' ? 'player' : 'admin';
-    if (role !== 'admin') {
+    if (session.role === 'player') {
       return NextResponse.redirect(new URL('/portal/player', request.url), 303);
     }
 
@@ -38,17 +38,22 @@ export async function POST(request: Request) {
     const exerciseId = exerciseIdRaw ? Number(exerciseIdRaw) : undefined;
     const workoutId = workoutIdRaw ? Number(workoutIdRaw) : undefined;
 
-  if (!Number.isFinite(playerId) || playerId <= 0) {
-    return redirectWithMessage(request, redirectTo, 'error', 'Player is required.');
-  }
+    if (!Number.isFinite(playerId) || playerId <= 0) {
+      return redirectWithMessage(request, redirectTo, 'error', 'Player is required.');
+    }
 
-  if (assignmentType === 'exercise' && (!exerciseId || !Number.isFinite(exerciseId) || exerciseId <= 0)) {
-    return redirectWithMessage(request, redirectTo, 'error', 'Choose an exercise assignment.');
-  }
+    const allowed = await canManagePlayer(session, playerId);
+    if (!allowed) {
+      return redirectWithMessage(request, redirectTo, 'error', 'You do not have access to edit this player.');
+    }
 
-  if (assignmentType === 'workout' && (!workoutId || !Number.isFinite(workoutId) || workoutId <= 0)) {
-    return redirectWithMessage(request, redirectTo, 'error', 'Choose a workout assignment.');
-  }
+    if (assignmentType === 'exercise' && (!exerciseId || !Number.isFinite(exerciseId) || exerciseId <= 0)) {
+      return redirectWithMessage(request, redirectTo, 'error', 'Choose an exercise assignment.');
+    }
+
+    if (assignmentType === 'workout' && (!workoutId || !Number.isFinite(workoutId) || workoutId <= 0)) {
+      return redirectWithMessage(request, redirectTo, 'error', 'Choose a workout assignment.');
+    }
 
     const result = await addProgramItem({
       organizationId,

@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
-import { getPlayerByIdInOrganization, getPlayerForUser, upsertExerciseLog } from '../../../../../lib/training-db';
+import { upsertExerciseLog } from '../../../../../lib/training-db';
+import { canManagePlayer } from '../../../../../lib/portal-access';
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
@@ -21,28 +22,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid log payload.' }, { status: 400 });
   }
 
-  const role = session.role === 'player' ? 'player' : 'admin';
-  let allowedPlayerId: number | null = null;
-
-  if (role === 'player') {
-    const ownPlayer = await getPlayerForUser({
-      organizationId: session.organizationId ?? 0,
-      userId: session.userId ?? 0,
-    });
-    allowedPlayerId = ownPlayer?.id ?? session.playerId ?? null;
-    if (allowedPlayerId !== playerId) {
-      return NextResponse.json({ error: 'You can only log your own program.' }, { status: 403 });
-    }
+  const allowed = await canManagePlayer(session, playerId);
+  if (!allowed) {
+    return NextResponse.json({ error: 'You do not have access to log this player.' }, { status: 403 });
   }
-
-  if (role === 'admin') {
-    const player = await getPlayerByIdInOrganization({
-      organizationId: session.organizationId ?? 0,
-      playerId,
-    });
-    if (!player) return NextResponse.json({ error: 'Player not found in your organization.' }, { status: 404 });
-    allowedPlayerId = player.id;
-  }
+  const allowedPlayerId = playerId;
 
   if (!allowedPlayerId) return NextResponse.json({ error: 'Unable to resolve player access.' }, { status: 400 });
 

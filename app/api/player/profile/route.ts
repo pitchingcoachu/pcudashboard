@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { getPlayerByIdInOrganization, getPlayerForUser, updatePlayerProfile } from '../../../../lib/training-db';
+import { canManagePlayer } from '../../../../lib/portal-access';
 
 async function resolveAllowedPlayerId(session: { role?: string; organizationId?: number; userId?: number; playerId?: number | null } | null, requestedPlayerId: number) {
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
@@ -16,6 +17,8 @@ async function resolveAllowedPlayerId(session: { role?: string; organizationId?:
     return { ok: true as const, playerId: allowed };
   }
 
+  const allowed = await canManagePlayer(session as { role?: 'admin' | 'coach' | 'player'; organizationId?: number; userId?: number; playerId?: number | null }, requestedPlayerId);
+  if (!allowed) return { ok: false as const, status: 403, error: 'Forbidden' };
   const player = await getPlayerByIdInOrganization({
     organizationId: session.organizationId ?? 0,
     playerId: requestedPlayerId,
@@ -39,6 +42,11 @@ export async function POST(request: Request) {
   const allowed = await resolveAllowedPlayerId(session, playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
+  const canAssignCoach = session.role === 'admin' || session.role === 'coach';
+  const assignedCoachRaw = Number(body.assignedCoachUserId ?? 0);
+  const assignedCoachUserId =
+    canAssignCoach && Number.isFinite(assignedCoachRaw) && assignedCoachRaw > 0 ? assignedCoachRaw : null;
+
   const result = await updatePlayerProfile({
     organizationId: session.organizationId ?? 0,
     playerId: allowed.playerId,
@@ -50,6 +58,7 @@ export async function POST(request: Request) {
     collegeCommitment: String(body.collegeCommitment ?? ''),
     batsHand: String(body.batsHand ?? ''),
     throwsHand: String(body.throwsHand ?? ''),
+    assignedCoachUserId: canAssignCoach ? assignedCoachUserId : undefined,
   });
 
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });

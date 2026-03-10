@@ -17,8 +17,7 @@ export async function POST(request: Request) {
       return NextResponse.redirect(new URL('/login', request.url), 303);
     }
 
-    const role = session.role === 'player' ? 'player' : 'admin';
-    if (role !== 'admin') {
+    if ((session.role ?? 'admin') !== 'admin') {
       return NextResponse.redirect(new URL('/portal/player', request.url), 303);
     }
 
@@ -38,6 +37,7 @@ export async function POST(request: Request) {
     const collegeCommitment = String(form.get('collegeCommitment') ?? '');
     const batsHand = String(form.get('batsHand') ?? '');
     const throwsHand = String(form.get('throwsHand') ?? '');
+    const assignedCoachUserId = Number(String(form.get('assignedCoachUserId') ?? '0'));
 
     const result = await createClientWithLogin({
       organizationId,
@@ -50,6 +50,7 @@ export async function POST(request: Request) {
       collegeCommitment,
       batsHand,
       throwsHand,
+      assignedCoachUserId: Number.isFinite(assignedCoachUserId) && assignedCoachUserId > 0 ? assignedCoachUserId : undefined,
     });
 
     if (!result.ok) {

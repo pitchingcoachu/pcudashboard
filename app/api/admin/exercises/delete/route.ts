@@ -17,8 +17,7 @@ export async function POST(request: Request) {
       return NextResponse.redirect(new URL('/login', request.url), 303);
     }
 
-    const role = session.role === 'player' ? 'player' : 'admin';
-    if (role !== 'admin') {
+    if (session.role === 'player') {
       return NextResponse.redirect(new URL('/portal/player', request.url), 303);
     }
 

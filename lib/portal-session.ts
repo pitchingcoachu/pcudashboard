@@ -7,7 +7,7 @@ export type PortalSession = {
   userId: number;
   email: string;
   name?: string;
-  role: 'admin' | 'player';
+  role: 'admin' | 'coach' | 'player';
   organizationId: number;
   playerId: number | null;
   appUrl: string;
@@ -28,7 +28,7 @@ export async function requirePortalSession(): Promise<PortalSession> {
     userId: session.userId ?? 0,
     email: session.email,
     name: session.name,
-    role: session.role === 'player' ? 'player' : 'admin',
+    role: session.role === 'player' ? 'player' : session.role === 'coach' ? 'coach' : 'admin',
     organizationId: session.organizationId ?? 0,
     playerId: session.playerId ?? null,
     appUrl: session.appUrl,

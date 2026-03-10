@@ -1,6 +1,7 @@
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import { requirePortalSession } from '../../../../lib/portal-session';
-import { listClientsByOrganization } from '../../../../lib/training-db';
+import { listClientsByOrganization, listCoachesByOrganization } from '../../../../lib/training-db';
 
 type ClientPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -14,9 +15,28 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 
 export default async function AdminClientsPage({ searchParams }: ClientPageProps) {
   const session = await requirePortalSession();
-  const clients = await listClientsByOrganization(session.organizationId);
+  if (session.role !== 'admin') notFound();
+
+  const [clients, coaches] = await Promise.all([
+    listClientsByOrganization(session.organizationId),
+    listCoachesByOrganization(session.organizationId),
+  ]);
   const params = await searchParams;
   const { ok, error } = readMessage(params);
+  const query = typeof params.q === 'string' ? params.q.trim().toLowerCase() : '';
+  const coachFilter = typeof params.coach === 'string' ? params.coach.trim() : '';
+  const coachFilterId = Number(coachFilter);
+  const visibleClients = clients.filter((client) => {
+    const matchesCoach = !coachFilter
+      ? true
+      : Number.isFinite(coachFilterId) && coachFilterId > 0
+        ? client.assignedCoachUserId === coachFilterId
+        : false;
+    const matchesQuery = !query
+      ? true
+      : [client.fullName, client.email, client.assignedCoachName ?? ''].join(' ').toLowerCase().includes(query);
+    return matchesCoach && matchesQuery;
+  });
 
   return (
     <div className="portal-admin-stack">
@@ -71,6 +91,17 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
             </select>
           </label>
           <label>
+            Assigned Coach
+            <select name="assignedCoachUserId" defaultValue="">
+              <option value="">Unassigned</option>
+              {coaches.map((coach) => (
+                <option key={coach.userId} value={String(coach.userId)}>
+                  {coach.name} ({coach.role})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             Temporary Password
             <input name="password" type="text" minLength={8} required />
           </label>
@@ -84,7 +115,32 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
 
       <article className="portal-admin-card">
         <h3>Current Clients</h3>
-        {clients.length === 0 ? (
+        <form method="get" className="portal-form-grid" style={{ marginBottom: '0.75rem' }}>
+          <label>
+            Search
+            <input name="q" defaultValue={typeof params.q === 'string' ? params.q : ''} placeholder="Player, email, or coach..." />
+          </label>
+          <label>
+            Assigned Coach
+            <select name="coach" defaultValue={coachFilter}>
+              <option value="">All coaches</option>
+              {coaches.map((coach) => (
+                <option key={coach.userId} value={String(coach.userId)}>
+                  {coach.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="portal-choice-line-actions">
+            <button type="submit" className="btn btn-ghost">
+              Filter
+            </button>
+            <Link href="/portal/admin/clients" className="btn btn-ghost as-link">
+              Clear
+            </Link>
+          </div>
+        </form>
+        {visibleClients.length === 0 ? (
           <p>No clients yet.</p>
         ) : (
           <div className="portal-table-wrap">
@@ -93,15 +149,17 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
                 <tr>
                   <th>Player</th>
                   <th>Email</th>
+                  <th>Coach</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {clients.map((client) => (
+                {visibleClients.map((client) => (
                   <tr key={client.playerId}>
                     <td>{client.fullName}</td>
                     <td>{client.email}</td>
+                    <td>{client.assignedCoachName ?? '-'}</td>
                     <td>{client.status}</td>
                     <td className="portal-table-actions">
                       <Link className="btn btn-ghost as-link" href={`/portal/admin/programs/${client.playerId}`}>

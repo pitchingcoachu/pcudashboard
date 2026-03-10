@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     const cookieStore = await cookies();
     const session = getSessionFromCookies(cookieStore);
     if (!session) return NextResponse.redirect(new URL('/login', request.url), 303);
-    if ((session.role ?? 'admin') !== 'admin') return NextResponse.redirect(new URL('/portal/player', request.url), 303);
+    if (session.role === 'player') return NextResponse.redirect(new URL('/portal/player', request.url), 303);
 
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/workouts');
