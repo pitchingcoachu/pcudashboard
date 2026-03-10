@@ -79,7 +79,11 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
     return (
       <div className="portal-shell">
         <header className="portal-header">
-          <div className="portal-header-left" aria-hidden="true" />
+          <div className="portal-header-left">
+            <Link href="/portal/player" className="portal-header-logo-link" aria-label="PCU Home">
+              <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
+            </Link>
+          </div>
           <div className="portal-header-center">
             <nav className="portal-nav" aria-label="Portal Navigation">
               <Link href="/portal" className="portal-nav-link">
@@ -130,6 +134,9 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
     <div className="portal-shell">
       <header className="portal-header">
         <div className="portal-header-left">
+          <Link href="/portal/player" className="portal-header-logo-link" aria-label="PCU Home">
+            <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
+          </Link>
           {session.role === 'admin' ? (
             <form method="get" className="portal-preview-form">
               <label>

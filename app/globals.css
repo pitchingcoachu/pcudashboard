@@ -1279,6 +1279,24 @@ main {
 .portal-header-left {
   justify-self: start;
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.portal-header-logo-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+}
+
+.portal-header-logo {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
 }
 
 .portal-header-center {
