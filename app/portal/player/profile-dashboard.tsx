@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import type { MouseEvent } from 'react';
-import type { BodyWeightLogRow, ProgramItemRow } from '../../../lib/training-db';
+import type { AssessmentWorkoutScoreRow, BodyWeightLogRow, ProgramItemRow } from '../../../lib/training-db';
 import WorkoutLogModal from '../components/workout-log-modal';
 
 type TrackedExercise = {
@@ -37,6 +37,7 @@ type ProfileDashboardProps = {
   canAssignCoach: boolean;
   todayItems: ProgramItemRow[];
   initialWeightLogs: BodyWeightLogRow[];
+  initialAssessmentScores: AssessmentWorkoutScoreRow[];
   trackedExercises: TrackedExercise[];
   initialExerciseId: number | null;
   initialTrend: ExerciseTrendPoint[];
@@ -203,6 +204,7 @@ export default function ProfileDashboard({
   canAssignCoach,
   todayItems,
   initialWeightLogs,
+  initialAssessmentScores,
   trackedExercises,
   initialExerciseId,
   initialTrend,
@@ -236,6 +238,9 @@ export default function ProfileDashboard({
   const [profileExpanded, setProfileExpanded] = useState(false);
 
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
+  const [selectedAssessmentDate, setSelectedAssessmentDate] = useState(
+    initialAssessmentScores[0]?.dayDate ?? ''
+  );
 
   const displayAge = useMemo(() => calculateAge(profile.dateOfBirth || null) ?? initialProfile.age, [initialProfile.age, profile.dateOfBirth]);
 
@@ -253,6 +258,19 @@ export default function ProfileDashboard({
     () => sortedWeightLogs.map((log) => ({ xLabel: formatDate(log.logDate), value: log.weightLbs })),
     [sortedWeightLogs]
   );
+
+  const assessmentDates = useMemo(
+    () =>
+      Array.from(new Set(initialAssessmentScores.map((row) => row.dayDate))).sort((a, b) =>
+        b.localeCompare(a)
+      ),
+    [initialAssessmentScores]
+  );
+
+  const visibleAssessmentRows = useMemo(() => {
+    if (!selectedAssessmentDate) return [];
+    return initialAssessmentScores.filter((row) => row.dayDate === selectedAssessmentDate);
+  }, [initialAssessmentScores, selectedAssessmentDate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -470,6 +488,57 @@ export default function ProfileDashboard({
             </div>
           </form>
         ) : null}
+      </article>
+
+      <article className="portal-admin-card">
+        <div className="portal-row-between">
+          <h3>Assessment Scores</h3>
+          {assessmentDates.length > 0 && (
+            <label className="portal-inline-filter">
+              Date
+              <select
+                value={selectedAssessmentDate}
+                onChange={(event) => setSelectedAssessmentDate(event.target.value)}
+              >
+                {assessmentDates.map((date) => (
+                  <option key={date} value={date}>
+                    {formatDate(date)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+        {visibleAssessmentRows.length === 0 ? (
+          <p className="portal-muted-text">No assessment scores logged yet.</p>
+        ) : (
+          <div className="portal-admin-stack">
+            {visibleAssessmentRows.map((row, rowIdx) => (
+              <div key={`${row.dayDate}-${row.workoutName}-${rowIdx}`} className="portal-day-card">
+                <h4 style={{ margin: 0 }}>{row.workoutName}</h4>
+                <div className="portal-tag-row">
+                  {row.exerciseScores.map((entry, idx) => {
+                    const score = entry.score;
+                    const style =
+                      score === 3
+                        ? { borderColor: 'rgba(66, 214, 133, 0.8)', background: 'rgba(32, 150, 91, 0.2)' }
+                        : score === 2
+                          ? { borderColor: 'rgba(245, 212, 78, 0.8)', background: 'rgba(168, 138, 36, 0.2)' }
+                          : score === 1
+                            ? { borderColor: 'rgba(246, 97, 97, 0.8)', background: 'rgba(165, 41, 41, 0.2)' }
+                            : { borderColor: 'rgba(255,255,255,0.24)', background: 'rgba(255,255,255,0.06)' };
+                    return (
+                      <span key={`${row.dayDate}-${row.workoutName}-${idx}`} className="portal-tag" style={style}>
+                        {entry.prefix ? `${entry.prefix} ` : ''}
+                        {entry.exerciseName}: {score ?? '-'}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </article>
 
       <div className="portal-profile-three-col" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.85rem' }}>

@@ -5,6 +5,7 @@ import { canManagePlayer } from '../../../lib/portal-access';
 import {
   getPlayerByIdInOrganization,
   getPlayerForUser,
+  listAssessmentWorkoutScoresForPlayer,
   listCoachesByOrganization,
   listBodyWeightLogsForPlayer,
   listClientsByOrganization,
@@ -74,7 +75,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
   const today = todayIsoDate();
   const tomorrow = addDays(today, 1);
 
-  const [player, todayItems, bodyWeightLogs, previewClients, coaches] = await Promise.all([
+  const [player, todayItems, bodyWeightLogs, previewClients, coaches, assessmentScores] = await Promise.all([
     getPlayerByIdInOrganization({
       organizationId: session.organizationId,
       playerId: effectivePlayerId,
@@ -96,6 +97,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
     session.role === 'admin' || session.role === 'coach'
       ? listCoachesByOrganization(session.organizationId)
       : Promise.resolve([]),
+    listAssessmentWorkoutScoresForPlayer({ playerId: effectivePlayerId, limit: 240 }),
   ]);
 
   if (!player) {
@@ -186,6 +188,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
           canAssignCoach={session.role === 'admin' || session.role === 'coach'}
           todayItems={todayItems}
           initialWeightLogs={bodyWeightLogs}
+          initialAssessmentScores={assessmentScores}
           trackedExercises={[]}
           initialExerciseId={null}
           initialTrend={[]}

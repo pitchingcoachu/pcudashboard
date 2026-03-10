@@ -77,6 +77,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
   const [videoPreview, setVideoPreview] = useState<{ title: string; url: string } | null>(null);
 
   const loadValues = useMemo(() => parseLoadValues(item.performedLoad), [item.performedLoad]);
+  const isAssessmentWorkout = (item.workoutCategory ?? '').trim().toLowerCase() === 'assessment';
   const exerciseIdsForHistory = useMemo(() => {
     if (item.itemType === 'workout') {
       return Array.from(
@@ -229,6 +230,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
                 let loadIndex = 0;
                 return item.workoutExercises.map((exercise, exerciseIdx) => {
                   const setCount = parseSetCount(exercise.prescribedSets);
+                  const assessmentCurrent = loadValues[exerciseIdx] ?? '';
                   return (
                     <div key={`${item.itemId}-modal-ex-${exerciseIdx}`} className="portal-workout-player-exercise">
                       <div className="portal-workout-player-head">
@@ -261,7 +263,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
                         {exercise.prescribedSets ?? '-'} x{' '}
                         {formatRepTarget(exercise.repMeasure, exercise.repsPerSide, exercise.prescribedReps)}
                       </p>
-                      {exercise.exerciseId && historyByExercise[exercise.exerciseId]?.length
+                      {!isAssessmentWorkout && exercise.exerciseId && historyByExercise[exercise.exerciseId]?.length
                         ? (() => {
                             const maxEntry = formatMaxHistory(historyByExercise[exercise.exerciseId]);
                             if (!maxEntry) return null;
@@ -272,18 +274,32 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
                             );
                           })()
                         : null}
-                      <div className="portal-set-weights">
-                        {Array.from({ length: setCount }).map((_, setIdx) => {
-                          const current = loadValues[loadIndex] ?? '';
-                          loadIndex += 1;
-                          return (
-                            <label key={`${item.itemId}-modal-ex-${exerciseIdx}-set-${setIdx}`}>
-                              Set {setIdx + 1}
-                              <input name="performedLoadValues" defaultValue={current} placeholder="lbs" />
-                            </label>
-                          );
-                        })}
-                      </div>
+                      {isAssessmentWorkout ? (
+                        <div className="portal-set-weights">
+                          <label key={`${item.itemId}-modal-ex-${exerciseIdx}-score`}>
+                            Score (1-3)
+                            <select name="assessmentScoreValues" defaultValue={assessmentCurrent}>
+                              <option value="">Select score</option>
+                              <option value="3">3 - Pass</option>
+                              <option value="2">2 - Mid</option>
+                              <option value="1">1 - Fail</option>
+                            </select>
+                          </label>
+                        </div>
+                      ) : (
+                        <div className="portal-set-weights">
+                          {Array.from({ length: setCount }).map((_, setIdx) => {
+                            const current = loadValues[loadIndex] ?? '';
+                            loadIndex += 1;
+                            return (
+                              <label key={`${item.itemId}-modal-ex-${exerciseIdx}-set-${setIdx}`}>
+                                Set {setIdx + 1}
+                                <input name="performedLoadValues" defaultValue={current} placeholder="lbs" />
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 });

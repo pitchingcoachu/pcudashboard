@@ -16,7 +16,11 @@ export async function POST(request: Request) {
     .getAll('performedLoadValues')
     .map((value) => String(value).trim())
     .filter((value) => value.length > 0);
-  const performedLoadCombined = performedLoadValues.join(', ');
+  const assessmentScoreValues = form
+    .getAll('assessmentScoreValues')
+    .map((value) => String(value).trim())
+    .filter((value) => value === '1' || value === '2' || value === '3');
+  const performedLoadCombined = (assessmentScoreValues.length > 0 ? assessmentScoreValues : performedLoadValues).join(', ');
 
   if (!Number.isFinite(itemId) || itemId <= 0 || !Number.isFinite(playerId) || playerId <= 0) {
     return NextResponse.json({ error: 'Invalid log payload.' }, { status: 400 });

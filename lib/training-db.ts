@@ -157,6 +157,17 @@ export type ExerciseLoadHistoryEntry = {
   repsPerSide: boolean;
 };
 
+export type AssessmentWorkoutScoreRow = {
+  dayDate: string;
+  workoutName: string;
+  exerciseScores: Array<{
+    exerciseId: number | null;
+    exerciseName: string;
+    prefix: string | null;
+    score: 1 | 2 | 3 | null;
+  }>;
+};
+
 export async function ensureTrainingDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
   if (global.__pcuTrainingDbReady) return;
@@ -1744,6 +1755,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
       WHERE p.player_id = $1
         AND l.performed_load IS NOT NULL
         AND LENGTH(TRIM(l.performed_load)) > 0
+        AND COALESCE(LOWER(w.category), '') <> 'assessment'
         AND (
           i.exercise_id = ANY($2::int[])
           OR EXISTS (
@@ -2354,8 +2366,10 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
         JOIN program_day_items i ON i.program_day_id = d.id
         JOIN exercise_logs l ON l.program_day_item_id = i.id AND l.player_id = p.player_id
         JOIN workout_exercises we ON we.workout_id = i.workout_id
+        JOIN workout_library wl ON wl.id = i.workout_id
         WHERE p.player_id = $1
           AND i.workout_id IS NOT NULL
+          AND COALESCE(LOWER(wl.category), '') <> 'assessment'
           AND l.performed_load IS NOT NULL
           AND LENGTH(TRIM(l.performed_load)) > 0
       ),
@@ -2377,4 +2391,84 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
     name: row.name,
     category: row.category,
   }));
+}
+
+export async function listAssessmentWorkoutScoresForPlayer(input: {
+  playerId: number;
+  limit?: number;
+}): Promise<AssessmentWorkoutScoreRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const limit = Math.max(10, Math.min(500, input.limit ?? 120));
+
+  const result = await pool.query<{
+    day_date: string;
+    workout_name: string;
+    performed_load: string | null;
+    workout_exercise_json: unknown;
+  }>(
+    `
+      SELECT
+        d.day_date::text AS day_date,
+        w.name AS workout_name,
+        l.performed_load,
+        ws.exercise_json AS workout_exercise_json
+      FROM programs p
+      JOIN program_days d ON d.program_id = p.id
+      JOIN program_day_items i ON i.program_day_id = d.id
+      JOIN exercise_logs l ON l.program_day_item_id = i.id AND l.player_id = p.player_id
+      JOIN workout_library w ON w.id = i.workout_id
+      LEFT JOIN LATERAL (
+        SELECT
+          COALESCE(
+            JSON_AGG(
+              JSON_BUILD_OBJECT(
+                'exerciseId', e2.id,
+                'exerciseName', e2.name,
+                'prefix', we2.exercise_prefix
+              )
+              ORDER BY we2.sort_order, e2.name
+            ),
+            '[]'::json
+          ) AS exercise_json
+        FROM workout_exercises we2
+        JOIN exercise_library e2 ON e2.id = we2.exercise_id
+        WHERE we2.workout_id = i.workout_id
+      ) ws ON TRUE
+      WHERE p.player_id = $1
+        AND COALESCE(LOWER(w.category), '') = 'assessment'
+        AND l.performed_load IS NOT NULL
+        AND LENGTH(TRIM(l.performed_load)) > 0
+      ORDER BY d.day_date DESC, i.id DESC
+      LIMIT $2
+    `,
+    [input.playerId, limit]
+  );
+
+  return result.rows.map((row) => {
+    const rawExercises = Array.isArray(row.workout_exercise_json) ? row.workout_exercise_json : [];
+    const scoreValues = parseLoadValues(row.performed_load);
+    const exerciseScores = rawExercises.map((entry, index) => {
+      const mapped =
+        entry && typeof entry === 'object'
+          ? (entry as { exerciseId?: number; exerciseName?: string; prefix?: string | null })
+          : {};
+      const rawScore = Number(scoreValues[index] ?? '');
+      let score: 1 | 2 | 3 | null = null;
+      if (rawScore === 1 || rawScore === 2 || rawScore === 3) score = rawScore;
+      return {
+        exerciseId: Number.isFinite(Number(mapped.exerciseId)) ? Number(mapped.exerciseId) : null,
+        exerciseName: String(mapped.exerciseName ?? `Exercise ${index + 1}`),
+        prefix: typeof mapped.prefix === 'string' ? mapped.prefix : null,
+        score,
+      };
+    });
+
+    return {
+      dayDate: row.day_date,
+      workoutName: row.workout_name,
+      exerciseScores,
+    };
+  });
 }
