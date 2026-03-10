@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import type { MouseEvent } from 'react';
+import type { CSSProperties, MouseEvent } from 'react';
 import type { AssessmentWorkoutScoreRow, BodyWeightLogRow, ProgramItemRow } from '../../../lib/training-db';
 import WorkoutLogModal from '../components/workout-log-modal';
 
@@ -70,6 +70,20 @@ function calculateAge(dateOfBirth: string | null): number | null {
     age -= 1;
   }
   return age >= 0 ? age : null;
+}
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  return hash;
+}
+
+function categoryBubbleStyle(category: string): CSSProperties {
+  const hue = hashString(category) % 360;
+  return {
+    borderColor: `hsla(${hue}, 88%, 64%, 0.7)`,
+    background: `hsla(${hue}, 82%, 52%, 0.2)`,
+  };
 }
 
 function LineChart({
@@ -271,6 +285,70 @@ export default function ProfileDashboard({
     if (!selectedAssessmentDate) return [];
     return initialAssessmentScores.filter((row) => row.dayDate === selectedAssessmentDate);
   }, [initialAssessmentScores, selectedAssessmentDate]);
+
+  const selectedDateAssessmentExercises = useMemo(
+    () =>
+      visibleAssessmentRows.flatMap((row) =>
+        row.exerciseScores.map((entry) => ({
+          dayDate: row.dayDate,
+          workoutName: row.workoutName,
+          exerciseId: entry.exerciseId,
+          exerciseName: entry.exerciseName,
+          prefix: entry.prefix,
+          score: entry.score,
+        }))
+      ),
+    [visibleAssessmentRows]
+  );
+
+  const assessmentExerciseOptions = useMemo(() => {
+    const map = new Map<string, { key: string; label: string }>();
+    for (const row of initialAssessmentScores) {
+      for (const entry of row.exerciseScores) {
+        const name = entry.exerciseName.trim();
+        if (!name) continue;
+        const key = `${entry.exerciseId ?? 'name'}::${name.toLowerCase()}`;
+        if (!map.has(key)) {
+          map.set(key, { key, label: name });
+        }
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [initialAssessmentScores]);
+
+  const [selectedAssessmentExerciseKey, setSelectedAssessmentExerciseKey] = useState<string>(
+    assessmentExerciseOptions[0]?.key ?? ''
+  );
+
+  useEffect(() => {
+    if (!assessmentExerciseOptions.length) {
+      setSelectedAssessmentExerciseKey('');
+      return;
+    }
+    if (!assessmentExerciseOptions.some((opt) => opt.key === selectedAssessmentExerciseKey)) {
+      setSelectedAssessmentExerciseKey(assessmentExerciseOptions[0].key);
+    }
+  }, [assessmentExerciseOptions, selectedAssessmentExerciseKey]);
+
+  const assessmentTrendPoints = useMemo(() => {
+    if (!selectedAssessmentExerciseKey) return [];
+    const [, exerciseNameRaw] = selectedAssessmentExerciseKey.split('::');
+    const exerciseNameNeedle = (exerciseNameRaw ?? '').trim();
+    if (!exerciseNameNeedle) return [];
+
+    return initialAssessmentScores
+      .flatMap((row) =>
+        row.exerciseScores
+          .filter((entry) => entry.score !== null && entry.exerciseName.trim().toLowerCase() === exerciseNameNeedle)
+          .map((entry) => ({
+            xLabel: formatDate(row.dayDate),
+            value: Number(entry.score),
+            dayDate: row.dayDate,
+          }))
+      )
+      .sort((a, b) => a.dayDate.localeCompare(b.dayDate))
+      .map((point) => ({ xLabel: point.xLabel, value: point.value }));
+  }, [initialAssessmentScores, selectedAssessmentExerciseKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -512,31 +590,60 @@ export default function ProfileDashboard({
         {visibleAssessmentRows.length === 0 ? (
           <p className="portal-muted-text">No assessment scores logged yet.</p>
         ) : (
-          <div className="portal-admin-stack">
-            {visibleAssessmentRows.map((row, rowIdx) => (
-              <div key={`${row.dayDate}-${row.workoutName}-${rowIdx}`} className="portal-day-card">
-                <h4 style={{ margin: 0 }}>{row.workoutName}</h4>
-                <div className="portal-tag-row">
-                  {row.exerciseScores.map((entry, idx) => {
-                    const score = entry.score;
-                    const style =
-                      score === 3
-                        ? { borderColor: 'rgba(66, 214, 133, 0.8)', background: 'rgba(32, 150, 91, 0.2)' }
-                        : score === 2
-                          ? { borderColor: 'rgba(245, 212, 78, 0.8)', background: 'rgba(168, 138, 36, 0.2)' }
-                          : score === 1
-                            ? { borderColor: 'rgba(246, 97, 97, 0.8)', background: 'rgba(165, 41, 41, 0.2)' }
-                            : { borderColor: 'rgba(255,255,255,0.24)', background: 'rgba(255,255,255,0.06)' };
-                    return (
-                      <span key={`${row.dayDate}-${row.workoutName}-${idx}`} className="portal-tag" style={style}>
+          <div
+            className="portal-profile-assessment-split"
+            style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: '0.85rem' }}
+          >
+            <div className="portal-admin-stack">
+              <h4 style={{ margin: 0 }}>Scores For {formatDate(selectedAssessmentDate)}</h4>
+              <div
+                className="portal-profile-assessment-grid"
+                style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.55rem' }}
+              >
+                {selectedDateAssessmentExercises.map((entry, idx) => {
+                  const score = entry.score;
+                  const style =
+                    score === 3
+                      ? { borderColor: 'rgba(66, 214, 133, 0.8)', background: 'rgba(32, 150, 91, 0.2)' }
+                      : score === 2
+                        ? { borderColor: 'rgba(245, 212, 78, 0.8)', background: 'rgba(168, 138, 36, 0.2)' }
+                        : score === 1
+                          ? { borderColor: 'rgba(246, 97, 97, 0.8)', background: 'rgba(165, 41, 41, 0.2)' }
+                          : { borderColor: 'rgba(255,255,255,0.24)', background: 'rgba(255,255,255,0.06)' };
+                  return (
+                    <article
+                      key={`${entry.dayDate}-${entry.workoutName}-${entry.exerciseName}-${idx}`}
+                      className="portal-day-card"
+                      style={style}
+                    >
+                      <h4 style={{ margin: 0 }}>
                         {entry.prefix ? `${entry.prefix} ` : ''}
-                        {entry.exerciseName}: {score ?? '-'}
-                      </span>
-                    );
-                  })}
-                </div>
+                        {entry.exerciseName}
+                      </h4>
+                      <p className="portal-muted-text">{entry.workoutName}</p>
+                      <p style={{ margin: 0, fontWeight: 700 }}>Score: {score ?? '-'}</p>
+                    </article>
+                  );
+                })}
               </div>
-            ))}
+            </div>
+            <article className="portal-admin-card">
+              <h4 style={{ margin: 0 }}>Assessment Trend</h4>
+              <label className="portal-inline-filter">
+                Assessment Exercise
+                <select
+                  value={selectedAssessmentExerciseKey}
+                  onChange={(event) => setSelectedAssessmentExerciseKey(event.target.value)}
+                >
+                  {assessmentExerciseOptions.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <LineChart points={assessmentTrendPoints} yLabel="Score (1-3)" emptyText="No scores logged yet for this assessment." />
+            </article>
           </div>
         )}
       </article>
@@ -554,7 +661,13 @@ export default function ProfileDashboard({
           ) : (
             <div className="portal-player-items">
               {todayItems.map((item) => (
-                <button key={item.itemId} type="button" className="portal-schedule-item" onClick={() => setSelectedItem(item)}>
+                <button
+                  key={item.itemId}
+                  type="button"
+                  className="portal-schedule-item"
+                  style={categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout')}
+                  onClick={() => setSelectedItem(item)}
+                >
                   <strong>{item.itemName}</strong>
                 </button>
               ))}

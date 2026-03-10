@@ -4,6 +4,8 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { upsertExerciseLog } from '../../../../../lib/training-db';
 import { canManagePlayer } from '../../../../../lib/portal-access';
 
+const ASSESSMENT_NOTES_TOKEN = '[ASSESSMENT_NOTES]';
+
 export async function POST(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -20,7 +22,15 @@ export async function POST(request: Request) {
     .getAll('assessmentScoreValues')
     .map((value) => String(value).trim())
     .filter((value) => value === '1' || value === '2' || value === '3');
+  const assessmentNoteValues = form
+    .getAll('assessmentNoteValues')
+    .map((value) => String(value).trim());
   const performedLoadCombined = (assessmentScoreValues.length > 0 ? assessmentScoreValues : performedLoadValues).join(', ');
+  const baseNotes = String(form.get('notes') ?? '').trim();
+  const hasAssessmentNotes = assessmentNoteValues.some((value) => value.length > 0);
+  const notes = hasAssessmentNotes
+    ? `${baseNotes}\n${ASSESSMENT_NOTES_TOKEN}${JSON.stringify(assessmentNoteValues)}`
+    : baseNotes;
 
   if (!Number.isFinite(itemId) || itemId <= 0 || !Number.isFinite(playerId) || playerId <= 0) {
     return NextResponse.json({ error: 'Invalid log payload.' }, { status: 400 });
@@ -43,7 +53,7 @@ export async function POST(request: Request) {
       performedSets: String(form.get('performedSets') ?? ''),
       performedReps: String(form.get('performedReps') ?? ''),
       performedLoad: performedLoadCombined || String(form.get('performedLoad') ?? ''),
-      notes: String(form.get('notes') ?? ''),
+      notes,
     });
     return NextResponse.json({ ok: true });
   } catch (error) {

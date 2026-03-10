@@ -11,6 +11,8 @@ type WorkoutLogModalProps = {
   onSaved?: () => Promise<void> | void;
 };
 
+const ASSESSMENT_NOTES_TOKEN = '[ASSESSMENT_NOTES]';
+
 function parseSetCount(value: string | null): number {
   if (!value) return 1;
   const match = value.match(/\d+/);
@@ -26,6 +28,31 @@ function parseLoadValues(value: string | null): string[] {
     .split(',')
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
+}
+
+function parseAssessmentNotesPayload(
+  value: string | null
+): { generalNotes: string; assessmentNotes: string[] } {
+  const raw = String(value ?? '');
+  const tokenIndex = raw.indexOf(ASSESSMENT_NOTES_TOKEN);
+  if (tokenIndex === -1) {
+    return { generalNotes: raw, assessmentNotes: [] };
+  }
+
+  const generalNotes = raw.slice(0, tokenIndex).trimEnd();
+  const payload = raw.slice(tokenIndex + ASSESSMENT_NOTES_TOKEN.length).trim();
+  if (!payload) return { generalNotes, assessmentNotes: [] };
+
+  try {
+    const parsed = JSON.parse(payload);
+    if (!Array.isArray(parsed)) return { generalNotes, assessmentNotes: [] };
+    return {
+      generalNotes,
+      assessmentNotes: parsed.map((entry) => String(entry ?? '')),
+    };
+  } catch {
+    return { generalNotes, assessmentNotes: [] };
+  }
 }
 
 function formatRepTarget(repMeasure: 'reps' | 'seconds' | 'distance', repsPerSide: boolean, value: string | null): string {
@@ -78,6 +105,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
 
   const loadValues = useMemo(() => parseLoadValues(item.performedLoad), [item.performedLoad]);
   const isAssessmentWorkout = (item.workoutCategory ?? '').trim().toLowerCase() === 'assessment';
+  const notesPayload = useMemo(() => parseAssessmentNotesPayload(item.logNotes ?? ''), [item.logNotes]);
   const exerciseIdsForHistory = useMemo(() => {
     if (item.itemType === 'workout') {
       return Array.from(
@@ -284,6 +312,13 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
                               <option value="2">2 - Mid</option>
                               <option value="1">1 - Fail</option>
                             </select>
+                            <textarea
+                              name="assessmentNoteValues"
+                              rows={2}
+                              placeholder="Assessment note..."
+                              defaultValue={notesPayload.assessmentNotes[exerciseIdx] ?? ''}
+                              style={{ marginTop: '0.35rem' }}
+                            />
                           </label>
                         </div>
                       ) : (
@@ -360,7 +395,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
           <div className="portal-log-grid">
             <label className="portal-form-span-2">
               Notes
-              <textarea name="notes" rows={2} defaultValue={item.logNotes ?? ''} />
+              <textarea name="notes" rows={2} defaultValue={notesPayload.generalNotes} />
             </label>
           </div>
 

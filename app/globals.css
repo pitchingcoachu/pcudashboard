@@ -2056,6 +2056,18 @@ main {
   gap: 0.8rem;
 }
 
+.portal-profile-assessment-split {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 0.85rem;
+}
+
+.portal-profile-assessment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
 .portal-loading-panel {
   display: grid;
   place-items: center;
@@ -2705,6 +2717,10 @@ main {
   .portal-month-filter {
     width: 100%;
   }
+
+  .portal-profile-assessment-split {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 780px) {
@@ -2716,5 +2732,9 @@ main {
   .portal-month-filter .btn {
     width: 100%;
     justify-content: center;
+  }
+
+  .portal-profile-assessment-grid {
+    grid-template-columns: 1fr;
   }
 }
