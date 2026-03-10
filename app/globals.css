@@ -2056,6 +2056,20 @@ main {
   gap: 0.8rem;
 }
 
+.portal-loading-panel {
+  display: grid;
+  place-items: center;
+}
+
+.portal-loading-text {
+  margin: 0;
+  font: 700 0.95rem/1.2 Manrope, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-main);
+  opacity: 0.92;
+}
+
 .portal-player-items {
   display: grid;
   gap: 0.7rem;
