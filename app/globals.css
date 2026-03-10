@@ -2721,6 +2721,10 @@ main {
   .portal-profile-assessment-split {
     grid-template-columns: 1fr;
   }
+
+  .portal-profile-assessment-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 780px) {

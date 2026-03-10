@@ -266,6 +266,7 @@ export default function ProfileDashboard({
   const [trendMessage, setTrendMessage] = useState('');
   const [trendData, setTrendData] = useState<ExerciseTrendPoint[]>(initialTrend);
   const [profileExpanded, setProfileExpanded] = useState(false);
+  const [assessmentExpanded, setAssessmentExpanded] = useState(true);
 
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
   const [selectedAssessmentDate, setSelectedAssessmentDate] = useState(
@@ -336,6 +337,11 @@ export default function ProfileDashboard({
   const [selectedAssessmentExerciseKey, setSelectedAssessmentExerciseKey] = useState<string>(
     assessmentExerciseOptions[0]?.key ?? ''
   );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setAssessmentExpanded(!window.matchMedia('(max-width: 780px)').matches);
+  }, []);
 
   useEffect(() => {
     if (!assessmentExerciseOptions.length) {
@@ -452,16 +458,14 @@ export default function ProfileDashboard({
       <article className="portal-admin-card">
         <div className="portal-row-between">
           <h3>Profile Details</h3>
-          {canEditProfile ? (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => setProfileExpanded((current) => !current)}
-              aria-expanded={profileExpanded}
-            >
-              {profileExpanded ? 'Collapse' : 'Expand'}
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setProfileExpanded((current) => !current)}
+            aria-expanded={profileExpanded}
+          >
+            {profileExpanded ? 'Collapse' : 'Expand'}
+          </button>
         </div>
         {canEditProfile && profileExpanded ? (
           <form
@@ -585,7 +589,7 @@ export default function ProfileDashboard({
             </div>
           </form>
         ) : null}
-        {!canEditProfile ? (
+        {!canEditProfile && profileExpanded ? (
           <div className="portal-form-grid">
             <label>
               Name
@@ -626,35 +630,39 @@ export default function ProfileDashboard({
       <article className="portal-admin-card">
         <div className="portal-row-between">
           <h3>Assessment Scores</h3>
-          {assessmentDates.length > 0 && (
-            <label className="portal-inline-filter">
-              Date
-              <select
-                value={selectedAssessmentDate}
-                onChange={(event) => setSelectedAssessmentDate(event.target.value)}
-              >
-                {assessmentDates.map((date) => (
-                  <option key={date} value={date}>
-                    {formatDate(date)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          <div className="portal-choice-line-actions">
+            {assessmentDates.length > 0 && (
+              <label className="portal-inline-filter">
+                Date
+                <select
+                  value={selectedAssessmentDate}
+                  onChange={(event) => setSelectedAssessmentDate(event.target.value)}
+                >
+                  {assessmentDates.map((date) => (
+                    <option key={date} value={date}>
+                      {formatDate(date)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setAssessmentExpanded((current) => !current)}
+              aria-expanded={assessmentExpanded}
+            >
+              {assessmentExpanded ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
         </div>
-        {visibleAssessmentRows.length === 0 ? (
+        {!assessmentExpanded ? null : visibleAssessmentRows.length === 0 ? (
           <p className="portal-muted-text">No assessment scores logged yet.</p>
         ) : (
-          <div
-            className="portal-profile-assessment-split"
-            style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: '0.85rem' }}
-          >
+          <div className="portal-profile-assessment-split">
             <div className="portal-admin-stack">
               <h4 style={{ margin: 0 }}>Scores For {formatDate(selectedAssessmentDate)}</h4>
-              <div
-                className="portal-profile-assessment-grid"
-                style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.55rem' }}
-              >
+              <div className="portal-profile-assessment-grid">
                 {selectedDateAssessmentExercises.map((entry, idx) => {
                   const score = entry.score;
                   const style =
