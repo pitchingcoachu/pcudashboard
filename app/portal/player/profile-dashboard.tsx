@@ -35,6 +35,7 @@ type ProfileDashboardProps = {
   };
   coachOptions: Array<{ userId: number; name: string; role: 'admin' | 'coach' }>;
   canAssignCoach: boolean;
+  canEditProfile: boolean;
   todayItems: ProgramItemRow[];
   initialWeightLogs: BodyWeightLogRow[];
   initialAssessmentScores: AssessmentWorkoutScoreRow[];
@@ -230,6 +231,7 @@ export default function ProfileDashboard({
   initialProfile,
   coachOptions,
   canAssignCoach,
+  canEditProfile,
   todayItems,
   initialWeightLogs,
   initialAssessmentScores,
@@ -450,16 +452,18 @@ export default function ProfileDashboard({
       <article className="portal-admin-card">
         <div className="portal-row-between">
           <h3>Profile Details</h3>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => setProfileExpanded((current) => !current)}
-            aria-expanded={profileExpanded}
-          >
-            {profileExpanded ? 'Collapse' : 'Expand'}
-          </button>
+          {canEditProfile ? (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setProfileExpanded((current) => !current)}
+              aria-expanded={profileExpanded}
+            >
+              {profileExpanded ? 'Collapse' : 'Expand'}
+            </button>
+          ) : null}
         </div>
-        {profileExpanded ? (
+        {canEditProfile && profileExpanded ? (
           <form
             className="portal-form-grid"
             onSubmit={async (event) => {
@@ -581,6 +585,42 @@ export default function ProfileDashboard({
             </div>
           </form>
         ) : null}
+        {!canEditProfile ? (
+          <div className="portal-form-grid">
+            <label>
+              Name
+              <input value={profile.fullName} readOnly />
+            </label>
+            <label>
+              Email
+              <input value={profile.email} readOnly />
+            </label>
+            <label>
+              Date Of Birth
+              <input value={profile.dateOfBirth || '-'} readOnly />
+            </label>
+            <label>
+              School / Team
+              <input value={profile.schoolTeam || '-'} readOnly />
+            </label>
+            <label>
+              Phone
+              <input value={profile.phone || '-'} readOnly />
+            </label>
+            <label>
+              College Commitment
+              <input value={profile.collegeCommitment || '-'} readOnly />
+            </label>
+            <label>
+              Bats
+              <input value={profile.batsHand || '-'} readOnly />
+            </label>
+            <label>
+              Throws
+              <input value={profile.throwsHand || '-'} readOnly />
+            </label>
+          </div>
+        ) : null}
       </article>
 
       <article className="portal-admin-card">
@@ -644,19 +684,17 @@ export default function ProfileDashboard({
             </div>
             <article className="portal-admin-card">
               <h4 style={{ margin: 0 }}>Assessment Trend</h4>
-              <label className="portal-inline-filter">
-                Assessment Exercise
-                <select
-                  value={selectedAssessmentExerciseKey}
-                  onChange={(event) => setSelectedAssessmentExerciseKey(event.target.value)}
-                >
-                  {assessmentExerciseOptions.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <select
+                aria-label="Assessment exercise"
+                value={selectedAssessmentExerciseKey}
+                onChange={(event) => setSelectedAssessmentExerciseKey(event.target.value)}
+              >
+                {assessmentExerciseOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
               <LineChart
                 points={assessmentTrendPoints}
                 yLabel="Score (1-3)"

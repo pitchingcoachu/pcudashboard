@@ -186,6 +186,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
           }}
           coachOptions={coaches}
           canAssignCoach={session.role === 'admin' || session.role === 'coach'}
+          canEditProfile={session.role === 'admin' || session.role === 'coach'}
           todayItems={todayItems}
           initialWeightLogs={bodyWeightLogs}
           initialAssessmentScores={assessmentScores}
