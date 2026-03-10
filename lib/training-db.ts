@@ -1,6 +1,10 @@
 import { createPasswordHash, ensureAuthDbReady, getDbPool, isDatabaseConfigured } from './auth-db';
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 
+declare global {
+  var __pcuTrainingDbReady: boolean | undefined;
+}
+
 export type ClientRow = {
   playerId: number;
   userId: number | null;
@@ -155,6 +159,7 @@ export type ExerciseLoadHistoryEntry = {
 
 export async function ensureTrainingDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
+  if (global.__pcuTrainingDbReady) return;
   await ensureAuthDbReady();
   const pool = getDbPool();
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
@@ -164,6 +169,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
   );
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
   await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
+  global.__pcuTrainingDbReady = true;
 }
 
 function validateHttpUrl(value: string): { ok: true; value: string } | { ok: false; error: string } {

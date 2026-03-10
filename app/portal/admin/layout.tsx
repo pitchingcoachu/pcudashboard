@@ -48,7 +48,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             >
               Player Preview
             </Link>
-            <Link href="/portal" className="portal-nav-link">
+            <Link href="/portal/dashboard" className="portal-nav-link">
               PCU Dashboard
             </Link>
           </nav>

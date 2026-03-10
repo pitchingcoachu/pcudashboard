@@ -154,16 +154,7 @@ export async function ensureAuthDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
   const pool = getDbPool();
 
-  if (global.__pcuAuthDbReady) {
-    await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
-    await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
-    await pool.query(
-      `ALTER TABLE players ADD COLUMN IF NOT EXISTS assigned_coach_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL;`
-    );
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
-    await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
-    return;
-  }
+  if (global.__pcuAuthDbReady) return;
   const migrationLockId = 14840321;
 
   // Prevent concurrent schema bootstrap from multiple requests/processes.

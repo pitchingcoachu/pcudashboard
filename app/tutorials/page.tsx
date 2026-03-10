@@ -20,13 +20,13 @@ export default async function TutorialsPage() {
     <div className="portal-shell">
       <header className="portal-header">
         <div className="portal-header-left">
-          <Link href="/portal" className="portal-header-logo-link" aria-label="PCU Home">
+          <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="PCU Home">
             <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
           </Link>
         </div>
         <div className="portal-header-center">
           <nav className="portal-nav" aria-label="Portal Navigation">
-            <Link href="/portal" className="portal-nav-link">
+            <Link href="/portal/dashboard" className="portal-nav-link">
               PCU Dashboard
             </Link>
             {(session.role === 'admin' || session.role === 'coach') && (

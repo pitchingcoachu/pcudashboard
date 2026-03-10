@@ -3,7 +3,6 @@ import {
   listClientsByOrganization,
   listCoachesByOrganization,
   listExercisesByOrganization,
-  listProgramItemsForPlayerByMonth,
   listWorkoutsByOrganization,
 } from '../../../lib/training-db';
 import { requirePortalSession } from '../../../lib/portal-session';
@@ -27,11 +26,6 @@ export default async function AdminHomePage() {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([status, count]) => `${status}: ${count}`)
     .join(' | ');
-  const today = new Date();
-  const month = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}`;
-  const firstPlayerId = visibleClients[0]?.playerId ?? 0;
-  const monthItems = firstPlayerId > 0 ? await listProgramItemsForPlayerByMonth({ playerId: firstPlayerId, month }) : [];
-
   return (
     <div className="portal-admin-grid">
       {session.role === 'admin' ? (
@@ -85,7 +79,7 @@ export default async function AdminHomePage() {
       </article>
       <article className="portal-admin-card">
         <h2>Schedule</h2>
-        <p>Build calendars with drag/drop. {monthItems.length} assignments loaded this month.</p>
+        <p>Build calendars with drag/drop workout scheduling.</p>
         <Link href="/portal/admin/schedule" className="btn btn-primary as-link">
           Open Schedule
         </Link>
@@ -93,7 +87,7 @@ export default async function AdminHomePage() {
       <article className="portal-admin-card">
         <h2>PCU Dashboard</h2>
         <p>Open the main dashboard view.</p>
-        <Link href="/portal" className="btn btn-primary as-link">
+        <Link href="/portal/dashboard" className="btn btn-primary as-link">
           Open PCU Dashboard
         </Link>
       </article>
