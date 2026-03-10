@@ -90,10 +90,14 @@ function LineChart({
   points,
   yLabel,
   emptyText,
+  fixedYMin,
+  fixedYMax,
 }: {
   points: Array<{ xLabel: string; value: number }>;
   yLabel: string;
   emptyText: string;
+  fixedYMin?: number;
+  fixedYMax?: number;
 }) {
   if (points.length === 0) return <p className="portal-muted-text">{emptyText}</p>;
 
@@ -106,8 +110,18 @@ function LineChart({
   const values = points.map((point) => point.value);
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
-  const yMin = minValue === maxValue ? minValue - 1 : minValue;
-  const yMax = minValue === maxValue ? maxValue + 1 : maxValue;
+  const yMin =
+    Number.isFinite(fixedYMin) && Number.isFinite(fixedYMax)
+      ? Number(fixedYMin)
+      : minValue === maxValue
+        ? minValue - 1
+        : minValue;
+  const yMax =
+    Number.isFinite(fixedYMin) && Number.isFinite(fixedYMax)
+      ? Number(fixedYMax)
+      : minValue === maxValue
+        ? maxValue + 1
+        : maxValue;
   const yTickCount = 5;
   const yTicks = Array.from({ length: yTickCount }, (_, idx) => {
     const ratio = idx / (yTickCount - 1);
@@ -296,6 +310,7 @@ export default function ProfileDashboard({
           exerciseName: entry.exerciseName,
           prefix: entry.prefix,
           score: entry.score,
+          note: entry.note,
         }))
       ),
     [visibleAssessmentRows]
@@ -620,8 +635,8 @@ export default function ProfileDashboard({
                         {entry.prefix ? `${entry.prefix} ` : ''}
                         {entry.exerciseName}
                       </h4>
-                      <p className="portal-muted-text">{entry.workoutName}</p>
                       <p style={{ margin: 0, fontWeight: 700 }}>Score: {score ?? '-'}</p>
+                      {entry.note ? <p className="portal-muted-text">Notes: {entry.note}</p> : null}
                     </article>
                   );
                 })}
@@ -642,7 +657,13 @@ export default function ProfileDashboard({
                   ))}
                 </select>
               </label>
-              <LineChart points={assessmentTrendPoints} yLabel="Score (1-3)" emptyText="No scores logged yet for this assessment." />
+              <LineChart
+                points={assessmentTrendPoints}
+                yLabel="Score (1-3)"
+                emptyText="No scores logged yet for this assessment."
+                fixedYMin={1}
+                fixedYMax={3}
+              />
             </article>
           </div>
         )}

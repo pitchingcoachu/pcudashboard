@@ -165,6 +165,7 @@ export type AssessmentWorkoutScoreRow = {
     exerciseName: string;
     prefix: string | null;
     score: 1 | 2 | 3 | null;
+    note: string | null;
   }>;
 };
 
@@ -220,6 +221,23 @@ function parseLoadValues(value: string | null): string[] {
     .split(',')
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
+}
+
+const ASSESSMENT_NOTES_TOKEN = '[ASSESSMENT_NOTES]';
+
+function parseAssessmentNotesFromLog(value: string | null): string[] {
+  const raw = String(value ?? '');
+  const tokenIndex = raw.indexOf(ASSESSMENT_NOTES_TOKEN);
+  if (tokenIndex === -1) return [];
+  const payload = raw.slice(tokenIndex + ASSESSMENT_NOTES_TOKEN.length).trim();
+  if (!payload) return [];
+  try {
+    const parsed = JSON.parse(payload);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((entry) => String(entry ?? '').trim());
+  } catch {
+    return [];
+  }
 }
 
 export async function listClientsByOrganization(organizationId: number): Promise<ClientRow[]> {
@@ -2406,6 +2424,7 @@ export async function listAssessmentWorkoutScoresForPlayer(input: {
     day_date: string;
     workout_name: string;
     performed_load: string | null;
+    log_notes: string | null;
     workout_exercise_json: unknown;
   }>(
     `
@@ -2413,6 +2432,7 @@ export async function listAssessmentWorkoutScoresForPlayer(input: {
         d.day_date::text AS day_date,
         w.name AS workout_name,
         l.performed_load,
+        l.notes AS log_notes,
         ws.exercise_json AS workout_exercise_json
       FROM programs p
       JOIN program_days d ON d.program_id = p.id
@@ -2449,6 +2469,7 @@ export async function listAssessmentWorkoutScoresForPlayer(input: {
   return result.rows.map((row) => {
     const rawExercises = Array.isArray(row.workout_exercise_json) ? row.workout_exercise_json : [];
     const scoreValues = parseLoadValues(row.performed_load);
+    const noteValues = parseAssessmentNotesFromLog(row.log_notes);
     const exerciseScores = rawExercises.map((entry, index) => {
       const mapped =
         entry && typeof entry === 'object'
@@ -2462,6 +2483,7 @@ export async function listAssessmentWorkoutScoresForPlayer(input: {
         exerciseName: String(mapped.exerciseName ?? `Exercise ${index + 1}`),
         prefix: typeof mapped.prefix === 'string' ? mapped.prefix : null,
         score,
+        note: noteValues[index] || null,
       };
     });
 
