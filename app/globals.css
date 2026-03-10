@@ -1580,6 +1580,9 @@ main {
 .portal-inline-filter input,
 .portal-preview-form select {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 10px;
   padding: 0.62rem 0.72rem;
