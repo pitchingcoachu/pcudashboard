@@ -1997,6 +1997,18 @@ main {
   flex-wrap: wrap;
 }
 
+.portal-month-filter {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto;
+  align-items: end;
+  gap: 0.5rem;
+  width: min(100%, 360px);
+}
+
+.portal-month-filter .btn {
+  white-space: nowrap;
+}
+
 .portal-inline-filter {
   display: grid;
   gap: 0.25rem;
@@ -2674,5 +2686,21 @@ main {
 
   .portal-schedule-layout {
     grid-template-columns: 1fr;
+  }
+
+  .portal-month-filter {
+    width: 100%;
+  }
+}
+
+@media (max-width: 780px) {
+  .portal-month-filter {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .portal-month-filter .btn {
+    width: 100%;
+    justify-content: center;
   }
 }

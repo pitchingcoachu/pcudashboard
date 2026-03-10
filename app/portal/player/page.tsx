@@ -13,6 +13,8 @@ import {
 import LogoutButton from '../logout-button';
 import ProfileDashboard from './profile-dashboard';
 
+const TM_DATA_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
+
 type PlayerPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -128,9 +130,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
                 Switch
               </button>
             </form>
-          ) : (
-            <span className="portal-app-trigger">Player Profile</span>
-          )}
+          ) : null}
         </div>
         <div className="portal-header-center">
           <nav className="portal-nav" aria-label="Portal Navigation">
@@ -145,9 +145,20 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             <Link href={fullProgramHref} className="portal-nav-link">
               Program
             </Link>
-            <Link href="/tutorials" className="portal-nav-link">
-              Tutorials
-            </Link>
+            {session.role === 'player' ? (
+              <a
+                href={TM_DATA_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="portal-nav-link"
+              >
+                PCU Dashboard
+              </a>
+            ) : (
+              <Link href="/tutorials" className="portal-nav-link">
+                Tutorials
+              </Link>
+            )}
           </nav>
         </div>
         <div className="portal-header-right">
