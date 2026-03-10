@@ -1591,6 +1591,16 @@ main {
   background: rgba(10, 10, 10, 0.9);
 }
 
+.portal-form-grid input[type='date'] {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .portal-form-grid button {
   width: fit-content;
 }
