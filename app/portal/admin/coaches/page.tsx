@@ -1,6 +1,9 @@
 import { notFound } from 'next/navigation';
 import { requirePortalSession } from '../../../../lib/portal-session';
-import { listCoachesByOrganization } from '../../../../lib/training-db';
+import { listClientsByOrganization, listCoachesByOrganization } from '../../../../lib/training-db';
+import { CoachesTable } from './table-client';
+
+export const dynamic = 'force-dynamic';
 
 type CoachPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -16,8 +19,9 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
   const session = await requirePortalSession();
   if (session.role !== 'admin') notFound();
 
-  const [coaches, params] = await Promise.all([
+  const [coaches, clients, params] = await Promise.all([
     listCoachesByOrganization(session.organizationId),
+    listClientsByOrganization(session.organizationId),
     searchParams,
   ]);
   const { ok, error } = readMessage(params);
@@ -69,57 +73,7 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
         {coaches.length === 0 ? (
           <p>No coaches yet.</p>
         ) : (
-          <div className="portal-table-wrap">
-            <table className="portal-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Email</th>
-                  <th>Phone</th>
-                  <th>Role</th>
-                  <th>Status</th>
-                  <th>Assigned</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {coaches.map((coach) => (
-                  <tr key={coach.userId}>
-                    <td>{coach.name}</td>
-                    <td>{coach.email}</td>
-                    <td>{coach.phone ?? '-'}</td>
-                    <td>{coach.role}</td>
-                    <td>{coach.isActive ? 'Active' : 'Inactive'}</td>
-                    <td>{coach.assignedPlayerCount}</td>
-                    <td className="portal-table-actions">
-                      {coach.userId === session.userId ? (
-                        <span className="portal-muted-text">Current user</span>
-                      ) : (
-                        <>
-                          <form method="post" action="/api/admin/coaches/manage">
-                            <input type="hidden" name="redirectTo" value="/portal/admin/coaches" />
-                            <input type="hidden" name="staffUserId" value={String(coach.userId)} />
-                            <input type="hidden" name="action" value={coach.isActive ? 'deactivate' : 'activate'} />
-                            <button type="submit" className="btn btn-ghost">
-                              {coach.isActive ? 'Deactivate' : 'Activate'}
-                            </button>
-                          </form>
-                          <form method="post" action="/api/admin/coaches/manage">
-                            <input type="hidden" name="redirectTo" value="/portal/admin/coaches" />
-                            <input type="hidden" name="staffUserId" value={String(coach.userId)} />
-                            <input type="hidden" name="action" value="delete" />
-                            <button type="submit" className="btn btn-ghost">
-                              Delete
-                            </button>
-                          </form>
-                        </>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <CoachesTable coaches={coaches} clients={clients} currentUserId={session.userId} />
         )}
       </article>
     </div>

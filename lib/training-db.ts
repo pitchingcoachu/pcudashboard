@@ -2069,24 +2069,24 @@ export async function getPlayerByIdInOrganization(input: {
   }>(
     `
       SELECT
-        id,
-        full_name,
-        email,
-        date_of_birth::text,
-        school_team,
-        phone,
-        college_commitment,
-        bats_hand,
-        throws_hand,
-        assigned_coach_user_id,
+        p.id,
+        p.full_name,
+        p.email,
+        p.date_of_birth::text,
+        p.school_team,
+        p.phone,
+        p.college_commitment,
+        p.bats_hand,
+        p.throws_hand,
+        p.assigned_coach_user_id,
         coach.name AS assigned_coach_name,
         CASE
-          WHEN date_of_birth IS NULL THEN NULL
-          ELSE DATE_PART('year', AGE(CURRENT_DATE, date_of_birth))::text
+          WHEN p.date_of_birth IS NULL THEN NULL
+          ELSE DATE_PART('year', AGE(CURRENT_DATE, p.date_of_birth))::text
         END AS age_years
-      FROM players
-      LEFT JOIN auth_users coach ON coach.id = players.assigned_coach_user_id
-      WHERE id = $1 AND organization_id = $2
+      FROM players p
+      LEFT JOIN auth_users coach ON coach.id = p.assigned_coach_user_id
+      WHERE p.id = $1 AND p.organization_id = $2
       LIMIT 1
     `,
     [input.playerId, input.organizationId]
@@ -2133,24 +2133,24 @@ export async function getPlayerForUser(input: {
   }>(
     `
       SELECT
-        id,
-        full_name,
-        email,
-        date_of_birth::text,
-        school_team,
-        phone,
-        college_commitment,
-        bats_hand,
-        throws_hand,
-        assigned_coach_user_id,
+        p.id,
+        p.full_name,
+        p.email,
+        p.date_of_birth::text,
+        p.school_team,
+        p.phone,
+        p.college_commitment,
+        p.bats_hand,
+        p.throws_hand,
+        p.assigned_coach_user_id,
         coach.name AS assigned_coach_name,
         CASE
-          WHEN date_of_birth IS NULL THEN NULL
-          ELSE DATE_PART('year', AGE(CURRENT_DATE, date_of_birth))::text
+          WHEN p.date_of_birth IS NULL THEN NULL
+          ELSE DATE_PART('year', AGE(CURRENT_DATE, p.date_of_birth))::text
         END AS age_years
-      FROM players
-      LEFT JOIN auth_users coach ON coach.id = players.assigned_coach_user_id
-      WHERE organization_id = $1 AND user_id = $2
+      FROM players p
+      LEFT JOIN auth_users coach ON coach.id = p.assigned_coach_user_id
+      WHERE p.organization_id = $1 AND p.user_id = $2
       LIMIT 1
     `,
     [input.organizationId, input.userId]

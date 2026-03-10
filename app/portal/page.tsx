@@ -10,6 +10,9 @@ export default async function PortalPage() {
   if (session.role === 'player') {
     redirect('/portal/player');
   }
+  if (session.role === 'coach') {
+    redirect('/portal/admin');
+  }
 
   return (
     <div className="portal-shell">
