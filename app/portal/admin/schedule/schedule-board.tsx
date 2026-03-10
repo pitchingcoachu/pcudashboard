@@ -276,6 +276,30 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
 
   const onDayDrop = async (event: React.DragEvent<HTMLElement>, dayDate: string) => {
     event.preventDefault();
+    const scheduleItemId = Number(event.dataTransfer.getData('scheduleItemId'));
+    const sourceDate = event.dataTransfer.getData('scheduleItemDay');
+    if (Number.isFinite(scheduleItemId) && scheduleItemId > 0) {
+      if (sourceDate === dayDate) return;
+      setError('');
+      try {
+        const response = await fetch('/api/admin/schedule/move', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            playerId,
+            itemId: scheduleItemId,
+            targetDate: dayDate,
+          }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to move schedule item.');
+        await loadItems();
+      } catch (moveError) {
+        setError(moveError instanceof Error ? moveError.message : 'Failed to move schedule item.');
+      }
+      return;
+    }
+
     const workoutId = Number(event.dataTransfer.getData('workoutId'));
     if (!Number.isFinite(workoutId) || workoutId <= 0) return;
     await assignWorkout(dayDate, workoutId);

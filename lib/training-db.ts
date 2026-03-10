@@ -1650,6 +1650,111 @@ export async function reorderProgramDayItems(input: {
   }
 }
 
+export async function moveProgramItemToDate(input: {
+  organizationId: number;
+  playerId: number;
+  itemId: number;
+  targetDate: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const date = input.targetDate.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, error: 'Date must be YYYY-MM-DD.' };
+  if (!Number.isFinite(input.itemId) || input.itemId <= 0) return { ok: false, error: 'Valid itemId is required.' };
+
+  const source = await pool.query<{
+    item_id: number;
+    source_day_date: string;
+    source_program_day_id: number;
+    program_id: number;
+  }>(
+    `
+      SELECT
+        i.id AS item_id,
+        d.day_date::text AS source_day_date,
+        d.id AS source_program_day_id,
+        p.id AS program_id
+      FROM programs p
+      JOIN program_days d ON d.program_id = p.id
+      JOIN program_day_items i ON i.program_day_id = d.id
+      WHERE p.organization_id = $1
+        AND p.player_id = $2
+        AND i.id = $3
+      LIMIT 1
+    `,
+    [input.organizationId, input.playerId, input.itemId]
+  );
+
+  if ((source.rowCount ?? 0) !== 1) return { ok: false, error: 'Schedule item was not found for this player.' };
+  const sourceRow = source.rows[0];
+  if (sourceRow.source_day_date === date) return { ok: true };
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const targetDay = await client.query<{ id: number }>(
+      `
+        INSERT INTO program_days (program_id, day_date)
+        VALUES ($1, $2::date)
+        ON CONFLICT (program_id, day_date)
+        DO UPDATE SET updated_at = NOW()
+        RETURNING id
+      `,
+      [sourceRow.program_id, date]
+    );
+    const targetProgramDayId = targetDay.rows[0]?.id;
+    if (!targetProgramDayId) throw new Error('Unable to create target day.');
+
+    const orderResult = await client.query<{ next_order: number }>(
+      `
+        SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order
+        FROM program_day_items
+        WHERE program_day_id = $1
+      `,
+      [targetProgramDayId]
+    );
+    const nextOrder = Number(orderResult.rows[0]?.next_order ?? 1);
+
+    await client.query(
+      `
+        UPDATE program_day_items
+        SET program_day_id = $1,
+            sort_order = $2,
+            updated_at = NOW()
+        WHERE id = $3
+      `,
+      [targetProgramDayId, nextOrder, input.itemId]
+    );
+
+    await client.query(
+      `
+        WITH ordered AS (
+          SELECT id, ROW_NUMBER() OVER (ORDER BY sort_order ASC, id ASC) AS next_order
+          FROM program_day_items
+          WHERE program_day_id = $1
+        )
+        UPDATE program_day_items AS i
+        SET sort_order = ordered.next_order,
+            updated_at = NOW()
+        FROM ordered
+        WHERE i.id = ordered.id
+      `,
+      [sourceRow.source_program_day_id]
+    );
+
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to move schedule item.' };
+  } finally {
+    client.release();
+  }
+}
+
 export async function upsertExerciseLog(input: {
   playerId: number;
   itemId: number;
