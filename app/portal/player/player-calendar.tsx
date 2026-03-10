@@ -105,7 +105,7 @@ function categoryBubbleStyle(category: string): CSSProperties {
 }
 
 export default function PlayerCalendar({ playerId, initialItems, initialStartDate, initialEndDate }: PlayerCalendarProps) {
-  const [view, setView] = useState<ViewMode>('month');
+  const [view, setView] = useState<ViewMode>('day');
   const [anchorDate, setAnchorDate] = useState<string>(toIsoDate(new Date()));
   const [items, setItems] = useState<ProgramItemRow[]>(initialItems);
   const [loading, setLoading] = useState(false);
@@ -277,10 +277,6 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
   return (
     <div className="portal-admin-stack">
       <div className="portal-schedule-toolbar">
-        <label>
-          Focus Date
-          <input type="date" value={anchorDate} onChange={(event) => setAnchorDate(event.target.value)} />
-        </label>
         <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
           {(['day', 'week', 'month'] as ViewMode[]).map((mode) => (
             <button

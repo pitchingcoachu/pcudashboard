@@ -17,9 +17,6 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <Link href="/portal/admin" className="portal-header-logo-link" aria-label="PCU Home">
             <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
           </Link>
-          <Link href="/portal/admin" className="portal-app-trigger portal-admin-badge-link">
-            Admin Console
-          </Link>
         </div>
         <div className="portal-header-center">
           <nav className="portal-nav" aria-label="Portal Navigation">

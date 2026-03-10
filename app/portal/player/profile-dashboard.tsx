@@ -227,6 +227,7 @@ export default function ProfileDashboard({
   const [trendLoading, setTrendLoading] = useState(false);
   const [trendMessage, setTrendMessage] = useState('');
   const [trendData, setTrendData] = useState<ExerciseTrendPoint[]>(initialTrend);
+  const [profileExpanded, setProfileExpanded] = useState(false);
 
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
 
@@ -315,7 +316,7 @@ export default function ProfileDashboard({
   return (
     <div className="portal-profile-stack">
       <section className="portal-admin-card portal-profile-hero">
-        <div>
+        <div className="portal-profile-hero-name">
           <h2>{profile.fullName}</h2>
         </div>
         <div className="portal-profile-vitals">
@@ -330,111 +331,123 @@ export default function ProfileDashboard({
       </section>
 
       <article className="portal-admin-card">
-        <h3>Profile</h3>
-        <form
-          className="portal-form-grid"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            setProfileSaving(true);
-            setProfileMessage('');
-            try {
-              const response = await fetch('/api/player/profile', {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({
-                  playerId,
-                  fullName: profile.fullName,
-                  email: profile.email,
-                  dateOfBirth: profile.dateOfBirth,
-                  schoolTeam: profile.schoolTeam,
-                  phone: profile.phone,
-                  collegeCommitment: profile.collegeCommitment,
-                  batsHand: profile.batsHand,
-                  throwsHand: profile.throwsHand,
-                }),
-              });
-              const payload = (await response.json().catch(() => ({}))) as { error?: string };
-              if (!response.ok) throw new Error(payload.error ?? 'Failed to save profile.');
-              setProfileMessage('Profile saved.');
-            } catch (error) {
-              setProfileMessage(error instanceof Error ? error.message : 'Failed to save profile.');
-            } finally {
-              setProfileSaving(false);
-            }
-          }}
-        >
-          <label>
-            Name
-            <input
-              value={profile.fullName}
-              onChange={(event) => setProfile((prev) => ({ ...prev, fullName: event.target.value }))}
-              required
-            />
-          </label>
-          <label>
-            Email
-            <input
-              type="email"
-              value={profile.email}
-              onChange={(event) => setProfile((prev) => ({ ...prev, email: event.target.value }))}
-              required
-            />
-          </label>
-          <label>
-            Date Of Birth
-            <input
-              type="date"
-              value={profile.dateOfBirth}
-              onChange={(event) => setProfile((prev) => ({ ...prev, dateOfBirth: event.target.value }))}
-            />
-          </label>
-          <label>
-            School / Team
-            <input
-              value={profile.schoolTeam}
-              onChange={(event) => setProfile((prev) => ({ ...prev, schoolTeam: event.target.value }))}
-            />
-          </label>
-          <label>
-            Phone
-            <input
-              value={profile.phone}
-              onChange={(event) => setProfile((prev) => ({ ...prev, phone: event.target.value }))}
-            />
-          </label>
-          <label>
-            College Commitment
-            <input
-              value={profile.collegeCommitment}
-              onChange={(event) => setProfile((prev) => ({ ...prev, collegeCommitment: event.target.value }))}
-            />
-          </label>
-          <label>
-            Bats
-            <select value={profile.batsHand} onChange={(event) => setProfile((prev) => ({ ...prev, batsHand: event.target.value }))}>
-              <option value="">-</option>
-              <option value="Right">Right</option>
-              <option value="Left">Left</option>
-              <option value="Switch">Switch</option>
-            </select>
-          </label>
-          <label>
-            Throws
-            <select value={profile.throwsHand} onChange={(event) => setProfile((prev) => ({ ...prev, throwsHand: event.target.value }))}>
-              <option value="">-</option>
-              <option value="Right">Right</option>
-              <option value="Left">Left</option>
-            </select>
-          </label>
-          <div className="portal-choice-line-actions">
-            <button type="submit" className="btn btn-primary" disabled={profileSaving}>
-              {profileSaving ? 'Saving...' : 'Save Profile'}
-            </button>
-            {profileMessage && (
-              <p className={profileMessage === 'Profile saved.' ? 'auth-message' : 'auth-error'}>{profileMessage}</p>
-            )}
-          </div>
-        </form>
+        <div className="portal-row-between">
+          <h3>Profile Details</h3>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setProfileExpanded((current) => !current)}
+            aria-expanded={profileExpanded}
+          >
+            {profileExpanded ? 'Collapse' : 'Expand'}
+          </button>
+        </div>
+        {profileExpanded ? (
+          <form
+            className="portal-form-grid"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setProfileSaving(true);
+              setProfileMessage('');
+              try {
+                const response = await fetch('/api/player/profile', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({
+                    playerId,
+                    fullName: profile.fullName,
+                    email: profile.email,
+                    dateOfBirth: profile.dateOfBirth,
+                    schoolTeam: profile.schoolTeam,
+                    phone: profile.phone,
+                    collegeCommitment: profile.collegeCommitment,
+                    batsHand: profile.batsHand,
+                    throwsHand: profile.throwsHand,
+                  }),
+                });
+                const payload = (await response.json().catch(() => ({}))) as { error?: string };
+                if (!response.ok) throw new Error(payload.error ?? 'Failed to save profile.');
+                setProfileMessage('Profile saved.');
+              } catch (error) {
+                setProfileMessage(error instanceof Error ? error.message : 'Failed to save profile.');
+              } finally {
+                setProfileSaving(false);
+              }
+            }}
+          >
+            <label>
+              Name
+              <input
+                value={profile.fullName}
+                onChange={(event) => setProfile((prev) => ({ ...prev, fullName: event.target.value }))}
+                required
+              />
+            </label>
+            <label>
+              Email
+              <input
+                type="email"
+                value={profile.email}
+                onChange={(event) => setProfile((prev) => ({ ...prev, email: event.target.value }))}
+                required
+              />
+            </label>
+            <label>
+              Date Of Birth
+              <input
+                type="date"
+                value={profile.dateOfBirth}
+                onChange={(event) => setProfile((prev) => ({ ...prev, dateOfBirth: event.target.value }))}
+              />
+            </label>
+            <label>
+              School / Team
+              <input
+                value={profile.schoolTeam}
+                onChange={(event) => setProfile((prev) => ({ ...prev, schoolTeam: event.target.value }))}
+              />
+            </label>
+            <label>
+              Phone
+              <input
+                value={profile.phone}
+                onChange={(event) => setProfile((prev) => ({ ...prev, phone: event.target.value }))}
+              />
+            </label>
+            <label>
+              College Commitment
+              <input
+                value={profile.collegeCommitment}
+                onChange={(event) => setProfile((prev) => ({ ...prev, collegeCommitment: event.target.value }))}
+              />
+            </label>
+            <label>
+              Bats
+              <select value={profile.batsHand} onChange={(event) => setProfile((prev) => ({ ...prev, batsHand: event.target.value }))}>
+                <option value="">-</option>
+                <option value="Right">Right</option>
+                <option value="Left">Left</option>
+                <option value="Switch">Switch</option>
+              </select>
+            </label>
+            <label>
+              Throws
+              <select value={profile.throwsHand} onChange={(event) => setProfile((prev) => ({ ...prev, throwsHand: event.target.value }))}>
+                <option value="">-</option>
+                <option value="Right">Right</option>
+                <option value="Left">Left</option>
+              </select>
+            </label>
+            <div className="portal-choice-line-actions">
+              <button type="submit" className="btn btn-primary" disabled={profileSaving}>
+                {profileSaving ? 'Saving...' : 'Save Profile'}
+              </button>
+              {profileMessage && (
+                <p className={profileMessage === 'Profile saved.' ? 'auth-message' : 'auth-error'}>{profileMessage}</p>
+              )}
+            </div>
+          </form>
+        ) : null}
       </article>
 
       <div className="portal-profile-three-col" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.85rem' }}>
@@ -461,20 +474,18 @@ export default function ProfileDashboard({
 
         <article className="portal-admin-card">
           <h3>Exercise Load Trend</h3>
-          <label>
-            Exercise
-            <select
-              value={selectedExerciseId ? String(selectedExerciseId) : ''}
-              onChange={(event) => setSelectedExerciseId(event.target.value ? Number(event.target.value) : null)}
-            >
-              <option value="">Select exercise</option>
-              {trackedExerciseOptions.map((exercise) => (
-                <option key={exercise.exerciseId} value={String(exercise.exerciseId)}>
-                  {exercise.name} ({exercise.category})
-                </option>
-              ))}
-            </select>
-          </label>
+          <select
+            aria-label="Exercise"
+            value={selectedExerciseId ? String(selectedExerciseId) : ''}
+            onChange={(event) => setSelectedExerciseId(event.target.value ? Number(event.target.value) : null)}
+          >
+            <option value="">Select exercise</option>
+            {trackedExerciseOptions.map((exercise) => (
+              <option key={exercise.exerciseId} value={String(exercise.exerciseId)}>
+                {exercise.name} ({exercise.category})
+              </option>
+            ))}
+          </select>
           {trendLoading ? <p className="portal-muted-text">Loading trend...</p> : null}
           {trendMessage ? <p className="auth-error">{trendMessage}</p> : null}
           <LineChart points={exerciseTrendPoints} yLabel="Avg load (lbs)" emptyText="No logged loads yet for this exercise." />

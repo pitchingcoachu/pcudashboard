@@ -2522,9 +2522,18 @@ main {
 .portal-profile-hero {
   display: flex;
   justify-content: space-between;
-  align-items: end;
+  align-items: center;
   gap: 0.8rem;
   flex-wrap: wrap;
+}
+
+.portal-profile-hero-name {
+  display: inline-flex;
+  align-items: center;
+}
+
+.portal-profile-hero-name h2 {
+  margin: 0;
 }
 
 .portal-profile-vitals {

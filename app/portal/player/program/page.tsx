@@ -194,7 +194,6 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
         <div className="portal-month-header">
           <div>
             <h2>{player.fullName}</h2>
-            <p>{month} calendar with daily throwing + workout assignments.</p>
           </div>
           <form method="get" className="portal-month-filter">
             {session.role === 'admin' && <input type="hidden" name="previewPlayerId" value={String(effectivePlayerId)} />}
