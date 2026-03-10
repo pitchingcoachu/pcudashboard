@@ -45,7 +45,7 @@ export async function GET(request: Request) {
     playerId,
     exerciseIds,
     beforeDate,
-    perExerciseLimit: 5,
+    perExerciseLimit: 500,
   });
 
   return NextResponse.json({ history });

@@ -134,6 +134,9 @@ export type ExerciseLoadHistoryEntry = {
   dayDate: string;
   sourceName: string;
   loads: string[];
+  prescribedReps: string | null;
+  repMeasure: 'reps' | 'seconds' | 'distance';
+  repsPerSide: boolean;
 };
 
 export async function ensureTrainingDbReady(): Promise<void> {
@@ -1130,6 +1133,159 @@ export async function addProgramItem(input: {
   return { ok: true };
 }
 
+export async function replaceProgramItemsForDates(input: {
+  organizationId: number;
+  userId: number;
+  playerId: number;
+  programName?: string;
+  dayPlans: Array<{
+    dayDate: string;
+    items: Array<{
+      assignmentType: 'exercise' | 'workout';
+      exerciseId?: number;
+      workoutId?: number;
+      prescribedSets?: string;
+      prescribedReps?: string;
+      prescribedLoad?: string;
+      prescribedNotes?: string;
+    }>;
+  }>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const playerCheck = await pool.query<{ id: number }>(
+    `SELECT id FROM players WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+    [input.playerId, input.organizationId]
+  );
+  if ((playerCheck.rowCount ?? 0) !== 1) {
+    return { ok: false, error: 'Player was not found in your organization.' };
+  }
+
+  const cleanedDayPlans = input.dayPlans
+    .map((day) => ({
+      dayDate: day.dayDate.trim(),
+      items: day.items ?? [],
+    }))
+    .filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(day.dayDate));
+
+  if (cleanedDayPlans.length === 0) {
+    return { ok: false, error: 'At least one valid day is required.' };
+  }
+
+  const exerciseIds = Array.from(
+    new Set(
+      cleanedDayPlans
+        .flatMap((day) => day.items)
+        .filter((item) => item.assignmentType === 'exercise')
+        .map((item) => Number(item.exerciseId ?? 0))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    )
+  );
+  const workoutIds = Array.from(
+    new Set(
+      cleanedDayPlans
+        .flatMap((day) => day.items)
+        .filter((item) => item.assignmentType === 'workout')
+        .map((item) => Number(item.workoutId ?? 0))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    )
+  );
+
+  if (exerciseIds.length > 0) {
+    const validExercises = await pool.query<{ id: number }>(
+      `SELECT id FROM exercise_library WHERE organization_id = $1 AND id = ANY($2::int[])`,
+      [input.organizationId, exerciseIds]
+    );
+    if (validExercises.rows.length !== exerciseIds.length) {
+      return { ok: false, error: 'One or more copied exercises are not available in this organization.' };
+    }
+  }
+
+  if (workoutIds.length > 0) {
+    const validWorkouts = await pool.query<{ id: number }>(
+      `SELECT id FROM workout_library WHERE organization_id = $1 AND id = ANY($2::int[])`,
+      [input.organizationId, workoutIds]
+    );
+    if (validWorkouts.rows.length !== workoutIds.length) {
+      return { ok: false, error: 'One or more copied workouts are not available in this organization.' };
+    }
+  }
+
+  const programId = await getOrCreateCurrentProgram({
+    organizationId: input.organizationId,
+    userId: input.userId,
+    playerId: input.playerId,
+    programName: input.programName,
+  });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const dayPlan of cleanedDayPlans) {
+      const dayResult = await client.query<{ id: number }>(
+        `
+          INSERT INTO program_days (program_id, day_date)
+          VALUES ($1, $2)
+          ON CONFLICT (program_id, day_date)
+          DO UPDATE SET updated_at = NOW()
+          RETURNING id
+        `,
+        [programId, dayPlan.dayDate]
+      );
+      const programDayId = dayResult.rows[0].id;
+
+      await client.query(`DELETE FROM program_day_items WHERE program_day_id = $1`, [programDayId]);
+
+      let sortOrder = 1;
+      for (const item of dayPlan.items) {
+        const assignmentType = item.assignmentType === 'exercise' ? 'exercise' : 'workout';
+        const exerciseIdValue = Number(item.exerciseId ?? 0);
+        const workoutIdValue = Number(item.workoutId ?? 0);
+        if (assignmentType === 'exercise' && (!Number.isFinite(exerciseIdValue) || exerciseIdValue <= 0)) continue;
+        if (assignmentType === 'workout' && (!Number.isFinite(workoutIdValue) || workoutIdValue <= 0)) continue;
+
+        await client.query(
+          `
+            INSERT INTO program_day_items (
+              program_day_id,
+              exercise_id,
+              workout_id,
+              prescribed_sets,
+              prescribed_reps,
+              prescribed_load,
+              prescribed_notes,
+              sort_order
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          `,
+          [
+            programDayId,
+            assignmentType === 'exercise' ? exerciseIdValue : null,
+            assignmentType === 'workout' ? workoutIdValue : null,
+            (item.prescribedSets ?? '').trim() || null,
+            (item.prescribedReps ?? '').trim() || null,
+            (item.prescribedLoad ?? '').trim() || null,
+            (item.prescribedNotes ?? '').trim() || null,
+            sortOrder,
+          ]
+        );
+        sortOrder += 1;
+      }
+    }
+
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to paste copied schedule.' };
+  } finally {
+    client.release();
+  }
+}
+
 export async function listProgramItemsForPlayerByMonth(input: {
   playerId: number;
   month: string;
@@ -1308,12 +1464,15 @@ export async function listExerciseLoadHistoryForPlayer(input: {
 
   const beforeDate = (input.beforeDate ?? '').trim();
   const hasBeforeDate = /^\d{4}-\d{2}-\d{2}$/.test(beforeDate);
-  const perExerciseLimit = Math.max(1, Math.min(12, input.perExerciseLimit ?? 5));
+  const perExerciseLimit = Math.max(1, Math.min(500, input.perExerciseLimit ?? 100));
 
   const rows = await pool.query<{
     day_date: string;
     source_name: string;
     exercise_id: number | null;
+    prescribed_reps: string | null;
+    rep_measure: 'reps' | 'seconds' | 'distance';
+    reps_per_side: boolean;
     performed_load: string | null;
     workout_exercise_json: unknown;
   }>(
@@ -1322,6 +1481,9 @@ export async function listExerciseLoadHistoryForPlayer(input: {
         d.day_date::text,
         COALESCE(w.name, e.name, 'Assignment') AS source_name,
         i.exercise_id,
+        i.prescribed_reps,
+        COALESCE(e.rep_measure, 'reps') AS rep_measure,
+        COALESCE(e.reps_per_side, FALSE) AS reps_per_side,
         l.performed_load,
         ws.exercise_json AS workout_exercise_json
       FROM programs p
@@ -1336,7 +1498,10 @@ export async function listExerciseLoadHistoryForPlayer(input: {
             JSON_AGG(
               JSON_BUILD_OBJECT(
                 'exerciseId', e2.id,
-                'prescribedSets', we2.prescribed_sets
+                'prescribedSets', we2.prescribed_sets,
+                'prescribedReps', we2.prescribed_reps,
+                'repMeasure', e2.rep_measure,
+                'repsPerSide', e2.reps_per_side
               )
               ORDER BY we2.sort_order, e2.name
             ),
@@ -1382,6 +1547,9 @@ export async function listExerciseLoadHistoryForPlayer(input: {
           dayDate: row.day_date,
           sourceName: row.source_name,
           loads: rowLoads,
+          prescribedReps: row.prescribed_reps,
+          repMeasure: row.rep_measure === 'seconds' ? 'seconds' : row.rep_measure === 'distance' ? 'distance' : 'reps',
+          repsPerSide: Boolean(row.reps_per_side),
         });
         limitReached.set(row.exercise_id, current + 1);
       }
@@ -1389,7 +1557,13 @@ export async function listExerciseLoadHistoryForPlayer(input: {
     }
 
     const workoutExercises = Array.isArray(row.workout_exercise_json)
-      ? (row.workout_exercise_json as Array<{ exerciseId?: number | null; prescribedSets?: string | null }>)
+      ? (row.workout_exercise_json as Array<{
+          exerciseId?: number | null;
+          prescribedSets?: string | null;
+          prescribedReps?: string | null;
+          repMeasure?: 'reps' | 'seconds' | 'distance' | null;
+          repsPerSide?: boolean | null;
+        }>)
       : [];
     if (workoutExercises.length === 0) continue;
 
@@ -1406,6 +1580,14 @@ export async function listExerciseLoadHistoryForPlayer(input: {
         dayDate: row.day_date,
         sourceName: row.source_name,
         loads: exerciseLoads,
+        prescribedReps: exercise.prescribedReps ?? null,
+        repMeasure:
+          exercise.repMeasure === 'seconds'
+            ? 'seconds'
+            : exercise.repMeasure === 'distance'
+              ? 'distance'
+              : 'reps',
+        repsPerSide: Boolean(exercise.repsPerSide),
       });
       limitReached.set(exId, current + 1);
     }

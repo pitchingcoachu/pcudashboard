@@ -14,6 +14,22 @@ type ScheduleBoardProps = {
   workouts: WorkoutChoice[];
 };
 
+type CopiedAssignment = {
+  assignmentType: 'exercise' | 'workout';
+  exerciseId?: number;
+  workoutId?: number;
+  prescribedSets?: string;
+  prescribedReps?: string;
+  prescribedLoad?: string;
+  prescribedNotes?: string;
+};
+
+type CopiedPlanBuffer = {
+  mode: 'day' | 'week';
+  sourceDate: string;
+  days: Array<{ offset: number; items: CopiedAssignment[] }>;
+};
+
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function toIsoDate(date: Date): string {
@@ -125,6 +141,8 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
+  const [copiedPlan, setCopiedPlan] = useState<CopiedPlanBuffer | null>(null);
+  const [menu, setMenu] = useState<{ dayDate: string; x: number; y: number } | null>(null);
 
   const visibleRange = useMemo(() => {
     if (view === 'day') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
@@ -212,6 +230,12 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     }
   };
 
+  const jumpToCurrentForView = (mode: ViewMode) => {
+    if (mode === 'day' || mode === 'week') {
+      setAnchorDate(toIsoDate(new Date()));
+    }
+  };
+
   const assignWorkout = async (dayDate: string, workoutId: number) => {
     if (!playerId) return;
     setError('');
@@ -257,6 +281,92 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     await assignWorkout(dayDate, workoutId);
   };
 
+  const serializeCopiedItems = (dayDate: string): CopiedAssignment[] => {
+    const dayItems = itemsByDate.get(dayDate) ?? [];
+    const copied: CopiedAssignment[] = [];
+    for (const item of dayItems) {
+      if (item.itemType === 'workout') {
+        if (!item.workoutId) continue;
+        copied.push({
+          assignmentType: 'workout',
+          workoutId: item.workoutId,
+          prescribedSets: item.prescribedSets ?? '',
+          prescribedReps: item.prescribedReps ?? '',
+          prescribedLoad: item.prescribedLoad ?? '',
+          prescribedNotes: item.prescribedNotes ?? '',
+        });
+        continue;
+      }
+      if (!item.exerciseId) continue;
+      copied.push({
+        assignmentType: 'exercise',
+        exerciseId: item.exerciseId,
+        prescribedSets: item.prescribedSets ?? '',
+        prescribedReps: item.prescribedReps ?? '',
+        prescribedLoad: item.prescribedLoad ?? '',
+        prescribedNotes: item.prescribedNotes ?? '',
+      });
+    }
+    return copied;
+  };
+
+  const copyDay = (dayDate: string) => {
+    setCopiedPlan({
+      mode: 'day',
+      sourceDate: dayDate,
+      days: [{ offset: 0, items: serializeCopiedItems(dayDate) }],
+    });
+    setMenu(null);
+  };
+
+  const copyWeekFromDay = (dayDate: string) => {
+    const weekDayIndex = fromIsoDate(dayDate).getUTCDay();
+    const dayCount = 7 - weekDayIndex;
+    const days = Array.from({ length: dayCount }, (_, idx) => {
+      const sourceDate = addDays(dayDate, idx);
+      return { offset: idx, items: serializeCopiedItems(sourceDate) };
+    });
+    setCopiedPlan({
+      mode: 'week',
+      sourceDate: dayDate,
+      days,
+    });
+    setMenu(null);
+  };
+
+  const pasteCopiedPlan = async (targetDate: string) => {
+    if (!copiedPlan || !playerId) return;
+    setMenu(null);
+    setError('');
+    try {
+      const dayPlans = copiedPlan.days.map((day) => ({
+        dayDate: addDays(targetDate, day.offset),
+        items: day.items,
+      }));
+      const response = await fetch('/api/admin/schedule/copy-paste', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          playerId,
+          programName: 'Current Program',
+          dayPlans,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to paste copied schedule.');
+      await loadItems();
+    } catch (pasteError) {
+      setError(pasteError instanceof Error ? pasteError.message : 'Failed to paste copied schedule.');
+    }
+  };
+
+  useEffect(() => {
+    if (!menu) return;
+    const onPointerDown = () => setMenu(null);
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => window.removeEventListener('pointerdown', onPointerDown);
+  }, [menu]);
+
   const onItemDrop = async (event: React.DragEvent<HTMLElement>, dayDate: string, targetItemId: number) => {
     event.preventDefault();
     const sourceItemId = Number(event.dataTransfer.getData('scheduleItemId'));
@@ -297,6 +407,10 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         }}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => void onDayDrop(event, dayDate)}
+        onDoubleClick={(event) => {
+          if ((event.target as HTMLElement).closest('.portal-schedule-item')) return;
+          setMenu({ dayDate, x: event.clientX, y: event.clientY });
+        }}
       >
         <header>
           <strong>
@@ -312,7 +426,8 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               className="portal-schedule-item"
               style={{
                 display: 'block',
-                width: '100%',
+                width: 'calc(100% - 0.35rem)',
+                margin: '0 auto',
                 boxSizing: 'border-box',
                 textAlign: 'center',
                 color: 'var(--text-main)',
@@ -371,17 +486,16 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
             ))}
           </select>
         </label>
-        <label>
-          Focus Date
-          <input type="date" value={anchorDate} onChange={(event) => setAnchorDate(event.target.value)} />
-        </label>
         <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
           {(['day', 'week', 'month'] as ViewMode[]).map((mode) => (
             <button
               key={mode}
               type="button"
               className={`btn ${view === mode ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setView(mode)}
+              onClick={() => {
+                jumpToCurrentForView(mode);
+                setView(mode);
+              }}
             >
               {mode[0].toUpperCase()}
               {mode.slice(1)}
@@ -430,11 +544,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               </div>
             )}
           </div>
-          <details open>
-            <summary className="portal-folder-header">
-              <h4>Saved Workouts</h4>
-              <span>{filteredWorkouts.length}</span>
-            </summary>
+          <div>
             <div className="portal-workout-palette-list">
               {filteredWorkouts.map((workout) => (
                 <article
@@ -451,7 +561,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               ))}
               {filteredWorkouts.length === 0 && <p className="portal-muted-text">No workouts match.</p>}
             </div>
-          </details>
+          </div>
         </aside>
 
         <section className="portal-schedule-calendar" aria-busy={loading}>
@@ -460,10 +570,6 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
             <div
               className="portal-schedule-weekdays"
               style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(7, minmax(140px, 1fr))',
-                gap: '0',
-                minWidth: '980px',
                 borderTop: '1px solid rgba(255,255,255,0.26)',
                 borderLeft: '1px solid rgba(255,255,255,0.26)',
               }}
@@ -479,10 +585,6 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
             <div
               className="portal-schedule-month-grid"
               style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(7, minmax(140px, 1fr))',
-                gap: '0',
-                minWidth: '980px',
                 borderLeft: '1px solid rgba(255,255,255,0.26)',
               }}
             >
@@ -495,10 +597,6 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
             <div
               className="portal-schedule-week-grid"
               style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(7, minmax(140px, 1fr))',
-                gap: '0',
-                minWidth: '980px',
                 borderLeft: '1px solid rgba(255,255,255,0.26)',
               }}
             >
@@ -520,6 +618,37 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
             await loadItems();
           }}
         />
+      )}
+
+      {menu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: menu.x,
+            top: menu.y,
+            zIndex: 80,
+            border: '1px solid rgba(255,255,255,0.22)',
+            borderRadius: '10px',
+            background: 'rgba(0,0,0,0.95)',
+            padding: '0.35rem',
+            display: 'grid',
+            gap: '0.25rem',
+            minWidth: '170px',
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button type="button" className="btn btn-ghost" onClick={() => copyDay(menu.dayDate)}>
+            Copy Day
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={() => copyWeekFromDay(menu.dayDate)}>
+            Copy Week
+          </button>
+          {copiedPlan && (
+            <button type="button" className="btn btn-primary" onClick={() => void pasteCopiedPlan(menu.dayDate)}>
+              Paste
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

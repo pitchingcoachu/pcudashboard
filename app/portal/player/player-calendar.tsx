@@ -238,7 +238,8 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
               className="portal-schedule-item"
               style={{
                 display: 'block',
-                width: '100%',
+                width: 'calc(100% - 0.35rem)',
+                margin: '0 auto',
                 boxSizing: 'border-box',
                 textAlign: 'center',
                 color: 'var(--text-main)',
@@ -309,10 +310,6 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
           <div
             className="portal-schedule-weekdays"
             style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(7, minmax(140px, 1fr))',
-              gap: '0',
-              minWidth: '980px',
               borderTop: '1px solid rgba(255,255,255,0.26)',
               borderLeft: '1px solid rgba(255,255,255,0.26)',
             }}
@@ -336,10 +333,6 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
           <div
             className="portal-schedule-month-grid"
             style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(7, minmax(140px, 1fr))',
-              gap: '0',
-              minWidth: '980px',
               borderLeft: '1px solid rgba(255,255,255,0.26)',
             }}
           >
@@ -353,10 +346,6 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
           <div
             className="portal-schedule-week-grid"
             style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(7, minmax(140px, 1fr))',
-              gap: '0',
-              minWidth: '980px',
               borderLeft: '1px solid rgba(255,255,255,0.26)',
             }}
           >

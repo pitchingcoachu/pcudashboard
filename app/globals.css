@@ -2084,9 +2084,21 @@ main {
 
 .portal-exercise-video-link {
   cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: rgba(200, 16, 46, 0.7);
-  text-underline-offset: 2px;
+  text-decoration: none;
+}
+
+.portal-exercise-video-trigger {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: var(--text-main);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: none !important;
+  -webkit-text-decoration: none !important;
+  box-shadow: none;
 }
 
 .portal-set-weights {
@@ -2312,8 +2324,8 @@ main {
 .portal-schedule-weekdays {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 0.35rem;
-  min-width: 980px;
+  gap: 0;
+  width: 100%;
 }
 
 .portal-schedule-weekdays span {
@@ -2326,8 +2338,8 @@ main {
 .portal-schedule-week-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 0.35rem;
-  min-width: 980px;
+  gap: 0;
+  width: 100%;
 }
 
 .portal-schedule-day-grid {
@@ -2337,6 +2349,8 @@ main {
 }
 
 .portal-schedule-day {
+  overflow: hidden;
+  min-width: 0;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 10px;
   padding: 0.45rem;
@@ -2406,10 +2420,12 @@ main {
   gap: 0.3rem;
   align-content: start;
   margin: 0;
+  min-width: 0;
 }
 
 .portal-schedule-item {
   width: 100%;
+  min-width: 0;
   box-sizing: border-box;
   border: 1px solid rgba(200, 16, 46, 0.45);
   border-radius: 6px;
@@ -2422,11 +2438,20 @@ main {
   align-items: center;
   text-align: center;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .portal-schedule-item span {
   color: rgba(255, 255, 255, 0.75);
   font-size: 0.74rem;
+}
+
+.portal-schedule-item strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .portal-modal-backdrop {

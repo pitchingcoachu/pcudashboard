@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { ProgramItemRow } from '../../../lib/training-db';
+import type { ExerciseLoadHistoryEntry, ProgramItemRow } from '../../../lib/training-db';
 
 type WorkoutLogModalProps = {
   item: ProgramItemRow;
@@ -37,20 +37,43 @@ function formatRepTarget(repMeasure: 'reps' | 'seconds' | 'distance', repsPerSid
 }
 
 function dateTitle(value: string): string {
-  return new Date(`${value}T00:00:00Z`).toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
+  const date = new Date(`${value}T00:00:00Z`);
+  const month = date.getUTCMonth() + 1;
+  const day = date.getUTCDate();
+  const year = String(date.getUTCFullYear()).slice(-2);
+  return `${month}/${day}/${year}`;
+}
+
+function formatLoadNumber(value: number): string {
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(1).replace(/\.0$/, '');
+}
+
+function formatMaxHistory(
+  entries: ExerciseLoadHistoryEntry[]
+): { load: number; dayDate: string; repsText: string } | null {
+  let best: { load: number; dayDate: string; repsText: string } | null = null;
+  for (const entry of entries) {
+    for (const loadValue of entry.loads) {
+      const numeric = Number(loadValue.replace(/[^\d.-]/g, ''));
+      if (!Number.isFinite(numeric)) continue;
+      if (!best || numeric > best.load) {
+        best = {
+          load: numeric,
+          dayDate: entry.dayDate,
+          repsText: formatRepTarget(entry.repMeasure, entry.repsPerSide, entry.prescribedReps),
+        };
+      }
+    }
+  }
+  return best;
 }
 
 export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: WorkoutLogModalProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [mounted, setMounted] = useState(false);
-  const [historyByExercise, setHistoryByExercise] = useState<Record<number, Array<{ dayDate: string; sourceName: string; loads: string[] }>>>({});
+  const [historyByExercise, setHistoryByExercise] = useState<Record<number, ExerciseLoadHistoryEntry[]>>({});
   const [videoPreview, setVideoPreview] = useState<{ title: string; url: string } | null>(null);
 
   const loadValues = useMemo(() => parseLoadValues(item.performedLoad), [item.performedLoad]);
@@ -82,10 +105,10 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
       const response = await fetch(`/api/player/exercise-history?${params.toString()}`, { cache: 'no-store' });
       if (!response.ok) return;
       const payload = (await response.json().catch(() => ({}))) as {
-        history?: Record<string, Array<{ dayDate: string; sourceName: string; loads: string[] }>>;
+        history?: Record<string, ExerciseLoadHistoryEntry[]>;
       };
       if (cancelled) return;
-      const next: Record<number, Array<{ dayDate: string; sourceName: string; loads: string[] }>> = {};
+      const next: Record<number, ExerciseLoadHistoryEntry[]> = {};
       for (const [key, value] of Object.entries(payload.history ?? {})) {
         const numeric = Number(key);
         if (!Number.isFinite(numeric) || numeric <= 0 || !Array.isArray(value)) continue;
@@ -132,6 +155,10 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
       className="portal-modal-card"
       role="dialog"
       aria-modal="true"
+      spellCheck={false}
+      data-gramm="false"
+      data-gramm_editor="false"
+      data-enable-grammarly="false"
       onClick={(event) => event.stopPropagation()}
       style={{ maxHeight: '85vh', overflow: 'auto', background: '#000', opacity: 1 }}
     >
@@ -167,6 +194,10 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
         </p>
 
         <form
+          spellCheck={false}
+          data-gramm="false"
+          data-gramm_editor="false"
+          data-enable-grammarly="false"
           onSubmit={async (event) => {
             event.preventDefault();
             setSaving(true);
@@ -191,6 +222,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
             }
           }}
         >
+          <input type="hidden" name="completed" value={item.completed ? 'on' : ''} />
           {item.itemType === 'workout' && item.workoutExercises.length > 0 ? (
             <div className="portal-workout-player-block">
               {(() => {
@@ -200,24 +232,10 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
                   return (
                     <div key={`${item.itemId}-modal-ex-${exerciseIdx}`} className="portal-workout-player-exercise">
                       <div className="portal-workout-player-head">
-                        <strong
-                          className="portal-exercise-video-link"
-                          role="button"
-                          tabIndex={0}
+                        <button
+                          type="button"
+                          className="portal-exercise-video-link portal-exercise-video-trigger"
                           onClick={() => {
-                            if (!exercise.instructionVideoUrl) {
-                              setError(`No video link saved for "${exercise.name}".`);
-                              return;
-                            }
-                            setError('');
-                            setVideoPreview({
-                              title: exercise.name,
-                              url: embedVideoUrl(exercise.instructionVideoUrl),
-                            });
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key !== 'Enter' && event.key !== ' ') return;
-                            event.preventDefault();
                             if (!exercise.instructionVideoUrl) {
                               setError(`No video link saved for "${exercise.name}".`);
                               return;
@@ -231,34 +249,36 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
                         >
                           {exercise.prefix ? `${exercise.prefix} ` : ''}
                           {exercise.name}
-                        </strong>
+                        </button>
                       </div>
-                      <p className="portal-muted-text">
-                        {exercise.prescribedSets ?? '-'} x{' '}
-                        {formatRepTarget(exercise.repMeasure, exercise.repsPerSide, exercise.prescribedReps)}
-                      </p>
                       {exercise.description && <p className="portal-muted-text">{exercise.description}</p>}
                       {exercise.coachingCues && (
                         <p className="portal-muted-text">
                           <strong>Cues:</strong> {exercise.coachingCues}
                         </p>
                       )}
-                      {exercise.exerciseId && historyByExercise[exercise.exerciseId]?.length ? (
-                        <div className="portal-history-list">
-                          {historyByExercise[exercise.exerciseId].map((entry, idx) => (
-                            <p key={`${exercise.exerciseId}-history-${idx}`} className="portal-muted-text">
-                              {dateTitle(entry.dayDate)}: {entry.loads.join(', ')} ({entry.sourceName})
-                            </p>
-                          ))}
-                        </div>
-                      ) : null}
+                      <p className="portal-muted-text">
+                        {exercise.prescribedSets ?? '-'} x{' '}
+                        {formatRepTarget(exercise.repMeasure, exercise.repsPerSide, exercise.prescribedReps)}
+                      </p>
+                      {exercise.exerciseId && historyByExercise[exercise.exerciseId]?.length
+                        ? (() => {
+                            const maxEntry = formatMaxHistory(historyByExercise[exercise.exerciseId]);
+                            if (!maxEntry) return null;
+                            return (
+                              <p className="portal-muted-text">
+                                Max: {formatLoadNumber(maxEntry.load)}x{maxEntry.repsText} ({dateTitle(maxEntry.dayDate)})
+                              </p>
+                            );
+                          })()
+                        : null}
                       <div className="portal-set-weights">
                         {Array.from({ length: setCount }).map((_, setIdx) => {
                           const current = loadValues[loadIndex] ?? '';
                           loadIndex += 1;
                           return (
                             <label key={`${item.itemId}-modal-ex-${exerciseIdx}-set-${setIdx}`}>
-                              Set {setIdx + 1} Weight
+                              Set {setIdx + 1}
                               <input name="performedLoadValues" defaultValue={current} placeholder="lbs" />
                             </label>
                           );
@@ -272,24 +292,10 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
           ) : (
             <div className="portal-workout-player-block">
               <div className="portal-workout-player-head">
-                <strong
-                  className="portal-exercise-video-link"
-                  role="button"
-                  tabIndex={0}
+                <button
+                  type="button"
+                  className="portal-exercise-video-link portal-exercise-video-trigger"
                   onClick={() => {
-                    if (!item.instructionVideoUrl) {
-                      setError(`No video link saved for "${item.itemName}".`);
-                      return;
-                    }
-                    setError('');
-                    setVideoPreview({
-                      title: item.itemName,
-                      url: embedVideoUrl(item.instructionVideoUrl),
-                    });
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
-                    event.preventDefault();
                     if (!item.instructionVideoUrl) {
                       setError(`No video link saved for "${item.itemName}".`);
                       return;
@@ -302,30 +308,32 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
                   }}
                 >
                   {item.itemName}
-                </strong>
+                </button>
               </div>
-              <p className="portal-muted-text">
-                {item.prescribedSets ?? '-'} x {formatRepTarget(item.repMeasure, item.repsPerSide, item.prescribedReps)}
-              </p>
               {item.exerciseDescription && <p className="portal-muted-text">{item.exerciseDescription}</p>}
               {item.exerciseCoachingCues && (
                 <p className="portal-muted-text">
                   <strong>Cues:</strong> {item.exerciseCoachingCues}
                 </p>
               )}
-              {item.exerciseId && historyByExercise[item.exerciseId]?.length ? (
-                <div className="portal-history-list">
-                  {historyByExercise[item.exerciseId].map((entry, idx) => (
-                    <p key={`${item.exerciseId}-history-${idx}`} className="portal-muted-text">
-                      {dateTitle(entry.dayDate)}: {entry.loads.join(', ')} ({entry.sourceName})
-                    </p>
-                  ))}
-                </div>
-              ) : null}
+              <p className="portal-muted-text">
+                {item.prescribedSets ?? '-'} x {formatRepTarget(item.repMeasure, item.repsPerSide, item.prescribedReps)}
+              </p>
+              {item.exerciseId && historyByExercise[item.exerciseId]?.length
+                ? (() => {
+                    const maxEntry = formatMaxHistory(historyByExercise[item.exerciseId]);
+                    if (!maxEntry) return null;
+                    return (
+                      <p className="portal-muted-text">
+                        Max: {formatLoadNumber(maxEntry.load)}x{maxEntry.repsText} ({dateTitle(maxEntry.dayDate)})
+                      </p>
+                    );
+                  })()
+                : null}
               <div className="portal-set-weights">
                 {Array.from({ length: parseSetCount(item.prescribedSets) }).map((_, setIdx) => (
                   <label key={`${item.itemId}-modal-set-${setIdx}`}>
-                    Set {setIdx + 1} Weight
+                    Set {setIdx + 1}
                     <input name="performedLoadValues" defaultValue={loadValues[setIdx] ?? ''} placeholder="lbs" />
                   </label>
                 ))}
@@ -337,10 +345,6 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
             <label className="portal-form-span-2">
               Notes
               <textarea name="notes" rows={2} defaultValue={item.logNotes ?? ''} />
-            </label>
-            <label className="portal-checkbox-row">
-              <input name="completed" type="checkbox" defaultChecked={item.completed} />
-              Mark complete
             </label>
           </div>
 
