@@ -1,61 +1,10 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../lib/portal-session';
-import LogoutButton from './logout-button';
-
-const TM_DATA_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 
 export default async function PortalPage() {
   const session = await requirePortalSession();
   if (session.role === 'player') {
     redirect('/portal/player');
   }
-  if (session.role === 'coach') {
-    redirect('/portal/admin');
-  }
-
-  return (
-    <div className="portal-shell">
-      <header className="portal-header">
-        <div className="portal-header-left">
-          <Link href="/portal" className="portal-header-logo-link" aria-label="PCU Home">
-            <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
-          </Link>
-        </div>
-        <div className="portal-header-center">
-          <nav className="portal-nav" aria-label="Portal Navigation">
-            <Link href="/portal/admin" className="portal-nav-link">
-              Admin Home
-            </Link>
-            <Link href="/portal" className="portal-nav-link active">
-              PCU Dashboard
-            </Link>
-            <Link href="/portal/player?preview=self" className="portal-nav-link">
-              Player Preview
-            </Link>
-            <Link href="/tutorials" className="portal-nav-link">
-              Tutorials
-            </Link>
-          </nav>
-        </div>
-        <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>Logged In As</p>
-            <h1>{session.name ?? session.email}</h1>
-          </div>
-          <LogoutButton />
-        </div>
-      </header>
-
-      <section className="portal-frame-wrap">
-        <iframe
-          className="portal-frame"
-          src={TM_DATA_URL}
-          title="PCU Dashboard"
-          loading="lazy"
-          referrerPolicy="strict-origin-when-cross-origin"
-        />
-      </section>
-    </div>
-  );
+  redirect('/portal/admin');
 }
