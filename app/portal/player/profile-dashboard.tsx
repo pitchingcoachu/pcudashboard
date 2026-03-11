@@ -333,6 +333,7 @@ export default function ProfileDashboard({
   const [showCompletedGoals, setShowCompletedGoals] = useState(false);
   const [completeModal, setCompleteModal] = useState<{ slotIndex: 1 | 2 | 3; details: string } | null>(null);
   const [completingGoal, setCompletingGoal] = useState(false);
+  const [planGoalsExpanded, setPlanGoalsExpanded] = useState(sessionRole !== 'player');
   const [selectedAssessmentDate, setSelectedAssessmentDate] = useState(
     initialAssessmentScores[0]?.dayDate ?? ''
   );
@@ -850,97 +851,111 @@ export default function ProfileDashboard({
       )}
 
       <article className="portal-admin-card">
-        <h3>Player Plan Goals</h3>
-        <div className="portal-profile-goals-grid">
-          {planGoals.map((goal) => (
-            <article key={`goal-slot-${goal.slotIndex}`} className="portal-day-card">
-              <div className="portal-row-between">
-                <h4 style={{ margin: 0 }}>Goal {goal.slotIndex}</h4>
-                <p className="portal-muted-text">Created: {formatTimestampDate(goal.createdAt)}</p>
-              </div>
-              <label className="portal-inline-filter">
-                Category
-                <select
-                  value={goal.category}
-                  disabled={!canManageGoals}
-                  onChange={(event) =>
-                    setPlanGoals((prev) =>
-                      prev.map((entry) =>
-                        entry.slotIndex === goal.slotIndex ? { ...entry, category: event.target.value } : entry
-                      )
-                    )
-                  }
-                >
-                  <option value="">Select category</option>
-                  {PLAN_GOAL_CATEGORIES.map((category) => (
-                    <option key={`${goal.slotIndex}-${category}`} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="portal-inline-filter">
-                Goal
-                <textarea
-                  rows={4}
-                  value={goal.goalDescription}
-                  readOnly={!canManageGoals}
-                  onChange={(event) =>
-                    setPlanGoals((prev) =>
-                      prev.map((entry) =>
-                        entry.slotIndex === goal.slotIndex ? { ...entry, goalDescription: event.target.value } : entry
-                      )
-                    )
-                  }
-                />
-              </label>
-              {canManageGoals ? (
-                <div className="portal-choice-line-actions">
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => void saveGoal(goal.slotIndex)}
-                    disabled={goalSavingSlot === goal.slotIndex}
-                  >
-                    {goalSavingSlot === goal.slotIndex ? 'Saving...' : 'Save Goal'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={!goal.category || !goal.goalDescription.trim()}
-                    onClick={() => setCompleteModal({ slotIndex: goal.slotIndex, details: '' })}
-                  >
-                    Completed Goal
-                  </button>
-                </div>
-              ) : null}
-            </article>
-          ))}
-        </div>
-        <div className="portal-choice-line-actions">
-          <button type="button" className="btn btn-ghost" onClick={() => setShowCompletedGoals((current) => !current)}>
-            {showCompletedGoals ? 'Hide Completed Goals' : 'View Completed Goals'}
+        <div className="portal-row-between">
+          <h3>Player Plan Goals</h3>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setPlanGoalsExpanded((current) => !current)}
+            aria-expanded={planGoalsExpanded}
+          >
+            {planGoalsExpanded ? 'Collapse' : 'Expand'}
           </button>
-          {goalMessage ? <p className={goalMessage.includes('Failed') ? 'auth-error' : 'auth-message'}>{goalMessage}</p> : null}
         </div>
-        {showCompletedGoals ? (
-          completedPlanGoals.length === 0 ? (
-            <p className="portal-muted-text">No completed goals yet.</p>
-          ) : (
-            <div className="portal-admin-stack">
-              {completedPlanGoals.map((goal) => (
-                <article key={`completed-goal-${goal.id}`} className="portal-day-card">
+        {!planGoalsExpanded ? null : (
+          <>
+            <div className="portal-profile-goals-grid">
+              {planGoals.map((goal) => (
+                <article key={`goal-slot-${goal.slotIndex}`} className="portal-day-card">
                   <div className="portal-row-between">
-                    <h4 style={{ margin: 0 }}>{goal.category}</h4>
-                    <p className="portal-muted-text">{formatTimestampDate(goal.completedAt)}</p>
+                    <h4 style={{ margin: 0 }}>Goal {goal.slotIndex}</h4>
+                    <p className="portal-muted-text">Created: {formatTimestampDate(goal.createdAt)}</p>
                   </div>
-                  <p style={{ margin: 0 }}>{goal.goalDescription}</p>
-                  {goal.completionDetails ? <p className="portal-muted-text">Details: {goal.completionDetails}</p> : null}
+                  <label className="portal-inline-filter">
+                    Category
+                    <select
+                      value={goal.category}
+                      disabled={!canManageGoals}
+                      onChange={(event) =>
+                        setPlanGoals((prev) =>
+                          prev.map((entry) =>
+                            entry.slotIndex === goal.slotIndex ? { ...entry, category: event.target.value } : entry
+                          )
+                        )
+                      }
+                    >
+                      <option value="">Select category</option>
+                      {PLAN_GOAL_CATEGORIES.map((category) => (
+                        <option key={`${goal.slotIndex}-${category}`} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="portal-inline-filter">
+                    Goal
+                    <textarea
+                      rows={4}
+                      value={goal.goalDescription}
+                      readOnly={!canManageGoals}
+                      onChange={(event) =>
+                        setPlanGoals((prev) =>
+                          prev.map((entry) =>
+                            entry.slotIndex === goal.slotIndex ? { ...entry, goalDescription: event.target.value } : entry
+                          )
+                        )
+                      }
+                    />
+                  </label>
+                  {canManageGoals ? (
+                    <div className="portal-choice-line-actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => void saveGoal(goal.slotIndex)}
+                        disabled={goalSavingSlot === goal.slotIndex}
+                      >
+                        {goalSavingSlot === goal.slotIndex ? 'Saving...' : 'Save Goal'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        disabled={!goal.category || !goal.goalDescription.trim()}
+                        onClick={() => setCompleteModal({ slotIndex: goal.slotIndex, details: '' })}
+                      >
+                        Completed Goal
+                      </button>
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>
-          )
-        ) : null}
+            <div className="portal-choice-line-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setShowCompletedGoals((current) => !current)}>
+                {showCompletedGoals ? 'Hide Completed Goals' : 'View Completed Goals'}
+              </button>
+              {goalMessage ? <p className={goalMessage.includes('Failed') ? 'auth-error' : 'auth-message'}>{goalMessage}</p> : null}
+            </div>
+            {showCompletedGoals ? (
+              completedPlanGoals.length === 0 ? (
+                <p className="portal-muted-text">No completed goals yet.</p>
+              ) : (
+                <div className="portal-admin-stack">
+                  {completedPlanGoals.map((goal) => (
+                    <article key={`completed-goal-${goal.id}`} className="portal-day-card">
+                      <div className="portal-row-between">
+                        <h4 style={{ margin: 0 }}>{goal.category}</h4>
+                        <p className="portal-muted-text">{formatTimestampDate(goal.completedAt)}</p>
+                      </div>
+                      <p style={{ margin: 0 }}>{goal.goalDescription}</p>
+                      {goal.completionDetails ? <p className="portal-muted-text">Details: {goal.completionDetails}</p> : null}
+                    </article>
+                  ))}
+                </div>
+              )
+            ) : null}
+          </>
+        )}
       </article>
 
       <article className="portal-admin-card">

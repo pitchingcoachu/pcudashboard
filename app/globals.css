@@ -1314,9 +1314,6 @@ main {
 
 .portal-header-center {
   justify-self: center;
-  display: grid;
-  justify-items: center;
-  gap: 0.35rem;
 }
 
 .portal-social-row {
@@ -2716,9 +2713,8 @@ main {
   }
 
   .portal-header-center {
-    display: grid;
-    justify-items: center;
-    gap: 0.3rem;
+    display: flex;
+    justify-content: center;
   }
 
   .portal-header-right {
@@ -2828,7 +2824,7 @@ main {
     flex-wrap: nowrap;
     overflow-x: auto;
     overflow-y: hidden;
-    justify-content: flex-start;
+    justify-content: center;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
