@@ -2097,10 +2097,11 @@ main {
 .portal-assessment-trend-select {
   width: 100%;
   max-width: 240px;
-  min-height: 30px;
+  height: 28px !important;
+  min-height: 28px !important;
   border-radius: 8px;
-  padding: 0.28rem 0.55rem;
-  font: 500 0.8rem/1.1 Manrope, sans-serif;
+  padding: 0.12rem 1.9rem 0.12rem 0.55rem !important;
+  font: 500 0.78rem/1 Manrope, sans-serif !important;
 }
 
 .portal-loading-panel {

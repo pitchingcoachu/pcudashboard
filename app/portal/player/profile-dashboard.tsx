@@ -1024,12 +1024,12 @@ export default function ProfileDashboard({
               ))}
             </div>
           )}
-          {isAdminPreview && <p className="portal-muted-text">Preview mode: updates are saved to this player.</p>}
         </article>
 
         <article className="portal-admin-card">
           <h3>Exercise Load Trend</h3>
           <select
+            className="portal-assessment-trend-select"
             aria-label="Exercise"
             value={selectedExerciseId ? String(selectedExerciseId) : ''}
             onChange={(event) => setSelectedExerciseId(event.target.value ? Number(event.target.value) : null)}
