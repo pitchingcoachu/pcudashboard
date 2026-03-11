@@ -2387,6 +2387,63 @@ export async function moveProgramItemToDate(input: {
   }
 }
 
+export async function deleteProgramItem(input: {
+  organizationId: number;
+  playerId: number;
+  itemId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  if (!Number.isFinite(input.itemId) || input.itemId <= 0) return { ok: false, error: 'Valid itemId is required.' };
+
+  const deleted = await pool.query<{ id: number }>(
+    `
+      DELETE FROM program_day_items i
+      USING program_days d, programs p
+      WHERE i.id = $1
+        AND i.program_day_id = d.id
+        AND d.program_id = p.id
+        AND p.organization_id = $2
+        AND p.player_id = $3
+      RETURNING i.id
+    `,
+    [input.itemId, input.organizationId, input.playerId]
+  );
+
+  if ((deleted.rowCount ?? 0) !== 1) return { ok: false, error: 'Schedule item not found.' };
+  return { ok: true };
+}
+
+export async function clearProgramItemsForDate(input: {
+  organizationId: number;
+  playerId: number;
+  dayDate: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const dayDate = input.dayDate.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dayDate)) return { ok: false, error: 'Date must be YYYY-MM-DD.' };
+
+  await pool.query(
+    `
+      DELETE FROM program_day_items i
+      USING program_days d, programs p
+      WHERE i.program_day_id = d.id
+        AND d.program_id = p.id
+        AND d.day_date = $1::date
+        AND p.organization_id = $2
+        AND p.player_id = $3
+    `,
+    [dayDate, input.organizationId, input.playerId]
+  );
+
+  return { ok: true };
+}
+
 export async function upsertExerciseLog(input: {
   playerId: number;
   itemId: number;

@@ -9,6 +9,7 @@ type WorkoutLogModalProps = {
   playerId: number;
   onClose: () => void;
   onSaved?: () => Promise<void> | void;
+  onDelete?: (item: ProgramItemRow) => Promise<void> | void;
 };
 
 const ASSESSMENT_NOTES_TOKEN = '[ASSESSMENT_NOTES]';
@@ -96,8 +97,9 @@ function formatMaxHistory(
   return best;
 }
 
-export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: WorkoutLogModalProps) {
+export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDelete }: WorkoutLogModalProps) {
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
   const [mounted, setMounted] = useState(false);
   const [historyByExercise, setHistoryByExercise] = useState<Record<number, ExerciseLoadHistoryEntry[]>>({});
@@ -408,6 +410,27 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? 'Saving...' : 'Save Log'}
             </button>
+            {onDelete && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={saving || deleting}
+                onClick={async () => {
+                  setDeleting(true);
+                  setError('');
+                  try {
+                    await onDelete(item);
+                    onClose();
+                  } catch (deleteError) {
+                    setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete workout.');
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+              >
+                {deleting ? 'Deleting...' : 'Delete Workout'}
+              </button>
+            )}
             <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>
               Close
             </button>

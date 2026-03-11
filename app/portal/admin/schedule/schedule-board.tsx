@@ -434,6 +434,36 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     }
   };
 
+  const deleteCalendarItem = async (itemId: number) => {
+    if (!playerId) return;
+    setError('');
+    const response = await fetch('/api/admin/schedule/delete', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ playerId, itemId, mode: 'item' }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? 'Failed to delete schedule workout.');
+    await loadItems();
+  };
+
+  const clearCalendarDay = async (dayDate: string) => {
+    if (!playerId) return;
+    setError('');
+    try {
+      const response = await fetch('/api/admin/schedule/delete', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, dayDate, mode: 'day' }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to delete day workouts.');
+      await loadItems();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete day workouts.');
+    }
+  };
+
   useEffect(() => {
     if (!menu) return;
     const onPointerDown = () => setMenu(null);
@@ -771,6 +801,14 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           onSaved={async () => {
             await loadItems();
           }}
+          onDelete={
+            selectedItem.scheduleType === 'calendar'
+              ? async (item) => {
+                  if (!window.confirm(`Delete "${item.itemName}" from this day?`)) return;
+                  await deleteCalendarItem(item.itemId);
+                }
+              : undefined
+          }
         />
       )}
 
@@ -796,6 +834,18 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           </button>
           <button type="button" className="btn btn-ghost" onClick={() => copyWeekFromDay(menu.dayDate)}>
             Copy Week
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => {
+              const ok = window.confirm(`Delete all workouts on ${menu.dayDate}?`);
+              if (!ok) return;
+              void clearCalendarDay(menu.dayDate);
+              setMenu(null);
+            }}
+          >
+            Delete Day
           </button>
           {copiedPlan && (
             <button type="button" className="btn btn-primary" onClick={() => void pasteCopiedPlan(menu.dayDate)}>

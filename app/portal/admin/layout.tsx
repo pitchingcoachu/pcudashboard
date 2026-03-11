@@ -42,12 +42,6 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/portal/admin/schedule" className="portal-nav-link">
               Schedule
             </Link>
-            <Link
-              href={session.role === 'coach' ? '/portal/admin/schedule' : '/portal/player?preview=self'}
-              className="portal-nav-link"
-            >
-              Player Preview
-            </Link>
             <Link href="/portal/dashboard" className="portal-nav-link">
               PCU Dashboard
             </Link>

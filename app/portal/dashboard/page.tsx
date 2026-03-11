@@ -32,11 +32,8 @@ export default async function PortalDashboardPage() {
                 </Link>
               </>
             ) : (
-              <Link
-                href={session.role === 'coach' ? '/portal/admin/schedule' : '/portal/player?preview=self'}
-                className="portal-nav-link"
-              >
-                Player Preview
+              <Link href="/portal/admin/schedule" className="portal-nav-link">
+                Schedule
               </Link>
             )}
             <Link href="/portal/dashboard" className="portal-nav-link active">
