@@ -56,6 +56,8 @@ export async function POST(request: Request) {
     schoolTeam: String(body.schoolTeam ?? ''),
     phone: String(body.phone ?? ''),
     collegeCommitment: String(body.collegeCommitment ?? ''),
+    gradYear: String(body.gradYear ?? ''),
+    position: String(body.position ?? ''),
     batsHand: String(body.batsHand ?? ''),
     throwsHand: String(body.throwsHand ?? ''),
     assignedCoachUserId: canAssignCoach ? assignedCoachUserId : undefined,

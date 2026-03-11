@@ -14,6 +14,8 @@ export type ClientRow = {
   schoolTeam: string | null;
   phone: string | null;
   collegeCommitment: string | null;
+  gradYear: string | null;
+  position: string | null;
   batsHand: string | null;
   throwsHand: string | null;
   assignedCoachUserId: number | null;
@@ -40,6 +42,8 @@ export type PlayerProfileRow = {
   schoolTeam: string | null;
   phone: string | null;
   collegeCommitment: string | null;
+  gradYear: string | null;
+  position: string | null;
   batsHand: string | null;
   throwsHand: string | null;
   assignedCoachUserId: number | null;
@@ -51,6 +55,23 @@ export type BodyWeightLogRow = {
   logDate: string;
   weightLbs: number;
   notes: string | null;
+};
+
+export type PlayerPlanGoalRow = {
+  slotIndex: 1 | 2 | 3;
+  category: string | null;
+  goalDescription: string | null;
+  createdAt: string | null;
+};
+
+export type CompletedPlayerPlanGoalRow = {
+  id: number;
+  slotIndex: 1 | 2 | 3;
+  category: string;
+  goalDescription: string;
+  completionDetails: string | null;
+  createdAt: string;
+  completedAt: string;
 };
 
 export type TrackedExerciseRow = {
@@ -262,6 +283,8 @@ export async function listClientsByOrganization(organizationId: number): Promise
     school_team: string | null;
     phone: string | null;
     college_commitment: string | null;
+    grad_year: string | null;
+    position: string | null;
     bats_hand: string | null;
     throws_hand: string | null;
     assigned_coach_user_id: number | null;
@@ -279,6 +302,8 @@ export async function listClientsByOrganization(organizationId: number): Promise
         p.school_team,
         p.phone,
         p.college_commitment,
+        p.grad_year,
+        p.position,
         p.bats_hand,
         p.throws_hand,
         p.assigned_coach_user_id,
@@ -303,6 +328,8 @@ export async function listClientsByOrganization(organizationId: number): Promise
     schoolTeam: row.school_team,
     phone: row.phone,
     collegeCommitment: row.college_commitment,
+    gradYear: row.grad_year,
+    position: row.position,
     batsHand: row.bats_hand,
     throwsHand: row.throws_hand,
     assignedCoachUserId: row.assigned_coach_user_id,
@@ -2575,6 +2602,8 @@ export async function getPlayerByIdInOrganization(input: {
     school_team: string | null;
     phone: string | null;
     college_commitment: string | null;
+    grad_year: string | null;
+    position: string | null;
     bats_hand: string | null;
     throws_hand: string | null;
     assigned_coach_user_id: number | null;
@@ -2590,6 +2619,8 @@ export async function getPlayerByIdInOrganization(input: {
         p.school_team,
         p.phone,
         p.college_commitment,
+        p.grad_year,
+        p.position,
         p.bats_hand,
         p.throws_hand,
         p.assigned_coach_user_id,
@@ -2615,6 +2646,8 @@ export async function getPlayerByIdInOrganization(input: {
     schoolTeam: result.rows[0].school_team,
     phone: result.rows[0].phone,
     collegeCommitment: result.rows[0].college_commitment,
+    gradYear: result.rows[0].grad_year,
+    position: result.rows[0].position,
     batsHand: result.rows[0].bats_hand,
     throwsHand: result.rows[0].throws_hand,
     assignedCoachUserId: result.rows[0].assigned_coach_user_id,
@@ -2639,6 +2672,8 @@ export async function getPlayerForUser(input: {
     school_team: string | null;
     phone: string | null;
     college_commitment: string | null;
+    grad_year: string | null;
+    position: string | null;
     bats_hand: string | null;
     throws_hand: string | null;
     assigned_coach_user_id: number | null;
@@ -2654,6 +2689,8 @@ export async function getPlayerForUser(input: {
         p.school_team,
         p.phone,
         p.college_commitment,
+        p.grad_year,
+        p.position,
         p.bats_hand,
         p.throws_hand,
         p.assigned_coach_user_id,
@@ -2679,6 +2716,8 @@ export async function getPlayerForUser(input: {
     schoolTeam: result.rows[0].school_team,
     phone: result.rows[0].phone,
     collegeCommitment: result.rows[0].college_commitment,
+    gradYear: result.rows[0].grad_year,
+    position: result.rows[0].position,
     batsHand: result.rows[0].bats_hand,
     throwsHand: result.rows[0].throws_hand,
     assignedCoachUserId: result.rows[0].assigned_coach_user_id,
@@ -2697,6 +2736,8 @@ export async function updatePlayerProfile(input: {
   schoolTeam?: string;
   phone?: string;
   collegeCommitment?: string;
+  gradYear?: string;
+  position?: string;
   batsHand?: string;
   throwsHand?: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -2738,11 +2779,13 @@ export async function updatePlayerProfile(input: {
         school_team = $4,
         phone = $5,
         college_commitment = $6,
-        bats_hand = $7,
-        throws_hand = $8,
-        assigned_coach_user_id = CASE WHEN $9::boolean THEN $10 ELSE assigned_coach_user_id END,
+        grad_year = $7,
+        position = $8,
+        bats_hand = $9,
+        throws_hand = $10,
+        assigned_coach_user_id = CASE WHEN $11::boolean THEN $12 ELSE assigned_coach_user_id END,
         updated_at = NOW()
-      WHERE id = $11 AND organization_id = $12
+      WHERE id = $13 AND organization_id = $14
       RETURNING id
     `,
     [
@@ -2752,6 +2795,8 @@ export async function updatePlayerProfile(input: {
       (input.schoolTeam ?? '').trim() || null,
       (input.phone ?? '').trim() || null,
       (input.collegeCommitment ?? '').trim() || null,
+      (input.gradYear ?? '').trim() || null,
+      (input.position ?? '').trim() || null,
       (input.batsHand ?? '').trim() || null,
       (input.throwsHand ?? '').trim() || null,
       assignedCoachProvided,
@@ -2787,6 +2832,249 @@ export async function listBodyWeightLogsForPlayer(input: { playerId: number; lim
     weightLbs: Number(row.weight_lbs),
     notes: row.notes,
   }));
+}
+
+export async function listPlayerPlanGoalsForPlayer(input: {
+  playerId: number;
+  completedLimit?: number;
+}): Promise<{ activeGoals: PlayerPlanGoalRow[]; completedGoals: CompletedPlayerPlanGoalRow[] }> {
+  if (!isDatabaseConfigured()) {
+    return {
+      activeGoals: [
+        { slotIndex: 1, category: null, goalDescription: null, createdAt: null },
+        { slotIndex: 2, category: null, goalDescription: null, createdAt: null },
+        { slotIndex: 3, category: null, goalDescription: null, createdAt: null },
+      ],
+      completedGoals: [],
+    };
+  }
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const completedLimit = Math.max(1, Math.min(500, input.completedLimit ?? 200));
+
+  const [activeResult, completedResult] = await Promise.all([
+    pool.query<{ slot_index: number; category: string; goal_description: string; created_at: string }>(
+      `
+        SELECT slot_index, category, goal_description, created_at::text
+        FROM player_plan_goals
+        WHERE player_id = $1
+        ORDER BY slot_index ASC
+      `,
+      [input.playerId]
+    ),
+    pool.query<{
+      id: number;
+      slot_index: number;
+      category: string;
+      goal_description: string;
+      completion_details: string | null;
+      created_at: string;
+      completed_at: string;
+    }>(
+      `
+        SELECT
+          id,
+          slot_index,
+          category,
+          goal_description,
+          completion_details,
+          created_at::text,
+          completed_at::text
+        FROM completed_player_plan_goals
+        WHERE player_id = $1
+        ORDER BY completed_at DESC, id DESC
+        LIMIT $2
+      `,
+      [input.playerId, completedLimit]
+    ),
+  ]);
+
+  const activeBySlot = new Map<number, PlayerPlanGoalRow>();
+  for (const row of activeResult.rows) {
+    if (row.slot_index < 1 || row.slot_index > 3) continue;
+    activeBySlot.set(row.slot_index, {
+      slotIndex: row.slot_index as 1 | 2 | 3,
+      category: row.category,
+      goalDescription: row.goal_description,
+      createdAt: row.created_at,
+    });
+  }
+
+  const activeGoals: PlayerPlanGoalRow[] = [1, 2, 3].map((slot) => {
+    const existing = activeBySlot.get(slot);
+    return (
+      existing ?? {
+        slotIndex: slot as 1 | 2 | 3,
+        category: null,
+        goalDescription: null,
+        createdAt: null,
+      }
+    );
+  });
+
+  const completedGoals: CompletedPlayerPlanGoalRow[] = completedResult.rows
+    .filter((row) => row.slot_index >= 1 && row.slot_index <= 3)
+    .map((row) => ({
+      id: row.id,
+      slotIndex: row.slot_index as 1 | 2 | 3,
+      category: row.category,
+      goalDescription: row.goal_description,
+      completionDetails: row.completion_details,
+      createdAt: row.created_at,
+      completedAt: row.completed_at,
+    }));
+
+  return { activeGoals, completedGoals };
+}
+
+export async function upsertPlayerPlanGoal(input: {
+  organizationId: number;
+  playerId: number;
+  slotIndex: number;
+  category: string;
+  goalDescription: string;
+  createdByUserId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  if (!Number.isFinite(input.slotIndex) || input.slotIndex < 1 || input.slotIndex > 3) {
+    return { ok: false, error: 'slotIndex must be 1, 2, or 3.' };
+  }
+  const category = input.category.trim();
+  const goalDescription = input.goalDescription.trim();
+  if (!category) return { ok: false, error: 'Goal category is required.' };
+  if (!goalDescription) return { ok: false, error: 'Goal description is required.' };
+
+  const playerCheck = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM players
+      WHERE id = $1 AND organization_id = $2
+      LIMIT 1
+    `,
+    [input.playerId, input.organizationId]
+  );
+  if ((playerCheck.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
+
+  await pool.query(
+    `
+      INSERT INTO player_plan_goals (
+        player_id,
+        slot_index,
+        category,
+        goal_description,
+        created_by_user_id,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+      ON CONFLICT (player_id, slot_index)
+      DO UPDATE SET
+        category = EXCLUDED.category,
+        goal_description = EXCLUDED.goal_description,
+        created_by_user_id = EXCLUDED.created_by_user_id,
+        updated_at = NOW()
+    `,
+    [input.playerId, input.slotIndex, category, goalDescription, input.createdByUserId]
+  );
+
+  return { ok: true };
+}
+
+export async function completePlayerPlanGoal(input: {
+  organizationId: number;
+  playerId: number;
+  slotIndex: number;
+  completionDetails: string;
+  completedByUserId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  if (!Number.isFinite(input.slotIndex) || input.slotIndex < 1 || input.slotIndex > 3) {
+    return { ok: false, error: 'slotIndex must be 1, 2, or 3.' };
+  }
+
+  const playerCheck = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM players
+      WHERE id = $1 AND organization_id = $2
+      LIMIT 1
+    `,
+    [input.playerId, input.organizationId]
+  );
+  if ((playerCheck.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const activeGoal = await client.query<{
+      id: number;
+      category: string;
+      goal_description: string;
+      created_at: string;
+    }>(
+      `
+        SELECT id, category, goal_description, created_at::text
+        FROM player_plan_goals
+        WHERE player_id = $1
+          AND slot_index = $2
+        LIMIT 1
+      `,
+      [input.playerId, input.slotIndex]
+    );
+    if ((activeGoal.rowCount ?? 0) !== 1) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'No active goal found in that column.' };
+    }
+
+    const goal = activeGoal.rows[0];
+    await client.query(
+      `
+        INSERT INTO completed_player_plan_goals (
+          player_id,
+          slot_index,
+          category,
+          goal_description,
+          completion_details,
+          created_at,
+          completed_at,
+          completed_by_user_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::timestamptz, NOW(), $7)
+      `,
+      [
+        input.playerId,
+        input.slotIndex,
+        goal.category,
+        goal.goal_description,
+        input.completionDetails.trim() || null,
+        goal.created_at,
+        input.completedByUserId,
+      ]
+    );
+
+    await client.query(
+      `
+        DELETE FROM player_plan_goals
+        WHERE id = $1
+      `,
+      [goal.id]
+    );
+
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to complete goal.' };
+  } finally {
+    client.release();
+  }
 }
 
 export async function upsertBodyWeightLog(input: {

@@ -9,6 +9,7 @@ import {
   listCoachesByOrganization,
   listBodyWeightLogsForPlayer,
   listClientsByOrganization,
+  listPlayerPlanGoalsForPlayer,
   listProgramItemsForPlayerByDateRange,
 } from '../../../lib/training-db';
 import LogoutButton from '../logout-button';
@@ -75,7 +76,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
   const today = todayIsoDate();
   const tomorrow = addDays(today, 1);
 
-  const [player, todayItems, bodyWeightLogs, previewClients, coaches, assessmentScores] = await Promise.all([
+  const [player, todayItems, bodyWeightLogs, previewClients, coaches, assessmentScores, planGoals] = await Promise.all([
     getPlayerByIdInOrganization({
       organizationId: session.organizationId,
       playerId: effectivePlayerId,
@@ -98,6 +99,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
       ? listCoachesByOrganization(session.organizationId)
       : Promise.resolve([]),
     listAssessmentWorkoutScoresForPlayer({ playerId: effectivePlayerId, limit: 240 }),
+    listPlayerPlanGoalsForPlayer({ playerId: effectivePlayerId }),
   ]);
 
   if (!player) {
@@ -179,6 +181,8 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             schoolTeam: player.schoolTeam,
             phone: player.phone,
             collegeCommitment: player.collegeCommitment,
+            gradYear: player.gradYear,
+            position: player.position,
             batsHand: player.batsHand,
             throwsHand: player.throwsHand,
             assignedCoachUserId: player.assignedCoachUserId,
@@ -193,6 +197,9 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
           trackedExercises={[]}
           initialExerciseId={null}
           initialTrend={[]}
+          sessionRole={session.role}
+          initialPlanGoals={planGoals.activeGoals}
+          initialCompletedPlanGoals={planGoals.completedGoals}
         />
       </section>
     </div>

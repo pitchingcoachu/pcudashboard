@@ -3,7 +3,13 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, MouseEvent } from 'react';
-import type { AssessmentWorkoutScoreRow, BodyWeightLogRow, ProgramItemRow } from '../../../lib/training-db';
+import type {
+  AssessmentWorkoutScoreRow,
+  BodyWeightLogRow,
+  CompletedPlayerPlanGoalRow,
+  PlayerPlanGoalRow,
+  ProgramItemRow,
+} from '../../../lib/training-db';
 import WorkoutLogModal from '../components/workout-log-modal';
 
 type TrackedExercise = {
@@ -17,8 +23,18 @@ type ExerciseTrendPoint = {
   averageLoad: number;
 };
 
+const PLAN_GOAL_CATEGORIES = ['Mechanical', 'Stuff', 'Command', 'Mental Side', 'Strength', 'Mobility'] as const;
+
+type GoalDraft = {
+  slotIndex: 1 | 2 | 3;
+  category: string;
+  goalDescription: string;
+  createdAt: string | null;
+};
+
 type ProfileDashboardProps = {
   playerId: number;
+  sessionRole: 'admin' | 'coach' | 'player';
   isAdminPreview: boolean;
   fullProgramHref: string;
   initialProfile: {
@@ -28,6 +44,8 @@ type ProfileDashboardProps = {
     schoolTeam: string | null;
     phone: string | null;
     collegeCommitment: string | null;
+    gradYear: string | null;
+    position: string | null;
     batsHand: string | null;
     throwsHand: string | null;
     assignedCoachUserId: number | null;
@@ -39,6 +57,8 @@ type ProfileDashboardProps = {
   todayItems: ProgramItemRow[];
   initialWeightLogs: BodyWeightLogRow[];
   initialAssessmentScores: AssessmentWorkoutScoreRow[];
+  initialPlanGoals: PlayerPlanGoalRow[];
+  initialCompletedPlanGoals: CompletedPlayerPlanGoalRow[];
   trackedExercises: TrackedExercise[];
   initialExerciseId: number | null;
   initialTrend: ExerciseTrendPoint[];
@@ -46,6 +66,16 @@ type ProfileDashboardProps = {
 
 function formatDate(isoDate: string): string {
   const date = new Date(`${isoDate}T00:00:00Z`);
+  const month = date.getUTCMonth() + 1;
+  const day = date.getUTCDate();
+  const year = String(date.getUTCFullYear()).slice(-2);
+  return `${month}/${day}/${year}`;
+}
+
+function formatTimestampDate(value: string | null): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
   const month = date.getUTCMonth() + 1;
   const day = date.getUTCDate();
   const year = String(date.getUTCFullYear()).slice(-2);
@@ -93,17 +123,19 @@ function LineChart({
   emptyText,
   fixedYMin,
   fixedYMax,
+  chartHeight = 230,
 }: {
   points: Array<{ xLabel: string; value: number }>;
   yLabel: string;
   emptyText: string;
   fixedYMin?: number;
   fixedYMax?: number;
+  chartHeight?: number;
 }) {
   if (points.length === 0) return <p className="portal-muted-text">{emptyText}</p>;
 
   const width = 620;
-  const height = 230;
+  const height = chartHeight;
   const leftPad = 52;
   const rightPad = 16;
   const topPad = 18;
@@ -124,12 +156,20 @@ function LineChart({
         ? maxValue + 1
         : maxValue;
   const yTickCount = 5;
-  const yTicks = Array.from({ length: yTickCount }, (_, idx) => {
-    const ratio = idx / (yTickCount - 1);
-    const value = yMax - ratio * (yMax - yMin);
-    const y = topPad + ratio * (height - topPad - bottomPad);
-    return { value, y };
-  });
+  const useIntegerTicks = Number.isInteger(yMin) && Number.isInteger(yMax) && yMax - yMin <= 10;
+  const yTicks = useIntegerTicks
+    ? Array.from({ length: yMax - yMin + 1 }, (_, idx) => {
+        const value = yMax - idx;
+        const ratio = (yMax - value) / Math.max(1, yMax - yMin);
+        const y = topPad + ratio * (height - topPad - bottomPad);
+        return { value, y };
+      })
+    : Array.from({ length: yTickCount }, (_, idx) => {
+        const ratio = idx / (yTickCount - 1);
+        const value = yMax - ratio * (yMax - yMin);
+        const y = topPad + ratio * (height - topPad - bottomPad);
+        return { value, y };
+      });
 
   const chartPoints = points.map((point, index) => {
     const x =
@@ -159,7 +199,7 @@ function LineChart({
               strokeWidth="1"
             />
             <text x={leftPad - 8} y={tick.y + 4} textAnchor="end" fill="rgba(255,255,255,0.72)" fontSize="11">
-              {tick.value.toFixed(1)}
+              {Number.isInteger(tick.value) ? String(tick.value) : tick.value.toFixed(1)}
             </text>
           </g>
         ))}
@@ -226,6 +266,7 @@ function LineChart({
 
 export default function ProfileDashboard({
   playerId,
+  sessionRole,
   isAdminPreview,
   fullProgramHref,
   initialProfile,
@@ -235,10 +276,14 @@ export default function ProfileDashboard({
   todayItems,
   initialWeightLogs,
   initialAssessmentScores,
+  initialPlanGoals,
+  initialCompletedPlanGoals,
   trackedExercises,
   initialExerciseId,
   initialTrend,
 }: ProfileDashboardProps) {
+  const canManageGoals = sessionRole === 'admin' || sessionRole === 'coach';
+  const showProfileDetailsPanel = sessionRole !== 'player';
   const [profile, setProfile] = useState({
     fullName: initialProfile.fullName,
     email: initialProfile.email,
@@ -246,6 +291,8 @@ export default function ProfileDashboard({
     schoolTeam: initialProfile.schoolTeam ?? '',
     phone: initialProfile.phone ?? '',
     collegeCommitment: initialProfile.collegeCommitment ?? '',
+    gradYear: initialProfile.gradYear ?? '',
+    position: initialProfile.position ?? '',
     batsHand: initialProfile.batsHand ?? '',
     throwsHand: initialProfile.throwsHand ?? '',
     assignedCoachUserId: initialProfile.assignedCoachUserId ? String(initialProfile.assignedCoachUserId) : '',
@@ -269,6 +316,23 @@ export default function ProfileDashboard({
   const [assessmentExpanded, setAssessmentExpanded] = useState(true);
 
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
+  const [planGoals, setPlanGoals] = useState<GoalDraft[]>(
+    [1, 2, 3].map((slot) => {
+      const existing = initialPlanGoals.find((goal) => goal.slotIndex === slot);
+      return {
+        slotIndex: slot as 1 | 2 | 3,
+        category: existing?.category ?? '',
+        goalDescription: existing?.goalDescription ?? '',
+        createdAt: existing?.createdAt ?? null,
+      };
+    })
+  );
+  const [completedPlanGoals, setCompletedPlanGoals] = useState<CompletedPlayerPlanGoalRow[]>(initialCompletedPlanGoals);
+  const [goalSavingSlot, setGoalSavingSlot] = useState<1 | 2 | 3 | null>(null);
+  const [goalMessage, setGoalMessage] = useState('');
+  const [showCompletedGoals, setShowCompletedGoals] = useState(false);
+  const [completeModal, setCompleteModal] = useState<{ slotIndex: 1 | 2 | 3; details: string } | null>(null);
+  const [completingGoal, setCompletingGoal] = useState(false);
   const [selectedAssessmentDate, setSelectedAssessmentDate] = useState(
     initialAssessmentScores[0]?.dayDate ?? ''
   );
@@ -438,24 +502,123 @@ export default function ProfileDashboard({
     };
   }, [playerId, selectedExerciseId]);
 
+  const saveGoal = async (slotIndex: 1 | 2 | 3) => {
+    if (!canManageGoals) return;
+    const goal = planGoals.find((entry) => entry.slotIndex === slotIndex);
+    if (!goal) return;
+    setGoalSavingSlot(slotIndex);
+    setGoalMessage('');
+    try {
+      const response = await fetch('/api/player/plan-goals', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          playerId,
+          slotIndex,
+          category: goal.category,
+          goalDescription: goal.goalDescription,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        activeGoals?: PlayerPlanGoalRow[];
+        completedGoals?: CompletedPlayerPlanGoalRow[];
+      };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to save goal.');
+      const nextActive = Array.isArray(payload.activeGoals) ? payload.activeGoals : [];
+      setPlanGoals(
+        [1, 2, 3].map((slot) => {
+          const existing = nextActive.find((entry) => entry.slotIndex === slot);
+          return {
+            slotIndex: slot as 1 | 2 | 3,
+            category: existing?.category ?? '',
+            goalDescription: existing?.goalDescription ?? '',
+            createdAt: existing?.createdAt ?? null,
+          };
+        })
+      );
+      if (Array.isArray(payload.completedGoals)) setCompletedPlanGoals(payload.completedGoals);
+      setGoalMessage(`Goal ${slotIndex} saved.`);
+    } catch (error) {
+      setGoalMessage(error instanceof Error ? error.message : 'Failed to save goal.');
+    } finally {
+      setGoalSavingSlot(null);
+    }
+  };
+
+  const saveGoalCompletion = async () => {
+    if (!canManageGoals || !completeModal) return;
+    setCompletingGoal(true);
+    setGoalMessage('');
+    try {
+      const response = await fetch('/api/player/plan-goals', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          playerId,
+          slotIndex: completeModal.slotIndex,
+          completionDetails: completeModal.details,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        activeGoals?: PlayerPlanGoalRow[];
+        completedGoals?: CompletedPlayerPlanGoalRow[];
+      };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to complete goal.');
+      const nextActive = Array.isArray(payload.activeGoals) ? payload.activeGoals : [];
+      setPlanGoals(
+        [1, 2, 3].map((slot) => {
+          const existing = nextActive.find((entry) => entry.slotIndex === slot);
+          return {
+            slotIndex: slot as 1 | 2 | 3,
+            category: existing?.category ?? '',
+            goalDescription: existing?.goalDescription ?? '',
+            createdAt: existing?.createdAt ?? null,
+          };
+        })
+      );
+      if (Array.isArray(payload.completedGoals)) setCompletedPlanGoals(payload.completedGoals);
+      setCompleteModal(null);
+      setGoalMessage(`Goal ${completeModal.slotIndex} marked complete.`);
+    } catch (error) {
+      setGoalMessage(error instanceof Error ? error.message : 'Failed to complete goal.');
+    } finally {
+      setCompletingGoal(false);
+    }
+  };
+
+  const heroMetaLineOne = [
+    displayAge !== null ? `Age: ${displayAge}` : null,
+    profile.batsHand.trim() ? `Bats: ${profile.batsHand.trim()}` : null,
+    profile.throwsHand.trim() ? `Throws: ${profile.throwsHand.trim()}` : null,
+    profile.position.trim() ? `Position: ${profile.position.trim()}` : null,
+  ].filter((value): value is string => Boolean(value));
+
+  const schoolTeamValue = profile.schoolTeam.trim();
+  const gradYearValue = profile.gradYear.trim();
+  const heroSchoolGradLine = schoolTeamValue && gradYearValue ? `${schoolTeamValue} • ${gradYearValue}` : schoolTeamValue || gradYearValue || '';
+  const heroCommitLine = profile.collegeCommitment.trim()
+    ? `${profile.collegeCommitment.trim()} Commit`
+    : '';
+
   return (
     <div className="portal-profile-stack">
       <section className="portal-admin-card portal-profile-hero">
-        <div className="portal-profile-hero-name">
-          <h2>{profile.fullName}</h2>
-        </div>
-        <div className="portal-profile-vitals">
-          <span className="portal-profile-vitals-text">
-            Age: {displayAge ?? '-'}
-            {'\u00A0\u00A0\u00A0\u00A0\u00A0'}
-            Bats: {profile.batsHand || '-'}
-            {'\u00A0\u00A0\u00A0\u00A0\u00A0'}
-            Throws: {profile.throwsHand || '-'}
-          </span>
+        <div className="portal-profile-hero-main">
+          <div className="portal-profile-hero-name">
+            <h2>{profile.fullName}</h2>
+          </div>
+          {heroMetaLineOne.length > 0 ? (
+            <p className="portal-profile-hero-line">{heroMetaLineOne.join(' • ')}</p>
+          ) : null}
+          {heroSchoolGradLine ? <p className="portal-profile-hero-line">{heroSchoolGradLine}</p> : null}
+          {heroCommitLine ? <p className="portal-profile-hero-line">{heroCommitLine}</p> : null}
         </div>
       </section>
 
-      <article className="portal-admin-card">
+      {showProfileDetailsPanel && (
+        <article className="portal-admin-card">
         <div className="portal-row-between">
           <h3>Profile Details</h3>
           <button
@@ -486,6 +649,8 @@ export default function ProfileDashboard({
                     schoolTeam: profile.schoolTeam,
                     phone: profile.phone,
                     collegeCommitment: profile.collegeCommitment,
+                    gradYear: profile.gradYear,
+                    position: profile.position,
                     batsHand: profile.batsHand,
                     throwsHand: profile.throwsHand,
                     assignedCoachUserId: profile.assignedCoachUserId ? Number(profile.assignedCoachUserId) : null,
@@ -545,6 +710,20 @@ export default function ProfileDashboard({
               <input
                 value={profile.collegeCommitment}
                 onChange={(event) => setProfile((prev) => ({ ...prev, collegeCommitment: event.target.value }))}
+              />
+            </label>
+            <label>
+              Grad Year
+              <input
+                value={profile.gradYear}
+                onChange={(event) => setProfile((prev) => ({ ...prev, gradYear: event.target.value }))}
+              />
+            </label>
+            <label>
+              Position
+              <input
+                value={profile.position}
+                onChange={(event) => setProfile((prev) => ({ ...prev, position: event.target.value }))}
               />
             </label>
             <label>
@@ -616,6 +795,14 @@ export default function ProfileDashboard({
               <input value={profile.collegeCommitment || '-'} readOnly />
             </label>
             <label>
+              Grad Year
+              <input value={profile.gradYear || '-'} readOnly />
+            </label>
+            <label>
+              Position
+              <input value={profile.position || '-'} readOnly />
+            </label>
+            <label>
               Bats
               <input value={profile.batsHand || '-'} readOnly />
             </label>
@@ -624,6 +811,101 @@ export default function ProfileDashboard({
               <input value={profile.throwsHand || '-'} readOnly />
             </label>
           </div>
+        ) : null}
+        </article>
+      )}
+
+      <article className="portal-admin-card">
+        <h3>Player Plan Goals</h3>
+        <div className="portal-profile-goals-grid">
+          {planGoals.map((goal) => (
+            <article key={`goal-slot-${goal.slotIndex}`} className="portal-day-card">
+              <div className="portal-row-between">
+                <h4 style={{ margin: 0 }}>Goal {goal.slotIndex}</h4>
+                <p className="portal-muted-text">Created: {formatTimestampDate(goal.createdAt)}</p>
+              </div>
+              <label className="portal-inline-filter">
+                Category
+                <select
+                  value={goal.category}
+                  disabled={!canManageGoals}
+                  onChange={(event) =>
+                    setPlanGoals((prev) =>
+                      prev.map((entry) =>
+                        entry.slotIndex === goal.slotIndex ? { ...entry, category: event.target.value } : entry
+                      )
+                    )
+                  }
+                >
+                  <option value="">Select category</option>
+                  {PLAN_GOAL_CATEGORIES.map((category) => (
+                    <option key={`${goal.slotIndex}-${category}`} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="portal-inline-filter">
+                Goal
+                <textarea
+                  rows={4}
+                  value={goal.goalDescription}
+                  readOnly={!canManageGoals}
+                  onChange={(event) =>
+                    setPlanGoals((prev) =>
+                      prev.map((entry) =>
+                        entry.slotIndex === goal.slotIndex ? { ...entry, goalDescription: event.target.value } : entry
+                      )
+                    )
+                  }
+                />
+              </label>
+              {canManageGoals ? (
+                <div className="portal-choice-line-actions">
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => void saveGoal(goal.slotIndex)}
+                    disabled={goalSavingSlot === goal.slotIndex}
+                  >
+                    {goalSavingSlot === goal.slotIndex ? 'Saving...' : 'Save Goal'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={!goal.category || !goal.goalDescription.trim()}
+                    onClick={() => setCompleteModal({ slotIndex: goal.slotIndex, details: '' })}
+                  >
+                    Completed Goal
+                  </button>
+                </div>
+              ) : null}
+            </article>
+          ))}
+        </div>
+        <div className="portal-choice-line-actions">
+          <button type="button" className="btn btn-ghost" onClick={() => setShowCompletedGoals((current) => !current)}>
+            {showCompletedGoals ? 'Hide Completed Goals' : 'View Completed Goals'}
+          </button>
+          {goalMessage ? <p className={goalMessage.includes('Failed') ? 'auth-error' : 'auth-message'}>{goalMessage}</p> : null}
+        </div>
+        {showCompletedGoals ? (
+          completedPlanGoals.length === 0 ? (
+            <p className="portal-muted-text">No completed goals yet.</p>
+          ) : (
+            <div className="portal-admin-stack">
+              {completedPlanGoals.map((goal) => (
+                <article key={`completed-goal-${goal.id}`} className="portal-day-card">
+                  <div className="portal-row-between">
+                    <h4 style={{ margin: 0 }}>{goal.category}</h4>
+                    <p className="portal-muted-text">{formatTimestampDate(goal.completedAt)}</p>
+                  </div>
+                  <p style={{ margin: 0 }}>{goal.goalDescription}</p>
+                  {goal.completionDetails ? <p className="portal-muted-text">Details: {goal.completionDetails}</p> : null}
+                </article>
+              ))}
+            </div>
+          )
         ) : null}
       </article>
 
@@ -693,6 +975,7 @@ export default function ProfileDashboard({
             <article className="portal-admin-card">
               <h4 style={{ margin: 0 }}>Assessment Trend</h4>
               <select
+                className="portal-assessment-trend-select"
                 aria-label="Assessment exercise"
                 value={selectedAssessmentExerciseKey}
                 onChange={(event) => setSelectedAssessmentExerciseKey(event.target.value)}
@@ -707,8 +990,9 @@ export default function ProfileDashboard({
                 points={assessmentTrendPoints}
                 yLabel="Score (1-3)"
                 emptyText="No scores logged yet for this assessment."
-                fixedYMin={1}
+                fixedYMin={0}
                 fixedYMax={3}
+                chartHeight={280}
               />
             </article>
           </div>
@@ -828,6 +1112,53 @@ export default function ProfileDashboard({
           <LineChart points={weightTrendPoints} yLabel="Body weight (lbs)" emptyText="No body weight entries yet." />
         </article>
       </div>
+
+      {completeModal ? (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9998,
+            background: 'rgba(0,0,0,0.86)',
+            display: 'grid',
+            placeItems: 'center',
+            padding: '1rem',
+          }}
+          onClick={() => {
+            if (completingGoal) return;
+            setCompleteModal(null);
+          }}
+        >
+          <article
+            className="portal-admin-card"
+            style={{ width: 'min(560px, 96vw)' }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>Details of Goal Completion</h3>
+            <label className="portal-inline-filter">
+              Notes
+              <textarea
+                rows={5}
+                value={completeModal.details}
+                onChange={(event) =>
+                  setCompleteModal((current) =>
+                    current ? { ...current, details: event.target.value } : current
+                  )
+                }
+                placeholder="Enter details..."
+              />
+            </label>
+            <div className="portal-choice-line-actions">
+              <button type="button" className="btn btn-primary" disabled={completingGoal} onClick={() => void saveGoalCompletion()}>
+                {completingGoal ? 'Saving...' : 'Save'}
+              </button>
+              <button type="button" className="btn btn-ghost" disabled={completingGoal} onClick={() => setCompleteModal(null)}>
+                Cancel
+              </button>
+            </div>
+          </article>
+        </div>
+      ) : null}
 
       {selectedItem && (
         <WorkoutLogModal

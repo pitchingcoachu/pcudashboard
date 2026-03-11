@@ -240,6 +240,8 @@ export async function ensureAuthDbReady(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS school_team TEXT;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS phone TEXT;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS college_commitment TEXT;`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS grad_year TEXT;`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS position TEXT;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS bats_hand TEXT;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS throws_hand TEXT;`);
   await pool.query(
@@ -257,6 +259,34 @@ export async function ensureAuthDbReady(): Promise<void> {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (player_id, log_date)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_plan_goals (
+      id SERIAL PRIMARY KEY,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      slot_index SMALLINT NOT NULL CHECK (slot_index BETWEEN 1 AND 3),
+      category TEXT NOT NULL,
+      goal_description TEXT NOT NULL,
+      created_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (player_id, slot_index)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS completed_player_plan_goals (
+      id SERIAL PRIMARY KEY,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      slot_index SMALLINT NOT NULL CHECK (slot_index BETWEEN 1 AND 3),
+      category TEXT NOT NULL,
+      goal_description TEXT NOT NULL,
+      completion_details TEXT,
+      created_at TIMESTAMPTZ NOT NULL,
+      completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL
     );
   `);
 
@@ -420,6 +450,8 @@ export async function ensureAuthDbReady(): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_org ON players (organization_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_body_weight_logs_player_date ON body_weight_logs (player_id, log_date);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_plan_goals_player_slot ON player_plan_goals (player_id, slot_index);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_completed_plan_goals_player_completed_at ON completed_player_plan_goals (player_id, completed_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_categories_org ON exercise_categories (organization_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_library_org ON exercise_library (organization_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_library_org ON workout_library (organization_id);`);

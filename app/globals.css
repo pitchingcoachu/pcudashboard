@@ -1583,6 +1583,8 @@ main {
 .portal-form-grid textarea,
 .portal-form-grid select,
 .portal-inline-filter input,
+.portal-inline-filter textarea,
+.portal-inline-filter select,
 .portal-preview-form select {
   width: 100%;
   max-width: 100%;
@@ -2086,6 +2088,21 @@ main {
   gap: 0.55rem;
 }
 
+.portal-profile-goals-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.portal-assessment-trend-select {
+  width: 100%;
+  max-width: 240px;
+  min-height: 30px;
+  border-radius: 8px;
+  padding: 0.28rem 0.55rem;
+  font: 500 0.8rem/1.1 Manrope, sans-serif;
+}
+
 .portal-loading-panel {
   display: grid;
   place-items: center;
@@ -2576,15 +2593,21 @@ main {
 }
 
 .portal-profile-hero {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  justify-items: center;
   align-items: center;
-  gap: 0.8rem;
-  flex-wrap: wrap;
+  gap: 0.4rem;
+  text-align: center;
+}
+
+.portal-profile-hero-main {
+  display: grid;
+  gap: 0.24rem;
+  justify-items: center;
 }
 
 .portal-profile-hero-name {
-  display: inline-flex;
+  display: grid;
   align-items: center;
 }
 
@@ -2592,24 +2615,11 @@ main {
   margin: 0;
 }
 
-.portal-profile-vitals {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.8rem;
-}
-
-.portal-profile-vitals span {
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 999px;
-  padding: 0.3rem 0.85rem;
-  font: 700 0.72rem/1 Manrope, sans-serif;
-  color: var(--text-main);
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.portal-profile-vitals-text {
+.portal-profile-hero-line {
+  margin: 0;
+  color: var(--text-muted);
+  font: 700 0.84rem/1.25 Manrope, sans-serif;
   letter-spacing: 0.01em;
-  white-space: nowrap;
 }
 
 .portal-profile-grid {
@@ -2743,6 +2753,10 @@ main {
   .portal-profile-assessment-grid {
     grid-template-columns: 1fr;
   }
+
+  .portal-profile-goals-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 780px) {
@@ -2855,6 +2869,10 @@ main {
   }
 
   .portal-profile-assessment-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-profile-goals-grid {
     grid-template-columns: 1fr;
   }
 }
