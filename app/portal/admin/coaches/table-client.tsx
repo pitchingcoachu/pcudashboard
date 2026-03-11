@@ -50,7 +50,7 @@ export function CoachesTable({ coaches, clients, currentUserId }: Props) {
                   <td>
                     <button
                       type="button"
-                      className="portal-inline-link"
+                      className="portal-inline-link portal-coach-name-link"
                       style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }}
                       onClick={() => setExpandedCoachId((prev) => (prev === coach.userId ? null : coach.userId))}
                     >
