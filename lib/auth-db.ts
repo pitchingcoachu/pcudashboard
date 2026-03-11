@@ -384,6 +384,37 @@ export async function ensureAuthDbReady(): Promise<void> {
     );
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS program_cycle_items (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      cycle_slot TEXT NOT NULL CHECK (cycle_slot IN ('medium', 'high', 'low')),
+      workout_id INTEGER NOT NULL REFERENCES workout_library(id) ON DELETE CASCADE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_by INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS exercise_log_history (
+      id SERIAL PRIMARY KEY,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      schedule_type TEXT NOT NULL CHECK (schedule_type IN ('calendar', 'cycle')),
+      program_day_item_id INTEGER REFERENCES program_day_items(id) ON DELETE CASCADE,
+      cycle_item_id INTEGER REFERENCES program_cycle_items(id) ON DELETE CASCADE,
+      performed_sets TEXT,
+      performed_reps TEXT,
+      performed_load TEXT,
+      completed BOOLEAN NOT NULL DEFAULT FALSE,
+      notes TEXT,
+      logged_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+      logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_users_email ON auth_users (LOWER(email));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_users_org ON auth_users (organization_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_org ON players (organization_id);`);
@@ -395,6 +426,10 @@ export async function ensureAuthDbReady(): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_exercises_workout ON workout_exercises (workout_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_programs_player ON programs (player_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_days_date ON program_days (day_date);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_cycle_items_player_slot ON program_cycle_items (player_id, cycle_slot, sort_order);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_log_history_player_logged_at ON exercise_log_history (player_id, logged_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_log_history_program_item ON exercise_log_history (program_day_item_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_log_history_cycle_item ON exercise_log_history (cycle_item_id);`);
 
   const tokenColumnsResult = await pool.query<{ column_name: string }>(
     `

@@ -122,6 +122,8 @@ export type WorkoutExerciseAssignment = {
 export type ProgramItemRow = {
   itemId: number;
   dayDate: string;
+  scheduleType: 'calendar' | 'cycle';
+  cycleSlot: 'medium' | 'high' | 'low' | null;
   itemType: 'exercise' | 'workout';
   itemName: string;
   workoutDescription: string | null;
@@ -200,6 +202,12 @@ function validateHttpUrl(value: string): { ok: true; value: string } | { ok: fal
 
 function normalizeCategoryName(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
+}
+
+function normalizeCycleSlot(value: string): 'medium' | 'high' | 'low' | null {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'medium' || normalized === 'high' || normalized === 'low') return normalized;
+  return null;
 }
 
 function deriveUsernameFromEmail(email: string): string {
@@ -1712,6 +1720,8 @@ export async function listProgramItemsForPlayerByDateRange(input: {
       : [],
     itemId: row.item_id,
     dayDate: row.day_date,
+    scheduleType: 'calendar',
+    cycleSlot: null,
     itemType: row.item_type === 'workout' ? 'workout' : 'exercise',
     itemName: row.item_name,
     workoutDescription: row.workout_description,
@@ -1736,6 +1746,246 @@ export async function listProgramItemsForPlayerByDateRange(input: {
     logNotes: row.log_notes,
     programName: row.program_name,
   }));
+}
+
+export async function listCycleProgramItemsForPlayer(input: { playerId: number }): Promise<ProgramItemRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const result = await pool.query<{
+    item_id: number;
+    cycle_slot: 'medium' | 'high' | 'low';
+    workout_id: number;
+    workout_name: string;
+    workout_category: string | null;
+    workout_description: string | null;
+    workout_exercise_names: string | null;
+    workout_exercise_json: unknown;
+  }>(
+    `
+      SELECT
+        ci.id AS item_id,
+        ci.cycle_slot,
+        w.id AS workout_id,
+        w.name AS workout_name,
+        w.category AS workout_category,
+        w.description AS workout_description,
+        ws.exercise_names AS workout_exercise_names,
+        ws.exercise_json AS workout_exercise_json
+      FROM program_cycle_items ci
+      JOIN workout_library w ON w.id = ci.workout_id
+      LEFT JOIN LATERAL (
+        SELECT
+          STRING_AGG(
+            CASE
+              WHEN we2.exercise_prefix IS NOT NULL AND LENGTH(TRIM(we2.exercise_prefix)) > 0
+                THEN CONCAT(TRIM(we2.exercise_prefix), ': ', e2.name)
+              ELSE e2.name
+            END,
+            ', '
+            ORDER BY we2.sort_order, e2.name
+          ) AS exercise_names,
+          COALESCE(
+            JSON_AGG(
+              JSON_BUILD_OBJECT(
+                'exerciseId', e2.id,
+                'prefix', we2.exercise_prefix,
+                'name', e2.name,
+                'category', e2.category,
+                'repMeasure', e2.rep_measure,
+                'repsPerSide', e2.reps_per_side,
+                'prescribedSets', we2.prescribed_sets,
+                'prescribedReps', we2.prescribed_reps,
+                'instructionVideoUrl', e2.instruction_video_url,
+                'description', e2.description,
+                'coachingCues', e2.coaching_cues
+              )
+              ORDER BY we2.sort_order, e2.name
+            ),
+            '[]'::json
+          ) AS exercise_json
+        FROM workout_exercises we2
+        JOIN exercise_library e2 ON e2.id = we2.exercise_id
+        WHERE we2.workout_id = ci.workout_id
+      ) ws ON TRUE
+      WHERE ci.player_id = $1
+      ORDER BY
+        CASE ci.cycle_slot
+          WHEN 'medium' THEN 1
+          WHEN 'high' THEN 2
+          WHEN 'low' THEN 3
+          ELSE 4
+        END ASC,
+        ci.sort_order ASC,
+        ci.id ASC
+    `,
+    [input.playerId]
+  );
+
+  const today = new Date();
+  const dayDate = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(
+    today.getUTCDate()
+  ).padStart(2, '0')}`;
+
+  return result.rows.map((row) => ({
+    workoutExercises: Array.isArray(row.workout_exercise_json)
+      ? (row.workout_exercise_json as WorkoutExerciseAssignment[])
+      : [],
+    itemId: row.item_id,
+    dayDate,
+    scheduleType: 'cycle',
+    cycleSlot: row.cycle_slot,
+    itemType: 'workout',
+    itemName: row.workout_name,
+    workoutDescription: row.workout_description,
+    exerciseId: null,
+    workoutId: row.workout_id,
+    workoutCategory: row.workout_category,
+    exerciseCategory: 'workout',
+    repMeasure: 'reps',
+    repsPerSide: false,
+    exerciseDescription: null,
+    exerciseCoachingCues: null,
+    instructionVideoUrl: null,
+    workoutExerciseNames: row.workout_exercise_names ? row.workout_exercise_names.split(', ').filter(Boolean) : [],
+    prescribedSets: null,
+    prescribedReps: null,
+    prescribedLoad: null,
+    prescribedNotes: null,
+    completed: false,
+    performedSets: null,
+    performedReps: null,
+    performedLoad: null,
+    logNotes: null,
+    programName: '3-Day Cycle',
+  }));
+}
+
+export async function addCycleWorkoutAssignment(input: {
+  organizationId: number;
+  userId: number;
+  playerId: number;
+  workoutId: number;
+  cycleSlot: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const slot = normalizeCycleSlot(input.cycleSlot);
+  if (!slot) return { ok: false, error: 'Cycle slot must be medium, high, or low.' };
+
+  const workout = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM workout_library
+      WHERE id = $1 AND organization_id = $2
+      LIMIT 1
+    `,
+    [input.workoutId, input.organizationId]
+  );
+  if ((workout.rowCount ?? 0) !== 1) return { ok: false, error: 'Workout was not found.' };
+
+  const nextOrder = await pool.query<{ next_order: number }>(
+    `
+      SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order
+      FROM program_cycle_items
+      WHERE player_id = $1 AND cycle_slot = $2
+    `,
+    [input.playerId, slot]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO program_cycle_items (
+        organization_id, player_id, cycle_slot, workout_id, sort_order, created_by
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `,
+    [input.organizationId, input.playerId, slot, input.workoutId, Number(nextOrder.rows[0]?.next_order ?? 1), input.userId]
+  );
+
+  return { ok: true };
+}
+
+export async function moveCycleProgramItem(input: {
+  organizationId: number;
+  playerId: number;
+  itemId: number;
+  targetSlot: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const slot = normalizeCycleSlot(input.targetSlot);
+  if (!slot) return { ok: false, error: 'Cycle slot must be medium, high, or low.' };
+  if (!Number.isFinite(input.itemId) || input.itemId <= 0) return { ok: false, error: 'Valid itemId is required.' };
+
+  const existing = await pool.query<{ id: number; cycle_slot: 'medium' | 'high' | 'low' }>(
+    `
+      SELECT id, cycle_slot
+      FROM program_cycle_items
+      WHERE id = $1
+        AND organization_id = $2
+        AND player_id = $3
+      LIMIT 1
+    `,
+    [input.itemId, input.organizationId, input.playerId]
+  );
+  if ((existing.rowCount ?? 0) !== 1) return { ok: false, error: 'Cycle item not found.' };
+  const sourceSlot = existing.rows[0].cycle_slot;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const nextOrder = await client.query<{ next_order: number }>(
+      `
+        SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order
+        FROM program_cycle_items
+        WHERE player_id = $1 AND cycle_slot = $2
+      `,
+      [input.playerId, slot]
+    );
+
+    await client.query(
+      `
+        UPDATE program_cycle_items
+        SET cycle_slot = $1,
+            sort_order = $2,
+            updated_at = NOW()
+        WHERE id = $3
+      `,
+      [slot, Number(nextOrder.rows[0]?.next_order ?? 1), input.itemId]
+    );
+
+    await client.query(
+      `
+        WITH ordered AS (
+          SELECT id, ROW_NUMBER() OVER (ORDER BY sort_order ASC, id ASC) AS next_order
+          FROM program_cycle_items
+          WHERE player_id = $1
+            AND cycle_slot = $2
+        )
+        UPDATE program_cycle_items AS i
+        SET sort_order = ordered.next_order,
+            updated_at = NOW()
+        FROM ordered
+        WHERE i.id = ordered.id
+      `,
+      [input.playerId, sourceSlot]
+    );
+
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to move cycle item.' };
+  } finally {
+    client.release();
+  }
 }
 
 export async function listExerciseLoadHistoryForPlayer(input: {
@@ -1766,55 +2016,147 @@ export async function listExerciseLoadHistoryForPlayer(input: {
     workout_exercise_json: unknown;
   }>(
     `
-      SELECT
-        d.day_date::text,
-        COALESCE(w.name, e.name, 'Assignment') AS source_name,
-        i.exercise_id,
-        i.prescribed_reps,
-        COALESCE(e.rep_measure, 'reps') AS rep_measure,
-        COALESCE(e.reps_per_side, FALSE) AS reps_per_side,
-        l.performed_load,
-        ws.exercise_json AS workout_exercise_json
-      FROM programs p
-      JOIN program_days d ON d.program_id = p.id
-      JOIN program_day_items i ON i.program_day_id = d.id
-      JOIN exercise_logs l ON l.program_day_item_id = i.id AND l.player_id = p.player_id
-      LEFT JOIN exercise_library e ON e.id = i.exercise_id
-      LEFT JOIN workout_library w ON w.id = i.workout_id
-      LEFT JOIN LATERAL (
+      WITH history_rows AS (
         SELECT
-          COALESCE(
-            JSON_AGG(
-              JSON_BUILD_OBJECT(
-                'exerciseId', e2.id,
-                'prescribedSets', we2.prescribed_sets,
-                'prescribedReps', we2.prescribed_reps,
-                'repMeasure', e2.rep_measure,
-                'repsPerSide', e2.reps_per_side
-              )
-              ORDER BY we2.sort_order, e2.name
-            ),
-            '[]'::json
-          ) AS exercise_json
-        FROM workout_exercises we2
-        JOIN exercise_library e2 ON e2.id = we2.exercise_id
-        WHERE we2.workout_id = i.workout_id
-      ) ws ON TRUE
-      WHERE p.player_id = $1
-        AND l.performed_load IS NOT NULL
-        AND LENGTH(TRIM(l.performed_load)) > 0
-        AND COALESCE(LOWER(w.category), '') <> 'assessment'
-        AND (
-          i.exercise_id = ANY($2::int[])
-          OR EXISTS (
-            SELECT 1
-            FROM workout_exercises wx
-            WHERE wx.workout_id = i.workout_id
-              AND wx.exercise_id = ANY($2::int[])
+          COALESCE(d.day_date, h.logged_at::date)::text AS day_date,
+          COALESCE(w.name, cw.name, e.name, 'Assignment') AS source_name,
+          i.exercise_id,
+          i.prescribed_reps,
+          COALESCE(e.rep_measure, 'reps') AS rep_measure,
+          COALESCE(e.reps_per_side, FALSE) AS reps_per_side,
+          h.performed_load,
+          CASE
+            WHEN h.schedule_type = 'cycle' THEN cws.exercise_json
+            ELSE ws.exercise_json
+          END AS workout_exercise_json
+        FROM exercise_log_history h
+        LEFT JOIN program_day_items i ON i.id = h.program_day_item_id
+        LEFT JOIN program_days d ON d.id = i.program_day_id
+        LEFT JOIN exercise_library e ON e.id = i.exercise_id
+        LEFT JOIN workout_library w ON w.id = i.workout_id
+        LEFT JOIN program_cycle_items ci ON ci.id = h.cycle_item_id
+        LEFT JOIN workout_library cw ON cw.id = ci.workout_id
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(
+              JSON_AGG(
+                JSON_BUILD_OBJECT(
+                  'exerciseId', e2.id,
+                  'prescribedSets', we2.prescribed_sets,
+                  'prescribedReps', we2.prescribed_reps,
+                  'repMeasure', e2.rep_measure,
+                  'repsPerSide', e2.reps_per_side
+                )
+                ORDER BY we2.sort_order, e2.name
+              ),
+              '[]'::json
+            ) AS exercise_json
+          FROM workout_exercises we2
+          JOIN exercise_library e2 ON e2.id = we2.exercise_id
+          WHERE we2.workout_id = i.workout_id
+        ) ws ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(
+              JSON_AGG(
+                JSON_BUILD_OBJECT(
+                  'exerciseId', e2.id,
+                  'prescribedSets', we2.prescribed_sets,
+                  'prescribedReps', we2.prescribed_reps,
+                  'repMeasure', e2.rep_measure,
+                  'repsPerSide', e2.reps_per_side
+                )
+                ORDER BY we2.sort_order, e2.name
+              ),
+              '[]'::json
+            ) AS exercise_json
+          FROM workout_exercises we2
+          JOIN exercise_library e2 ON e2.id = we2.exercise_id
+          WHERE we2.workout_id = ci.workout_id
+        ) cws ON TRUE
+        WHERE h.player_id = $1
+          AND h.performed_load IS NOT NULL
+          AND LENGTH(TRIM(h.performed_load)) > 0
+          AND COALESCE(LOWER(w.category), LOWER(cw.category), '') <> 'assessment'
+          AND (
+            i.exercise_id = ANY($2::int[])
+            OR EXISTS (
+              SELECT 1
+              FROM workout_exercises wx
+              WHERE wx.workout_id = i.workout_id
+                AND wx.exercise_id = ANY($2::int[])
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM workout_exercises wx
+              WHERE wx.workout_id = ci.workout_id
+                AND wx.exercise_id = ANY($2::int[])
+            )
           )
-        )
-        AND ($3::date IS NULL OR d.day_date < $3::date)
-      ORDER BY d.day_date DESC, i.id DESC
+          AND ($3::date IS NULL OR COALESCE(d.day_date, h.logged_at::date) < $3::date)
+      ),
+      legacy_rows AS (
+        SELECT
+          d.day_date::text AS day_date,
+          COALESCE(w.name, e.name, 'Assignment') AS source_name,
+          i.exercise_id,
+          i.prescribed_reps,
+          COALESCE(e.rep_measure, 'reps') AS rep_measure,
+          COALESCE(e.reps_per_side, FALSE) AS reps_per_side,
+          l.performed_load,
+          ws.exercise_json AS workout_exercise_json
+        FROM programs p
+        JOIN program_days d ON d.program_id = p.id
+        JOIN program_day_items i ON i.program_day_id = d.id
+        JOIN exercise_logs l ON l.program_day_item_id = i.id AND l.player_id = p.player_id
+        LEFT JOIN exercise_library e ON e.id = i.exercise_id
+        LEFT JOIN workout_library w ON w.id = i.workout_id
+        LEFT JOIN LATERAL (
+          SELECT
+            COALESCE(
+              JSON_AGG(
+                JSON_BUILD_OBJECT(
+                  'exerciseId', e2.id,
+                  'prescribedSets', we2.prescribed_sets,
+                  'prescribedReps', we2.prescribed_reps,
+                  'repMeasure', e2.rep_measure,
+                  'repsPerSide', e2.reps_per_side
+                )
+                ORDER BY we2.sort_order, e2.name
+              ),
+              '[]'::json
+            ) AS exercise_json
+          FROM workout_exercises we2
+          JOIN exercise_library e2 ON e2.id = we2.exercise_id
+          WHERE we2.workout_id = i.workout_id
+        ) ws ON TRUE
+        WHERE p.player_id = $1
+          AND l.performed_load IS NOT NULL
+          AND LENGTH(TRIM(l.performed_load)) > 0
+          AND COALESCE(LOWER(w.category), '') <> 'assessment'
+          AND (
+            i.exercise_id = ANY($2::int[])
+            OR EXISTS (
+              SELECT 1
+              FROM workout_exercises wx
+              WHERE wx.workout_id = i.workout_id
+                AND wx.exercise_id = ANY($2::int[])
+            )
+          )
+          AND ($3::date IS NULL OR d.day_date < $3::date)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM exercise_log_history h
+            WHERE h.player_id = p.player_id
+              AND h.program_day_item_id = i.id
+          )
+      )
+      SELECT day_date, source_name, exercise_id, prescribed_reps, rep_measure, reps_per_side, performed_load, workout_exercise_json
+      FROM history_rows
+      UNION ALL
+      SELECT day_date, source_name, exercise_id, prescribed_reps, rep_measure, reps_per_side, performed_load, workout_exercise_json
+      FROM legacy_rows
+      ORDER BY day_date DESC
       LIMIT 500
     `,
     [input.playerId, exerciseIds, hasBeforeDate ? beforeDate : null]
@@ -2048,6 +2390,7 @@ export async function moveProgramItemToDate(input: {
 export async function upsertExerciseLog(input: {
   playerId: number;
   itemId: number;
+  scheduleType?: 'calendar' | 'cycle';
   loggedByUserId: number;
   completed: boolean;
   performedSets?: string;
@@ -2058,6 +2401,44 @@ export async function upsertExerciseLog(input: {
   if (!isDatabaseConfigured()) throw new Error('DATABASE_URL is not configured.');
   await ensureTrainingDbReady();
   const pool = getDbPool();
+  const scheduleType = input.scheduleType === 'cycle' ? 'cycle' : 'calendar';
+  const performedSets = (input.performedSets ?? '').trim() || null;
+  const performedReps = (input.performedReps ?? '').trim() || null;
+  const performedLoad = (input.performedLoad ?? '').trim() || null;
+  const notes = (input.notes ?? '').trim() || null;
+
+  if (scheduleType === 'cycle') {
+    const allowedItem = await pool.query<{ id: number }>(
+      `
+        SELECT id
+        FROM program_cycle_items
+        WHERE id = $1 AND player_id = $2
+        LIMIT 1
+      `,
+      [input.itemId, input.playerId]
+    );
+    if ((allowedItem.rowCount ?? 0) !== 1) throw new Error('Cycle item not assigned to player.');
+
+    await pool.query(
+      `
+        INSERT INTO exercise_log_history (
+          player_id,
+          schedule_type,
+          cycle_item_id,
+          performed_sets,
+          performed_reps,
+          performed_load,
+          completed,
+          notes,
+          logged_by_user_id,
+          logged_at
+        )
+        VALUES ($1, 'cycle', $2, $3, $4, $5, $6, $7, $8, NOW())
+      `,
+      [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
+    );
+    return;
+  }
 
   const allowedItem = await pool.query<{ id: number }>(
     `
@@ -2098,16 +2479,26 @@ export async function upsertExerciseLog(input: {
         logged_at = NOW(),
         updated_at = NOW()
     `,
-    [
-      input.playerId,
-      input.itemId,
-      (input.performedSets ?? '').trim() || null,
-      (input.performedReps ?? '').trim() || null,
-      (input.performedLoad ?? '').trim() || null,
-      input.completed,
-      (input.notes ?? '').trim() || null,
-      input.loggedByUserId,
-    ]
+    [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO exercise_log_history (
+        player_id,
+        schedule_type,
+        program_day_item_id,
+        performed_sets,
+        performed_reps,
+        performed_load,
+        completed,
+        notes,
+        logged_by_user_id,
+        logged_at
+      )
+      VALUES ($1, 'calendar', $2, $3, $4, $5, $6, $7, $8, NOW())
+    `,
+    [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
   );
 }
 
@@ -2396,7 +2787,39 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
 
   const result = await pool.query<{ exercise_id: number; name: string; category: string }>(
     `
-      WITH direct_assignments AS (
+      WITH history_direct AS (
+        SELECT DISTINCT i.exercise_id
+        FROM exercise_log_history h
+        JOIN program_day_items i ON i.id = h.program_day_item_id
+        WHERE h.player_id = $1
+          AND i.exercise_id IS NOT NULL
+          AND h.performed_load IS NOT NULL
+          AND LENGTH(TRIM(h.performed_load)) > 0
+      ),
+      history_workout_calendar AS (
+        SELECT DISTINCT we.exercise_id
+        FROM exercise_log_history h
+        JOIN program_day_items i ON i.id = h.program_day_item_id
+        JOIN workout_exercises we ON we.workout_id = i.workout_id
+        JOIN workout_library wl ON wl.id = i.workout_id
+        WHERE h.player_id = $1
+          AND i.workout_id IS NOT NULL
+          AND COALESCE(LOWER(wl.category), '') <> 'assessment'
+          AND h.performed_load IS NOT NULL
+          AND LENGTH(TRIM(h.performed_load)) > 0
+      ),
+      history_workout_cycle AS (
+        SELECT DISTINCT we.exercise_id
+        FROM exercise_log_history h
+        JOIN program_cycle_items ci ON ci.id = h.cycle_item_id
+        JOIN workout_exercises we ON we.workout_id = ci.workout_id
+        JOIN workout_library wl ON wl.id = ci.workout_id
+        WHERE h.player_id = $1
+          AND COALESCE(LOWER(wl.category), '') <> 'assessment'
+          AND h.performed_load IS NOT NULL
+          AND LENGTH(TRIM(h.performed_load)) > 0
+      ),
+      legacy_direct AS (
         SELECT DISTINCT i.exercise_id
         FROM programs p
         JOIN program_days d ON d.program_id = p.id
@@ -2406,8 +2829,11 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
           AND i.exercise_id IS NOT NULL
           AND l.performed_load IS NOT NULL
           AND LENGTH(TRIM(l.performed_load)) > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM exercise_log_history h WHERE h.player_id = p.player_id AND h.program_day_item_id = i.id
+          )
       ),
-      workout_assignments AS (
+      legacy_workout AS (
         SELECT DISTINCT we.exercise_id
         FROM programs p
         JOIN program_days d ON d.program_id = p.id
@@ -2420,11 +2846,20 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
           AND COALESCE(LOWER(wl.category), '') <> 'assessment'
           AND l.performed_load IS NOT NULL
           AND LENGTH(TRIM(l.performed_load)) > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM exercise_log_history h WHERE h.player_id = p.player_id AND h.program_day_item_id = i.id
+          )
       ),
       all_exercises AS (
-        SELECT exercise_id FROM direct_assignments
+        SELECT exercise_id FROM history_direct
         UNION
-        SELECT exercise_id FROM workout_assignments
+        SELECT exercise_id FROM history_workout_calendar
+        UNION
+        SELECT exercise_id FROM history_workout_cycle
+        UNION
+        SELECT exercise_id FROM legacy_direct
+        UNION
+        SELECT exercise_id FROM legacy_workout
       )
       SELECT e.id AS exercise_id, e.name, e.category
       FROM all_exercises a

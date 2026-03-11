@@ -7,7 +7,7 @@ import WorkoutLogModal from '../../components/workout-log-modal';
 
 type PlayerChoice = { id: number; name: string };
 type WorkoutChoice = { id: number; name: string; exerciseCount: number; category: string };
-type ViewMode = 'day' | 'week' | 'month';
+type ViewMode = 'day' | 'week' | 'month' | 'cycle';
 
 type ScheduleBoardProps = {
   players: PlayerChoice[];
@@ -31,6 +31,11 @@ type CopiedPlanBuffer = {
 };
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low'; label: string }> = [
+  { key: 'medium', label: 'Medium' },
+  { key: 'high', label: 'High' },
+  { key: 'low', label: 'Low' },
+];
 
 function toIsoDate(date: Date): string {
   const year = date.getUTCFullYear();
@@ -145,6 +150,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   const [menu, setMenu] = useState<{ dayDate: string; x: number; y: number } | null>(null);
 
   const visibleRange = useMemo(() => {
+    if (view === 'cycle') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
     if (view === 'day') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
     if (view === 'week') return { startDate: startOfWeek(anchorDate), endDate: endOfWeekExclusive(anchorDate) };
     const monthStart = startOfMonth(anchorDate);
@@ -160,6 +166,14 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     setLoading(true);
     setError('');
     try {
+      if (view === 'cycle') {
+        const params = new URLSearchParams({ playerId: String(playerId) });
+        const response = await fetch(`/api/admin/schedule/cycle?${params.toString()}`, { cache: 'no-store' });
+        const payload = (await response.json().catch(() => ({}))) as { items?: ProgramItemRow[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load 3-Day Cycle.');
+        setItems(Array.isArray(payload.items) ? payload.items : []);
+        return;
+      }
       const params = new URLSearchParams({
         playerId: String(playerId),
         startDate: visibleRange.startDate,
@@ -174,7 +188,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     } finally {
       setLoading(false);
     }
-  }, [playerId, visibleRange.endDate, visibleRange.startDate]);
+  }, [playerId, view, visibleRange.endDate, visibleRange.startDate]);
 
   useEffect(() => {
     void loadItems();
@@ -194,6 +208,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   const weekCells = useMemo(() => (view === 'week' ? Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(anchorDate), i)) : []), [anchorDate, view]);
   const dayCells = useMemo(() => (view === 'day' ? [anchorDate] : []), [anchorDate, view]);
   const periodLabel = useMemo(() => {
+    if (view === 'cycle') return '3-Day Cycle';
     const anchor = fromIsoDate(anchorDate);
     if (view === 'month') {
       return anchor.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -221,6 +236,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   }, [workoutQuery, workouts]);
 
   const movePeriod = (direction: -1 | 1) => {
+    if (view === 'cycle') return;
     if (view === 'day') setAnchorDate((prev) => addDays(prev, direction));
     else if (view === 'week') setAnchorDate((prev) => addDays(prev, direction * 7));
     else {
@@ -231,7 +247,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   };
 
   const jumpToCurrentForView = (mode: ViewMode) => {
-    if (mode === 'day' || mode === 'week') {
+    if (mode === 'day' || mode === 'week' || mode === 'cycle') {
       setAnchorDate(toIsoDate(new Date()));
     }
   };
@@ -250,6 +266,40 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
       await loadItems();
     } catch (assignError) {
       setError(assignError instanceof Error ? assignError.message : 'Failed to assign workout.');
+    }
+  };
+
+  const assignCycleWorkout = async (cycleSlot: 'medium' | 'high' | 'low', workoutId: number) => {
+    if (!playerId) return;
+    setError('');
+    try {
+      const response = await fetch('/api/admin/schedule/cycle', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, workoutId, cycleSlot }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to assign cycle workout.');
+      await loadItems();
+    } catch (assignError) {
+      setError(assignError instanceof Error ? assignError.message : 'Failed to assign cycle workout.');
+    }
+  };
+
+  const moveCycleItem = async (itemId: number, cycleSlot: 'medium' | 'high' | 'low') => {
+    if (!playerId) return;
+    setError('');
+    try {
+      const response = await fetch('/api/admin/schedule/cycle', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, itemId, cycleSlot }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to move cycle workout.');
+      await loadItems();
+    } catch (moveError) {
+      setError(moveError instanceof Error ? moveError.message : 'Failed to move cycle workout.');
     }
   };
 
@@ -413,6 +463,32 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     return map;
   }, [workouts]);
 
+  const cycleItemsBySlot = useMemo(() => {
+    const map: Record<'medium' | 'high' | 'low', ProgramItemRow[]> = { medium: [], high: [], low: [] };
+    for (const item of items) {
+      if (item.scheduleType !== 'cycle') continue;
+      const slot = item.cycleSlot;
+      if (!slot) continue;
+      map[slot].push(item);
+    }
+    return map;
+  }, [items]);
+
+  const onCycleDrop = async (event: React.DragEvent<HTMLElement>, cycleSlot: 'medium' | 'high' | 'low') => {
+    event.preventDefault();
+    const cycleItemId = Number(event.dataTransfer.getData('cycleItemId'));
+    if (Number.isFinite(cycleItemId) && cycleItemId > 0) {
+      const sourceSlot = event.dataTransfer.getData('cycleItemSlot');
+      if (sourceSlot === cycleSlot) return;
+      await moveCycleItem(cycleItemId, cycleSlot);
+      return;
+    }
+
+    const workoutId = Number(event.dataTransfer.getData('workoutId'));
+    if (!Number.isFinite(workoutId) || workoutId <= 0) return;
+    await assignCycleWorkout(cycleSlot, workoutId);
+  };
+
   const renderDayCell = (dayDate: string, compact: boolean, monthStart?: string, showDayLabel = false) => {
     const dayItems = itemsByDate.get(dayDate) ?? [];
     const isOutsideMonth = monthStart ? !dayDate.startsWith(monthStart.slice(0, 7)) : false;
@@ -511,7 +587,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           </select>
         </label>
         <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
-          {(['day', 'week', 'month'] as ViewMode[]).map((mode) => (
+          {(['day', 'week', 'month', 'cycle'] as ViewMode[]).map((mode) => (
             <button
               key={mode}
               type="button"
@@ -521,19 +597,20 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                 setView(mode);
               }}
             >
-              {mode[0].toUpperCase()}
-              {mode.slice(1)}
+              {mode === 'cycle' ? '3-Day Cycle' : `${mode[0].toUpperCase()}${mode.slice(1)}`}
             </button>
           ))}
         </div>
-        <div className="portal-schedule-nav">
-          <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)}>
-            Prev
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={() => movePeriod(1)}>
-            Next
-          </button>
-        </div>
+        {view !== 'cycle' && (
+          <div className="portal-schedule-nav">
+            <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)}>
+              Prev
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => movePeriod(1)}>
+              Next
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="portal-schedule-layout">
@@ -590,7 +667,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
 
         <section className="portal-schedule-calendar" aria-busy={loading}>
           <h3 className="portal-schedule-period">{periodLabel}</h3>
-          {view !== 'day' && (
+          {view !== 'day' && view !== 'cycle' && (
             <div
               className="portal-schedule-weekdays"
               style={{
@@ -628,6 +705,59 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
             </div>
           )}
           {view === 'day' && <div className="portal-schedule-day-grid">{dayCells.map((date) => renderDayCell(date, false, undefined, true))}</div>}
+          {view === 'cycle' && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                gap: '0.75rem',
+              }}
+            >
+              {CYCLE_COLUMNS.map((column) => (
+                <article
+                  key={column.key}
+                  className="portal-panel"
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => void onCycleDrop(event, column.key)}
+                  style={{ minHeight: '320px' }}
+                >
+                  <h4 style={{ marginTop: 0 }}>{column.label}</h4>
+                  <div style={{ display: 'grid', gap: '0.45rem' }}>
+                    {cycleItemsBySlot[column.key].map((item) => (
+                      <button
+                        key={item.itemId}
+                        type="button"
+                        className="portal-schedule-item"
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'center',
+                          color: 'var(--text-main)',
+                          border: '1px solid rgba(255,255,255,0.2)',
+                          borderRadius: '6px',
+                          padding: '0.4rem 0.5rem',
+                          ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
+                        }}
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.setData('cycleItemId', String(item.itemId));
+                          event.dataTransfer.setData('cycleItemSlot', item.cycleSlot ?? '');
+                        }}
+                        onClick={() => setSelectedItem(item)}
+                      >
+                        <strong>{item.itemName}</strong>
+                      </button>
+                    ))}
+                    {cycleItemsBySlot[column.key].length === 0 && (
+                      <p className="portal-muted-text" style={{ margin: 0 }}>
+                        Drag workouts here
+                      </p>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
       </div>
 

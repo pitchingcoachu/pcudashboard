@@ -5,7 +5,7 @@ import type { CSSProperties } from 'react';
 import type { ProgramItemRow } from '../../../lib/training-db';
 import WorkoutLogModal from '../components/workout-log-modal';
 
-type ViewMode = 'day' | 'week' | 'month';
+type ViewMode = 'day' | 'week' | 'month' | 'cycle';
 
 type PlayerCalendarProps = {
   playerId: number;
@@ -15,6 +15,11 @@ type PlayerCalendarProps = {
 };
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low'; label: string }> = [
+  { key: 'medium', label: 'Medium' },
+  { key: 'high', label: 'High' },
+  { key: 'low', label: 'Low' },
+];
 
 function toIsoDate(date: Date): string {
   const year = date.getUTCFullYear();
@@ -114,6 +119,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
   const consumedInitialRef = useRef(false);
 
   const visibleRange = useMemo(() => {
+    if (view === 'cycle') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
     if (view === 'day') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
     if (view === 'week') return { startDate: startOfWeek(anchorDate), endDate: endOfWeekExclusive(anchorDate) };
     const monthStart = startOfMonth(anchorDate);
@@ -131,6 +137,16 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
     setLoading(true);
     setError('');
     try {
+      if (view === 'cycle') {
+        const params = new URLSearchParams({
+          playerId: String(playerId),
+        });
+        const response = await fetch(`/api/player/cycle-items?${params.toString()}`, { cache: 'no-store' });
+        const payload = (await response.json().catch(() => ({}))) as { items?: ProgramItemRow[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load 3-Day Cycle.');
+        setItems(Array.isArray(payload.items) ? payload.items : []);
+        return;
+      }
       const params = new URLSearchParams({
         playerId: String(playerId),
         startDate: visibleRange.startDate,
@@ -145,7 +161,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
     } finally {
       setLoading(false);
     }
-  }, [initialEndDate, initialStartDate, playerId, visibleRange.endDate, visibleRange.startDate]);
+  }, [initialEndDate, initialStartDate, playerId, view, visibleRange.endDate, visibleRange.startDate]);
 
   useEffect(() => {
     void loadItems();
@@ -166,6 +182,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
   const dayCells = useMemo(() => (view === 'day' ? [anchorDate] : []), [anchorDate, view]);
 
   const periodLabel = useMemo(() => {
+    if (view === 'cycle') return '3-Day Cycle';
     const anchor = fromIsoDate(anchorDate);
     if (view === 'month') {
       return anchor.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -192,6 +209,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
   }, [anchorDate, view]);
 
   const movePeriod = (direction: -1 | 1) => {
+    if (view === 'cycle') return;
     if (view === 'day') {
       setAnchorDate((prev) => addDays(prev, direction));
       return;
@@ -278,31 +296,32 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
     <div className="portal-admin-stack">
       <div className="portal-schedule-toolbar">
         <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
-          {(['day', 'week', 'month'] as ViewMode[]).map((mode) => (
+          {(['day', 'week', 'month', 'cycle'] as ViewMode[]).map((mode) => (
             <button
               key={mode}
               type="button"
               className={`btn ${view === mode ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => setView(mode)}
             >
-              {mode[0].toUpperCase()}
-              {mode.slice(1)}
+              {mode === 'cycle' ? '3-Day Cycle' : `${mode[0].toUpperCase()}${mode.slice(1)}`}
             </button>
           ))}
         </div>
-        <div className="portal-schedule-nav">
-          <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)}>
-            Prev
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={() => movePeriod(1)}>
-            Next
-          </button>
-        </div>
+        {view !== 'cycle' && (
+          <div className="portal-schedule-nav">
+            <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)}>
+              Prev
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => movePeriod(1)}>
+              Next
+            </button>
+          </div>
+        )}
       </div>
 
       <section className="portal-schedule-calendar" aria-busy={loading}>
         <h3 className="portal-schedule-period">{periodLabel}</h3>
-        {view !== 'day' && (
+        {view !== 'day' && view !== 'cycle' && (
           <div
             className="portal-schedule-weekdays"
             style={{
@@ -350,6 +369,51 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
         )}
 
         {view === 'day' && <div className="portal-schedule-day-grid">{dayCells.map((date) => renderDayCell(date, false, undefined, true))}</div>}
+        {view === 'cycle' && (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+              gap: '0.75rem',
+            }}
+          >
+            {CYCLE_COLUMNS.map((column) => {
+              const slotItems = items.filter((item) => item.scheduleType === 'cycle' && item.cycleSlot === column.key);
+              return (
+                <article key={column.key} className="portal-panel" style={{ minHeight: '300px' }}>
+                  <h4 style={{ marginTop: 0 }}>{column.label}</h4>
+                  <div style={{ display: 'grid', gap: '0.45rem' }}>
+                    {slotItems.map((item) => (
+                      <button
+                        key={item.itemId}
+                        type="button"
+                        className="portal-schedule-item"
+                        style={{
+                          display: 'block',
+                          width: '100%',
+                          textAlign: 'center',
+                          color: 'var(--text-main)',
+                          border: '1px solid rgba(255,255,255,0.2)',
+                          borderRadius: '6px',
+                          padding: '0.4rem 0.5rem',
+                          ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
+                        }}
+                        onClick={() => setSelectedItem(item)}
+                      >
+                        <strong>{item.itemName}</strong>
+                      </button>
+                    ))}
+                    {slotItems.length === 0 && (
+                      <p className="portal-muted-text" style={{ margin: 0 }}>
+                        No workouts assigned
+                      </p>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       {error && <p className="auth-error">{error}</p>}

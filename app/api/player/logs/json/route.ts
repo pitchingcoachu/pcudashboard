@@ -14,6 +14,7 @@ export async function POST(request: Request) {
   const form = await request.formData();
   const itemId = Number(String(form.get('itemId') ?? '0'));
   const playerId = Number(String(form.get('playerId') ?? '0'));
+  const scheduleType = String(form.get('scheduleType') ?? 'calendar').trim().toLowerCase() === 'cycle' ? 'cycle' : 'calendar';
   const performedLoadValues = form
     .getAll('performedLoadValues')
     .map((value) => String(value).trim())
@@ -48,6 +49,7 @@ export async function POST(request: Request) {
     await upsertExerciseLog({
       playerId: allowedPlayerId,
       itemId,
+      scheduleType,
       loggedByUserId: session.userId ?? 0,
       completed: form.get('completed') === 'on',
       performedSets: String(form.get('performedSets') ?? ''),
