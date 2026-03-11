@@ -1070,7 +1070,6 @@ export async function createWorkout(input: {
   if (!name) return { ok: false, error: 'Workout name is required.' };
   const category = input.category.trim();
   if (!category) return { ok: false, error: 'Workout category is required.' };
-  if (input.exerciseItems.length === 0) return { ok: false, error: 'Add at least one exercise to the workout.' };
 
   const uniqueExerciseIds = Array.from(
     new Set(
@@ -1079,19 +1078,19 @@ export async function createWorkout(input: {
         .filter((id) => Number.isFinite(id) && id > 0)
     )
   );
-  if (uniqueExerciseIds.length === 0) return { ok: false, error: 'Add at least one valid exercise.' };
+  if (uniqueExerciseIds.length > 0) {
+    const exerciseCheck = await pool.query<{ id: number }>(
+      `
+        SELECT id
+        FROM exercise_library
+        WHERE organization_id = $1 AND id = ANY($2::int[])
+      `,
+      [input.organizationId, uniqueExerciseIds]
+    );
 
-  const exerciseCheck = await pool.query<{ id: number }>(
-    `
-      SELECT id
-      FROM exercise_library
-      WHERE organization_id = $1 AND id = ANY($2::int[])
-    `,
-    [input.organizationId, uniqueExerciseIds]
-  );
-
-  if (exerciseCheck.rows.length !== uniqueExerciseIds.length) {
-    return { ok: false, error: 'One or more exercises were not found in your library.' };
+    if (exerciseCheck.rows.length !== uniqueExerciseIds.length) {
+      return { ok: false, error: 'One or more exercises were not found in your library.' };
+    }
   }
 
   const client = await pool.connect();
@@ -1168,7 +1167,6 @@ export async function updateWorkout(input: {
   const category = input.category.trim();
   if (!category) return { ok: false, error: 'Workout category is required.' };
   if (!Number.isFinite(input.workoutId) || input.workoutId <= 0) return { ok: false, error: 'Workout ID is required.' };
-  if (input.exerciseItems.length === 0) return { ok: false, error: 'Add at least one exercise to the workout.' };
 
   const uniqueExerciseIds = Array.from(
     new Set(
@@ -1177,18 +1175,18 @@ export async function updateWorkout(input: {
         .filter((id) => Number.isFinite(id) && id > 0)
     )
   );
-  if (uniqueExerciseIds.length === 0) return { ok: false, error: 'Add at least one valid exercise.' };
-
-  const exerciseCheck = await pool.query<{ id: number }>(
-    `
-      SELECT id
-      FROM exercise_library
-      WHERE organization_id = $1 AND id = ANY($2::int[])
-    `,
-    [input.organizationId, uniqueExerciseIds]
-  );
-  if (exerciseCheck.rows.length !== uniqueExerciseIds.length) {
-    return { ok: false, error: 'One or more exercises were not found in your library.' };
+  if (uniqueExerciseIds.length > 0) {
+    const exerciseCheck = await pool.query<{ id: number }>(
+      `
+        SELECT id
+        FROM exercise_library
+        WHERE organization_id = $1 AND id = ANY($2::int[])
+      `,
+      [input.organizationId, uniqueExerciseIds]
+    );
+    if (exerciseCheck.rows.length !== uniqueExerciseIds.length) {
+      return { ok: false, error: 'One or more exercises were not found in your library.' };
+    }
   }
 
   const client = await pool.connect();
