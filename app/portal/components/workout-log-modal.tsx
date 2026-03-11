@@ -413,23 +413,43 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
   );
 
   return createPortal(
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 9999,
-        display: 'grid',
-        placeItems: 'center',
-        padding: '1rem',
-        background: '#000',
-      }}
-      onClick={onClose}
-      role="presentation"
-    >
-      <div onClick={(event) => event.stopPropagation()} style={{ width: 'min(720px, 96vw)' }}>
-        {content}
-        {videoPreview && (
-          <article className="portal-modal-card" style={{ marginTop: '0.7rem', background: '#000' }}>
+    <>
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 9999,
+          display: 'grid',
+          placeItems: 'center',
+          padding: '1rem',
+          background: '#000',
+        }}
+        onClick={onClose}
+        role="presentation"
+      >
+        <div onClick={(event) => event.stopPropagation()} style={{ width: 'min(720px, 96vw)' }}>
+          {content}
+        </div>
+      </div>
+      {videoPreview && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            display: 'grid',
+            placeItems: 'center',
+            padding: '1rem',
+            background: 'rgba(0,0,0,0.92)',
+          }}
+          onClick={() => setVideoPreview(null)}
+          role="presentation"
+        >
+          <article
+            className="portal-modal-card"
+            style={{ width: 'min(860px, 96vw)', background: '#000' }}
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="portal-choice-line-actions">
               <h4 style={{ margin: 0 }}>{videoPreview.title}</h4>
               <button type="button" className="btn btn-ghost" onClick={() => setVideoPreview(null)}>
@@ -446,9 +466,9 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved }: Wo
               />
             </div>
           </article>
-        )}
-      </div>
-    </div>,
+        </div>
+      )}
+    </>,
     document.body
   );
 }
