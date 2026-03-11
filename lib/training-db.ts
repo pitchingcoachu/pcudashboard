@@ -1093,6 +1093,17 @@ export async function createWorkout(input: {
     }
   }
 
+  if (uniqueExerciseIds.length === 0) {
+    await pool.query(
+      `
+        INSERT INTO workout_library (organization_id, name, category, description, created_by)
+        VALUES ($1, $2, $3, $4, $5)
+      `,
+      [input.organizationId, name, category, (input.description ?? '').trim() || null, input.userId]
+    );
+    return { ok: true };
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -1187,6 +1198,27 @@ export async function updateWorkout(input: {
     if (exerciseCheck.rows.length !== uniqueExerciseIds.length) {
       return { ok: false, error: 'One or more exercises were not found in your library.' };
     }
+  }
+
+  if (uniqueExerciseIds.length === 0) {
+    const updatedWorkout = await pool.query<{ id: number }>(
+      `
+        UPDATE workout_library
+        SET
+          name = $1,
+          category = $2,
+          description = $3,
+          updated_at = NOW()
+        WHERE id = $4 AND organization_id = $5
+        RETURNING id
+      `,
+      [name, category, (input.description ?? '').trim() || null, input.workoutId, input.organizationId]
+    );
+    if ((updatedWorkout.rowCount ?? 0) !== 1) {
+      return { ok: false, error: 'Workout was not found in your organization.' };
+    }
+    await pool.query(`DELETE FROM workout_exercises WHERE workout_id = $1`, [input.workoutId]);
+    return { ok: true };
   }
 
   const client = await pool.connect();
