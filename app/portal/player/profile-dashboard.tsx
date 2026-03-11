@@ -526,15 +526,32 @@ export default function ProfileDashboard({
       };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to save goal.');
       const nextActive = Array.isArray(payload.activeGoals) ? payload.activeGoals : [];
-      setPlanGoals(
+      setPlanGoals((prev) =>
         [1, 2, 3].map((slot) => {
-          const existing = nextActive.find((entry) => entry.slotIndex === slot);
-          return {
+          const local = prev.find((entry) => entry.slotIndex === slot) ?? {
             slotIndex: slot as 1 | 2 | 3,
-            category: existing?.category ?? '',
-            goalDescription: existing?.goalDescription ?? '',
-            createdAt: existing?.createdAt ?? null,
+            category: '',
+            goalDescription: '',
+            createdAt: null,
           };
+          const server = nextActive.find((entry) => entry.slotIndex === slot);
+          if (slot === slotIndex) {
+            return {
+              slotIndex: slot as 1 | 2 | 3,
+              category: server?.category ?? local.category,
+              goalDescription: server?.goalDescription ?? local.goalDescription,
+              createdAt: server?.createdAt ?? local.createdAt,
+            };
+          }
+          if (server?.category || server?.goalDescription || server?.createdAt) {
+            return {
+              slotIndex: slot as 1 | 2 | 3,
+              category: server.category ?? '',
+              goalDescription: server.goalDescription ?? '',
+              createdAt: server.createdAt ?? null,
+            };
+          }
+          return local;
         })
       );
       if (Array.isArray(payload.completedGoals)) setCompletedPlanGoals(payload.completedGoals);
@@ -567,15 +584,32 @@ export default function ProfileDashboard({
       };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to complete goal.');
       const nextActive = Array.isArray(payload.activeGoals) ? payload.activeGoals : [];
-      setPlanGoals(
+      setPlanGoals((prev) =>
         [1, 2, 3].map((slot) => {
-          const existing = nextActive.find((entry) => entry.slotIndex === slot);
-          return {
+          const local = prev.find((entry) => entry.slotIndex === slot) ?? {
             slotIndex: slot as 1 | 2 | 3,
-            category: existing?.category ?? '',
-            goalDescription: existing?.goalDescription ?? '',
-            createdAt: existing?.createdAt ?? null,
+            category: '',
+            goalDescription: '',
+            createdAt: null,
           };
+          const server = nextActive.find((entry) => entry.slotIndex === slot);
+          if (slot === completeModal.slotIndex) {
+            return {
+              slotIndex: slot as 1 | 2 | 3,
+              category: server?.category ?? '',
+              goalDescription: server?.goalDescription ?? '',
+              createdAt: server?.createdAt ?? null,
+            };
+          }
+          if (server?.category || server?.goalDescription || server?.createdAt) {
+            return {
+              slotIndex: slot as 1 | 2 | 3,
+              category: server.category ?? '',
+              goalDescription: server.goalDescription ?? '',
+              createdAt: server.createdAt ?? null,
+            };
+          }
+          return local;
         })
       );
       if (Array.isArray(payload.completedGoals)) setCompletedPlanGoals(payload.completedGoals);
