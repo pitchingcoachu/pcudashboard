@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, MouseEvent, ChangeEvent } from 'react';
+import type { CSSProperties, MouseEvent, ChangeEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type {
   AssessmentWorkoutScoreRow,
   BodyWeightLogRow,
@@ -364,7 +364,15 @@ export default function ProfileDashboard({
   const [photoUploading, setPhotoUploading] = useState(false);
   const [photoMessage, setPhotoMessage] = useState('');
   const [photoCropState, setPhotoCropState] = useState<PhotoCropState | null>(null);
+  const [photoDragging, setPhotoDragging] = useState(false);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const photoDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    baseX: number;
+    baseY: number;
+  } | null>(null);
 
   const [weightDate, setWeightDate] = useState(todayIsoDate());
   const [weightValue, setWeightValue] = useState('');
@@ -758,6 +766,37 @@ export default function ProfileDashboard({
       setPhotoMessage(error instanceof Error ? error.message : 'Failed to update profile photo.');
     } finally {
       setPhotoUploading(false);
+    }
+  };
+
+  const onCropPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!photoCropState) return;
+    photoDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      baseX: photoCropState.offsetX,
+      baseY: photoCropState.offsetY,
+    };
+    setPhotoDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onCropPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = photoDragRef.current;
+    if (!drag || !photoCropState || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    setPhotoCropState((prev) => (prev ? { ...prev, offsetX: drag.baseX + dx, offsetY: drag.baseY + dy } : prev));
+  };
+
+  const onCropPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = photoDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    photoDragRef.current = null;
+    setPhotoDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
     }
   };
 
@@ -1360,7 +1399,14 @@ export default function ProfileDashboard({
                 margin: '0.2rem auto 0',
                 position: 'relative',
                 background: 'rgba(0,0,0,0.6)',
+                touchAction: 'none',
+                userSelect: 'none',
+                cursor: photoDragging ? 'grabbing' : 'grab',
               }}
+              onPointerDown={onCropPointerDown}
+              onPointerMove={onCropPointerMove}
+              onPointerUp={onCropPointerUp}
+              onPointerCancel={onCropPointerUp}
             >
               <img
                 src={photoCropState.sourceDataUrl}
@@ -1375,6 +1421,9 @@ export default function ProfileDashboard({
                 }}
               />
             </div>
+            <p className="portal-muted-text" style={{ textAlign: 'center' }}>
+              Drag to reposition. Use zoom for tighter crop.
+            </p>
             <label className="portal-inline-filter">
               Zoom
               <input
@@ -1385,32 +1434,6 @@ export default function ProfileDashboard({
                 value={photoCropState.zoom}
                 onChange={(event) =>
                   setPhotoCropState((prev) => (prev ? { ...prev, zoom: Number(event.target.value) } : prev))
-                }
-              />
-            </label>
-            <label className="portal-inline-filter">
-              Horizontal
-              <input
-                type="range"
-                min="-180"
-                max="180"
-                step="1"
-                value={photoCropState.offsetX}
-                onChange={(event) =>
-                  setPhotoCropState((prev) => (prev ? { ...prev, offsetX: Number(event.target.value) } : prev))
-                }
-              />
-            </label>
-            <label className="portal-inline-filter">
-              Vertical
-              <input
-                type="range"
-                min="-180"
-                max="180"
-                step="1"
-                value={photoCropState.offsetY}
-                onChange={(event) =>
-                  setPhotoCropState((prev) => (prev ? { ...prev, offsetY: Number(event.target.value) } : prev))
                 }
               />
             </label>
