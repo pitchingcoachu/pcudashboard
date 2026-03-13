@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 
 type MobileNavItem = {
@@ -12,11 +12,20 @@ type MobileNavSelectProps = {
   items: MobileNavItem[];
   currentHref?: string;
   ariaLabel?: string;
+  loggedInAs?: string;
+  showLogout?: boolean;
 };
 
-export default function MobileNavSelect({ items, currentHref, ariaLabel = 'Portal Navigation' }: MobileNavSelectProps) {
+export default function MobileNavSelect({
+  items,
+  currentHref,
+  ariaLabel = 'Portal Navigation',
+  loggedInAs,
+  showLogout = true,
+}: MobileNavSelectProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const selectedHref = useMemo(() => {
     if (currentHref) return currentHref;
@@ -48,6 +57,32 @@ export default function MobileNavSelect({ items, currentHref, ariaLabel = 'Porta
           </option>
         ))}
       </select>
+      {(loggedInAs || showLogout) && (
+        <div className="portal-mobile-account-row">
+          {loggedInAs ? (
+            <p className="portal-mobile-account-name">
+              Logged in as <strong>{loggedInAs}</strong>
+            </p>
+          ) : (
+            <span />
+          )}
+          {showLogout && (
+            <button
+              type="button"
+              className="btn btn-ghost portal-mobile-logout-btn"
+              disabled={loggingOut}
+              onClick={async () => {
+                setLoggingOut(true);
+                await fetch('/api/auth/logout', { method: 'POST' });
+                router.push('/login');
+                router.refresh();
+              }}
+            >
+              {loggingOut ? 'Logging Out...' : 'Log Out'}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

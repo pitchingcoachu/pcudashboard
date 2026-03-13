@@ -48,6 +48,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             </Link>
           </nav>
           <MobileNavSelect
+            loggedInAs={session.name ?? session.email}
             items={[
               { href: '/portal/admin', label: 'Admin Home' },
               ...(session.role === 'admin' ? [{ href: '/portal/admin/clients', label: 'Clients' }] : []),

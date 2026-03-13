@@ -1194,7 +1194,7 @@ main {
   align-content: center;
   justify-items: center;
   gap: 0.65rem;
-  padding: 1rem;
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) 1rem 1rem;
 }
 
 .auth-top-nav {
@@ -1273,7 +1273,7 @@ main {
 
 .portal-shell {
   min-height: 100vh;
-  padding: 0.8rem;
+  padding: calc(0.8rem + env(safe-area-inset-top, 0px)) 0.8rem 0.8rem;
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 0.8rem;
@@ -1400,6 +1400,33 @@ main {
   text-transform: uppercase;
   color: var(--text-main);
   background: rgba(10, 10, 10, 0.92);
+}
+
+.portal-mobile-account-row {
+  margin-top: 0.45rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.portal-mobile-account-name {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-muted);
+  font: 700 0.68rem/1.2 Manrope, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.portal-mobile-account-name strong {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.portal-mobile-logout-btn {
+  padding: 0.45rem 0.72rem;
+  font-size: 0.68rem;
 }
 
 .portal-app-dropdown {
@@ -2829,7 +2856,7 @@ main {
 
 @media (max-width: 780px) {
   .portal-shell {
-    padding: 0.55rem;
+    padding: calc(0.55rem + env(safe-area-inset-top, 0px)) 0.55rem 0.55rem;
     gap: 0.55rem;
     width: 100%;
   }
@@ -2847,10 +2874,7 @@ main {
   }
 
   .portal-header-right {
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.45rem;
-    width: 100%;
+    display: none;
   }
 
   .portal-user-meta p {

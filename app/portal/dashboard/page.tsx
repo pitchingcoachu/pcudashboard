@@ -48,6 +48,7 @@ export default async function PortalDashboardPage() {
           </nav>
           <MobileNavSelect
             currentHref="/portal/dashboard"
+            loggedInAs={session.name ?? session.email}
             items={[
               ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin Home' }] : []),
               ...(session.role === 'player'

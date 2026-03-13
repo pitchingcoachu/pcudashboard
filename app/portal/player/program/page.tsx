@@ -105,6 +105,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
             </nav>
             <MobileNavSelect
               currentHref="/portal/player/program"
+              loggedInAs={session.name ?? session.email}
               items={[
                 { href: '/portal/dashboard', label: 'PCU Dashboard' },
                 ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin' }] : []),
@@ -209,6 +210,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           </nav>
           <MobileNavSelect
             currentHref="/portal/player/program"
+            loggedInAs={session.name ?? session.email}
             items={[
               ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin' }] : []),
               {

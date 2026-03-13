@@ -162,6 +162,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
           </nav>
           <MobileNavSelect
             currentHref="/portal/player"
+            loggedInAs={session.name ?? session.email}
             items={[
               ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin' }] : []),
               { href: '/portal/player', label: 'Profile' },
