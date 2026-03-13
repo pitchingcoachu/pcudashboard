@@ -1278,6 +1278,19 @@ main {
   grid-template-rows: auto 1fr;
   gap: 0.8rem;
   min-width: 0;
+  position: relative;
+}
+
+.portal-shell::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(env(safe-area-inset-top, 0px) + 8px);
+  background: rgba(5, 5, 5, 0.96);
+  pointer-events: none;
+  z-index: 20;
 }
 
 .portal-header {
@@ -1289,6 +1302,8 @@ main {
   grid-template-columns: minmax(210px, 1fr) auto minmax(280px, 1fr);
   align-items: center;
   gap: 0.7rem;
+  position: relative;
+  z-index: 21;
 }
 
 .portal-header-left {
@@ -2859,6 +2874,10 @@ main {
     padding: calc(0.55rem + env(safe-area-inset-top, 0px)) 0.55rem 0.55rem;
     gap: 0.55rem;
     width: 100%;
+  }
+
+  .portal-shell::before {
+    height: calc(env(safe-area-inset-top, 0px) + 10px);
   }
 
   .portal-header {
