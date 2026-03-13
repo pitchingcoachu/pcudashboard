@@ -1287,10 +1287,10 @@ main {
   top: 0;
   left: 0;
   right: 0;
-  height: calc(env(safe-area-inset-top, 0px) + 8px);
+  height: calc(env(safe-area-inset-top, 0px) + 1px);
   background: rgba(5, 5, 5, 0.96);
   pointer-events: none;
-  z-index: 20;
+  z-index: 18;
 }
 
 .portal-header {
@@ -1303,7 +1303,7 @@ main {
   align-items: center;
   gap: 0.7rem;
   position: relative;
-  z-index: 21;
+  z-index: 12;
 }
 
 .portal-header-left {
@@ -2877,7 +2877,7 @@ main {
   }
 
   .portal-shell::before {
-    height: calc(env(safe-area-inset-top, 0px) + 10px);
+    height: calc(env(safe-area-inset-top, 0px) + 1px);
   }
 
   .portal-header {
