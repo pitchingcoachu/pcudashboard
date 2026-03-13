@@ -155,7 +155,8 @@ async function renderCroppedProfilePhoto(input: {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Could not process image.');
 
-  const baseScale = Math.max(size / image.width, size / image.height);
+  // Start from full/default framing (entire image visible), then let user zoom in.
+  const baseScale = Math.min(size / image.width, size / image.height);
   const drawScale = baseScale * Math.max(1, zoom);
   const drawWidth = image.width * drawScale;
   const drawHeight = image.height * drawScale;
