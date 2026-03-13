@@ -32,6 +32,13 @@ type GoalDraft = {
   createdAt: string | null;
 };
 
+type PhotoCropState = {
+  sourceDataUrl: string;
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
+};
+
 type ProfileDashboardProps = {
   playerId: number;
   sessionRole: 'admin' | 'coach' | 'player';
@@ -93,19 +100,6 @@ function todayIsoDate(): string {
   return `${year}-${month}-${day}`;
 }
 
-function calculateAge(dateOfBirth: string | null): number | null {
-  if (!dateOfBirth) return null;
-  const parsed = new Date(`${dateOfBirth}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) return null;
-  const today = new Date();
-  let age = today.getUTCFullYear() - parsed.getUTCFullYear();
-  const monthDelta = today.getUTCMonth() - parsed.getUTCMonth();
-  if (monthDelta < 0 || (monthDelta === 0 && today.getUTCDate() < parsed.getUTCDate())) {
-    age -= 1;
-  }
-  return age >= 0 ? age : null;
-}
-
 function hashString(value: string): number {
   let hash = 0;
   for (let i = 0; i < value.length; i += 1) hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
@@ -130,13 +124,22 @@ function toInitials(fullName: string): string {
   return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
 }
 
-async function processProfilePhoto(file: File): Promise<string> {
-  const sourceDataUrl = await new Promise<string>((resolve, reject) => {
+async function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result ?? ''));
     reader.onerror = () => reject(new Error('Could not read image file.'));
     reader.readAsDataURL(file);
   });
+}
+
+async function renderCroppedProfilePhoto(input: {
+  sourceDataUrl: string;
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
+}): Promise<string> {
+  const { sourceDataUrl, zoom, offsetX, offsetY } = input;
 
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
@@ -152,16 +155,20 @@ async function processProfilePhoto(file: File): Promise<string> {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Could not process image.');
 
-  const srcSize = Math.min(image.width, image.height);
-  const srcX = (image.width - srcSize) / 2;
-  const srcY = (image.height - srcSize) / 2;
+  const baseScale = Math.max(size / image.width, size / image.height);
+  const drawScale = baseScale * Math.max(1, zoom);
+  const drawWidth = image.width * drawScale;
+  const drawHeight = image.height * drawScale;
+  const drawX = (size - drawWidth) / 2 + offsetX;
+  const drawY = (size - drawHeight) / 2 + offsetY;
+
   ctx.clearRect(0, 0, size, size);
   ctx.save();
   ctx.beginPath();
   ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
   ctx.closePath();
   ctx.clip();
-  ctx.drawImage(image, srcX, srcY, srcSize, srcSize, 0, 0, size, size);
+  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
   ctx.restore();
   return canvas.toDataURL('image/png');
 }
@@ -356,6 +363,7 @@ export default function ProfileDashboard({
   const [profileMessage, setProfileMessage] = useState('');
   const [photoUploading, setPhotoUploading] = useState(false);
   const [photoMessage, setPhotoMessage] = useState('');
+  const [photoCropState, setPhotoCropState] = useState<PhotoCropState | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   const [weightDate, setWeightDate] = useState(todayIsoDate());
@@ -395,8 +403,6 @@ export default function ProfileDashboard({
   const [selectedAssessmentDate, setSelectedAssessmentDate] = useState(
     initialAssessmentScores[0]?.dayDate ?? ''
   );
-
-  const displayAge = useMemo(() => calculateAge(profile.dateOfBirth || null) ?? initialProfile.age, [initialProfile.age, profile.dateOfBirth]);
 
   const sortedWeightLogs = useMemo(
     () => [...weightLogs].sort((a, b) => a.logDate.localeCompare(b.logDate)),
@@ -726,20 +732,27 @@ export default function ProfileDashboard({
       return;
     }
 
-    const dataUrl = await processProfilePhoto(file).catch((error) => {
+    const dataUrl = await readFileAsDataUrl(file).catch((error) => {
       setPhotoMessage(error instanceof Error ? error.message : 'Could not read image file.');
       return '';
     });
 
     event.target.value = '';
     if (!dataUrl) return;
+    setPhotoMessage('');
+    setPhotoCropState({ sourceDataUrl: dataUrl, zoom: 1, offsetX: 0, offsetY: 0 });
+  };
 
+  const saveCroppedPhoto = async () => {
+    if (!photoCropState) return;
     setPhotoUploading(true);
     setPhotoMessage('');
-    const nextProfile = { ...profile, profilePhotoDataUrl: dataUrl };
     try {
+      const croppedDataUrl = await renderCroppedProfilePhoto(photoCropState);
+      const nextProfile = { ...profile, profilePhotoDataUrl: croppedDataUrl };
       await saveProfilePayload(nextProfile);
       setProfile(nextProfile);
+      setPhotoCropState(null);
       setPhotoMessage('Profile photo updated.');
     } catch (error) {
       setPhotoMessage(error instanceof Error ? error.message : 'Failed to update profile photo.');
@@ -748,20 +761,17 @@ export default function ProfileDashboard({
     }
   };
 
-  const heroMetaLineOne = [
-    displayAge !== null ? `Age: ${displayAge}` : null,
-    profile.throwsHand.trim() ? `Throws: ${profile.throwsHand.trim()}` : null,
-    profile.position.trim() ? `Position: ${profile.position.trim()}` : null,
-    profile.height.trim() ? `Height: ${profile.height.trim()}` : null,
-    effectiveProfileWeight !== null ? `Weight: ${effectiveProfileWeight.toFixed(1)} lbs` : null,
-  ].filter((value): value is string => Boolean(value));
-
-  const schoolTeamValue = profile.schoolTeam.trim();
   const gradYearValue = profile.gradYear.trim();
-  const heroSchoolGradLine = schoolTeamValue && gradYearValue ? `${schoolTeamValue} • ${gradYearValue}` : schoolTeamValue || gradYearValue || '';
-  const heroCommitLine = profile.collegeCommitment.trim()
-    ? `${profile.collegeCommitment.trim()} Commit`
-    : '';
+  const positionValue = profile.position.trim();
+  const heightValue = profile.height.trim();
+  const roundedWeight = effectiveProfileWeight !== null ? Math.round(effectiveProfileWeight) : null;
+  const heroGradPositionLine =
+    gradYearValue && positionValue ? `${gradYearValue} ${positionValue}` : gradYearValue || positionValue || '';
+  const heroHeightWeightLine =
+    heightValue && roundedWeight !== null
+      ? `${heightValue} ${roundedWeight} lbs.`
+      : heightValue || (roundedWeight !== null ? `${roundedWeight} lbs.` : '');
+  const heroCommitLine = profile.collegeCommitment.trim() ? `${profile.collegeCommitment.trim()} Commit` : '';
 
   return (
     <div className="portal-profile-stack">
@@ -794,10 +804,8 @@ export default function ProfileDashboard({
           <div className="portal-profile-hero-name">
             <h2>{profile.fullName}</h2>
           </div>
-          {heroMetaLineOne.length > 0 ? (
-            <p className="portal-profile-hero-line">{heroMetaLineOne.join(' • ')}</p>
-          ) : null}
-          {heroSchoolGradLine ? <p className="portal-profile-hero-line">{heroSchoolGradLine}</p> : null}
+          {heroGradPositionLine ? <p className="portal-profile-hero-line">{heroGradPositionLine}</p> : null}
+          {heroHeightWeightLine ? <p className="portal-profile-hero-line">{heroHeightWeightLine}</p> : null}
           {heroCommitLine ? <p className="portal-profile-hero-line">{heroCommitLine}</p> : null}
         </div>
         {photoMessage ? <p className={photoMessage === 'Profile photo updated.' ? 'auth-message' : 'auth-error'}>{photoMessage}</p> : null}
@@ -905,7 +913,7 @@ export default function ProfileDashboard({
               Profile Weight (lbs)
               <input
                 type="number"
-                step="0.1"
+                step="1"
                 min="1"
                 value={profile.profileWeightLbs}
                 onChange={(event) => setProfile((prev) => ({ ...prev, profileWeightLbs: event.target.value }))}
@@ -1295,7 +1303,7 @@ export default function ProfileDashboard({
               Weight (lbs)
               <input
                 type="number"
-                step="0.1"
+                step="1"
                 min="1"
                 value={weightValue}
                 onChange={(event) => setWeightValue(event.target.value)}
@@ -1319,6 +1327,104 @@ export default function ProfileDashboard({
           <LineChart points={weightTrendPoints} yLabel="Body weight (lbs)" emptyText="No body weight entries yet." />
         </article>
       </div>
+
+      {photoCropState ? (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(0,0,0,0.86)',
+            display: 'grid',
+            placeItems: 'center',
+            padding: '1rem',
+          }}
+          onClick={() => {
+            if (photoUploading) return;
+            setPhotoCropState(null);
+          }}
+        >
+          <article
+            className="portal-admin-card"
+            style={{ width: 'min(560px, 96vw)' }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 style={{ margin: 0 }}>Crop Profile Photo</h3>
+            <div
+              style={{
+                width: '260px',
+                height: '260px',
+                borderRadius: '999px',
+                border: '1px solid rgba(255,255,255,0.22)',
+                overflow: 'hidden',
+                margin: '0.2rem auto 0',
+                position: 'relative',
+                background: 'rgba(0,0,0,0.6)',
+              }}
+            >
+              <img
+                src={photoCropState.sourceDataUrl}
+                alt="Crop preview"
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: '50%',
+                  transform: `translate(calc(-50% + ${photoCropState.offsetX}px), calc(-50% + ${photoCropState.offsetY}px)) scale(${photoCropState.zoom})`,
+                  transformOrigin: 'center center',
+                  maxWidth: 'none',
+                }}
+              />
+            </div>
+            <label className="portal-inline-filter">
+              Zoom
+              <input
+                type="range"
+                min="1"
+                max="3"
+                step="0.01"
+                value={photoCropState.zoom}
+                onChange={(event) =>
+                  setPhotoCropState((prev) => (prev ? { ...prev, zoom: Number(event.target.value) } : prev))
+                }
+              />
+            </label>
+            <label className="portal-inline-filter">
+              Horizontal
+              <input
+                type="range"
+                min="-180"
+                max="180"
+                step="1"
+                value={photoCropState.offsetX}
+                onChange={(event) =>
+                  setPhotoCropState((prev) => (prev ? { ...prev, offsetX: Number(event.target.value) } : prev))
+                }
+              />
+            </label>
+            <label className="portal-inline-filter">
+              Vertical
+              <input
+                type="range"
+                min="-180"
+                max="180"
+                step="1"
+                value={photoCropState.offsetY}
+                onChange={(event) =>
+                  setPhotoCropState((prev) => (prev ? { ...prev, offsetY: Number(event.target.value) } : prev))
+                }
+              />
+            </label>
+            <div className="portal-choice-line-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setPhotoCropState(null)} disabled={photoUploading}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-primary" onClick={() => void saveCroppedPhoto()} disabled={photoUploading}>
+                {photoUploading ? 'Saving...' : 'Use Photo'}
+              </button>
+            </div>
+          </article>
+        </div>
+      ) : null}
 
       {completeModal ? (
         <div

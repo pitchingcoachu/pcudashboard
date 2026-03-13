@@ -1,7 +1,5 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-
 type PreviewAthleteSelectProps = {
   selectedPlayerId: number;
   players: Array<{ playerId: number; fullName: string }>;
@@ -15,8 +13,6 @@ export default function PreviewAthleteSelect({
   basePath,
   extraParams = {},
 }: PreviewAthleteSelectProps) {
-  const router = useRouter();
-
   return (
     <div className="portal-preview-form">
       <label>
@@ -26,7 +22,10 @@ export default function PreviewAthleteSelect({
           onChange={(event) => {
             const params = new URLSearchParams(extraParams);
             params.set('previewPlayerId', event.target.value);
-            router.push(`${basePath}?${params.toString()}`);
+            const nextUrl = `${basePath}?${params.toString()}`;
+            if (typeof window !== 'undefined') {
+              window.location.assign(nextUrl);
+            }
           }}
         >
           {players.map((client) => (
