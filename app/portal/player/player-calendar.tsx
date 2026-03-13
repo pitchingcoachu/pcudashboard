@@ -371,9 +371,8 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
         {view === 'day' && <div className="portal-schedule-day-grid">{dayCells.map((date) => renderDayCell(date, false, undefined, true))}</div>}
         {view === 'cycle' && (
           <div
+            className="portal-cycle-grid"
             style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
               gap: '0.75rem',
             }}
           >

@@ -12,6 +12,7 @@ import {
   listPlayerPlanGoalsForPlayer,
   listProgramItemsForPlayerByDateRange,
 } from '../../../lib/training-db';
+import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
 import ProfileDashboard from './profile-dashboard';
 
@@ -159,6 +160,17 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
               </Link>
             )}
           </nav>
+          <MobileNavSelect
+            currentHref="/portal/player"
+            items={[
+              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin' }] : []),
+              { href: '/portal/player', label: 'Profile' },
+              { href: fullProgramHref, label: 'Program' },
+              ...(session.role === 'player'
+                ? [{ href: '/portal/dashboard', label: 'PCU Dashboard' }]
+                : [{ href: '/tutorials', label: 'Tutorials' }]),
+            ]}
+          />
         </div>
         <div className="portal-header-right">
           <div className="portal-user-meta" aria-label="Logged in user">

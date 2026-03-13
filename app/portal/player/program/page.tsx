@@ -8,6 +8,7 @@ import {
   listClientsByOrganization,
   listProgramItemsForPlayerByMonth,
 } from '../../../../lib/training-db';
+import MobileNavSelect from '../../mobile-nav-select';
 import LogoutButton from '../../logout-button';
 import PlayerCalendar from '../player-calendar';
 
@@ -102,6 +103,15 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
                 Program
               </Link>
             </nav>
+            <MobileNavSelect
+              currentHref="/portal/player/program"
+              items={[
+                { href: '/portal/dashboard', label: 'PCU Dashboard' },
+                ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin' }] : []),
+                { href: '/portal/player', label: 'Profile' },
+                { href: '/portal/player/program', label: 'Program' },
+              ]}
+            />
           </div>
           <div className="portal-header-right">
             <div className="portal-user-meta" aria-label="Logged in user">
@@ -197,6 +207,23 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
               </Link>
             )}
           </nav>
+          <MobileNavSelect
+            currentHref="/portal/player/program"
+            items={[
+              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin' }] : []),
+              {
+                href:
+                  session.role === 'admin' || session.role === 'coach'
+                    ? `/portal/player?previewPlayerId=${effectivePlayerId}`
+                    : '/portal/player',
+                label: 'Profile',
+              },
+              { href: '/portal/player/program', label: 'Program' },
+              ...(session.role === 'player'
+                ? [{ href: '/portal/dashboard', label: 'PCU Dashboard' }]
+                : [{ href: '/tutorials', label: 'Tutorials' }]),
+            ]}
+          />
         </div>
         <div className="portal-header-right">
           <div className="portal-user-meta" aria-label="Logged in user">

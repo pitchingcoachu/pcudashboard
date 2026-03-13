@@ -8,9 +8,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "migrate:training-data": "node scripts/migrate-training-data.mjs"
+    "migrate:training-data": "node scripts/migrate-training-data.mjs",
+    "cap:sync": "npx cap sync ios",
+    "ios:open": "npx cap open ios"
   },
   "dependencies": {
+    "@capacitor/cli": "^8.2.0",
+    "@capacitor/core": "^8.2.0",
+    "@capacitor/ios": "^8.2.0",
     "next": "16.1.6",
     "pg": "^8.18.0",
     "react": "19.2.0",

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { requirePortalSession } from '../../../lib/portal-session';
+import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
 
 const TM_DATA_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
@@ -45,6 +46,20 @@ export default async function PortalDashboardPage() {
               </Link>
             )}
           </nav>
+          <MobileNavSelect
+            currentHref="/portal/dashboard"
+            items={[
+              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin Home' }] : []),
+              ...(session.role === 'player'
+                ? [
+                    { href: '/portal/player', label: 'Profile' },
+                    { href: '/portal/player/program', label: 'Program' },
+                  ]
+                : [{ href: '/portal/admin/schedule', label: 'Schedule' }]),
+              { href: '/portal/dashboard', label: 'PCU Dashboard' },
+              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/tutorials', label: 'Tutorials' }] : []),
+            ]}
+          />
         </div>
         <div className="portal-header-right">
           <div className="portal-user-meta" aria-label="Logged in user">

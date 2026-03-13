@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../lib/portal-session';
+import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -46,6 +47,17 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               PCU Dashboard
             </Link>
           </nav>
+          <MobileNavSelect
+            items={[
+              { href: '/portal/admin', label: 'Admin Home' },
+              ...(session.role === 'admin' ? [{ href: '/portal/admin/clients', label: 'Clients' }] : []),
+              ...(session.role === 'admin' ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
+              { href: '/portal/admin/exercises', label: 'Exercise Library' },
+              { href: '/portal/admin/workouts', label: 'Workouts' },
+              { href: '/portal/admin/schedule', label: 'Schedule' },
+              { href: '/portal/dashboard', label: 'PCU Dashboard' },
+            ]}
+          />
         </div>
         <div className="portal-header-right">
           <div className="portal-user-meta" aria-label="Logged in user">

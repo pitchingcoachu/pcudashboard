@@ -20,6 +20,7 @@ html,
 body {
   margin: 0;
   min-height: 100%;
+  overflow-x: clip;
   color: var(--text-main);
   font-family: Manrope, sans-serif;
   background: radial-gradient(circle at 10% 4%, rgba(200, 16, 46, 0.25), transparent 42%),
@@ -1276,6 +1277,7 @@ main {
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 0.8rem;
+  min-width: 0;
 }
 
 .portal-header {
@@ -1314,6 +1316,7 @@ main {
 
 .portal-header-center {
   justify-self: center;
+  min-width: 0;
 }
 
 .portal-social-row {
@@ -1332,6 +1335,7 @@ main {
   display: inline-flex;
   align-items: center;
   gap: 0.6rem;
+  min-width: 0;
 }
 
 .portal-user-meta {
@@ -1369,6 +1373,33 @@ main {
   border-radius: 999px;
   padding: 0.2rem;
   background: rgba(255, 255, 255, 0.04);
+}
+
+.portal-nav-mobile-wrap {
+  display: none;
+}
+
+.portal-nav-mobile-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+.portal-nav-mobile {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  padding: 0.58rem 2rem 0.58rem 0.8rem;
+  font: 700 0.8rem/1 Manrope, sans-serif;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-main);
+  background: rgba(10, 10, 10, 0.92);
 }
 
 .portal-app-dropdown {
@@ -1499,6 +1530,7 @@ main {
   background: rgba(5, 5, 5, 0.96);
   min-height: calc(100vh - 130px);
   padding: 1.2rem;
+  min-width: 0;
 }
 
 .portal-panel h2 {
@@ -1553,6 +1585,7 @@ main {
 .portal-admin-stack {
   display: grid;
   gap: 0.9rem;
+  min-width: 0;
 }
 
 .portal-admin-headline {
@@ -2361,6 +2394,7 @@ main {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   gap: 0.7rem;
+  min-width: 0;
 }
 
 .portal-workout-palette {
@@ -2429,6 +2463,7 @@ main {
   display: grid;
   gap: 0.4rem;
   overflow-x: auto;
+  min-width: 0;
 }
 
 .portal-schedule-period {
@@ -2651,12 +2686,14 @@ main {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.85rem;
+  min-width: 0;
 }
 
 .portal-profile-three-col {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.85rem;
+  min-width: 0;
 }
 
 .portal-profile-three-col > * {
@@ -2669,6 +2706,12 @@ main {
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+.portal-cycle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
 }
 
 .portal-chart-wrap {
@@ -2788,6 +2831,7 @@ main {
   .portal-shell {
     padding: 0.55rem;
     gap: 0.55rem;
+    width: 100%;
   }
 
   .portal-header {
@@ -2797,13 +2841,16 @@ main {
 
   .portal-header-left {
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 0.5rem;
+    width: 100%;
   }
 
   .portal-header-right {
     align-items: center;
+    justify-content: space-between;
     gap: 0.45rem;
+    width: 100%;
   }
 
   .portal-user-meta p {
@@ -2819,24 +2866,16 @@ main {
   }
 
   .portal-nav {
-    width: 100%;
-    display: flex;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overflow-y: hidden;
-    justify-content: center;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-
-  .portal-nav::-webkit-scrollbar {
     display: none;
   }
 
-  .portal-nav-link {
-    flex: 0 0 auto;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.72rem;
+  .portal-nav-mobile-wrap {
+    display: block;
+    width: 100%;
+  }
+
+  .portal-header-center {
+    width: 100%;
   }
 
   .portal-panel {
@@ -2899,5 +2938,48 @@ main {
 
   .portal-profile-goals-grid {
     grid-template-columns: 1fr;
+  }
+
+  .portal-social-row {
+    gap: 0.3rem;
+  }
+
+  .portal-social-row .social-link {
+    width: 1.8rem;
+    height: 1.8rem;
+  }
+
+  .portal-user-meta {
+    justify-items: start;
+    min-width: 0;
+  }
+
+  .portal-preview-form {
+    width: 100%;
+  }
+
+  .portal-preview-form label {
+    width: 100%;
+  }
+
+  .portal-schedule-weekdays,
+  .portal-schedule-month-grid,
+  .portal-schedule-week-grid {
+    min-width: 0;
+  }
+
+  .portal-schedule-day {
+    min-height: 160px !important;
+    aspect-ratio: auto;
+    padding: 0.35rem;
+  }
+
+  .portal-schedule-day-empty {
+    min-height: 160px !important;
+    aspect-ratio: auto;
+  }
+
+  .portal-cycle-grid {
+    grid-template-columns: 1fr !important;
   }
 }
