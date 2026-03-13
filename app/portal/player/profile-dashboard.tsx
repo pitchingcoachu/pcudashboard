@@ -1224,32 +1224,27 @@ export default function ProfileDashboard({
       <article className="portal-admin-card">
         <div className="portal-row-between">
           <h3>Assessment Scores</h3>
-          <div className="portal-choice-line-actions">
-            {assessmentDates.length > 0 && (
-              <label className="portal-inline-filter">
-                Date
-                <select
-                  value={selectedAssessmentDate}
-                  onChange={(event) => setSelectedAssessmentDate(event.target.value)}
-                >
-                  {assessmentDates.map((date) => (
-                    <option key={date} value={date}>
-                      {formatDate(date)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => setAssessmentExpanded((current) => !current)}
-              aria-expanded={assessmentExpanded}
-            >
-              {assessmentExpanded ? 'Collapse' : 'Expand'}
-            </button>
-          </div>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setAssessmentExpanded((current) => !current)}
+            aria-expanded={assessmentExpanded}
+          >
+            {assessmentExpanded ? 'Collapse' : 'Expand'}
+          </button>
         </div>
+        {assessmentDates.length > 0 && (
+          <label className="portal-inline-filter" style={{ maxWidth: '220px' }}>
+            Date
+            <select value={selectedAssessmentDate} onChange={(event) => setSelectedAssessmentDate(event.target.value)}>
+              {assessmentDates.map((date) => (
+                <option key={date} value={date}>
+                  {formatDate(date)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {!assessmentExpanded ? null : visibleAssessmentRows.length === 0 ? (
           <p className="portal-muted-text">No assessment scores logged yet.</p>
         ) : (
