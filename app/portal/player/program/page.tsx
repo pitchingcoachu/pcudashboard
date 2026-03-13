@@ -9,6 +9,7 @@ import {
   listProgramItemsForPlayerByMonth,
 } from '../../../../lib/training-db';
 import MobileNavSelect from '../../mobile-nav-select';
+import PreviewAthleteSelect from '../../preview-athlete-select';
 import LogoutButton from '../../logout-button';
 import PlayerCalendar from '../player-calendar';
 
@@ -160,22 +161,12 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
             <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
           </Link>
           {session.role === 'admin' || session.role === 'coach' ? (
-            <form method="get" className="portal-preview-form">
-              <label>
-                Preview Athlete
-                <select name="previewPlayerId" defaultValue={String(effectivePlayerId)}>
-                  {previewClients.map((client) => (
-                    <option key={client.playerId} value={String(client.playerId)}>
-                      {client.fullName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <input type="hidden" name="month" value={month} />
-              <button className="btn btn-ghost" type="submit">
-                Switch
-              </button>
-            </form>
+            <PreviewAthleteSelect
+              basePath="/portal/player/program"
+              selectedPlayerId={effectivePlayerId}
+              players={previewClients}
+              extraParams={{ month }}
+            />
           ) : null}
         </div>
         <div className="portal-header-center">

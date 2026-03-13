@@ -46,6 +46,9 @@ export type PlayerProfileRow = {
   position: string | null;
   batsHand: string | null;
   throwsHand: string | null;
+  height: string | null;
+  profileWeightLbs: number | null;
+  profilePhotoDataUrl: string | null;
   assignedCoachUserId: number | null;
   assignedCoachName: string | null;
   age: number | null;
@@ -199,6 +202,9 @@ export async function ensureTrainingDbReady(): Promise<void> {
   const pool = getDbPool();
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS height TEXT;`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_weight_lbs DOUBLE PRECISION;`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_photo_data_url TEXT;`);
   await pool.query(
     `ALTER TABLE players ADD COLUMN IF NOT EXISTS assigned_coach_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL;`
   );
@@ -2606,6 +2612,9 @@ export async function getPlayerByIdInOrganization(input: {
     position: string | null;
     bats_hand: string | null;
     throws_hand: string | null;
+    height: string | null;
+    profile_weight_lbs: string | null;
+    profile_photo_data_url: string | null;
     assigned_coach_user_id: number | null;
     assigned_coach_name: string | null;
     age_years: string | null;
@@ -2623,6 +2632,9 @@ export async function getPlayerByIdInOrganization(input: {
         p.position,
         p.bats_hand,
         p.throws_hand,
+        p.height,
+        p.profile_weight_lbs::text,
+        p.profile_photo_data_url,
         p.assigned_coach_user_id,
         coach.name AS assigned_coach_name,
         CASE
@@ -2650,6 +2662,9 @@ export async function getPlayerByIdInOrganization(input: {
     position: result.rows[0].position,
     batsHand: result.rows[0].bats_hand,
     throwsHand: result.rows[0].throws_hand,
+    height: result.rows[0].height,
+    profileWeightLbs: result.rows[0].profile_weight_lbs ? Number(result.rows[0].profile_weight_lbs) : null,
+    profilePhotoDataUrl: result.rows[0].profile_photo_data_url,
     assignedCoachUserId: result.rows[0].assigned_coach_user_id,
     assignedCoachName: result.rows[0].assigned_coach_name,
     age: result.rows[0].age_years ? Number(result.rows[0].age_years) : null,
@@ -2676,6 +2691,9 @@ export async function getPlayerForUser(input: {
     position: string | null;
     bats_hand: string | null;
     throws_hand: string | null;
+    height: string | null;
+    profile_weight_lbs: string | null;
+    profile_photo_data_url: string | null;
     assigned_coach_user_id: number | null;
     assigned_coach_name: string | null;
     age_years: string | null;
@@ -2693,6 +2711,9 @@ export async function getPlayerForUser(input: {
         p.position,
         p.bats_hand,
         p.throws_hand,
+        p.height,
+        p.profile_weight_lbs::text,
+        p.profile_photo_data_url,
         p.assigned_coach_user_id,
         coach.name AS assigned_coach_name,
         CASE
@@ -2720,6 +2741,9 @@ export async function getPlayerForUser(input: {
     position: result.rows[0].position,
     batsHand: result.rows[0].bats_hand,
     throwsHand: result.rows[0].throws_hand,
+    height: result.rows[0].height,
+    profileWeightLbs: result.rows[0].profile_weight_lbs ? Number(result.rows[0].profile_weight_lbs) : null,
+    profilePhotoDataUrl: result.rows[0].profile_photo_data_url,
     assignedCoachUserId: result.rows[0].assigned_coach_user_id,
     assignedCoachName: result.rows[0].assigned_coach_name,
     age: result.rows[0].age_years ? Number(result.rows[0].age_years) : null,
@@ -2740,6 +2764,9 @@ export async function updatePlayerProfile(input: {
   position?: string;
   batsHand?: string;
   throwsHand?: string;
+  height?: string;
+  profileWeightLbs?: number | null;
+  profilePhotoDataUrl?: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
@@ -2748,6 +2775,16 @@ export async function updatePlayerProfile(input: {
   const fullName = input.fullName.trim();
   const email = input.email.trim().toLowerCase();
   if (!fullName || !email) return { ok: false, error: 'Name and email are required.' };
+  const height = (input.height ?? '').trim() || null;
+  const profileWeightLbs =
+    input.profileWeightLbs === null || input.profileWeightLbs === undefined || Number.isNaN(Number(input.profileWeightLbs))
+      ? null
+      : Number(input.profileWeightLbs);
+  const profilePhotoProvided = input.profilePhotoDataUrl !== undefined;
+  const profilePhotoDataUrl = (input.profilePhotoDataUrl ?? '').trim() || null;
+  if (profilePhotoDataUrl && profilePhotoDataUrl.length > 2_000_000) {
+    return { ok: false, error: 'Profile photo is too large. Please upload a smaller image.' };
+  }
 
   const assignedCoachProvided = input.assignedCoachUserId !== undefined;
   let assignedCoachUserId: number | null = null;
@@ -2783,9 +2820,12 @@ export async function updatePlayerProfile(input: {
         position = $8,
         bats_hand = $9,
         throws_hand = $10,
-        assigned_coach_user_id = CASE WHEN $11::boolean THEN $12 ELSE assigned_coach_user_id END,
+        height = $11,
+        profile_weight_lbs = $12,
+        profile_photo_data_url = CASE WHEN $13::boolean THEN $14 ELSE profile_photo_data_url END,
+        assigned_coach_user_id = CASE WHEN $15::boolean THEN $16 ELSE assigned_coach_user_id END,
         updated_at = NOW()
-      WHERE id = $13 AND organization_id = $14
+      WHERE id = $17 AND organization_id = $18
       RETURNING id
     `,
     [
@@ -2799,6 +2839,10 @@ export async function updatePlayerProfile(input: {
       (input.position ?? '').trim() || null,
       (input.batsHand ?? '').trim() || null,
       (input.throwsHand ?? '').trim() || null,
+      height,
+      profileWeightLbs,
+      profilePhotoProvided,
+      profilePhotoDataUrl,
       assignedCoachProvided,
       assignedCoachUserId,
       input.playerId,

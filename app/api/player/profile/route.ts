@@ -46,6 +46,9 @@ export async function POST(request: Request) {
   const assignedCoachRaw = Number(body.assignedCoachUserId ?? 0);
   const assignedCoachUserId =
     canAssignCoach && Number.isFinite(assignedCoachRaw) && assignedCoachRaw > 0 ? assignedCoachRaw : null;
+  const parsedProfileWeight = Number(body.profileWeightLbs);
+  const profileWeightLbs =
+    Number.isFinite(parsedProfileWeight) && parsedProfileWeight > 0 ? parsedProfileWeight : null;
 
   const result = await updatePlayerProfile({
     organizationId: session.organizationId ?? 0,
@@ -60,6 +63,9 @@ export async function POST(request: Request) {
     position: String(body.position ?? ''),
     batsHand: String(body.batsHand ?? ''),
     throwsHand: String(body.throwsHand ?? ''),
+    height: String(body.height ?? ''),
+    profileWeightLbs,
+    profilePhotoDataUrl: typeof body.profilePhotoDataUrl === 'string' ? body.profilePhotoDataUrl : undefined,
     assignedCoachUserId: canAssignCoach ? assignedCoachUserId : undefined,
   });
 

@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
-import type { CSSProperties, MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, MouseEvent, ChangeEvent } from 'react';
 import type {
   AssessmentWorkoutScoreRow,
   BodyWeightLogRow,
@@ -48,6 +48,9 @@ type ProfileDashboardProps = {
     position: string | null;
     batsHand: string | null;
     throwsHand: string | null;
+    height: string | null;
+    profileWeightLbs: number | null;
+    profilePhotoDataUrl: string | null;
     assignedCoachUserId: number | null;
     age: number | null;
   };
@@ -115,6 +118,52 @@ function categoryBubbleStyle(category: string): CSSProperties {
     borderColor: `hsla(${hue}, 88%, 64%, 0.7)`,
     background: `hsla(${hue}, 82%, 52%, 0.2)`,
   };
+}
+
+function toInitials(fullName: string): string {
+  const parts = fullName
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return 'P';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
+}
+
+async function processProfilePhoto(file: File): Promise<string> {
+  const sourceDataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('Could not read image file.'));
+    reader.readAsDataURL(file);
+  });
+
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not load image.'));
+    img.src = sourceDataUrl;
+  });
+
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not process image.');
+
+  const srcSize = Math.min(image.width, image.height);
+  const srcX = (image.width - srcSize) / 2;
+  const srcY = (image.height - srcSize) / 2;
+  ctx.clearRect(0, 0, size, size);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(image, srcX, srcY, srcSize, srcSize, 0, 0, size, size);
+  ctx.restore();
+  return canvas.toDataURL('image/png');
 }
 
 function LineChart({
@@ -295,10 +344,19 @@ export default function ProfileDashboard({
     position: initialProfile.position ?? '',
     batsHand: initialProfile.batsHand ?? '',
     throwsHand: initialProfile.throwsHand ?? '',
+    height: initialProfile.height ?? '',
+    profileWeightLbs:
+      initialProfile.profileWeightLbs !== null && Number.isFinite(initialProfile.profileWeightLbs)
+        ? String(initialProfile.profileWeightLbs)
+        : '',
+    profilePhotoDataUrl: initialProfile.profilePhotoDataUrl ?? '',
     assignedCoachUserId: initialProfile.assignedCoachUserId ? String(initialProfile.assignedCoachUserId) : '',
   });
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMessage, setProfileMessage] = useState('');
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoMessage, setPhotoMessage] = useState('');
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   const [weightDate, setWeightDate] = useState(todayIsoDate());
   const [weightValue, setWeightValue] = useState('');
@@ -344,6 +402,11 @@ export default function ProfileDashboard({
     () => [...weightLogs].sort((a, b) => a.logDate.localeCompare(b.logDate)),
     [weightLogs]
   );
+  const latestWeightLog = sortedWeightLogs.length > 0 ? sortedWeightLogs[sortedWeightLogs.length - 1] : null;
+  const fallbackProfileWeight = Number(profile.profileWeightLbs);
+  const effectiveProfileWeight =
+    latestWeightLog?.weightLbs ??
+    (Number.isFinite(fallbackProfileWeight) && fallbackProfileWeight > 0 ? fallbackProfileWeight : null);
 
   const exerciseTrendPoints = useMemo(
     () => trendData.map((point) => ({ xLabel: formatDate(point.dayDate), value: point.averageLoad })),
@@ -623,11 +686,74 @@ export default function ProfileDashboard({
     }
   };
 
+  const saveProfilePayload = async (nextProfile: typeof profile) => {
+    const response = await fetch('/api/player/profile', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        playerId,
+        fullName: nextProfile.fullName,
+        email: nextProfile.email,
+        dateOfBirth: nextProfile.dateOfBirth,
+        schoolTeam: nextProfile.schoolTeam,
+        phone: nextProfile.phone,
+        collegeCommitment: nextProfile.collegeCommitment,
+        gradYear: nextProfile.gradYear,
+        position: nextProfile.position,
+        batsHand: nextProfile.batsHand,
+        throwsHand: nextProfile.throwsHand,
+        height: nextProfile.height,
+        profileWeightLbs: nextProfile.profileWeightLbs ? Number(nextProfile.profileWeightLbs) : null,
+        profilePhotoDataUrl: nextProfile.profilePhotoDataUrl || null,
+        assignedCoachUserId: nextProfile.assignedCoachUserId ? Number(nextProfile.assignedCoachUserId) : null,
+      }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? 'Failed to save profile.');
+  };
+
+  const onPhotoSelected = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setPhotoMessage('Please choose an image file.');
+      event.target.value = '';
+      return;
+    }
+    if (file.size > 2_000_000) {
+      setPhotoMessage('Image is too large. Please keep it under 2MB.');
+      event.target.value = '';
+      return;
+    }
+
+    const dataUrl = await processProfilePhoto(file).catch((error) => {
+      setPhotoMessage(error instanceof Error ? error.message : 'Could not read image file.');
+      return '';
+    });
+
+    event.target.value = '';
+    if (!dataUrl) return;
+
+    setPhotoUploading(true);
+    setPhotoMessage('');
+    const nextProfile = { ...profile, profilePhotoDataUrl: dataUrl };
+    try {
+      await saveProfilePayload(nextProfile);
+      setProfile(nextProfile);
+      setPhotoMessage('Profile photo updated.');
+    } catch (error) {
+      setPhotoMessage(error instanceof Error ? error.message : 'Failed to update profile photo.');
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
+
   const heroMetaLineOne = [
     displayAge !== null ? `Age: ${displayAge}` : null,
-    profile.batsHand.trim() ? `Bats: ${profile.batsHand.trim()}` : null,
     profile.throwsHand.trim() ? `Throws: ${profile.throwsHand.trim()}` : null,
     profile.position.trim() ? `Position: ${profile.position.trim()}` : null,
+    profile.height.trim() ? `Height: ${profile.height.trim()}` : null,
+    effectiveProfileWeight !== null ? `Weight: ${effectiveProfileWeight.toFixed(1)} lbs` : null,
   ].filter((value): value is string => Boolean(value));
 
   const schoolTeamValue = profile.schoolTeam.trim();
@@ -640,6 +766,30 @@ export default function ProfileDashboard({
   return (
     <div className="portal-profile-stack">
       <section className="portal-admin-card portal-profile-hero">
+        <div className="portal-profile-hero-photo">
+          {profile.profilePhotoDataUrl ? (
+            <img src={profile.profilePhotoDataUrl} alt={`${profile.fullName} profile`} className="portal-profile-avatar-image" />
+          ) : (
+            <div className="portal-profile-avatar-fallback" aria-label="Profile photo placeholder">
+              {toInitials(profile.fullName)}
+            </div>
+          )}
+          <input
+            ref={photoInputRef}
+            type="file"
+            accept="image/*"
+            onChange={(event) => void onPhotoSelected(event)}
+            style={{ display: 'none' }}
+          />
+          <button
+            type="button"
+            className="btn btn-ghost portal-profile-photo-btn"
+            onClick={() => photoInputRef.current?.click()}
+            disabled={photoUploading}
+          >
+            {photoUploading ? 'Uploading...' : 'Upload Photo'}
+          </button>
+        </div>
         <div className="portal-profile-hero-main">
           <div className="portal-profile-hero-name">
             <h2>{profile.fullName}</h2>
@@ -650,6 +800,7 @@ export default function ProfileDashboard({
           {heroSchoolGradLine ? <p className="portal-profile-hero-line">{heroSchoolGradLine}</p> : null}
           {heroCommitLine ? <p className="portal-profile-hero-line">{heroCommitLine}</p> : null}
         </div>
+        {photoMessage ? <p className={photoMessage === 'Profile photo updated.' ? 'auth-message' : 'auth-error'}>{photoMessage}</p> : null}
       </section>
 
       {showProfileDetailsPanel && (
@@ -673,26 +824,7 @@ export default function ProfileDashboard({
               setProfileSaving(true);
               setProfileMessage('');
               try {
-                const response = await fetch('/api/player/profile', {
-                  method: 'POST',
-                  headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({
-                    playerId,
-                    fullName: profile.fullName,
-                    email: profile.email,
-                    dateOfBirth: profile.dateOfBirth,
-                    schoolTeam: profile.schoolTeam,
-                    phone: profile.phone,
-                    collegeCommitment: profile.collegeCommitment,
-                    gradYear: profile.gradYear,
-                    position: profile.position,
-                    batsHand: profile.batsHand,
-                    throwsHand: profile.throwsHand,
-                    assignedCoachUserId: profile.assignedCoachUserId ? Number(profile.assignedCoachUserId) : null,
-                  }),
-                });
-                const payload = (await response.json().catch(() => ({}))) as { error?: string };
-                if (!response.ok) throw new Error(payload.error ?? 'Failed to save profile.');
+                await saveProfilePayload(profile);
                 setProfileMessage('Profile saved.');
               } catch (error) {
                 setProfileMessage(error instanceof Error ? error.message : 'Failed to save profile.');
@@ -759,6 +891,24 @@ export default function ProfileDashboard({
               <input
                 value={profile.position}
                 onChange={(event) => setProfile((prev) => ({ ...prev, position: event.target.value }))}
+              />
+            </label>
+            <label>
+              Height
+              <input
+                value={profile.height}
+                onChange={(event) => setProfile((prev) => ({ ...prev, height: event.target.value }))}
+                placeholder={`6'2"`}
+              />
+            </label>
+            <label>
+              Profile Weight (lbs)
+              <input
+                type="number"
+                step="0.1"
+                min="1"
+                value={profile.profileWeightLbs}
+                onChange={(event) => setProfile((prev) => ({ ...prev, profileWeightLbs: event.target.value }))}
               />
             </label>
             <label>
@@ -836,6 +986,14 @@ export default function ProfileDashboard({
             <label>
               Position
               <input value={profile.position || '-'} readOnly />
+            </label>
+            <label>
+              Height
+              <input value={profile.height || '-'} readOnly />
+            </label>
+            <label>
+              Profile Weight (lbs)
+              <input value={profile.profileWeightLbs || '-'} readOnly />
             </label>
             <label>
               Bats

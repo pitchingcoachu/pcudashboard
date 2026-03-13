@@ -13,6 +13,7 @@ import {
   listProgramItemsForPlayerByDateRange,
 } from '../../../lib/training-db';
 import MobileNavSelect from '../mobile-nav-select';
+import PreviewAthleteSelect from '../preview-athlete-select';
 import LogoutButton from '../logout-button';
 import ProfileDashboard from './profile-dashboard';
 
@@ -120,21 +121,11 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
           </Link>
           {session.role === 'admin' || session.role === 'coach' ? (
-            <form method="get" className="portal-preview-form">
-              <label>
-                Preview Athlete
-                <select name="previewPlayerId" defaultValue={String(effectivePlayerId)}>
-                  {previewClients.map((client) => (
-                    <option key={client.playerId} value={String(client.playerId)}>
-                      {client.fullName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button className="btn btn-ghost" type="submit">
-                Switch
-              </button>
-            </form>
+            <PreviewAthleteSelect
+              basePath="/portal/player"
+              selectedPlayerId={effectivePlayerId}
+              players={previewClients}
+            />
           ) : null}
         </div>
         <div className="portal-header-center">
@@ -215,6 +206,9 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             position: player.position,
             batsHand: player.batsHand,
             throwsHand: player.throwsHand,
+            height: player.height,
+            profileWeightLbs: player.profileWeightLbs,
+            profilePhotoDataUrl: player.profilePhotoDataUrl,
             assignedCoachUserId: player.assignedCoachUserId,
             age: player.age,
           }}

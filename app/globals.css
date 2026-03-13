@@ -2702,6 +2702,40 @@ main {
   text-align: center;
 }
 
+.portal-profile-hero-photo {
+  display: grid;
+  justify-items: center;
+  gap: 0.45rem;
+}
+
+.portal-profile-avatar-image,
+.portal-profile-avatar-fallback {
+  width: 74px;
+  height: 74px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  box-shadow: 0 0 0 4px rgba(200, 16, 46, 0.2);
+}
+
+.portal-profile-avatar-image {
+  object-fit: cover;
+}
+
+.portal-profile-avatar-fallback {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font: 800 1.1rem/1 Manrope, sans-serif;
+  letter-spacing: 0.04em;
+  background: linear-gradient(140deg, rgba(200, 16, 46, 0.85), rgba(143, 15, 36, 0.88));
+}
+
+.portal-profile-photo-btn {
+  padding: 0.45rem 0.72rem;
+  font-size: 0.68rem;
+}
+
 .portal-profile-hero-main {
   display: grid;
   gap: 0.24rem;
