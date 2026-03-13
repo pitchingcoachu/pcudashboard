@@ -34,6 +34,8 @@ type GoalDraft = {
 
 type PhotoCropState = {
   sourceDataUrl: string;
+  imageWidth: number;
+  imageHeight: number;
   zoom: number;
   offsetX: number;
   offsetY: number;
@@ -133,20 +135,25 @@ async function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-async function renderCroppedProfilePhoto(input: {
-  sourceDataUrl: string;
-  zoom: number;
-  offsetX: number;
-  offsetY: number;
-}): Promise<string> {
-  const { sourceDataUrl, zoom, offsetX, offsetY } = input;
-
-  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+async function loadImageElement(sourceDataUrl: string): Promise<HTMLImageElement> {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('Could not load image.'));
     img.src = sourceDataUrl;
   });
+}
+
+async function renderCroppedProfilePhoto(input: {
+  sourceDataUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
+}): Promise<string> {
+  const { sourceDataUrl, imageWidth, imageHeight, zoom, offsetX, offsetY } = input;
+  const image = await loadImageElement(sourceDataUrl);
 
   const size = 512;
   const canvas = document.createElement('canvas');
@@ -156,10 +163,10 @@ async function renderCroppedProfilePhoto(input: {
   if (!ctx) throw new Error('Could not process image.');
 
   // Start from full/default framing (entire image visible), then let user zoom in.
-  const baseScale = Math.min(size / image.width, size / image.height);
+  const baseScale = Math.min(size / imageWidth, size / imageHeight);
   const drawScale = baseScale * Math.max(1, zoom);
-  const drawWidth = image.width * drawScale;
-  const drawHeight = image.height * drawScale;
+  const drawWidth = imageWidth * drawScale;
+  const drawHeight = imageHeight * drawScale;
   const drawX = (size - drawWidth) / 2 + offsetX;
   const drawY = (size - drawHeight) / 2 + offsetY;
 
@@ -374,6 +381,12 @@ export default function ProfileDashboard({
     baseX: number;
     baseY: number;
   } | null>(null);
+  const pinchRef = useRef<{
+    active: boolean;
+    startDistance: number;
+    startZoom: number;
+  } | null>(null);
+  const pointerMapRef = useRef<Map<number, { x: number; y: number }>>(new Map());
 
   const [weightDate, setWeightDate] = useState(todayIsoDate());
   const [weightValue, setWeightValue] = useState('');
@@ -748,8 +761,20 @@ export default function ProfileDashboard({
 
     event.target.value = '';
     if (!dataUrl) return;
+    const image = await loadImageElement(dataUrl).catch((error) => {
+      setPhotoMessage(error instanceof Error ? error.message : 'Could not load selected image.');
+      return null;
+    });
+    if (!image) return;
     setPhotoMessage('');
-    setPhotoCropState({ sourceDataUrl: dataUrl, zoom: 1, offsetX: 0, offsetY: 0 });
+    setPhotoCropState({
+      sourceDataUrl: dataUrl,
+      imageWidth: image.naturalWidth || image.width,
+      imageHeight: image.naturalHeight || image.height,
+      zoom: 1,
+      offsetX: 0,
+      offsetY: 0,
+    });
   };
 
   const saveCroppedPhoto = async () => {
@@ -772,6 +797,23 @@ export default function ProfileDashboard({
 
   const onCropPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!photoCropState) return;
+    pointerMapRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointerMapRef.current.size === 2) {
+      const points = Array.from(pointerMapRef.current.values());
+      const dx = points[1].x - points[0].x;
+      const dy = points[1].y - points[0].y;
+      pinchRef.current = {
+        active: true,
+        startDistance: Math.hypot(dx, dy),
+        startZoom: photoCropState.zoom,
+      };
+      photoDragRef.current = null;
+      setPhotoDragging(false);
+    }
+    if (pointerMapRef.current.size > 1) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
     photoDragRef.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -784,6 +826,19 @@ export default function ProfileDashboard({
   };
 
   const onCropPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (pointerMapRef.current.has(event.pointerId)) {
+      pointerMapRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+    if (pinchRef.current?.active && photoCropState && pointerMapRef.current.size >= 2) {
+      const points = Array.from(pointerMapRef.current.values());
+      const dx = points[1].x - points[0].x;
+      const dy = points[1].y - points[0].y;
+      const distance = Math.hypot(dx, dy);
+      const ratio = pinchRef.current.startDistance > 0 ? distance / pinchRef.current.startDistance : 1;
+      const nextZoom = Math.min(4, Math.max(1, pinchRef.current.startZoom * ratio));
+      setPhotoCropState((prev) => (prev ? { ...prev, zoom: nextZoom } : prev));
+      return;
+    }
     const drag = photoDragRef.current;
     if (!drag || !photoCropState || drag.pointerId !== event.pointerId) return;
     const dx = event.clientX - drag.startX;
@@ -792,13 +847,15 @@ export default function ProfileDashboard({
   };
 
   const onCropPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    pointerMapRef.current.delete(event.pointerId);
+    if (pointerMapRef.current.size < 2) pinchRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
     const drag = photoDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     photoDragRef.current = null;
     setPhotoDragging(false);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
   };
 
   const gradYearValue = profile.gradYear.trim();
@@ -1416,28 +1473,18 @@ export default function ProfileDashboard({
                   position: 'absolute',
                   left: '50%',
                   top: '50%',
+                  width: `${photoCropState.imageWidth * Math.min(260 / photoCropState.imageWidth, 260 / photoCropState.imageHeight)}px`,
+                  height: `${photoCropState.imageHeight * Math.min(260 / photoCropState.imageWidth, 260 / photoCropState.imageHeight)}px`,
                   transform: `translate(calc(-50% + ${photoCropState.offsetX}px), calc(-50% + ${photoCropState.offsetY}px)) scale(${photoCropState.zoom})`,
                   transformOrigin: 'center center',
                   maxWidth: 'none',
+                  maxHeight: 'none',
                 }}
               />
             </div>
             <p className="portal-muted-text" style={{ textAlign: 'center' }}>
-              Drag to reposition. Use zoom for tighter crop.
+              Drag to reposition. Pinch with two fingers to zoom.
             </p>
-            <label className="portal-inline-filter">
-              Zoom
-              <input
-                type="range"
-                min="1"
-                max="3"
-                step="0.01"
-                value={photoCropState.zoom}
-                onChange={(event) =>
-                  setPhotoCropState((prev) => (prev ? { ...prev, zoom: Number(event.target.value) } : prev))
-                }
-              />
-            </label>
             <div className="portal-choice-line-actions">
               <button type="button" className="btn btn-ghost" onClick={() => setPhotoCropState(null)} disabled={photoUploading}>
                 Cancel
