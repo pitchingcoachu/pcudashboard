@@ -17,7 +17,7 @@ export async function POST(request: Request) {
       return NextResponse.redirect(new URL('/login', request.url), 303);
     }
 
-    if ((session.role ?? 'admin') !== 'admin') {
+    if ((session.role ?? 'admin') !== 'admin' && (session.role ?? 'admin') !== 'coach') {
       return NextResponse.redirect(new URL('/portal/player', request.url), 303);
     }
 
@@ -35,9 +35,20 @@ export async function POST(request: Request) {
     const schoolTeam = String(form.get('schoolTeam') ?? '');
     const phone = String(form.get('phone') ?? '');
     const collegeCommitment = String(form.get('collegeCommitment') ?? '');
+    const gradYear = String(form.get('gradYear') ?? '');
+    const position = String(form.get('position') ?? '');
+    const height = String(form.get('height') ?? '');
+    const profileWeightRaw = Number(String(form.get('profileWeightLbs') ?? ''));
+    const profileWeightLbs = Number.isFinite(profileWeightRaw) && profileWeightRaw > 0 ? profileWeightRaw : undefined;
     const batsHand = String(form.get('batsHand') ?? '');
     const throwsHand = String(form.get('throwsHand') ?? '');
-    const assignedCoachUserId = Number(String(form.get('assignedCoachUserId') ?? '0'));
+    const assignedCoachUserIdFromForm = Number(String(form.get('assignedCoachUserId') ?? '0'));
+    const assignedCoachUserId =
+      session.role === 'coach'
+        ? session.userId ?? undefined
+        : Number.isFinite(assignedCoachUserIdFromForm) && assignedCoachUserIdFromForm > 0
+          ? assignedCoachUserIdFromForm
+          : undefined;
 
     const result = await createClientWithLogin({
       organizationId,
@@ -48,9 +59,13 @@ export async function POST(request: Request) {
       schoolTeam,
       phone,
       collegeCommitment,
+      gradYear,
+      position,
+      height,
+      profileWeightLbs,
       batsHand,
       throwsHand,
-      assignedCoachUserId: Number.isFinite(assignedCoachUserId) && assignedCoachUserId > 0 ? assignedCoachUserId : undefined,
+      assignedCoachUserId,
     });
 
     if (!result.ok) {

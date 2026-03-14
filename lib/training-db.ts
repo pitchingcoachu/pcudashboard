@@ -426,6 +426,10 @@ export async function createClientWithLogin(input: {
   schoolTeam?: string;
   phone?: string;
   collegeCommitment?: string;
+  gradYear?: string;
+  position?: string;
+  height?: string;
+  profileWeightLbs?: number;
   batsHand?: string;
   throwsHand?: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -442,6 +446,10 @@ export async function createClientWithLogin(input: {
   const assignedCoachUserId =
     Number.isFinite(Number(input.assignedCoachUserId ?? 0)) && Number(input.assignedCoachUserId ?? 0) > 0
       ? Number(input.assignedCoachUserId)
+      : null;
+  const profileWeightLbs =
+    Number.isFinite(Number(input.profileWeightLbs ?? NaN)) && Number(input.profileWeightLbs ?? NaN) > 0
+      ? Number(input.profileWeightLbs)
       : null;
 
   const client = await pool.connect();
@@ -496,9 +504,24 @@ export async function createClientWithLogin(input: {
     await client.query(
       `
         INSERT INTO players (
-          organization_id, user_id, full_name, email, date_of_birth, school_team, phone, college_commitment, bats_hand, throws_hand, assigned_coach_user_id, status
+          organization_id,
+          user_id,
+          full_name,
+          email,
+          date_of_birth,
+          school_team,
+          phone,
+          college_commitment,
+          grad_year,
+          position,
+          height,
+          profile_weight_lbs,
+          bats_hand,
+          throws_hand,
+          assigned_coach_user_id,
+          status
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'active')
       `,
       [
         input.organizationId,
@@ -509,6 +532,10 @@ export async function createClientWithLogin(input: {
         (input.schoolTeam ?? '').trim() || null,
         (input.phone ?? '').trim() || null,
         (input.collegeCommitment ?? '').trim() || null,
+        (input.gradYear ?? '').trim() || null,
+        (input.position ?? '').trim() || null,
+        (input.height ?? '').trim() || null,
+        profileWeightLbs,
         (input.batsHand ?? '').trim() || null,
         (input.throwsHand ?? '').trim() || null,
         assignedCoachUserId,

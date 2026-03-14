@@ -24,7 +24,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/portal/admin" className="portal-nav-link">
               Admin Home
             </Link>
-            {session.role === 'admin' && (
+            {(session.role === 'admin' || session.role === 'coach') && (
               <Link href="/portal/admin/clients" className="portal-nav-link">
                 Clients
               </Link>
@@ -51,7 +51,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             loggedInAs={session.name ?? session.email}
             items={[
               { href: '/portal/admin', label: 'Admin Home' },
-              ...(session.role === 'admin' ? [{ href: '/portal/admin/clients', label: 'Clients' }] : []),
+              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin/clients', label: 'Clients' }] : []),
               ...(session.role === 'admin' ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
               { href: '/portal/admin/exercises', label: 'Exercise Library' },
               { href: '/portal/admin/workouts', label: 'Workouts' },

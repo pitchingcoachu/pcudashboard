@@ -866,8 +866,8 @@ export default function ProfileDashboard({
     gradYearValue && positionValue ? `${gradYearValue} ${positionValue}` : gradYearValue || positionValue || '';
   const heroHeightWeightLine =
     heightValue && roundedWeight !== null
-      ? `${heightValue} ${roundedWeight} lbs.`
-      : heightValue || (roundedWeight !== null ? `${roundedWeight} lbs.` : '');
+      ? `${heightValue} ${roundedWeight} lbs`
+      : heightValue || (roundedWeight !== null ? `${roundedWeight} lbs` : '');
   const heroCommitLine = profile.collegeCommitment.trim() ? `${profile.collegeCommitment.trim()} Commit` : '';
 
   return (

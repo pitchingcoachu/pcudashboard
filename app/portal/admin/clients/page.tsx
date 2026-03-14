@@ -15,7 +15,7 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 
 export default async function AdminClientsPage({ searchParams }: ClientPageProps) {
   const session = await requirePortalSession();
-  if (session.role !== 'admin') notFound();
+  if (session.role === 'player') notFound();
 
   const [clients, coaches] = await Promise.all([
     listClientsByOrganization(session.organizationId),
@@ -27,6 +27,7 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
   const coachFilter = typeof params.coach === 'string' ? params.coach.trim() : '';
   const coachFilterId = Number(coachFilter);
   const visibleClients = clients.filter((client) => {
+    const matchesRole = session.role === 'coach' ? client.assignedCoachUserId === (session.userId ?? 0) : true;
     const matchesCoach = !coachFilter
       ? true
       : Number.isFinite(coachFilterId) && coachFilterId > 0
@@ -35,7 +36,7 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
     const matchesQuery = !query
       ? true
       : [client.fullName, client.email, client.assignedCoachName ?? ''].join(' ').toLowerCase().includes(query);
-    return matchesCoach && matchesQuery;
+    return matchesRole && matchesCoach && matchesQuery;
   });
 
   return (
@@ -74,6 +75,22 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
             <input name="collegeCommitment" />
           </label>
           <label>
+            Grad Year
+            <input name="gradYear" />
+          </label>
+          <label>
+            Position
+            <input name="position" />
+          </label>
+          <label>
+            Height
+            <input name="height" placeholder={`6'2"`} />
+          </label>
+          <label>
+            Profile Weight (lbs)
+            <input name="profileWeightLbs" type="number" min={1} step={1} />
+          </label>
+          <label>
             Bats
             <select name="batsHand" defaultValue="">
               <option value="">-</option>
@@ -92,14 +109,21 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
           </label>
           <label>
             Assigned Coach
-            <select name="assignedCoachUserId" defaultValue="">
-              <option value="">Unassigned</option>
-              {coaches.map((coach) => (
-                <option key={coach.userId} value={String(coach.userId)}>
-                  {coach.name} ({coach.role})
-                </option>
-              ))}
-            </select>
+            {session.role === 'coach' ? (
+              <>
+                <input value={session.name ?? session.email} readOnly />
+                <input type="hidden" name="assignedCoachUserId" value={String(session.userId ?? '')} />
+              </>
+            ) : (
+              <select name="assignedCoachUserId" defaultValue="">
+                <option value="">Unassigned</option>
+                {coaches.map((coach) => (
+                  <option key={coach.userId} value={String(coach.userId)}>
+                    {coach.name} ({coach.role})
+                  </option>
+                ))}
+              </select>
+            )}
           </label>
           <label>
             Temporary Password
