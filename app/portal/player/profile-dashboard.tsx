@@ -23,7 +23,7 @@ type ExerciseTrendPoint = {
   averageLoad: number;
 };
 
-const PLAN_GOAL_CATEGORIES = ['Mechanical', 'Stuff', 'Command', 'Mental Side', 'Strength', 'Mobility'] as const;
+const PLAN_GOAL_CATEGORIES = ['Mechanical', 'Stuff', 'Command', 'Mental Side', 'Strength', 'Mobility', 'Weight'] as const;
 
 type GoalDraft = {
   slotIndex: 1 | 2 | 3;
