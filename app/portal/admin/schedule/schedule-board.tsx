@@ -31,10 +31,12 @@ type CopiedPlanBuffer = {
 };
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low'; label: string }> = [
+const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c'; label: string }> = [
   { key: 'medium', label: 'Medium' },
   { key: 'high', label: 'High' },
   { key: 'low', label: 'Low' },
+  { key: 'mobility', label: 'Mobility' },
+  { key: 's_and_c', label: 'S&C' },
 ];
 
 function toIsoDate(date: Date): string {
@@ -269,7 +271,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     }
   };
 
-  const assignCycleWorkout = async (cycleSlot: 'medium' | 'high' | 'low', workoutId: number) => {
+  const assignCycleWorkout = async (cycleSlot: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c', workoutId: number) => {
     if (!playerId) return;
     setError('');
     try {
@@ -286,7 +288,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     }
   };
 
-  const moveCycleItem = async (itemId: number, cycleSlot: 'medium' | 'high' | 'low') => {
+  const moveCycleItem = async (itemId: number, cycleSlot: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c') => {
     if (!playerId) return;
     setError('');
     try {
@@ -494,7 +496,13 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   }, [workouts]);
 
   const cycleItemsBySlot = useMemo(() => {
-    const map: Record<'medium' | 'high' | 'low', ProgramItemRow[]> = { medium: [], high: [], low: [] };
+    const map: Record<'medium' | 'high' | 'low' | 'mobility' | 's_and_c', ProgramItemRow[]> = {
+      medium: [],
+      high: [],
+      low: [],
+      mobility: [],
+      s_and_c: [],
+    };
     for (const item of items) {
       if (item.scheduleType !== 'cycle') continue;
       const slot = item.cycleSlot;
@@ -504,7 +512,10 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     return map;
   }, [items]);
 
-  const onCycleDrop = async (event: React.DragEvent<HTMLElement>, cycleSlot: 'medium' | 'high' | 'low') => {
+  const onCycleDrop = async (
+    event: React.DragEvent<HTMLElement>,
+    cycleSlot: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c'
+  ) => {
     event.preventDefault();
     const cycleItemId = Number(event.dataTransfer.getData('cycleItemId'));
     if (Number.isFinite(cycleItemId) && cycleItemId > 0) {

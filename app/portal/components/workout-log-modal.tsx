@@ -72,6 +72,12 @@ function dateTitle(value: string): string {
   return `${month}/${day}/${year}`;
 }
 
+function cycleSlotLabel(value: string | null): string {
+  if (!value) return '';
+  if (value === 's_and_c') return 'S&C';
+  return value[0].toUpperCase() + value.slice(1).replaceAll('_', ' ');
+}
+
 function formatLoadNumber(value: number): string {
   if (Number.isInteger(value)) return String(value);
   return value.toFixed(1).replace(/\.0$/, '');
@@ -223,7 +229,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
         )}
         <p className="portal-muted-text" style={{ fontStyle: 'italic' }}>
           {isCycleItem
-            ? `3-Day Cycle${item.cycleSlot ? ` - ${item.cycleSlot[0].toUpperCase()}${item.cycleSlot.slice(1)}` : ''}`
+            ? `3-Day Cycle${item.cycleSlot ? ` - ${cycleSlotLabel(item.cycleSlot)}` : ''}`
             : dateTitle(item.dayDate)}
         </p>
 

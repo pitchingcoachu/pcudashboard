@@ -147,7 +147,7 @@ export type ProgramItemRow = {
   itemId: number;
   dayDate: string;
   scheduleType: 'calendar' | 'cycle';
-  cycleSlot: 'medium' | 'high' | 'low' | null;
+  cycleSlot: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c' | null;
   itemType: 'exercise' | 'workout';
   itemName: string;
   workoutDescription: string | null;
@@ -231,9 +231,10 @@ function normalizeCategoryName(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-function normalizeCycleSlot(value: string): 'medium' | 'high' | 'low' | null {
+function normalizeCycleSlot(value: string): 'medium' | 'high' | 'low' | 'mobility' | 's_and_c' | null {
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'medium' || normalized === 'high' || normalized === 'low') return normalized;
+  if (normalized === 'medium' || normalized === 'high' || normalized === 'low' || normalized === 'mobility') return normalized;
+  if (normalized === 's&c' || normalized === 's_and_c' || normalized === 's-c' || normalized === 'sc') return 's_and_c';
   return null;
 }
 
@@ -1815,7 +1816,7 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
 
   const result = await pool.query<{
     item_id: number;
-    cycle_slot: 'medium' | 'high' | 'low';
+    cycle_slot: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c';
     workout_id: number;
     workout_name: string;
     workout_category: string | null;
@@ -1875,7 +1876,9 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
           WHEN 'medium' THEN 1
           WHEN 'high' THEN 2
           WHEN 'low' THEN 3
-          ELSE 4
+          WHEN 'mobility' THEN 4
+          WHEN 's_and_c' THEN 5
+          ELSE 6
         END ASC,
         ci.sort_order ASC,
         ci.id ASC
@@ -1934,7 +1937,7 @@ export async function addCycleWorkoutAssignment(input: {
   const pool = getDbPool();
 
   const slot = normalizeCycleSlot(input.cycleSlot);
-  if (!slot) return { ok: false, error: 'Cycle slot must be medium, high, or low.' };
+  if (!slot) return { ok: false, error: 'Cycle slot must be medium, high, low, mobility, or s_and_c.' };
 
   const workout = await pool.query<{ id: number }>(
     `
@@ -1980,10 +1983,10 @@ export async function moveCycleProgramItem(input: {
   const pool = getDbPool();
 
   const slot = normalizeCycleSlot(input.targetSlot);
-  if (!slot) return { ok: false, error: 'Cycle slot must be medium, high, or low.' };
+  if (!slot) return { ok: false, error: 'Cycle slot must be medium, high, low, mobility, or s_and_c.' };
   if (!Number.isFinite(input.itemId) || input.itemId <= 0) return { ok: false, error: 'Valid itemId is required.' };
 
-  const existing = await pool.query<{ id: number; cycle_slot: 'medium' | 'high' | 'low' }>(
+  const existing = await pool.query<{ id: number; cycle_slot: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c' }>(
     `
       SELECT id, cycle_slot
       FROM program_cycle_items

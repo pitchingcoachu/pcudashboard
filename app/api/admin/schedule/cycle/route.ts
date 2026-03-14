@@ -9,9 +9,10 @@ import {
 } from '../../../../../lib/training-db';
 import { canManagePlayer } from '../../../../../lib/portal-access';
 
-function parseCycleSlot(value: string): 'medium' | 'high' | 'low' | null {
+function parseCycleSlot(value: string): 'medium' | 'high' | 'low' | 'mobility' | 's_and_c' | null {
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'medium' || normalized === 'high' || normalized === 'low') return normalized;
+  if (normalized === 'medium' || normalized === 'high' || normalized === 'low' || normalized === 'mobility') return normalized;
+  if (normalized === 's&c' || normalized === 's_and_c' || normalized === 's-c' || normalized === 'sc') return 's_and_c';
   return null;
 }
 

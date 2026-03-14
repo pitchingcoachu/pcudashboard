@@ -15,10 +15,12 @@ type PlayerCalendarProps = {
 };
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low'; label: string }> = [
+const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c'; label: string }> = [
   { key: 'medium', label: 'Medium' },
   { key: 'high', label: 'High' },
   { key: 'low', label: 'Low' },
+  { key: 'mobility', label: 'Mobility' },
+  { key: 's_and_c', label: 'S&C' },
 ];
 
 function toIsoDate(date: Date): string {

@@ -419,13 +419,42 @@ export async function ensureAuthDbReady(): Promise<void> {
       id SERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
       player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-      cycle_slot TEXT NOT NULL CHECK (cycle_slot IN ('medium', 'high', 'low')),
+      cycle_slot TEXT NOT NULL CHECK (cycle_slot IN ('medium', 'high', 'low', 'mobility', 's_and_c')),
       workout_id INTEGER NOT NULL REFERENCES workout_library(id) ON DELETE CASCADE,
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_by INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  await pool.query(`
+    DO $$
+    DECLARE
+      constraint_name text;
+    BEGIN
+      SELECT con.conname
+      INTO constraint_name
+      FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+      WHERE nsp.nspname = 'public'
+        AND rel.relname = 'program_cycle_items'
+        AND con.contype = 'c'
+        AND pg_get_constraintdef(con.oid) LIKE '%cycle_slot%'
+      LIMIT 1;
+
+      IF constraint_name IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE public.program_cycle_items DROP CONSTRAINT %I', constraint_name);
+      END IF;
+
+      ALTER TABLE public.program_cycle_items
+      ADD CONSTRAINT program_cycle_items_cycle_slot_check
+      CHECK (cycle_slot IN ('medium', 'high', 'low', 'mobility', 's_and_c'));
+    EXCEPTION
+      WHEN duplicate_object THEN
+        NULL;
+    END $$;
   `);
 
   await pool.query(`
