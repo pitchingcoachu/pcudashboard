@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveDashboardPlayerIdentity, selectScopedPlayerName } from '../../../../../lib/dashboard-player-scope';
-import { filterNamesByAllowed, loadRosterVectorsFromConfig } from '../../../../../lib/dashboard-roster-config';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 export async function GET() {
@@ -46,14 +45,7 @@ export async function GET() {
     if (result.status < 200 || result.status >= 300) {
       return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
     }
-    const roster = loadRosterVectorsFromConfig(schoolCode);
     const payload = result.payload as Record<string, unknown>;
-    if (roster && Array.isArray(payload.hitters)) {
-      payload.hitters = filterNamesByAllowed(
-        payload.hitters.map((value) => String(value ?? '').trim()),
-        roster.allowedHitters
-      );
-    }
     if (playerIdentity && Array.isArray(payload.hitters)) {
       const scoped = selectScopedPlayerName(payload.hitters, playerIdentity);
       payload.hitters = scoped ? [scoped] : [];

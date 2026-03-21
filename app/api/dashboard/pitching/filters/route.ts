@@ -3,8 +3,21 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveDashboardPlayerIdentity, selectScopedPlayerName } from '../../../../../lib/dashboard-player-scope';
-import { appendRosterNames, filterNamesByAllowed, loadRosterVectorsFromConfig, schoolRosterAdditions } from '../../../../../lib/dashboard-roster-config';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
+
+function uniqueNames(values: string[]): string[] {
+  return Array.from(new Set(values.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
+}
+
+function schoolRosterAdditions(schoolCode: string): { pitchers: string[] } {
+  const upper = String(schoolCode ?? '').trim().toUpperCase();
+  if (upper === 'PCU') {
+    return {
+      pitchers: ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry'],
+    };
+  }
+  return { pitchers: [] };
+}
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -46,17 +59,13 @@ export async function GET() {
     if (result.status < 200 || result.status >= 300) {
       return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
     }
-    const roster = loadRosterVectorsFromConfig(schoolCode);
     const payload = result.payload as Record<string, unknown>;
     const additions = schoolRosterAdditions(schoolCode);
-    if (roster && Array.isArray(payload.pitchers)) {
-      payload.pitchers = appendRosterNames(
-        filterNamesByAllowed(
-          payload.pitchers.map((value) => String(value ?? '').trim()),
-          roster.allowedPitchers
-        ),
-        additions.pitchers
-      );
+    if (Array.isArray(payload.pitchers) && additions.pitchers.length > 0) {
+      payload.pitchers = uniqueNames([
+        ...payload.pitchers.map((value) => String(value ?? '').trim()),
+        ...additions.pitchers,
+      ]);
     }
     if (playerIdentity && Array.isArray(payload.pitchers)) {
       const scoped = selectScopedPlayerName(payload.pitchers, playerIdentity);

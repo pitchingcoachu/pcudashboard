@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlayerName } from '../../../../../lib/dashboard-player-scope';
-import { filterNamesByAllowed, loadRosterVectorsFromConfig } from '../../../../../lib/dashboard-roster-config';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching';
@@ -44,19 +43,6 @@ export async function GET(request: Request) {
   }
 
   try {
-    const roster = loadRosterVectorsFromConfig(schoolCode);
-    if (roster) {
-      const players = domain === 'Pitching' ? roster.allowedPitchers : roster.allowedHitters;
-      if (players.length) {
-        const uniqueRoster = uniqueNames(players);
-        if (playerIdentity) {
-          const scopedRoster = selectScopedPlayerName(uniqueRoster, playerIdentity);
-          return NextResponse.json({ players: scopedRoster ? [scopedRoster] : [] });
-        }
-        return NextResponse.json({ players: uniqueRoster });
-      }
-    }
-
     if (domain === 'Hitting') {
       const filtersUrl = new URL(`${apiBase}/v1/hitting/filters`);
       filtersUrl.searchParams.set('school_code', schoolCode);
@@ -69,7 +55,7 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
       }
       const hitterPool = uniqueNames(Array.isArray(result.payload.hitters) ? result.payload.hitters : []);
-      const hitters = roster ? filterNamesByAllowed(hitterPool, roster.allowedHitters) : hitterPool;
+      const hitters = hitterPool;
       if (!playerIdentity) return NextResponse.json({ players: hitters });
       const scoped = selectScopedPlayerName(hitters, playerIdentity);
       if (scoped) return NextResponse.json({ players: [scoped] });
@@ -97,17 +83,8 @@ export async function GET(request: Request) {
         .filter((name: string) => name && name !== 'All')
     );
     if (splitNames.length) {
-      if (!roster) {
-        if (!playerIdentity) return NextResponse.json({ players: splitNames });
-        const scoped = selectScopedPlayerName(splitNames, playerIdentity);
-        if (scoped) return NextResponse.json({ players: [scoped] });
-        const fallback = scopedPlayerQueryName(playerIdentity, domain);
-        return NextResponse.json({ players: fallback ? [fallback] : [] });
-      }
-      const allowed = domain === 'Pitching' ? roster.allowedPitchers : roster.allowedHitters;
-      const filtered = filterNamesByAllowed(splitNames, allowed);
-      if (!playerIdentity) return NextResponse.json({ players: filtered });
-      const scoped = selectScopedPlayerName(filtered, playerIdentity);
+      if (!playerIdentity) return NextResponse.json({ players: splitNames });
+      const scoped = selectScopedPlayerName(splitNames, playerIdentity);
       if (scoped) return NextResponse.json({ players: [scoped] });
       const fallback = scopedPlayerQueryName(playerIdentity, domain);
       return NextResponse.json({ players: fallback ? [fallback] : [] });
@@ -118,17 +95,8 @@ export async function GET(request: Request) {
         domain === 'Pitching' ? String(row?.pitcher ?? '').trim() : String(row?.catcher ?? '').trim()
       )
     );
-    if (!roster) {
-      if (!playerIdentity) return NextResponse.json({ players: pointNames });
-      const scoped = selectScopedPlayerName(pointNames, playerIdentity);
-      if (scoped) return NextResponse.json({ players: [scoped] });
-      const fallback = scopedPlayerQueryName(playerIdentity, domain);
-      return NextResponse.json({ players: fallback ? [fallback] : [] });
-    }
-    const allowed = domain === 'Pitching' ? roster.allowedPitchers : roster.allowedHitters;
-    const filtered = filterNamesByAllowed(pointNames, allowed);
-    if (!playerIdentity) return NextResponse.json({ players: filtered });
-    const scoped = selectScopedPlayerName(filtered, playerIdentity);
+    if (!playerIdentity) return NextResponse.json({ players: pointNames });
+    const scoped = selectScopedPlayerName(pointNames, playerIdentity);
     if (scoped) return NextResponse.json({ players: [scoped] });
     const fallback = scopedPlayerQueryName(playerIdentity, domain);
     return NextResponse.json({ players: fallback ? [fallback] : [] });
