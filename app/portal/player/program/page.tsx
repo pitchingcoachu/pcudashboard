@@ -8,6 +8,7 @@ import {
   listClientsByOrganization,
   listProgramItemsForPlayerByMonth,
 } from '../../../../lib/training-db';
+import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import MobileNavSelect from '../../mobile-nav-select';
 import PreviewAthleteSelect from '../../preview-athlete-select';
 import LogoutButton from '../../logout-button';
@@ -49,6 +50,11 @@ function monthRange(month: string): { startDate: string; endDate: string } {
 
 export default async function PlayerProgramPage({ searchParams }: PlayerProgramPageProps) {
   const session = await requirePortalSession();
+  if (session.role === 'player' && !canUseProgrammingData(session)) {
+    redirect('/portal/dashboard');
+  }
+  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const params = await searchParams;
   const previewPlayerIdRaw = typeof params.previewPlayerId === 'string' ? params.previewPlayerId : '';
   const previewSelf = typeof params.preview === 'string' ? params.preview === 'self' : false;
@@ -72,10 +78,53 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
 
   if (session.role === 'player') {
     const ownPlayer = await getPlayerForUser({
-      organizationId: session.organizationId,
+      organizationId: programmingOrganizationId,
       userId: session.userId,
     });
     effectivePlayerId = ownPlayer?.id ?? session.playerId;
+  }
+
+  if (programmingOrganizationId <= 0) {
+    return (
+      <div className="portal-shell">
+        <header className="portal-header">
+          <div className="portal-header-left">
+            <Link href="/portal/player" className="portal-header-logo-link" aria-label="PCU Home">
+              <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
+            </Link>
+          </div>
+          <div className="portal-header-center">
+            <nav className="portal-nav" aria-label="Portal Navigation">
+              {(session.role === 'admin' || session.role === 'coach') && (
+                <Link href="/portal/admin" className="portal-nav-link">
+                  Admin
+                </Link>
+              )}
+              <Link href="/portal/player" className="portal-nav-link">
+                Profile
+              </Link>
+              <Link href="/portal/player/program" className="portal-nav-link active">
+                Program
+              </Link>
+              <Link href="/portal/dashboard" className="portal-nav-link">
+                PCU Dashboard
+              </Link>
+            </nav>
+          </div>
+          <div className="portal-header-right">
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+            <LogoutButton />
+          </div>
+        </header>
+        <section className="portal-panel">
+          <h2>Programming Data</h2>
+          <p>No programming data is configured for {programmingSchoolCode} yet.</p>
+        </section>
+      </div>
+    );
   }
 
   if (!effectivePlayerId) {
@@ -137,7 +186,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
   }
 
   const [player, items] = await Promise.all([
-    getPlayerByIdInOrganization({ organizationId: session.organizationId, playerId: effectivePlayerId }),
+    getPlayerByIdInOrganization({ organizationId: programmingOrganizationId, playerId: effectivePlayerId }),
     listProgramItemsForPlayerByMonth({ playerId: effectivePlayerId, month }),
   ]);
 
@@ -147,7 +196,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
 
   const previewClients =
     session.role === 'admin' || session.role === 'coach'
-      ? (await listClientsByOrganization(session.organizationId)).filter(
+      ? (await listClientsByOrganization(programmingOrganizationId)).filter(
           (client) => session.role === 'admin' || client.assignedCoachUserId === session.userId
         )
       : [];

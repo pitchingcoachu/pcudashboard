@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
+import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import {
   completePlayerPlanGoal,
@@ -17,8 +18,9 @@ async function resolveAllowedPlayerId(
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
 
   if (session.role === 'player') {
+    const organizationId = resolveProgrammingOrganizationId(session);
     const ownPlayer = await getPlayerForUser({
-      organizationId: session.organizationId ?? 0,
+      organizationId,
       userId: session.userId ?? 0,
     });
     const allowed = ownPlayer?.id ?? session.playerId ?? 0;
@@ -31,8 +33,9 @@ async function resolveAllowedPlayerId(
     requestedPlayerId
   );
   if (!allowed) return { ok: false as const, status: 403, error: 'Forbidden' };
+  const organizationId = resolveProgrammingOrganizationId(session);
   const player = await getPlayerByIdInOrganization({
-    organizationId: session.organizationId ?? 0,
+    organizationId,
     playerId: requestedPlayerId,
   });
   if (!player) return { ok: false as const, status: 404, error: 'Player not found.' };
@@ -77,7 +80,7 @@ export async function POST(request: Request) {
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
   const result = await upsertPlayerPlanGoal({
-    organizationId: session.organizationId ?? 0,
+    organizationId: resolveProgrammingOrganizationId(session),
     playerId: allowed.playerId,
     slotIndex,
     category,
@@ -109,7 +112,7 @@ export async function PATCH(request: Request) {
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
   const result = await completePlayerPlanGoal({
-    organizationId: session.organizationId ?? 0,
+    organizationId: resolveProgrammingOrganizationId(session),
     playerId: allowed.playerId,
     slotIndex,
     completionDetails,

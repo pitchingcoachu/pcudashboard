@@ -5,6 +5,7 @@ import {
   getExerciseByIdInOrganization,
   listExerciseCategoriesByOrganization,
 } from '../../../../../lib/training-db';
+import { resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
 
 type EditExercisePageProps = {
   params: Promise<{ exerciseId: string }>;
@@ -19,14 +20,26 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 export default async function EditExercisePage({ params, searchParams }: EditExercisePageProps) {
   const session = await requirePortalSession();
   if (session.role === 'player') notFound();
+  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingSchoolCode = resolveProgrammingSchoolCode(session);
+  if (programmingOrganizationId <= 0) {
+    return (
+      <div className="portal-admin-stack">
+        <article className="portal-admin-card">
+          <h3>Programming Data</h3>
+          <p>No programming data is configured for {programmingSchoolCode} yet.</p>
+        </article>
+      </div>
+    );
+  }
 
   const { exerciseId: rawExerciseId } = await params;
   const exerciseId = Number(rawExerciseId);
   if (!Number.isFinite(exerciseId) || exerciseId <= 0) notFound();
 
   const [exercise, categories, query] = await Promise.all([
-    getExerciseByIdInOrganization({ organizationId: session.organizationId, exerciseId }),
-    listExerciseCategoriesByOrganization(session.organizationId),
+    getExerciseByIdInOrganization({ organizationId: programmingOrganizationId, exerciseId }),
+    listExerciseCategoriesByOrganization(programmingOrganizationId),
     searchParams,
   ]);
   if (!exercise) notFound();
@@ -70,6 +83,14 @@ export default async function EditExercisePage({ params, searchParams }: EditExe
               <option value="reps">Reps</option>
               <option value="seconds">Seconds</option>
               <option value="distance">Distance</option>
+            </select>
+          </label>
+          <label>
+            Tracking Type
+            <select name="trackingType" defaultValue={exercise.trackingType}>
+              <option value="lbs">lbs</option>
+              <option value="seconds">seconds</option>
+              <option value="inches">inches</option>
             </select>
           </label>
           <label className="portal-checkbox-label">

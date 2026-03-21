@@ -33,6 +33,7 @@ type SessionPayload = {
   role?: 'admin' | 'coach' | 'player';
   organizationId?: number;
   playerId?: number | null;
+  dashboardSchoolCode?: string | null;
   exp: number;
 };
 
@@ -189,6 +190,7 @@ export function verifySessionToken(token: string): SessionPayload | null {
     role: parsed.role === 'player' ? 'player' : parsed.role === 'coach' ? 'coach' : 'admin',
     organizationId: parsed.organizationId,
     playerId: parsed.playerId ?? null,
+    dashboardSchoolCode: typeof parsed.dashboardSchoolCode === 'string' ? parsed.dashboardSchoolCode.trim().toUpperCase() : null,
   };
   } catch {
     return null;

@@ -12,6 +12,7 @@ import {
   listPlayerPlanGoalsForPlayer,
   listProgramItemsForPlayerByDateRange,
 } from '../../../lib/training-db';
+import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../lib/programming-scope';
 import MobileNavSelect from '../mobile-nav-select';
 import PreviewAthleteSelect from '../preview-athlete-select';
 import LogoutButton from '../logout-button';
@@ -40,6 +41,12 @@ function addDays(value: string, days: number): string {
 
 export default async function PlayerPortalPage({ searchParams }: PlayerPageProps) {
   const session = await requirePortalSession();
+  const canAccessProgramming = canUseProgrammingData(session);
+  if (session.role === 'player' && !canAccessProgramming) {
+    redirect('/portal/dashboard');
+  }
+  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const params = await searchParams;
 
   const previewPlayerIdRaw = typeof params.previewPlayerId === 'string' ? params.previewPlayerId : '';
@@ -60,10 +67,55 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
 
   if (session.role === 'player') {
     const ownPlayer = await getPlayerForUser({
-      organizationId: session.organizationId,
+      organizationId: programmingOrganizationId,
       userId: session.userId,
     });
     effectivePlayerId = ownPlayer?.id ?? session.playerId;
+  }
+
+  if (programmingOrganizationId <= 0) {
+    return (
+      <div className="portal-shell">
+        <header className="portal-header">
+          <div className="portal-header-left">
+            <Link href="/portal/player" className="portal-header-logo-link" aria-label="PCU Home">
+              <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
+            </Link>
+          </div>
+          <div className="portal-header-center">
+            <nav className="portal-nav" aria-label="Portal Navigation">
+              {(session.role === 'admin' || session.role === 'coach') && (
+                <Link href="/portal/admin" className="portal-nav-link">
+                  Admin
+                </Link>
+              )}
+              <Link href="/portal/player" className="portal-nav-link active">
+                Profile
+              </Link>
+              {canAccessProgramming ? (
+                <Link href="/portal/player/program" className="portal-nav-link">
+                  Program
+                </Link>
+              ) : null}
+              <Link href="/portal/dashboard" className="portal-nav-link">
+                PCU Dashboard
+              </Link>
+            </nav>
+          </div>
+          <div className="portal-header-right">
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+            <LogoutButton />
+          </div>
+        </header>
+        <section className="portal-panel">
+          <h2>Programming Data</h2>
+          <p>No programming data is configured for {programmingSchoolCode} yet.</p>
+        </section>
+      </div>
+    );
   }
 
   if (!effectivePlayerId) {
@@ -80,7 +132,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
 
   const [player, todayItems, bodyWeightLogs, previewClients, coaches, assessmentScores, planGoals] = await Promise.all([
     getPlayerByIdInOrganization({
-      organizationId: session.organizationId,
+      organizationId: programmingOrganizationId,
       playerId: effectivePlayerId,
     }),
     listProgramItemsForPlayerByDateRange({
@@ -93,12 +145,12 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
       limit: 120,
     }),
     session.role === 'admin' || session.role === 'coach'
-      ? listClientsByOrganization(session.organizationId).then((clients) =>
+      ? listClientsByOrganization(programmingOrganizationId).then((clients) =>
           session.role === 'coach' ? clients.filter((client) => client.assignedCoachUserId === session.userId) : clients
         )
       : Promise.resolve([]),
     session.role === 'admin' || session.role === 'coach'
-      ? listCoachesByOrganization(session.organizationId)
+      ? listCoachesByOrganization(programmingOrganizationId)
       : Promise.resolve([]),
     listAssessmentWorkoutScoresForPlayer({ playerId: effectivePlayerId, limit: 240 }),
     listPlayerPlanGoalsForPlayer({ playerId: effectivePlayerId }),
@@ -138,9 +190,11 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             <Link href="/portal/player" className="portal-nav-link active">
               Profile
             </Link>
-            <Link href={fullProgramHref} className="portal-nav-link">
-              Program
-            </Link>
+            {canAccessProgramming ? (
+              <Link href={fullProgramHref} className="portal-nav-link">
+                Program
+              </Link>
+            ) : null}
             {session.role === 'player' ? (
               <Link href="/portal/dashboard" className="portal-nav-link">
                 PCU Dashboard
@@ -157,7 +211,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             items={[
               ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin' }] : []),
               { href: '/portal/player', label: 'Profile' },
-              { href: fullProgramHref, label: 'Program' },
+              ...(canAccessProgramming ? [{ href: fullProgramHref, label: 'Program' }] : []),
               ...(session.role === 'player'
                 ? [{ href: '/portal/dashboard', label: 'PCU Dashboard' }]
                 : [{ href: '/tutorials', label: 'Tutorials' }]),

@@ -67,6 +67,9 @@ export function CoachesTable({ coaches, clients, currentUserId }: Props) {
                       <span className="portal-muted-text">Current user</span>
                     ) : (
                       <>
+                        <Link className="btn btn-ghost as-link" href={`/portal/admin/coaches?edit=${coach.userId}`}>
+                          Edit
+                        </Link>
                         <form method="post" action="/api/admin/coaches/manage">
                           <input type="hidden" name="redirectTo" value="/portal/admin/coaches" />
                           <input type="hidden" name="staffUserId" value={String(coach.userId)} />

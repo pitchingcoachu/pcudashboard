@@ -2,6 +2,12 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requirePortalSession } from '../../../../lib/portal-session';
 import { listClientsByOrganization, listCoachesByOrganization } from '../../../../lib/training-db';
+import {
+  canUseClientManagement,
+  canUseProgrammingData,
+  resolveClientManagementOrganizationId,
+  resolveProgrammingSchoolCode,
+} from '../../../../lib/programming-scope';
 
 type ClientPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -16,10 +22,14 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 export default async function AdminClientsPage({ searchParams }: ClientPageProps) {
   const session = await requirePortalSession();
   if (session.role === 'player') notFound();
+  const canAccessClientManagement = canUseClientManagement(session);
+  const canAccessProgramming = canUseProgrammingData(session);
+  const clientManagementOrganizationId = resolveClientManagementOrganizationId(session);
+  const programmingSchoolCode = resolveProgrammingSchoolCode(session);
 
   const [clients, coaches] = await Promise.all([
-    listClientsByOrganization(session.organizationId),
-    listCoachesByOrganization(session.organizationId),
+    clientManagementOrganizationId > 0 ? listClientsByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
+    clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
   ]);
   const params = await searchParams;
   const { ok, error } = readMessage(params);
@@ -41,13 +51,20 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
 
   return (
     <div className="portal-admin-stack">
+      {!canAccessClientManagement || clientManagementOrganizationId <= 0 ? (
+        <article className="portal-admin-card">
+          <h3>Client Management</h3>
+          <p>Client login management is not enabled for {programmingSchoolCode}.</p>
+        </article>
+      ) : null}
       <div className="portal-admin-headline">
-        <h2>Client Management</h2>
+        <h2>Player Management</h2>
         <p>Add players, create logins, and launch their plans.</p>
       </div>
 
+      {canAccessClientManagement && clientManagementOrganizationId > 0 ? (
       <article className="portal-admin-card">
-        <h3>Add Client Login</h3>
+        <h3>Add Player Login</h3>
         <form method="post" action="/api/admin/clients" className="portal-form-grid">
           <input type="hidden" name="redirectTo" value="/portal/admin/clients" />
           <label>
@@ -130,15 +147,16 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
             <input name="password" type="text" minLength={8} required />
           </label>
           <button type="submit" className="btn btn-primary">
-            Add Client
+            Add Player
           </button>
         </form>
         {ok && <p className="auth-message">{ok}</p>}
         {error && <p className="auth-error">{error}</p>}
       </article>
+      ) : null}
 
       <article className="portal-admin-card">
-        <h3>Current Clients</h3>
+        <h3>Current Players</h3>
         <form method="get" className="portal-form-grid" style={{ marginBottom: '0.75rem' }}>
           <label>
             Search
@@ -165,7 +183,7 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
           </div>
         </form>
         {visibleClients.length === 0 ? (
-          <p>No clients yet.</p>
+          <p>No players yet.</p>
         ) : (
           <div className="portal-table-wrap">
             <table className="portal-table">
@@ -186,15 +204,48 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
                     <td>{client.assignedCoachName ?? '-'}</td>
                     <td>{client.status}</td>
                     <td className="portal-table-actions">
-                      <Link className="btn btn-ghost as-link" href={`/portal/admin/programs/${client.playerId}`}>
-                        Build Program
-                      </Link>
-                      <Link className="btn btn-ghost as-link" href={`/portal/player?previewPlayerId=${client.playerId}`}>
-                        View Profile
-                      </Link>
-                      <Link className="btn btn-ghost as-link" href={`/portal/player/program?previewPlayerId=${client.playerId}`}>
-                        Preview Program
-                      </Link>
+                      {canAccessProgramming ? (
+                        <>
+                          <Link className="btn btn-ghost as-link" href={`/portal/player?previewPlayerId=${client.playerId}`}>
+                            Edit Player
+                          </Link>
+                          <Link className="btn btn-ghost as-link" href={`/portal/admin/programs/${client.playerId}`}>
+                            Build Program
+                          </Link>
+                          <Link className="btn btn-ghost as-link" href={`/portal/player?previewPlayerId=${client.playerId}`}>
+                            View Profile
+                          </Link>
+                          <Link className="btn btn-ghost as-link" href={`/portal/player/program?previewPlayerId=${client.playerId}`}>
+                            Preview Program
+                          </Link>
+                          {session.role === 'admin' ? (
+                            <form method="post" action="/api/admin/clients/manage" style={{ display: 'inline' }}>
+                              <input type="hidden" name="redirectTo" value="/portal/admin/clients" />
+                              <input type="hidden" name="action" value="delete" />
+                              <input type="hidden" name="playerId" value={String(client.playerId)} />
+                              <button type="submit" className="btn btn-ghost">
+                                Delete Player
+                              </button>
+                            </form>
+                          ) : null}
+                        </>
+                      ) : (
+                        <>
+                          <Link className="btn btn-ghost as-link" href={`/portal/player?previewPlayerId=${client.playerId}`}>
+                            Edit Player
+                          </Link>
+                          {session.role === 'admin' ? (
+                            <form method="post" action="/api/admin/clients/manage" style={{ display: 'inline' }}>
+                              <input type="hidden" name="redirectTo" value="/portal/admin/clients" />
+                              <input type="hidden" name="action" value="delete" />
+                              <input type="hidden" name="playerId" value={String(client.playerId)} />
+                              <button type="submit" className="btn btn-ghost">
+                                Delete Player
+                              </button>
+                            </form>
+                          ) : null}
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}

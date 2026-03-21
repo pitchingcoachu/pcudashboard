@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getSessionFromCookies } from '../../../../lib/auth';
+import { resolveAllowedDashboardSchoolCodes } from '../../../../lib/dashboard-access';
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -17,5 +18,7 @@ export async function GET() {
     role: session.role ?? 'admin',
     organizationId: session.organizationId ?? null,
     playerId: session.playerId ?? null,
+    dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+    allowedDashboardSchoolCodes: resolveAllowedDashboardSchoolCodes(),
   });
 }

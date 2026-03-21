@@ -1,5 +1,6 @@
 import { requirePortalSession } from '../../../../lib/portal-session';
 import { listExerciseCategoriesByOrganization, listExercisesByOrganization } from '../../../../lib/training-db';
+import { resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import ExerciseLibrary from './exercise-library';
 
 type ExercisePageProps = {
@@ -14,20 +15,29 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 
 export default async function AdminExercisesPage({ searchParams }: ExercisePageProps) {
   const session = await requirePortalSession();
+  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const [exercises, categories] = await Promise.all([
-    listExercisesByOrganization(session.organizationId),
-    listExerciseCategoriesByOrganization(session.organizationId),
+    programmingOrganizationId > 0 ? listExercisesByOrganization(programmingOrganizationId) : Promise.resolve([]),
+    programmingOrganizationId > 0 ? listExerciseCategoriesByOrganization(programmingOrganizationId) : Promise.resolve([]),
   ]);
   const params = await searchParams;
   const { ok, error } = readMessage(params);
 
   return (
     <div className="portal-admin-stack">
+      {programmingOrganizationId <= 0 ? (
+        <article className="portal-admin-card">
+          <h3>Programming Data</h3>
+          <p>No programming data is configured for {programmingSchoolCode} yet.</p>
+        </article>
+      ) : null}
       <div className="portal-admin-headline">
         <h2>Exercise + Drill Library</h2>
         <p>Create reusable movement cards and attach video demos to each one.</p>
       </div>
 
+      {programmingOrganizationId > 0 ? (
       <article className="portal-admin-card">
         <h3>Exercise Categories</h3>
         <form method="post" action="/api/admin/exercise-categories" className="portal-form-grid">
@@ -48,7 +58,9 @@ export default async function AdminExercisesPage({ searchParams }: ExercisePageP
           ))}
         </div>
       </article>
+      ) : null}
 
+      {programmingOrganizationId > 0 ? (
       <article className="portal-admin-card">
         <h3>Add Exercise</h3>
         <form method="post" action="/api/admin/exercises" className="portal-form-grid">
@@ -75,6 +87,14 @@ export default async function AdminExercisesPage({ searchParams }: ExercisePageP
               <option value="distance">Distance</option>
             </select>
           </label>
+          <label>
+            Tracking Type
+            <select name="trackingType" defaultValue="lbs">
+              <option value="lbs">lbs</option>
+              <option value="seconds">seconds</option>
+              <option value="inches">inches</option>
+            </select>
+          </label>
           <label className="portal-checkbox-label">
             <input type="checkbox" name="repsPerSide" />
             Use reps per side
@@ -98,6 +118,7 @@ export default async function AdminExercisesPage({ searchParams }: ExercisePageP
         {ok && <p className="auth-message">{ok}</p>}
         {error && <p className="auth-error">{error}</p>}
       </article>
+      ) : null}
 
       <article className="portal-admin-card">
         <h3>Library</h3>

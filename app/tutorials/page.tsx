@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { requirePortalSession } from '../../lib/portal-session';
+import { resolveDashboardSchoolCode } from '../../lib/dashboard-access';
+import { resolveSchoolBrand, schoolBrandCssVars } from '../../lib/school-brand';
 import LogoutButton from '../portal/logout-button';
 
 const tutorialVideos = [
@@ -15,14 +17,17 @@ const tutorialVideos = [
 
 export default async function TutorialsPage() {
   const session = await requirePortalSession();
+  const selectedSchool = resolveDashboardSchoolCode(session);
+  const brand = resolveSchoolBrand(selectedSchool);
 
   return (
-    <div className="portal-shell">
+    <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
       <header className="portal-header">
         <div className="portal-header-left">
           <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="PCU Home">
             <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
           </Link>
+          {brand.logoSrc ? <img src={brand.logoSrc} alt={brand.logoAlt} className="portal-header-logo portal-header-logo--school" /> : null}
         </div>
         <div className="portal-header-center">
           <nav className="portal-nav" aria-label="Portal Navigation">

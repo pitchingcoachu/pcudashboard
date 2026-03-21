@@ -8,6 +8,7 @@ import {
   SESSION_COOKIE_NAME,
   validateLoginCredentials,
 } from '../../../../lib/auth';
+import { canUseProgrammingData } from '../../../../lib/programming-scope';
 
 type LoginPayload = {
   email?: string;
@@ -52,7 +53,17 @@ export async function POST(request: Request) {
     const hostname = requestUrl.hostname;
 
     if (isWebMode) {
-      const destination = user.role === 'player' ? '/portal/player' : '/portal/admin';
+      const destination =
+        user.role === 'player'
+          ? canUseProgrammingData({
+              role: user.role,
+              organizationId: user.organizationId ?? 0,
+              email: user.email,
+              dashboardSchoolCode: user.dashboardSchoolCode ?? null,
+            })
+            ? '/portal/player'
+            : '/portal/dashboard'
+          : '/portal/admin';
       const response = NextResponse.redirect(new URL(destination, request.url), 303);
       response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
       const domainOptions = getDomainSessionCookieOptions(hostname);

@@ -8,6 +8,7 @@ import {
   listProgramItemsForPlayerByMonth,
   listWorkoutsByOrganization,
 } from '../../../../../lib/training-db';
+import { resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
 
 type ProgramPageProps = {
   params: Promise<{ playerId: string }>;
@@ -32,6 +33,18 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 export default async function AdminProgramBuilderPage({ params, searchParams }: ProgramPageProps) {
   const session = await requirePortalSession();
   if (session.role === 'player') notFound();
+  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingSchoolCode = resolveProgrammingSchoolCode(session);
+  if (programmingOrganizationId <= 0) {
+    return (
+      <div className="portal-admin-stack">
+        <article className="portal-admin-card">
+          <h3>Programming Data</h3>
+          <p>No programming data is configured for {programmingSchoolCode} yet.</p>
+        </article>
+      </div>
+    );
+  }
 
   const { playerId: playerIdRaw } = await params;
   const playerId = Number(playerIdRaw);
@@ -39,7 +52,7 @@ export default async function AdminProgramBuilderPage({ params, searchParams }: 
   const allowed = await canManagePlayer(session, playerId);
   if (!allowed) notFound();
 
-  const player = await getPlayerByIdInOrganization({ organizationId: session.organizationId, playerId });
+  const player = await getPlayerByIdInOrganization({ organizationId: programmingOrganizationId, playerId });
   if (!player) notFound();
 
   const query = await searchParams;
@@ -47,8 +60,8 @@ export default async function AdminProgramBuilderPage({ params, searchParams }: 
   const { ok, error } = readMessage(query);
 
   const [exercises, workouts, items] = await Promise.all([
-    listExercisesByOrganization(session.organizationId),
-    listWorkoutsByOrganization(session.organizationId),
+    listExercisesByOrganization(programmingOrganizationId),
+    listWorkoutsByOrganization(programmingOrganizationId),
     listProgramItemsForPlayerByMonth({ playerId, month }),
   ]);
 

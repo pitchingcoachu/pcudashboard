@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
+import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { canManagePlayer } from '../../../../../lib/portal-access';
 import { clearProgramItemsForDate, deleteProgramItem, getPlayerByIdInOrganization } from '../../../../../lib/training-db';
 
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
   const itemId = Number(body.itemId ?? 0);
   const dayDate = parseDate(String(body.dayDate ?? ''));
   const mode = body.mode === 'day' ? 'day' : 'item';
-  const organizationId = session.organizationId ?? 0;
+  const organizationId = resolveProgrammingOrganizationId(session);
 
   if (organizationId <= 0) {
     return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });

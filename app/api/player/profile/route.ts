@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
+import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import { getPlayerByIdInOrganization, getPlayerForUser, updatePlayerProfile } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
 
@@ -8,8 +9,9 @@ async function resolveAllowedPlayerId(session: { role?: string; organizationId?:
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
 
   if (session.role === 'player') {
+    const organizationId = resolveProgrammingOrganizationId(session);
     const ownPlayer = await getPlayerForUser({
-      organizationId: session.organizationId ?? 0,
+      organizationId,
       userId: session.userId ?? 0,
     });
     const allowed = ownPlayer?.id ?? session.playerId ?? 0;
@@ -19,8 +21,9 @@ async function resolveAllowedPlayerId(session: { role?: string; organizationId?:
 
   const allowed = await canManagePlayer(session as { role?: 'admin' | 'coach' | 'player'; organizationId?: number; userId?: number; playerId?: number | null }, requestedPlayerId);
   if (!allowed) return { ok: false as const, status: 403, error: 'Forbidden' };
+  const organizationId = resolveProgrammingOrganizationId(session);
   const player = await getPlayerByIdInOrganization({
-    organizationId: session.organizationId ?? 0,
+    organizationId,
     playerId: requestedPlayerId,
   });
   if (!player) return { ok: false as const, status: 404, error: 'Player not found.' };
@@ -51,7 +54,7 @@ export async function POST(request: Request) {
     Number.isFinite(parsedProfileWeight) && parsedProfileWeight > 0 ? parsedProfileWeight : null;
 
   const result = await updatePlayerProfile({
-    organizationId: session.organizationId ?? 0,
+    organizationId: resolveProgrammingOrganizationId(session),
     playerId: allowed.playerId,
     fullName: String(body.fullName ?? ''),
     email: String(body.email ?? ''),

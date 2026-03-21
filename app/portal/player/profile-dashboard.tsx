@@ -23,7 +23,18 @@ type ExerciseTrendPoint = {
   averageLoad: number;
 };
 
-const PLAN_GOAL_CATEGORIES = ['Mechanical', 'Stuff', 'Command', 'Mental Side', 'Strength', 'Mobility', 'Weight'] as const;
+const PLAN_GOAL_CATEGORIES = [
+  'Mechanical',
+  'Stuff',
+  'Execution',
+  'Mental Side',
+  'Strength',
+  'Mobility',
+  'Weight',
+  'Swing Decisions',
+  'Batted Ball',
+  'Pre-Pitch Routine',
+] as const;
 
 type GoalDraft = {
   slotIndex: 1 | 2 | 3;
@@ -409,7 +420,7 @@ export default function ProfileDashboard({
       const existing = initialPlanGoals.find((goal) => goal.slotIndex === slot);
       return {
         slotIndex: slot as 1 | 2 | 3,
-        category: existing?.category ?? '',
+        category: existing?.category === 'Command' ? 'Execution' : (existing?.category ?? ''),
         goalDescription: existing?.goalDescription ?? '',
         createdAt: existing?.createdAt ?? null,
       };

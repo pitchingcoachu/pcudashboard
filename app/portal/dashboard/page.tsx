@@ -2,61 +2,82 @@ import Link from 'next/link';
 import { requirePortalSession } from '../../../lib/portal-session';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
-
-const TM_DATA_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
+import { resolveAllowedDashboardSchoolCodes, resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
+import { canUseDashboardData, canUseProgrammingData } from '../../../lib/programming-scope';
+import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-brand';
+import DashboardSchoolSelector from './dashboard-school-selector';
+import DashboardShell from './dashboard-shell';
 
 export default async function PortalDashboardPage() {
   const session = await requirePortalSession();
+  const schoolOptions = resolveAllowedDashboardSchoolCodes();
+  const selectedSchool = resolveDashboardSchoolCode(session);
+  const brand = resolveSchoolBrand(selectedSchool);
+  const canAccessDashboard = canUseDashboardData(session);
+  const canAccessProgramming = canUseProgrammingData(session);
 
   return (
-    <div className="portal-shell">
+    <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
       <header className="portal-header">
         <div className="portal-header-left">
-          <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="PCU Home">
-            <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
-          </Link>
+          {session.role === 'admin' ? (
+            <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
+          ) : (
+            <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label={`${brand.schoolCode} Home`}>
+              <img
+                src={brand.logoSrc ?? '/pitching-coach-u-logo.png'}
+                alt={brand.logoSrc ? brand.logoAlt : 'PCU logo'}
+                className={`portal-header-logo${brand.logoSrc ? ' portal-header-logo--school' : ''}`}
+              />
+            </Link>
+          )}
         </div>
         <div className="portal-header-center">
-          <nav className="portal-nav" aria-label="Portal Navigation">
-            {(session.role === 'admin' || session.role === 'coach') && (
-              <Link href="/portal/admin" className="portal-nav-link">
-                Admin Home
-              </Link>
-            )}
-            {session.role === 'player' ? (
-              <>
-                <Link href="/portal/player" className="portal-nav-link">
-                  Profile
+          <div className="portal-header-nav-stack">
+            <nav className="portal-nav" aria-label="Portal Navigation">
+              {(session.role === 'admin' || session.role === 'coach') && (
+                <Link href="/portal/admin" className="portal-nav-link">
+                  Admin Home
                 </Link>
-                <Link href="/portal/player/program" className="portal-nav-link">
-                  Program
+              )}
+              {session.role === 'player' ? (
+                <>
+                  {canAccessProgramming ? (
+                    <>
+                      <Link href="/portal/player" className="portal-nav-link">
+                        Profile
+                      </Link>
+                      <Link href="/portal/player/program" className="portal-nav-link">
+                        Program
+                      </Link>
+                    </>
+                  ) : null}
+                </>
+              ) : (
+                canAccessProgramming ? (
+                  <Link href="/portal/admin/schedule" className="portal-nav-link">
+                    Schedule
+                  </Link>
+                ) : null
+              )}
+              <Link href="/portal/dashboard" className="portal-nav-link active">
+                PCU Dashboard
+              </Link>
+              {(session.role === 'admin' || session.role === 'coach') && (
+                <Link href="/tutorials" className="portal-nav-link">
+                  Tutorials
                 </Link>
-              </>
-            ) : (
-              <Link href="/portal/admin/schedule" className="portal-nav-link">
-                Schedule
-              </Link>
-            )}
-            <Link href="/portal/dashboard" className="portal-nav-link active">
-              PCU Dashboard
-            </Link>
-            {(session.role === 'admin' || session.role === 'coach') && (
-              <Link href="/tutorials" className="portal-nav-link">
-                Tutorials
-              </Link>
-            )}
-          </nav>
+              )}
+            </nav>
+          </div>
           <MobileNavSelect
             currentHref="/portal/dashboard"
             loggedInAs={session.name ?? session.email}
             items={[
               ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin Home' }] : []),
               ...(session.role === 'player'
-                ? [
-                    { href: '/portal/player', label: 'Profile' },
-                    { href: '/portal/player/program', label: 'Program' },
-                  ]
-                : [{ href: '/portal/admin/schedule', label: 'Schedule' }]),
+                ? [...(canAccessProgramming ? [{ href: '/portal/player', label: 'Profile' }, { href: '/portal/player/program', label: 'Program' }] : [])]
+                : [...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : [])]),
               { href: '/portal/dashboard', label: 'PCU Dashboard' },
               ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/tutorials', label: 'Tutorials' }] : []),
             ]}
@@ -85,18 +106,22 @@ export default async function PortalDashboardPage() {
               </svg>
             </Link>
           </div>
+          {brand.logoSrc ? (
+            <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="PCU Home">
+              <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo portal-header-logo--pcu-right" />
+            </Link>
+          ) : null}
         </div>
       </header>
 
-      <section className="portal-frame-wrap">
-        <iframe
-          className="portal-frame"
-          src={TM_DATA_URL}
-          title="PCU Dashboard"
-          loading="lazy"
-          referrerPolicy="strict-origin-when-cross-origin"
-        />
-      </section>
+      {canAccessDashboard ? (
+        <DashboardShell role={session.role} selectedSchoolCode={selectedSchool} />
+      ) : (
+        <section className="portal-panel">
+          <h2>Dashboard Access</h2>
+          <p>Dashboard access is not enabled for the selected school.</p>
+        </section>
+      )}
     </div>
   );
 }

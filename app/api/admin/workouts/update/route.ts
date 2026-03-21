@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
+import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { updateWorkout } from '../../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
       return redirectWithMessage(request, redirectTo, 'error', 'Workout ID is required.');
     }
 
-    const organizationId = session.organizationId ?? 0;
+    const organizationId = resolveProgrammingOrganizationId(session);
     const userId = session.userId ?? 0;
     if (organizationId <= 0 || userId <= 0) {
       return redirectWithMessage(request, redirectTo, 'error', 'Session context missing. Please log out and log in again.');

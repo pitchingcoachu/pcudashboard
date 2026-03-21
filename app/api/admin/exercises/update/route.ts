@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
+import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { updateExercise } from '../../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
@@ -29,7 +30,7 @@ export async function POST(request: Request) {
       return redirectWithMessage(request, redirectTo, 'error', 'Exercise ID is required.');
     }
 
-    const organizationId = session.organizationId ?? 0;
+    const organizationId = resolveProgrammingOrganizationId(session);
     const userId = session.userId ?? 0;
     if (organizationId <= 0 || userId <= 0) {
       return redirectWithMessage(request, redirectTo, 'error', 'Session context missing. Please log out and log in again.');
@@ -42,6 +43,7 @@ export async function POST(request: Request) {
       name: String(form.get('name') ?? ''),
       category: String(form.get('category') ?? ''),
       repMeasure: String(form.get('repMeasure') ?? ''),
+      trackingType: String(form.get('trackingType') ?? ''),
       repsPerSide: form.get('repsPerSide') === 'on',
       description: String(form.get('description') ?? ''),
       instructionVideoUrl: String(form.get('instructionVideoUrl') ?? ''),

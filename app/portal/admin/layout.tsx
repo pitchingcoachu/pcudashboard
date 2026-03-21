@@ -1,61 +1,94 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../lib/portal-session';
+import { resolveAllowedDashboardSchoolCodes, resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
+import { canUseClientManagement, canUseProgrammingData } from '../../../lib/programming-scope';
+import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-brand';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
+import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const session = await requirePortalSession();
+  const schoolOptions = resolveAllowedDashboardSchoolCodes();
+  const selectedSchool = resolveDashboardSchoolCode(session);
+  const brand = resolveSchoolBrand(selectedSchool);
+  const canAccessProgramming = canUseProgrammingData(session);
+  const canAccessClientManagement = canUseClientManagement(session);
 
   if (session.role === 'player') {
     redirect('/portal/player');
   }
 
   return (
-    <div className="portal-shell">
+    <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
       <header className="portal-header">
         <div className="portal-header-left">
-          <Link href="/portal/admin" className="portal-header-logo-link" aria-label="PCU Home">
-            <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
-          </Link>
+          {session.role === 'admin' ? (
+            <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
+          ) : (
+            <Link href="/portal/admin" className="portal-header-logo-link" aria-label={`${brand.schoolCode} Home`}>
+              <img
+                src={brand.logoSrc ?? '/pitching-coach-u-logo.png'}
+                alt={brand.logoSrc ? brand.logoAlt : 'PCU logo'}
+                className={`portal-header-logo${brand.logoSrc ? ' portal-header-logo--school' : ''}`}
+              />
+            </Link>
+          )}
         </div>
         <div className="portal-header-center">
-          <nav className="portal-nav" aria-label="Portal Navigation">
-            <Link href="/portal/admin" className="portal-nav-link">
-              Admin Home
-            </Link>
-            {(session.role === 'admin' || session.role === 'coach') && (
-              <Link href="/portal/admin/clients" className="portal-nav-link">
-                Clients
+          <div className="portal-header-nav-stack">
+            <nav className="portal-nav" aria-label="Portal Navigation">
+              <Link href="/portal/admin" className="portal-nav-link">
+                Admin Home
               </Link>
-            )}
-            {session.role === 'admin' && (
-              <Link href="/portal/admin/coaches" className="portal-nav-link">
-                Coaches
+              {(session.role === 'admin' || session.role === 'coach') && canAccessClientManagement && (
+                <Link href="/portal/admin/clients" className="portal-nav-link">
+                  Players
+                </Link>
+              )}
+              {session.role === 'admin' && canAccessClientManagement && (
+                <Link href="/portal/admin/coaches" className="portal-nav-link">
+                  Coaches
+                </Link>
+              )}
+              {canAccessProgramming ? (
+                <>
+                  <Link href="/portal/admin/exercises" className="portal-nav-link">
+                    Exercise Library
+                  </Link>
+                  <Link href="/portal/admin/workouts" className="portal-nav-link">
+                    Workouts
+                  </Link>
+                  <Link href="/portal/admin/schedule" className="portal-nav-link">
+                    Schedule
+                  </Link>
+                  <Link href="/portal/admin/testing" className="portal-nav-link">
+                    Testing
+                  </Link>
+                </>
+              ) : null}
+              <Link href="/portal/dashboard" className="portal-nav-link">
+                PCU Dashboard
               </Link>
-            )}
-            <Link href="/portal/admin/exercises" className="portal-nav-link">
-              Exercise Library
-            </Link>
-            <Link href="/portal/admin/workouts" className="portal-nav-link">
-              Workouts
-            </Link>
-            <Link href="/portal/admin/schedule" className="portal-nav-link">
-              Schedule
-            </Link>
-            <Link href="/portal/dashboard" className="portal-nav-link">
-              PCU Dashboard
-            </Link>
-          </nav>
+            </nav>
+          </div>
           <MobileNavSelect
             loggedInAs={session.name ?? session.email}
             items={[
               { href: '/portal/admin', label: 'Admin Home' },
-              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin/clients', label: 'Clients' }] : []),
-              ...(session.role === 'admin' ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
-              { href: '/portal/admin/exercises', label: 'Exercise Library' },
-              { href: '/portal/admin/workouts', label: 'Workouts' },
-              { href: '/portal/admin/schedule', label: 'Schedule' },
+              ...(session.role === 'admin' || session.role === 'coach'
+                ? [...(canAccessClientManagement ? [{ href: '/portal/admin/clients', label: 'Players' }] : [])]
+                : []),
+              ...(session.role === 'admin' && canAccessClientManagement ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
+              ...(canAccessProgramming
+                ? [
+                    { href: '/portal/admin/exercises', label: 'Exercise Library' },
+                    { href: '/portal/admin/workouts', label: 'Workouts' },
+                    { href: '/portal/admin/schedule', label: 'Schedule' },
+                    { href: '/portal/admin/testing', label: 'Testing' },
+                  ]
+                : []),
               { href: '/portal/dashboard', label: 'PCU Dashboard' },
             ]}
           />
@@ -83,6 +116,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               </svg>
             </Link>
           </div>
+          {brand.logoSrc ? (
+            <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="PCU Home">
+              <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo portal-header-logo--pcu-right" />
+            </Link>
+          ) : null}
         </div>
       </header>
       <section className="portal-panel portal-admin-panel">{children}</section>

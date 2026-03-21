@@ -83,8 +83,15 @@ function formatLoadNumber(value: number): string {
   return value.toFixed(1).replace(/\.0$/, '');
 }
 
+function trackingPlaceholder(trackingType: 'lbs' | 'seconds' | 'inches'): string {
+  if (trackingType === 'seconds') return 'sec';
+  if (trackingType === 'inches') return 'in';
+  return 'lbs';
+}
+
 function formatMaxHistory(
-  entries: ExerciseLoadHistoryEntry[]
+  entries: ExerciseLoadHistoryEntry[],
+  trackingType: 'lbs' | 'seconds' | 'inches'
 ): { load: number; dayDate: string; repsText: string } | null {
   let best: { load: number; dayDate: string; repsText: string } | null = null;
   for (const entry of entries) {
@@ -305,11 +312,11 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                       </p>
                       {!isAssessmentWorkout && exercise.exerciseId && historyByExercise[exercise.exerciseId]?.length
                         ? (() => {
-                            const maxEntry = formatMaxHistory(historyByExercise[exercise.exerciseId]);
+                            const maxEntry = formatMaxHistory(historyByExercise[exercise.exerciseId], exercise.trackingType);
                             if (!maxEntry) return null;
                             return (
                               <p className="portal-muted-text">
-                                Max: {formatLoadNumber(maxEntry.load)}x{maxEntry.repsText} ({dateTitle(maxEntry.dayDate)})
+                                Max: {formatLoadNumber(maxEntry.load)} {trackingPlaceholder(exercise.trackingType)} x{maxEntry.repsText} ({dateTitle(maxEntry.dayDate)})
                               </p>
                             );
                           })()
@@ -341,7 +348,11 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                             return (
                               <label key={`${item.itemId}-modal-ex-${exerciseIdx}-set-${setIdx}`}>
                                 Set {setIdx + 1}
-                                <input name="performedLoadValues" defaultValue={current} placeholder="lbs" />
+                                <input
+                                  name="performedLoadValues"
+                                  defaultValue={current}
+                                  placeholder={trackingPlaceholder(exercise.trackingType)}
+                                />
                               </label>
                             );
                           })}
@@ -384,11 +395,11 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
               </p>
               {item.exerciseId && historyByExercise[item.exerciseId]?.length
                 ? (() => {
-                    const maxEntry = formatMaxHistory(historyByExercise[item.exerciseId]);
+                    const maxEntry = formatMaxHistory(historyByExercise[item.exerciseId], item.trackingType);
                     if (!maxEntry) return null;
                     return (
                       <p className="portal-muted-text">
-                        Max: {formatLoadNumber(maxEntry.load)}x{maxEntry.repsText} ({dateTitle(maxEntry.dayDate)})
+                        Max: {formatLoadNumber(maxEntry.load)} {trackingPlaceholder(item.trackingType)} x{maxEntry.repsText} ({dateTitle(maxEntry.dayDate)})
                       </p>
                     );
                   })()
@@ -397,7 +408,11 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                 {Array.from({ length: parseSetCount(item.prescribedSets) }).map((_, setIdx) => (
                   <label key={`${item.itemId}-modal-set-${setIdx}`}>
                     Set {setIdx + 1}
-                    <input name="performedLoadValues" defaultValue={isCycleItem ? '' : loadValues[setIdx] ?? ''} placeholder="lbs" />
+                    <input
+                      name="performedLoadValues"
+                      defaultValue={isCycleItem ? '' : loadValues[setIdx] ?? ''}
+                      placeholder={trackingPlaceholder(item.trackingType)}
+                    />
                   </label>
                 ))}
               </div>

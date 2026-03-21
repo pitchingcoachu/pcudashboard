@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
+import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { deleteWorkout } from '../../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
@@ -29,7 +30,7 @@ export async function POST(request: Request) {
       return redirectWithMessage(request, redirectTo, 'error', 'Workout ID is required.');
     }
 
-    const organizationId = session.organizationId ?? 0;
+    const organizationId = resolveProgrammingOrganizationId(session);
     if (organizationId <= 0) {
       return redirectWithMessage(request, redirectTo, 'error', 'Session organization not found. Please log out and log in again.');
     }

@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
-import { deleteStaffUser, setStaffActiveStatus } from '../../../../../lib/training-db';
+import { resolveClientManagementOrganizationId } from '../../../../../lib/programming-scope';
+import { deleteStaffUser, setStaffActiveStatus, updateStaffUser } from '../../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -22,9 +23,9 @@ export async function POST(request: Request) {
 
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/coaches');
-    const organizationId = session.organizationId ?? 0;
+    const organizationId = resolveClientManagementOrganizationId(session);
     if (organizationId <= 0) {
-      return redirectWithMessage(request, redirectTo, 'error', 'Session organization not found. Please log out and log in again.');
+      return redirectWithMessage(request, redirectTo, 'error', 'Coach management is not enabled for this school.');
     }
 
     const staffUserId = Number(String(form.get('staffUserId') ?? '0'));
@@ -45,6 +46,21 @@ export async function POST(request: Request) {
       });
       if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);
       return redirectWithMessage(request, redirectTo, 'ok', action === 'activate' ? 'Coach activated.' : 'Coach deactivated.');
+    }
+
+    if (action === 'update') {
+      const roleRaw = String(form.get('role') ?? '').trim().toLowerCase();
+      const role = roleRaw === 'coach' ? 'coach' : 'admin';
+      const result = await updateStaffUser({
+        organizationId,
+        staffUserId,
+        name: String(form.get('name') ?? ''),
+        email: String(form.get('email') ?? ''),
+        phone: String(form.get('phone') ?? ''),
+        role,
+      });
+      if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);
+      return redirectWithMessage(request, redirectTo, 'ok', 'Coach updated.');
     }
 
     if (action === 'delete') {

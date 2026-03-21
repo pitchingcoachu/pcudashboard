@@ -1,12 +1,15 @@
 import { listClientsByOrganization, listWorkoutsByOrganization } from '../../../../lib/training-db';
 import { requirePortalSession } from '../../../../lib/portal-session';
+import { resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import ScheduleBoard from './schedule-board';
 
 export default async function AdminSchedulePage() {
   const session = await requirePortalSession();
+  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const [clients, workouts] = await Promise.all([
-    listClientsByOrganization(session.organizationId),
-    listWorkoutsByOrganization(session.organizationId),
+    programmingOrganizationId > 0 ? listClientsByOrganization(programmingOrganizationId) : Promise.resolve([]),
+    programmingOrganizationId > 0 ? listWorkoutsByOrganization(programmingOrganizationId) : Promise.resolve([]),
   ]);
 
   const visibleClients =
@@ -21,6 +24,12 @@ export default async function AdminSchedulePage() {
 
   return (
     <div className="portal-admin-stack">
+      {programmingOrganizationId <= 0 ? (
+        <article className="portal-admin-card">
+          <h3>Programming Data</h3>
+          <p>No programming data is configured for {programmingSchoolCode} yet.</p>
+        </article>
+      ) : null}
       <div className="portal-admin-headline">
         <h2>Schedule Builder</h2>
         <p>Select a player, then drag workouts onto calendar dates.</p>

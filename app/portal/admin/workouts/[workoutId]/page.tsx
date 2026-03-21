@@ -6,6 +6,7 @@ import {
   listExerciseCategoriesByOrganization,
   listExercisesByOrganization,
 } from '../../../../../lib/training-db';
+import { resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
 import WorkoutExerciseSelector from '../exercise-selector';
 
 type EditWorkoutPageProps = {
@@ -21,15 +22,27 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 export default async function EditWorkoutPage({ params, searchParams }: EditWorkoutPageProps) {
   const session = await requirePortalSession();
   if (session.role === 'player') notFound();
+  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingSchoolCode = resolveProgrammingSchoolCode(session);
+  if (programmingOrganizationId <= 0) {
+    return (
+      <div className="portal-admin-stack">
+        <article className="portal-admin-card">
+          <h3>Programming Data</h3>
+          <p>No programming data is configured for {programmingSchoolCode} yet.</p>
+        </article>
+      </div>
+    );
+  }
 
   const { workoutId: rawWorkoutId } = await params;
   const workoutId = Number(rawWorkoutId);
   if (!Number.isFinite(workoutId) || workoutId <= 0) notFound();
 
   const [workout, exercises, categories, query] = await Promise.all([
-    getWorkoutByIdInOrganization({ organizationId: session.organizationId, workoutId }),
-    listExercisesByOrganization(session.organizationId),
-    listExerciseCategoriesByOrganization(session.organizationId),
+    getWorkoutByIdInOrganization({ organizationId: programmingOrganizationId, workoutId }),
+    listExercisesByOrganization(programmingOrganizationId),
+    listExerciseCategoriesByOrganization(programmingOrganizationId),
     searchParams,
   ]);
   if (!workout) notFound();

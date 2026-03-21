@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
+import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { addProgramItem, getPlayerByIdInOrganization, listProgramItemsForPlayerByDateRange } from '../../../../../lib/training-db';
 import { canManagePlayer } from '../../../../../lib/portal-access';
 
@@ -23,9 +24,13 @@ export async function GET(request: Request) {
   if (!Number.isFinite(playerId) || playerId <= 0 || !startDate || !endDate) {
     return NextResponse.json({ error: 'playerId, startDate, and endDate are required.' }, { status: 400 });
   }
+  const organizationId = resolveProgrammingOrganizationId(session);
+  if (organizationId <= 0) {
+    return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });
+  }
   const allowed = await canManagePlayer(session, playerId);
   if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  const player = await getPlayerByIdInOrganization({ organizationId: session.organizationId ?? 0, playerId });
+  const player = await getPlayerByIdInOrganization({ organizationId, playerId });
   if (!player) return NextResponse.json({ error: 'Player not found.' }, { status: 404 });
 
   const items = await listProgramItemsForPlayerByDateRange({ playerId, startDate, endDate });
@@ -46,7 +51,7 @@ export async function POST(request: Request) {
   const playerId = Number(body.playerId ?? 0);
   const dayDate = parseDate(String(body.dayDate ?? ''));
   const workoutId = Number(body.workoutId ?? 0);
-  const organizationId = session.organizationId ?? 0;
+  const organizationId = resolveProgrammingOrganizationId(session);
   const userId = session.userId ?? 0;
 
   if (organizationId <= 0 || userId <= 0) {

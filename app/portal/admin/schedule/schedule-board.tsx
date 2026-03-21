@@ -617,7 +617,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   return (
     <div className="portal-admin-stack">
       <div className="portal-schedule-toolbar">
-        <label>
+        <label className="portal-schedule-player-picker">
           Player
           <select value={String(playerId)} onChange={(event) => setPlayerId(Number(event.target.value))}>
             {players.map((player) => (

@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getSessionFromCookies } from './auth';
 import { ensureTrainingDbReady } from './training-db';
+import { refreshSchoolProductAccessCache } from './programming-scope';
 
 export type PortalSession = {
   userId: number;
@@ -10,6 +11,7 @@ export type PortalSession = {
   role: 'admin' | 'coach' | 'player';
   organizationId: number;
   playerId: number | null;
+  dashboardSchoolCode?: string | null;
   appUrl: string;
   apps: Array<{ name: string; url: string }>;
 };
@@ -23,6 +25,7 @@ export async function requirePortalSession(): Promise<PortalSession> {
   }
 
   await ensureTrainingDbReady();
+  await refreshSchoolProductAccessCache();
 
   return {
     userId: session.userId ?? 0,
@@ -31,6 +34,7 @@ export async function requirePortalSession(): Promise<PortalSession> {
     role: session.role === 'player' ? 'player' : session.role === 'coach' ? 'coach' : 'admin',
     organizationId: session.organizationId ?? 0,
     playerId: session.playerId ?? null,
+    dashboardSchoolCode: typeof session.dashboardSchoolCode === 'string' ? session.dashboardSchoolCode.trim().toUpperCase() : null,
     appUrl: session.appUrl,
     apps: session.apps,
   };

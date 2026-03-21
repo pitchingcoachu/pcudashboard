@@ -84,6 +84,7 @@ export default function ExerciseLibrary({ exercises }: ExerciseLibraryProps) {
                               ? 'reps per side'
                               : 'reps'}
                       </p>
+                      <p className="portal-muted-text">Tracking: {exercise.trackingType}</p>
                       {exercise.description && <p>{exercise.description}</p>}
                       {exercise.coachingCues && (
                         <p>

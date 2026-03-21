@@ -1,4 +1,5 @@
 import { getPlayerByIdInOrganization, getPlayerForUser, isCoachAssignedToPlayer } from './training-db';
+import { resolveProgrammingOrganizationId } from './programming-scope';
 
 type SessionLike = {
   role?: string;
@@ -9,7 +10,7 @@ type SessionLike = {
 
 export async function canManagePlayer(session: SessionLike, playerId: number): Promise<boolean> {
   if (!session) return false;
-  const organizationId = session.organizationId ?? 0;
+  const organizationId = resolveProgrammingOrganizationId(session);
   if (organizationId <= 0 || !Number.isFinite(playerId) || playerId <= 0) return false;
 
   if (session.role === 'admin') {

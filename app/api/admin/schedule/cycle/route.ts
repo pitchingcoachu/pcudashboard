@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
+import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import {
   addCycleWorkoutAssignment,
   getPlayerByIdInOrganization,
@@ -31,7 +32,11 @@ export async function GET(request: Request) {
   const allowed = await canManagePlayer(session, playerId);
   if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
-  const player = await getPlayerByIdInOrganization({ organizationId: session.organizationId ?? 0, playerId });
+  const organizationId = resolveProgrammingOrganizationId(session);
+  if (organizationId <= 0) {
+    return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });
+  }
+  const player = await getPlayerByIdInOrganization({ organizationId, playerId });
   if (!player) return NextResponse.json({ error: 'Player not found.' }, { status: 404 });
 
   const items = await listCycleProgramItemsForPlayer({ playerId });
@@ -49,7 +54,7 @@ export async function POST(request: Request) {
     | null;
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
-  const organizationId = session.organizationId ?? 0;
+  const organizationId = resolveProgrammingOrganizationId(session);
   const userId = session.userId ?? 0;
   const playerId = Number(body.playerId ?? 0);
   const workoutId = Number(body.workoutId ?? 0);
@@ -88,7 +93,7 @@ export async function PATCH(request: Request) {
     | null;
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
-  const organizationId = session.organizationId ?? 0;
+  const organizationId = resolveProgrammingOrganizationId(session);
   const playerId = Number(body.playerId ?? 0);
   const itemId = Number(body.itemId ?? 0);
   const cycleSlot = parseCycleSlot(String(body.cycleSlot ?? ''));

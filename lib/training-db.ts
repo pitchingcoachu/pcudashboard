@@ -77,10 +77,40 @@ export type CompletedPlayerPlanGoalRow = {
   completedAt: string;
 };
 
+export type PlayerPlanNoteRow = {
+  id: number;
+  playerId: number;
+  domain: 'Pitching' | 'Hitting' | 'Catching' | 'General';
+  noteDate: string;
+  category: string;
+  noteText: string;
+  attachmentName: string | null;
+  attachmentMimeType: string | null;
+  attachmentDataUrl: string | null;
+  createdAt: string;
+  createdByUserId: number | null;
+};
+
+export type DashboardPlayerNoteRow = {
+  id: number;
+  organizationId: number;
+  dashboardPlayerName: string;
+  domain: 'Pitching' | 'Hitting' | 'Catching' | 'General';
+  noteDate: string;
+  category: string;
+  noteText: string;
+  attachmentName: string | null;
+  attachmentMimeType: string | null;
+  attachmentDataUrl: string | null;
+  createdAt: string;
+  createdByUserId: number | null;
+};
+
 export type TrackedExerciseRow = {
   exerciseId: number;
   name: string;
   category: string;
+  trackingType: 'lbs' | 'seconds' | 'inches';
 };
 
 export type ExerciseCategoryRow = {
@@ -93,6 +123,7 @@ export type ExerciseRow = {
   name: string;
   category: string;
   repMeasure: 'reps' | 'seconds' | 'distance';
+  trackingType: 'lbs' | 'seconds' | 'inches';
   repsPerSide: boolean;
   description: string | null;
   instructionVideoUrl: string | null;
@@ -113,6 +144,7 @@ export type WorkoutEditorItem = {
   exerciseName: string;
   category: string;
   repMeasure: 'reps' | 'seconds' | 'distance';
+  trackingType: 'lbs' | 'seconds' | 'inches';
   repsPerSide: boolean;
   sortOrder: number;
   prefix: string | null;
@@ -135,6 +167,7 @@ export type WorkoutExerciseAssignment = {
   name: string;
   category: string;
   repMeasure: 'reps' | 'seconds' | 'distance';
+  trackingType: 'lbs' | 'seconds' | 'inches';
   repsPerSide: boolean;
   prescribedSets: string | null;
   prescribedReps: string | null;
@@ -159,6 +192,7 @@ export type ProgramItemRow = {
   workoutExerciseNames: string[];
   workoutExercises: WorkoutExerciseAssignment[];
   repMeasure: 'reps' | 'seconds' | 'distance';
+  trackingType: 'lbs' | 'seconds' | 'inches';
   repsPerSide: boolean;
   exerciseDescription: string | null;
   exerciseCoachingCues: string | null;
@@ -180,6 +214,7 @@ export type ExerciseLoadHistoryEntry = {
   loads: string[];
   prescribedReps: string | null;
   repMeasure: 'reps' | 'seconds' | 'distance';
+  trackingType: 'lbs' | 'seconds' | 'inches';
   repsPerSide: boolean;
 };
 
@@ -195,9 +230,22 @@ export type AssessmentWorkoutScoreRow = {
   }>;
 };
 
+export type DashboardCustomTableRow = {
+  id: number;
+  name: string;
+  columns: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export async function ensureTrainingDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
-  if (global.__pcuTrainingDbReady) return;
+  if (global.__pcuTrainingDbReady) {
+    const pool = getDbPool();
+    await pool.query(`ALTER TABLE exercise_library ADD COLUMN IF NOT EXISTS tracking_type TEXT NOT NULL DEFAULT 'lbs';`);
+    await pool.query(`UPDATE exercise_library SET tracking_type = 'lbs' WHERE tracking_type IS NULL OR LENGTH(TRIM(tracking_type)) = 0;`);
+    return;
+  }
   await ensureAuthDbReady();
   const pool = getDbPool();
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
@@ -205,11 +253,68 @@ export async function ensureTrainingDbReady(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS height TEXT;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_weight_lbs DOUBLE PRECISION;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_photo_data_url TEXT;`);
+  await pool.query(`ALTER TABLE exercise_library ADD COLUMN IF NOT EXISTS tracking_type TEXT NOT NULL DEFAULT 'lbs';`);
+  await pool.query(`UPDATE exercise_library SET tracking_type = 'lbs' WHERE tracking_type IS NULL OR LENGTH(TRIM(tracking_type)) = 0;`);
   await pool.query(
     `ALTER TABLE players ADD COLUMN IF NOT EXISTS assigned_coach_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL;`
   );
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
   await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dashboard_custom_tables (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      school_code TEXT NOT NULL,
+      name TEXT NOT NULL,
+      columns_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_name ON dashboard_custom_tables (organization_id, school_code, lower(name));`
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_updated ON dashboard_custom_tables (organization_id, school_code, updated_at DESC);`
+  );
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_plan_notes (
+      id BIGSERIAL PRIMARY KEY,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      domain TEXT NOT NULL,
+      note_date DATE NOT NULL,
+      category TEXT NOT NULL,
+      note_text TEXT NOT NULL,
+      attachment_name TEXT,
+      attachment_mime_type TEXT,
+      attachment_data_url TEXT,
+      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_plan_notes_player_date ON player_plan_notes (player_id, note_date DESC, created_at DESC);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dashboard_player_notes (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      dashboard_player_name TEXT NOT NULL,
+      domain TEXT NOT NULL,
+      note_date DATE NOT NULL,
+      category TEXT NOT NULL,
+      note_text TEXT NOT NULL,
+      attachment_name TEXT,
+      attachment_mime_type TEXT,
+      attachment_data_url TEXT,
+      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_dashboard_player_notes_org_name_date ON dashboard_player_notes (organization_id, dashboard_player_name, note_date DESC, created_at DESC);`
+  );
   global.__pcuTrainingDbReady = true;
 }
 
@@ -229,6 +334,15 @@ function validateHttpUrl(value: string): { ok: true; value: string } | { ok: fal
 
 function normalizeCategoryName(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
+}
+
+function normalizeTrackingType(value: string | null | undefined): 'lbs' | 'seconds' | 'inches' {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
+  if (normalized === 'seconds') return 'seconds';
+  if (normalized === 'inches') return 'inches';
+  return 'lbs';
 }
 
 function normalizeCycleSlot(value: string): 'medium' | 'high' | 'low' | 'mobility' | 's_and_c' | null {
@@ -652,6 +766,115 @@ export async function deleteStaffUser(input: {
   return { ok: true };
 }
 
+export async function updateStaffUser(input: {
+  organizationId: number;
+  staffUserId: number;
+  name: string;
+  email: string;
+  phone?: string;
+  role: 'admin' | 'coach';
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const normalizedEmail = input.email.trim().toLowerCase();
+  const name = input.name.trim();
+  if (!name || !normalizedEmail) {
+    return { ok: false, error: 'Name and email are required.' };
+  }
+  if (input.role !== 'admin' && input.role !== 'coach') {
+    return { ok: false, error: 'Role must be admin or coach.' };
+  }
+
+  const existing = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM auth_users
+      WHERE LOWER(email) = LOWER($1)
+        AND id <> $2
+      LIMIT 1
+    `,
+    [normalizedEmail, input.staffUserId]
+  );
+  if ((existing.rowCount ?? 0) > 0) {
+    return { ok: false, error: 'A login already exists with that email.' };
+  }
+
+  const updated = await pool.query<{ id: number }>(
+    `
+      UPDATE auth_users
+      SET
+        name = $1,
+        email = $2,
+        username = $3,
+        phone = $4,
+        role = $5,
+        updated_at = NOW()
+      WHERE id = $6
+        AND organization_id = $7
+        AND role IN ('admin', 'coach')
+      RETURNING id
+    `,
+    [
+      name,
+      normalizedEmail,
+      deriveUsernameFromEmail(normalizedEmail),
+      (input.phone ?? '').trim() || null,
+      input.role,
+      input.staffUserId,
+      input.organizationId,
+    ]
+  );
+  if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Coach user not found.' };
+  return { ok: true };
+}
+
+export async function deleteClientUser(input: {
+  organizationId: number;
+  playerId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const deletedPlayer = await client.query<{ user_id: number | null }>(
+      `
+        DELETE FROM players
+        WHERE id = $1
+          AND organization_id = $2
+        RETURNING user_id
+      `,
+      [input.playerId, input.organizationId]
+    );
+    if ((deletedPlayer.rowCount ?? 0) !== 1) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'Player not found.' };
+    }
+    const userId = Number(deletedPlayer.rows[0]?.user_id ?? 0);
+    if (Number.isFinite(userId) && userId > 0) {
+      await client.query(
+        `
+          DELETE FROM auth_users
+          WHERE id = $1
+            AND organization_id = $2
+            AND role = 'player'
+        `,
+        [userId, input.organizationId]
+      );
+    }
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to delete player.' };
+  } finally {
+    client.release();
+  }
+}
+
 export async function listExerciseCategoriesByOrganization(organizationId: number): Promise<ExerciseCategoryRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
@@ -713,13 +936,14 @@ export async function listExercisesByOrganization(organizationId: number): Promi
     name: string;
     category: string;
     rep_measure: string;
+    tracking_type: string | null;
     reps_per_side: boolean;
     description: string | null;
     instruction_video_url: string | null;
     coaching_cues: string | null;
   }>(
     `
-      SELECT id, name, category, rep_measure, reps_per_side, description, instruction_video_url, coaching_cues
+      SELECT id, name, category, rep_measure, tracking_type, reps_per_side, description, instruction_video_url, coaching_cues
       FROM exercise_library
       WHERE organization_id = $1
       ORDER BY name ASC
@@ -732,6 +956,7 @@ export async function listExercisesByOrganization(organizationId: number): Promi
     name: row.name,
     category: row.category,
     repMeasure: row.rep_measure === 'seconds' ? 'seconds' : row.rep_measure === 'distance' ? 'distance' : 'reps',
+    trackingType: normalizeTrackingType(row.tracking_type),
     repsPerSide: Boolean(row.reps_per_side),
     description: row.description,
     instructionVideoUrl: row.instruction_video_url,
@@ -752,13 +977,14 @@ export async function getExerciseByIdInOrganization(input: {
     name: string;
     category: string;
     rep_measure: string;
+    tracking_type: string | null;
     reps_per_side: boolean;
     description: string | null;
     instruction_video_url: string | null;
     coaching_cues: string | null;
   }>(
     `
-      SELECT id, name, category, rep_measure, reps_per_side, description, instruction_video_url, coaching_cues
+      SELECT id, name, category, rep_measure, tracking_type, reps_per_side, description, instruction_video_url, coaching_cues
       FROM exercise_library
       WHERE organization_id = $1 AND id = $2
       LIMIT 1
@@ -773,6 +999,7 @@ export async function getExerciseByIdInOrganization(input: {
     name: row.name,
     category: row.category,
     repMeasure: row.rep_measure === 'seconds' ? 'seconds' : row.rep_measure === 'distance' ? 'distance' : 'reps',
+    trackingType: normalizeTrackingType(row.tracking_type),
     repsPerSide: Boolean(row.reps_per_side),
     description: row.description,
     instructionVideoUrl: row.instruction_video_url,
@@ -786,6 +1013,7 @@ export async function createExercise(input: {
   name: string;
   category: string;
   repMeasure?: string;
+  trackingType?: string;
   repsPerSide?: boolean;
   description?: string;
   instructionVideoUrl?: string;
@@ -798,6 +1026,7 @@ export async function createExercise(input: {
   const name = input.name.trim();
   const category = normalizeCategoryName(input.category);
   const repMeasure = input.repMeasure === 'seconds' ? 'seconds' : input.repMeasure === 'distance' ? 'distance' : 'reps';
+  const trackingType = normalizeTrackingType(input.trackingType);
   const repsPerSide = repMeasure === 'reps' ? Boolean(input.repsPerSide) : false;
   if (!name) return { ok: false, error: 'Exercise name is required.' };
   if (!category) return { ok: false, error: 'Category is required.' };
@@ -818,15 +1047,16 @@ export async function createExercise(input: {
   await pool.query(
     `
       INSERT INTO exercise_library (
-        organization_id, name, category, rep_measure, reps_per_side, description, instruction_video_url, coaching_cues, created_by
+        organization_id, name, category, rep_measure, tracking_type, reps_per_side, description, instruction_video_url, coaching_cues, created_by
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     `,
     [
       input.organizationId,
       name,
       category,
       repMeasure,
+      trackingType,
       repsPerSide,
       (input.description ?? '').trim() || null,
       videoCheck.value || null,
@@ -845,6 +1075,7 @@ export async function updateExercise(input: {
   name: string;
   category: string;
   repMeasure?: string;
+  trackingType?: string;
   repsPerSide?: boolean;
   description?: string;
   instructionVideoUrl?: string;
@@ -857,6 +1088,7 @@ export async function updateExercise(input: {
   const name = input.name.trim();
   const category = normalizeCategoryName(input.category);
   const repMeasure = input.repMeasure === 'seconds' ? 'seconds' : input.repMeasure === 'distance' ? 'distance' : 'reps';
+  const trackingType = normalizeTrackingType(input.trackingType);
   const repsPerSide = repMeasure === 'reps' ? Boolean(input.repsPerSide) : false;
   if (!name) return { ok: false, error: 'Exercise name is required.' };
   if (!category) return { ok: false, error: 'Category is required.' };
@@ -881,18 +1113,20 @@ export async function updateExercise(input: {
         name = $1,
         category = $2,
         rep_measure = $3,
-        reps_per_side = $4,
-        description = $5,
-        instruction_video_url = $6,
-        coaching_cues = $7,
+        tracking_type = $4,
+        reps_per_side = $5,
+        description = $6,
+        instruction_video_url = $7,
+        coaching_cues = $8,
         updated_at = NOW()
-      WHERE id = $8 AND organization_id = $9
+      WHERE id = $9 AND organization_id = $10
       RETURNING id
     `,
     [
       name,
       category,
       repMeasure,
+      trackingType,
       repsPerSide,
       (input.description ?? '').trim() || null,
       videoCheck.value || null,
@@ -1068,6 +1302,7 @@ export async function getWorkoutByIdInOrganization(input: {
     exercise_name: string;
     category: string;
     rep_measure: 'reps' | 'seconds' | 'distance';
+    tracking_type: string | null;
     reps_per_side: boolean;
     sort_order: number;
     prefix: string | null;
@@ -1081,6 +1316,7 @@ export async function getWorkoutByIdInOrganization(input: {
         e.name AS exercise_name,
         e.category,
         e.rep_measure,
+        e.tracking_type,
         e.reps_per_side,
         we.sort_order,
         we.exercise_prefix AS prefix,
@@ -1106,6 +1342,7 @@ export async function getWorkoutByIdInOrganization(input: {
       exerciseName: row.exercise_name,
       category: row.category,
       repMeasure: row.rep_measure,
+      trackingType: normalizeTrackingType(row.tracking_type),
       repsPerSide: row.reps_per_side,
       sortOrder: row.sort_order,
       prefix: row.prefix,
@@ -1681,6 +1918,7 @@ export async function listProgramItemsForPlayerByDateRange(input: {
     workout_description: string | null;
     exercise_category: string;
     rep_measure: string | null;
+    tracking_type: string | null;
     reps_per_side: boolean | null;
     instruction_video_url: string | null;
     exercise_description: string | null;
@@ -1710,6 +1948,7 @@ export async function listProgramItemsForPlayerByDateRange(input: {
         w.description AS workout_description,
         CASE WHEN i.workout_id IS NOT NULL THEN 'workout' ELSE COALESCE(e.category, 'exercise') END AS exercise_category,
         COALESCE(e.rep_measure, 'reps') AS rep_measure,
+        COALESCE(e.tracking_type, 'lbs') AS tracking_type,
         COALESCE(e.reps_per_side, FALSE) AS reps_per_side,
         e.instruction_video_url,
         e.description AS exercise_description,
@@ -1750,6 +1989,7 @@ export async function listProgramItemsForPlayerByDateRange(input: {
                 'name', e2.name,
                 'category', e2.category,
                 'repMeasure', e2.rep_measure,
+                'trackingType', e2.tracking_type,
                 'repsPerSide', e2.reps_per_side,
                 'prescribedSets', we2.prescribed_sets,
                 'prescribedReps', we2.prescribed_reps,
@@ -1791,6 +2031,7 @@ export async function listProgramItemsForPlayerByDateRange(input: {
     workoutCategory: row.workout_category,
     exerciseCategory: row.exercise_category,
     repMeasure: row.rep_measure === 'seconds' ? 'seconds' : row.rep_measure === 'distance' ? 'distance' : 'reps',
+    trackingType: normalizeTrackingType(row.tracking_type),
     repsPerSide: Boolean(row.reps_per_side),
     exerciseDescription: row.exercise_description,
     exerciseCoachingCues: row.exercise_coaching_cues,
@@ -1855,6 +2096,7 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
                 'name', e2.name,
                 'category', e2.category,
                 'repMeasure', e2.rep_measure,
+                'trackingType', e2.tracking_type,
                 'repsPerSide', e2.reps_per_side,
                 'prescribedSets', we2.prescribed_sets,
                 'prescribedReps', we2.prescribed_reps,
@@ -1907,6 +2149,7 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
     workoutCategory: row.workout_category,
     exerciseCategory: 'workout',
     repMeasure: 'reps',
+    trackingType: 'lbs',
     repsPerSide: false,
     exerciseDescription: null,
     exerciseCoachingCues: null,
@@ -2074,6 +2317,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
     exercise_id: number | null;
     prescribed_reps: string | null;
     rep_measure: 'reps' | 'seconds' | 'distance';
+    tracking_type: string | null;
     reps_per_side: boolean;
     performed_load: string | null;
     workout_exercise_json: unknown;
@@ -2086,6 +2330,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
           i.exercise_id,
           i.prescribed_reps,
           COALESCE(e.rep_measure, 'reps') AS rep_measure,
+          COALESCE(e.tracking_type, 'lbs') AS tracking_type,
           COALESCE(e.reps_per_side, FALSE) AS reps_per_side,
           h.performed_load,
           CASE
@@ -2108,6 +2353,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
                   'prescribedSets', we2.prescribed_sets,
                   'prescribedReps', we2.prescribed_reps,
                   'repMeasure', e2.rep_measure,
+                  'trackingType', e2.tracking_type,
                   'repsPerSide', e2.reps_per_side
                 )
                 ORDER BY we2.sort_order, e2.name
@@ -2127,6 +2373,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
                   'prescribedSets', we2.prescribed_sets,
                   'prescribedReps', we2.prescribed_reps,
                   'repMeasure', e2.rep_measure,
+                  'trackingType', e2.tracking_type,
                   'repsPerSide', e2.reps_per_side
                 )
                 ORDER BY we2.sort_order, e2.name
@@ -2165,6 +2412,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
           i.exercise_id,
           i.prescribed_reps,
           COALESCE(e.rep_measure, 'reps') AS rep_measure,
+          COALESCE(e.tracking_type, 'lbs') AS tracking_type,
           COALESCE(e.reps_per_side, FALSE) AS reps_per_side,
           l.performed_load,
           ws.exercise_json AS workout_exercise_json
@@ -2183,6 +2431,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
                   'prescribedSets', we2.prescribed_sets,
                   'prescribedReps', we2.prescribed_reps,
                   'repMeasure', e2.rep_measure,
+                  'trackingType', e2.tracking_type,
                   'repsPerSide', e2.reps_per_side
                 )
                 ORDER BY we2.sort_order, e2.name
@@ -2214,10 +2463,10 @@ export async function listExerciseLoadHistoryForPlayer(input: {
               AND h.program_day_item_id = i.id
           )
       )
-      SELECT day_date, source_name, exercise_id, prescribed_reps, rep_measure, reps_per_side, performed_load, workout_exercise_json
+      SELECT day_date, source_name, exercise_id, prescribed_reps, rep_measure, tracking_type, reps_per_side, performed_load, workout_exercise_json
       FROM history_rows
       UNION ALL
-      SELECT day_date, source_name, exercise_id, prescribed_reps, rep_measure, reps_per_side, performed_load, workout_exercise_json
+      SELECT day_date, source_name, exercise_id, prescribed_reps, rep_measure, tracking_type, reps_per_side, performed_load, workout_exercise_json
       FROM legacy_rows
       ORDER BY day_date DESC
       LIMIT 500
@@ -2244,6 +2493,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
           loads: rowLoads,
           prescribedReps: row.prescribed_reps,
           repMeasure: row.rep_measure === 'seconds' ? 'seconds' : row.rep_measure === 'distance' ? 'distance' : 'reps',
+          trackingType: normalizeTrackingType(row.tracking_type),
           repsPerSide: Boolean(row.reps_per_side),
         });
         limitReached.set(row.exercise_id, current + 1);
@@ -2257,6 +2507,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
           prescribedSets?: string | null;
           prescribedReps?: string | null;
           repMeasure?: 'reps' | 'seconds' | 'distance' | null;
+          trackingType?: string | null;
           repsPerSide?: boolean | null;
         }>)
       : [];
@@ -2282,6 +2533,7 @@ export async function listExerciseLoadHistoryForPlayer(input: {
             : exercise.repMeasure === 'distance'
               ? 'distance'
               : 'reps',
+        trackingType: normalizeTrackingType(exercise.trackingType),
         repsPerSide: Boolean(exercise.repsPerSide),
       });
       limitReached.set(exId, current + 1);
@@ -3057,6 +3309,485 @@ export async function upsertPlayerPlanGoal(input: {
   return { ok: true };
 }
 
+export async function listPlayerPlanNotesForPlayer(input: {
+  playerId: number;
+  domain?: 'Pitching' | 'Hitting' | 'Catching' | 'General';
+  limit?: number;
+}): Promise<PlayerPlanNoteRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const limit = Math.max(1, Math.min(500, input.limit ?? 250));
+  const domain = input.domain?.trim();
+  const filteredDomain = domain === 'Pitching' || domain === 'Hitting' || domain === 'Catching' ? domain : null;
+
+  const result = await pool.query<{
+    id: number;
+    player_id: number;
+    domain: string;
+    note_date: string;
+    category: string;
+    note_text: string;
+    attachment_name: string | null;
+    attachment_mime_type: string | null;
+    attachment_data_url: string | null;
+    created_at: string;
+    created_by_user_id: number | null;
+  }>(
+    `
+      SELECT
+        id,
+        player_id,
+        domain,
+        note_date::text,
+        category,
+        note_text,
+        attachment_name,
+        attachment_mime_type,
+        attachment_data_url,
+        created_at::text,
+        created_by_user_id
+      FROM player_plan_notes
+      WHERE player_id = $1
+        AND ($2::text IS NULL OR domain = $2::text)
+      ORDER BY note_date DESC, created_at DESC
+      LIMIT $3
+    `,
+    [input.playerId, filteredDomain, limit]
+  );
+
+  return result.rows
+    .map((row) => {
+      const domainValue =
+        row.domain === 'Pitching' || row.domain === 'Hitting' || row.domain === 'Catching' || row.domain === 'General' ? row.domain : null;
+      const categoryValue = String(row.category ?? '').trim();
+      if (!domainValue || !categoryValue) return null;
+      return {
+        id: row.id,
+        playerId: row.player_id,
+        domain: domainValue,
+        noteDate: row.note_date,
+        category: categoryValue,
+        noteText: row.note_text,
+        attachmentName: row.attachment_name,
+        attachmentMimeType: row.attachment_mime_type,
+        attachmentDataUrl: row.attachment_data_url,
+        createdAt: row.created_at,
+        createdByUserId: row.created_by_user_id,
+      } satisfies PlayerPlanNoteRow;
+    })
+    .filter((row): row is PlayerPlanNoteRow => Boolean(row));
+}
+
+export async function createPlayerPlanNote(input: {
+  organizationId: number;
+  playerId: number;
+  domain: 'Pitching' | 'Hitting' | 'Catching' | 'General';
+  noteDate: string;
+  category: string;
+  noteText: string;
+  attachmentName?: string;
+  attachmentMimeType?: string;
+  attachmentDataUrl?: string;
+  createdByUserId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.noteDate.trim())) return { ok: false, error: 'Date must be YYYY-MM-DD.' };
+  const noteText = input.noteText.trim();
+  if (!noteText) return { ok: false, error: 'Note text is required.' };
+
+  const playerCheck = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM players
+      WHERE id = $1 AND organization_id = $2
+      LIMIT 1
+    `,
+    [input.playerId, input.organizationId]
+  );
+  if ((playerCheck.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
+
+  const attachmentDataUrl = String(input.attachmentDataUrl ?? '').trim() || null;
+  if (attachmentDataUrl && attachmentDataUrl.length > 9_000_000) {
+    return { ok: false, error: 'Attachment is too large.' };
+  }
+
+  await pool.query(
+    `
+      INSERT INTO player_plan_notes (
+        player_id,
+        domain,
+        note_date,
+        category,
+        note_text,
+        attachment_name,
+        attachment_mime_type,
+        attachment_data_url,
+        created_by_user_id
+      )
+      VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9)
+    `,
+    [
+      input.playerId,
+      input.domain,
+      input.noteDate.trim(),
+      input.category,
+      noteText,
+      String(input.attachmentName ?? '').trim() || null,
+      String(input.attachmentMimeType ?? '').trim() || null,
+      attachmentDataUrl,
+      input.createdByUserId,
+    ]
+  );
+
+  return { ok: true };
+}
+
+export async function listDashboardPlayerNotes(input: {
+  organizationId: number;
+  dashboardPlayerName: string;
+  domain?: 'Pitching' | 'Hitting' | 'Catching' | 'General';
+  limit?: number;
+}): Promise<DashboardPlayerNoteRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dashboard_player_notes (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      dashboard_player_name TEXT NOT NULL,
+      domain TEXT NOT NULL,
+      note_date DATE NOT NULL,
+      category TEXT NOT NULL,
+      note_text TEXT NOT NULL,
+      attachment_name TEXT,
+      attachment_mime_type TEXT,
+      attachment_data_url TEXT,
+      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_dashboard_player_notes_org_name_date ON dashboard_player_notes (organization_id, dashboard_player_name, note_date DESC, created_at DESC);`
+  );
+  const name = input.dashboardPlayerName.trim();
+  if (!name) return [];
+  const filteredDomain = input.domain && (input.domain === 'Pitching' || input.domain === 'Hitting' || input.domain === 'Catching' || input.domain === 'General')
+    ? input.domain
+    : null;
+  const limit = Number.isFinite(input.limit) ? Math.max(1, Math.min(500, Math.trunc(Number(input.limit)))) : 500;
+  const result = await pool.query<{
+    id: number;
+    organization_id: number;
+    dashboard_player_name: string;
+    domain: string;
+    note_date: string;
+    category: string;
+    note_text: string;
+    attachment_name: string | null;
+    attachment_mime_type: string | null;
+    attachment_data_url: string | null;
+    created_at: string;
+    created_by_user_id: number | null;
+  }>(
+    `
+      SELECT
+        id,
+        organization_id,
+        dashboard_player_name,
+        domain,
+        note_date::text,
+        category,
+        note_text,
+        attachment_name,
+        attachment_mime_type,
+        attachment_data_url,
+        created_at::text,
+        created_by_user_id
+      FROM dashboard_player_notes
+      WHERE organization_id = $1
+        AND dashboard_player_name = $2
+        AND ($3::text IS NULL OR domain = $3::text)
+      ORDER BY note_date DESC, created_at DESC
+      LIMIT $4
+    `,
+    [input.organizationId, name, filteredDomain, limit]
+  );
+
+  return result.rows
+    .map((row) => {
+      const domainValue =
+        row.domain === 'Pitching' || row.domain === 'Hitting' || row.domain === 'Catching' || row.domain === 'General' ? row.domain : null;
+      const categoryValue = String(row.category ?? '').trim();
+      if (!domainValue || !categoryValue) return null;
+      return {
+        id: row.id,
+        organizationId: row.organization_id,
+        dashboardPlayerName: row.dashboard_player_name,
+        domain: domainValue,
+        noteDate: row.note_date,
+        category: categoryValue,
+        noteText: row.note_text,
+        attachmentName: row.attachment_name,
+        attachmentMimeType: row.attachment_mime_type,
+        attachmentDataUrl: row.attachment_data_url,
+        createdAt: row.created_at,
+        createdByUserId: row.created_by_user_id,
+      } satisfies DashboardPlayerNoteRow;
+    })
+    .filter((row): row is DashboardPlayerNoteRow => Boolean(row));
+}
+
+export async function listDashboardPlayerNotesByOrganization(input: {
+  organizationId: number;
+  domain?: 'Pitching' | 'Hitting' | 'Catching' | 'General';
+  limit?: number;
+}): Promise<DashboardPlayerNoteRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dashboard_player_notes (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      dashboard_player_name TEXT NOT NULL,
+      domain TEXT NOT NULL,
+      note_date DATE NOT NULL,
+      category TEXT NOT NULL,
+      note_text TEXT NOT NULL,
+      attachment_name TEXT,
+      attachment_mime_type TEXT,
+      attachment_data_url TEXT,
+      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_dashboard_player_notes_org_name_date ON dashboard_player_notes (organization_id, dashboard_player_name, note_date DESC, created_at DESC);`
+  );
+  const filteredDomain = input.domain && (input.domain === 'Pitching' || input.domain === 'Hitting' || input.domain === 'Catching' || input.domain === 'General')
+    ? input.domain
+    : null;
+  const limit = Number.isFinite(input.limit) ? Math.max(1, Math.min(1000, Math.trunc(Number(input.limit)))) : 1000;
+  const result = await pool.query<{
+    id: number;
+    organization_id: number;
+    dashboard_player_name: string;
+    domain: string;
+    note_date: string;
+    category: string;
+    note_text: string;
+    attachment_name: string | null;
+    attachment_mime_type: string | null;
+    attachment_data_url: string | null;
+    created_at: string;
+    created_by_user_id: number | null;
+  }>(
+    `
+      SELECT
+        id,
+        organization_id,
+        dashboard_player_name,
+        domain,
+        note_date::text,
+        category,
+        note_text,
+        attachment_name,
+        attachment_mime_type,
+        attachment_data_url,
+        created_at::text,
+        created_by_user_id
+      FROM dashboard_player_notes
+      WHERE organization_id = $1
+        AND ($2::text IS NULL OR domain = $2::text)
+      ORDER BY note_date DESC, created_at DESC
+      LIMIT $3
+    `,
+    [input.organizationId, filteredDomain, limit]
+  );
+  return result.rows
+    .map((row) => {
+      const domainValue =
+        row.domain === 'Pitching' || row.domain === 'Hitting' || row.domain === 'Catching' || row.domain === 'General' ? row.domain : null;
+      const categoryValue = String(row.category ?? '').trim();
+      if (!domainValue || !categoryValue) return null;
+      return {
+        id: row.id,
+        organizationId: row.organization_id,
+        dashboardPlayerName: row.dashboard_player_name,
+        domain: domainValue,
+        noteDate: row.note_date,
+        category: categoryValue,
+        noteText: row.note_text,
+        attachmentName: row.attachment_name,
+        attachmentMimeType: row.attachment_mime_type,
+        attachmentDataUrl: row.attachment_data_url,
+        createdAt: row.created_at,
+        createdByUserId: row.created_by_user_id,
+      } satisfies DashboardPlayerNoteRow;
+    })
+    .filter((row): row is DashboardPlayerNoteRow => Boolean(row));
+}
+
+export async function createDashboardPlayerNote(input: {
+  organizationId: number;
+  dashboardPlayerName: string;
+  domain: 'Pitching' | 'Hitting' | 'Catching' | 'General';
+  noteDate: string;
+  category: string;
+  noteText: string;
+  attachmentName?: string;
+  attachmentMimeType?: string;
+  attachmentDataUrl?: string;
+  createdByUserId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dashboard_player_notes (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      dashboard_player_name TEXT NOT NULL,
+      domain TEXT NOT NULL,
+      note_date DATE NOT NULL,
+      category TEXT NOT NULL,
+      note_text TEXT NOT NULL,
+      attachment_name TEXT,
+      attachment_mime_type TEXT,
+      attachment_data_url TEXT,
+      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS idx_dashboard_player_notes_org_name_date ON dashboard_player_notes (organization_id, dashboard_player_name, note_date DESC, created_at DESC);`
+  );
+  const dashboardPlayerName = input.dashboardPlayerName.trim();
+  if (!dashboardPlayerName) return { ok: false, error: 'Player name is required.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.noteDate.trim())) return { ok: false, error: 'Date must be YYYY-MM-DD.' };
+  const category = input.category.trim();
+  if (!category) return { ok: false, error: 'Category is required.' };
+  if (category.length > 80) return { ok: false, error: 'Category must be 80 characters or fewer.' };
+  const noteText = input.noteText.trim();
+  if (!noteText) return { ok: false, error: 'Note text is required.' };
+
+  const attachmentDataUrl = String(input.attachmentDataUrl ?? '').trim() || null;
+  if (attachmentDataUrl && attachmentDataUrl.length > 9_000_000) {
+    return { ok: false, error: 'Attachment is too large.' };
+  }
+
+  await pool.query(
+    `
+      INSERT INTO dashboard_player_notes (
+        organization_id,
+        dashboard_player_name,
+        domain,
+        note_date,
+        category,
+        note_text,
+        attachment_name,
+        attachment_mime_type,
+        attachment_data_url,
+        created_by_user_id
+      )
+      VALUES ($1, $2, $3, $4::date, $5, $6, $7, $8, $9, $10)
+    `,
+    [
+      input.organizationId,
+      dashboardPlayerName,
+      input.domain,
+      input.noteDate.trim(),
+      category,
+      noteText,
+      String(input.attachmentName ?? '').trim() || null,
+      String(input.attachmentMimeType ?? '').trim() || null,
+      attachmentDataUrl,
+      input.createdByUserId,
+    ]
+  );
+
+  return { ok: true };
+}
+
+export async function updateDashboardPlayerNote(input: {
+  organizationId: number;
+  noteId: number;
+  noteDate: string;
+  category: string;
+  noteText: string;
+  attachmentName?: string;
+  attachmentMimeType?: string;
+  attachmentDataUrl?: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  if (!Number.isFinite(input.noteId) || input.noteId <= 0) return { ok: false, error: 'Valid noteId is required.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(input.noteDate ?? '').trim())) return { ok: false, error: 'Date must be YYYY-MM-DD.' };
+  const category = String(input.category ?? '').trim();
+  if (!category) return { ok: false, error: 'Category is required.' };
+  if (category.length > 80) return { ok: false, error: 'Category must be 80 characters or fewer.' };
+  const noteText = String(input.noteText ?? '').trim();
+  if (!noteText) return { ok: false, error: 'Note text is required.' };
+  const attachmentDataUrl = String(input.attachmentDataUrl ?? '').trim() || null;
+  if (attachmentDataUrl && attachmentDataUrl.length > 9_000_000) return { ok: false, error: 'Attachment is too large.' };
+
+  const result = await pool.query(
+    `
+      UPDATE dashboard_player_notes
+      SET
+        note_date = $1::date,
+        category = $2,
+        note_text = $3,
+        attachment_name = $4,
+        attachment_mime_type = $5,
+        attachment_data_url = $6,
+        updated_at = NOW()
+      WHERE id = $7
+        AND organization_id = $8
+    `,
+    [
+      String(input.noteDate).trim(),
+      category,
+      noteText,
+      String(input.attachmentName ?? '').trim() || null,
+      String(input.attachmentMimeType ?? '').trim() || null,
+      attachmentDataUrl,
+      input.noteId,
+      input.organizationId,
+    ]
+  );
+  if ((result.rowCount ?? 0) < 1) return { ok: false, error: 'Note not found.' };
+  return { ok: true };
+}
+
+export async function deleteDashboardPlayerNote(input: {
+  organizationId: number;
+  noteId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  if (!Number.isFinite(input.noteId) || input.noteId <= 0) return { ok: false, error: 'Valid noteId is required.' };
+  const result = await pool.query(
+    `
+      DELETE FROM dashboard_player_notes
+      WHERE id = $1
+        AND organization_id = $2
+    `,
+    [input.noteId, input.organizationId]
+  );
+  if ((result.rowCount ?? 0) < 1) return { ok: false, error: 'Note not found.' };
+  return { ok: true };
+}
+
 export async function completePlayerPlanGoal(input: {
   organizationId: number;
   playerId: number;
@@ -3204,7 +3935,7 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
   await ensureTrainingDbReady();
   const pool = getDbPool();
 
-  const result = await pool.query<{ exercise_id: number; name: string; category: string }>(
+  const result = await pool.query<{ exercise_id: number; name: string; category: string; tracking_type: string | null }>(
     `
       WITH history_direct AS (
         SELECT DISTINCT i.exercise_id
@@ -3280,7 +4011,7 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
         UNION
         SELECT exercise_id FROM legacy_workout
       )
-      SELECT e.id AS exercise_id, e.name, e.category
+      SELECT e.id AS exercise_id, e.name, e.category, e.tracking_type
       FROM all_exercises a
       JOIN exercise_library e ON e.id = a.exercise_id
       ORDER BY e.name ASC
@@ -3292,6 +4023,7 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
     exerciseId: row.exercise_id,
     name: row.name,
     category: row.category,
+    trackingType: normalizeTrackingType(row.tracking_type),
   }));
 }
 
