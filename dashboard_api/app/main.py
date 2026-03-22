@@ -2229,6 +2229,10 @@ def health() -> Dict[str, str]:
 def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFiltersResponse:
     school_code = _validate_school_code(school_code)
     _sync_modifications_into_pitch_events(school_code)
+    roster = _load_school_roster(school_code)
+    team_norm = set(roster.get("team_only_norm", []) or [])
+    hitter_norm = set(roster.get("hitter_norm", []) or [])
+    campers_norm = set(roster.get("campers_norm", []) or [])
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -2288,6 +2292,13 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
             team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"filters query failed: {exc}") from exc
+
+    allowed_pitcher_keys = set(team_norm | campers_norm)
+    if allowed_pitcher_keys:
+        pitchers = [name for name in pitchers if _normalize_name_key(name) in allowed_pitcher_keys]
+    known_hitter_keys = set(hitter_norm | campers_norm)
+    if known_hitter_keys:
+        opp_hitters = [name for name in opp_hitters if _normalize_name_key(name) not in known_hitter_keys]
 
     return PitchingFiltersResponse(
         school_code=school_code,
@@ -4207,7 +4218,9 @@ def _zone_location_match(token: str, row: Dict[str, Any]) -> bool:
 def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
     roster = _load_school_roster(school_code)
-    hitter_norm = roster.get("hitter_norm", [])
+    campers_norm = set(roster.get("campers_norm", []) or [])
+    hitter_norm_set = set(roster.get("hitter_norm", []) or [])
+    team_hitter_norm = sorted(hitter_norm_set - campers_norm)
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -4236,8 +4249,8 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 """,
                 {
                     "school_code": school_code,
-                    "hitters_norm": hitter_norm,
-                    "hitter_count": len(hitter_norm),
+                    "hitters_norm": team_hitter_norm,
+                    "hitter_count": len(team_hitter_norm),
                 },
             )
             hitters = [str(row["hitter"]) for row in cur.fetchall()]
@@ -4253,6 +4266,9 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 {"school_code": school_code},
             )
             opp_pitchers = [str(row["opp_pitcher"]) for row in cur.fetchall()]
+            if team_hitter_norm:
+                team_hitter_keys = set(team_hitter_norm)
+                opp_pitchers = [name for name in opp_pitchers if _normalize_name_key(name) not in team_hitter_keys]
 
             cur.execute(
                 """
@@ -4341,8 +4357,8 @@ def hitting_overview(
     school_code = _validate_school_code(school_code)
     roster = _load_school_roster(school_code)
     hitter_norm = set(roster.get("hitter_norm", []) or [])
-    team_hitter_norm = set(roster.get("hitter_norm", []) or [])
     campers_norm = set(roster.get("campers_norm", []) or [])
+    team_hitter_norm = set(hitter_norm - campers_norm)
     team_markers_norm = set(roster.get("team_markers_norm", []) or [])
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
@@ -4675,6 +4691,8 @@ def catching_filters(
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
     roster = _load_school_roster(school_code)
+    campers_norm = set(roster.get("campers_norm", []) or [])
+    team_catcher_norm = set(roster.get("hitter_norm", []) or []) - campers_norm
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
     try:
@@ -4715,6 +4733,8 @@ def catching_filters(
                 },
             )
             catchers = [str(row["catcher"]) for row in cur.fetchall()]
+            if team_catcher_norm:
+                catchers = [name for name in catchers if _normalize_name_key(name) in team_catcher_norm]
 
             cur.execute(
                 """
@@ -4743,7 +4763,7 @@ def catching_filters(
         "min_date": date_row.get("min_date"),
         "max_date": date_row.get("max_date"),
         "catchers": catchers,
-        "team_types": ["All", school_code, "Opponents", "Campers"] if (roster.get("team_only_norm") or roster.get("campers_norm")) else ["All", school_code, "Opponents", "Campers"],
+        "team_types": ["All", school_code, "Opponents", "Campers"] if (team_catcher_norm or campers_norm) else ["All", school_code, "Opponents", "Campers"],
         "pitch_types": pitch_types,
         "hands": ["All", "Left", "Right"],
         "batter_sides": ["All", "Left", "Right"],
@@ -4782,8 +4802,9 @@ def catching_overview(
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
     roster = _load_school_roster(school_code)
-    team_norm = set(roster.get("hitter_norm", []) or [])
     campers_norm = set(roster.get("campers_norm", []) or [])
+    hitter_norm = set(roster.get("hitter_norm", []) or [])
+    team_norm = set(hitter_norm - campers_norm)
     team_markers_norm = set(roster.get("team_markers_norm", []) or [])
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
