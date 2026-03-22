@@ -47,6 +47,13 @@ export function resolveDashboardSchoolCode(session: PortalSession): string {
 }
 
 export function resolveDashboardApiBaseUrl(): string {
-  const base = (process.env.DASHBOARD_API_BASE_URL ?? 'http://127.0.0.1:8001').trim();
+  const configured =
+    (process.env.DASHBOARD_API_BASE_URL ?? process.env.DASHBOARD_API_URL ?? '').trim();
+  if (configured) return configured.replace(/\/+$/, '');
+  const isProdRuntime = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
+  if (isProdRuntime) {
+    throw new Error('DASHBOARD_API_BASE_URL is not set in production.');
+  }
+  const base = 'http://127.0.0.1:8001';
   return base.replace(/\/+$/, '');
 }
