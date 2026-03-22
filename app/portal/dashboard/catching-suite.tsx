@@ -360,6 +360,7 @@ export default function CatchingSuite() {
 
   const [page, setPage] = useState<'Data and Performance' | 'Leaderboard' | 'HeatMaps'>('Data and Performance');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
+  const [isMobileView, setIsMobileView] = useState(false);
 
   const [sessionType, setSessionType] = useState('All');
   const [teamType, setTeamType] = useState('All');
@@ -399,6 +400,20 @@ export default function CatchingSuite() {
   const autoFallbackAppliedRef = useRef(false);
   const isLeaderboardPage = page === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? 'Catcher' : splitBy;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(max-width: 900px)');
+    const sync = () => setIsMobileView(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileView) return;
+    setIsSidebarHidden(true);
+  }, [isMobileView]);
 
   useEffect(() => {
     setLoadingFilters(true);
@@ -813,7 +828,7 @@ export default function CatchingSuite() {
           {!isSidebarHidden ? (
             <article className="portal-admin-card portal-dashboard-sidebar">
               <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden(true)}>
-                Hide Sidebar
+                Hide Filters
               </button>
               <div className="portal-form-grid">
                 <label>
@@ -893,19 +908,34 @@ export default function CatchingSuite() {
           <article className="portal-admin-card" style={{ alignContent: 'start', minWidth: 0 }}>
             <div className="portal-day-card" style={{ marginBottom: '0.8rem', padding: '0.7rem 0.8rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                <div style={{ display: 'inline-flex', gap: 8 }}>
-                  <button type="button" className={page === 'Data and Performance' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPage('Data and Performance')}>
-                    DATA AND PERFORMANCE
-                  </button>
-                  <button type="button" className={page === 'Leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPage('Leaderboard')}>
-                    LEADERBOARD
-                  </button>
-                  <button type="button" className={page === 'HeatMaps' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPage('HeatMaps')}>
-                    HEATMAPS
-                  </button>
-                </div>
+                {isMobileView ? (
+                  <label className="portal-mobile-control-row">
+                    <span>Page</span>
+                    <select
+                      className="portal-mobile-page-select"
+                      value={page}
+                      onChange={(event) => setPage(event.target.value as typeof page)}
+                    >
+                      <option value="Data and Performance">Data and Performance</option>
+                      <option value="Leaderboard">Leaderboard</option>
+                      <option value="HeatMaps">HeatMaps</option>
+                    </select>
+                  </label>
+                ) : (
+                  <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button type="button" className={page === 'Data and Performance' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPage('Data and Performance')}>
+                      DATA AND PERFORMANCE
+                    </button>
+                    <button type="button" className={page === 'Leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPage('Leaderboard')}>
+                      LEADERBOARD
+                    </button>
+                    <button type="button" className={page === 'HeatMaps' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPage('HeatMaps')}>
+                      HEATMAPS
+                    </button>
+                  </div>
+                )}
                 <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden((v) => !v)}>
-                  {isSidebarHidden ? 'SHOW SIDEBAR' : 'HIDE SIDEBAR'}
+                  {isSidebarHidden ? 'Show Filters' : 'Hide Filters'}
                 </button>
               </div>
             </div>

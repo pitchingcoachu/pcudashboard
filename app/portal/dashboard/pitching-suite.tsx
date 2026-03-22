@@ -973,6 +973,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
   const canUsePitchEdits = role === 'admin' || role === 'coach';
   const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
+  const [isMobileView, setIsMobileView] = useState(false);
   const [filters, setFilters] = useState<FiltersPayload | null>(null);
   const [overview, setOverview] = useState<OverviewPayload | null>(null);
   const [loadingFilters, setLoadingFilters] = useState(true);
@@ -1033,6 +1034,20 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
   const [loadingCustomTables, setLoadingCustomTables] = useState(false);
   const [customTableName, setCustomTableName] = useState('');
   const [selectedCustomTableId, setSelectedCustomTableId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(max-width: 900px)');
+    const sync = () => setIsMobileView(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileView) return;
+    setIsSidebarHidden(true);
+  }, [isMobileView]);
   const [customTableColumns, setCustomTableColumns] = useState<string[]>([]);
   const [customColumnToAdd, setCustomColumnToAdd] = useState('');
   const [customSaveState, setCustomSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -4149,7 +4164,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
             style={dashboardPage === 'AB Report' ? { minHeight: 'auto', height: 'fit-content', alignSelf: 'start' } : undefined}
           >
           <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden(true)}>
-            Hide Sidebar
+            Hide Filters
           </button>
 
           {loadingFilters ? <p>Loading filters...</p> : null}
@@ -4362,67 +4377,91 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
 
         <article className="portal-admin-card" style={{ alignContent: 'start' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
-            <div style={{ display: 'inline-flex', gap: 8 }}>
-              <button
-                type="button"
-                className={dashboardPage === 'Summary' ? 'btn btn-primary' : 'btn btn-ghost'}
-                onClick={() => setDashboardPage('Summary')}
-              >
-                Summary
+            {isMobileView ? (
+              <label className="portal-mobile-control-row">
+                <span>Page</span>
+                <select
+                  className="portal-mobile-page-select"
+                  value={dashboardPage}
+                  onChange={(event) => setDashboardPage(event.target.value as typeof dashboardPage)}
+                >
+                  <option value="Summary">Summary</option>
+                  <option value="Leaderboard">Leaderboard</option>
+                  <option value="AB Report">AB Report</option>
+                  <option value="Velocity">Velocity</option>
+                  <option value="Trend">Trend</option>
+                  <option value="HeatMaps">HeatMaps</option>
+                  <option value="QP Locations">QP Locations</option>
+                  <option value="Velo Manual Entry">Velo Manual Entry</option>
+                </select>
+              </label>
+            ) : (
+              <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className={dashboardPage === 'Summary' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('Summary')}
+                >
+                  Summary
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'Leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('Leaderboard')}
+                >
+                  Leaderboard
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'AB Report' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('AB Report')}
+                >
+                  AB Report
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'Velocity' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('Velocity')}
+                >
+                  Velocity
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'Trend' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('Trend')}
+                >
+                  Trend
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'HeatMaps' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('HeatMaps')}
+                >
+                  HeatMaps
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'QP Locations' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('QP Locations')}
+                >
+                  QP Locations
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'Velo Manual Entry' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('Velo Manual Entry')}
+                >
+                  Velo Manual Entry
+                </button>
+              </div>
+            )}
+            {isMobileView ? (
+              <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden((value) => !value)}>
+                {isSidebarHidden ? 'Show Filters' : 'Hide Filters'}
               </button>
-              <button
-                type="button"
-                className={dashboardPage === 'Leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'}
-                onClick={() => setDashboardPage('Leaderboard')}
-              >
-                Leaderboard
-              </button>
-              <button
-                type="button"
-                className={dashboardPage === 'AB Report' ? 'btn btn-primary' : 'btn btn-ghost'}
-                onClick={() => setDashboardPage('AB Report')}
-              >
-                AB Report
-              </button>
-              <button
-                type="button"
-                className={dashboardPage === 'Velocity' ? 'btn btn-primary' : 'btn btn-ghost'}
-                onClick={() => setDashboardPage('Velocity')}
-              >
-                Velocity
-              </button>
-              <button
-                type="button"
-                className={dashboardPage === 'Trend' ? 'btn btn-primary' : 'btn btn-ghost'}
-                onClick={() => setDashboardPage('Trend')}
-              >
-                Trend
-              </button>
-              <button
-                type="button"
-                className={dashboardPage === 'HeatMaps' ? 'btn btn-primary' : 'btn btn-ghost'}
-                onClick={() => setDashboardPage('HeatMaps')}
-              >
-                HeatMaps
-              </button>
-              <button
-                type="button"
-                className={dashboardPage === 'QP Locations' ? 'btn btn-primary' : 'btn btn-ghost'}
-                onClick={() => setDashboardPage('QP Locations')}
-              >
-                QP Locations
-              </button>
-              <button
-                type="button"
-                className={dashboardPage === 'Velo Manual Entry' ? 'btn btn-primary' : 'btn btn-ghost'}
-                onClick={() => setDashboardPage('Velo Manual Entry')}
-              >
-                Velo Manual Entry
-              </button>
-            </div>
-            {isSidebarHidden ? (
+            ) : isSidebarHidden ? (
               <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden(false)}>
-                Show Sidebar
+                Show Filters
               </button>
             ) : null}
           </div>

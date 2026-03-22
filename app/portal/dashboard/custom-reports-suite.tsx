@@ -1171,6 +1171,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const reportCanvasRef = useRef<HTMLElement | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [isMobileView, setIsMobileView] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reportTitle, setReportTitle] = useState('');
@@ -1848,12 +1849,26 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     return chosen.map((name) => toFirstLast(name) || name).join(', ');
   }, [reportScope, reportPlayers]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(max-width: 900px)');
+    const sync = () => setIsMobileView(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileView) return;
+    setSidebarVisible(false);
+  }, [isMobileView]);
+
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
       <div className="portal-custom-reports-download-row">
-        {!sidebarVisible ? (
-          <button type="button" className="btn btn-ghost" onClick={() => setSidebarVisible(true)}>
-            Show Sidebar
+        {!sidebarVisible || isMobileView ? (
+          <button type="button" className="btn btn-ghost" onClick={() => setSidebarVisible((value) => !value)}>
+            {sidebarVisible ? 'Hide Filters' : 'Show Filters'}
           </button>
         ) : null}
         <button type="button" className="btn btn-primary" onClick={downloadReportPdf}>
@@ -1864,7 +1879,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         {sidebarVisible ? (
           <article className="portal-admin-card portal-dashboard-sidebar portal-custom-reports-sidebar">
             <button type="button" className="btn btn-ghost" onClick={() => setSidebarVisible(false)}>
-              Hide Sidebar
+              Hide Filters
             </button>
             <h3>Report Setup</h3>
             <div className="portal-form-grid">

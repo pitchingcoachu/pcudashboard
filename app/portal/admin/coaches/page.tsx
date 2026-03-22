@@ -36,7 +36,10 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
   const { ok, error } = readMessage(params);
   const editIdRaw = typeof params.edit === 'string' ? params.edit : '';
   const editId = Number(editIdRaw);
-  const coachToEdit = Number.isFinite(editId) && editId > 0 ? coaches.find((coach) => coach.userId === editId) ?? null : null;
+  const coachToEdit =
+    Number.isFinite(editId) && editId > 0
+      ? coaches.find((coach) => Number(coach.userId) === editId) ?? null
+      : null;
 
   return (
     <div className="portal-admin-stack">

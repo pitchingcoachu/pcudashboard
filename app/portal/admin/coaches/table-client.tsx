@@ -42,17 +42,18 @@ export function CoachesTable({ coaches, clients, currentUserId }: Props) {
         </thead>
         <tbody>
           {coaches.map((coach) => {
-            const isExpanded = expandedCoachId === coach.userId;
+            const coachId = Number(coach.userId);
+            const isExpanded = expandedCoachId === coachId;
             const assignedPlayers = playersByCoach.get(coach.userId) ?? [];
             return (
-              <Fragment key={coach.userId}>
+              <Fragment key={coachId}>
                 <tr>
                   <td>
                     <button
                       type="button"
                       className="portal-inline-link portal-coach-name-link"
                       style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer' }}
-                      onClick={() => setExpandedCoachId((prev) => (prev === coach.userId ? null : coach.userId))}
+                      onClick={() => setExpandedCoachId((prev) => (prev === coachId ? null : coachId))}
                     >
                       {coach.name}
                     </button>
@@ -63,11 +64,11 @@ export function CoachesTable({ coaches, clients, currentUserId }: Props) {
                   <td>{coach.isActive ? 'Active' : 'Inactive'}</td>
                   <td>{coach.assignedPlayerCount}</td>
                   <td className="portal-table-actions">
-                    {coach.userId === currentUserId ? (
+                    {coachId === currentUserId ? (
                       <span className="portal-muted-text">Current user</span>
                     ) : (
                       <>
-                        <Link className="btn btn-ghost as-link" href={`/portal/admin/coaches?edit=${coach.userId}`}>
+                        <Link className="btn btn-ghost as-link" href={`/portal/admin/coaches?edit=${coachId}`}>
                           Edit
                         </Link>
                         <form method="post" action="/api/admin/coaches/manage">

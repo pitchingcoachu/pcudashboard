@@ -1110,6 +1110,7 @@ function buildHeatCells(points: ChartPoint[], metric: string): HeatCell[] {
 export default function HittingSuite() {
   const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'AB Report' | 'HeatMaps' | 'Swing Data'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
+  const [isMobileView, setIsMobileView] = useState(false);
   const [filters, setFilters] = useState<HittingFiltersPayload | null>(null);
   const [overview, setOverview] = useState<HittingOverviewPayload | null>(null);
   const [abReport, setAbReport] = useState<AbReportPayload | null>(null);
@@ -1176,6 +1177,21 @@ export default function HittingSuite() {
   const [hbMax, setHbMax] = useState('');
   const [pcMin, setPcMin] = useState('');
   const [pcMax, setPcMax] = useState('');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(max-width: 900px)');
+    const sync = () => setIsMobileView(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileView) return;
+    setIsSidebarHidden(true);
+  }, [isMobileView]);
+
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? 'Batter' : splitBy;
   const teamTypeOptions = useMemo(() => {
@@ -1879,7 +1895,7 @@ export default function HittingSuite() {
         {!isSidebarHidden ? (
           <article className="portal-admin-card portal-dashboard-sidebar">
             <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden(true)}>
-              Hide Sidebar
+              Hide Filters
             </button>
             {loadingFilters ? <p>Loading filters...</p> : null}
             {error ? <p className="auth-error">{error}</p> : null}
@@ -2082,26 +2098,47 @@ export default function HittingSuite() {
 
         <article className="portal-admin-card" style={{ alignContent: 'start', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
-            <div style={{ display: 'inline-flex', gap: 8 }}>
-              <button type="button" className={dashboardPage === 'Summary' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('Summary')}>
-                Summary
+            {isMobileView ? (
+              <label className="portal-mobile-control-row">
+                <span>Page</span>
+                <select
+                  className="portal-mobile-page-select"
+                  value={dashboardPage}
+                  onChange={(event) => setDashboardPage(event.target.value as typeof dashboardPage)}
+                >
+                  <option value="Summary">Summary</option>
+                  <option value="Leaderboard">Leaderboard</option>
+                  <option value="AB Report">AB Report</option>
+                  <option value="HeatMaps">HeatMaps</option>
+                  <option value="Swing Data">Swing Data</option>
+                </select>
+              </label>
+            ) : (
+              <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" className={dashboardPage === 'Summary' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('Summary')}>
+                  Summary
+                </button>
+                <button type="button" className={dashboardPage === 'Leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('Leaderboard')}>
+                  Leaderboard
+                </button>
+                <button type="button" className={dashboardPage === 'AB Report' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('AB Report')}>
+                  AB Report
+                </button>
+                <button type="button" className={dashboardPage === 'HeatMaps' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('HeatMaps')}>
+                  HeatMaps
+                </button>
+                <button type="button" className={dashboardPage === 'Swing Data' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('Swing Data')}>
+                  Swing Data
+                </button>
+              </div>
+            )}
+            {isMobileView ? (
+              <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden((value) => !value)}>
+                {isSidebarHidden ? 'Show Filters' : 'Hide Filters'}
               </button>
-              <button type="button" className={dashboardPage === 'Leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('Leaderboard')}>
-                Leaderboard
-              </button>
-              <button type="button" className={dashboardPage === 'AB Report' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('AB Report')}>
-                AB Report
-              </button>
-              <button type="button" className={dashboardPage === 'HeatMaps' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('HeatMaps')}>
-                HeatMaps
-              </button>
-              <button type="button" className={dashboardPage === 'Swing Data' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('Swing Data')}>
-                Swing Data
-              </button>
-            </div>
-            {isSidebarHidden ? (
+            ) : isSidebarHidden ? (
               <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden(false)}>
-                Show Sidebar
+                Show Filters
               </button>
             ) : null}
           </div>
