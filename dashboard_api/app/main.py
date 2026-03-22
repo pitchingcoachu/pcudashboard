@@ -2702,8 +2702,12 @@ def pitching_overview(
                 OR
                 (
                   %(team_norm_count)s::int = 0 AND (
-                    """ + OPPONENT_TEAM_MATCH_SQL + """
-                    OR (""" + TEAM_BUCKET_SQL + """) = 'Opponents'
+                    (""" + TEAM_BUCKET_SQL + """) = 'Opponents'
+                    OR (
+                      """ + OPPONENT_TEAM_MATCH_SQL + """ AND
+                      (""" + TEAM_BUCKET_SQL + """) <> %(school_code)s::text AND
+                      (""" + TEAM_BUCKET_SQL + """) <> 'Campers'
+                    )
                   )
                 )
               )
