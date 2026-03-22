@@ -1902,12 +1902,24 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
     }
     config_path = env_path or default_path_by_school.get(school_code.upper(), "")
     if not config_path or not os.path.exists(config_path):
-        return {"team_only_norm": [], "campers_norm": [], "team_markers_norm": []}
+        fallback_marker = _normalize_team_code(school_code)
+        return {
+            "team_only_norm": [],
+            "hitter_norm": [],
+            "campers_norm": [],
+            "team_markers_norm": [fallback_marker] if fallback_marker else [],
+        }
 
     try:
         text = open(config_path, "r", encoding="utf-8").read()
     except Exception:
-        return {"team_only_norm": [], "campers_norm": [], "team_markers_norm": []}
+        fallback_marker = _normalize_team_code(school_code)
+        return {
+            "team_only_norm": [],
+            "hitter_norm": [],
+            "campers_norm": [],
+            "team_markers_norm": [fallback_marker] if fallback_marker else [],
+        }
 
     allowed_pitchers = _extract_r_vector(text, "allowed_pitchers")
     allowed_hitters = _extract_r_vector(text, "allowed_hitters")
@@ -1922,7 +1934,7 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
     if school_code.upper() == "LSU":
         campers_norm = set()
     team_only_norm = sorted(team_norm - campers_norm)
-    marker_source = [*(team_code_markers or []), *( [team_code] if team_code else [] )]
+    marker_source = [*(team_code_markers or []), *([team_code] if team_code else []), school_code]
     team_markers_norm = sorted({_normalize_team_code(code) for code in marker_source if _normalize_team_code(code)})
     return {
         "team_only_norm": team_only_norm,
@@ -2109,6 +2121,13 @@ CASE
   WHEN (
     %(team_norm_count)s::int > 0 AND
     regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(team_norm)s::text[])
+  ) OR (
+    %(team_norm_count)s::int = 0 AND
+    EXISTS (
+      SELECT 1
+      FROM unnest(%(team_markers_norm)s::text[]) AS tm(code)
+      WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
+    )
   ) THEN %(school_code)s
   ELSE 'Opponents'
 END

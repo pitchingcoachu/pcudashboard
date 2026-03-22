@@ -1516,7 +1516,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     return () => {
       active = false;
     };
-  }, []);
+  }, [schoolCode]);
 
   useEffect(() => {
     let active = true;
