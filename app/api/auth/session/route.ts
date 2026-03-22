@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveAllowedDashboardSchoolCodes } from '../../../../lib/dashboard-access';
+import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -11,14 +12,30 @@ export async function GET() {
     return NextResponse.json({ authenticated: false });
   }
 
+  const role = session.role === 'player' ? 'player' : session.role === 'coach' ? 'coach' : 'admin';
+  const allowedDashboardSchoolCodes =
+    role === 'admin'
+      ? resolveAllowedDashboardSchoolCodes()
+      : await resolveSessionDashboardSchoolOptions({
+          userId: session.userId ?? 0,
+          email: session.email,
+          name: session.name,
+          role,
+          organizationId: session.organizationId ?? 0,
+          playerId: session.playerId ?? null,
+          dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+          appUrl: session.appUrl,
+          apps: session.apps,
+        });
+
   return NextResponse.json({
     authenticated: true,
     name: session.name ?? null,
     email: session.email,
-    role: session.role ?? 'admin',
+    role,
     organizationId: session.organizationId ?? null,
     playerId: session.playerId ?? null,
     dashboardSchoolCode: session.dashboardSchoolCode ?? null,
-    allowedDashboardSchoolCodes: resolveAllowedDashboardSchoolCodes(),
+    allowedDashboardSchoolCodes,
   });
 }

@@ -416,14 +416,17 @@ export default function CatchingSuite() {
   }, [isMobileView]);
 
   useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
     setLoadingFilters(true);
-    fetch('/api/dashboard/catching/filters', { cache: 'no-store' })
+    fetch('/api/dashboard/catching/filters', { signal: controller.signal })
       .then(async (res) => {
         const payload = (await res.json().catch(() => ({}))) as CatchingFiltersPayload & { error?: string };
         if (!res.ok) {
           if (res.status === 404) throw new Error('Catching API endpoint not loaded. Restart Python API server.');
           throw new Error(payload.error ?? 'Failed to load catching filters.');
         }
+        if (!active) return;
         autoFallbackAppliedRef.current = false;
         setFilters(payload);
         const latest = payload.max_date ?? payload.min_date ?? '';
@@ -432,20 +435,33 @@ export default function CatchingSuite() {
           setDateEnd(latest);
         }
       })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load catching filters.'))
-      .finally(() => setLoadingFilters(false));
+      .catch((err) => {
+        if (!active) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setError(err instanceof Error ? err.message : 'Failed to load catching filters.');
+      })
+      .finally(() => {
+        if (active) setLoadingFilters(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, []);
 
   useEffect(() => {
     if (!dateStart && !dateEnd) return;
+    let active = true;
+    const controller = new AbortController();
     const params = new URLSearchParams();
     if (dateStart) params.set('start_date', dateStart);
     if (dateEnd) params.set('end_date', dateEnd);
     if (sessionType && sessionType !== 'All') params.set('session_type', sessionType);
-    fetch(`/api/dashboard/catching/filters?${params.toString()}`, { cache: 'no-store' })
+    fetch(`/api/dashboard/catching/filters?${params.toString()}`, { signal: controller.signal })
       .then(async (res) => {
         const payload = (await res.json().catch(() => ({}))) as CatchingFiltersPayload & { error?: string };
         if (!res.ok) throw new Error(payload.error ?? 'Failed to refresh catcher filters.');
+        if (!active) return;
         setFilters((prev) => {
           if (!prev) return payload;
           return { ...prev, catchers: payload.catchers };
@@ -453,9 +469,15 @@ export default function CatchingSuite() {
         if (catcher !== 'All' && !payload.catchers.includes(catcher)) setCatcher('All');
       })
       .catch(() => {});
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [dateStart, dateEnd, sessionType, catcher]);
 
   useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
     const params = new URLSearchParams();
     if (dateStart) params.set('start_date', dateStart);
     if (dateEnd) params.set('end_date', dateEnd);
@@ -484,13 +506,14 @@ export default function CatchingSuite() {
     if (tableMode === 'Custom' && customCols.length) params.set('custom_columns', customCols.join(','));
 
     setLoadingOverview(true);
-    fetch(`/api/dashboard/catching/overview?${params.toString()}`, { cache: 'no-store' })
+    fetch(`/api/dashboard/catching/overview?${params.toString()}`, { signal: controller.signal })
       .then(async (res) => {
         const payload = (await res.json().catch(() => ({}))) as CatchingOverviewPayload & { error?: string };
         if (!res.ok) {
           if (res.status === 404) throw new Error('Catching API endpoint not loaded. Restart Python API server.');
           throw new Error(payload.error ?? 'Failed to load catching overview.');
         }
+        if (!active) return;
         const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
         const minDate = String(filters?.min_date ?? '').trim();
         const maxDate = String(filters?.max_date ?? '').trim();
@@ -510,8 +533,18 @@ export default function CatchingSuite() {
         setOverview(payload);
         setError(null);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load catching overview.'))
-      .finally(() => setLoadingOverview(false));
+      .catch((err) => {
+        if (!active) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        setError(err instanceof Error ? err.message : 'Failed to load catching overview.');
+      })
+      .finally(() => {
+        if (active) setLoadingOverview(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [dateStart, dateEnd, sessionType, teamType, catcher, hand, batterSide, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols]);
 
   useEffect(() => {

@@ -61,10 +61,23 @@ function resolveScopedOrganizationIdBySelectedSchool(session: SessionLike): numb
   const canScopeBySelectedSchool = isGlobalAdminSession(session) || role === 'coach';
   if (!canScopeBySelectedSchool) return session.organizationId ?? 0;
   const selectedSchool = resolveProgrammingSchoolCode(session);
+  const sessionOrgId = Number(session.organizationId ?? 0);
   const map = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
-  const match = Object.entries(map).find(([, schoolCode]) => schoolCode === selectedSchool);
-  if (match) return Number(match[0]);
-  return session.organizationId ?? 0;
+  const matches = Object.entries(map)
+    .filter(([, schoolCode]) => schoolCode === selectedSchool)
+    .map(([orgId]) => Number(orgId))
+    .filter((orgId) => Number.isFinite(orgId) && orgId > 0);
+
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    if (sessionOrgId > 0 && matches.includes(sessionOrgId)) return sessionOrgId;
+    return matches[0];
+  }
+
+  // Safety: prevent leaking one org's programming data into other selected schools.
+  // Keep PCU fallback for the primary PCU org when map is incomplete.
+  if (selectedSchool === 'PCU' && sessionOrgId > 0) return sessionOrgId;
+  return 0;
 }
 
 export function resolveSchoolScopedOrganizationId(session: SessionLike): number {

@@ -11,6 +11,10 @@ function uniqueNames(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
 }
 
+const RESPONSE_CACHE_HEADERS = {
+  'cache-control': 'private, max-age=20, stale-while-revalidate=100',
+} as const;
+
 export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -48,7 +52,10 @@ export async function GET(request: Request) {
       filtersUrl.searchParams.set('school_code', schoolCode);
       const result = await fetchDashboardJsonWithCache({
         cacheKey: `player-plans:hitting:filters:${filtersUrl.toString()}`,
-        ttlMs: 30000,
+        ttlMs: 120000,
+        staleTtlMs: 300000,
+        timeoutMs: 10000,
+        retries: 1,
         fetcher: () => fetch(filtersUrl.toString(), { cache: 'no-store' }),
       });
       if (result.status < 200 || result.status >= 300) {
@@ -56,11 +63,11 @@ export async function GET(request: Request) {
       }
       const hitterPool = uniqueNames(Array.isArray(result.payload.hitters) ? result.payload.hitters : []);
       const hitters = hitterPool;
-      if (!playerIdentity) return NextResponse.json({ players: hitters });
+      if (!playerIdentity) return NextResponse.json({ players: hitters }, { headers: RESPONSE_CACHE_HEADERS });
       const scoped = selectScopedPlayerName(hitters, playerIdentity);
-      if (scoped) return NextResponse.json({ players: [scoped] });
+      if (scoped) return NextResponse.json({ players: [scoped] }, { headers: RESPONSE_CACHE_HEADERS });
       const fallback = scopedPlayerQueryName(playerIdentity, 'Hitting');
-      return NextResponse.json({ players: fallback ? [fallback] : [] });
+      return NextResponse.json({ players: fallback ? [fallback] : [] }, { headers: RESPONSE_CACHE_HEADERS });
     }
 
     const overviewUrl = new URL(`${apiBase}/v1/${domain.toLowerCase()}/overview`);
@@ -70,7 +77,10 @@ export async function GET(request: Request) {
 
     const result = await fetchDashboardJsonWithCache({
       cacheKey: `player-plans:${domain.toLowerCase()}:overview:${overviewUrl.toString()}`,
-      ttlMs: 30000,
+      ttlMs: 120000,
+      staleTtlMs: 300000,
+      timeoutMs: 10000,
+      retries: 1,
       fetcher: () => fetch(overviewUrl.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {
@@ -83,11 +93,11 @@ export async function GET(request: Request) {
         .filter((name: string) => name && name !== 'All')
     );
     if (splitNames.length) {
-      if (!playerIdentity) return NextResponse.json({ players: splitNames });
+      if (!playerIdentity) return NextResponse.json({ players: splitNames }, { headers: RESPONSE_CACHE_HEADERS });
       const scoped = selectScopedPlayerName(splitNames, playerIdentity);
-      if (scoped) return NextResponse.json({ players: [scoped] });
+      if (scoped) return NextResponse.json({ players: [scoped] }, { headers: RESPONSE_CACHE_HEADERS });
       const fallback = scopedPlayerQueryName(playerIdentity, domain);
-      return NextResponse.json({ players: fallback ? [fallback] : [] });
+      return NextResponse.json({ players: fallback ? [fallback] : [] }, { headers: RESPONSE_CACHE_HEADERS });
     }
 
     const pointNames = uniqueNames(
@@ -95,11 +105,11 @@ export async function GET(request: Request) {
         domain === 'Pitching' ? String(row?.pitcher ?? '').trim() : String(row?.catcher ?? '').trim()
       )
     );
-    if (!playerIdentity) return NextResponse.json({ players: pointNames });
+    if (!playerIdentity) return NextResponse.json({ players: pointNames }, { headers: RESPONSE_CACHE_HEADERS });
     const scoped = selectScopedPlayerName(pointNames, playerIdentity);
-    if (scoped) return NextResponse.json({ players: [scoped] });
+    if (scoped) return NextResponse.json({ players: [scoped] }, { headers: RESPONSE_CACHE_HEADERS });
     const fallback = scopedPlayerQueryName(playerIdentity, domain);
-    return NextResponse.json({ players: fallback ? [fallback] : [] });
+    return NextResponse.json({ players: fallback ? [fallback] : [] }, { headers: RESPONSE_CACHE_HEADERS });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to load player options.' }, { status: 502 });
   }

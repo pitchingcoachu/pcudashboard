@@ -5,6 +5,10 @@ import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../..
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
+const RESPONSE_CACHE_HEADERS = {
+  'cache-control': 'private, max-age=5, stale-while-revalidate=55',
+} as const;
+
 export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -72,13 +76,21 @@ export async function GET(request: Request) {
   try {
     const result = await fetchDashboardJsonWithCache({
       cacheKey: `catching:overview:${url.toString()}`,
-      ttlMs: 15000,
+      ttlMs: 30000,
+      staleTtlMs: 120000,
+      timeoutMs: 12000,
+      retries: 1,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {
       return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
     }
-    return NextResponse.json(result.payload, { headers: { 'x-dashboard-cache': result.cached ? 'HIT' : 'MISS' } });
+    return NextResponse.json(result.payload, {
+      headers: {
+        ...RESPONSE_CACHE_HEADERS,
+        'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',
+      },
+    });
   } catch (error) {
     return NextResponse.json(
       {

@@ -1210,9 +1210,10 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     setLoadingFilters(true);
     setError('');
-    fetch('/api/dashboard/pitching/filters', { cache: 'no-store' })
+    fetch('/api/dashboard/pitching/filters', { signal: controller.signal })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as FiltersPayload & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load dashboard filters.');
@@ -1226,6 +1227,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
       })
       .catch((requestError) => {
         if (!active) return;
+        if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
         setError(requestError instanceof Error ? requestError.message : 'Failed to load dashboard filters.');
       })
       .finally(() => {
@@ -1234,6 +1236,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
 
     return () => {
       active = false;
+      controller.abort();
     };
   }, []);
 
@@ -1358,6 +1361,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
   useEffect(() => {
     if (!canLoadOverview) return;
     let active = true;
+    const controller = new AbortController();
     setLoadingOverview(true);
     setError('');
 
@@ -1408,7 +1412,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
     if (pcMin) params.set('pc_min', pcMin);
     if (pcMax) params.set('pc_max', pcMax);
 
-    fetch(`/api/dashboard/pitching/overview?${params.toString()}`, { cache: 'no-store' })
+    fetch(`/api/dashboard/pitching/overview?${params.toString()}`, { signal: controller.signal })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load pitching overview.');
@@ -1433,6 +1437,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
       })
       .catch((requestError) => {
         if (!active) return;
+        if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
         setError(requestError instanceof Error ? requestError.message : 'Failed to load pitching overview.');
       })
       .finally(() => {
@@ -1441,6 +1446,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
 
     return () => {
       active = false;
+      controller.abort();
     };
   }, [
     appliedFilterVersion,
@@ -1486,6 +1492,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
       return;
     }
     let active = true;
+    const controller = new AbortController();
     setLoadingAbReport(true);
     setAbError('');
     const params = new URLSearchParams();
@@ -1501,7 +1508,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
     const pitchTypesParam = toParamValue(selectedPitchTypes);
     if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
 
-    fetch(`/api/dashboard/pitching/ab-report?${params.toString()}`, { cache: 'no-store' })
+    fetch(`/api/dashboard/pitching/ab-report?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as AbReportPayload & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load AB report.');
@@ -1511,6 +1518,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
       })
       .catch((requestError) => {
         if (!active) return;
+        if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
         setAbError(requestError instanceof Error ? requestError.message : 'Failed to load AB report.');
       })
       .finally(() => {
@@ -1519,6 +1527,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
 
     return () => {
       active = false;
+      controller.abort();
     };
   }, [
     dashboardPage,

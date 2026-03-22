@@ -666,7 +666,7 @@ export async function validateLoginWithDatabase(email: string, password: string)
     is_active: boolean | null;
     organization_id: number | null;
     player_id: number | null;
-  }>(
+    }>(
     `
       SELECT
         u.id,
@@ -681,27 +681,31 @@ export async function validateLoginWithDatabase(email: string, password: string)
       FROM auth_users u
       LEFT JOIN players p ON p.user_id = u.id
       WHERE LOWER(u.email) = LOWER($1)
-      LIMIT 1
+      ORDER BY
+        CASE WHEN COALESCE(u.is_active, TRUE) = TRUE THEN 0 ELSE 1 END,
+        CASE WHEN u.role = 'admin' THEN 0 WHEN u.role = 'coach' THEN 1 WHEN u.role = 'player' THEN 2 ELSE 3 END,
+        u.id ASC
     `,
     [normalizedEmail]
   );
 
-  if ((result.rowCount ?? 0) !== 1) return null;
-  const row = result.rows[0];
-  if (row.is_active === false) return null;
-  if (!verifyPassword(row.password_hash, password)) return null;
-  const appUrl = row.app_url?.trim();
-  if (!appUrl) return null;
-
-  return {
-    userId: row.id,
-    email: row.email,
-    name: row.name ?? undefined,
-    appUrl,
-    role: row.role === 'player' ? 'player' : row.role === 'coach' ? 'coach' : 'admin',
-    organizationId: row.organization_id ?? 0,
-    playerId: row.player_id ?? null,
-  };
+  if ((result.rowCount ?? 0) < 1) return null;
+  for (const row of result.rows) {
+    if (row.is_active === false) continue;
+    if (!verifyPassword(row.password_hash, password)) continue;
+    const appUrl = row.app_url?.trim();
+    if (!appUrl) continue;
+    return {
+      userId: row.id,
+      email: row.email,
+      name: row.name ?? undefined,
+      appUrl,
+      role: row.role === 'player' ? 'player' : row.role === 'coach' ? 'coach' : 'admin',
+      organizationId: row.organization_id ?? 0,
+      playerId: row.player_id ?? null,
+    };
+  }
+  return null;
 }
 
 export async function getSessionUserByEmail(email: string): Promise<SessionUser | null> {
@@ -719,7 +723,7 @@ export async function getSessionUserByEmail(email: string): Promise<SessionUser 
     is_active: boolean | null;
     organization_id: number | null;
     player_id: number | null;
-  }>(
+    }>(
     `
       SELECT
         u.id,
@@ -734,6 +738,9 @@ export async function getSessionUserByEmail(email: string): Promise<SessionUser 
       LEFT JOIN players p ON p.user_id = u.id
       WHERE LOWER(u.email) = LOWER($1)
         AND COALESCE(u.is_active, TRUE) = TRUE
+      ORDER BY
+        CASE WHEN u.role = 'admin' THEN 0 WHEN u.role = 'coach' THEN 1 WHEN u.role = 'player' THEN 2 ELSE 3 END,
+        u.id ASC
       LIMIT 1
     `,
     [normalizedEmail]

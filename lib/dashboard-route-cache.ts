@@ -3,6 +3,7 @@ type JsonRecord = Record<string, unknown>;
 type CacheEntry = {
   at: number;
   expiresAt: number;
+  staleUntil: number;
   status: number;
   payload: JsonRecord;
 };
@@ -51,15 +52,30 @@ function pruneOldestEntries(store: Map<string, CacheEntry>, maxEntries: number) 
   }
 }
 
+function pruneExpiredEntries(store: Map<string, CacheEntry>, now: number) {
+  for (const [key, entry] of store.entries()) {
+    if (entry.staleUntil <= now) store.delete(key);
+  }
+}
+
 export async function fetchDashboardJsonWithCache(options: {
   cacheKey: string;
   ttlMs: number;
+  staleTtlMs?: number;
+  timeoutMs?: number;
+  retries?: number;
   fetcher: () => Promise<Response>;
 }): Promise<{ status: number; payload: JsonRecord; cached: boolean }> {
   const store = getCacheStore();
   const inflight = getInflightStore();
   const now = Date.now();
+  pruneExpiredEntries(store, now);
   const hit = store.get(options.cacheKey);
+  const staleTtlMs = Math.max(0, options.staleTtlMs ?? Math.max(15000, options.ttlMs * 4));
+  const timeoutMs = Math.max(1000, options.timeoutMs ?? 14000);
+  const retries = Math.max(0, options.retries ?? 1);
+  const staleUntil = hit ? Number((hit as CacheEntry & { staleUntil?: number }).staleUntil ?? hit.expiresAt) : 0;
+  const staleHit = hit && staleUntil > now ? hit : null;
   if (hit && hit.expiresAt > now) {
     return { status: hit.status, payload: cloneJsonRecord(hit.payload), cached: true };
   }
@@ -72,26 +88,48 @@ export async function fetchDashboardJsonWithCache(options: {
 
   const inFlightPromise = (async () => {
     try {
-      const response = await options.fetcher();
+      let response: Response | null = null;
+      let attempt = 0;
+      while (attempt <= retries) {
+        attempt += 1;
+        try {
+          const timed = await Promise.race([
+            options.fetcher(),
+            new Promise<Response>((_, reject) =>
+              setTimeout(() => reject(new Error(`Dashboard API timeout after ${timeoutMs}ms`)), timeoutMs)
+            ),
+          ]);
+          response = timed;
+          break;
+        } catch (error) {
+          if (attempt > retries) throw error;
+        }
+      }
+
+      if (!response) throw new Error('Dashboard API request failed.');
+
       const rawPayload = (await response.json().catch(() => ({}))) as JsonRecord;
       const payload = cloneJsonRecord(rawPayload);
       if (response.status < 500) {
+        const freshTtl = Math.max(250, options.ttlMs);
+        const writeNow = Date.now();
         store.set(options.cacheKey, {
-          at: now,
-          expiresAt: now + Math.max(250, options.ttlMs),
+          at: writeNow,
+          expiresAt: writeNow + freshTtl,
+          staleUntil: writeNow + freshTtl + staleTtlMs,
           status: response.status,
           payload: cloneJsonRecord(payload),
         });
         pruneOldestEntries(store, MAX_ENTRIES);
         return { status: response.status, payload, cached: false };
       }
-      if (hit) {
-        return { status: hit.status, payload: cloneJsonRecord(hit.payload), cached: true };
+      if (staleHit) {
+        return { status: staleHit.status, payload: cloneJsonRecord(staleHit.payload), cached: true };
       }
       return { status: response.status, payload, cached: false };
     } catch (error) {
-      if (hit) {
-        return { status: hit.status, payload: cloneJsonRecord(hit.payload), cached: true };
+      if (staleHit) {
+        return { status: staleHit.status, payload: cloneJsonRecord(staleHit.payload), cached: true };
       }
       throw error;
     } finally {

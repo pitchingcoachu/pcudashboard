@@ -5,6 +5,10 @@ import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../..
 import { resolveDashboardPlayerIdentity, selectScopedPlayerName } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
+const RESPONSE_CACHE_HEADERS = {
+  'cache-control': 'private, max-age=20, stale-while-revalidate=100',
+} as const;
+
 function uniqueNames(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
 }
@@ -53,7 +57,10 @@ export async function GET() {
 
     const result = await fetchDashboardJsonWithCache({
       cacheKey: `pitching:filters:${url.toString()}`,
-      ttlMs: 45000,
+      ttlMs: 120000,
+      staleTtlMs: 300000,
+      timeoutMs: 10000,
+      retries: 1,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {
@@ -71,7 +78,12 @@ export async function GET() {
       const scoped = selectScopedPlayerName(payload.pitchers, playerIdentity);
       payload.pitchers = scoped ? [scoped] : [];
     }
-    return NextResponse.json(payload, { headers: { 'x-dashboard-cache': result.cached ? 'HIT' : 'MISS' } });
+    return NextResponse.json(payload, {
+      headers: {
+        ...RESPONSE_CACHE_HEADERS,
+        'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',
+      },
+    });
   } catch (error) {
     return NextResponse.json(
       {

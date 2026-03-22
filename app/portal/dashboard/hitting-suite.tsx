@@ -1204,8 +1204,9 @@ export default function HittingSuite() {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoadingFilters(true);
-    fetch('/api/dashboard/hitting/filters', { cache: 'no-store' })
+    fetch('/api/dashboard/hitting/filters', { signal: controller.signal })
       .then((r) => r.json())
       .then((payload: HittingFiltersPayload & { error?: string }) => {
         if (cancelled) return;
@@ -1227,6 +1228,7 @@ export default function HittingSuite() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         setError(err instanceof Error ? err.message : 'Failed to load filters.');
       })
       .finally(() => {
@@ -1234,6 +1236,7 @@ export default function HittingSuite() {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, []);
 
@@ -1322,6 +1325,7 @@ export default function HittingSuite() {
   useEffect(() => {
     if (!filters) return;
     let cancelled = false;
+    const controller = new AbortController();
     setLoadingOverview(true);
     setError(null);
     const params = new URLSearchParams();
@@ -1353,7 +1357,7 @@ export default function HittingSuite() {
     if (pcMin.trim()) params.set('pc_min', pcMin.trim());
     if (pcMax.trim()) params.set('pc_max', pcMax.trim());
 
-    fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { cache: 'no-store' })
+    fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { signal: controller.signal })
       .then((r) => r.json())
       .then((payload: HittingOverviewPayload & { error?: string }) => {
         if (cancelled) return;
@@ -1373,6 +1377,7 @@ export default function HittingSuite() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         setError(err instanceof Error ? err.message : 'Failed to load hitting summary.');
       })
       .finally(() => {
@@ -1381,6 +1386,7 @@ export default function HittingSuite() {
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [appliedFilterVersion, filters, startDate, endDate, hitter, teamType, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax]);
 
@@ -1394,6 +1400,7 @@ export default function HittingSuite() {
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     setLoadingAbReport(true);
     setAbError(null);
     const params = new URLSearchParams();
@@ -1408,7 +1415,7 @@ export default function HittingSuite() {
     const selectedPitchTypes = (pitchTypes || []).filter((entry) => entry && entry !== 'All');
     if (selectedPitchTypes.length) params.set('pitch_types', selectedPitchTypes.join(';'));
 
-    fetch(`/api/dashboard/hitting/ab-report?${params.toString()}`, { cache: 'no-store' })
+    fetch(`/api/dashboard/hitting/ab-report?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
       .then((r) => r.json())
       .then((payload: AbReportPayload & { error?: string }) => {
         if (cancelled) return;
@@ -1422,6 +1429,7 @@ export default function HittingSuite() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
+        if (err instanceof DOMException && err.name === 'AbortError') return;
         setAbError(err instanceof Error ? err.message : 'Failed to load hitting AB report.');
       })
       .finally(() => {
@@ -1430,6 +1438,7 @@ export default function HittingSuite() {
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [dashboardPage, selectedSingleHitter, abGameKey, startDate, endDate, teamType, oppPitcher, hand, batterSide, pitchTypes]);
 
