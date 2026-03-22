@@ -2128,6 +2128,12 @@ CASE
       FROM unnest(%(team_markers_norm)s::text[]) AS tm(code)
       WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
     )
+  ) OR (
+    %(team_norm_count)s::int = 0 AND
+    COALESCE(NULLIF(TRIM(pitcherteam), ''), '') = '' AND
+    COALESCE(NULLIF(TRIM(batterteam), ''), '') = '' AND
+    COALESCE(NULLIF(TRIM(hometeam), ''), '') = '' AND
+    COALESCE(NULLIF(TRIM(awayteam), ''), '') = ''
   ) THEN %(school_code)s
   ELSE 'Opponents'
 END
@@ -4491,6 +4497,9 @@ def hitting_overview(
                 row_team_bucket = "Campers"
             elif pitcher_key in team_pitcher_norm or pitcher_is_marker:
                 row_team_bucket = school_code
+            elif (not team_pitcher_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
+                # Fallback for schools where team-code columns are blank in source data.
+                row_team_bucket = school_code
             elif opponent_match or ((batter_is_marker or home_is_marker or away_is_marker) and not pitcher_is_marker):
                 row_team_bucket = "Opponents"
             else:
@@ -4871,10 +4880,13 @@ def catching_overview(
                 row_team_bucket = "Campers"
             elif pitcher_key in team_norm or pitcher_is_marker or home_is_marker or away_is_marker:
                 row_team_bucket = school_code
+            elif (not team_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
+                # Fallback for schools where team-code columns are blank in source data.
+                row_team_bucket = school_code
             elif opponent_match:
                 row_team_bucket = "Opponents"
             else:
-                row_team_bucket = "Other"
+                row_team_bucket = "Opponents"
             if row_team_bucket != team_type_value:
                 continue
         if selected_catcher_keys and _normalize_name_key(str(row.get("catcher") or "")) not in selected_catcher_keys:
