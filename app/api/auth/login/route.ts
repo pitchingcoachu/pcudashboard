@@ -15,6 +15,14 @@ type LoginPayload = {
   password?: string;
 };
 
+function resolveLoginDefaultDashboardSchoolCode(email: string, current: string | null | undefined): string | null | undefined {
+  const normalizedEmail = String(email ?? '').trim().toLowerCase();
+  if (normalizedEmail === 'jgaynor@pitchingcoachu.com') {
+    return 'PCU';
+  }
+  return current;
+}
+
 export async function POST(request: Request) {
   try {
     const requestUrl = new URL(request.url);
@@ -49,7 +57,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid credentials.' }, { status: 401 });
     }
 
-    const token = createSessionToken(user);
+    const token = createSessionToken({
+      ...user,
+      dashboardSchoolCode: resolveLoginDefaultDashboardSchoolCode(user.email, user.dashboardSchoolCode),
+    });
     const hostname = requestUrl.hostname;
 
     if (isWebMode) {
