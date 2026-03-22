@@ -2219,7 +2219,6 @@ BATTER_NAME_IS_KNOWN_SQL = """
   (%(known_campers_count)s::int > 0 AND """ + BATTER_NAME_NORM_SQL + """ = ANY(%(known_campers)s::text[]))
 )
 """
-SCHOOL_RELEVANT_ROW_SQL = "(" + SCHOOL_RELEVANT_TEAM_SQL + " OR " + PITCHER_NAME_IS_KNOWN_SQL + " OR " + BATTER_NAME_IS_KNOWN_SQL + ")"
 
 
 @app.get("/health")
@@ -2236,16 +2235,6 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
     hitter_norm = set(roster.get("hitter_norm", []) or [])
     campers_norm = set(roster.get("campers_norm", []) or [])
     team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
-    relevance_params = {
-        "school_code": school_code,
-        "team_markers_norm": team_markers_norm,
-        "known_pitchers": sorted(team_norm),
-        "known_pitchers_count": len(team_norm),
-        "known_hitters": sorted(hitter_norm),
-        "known_hitters_count": len(hitter_norm),
-        "known_campers": sorted(campers_norm),
-        "known_campers_count": len(campers_norm),
-    }
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -2255,9 +2244,9 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
                   MAX(session_date)::text AS max_date
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 """,
-                relevance_params,
+                {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             date_row = cur.fetchone() or {}
 
@@ -2266,11 +2255,11 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
                 SELECT DISTINCT TRIM(pitcher) AS pitcher
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(pitcher), '') <> ''
                 ORDER BY pitcher ASC
                 """,
-                relevance_params,
+                {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             pitchers = [str(row["pitcher"]) for row in cur.fetchall()]
 
@@ -2279,11 +2268,11 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
                 SELECT DISTINCT TRIM(batter) AS opp_hitter
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(batter), '') <> ''
                 ORDER BY opp_hitter ASC
                 """,
-                relevance_params,
+                {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             opp_hitters = [str(row["opp_hitter"]) for row in cur.fetchall()]
 
@@ -2298,11 +2287,11 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
                     """ + PITCH_TYPE_ORDER_SQL + """ AS pitch_sort
                   FROM public.pitch_events
                   WHERE school_code = %(school_code)s
-                    AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                    AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 ) t
                 ORDER BY t.pitch_sort ASC, t.pitch_type ASC
                 """,
-                relevance_params,
+                {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             pitch_types = [str(row["pitch_type"]) for row in cur.fetchall()]
 
@@ -2650,7 +2639,7 @@ def pitching_overview(
                )
              ) = pd_play.playid_key
         WHERE school_code = %(school_code)s
-          AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+          AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
           AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
           AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
           AND (
@@ -4238,19 +4227,8 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
     roster = _load_school_roster(school_code)
     campers_norm = set(roster.get("campers_norm", []) or [])
     hitter_norm_set = set(roster.get("hitter_norm", []) or [])
-    pitcher_norm_set = set(roster.get("team_only_norm", []) or [])
     team_hitter_norm = sorted(hitter_norm_set - campers_norm)
     team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
-    relevance_params = {
-        "school_code": school_code,
-        "team_markers_norm": team_markers_norm,
-        "known_pitchers": sorted(pitcher_norm_set),
-        "known_pitchers_count": len(pitcher_norm_set),
-        "known_hitters": sorted(hitter_norm_set),
-        "known_hitters_count": len(hitter_norm_set),
-        "known_campers": sorted(campers_norm),
-        "known_campers_count": len(campers_norm),
-    }
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -4260,9 +4238,9 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                   MAX(session_date)::text AS max_date
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 """,
-                relevance_params,
+                {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             date_row = cur.fetchone() or {}
 
@@ -4271,7 +4249,7 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 SELECT DISTINCT TRIM(batter) AS hitter
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(batter), '') <> ''
                   AND (
                     %(hitter_count)s::int = 0 OR
@@ -4280,9 +4258,10 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 ORDER BY hitter ASC
                 """,
                 {
-                    **relevance_params,
+                    "school_code": school_code,
                     "hitters_norm": team_hitter_norm,
                     "hitter_count": len(team_hitter_norm),
+                    "team_markers_norm": team_markers_norm,
                 },
             )
             hitters = [str(row["hitter"]) for row in cur.fetchall()]
@@ -4292,11 +4271,11 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 SELECT DISTINCT TRIM(pitcher) AS opp_pitcher
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(pitcher), '') <> ''
                 ORDER BY opp_pitcher ASC
                 """,
-                relevance_params,
+                {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             opp_pitchers = [str(row["opp_pitcher"]) for row in cur.fetchall()]
             if team_hitter_norm:
@@ -4316,11 +4295,11 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 + """ AS pitch_sort
                   FROM public.pitch_events
                   WHERE school_code = %(school_code)s
-                    AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                    AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 ) t
                 ORDER BY t.pitch_sort ASC, t.pitch_type ASC
                 """,
-                relevance_params,
+                {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             pitch_types = [str(row["pitch_type"]) for row in cur.fetchall()]
     except Exception as exc:
@@ -4551,7 +4530,7 @@ def hitting_overview(
                   ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number
                 FROM public.pitch_events pe
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                 ORDER BY session_date, COALESCE(created_at, NOW()), id
@@ -4561,12 +4540,6 @@ def hitting_overview(
                     "start_date": start_date,
                     "end_date": end_date,
                     "team_markers_norm": sorted(team_markers_norm),
-                    "known_pitchers": sorted(set(roster.get("team_only_norm", []) or [])),
-                    "known_pitchers_count": len(set(roster.get("team_only_norm", []) or [])),
-                    "known_hitters": sorted(hitter_norm),
-                    "known_hitters_count": len(hitter_norm),
-                    "known_campers": sorted(campers_norm),
-                    "known_campers_count": len(campers_norm),
                 },
             )
             rows = [dict(row) for row in cur.fetchall()]
@@ -4734,20 +4707,8 @@ def catching_filters(
     school_code = _validate_school_code(school_code)
     roster = _load_school_roster(school_code)
     campers_norm = set(roster.get("campers_norm", []) or [])
-    pitcher_norm_set = set(roster.get("team_only_norm", []) or [])
-    hitter_norm_set = set(roster.get("hitter_norm", []) or [])
     team_catcher_norm = set(roster.get("hitter_norm", []) or []) - campers_norm
     team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
-    relevance_params = {
-        "school_code": school_code,
-        "team_markers_norm": team_markers_norm,
-        "known_pitchers": sorted(pitcher_norm_set),
-        "known_pitchers_count": len(pitcher_norm_set),
-        "known_hitters": sorted(hitter_norm_set),
-        "known_hitters_count": len(hitter_norm_set),
-        "known_campers": sorted(campers_norm),
-        "known_campers_count": len(campers_norm),
-    }
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
     try:
@@ -4759,9 +4720,9 @@ def catching_filters(
                   MAX(session_date)::text AS max_date
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 """,
-                relevance_params,
+                {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             date_row = cur.fetchone() or {}
 
@@ -4770,7 +4731,7 @@ def catching_filters(
                 SELECT DISTINCT TRIM(catcher) AS catcher
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(catcher), '') <> ''
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
@@ -4783,10 +4744,11 @@ def catching_filters(
                 ORDER BY catcher ASC
                 """,
                 {
-                    **relevance_params,
+                    "school_code": school_code,
                     "start_date": start_date,
                     "end_date": end_date,
                     "session_type": session_type,
+                    "team_markers_norm": team_markers_norm,
                 },
             )
             catchers = [str(row["catcher"]) for row in cur.fetchall()]
@@ -4806,11 +4768,11 @@ def catching_filters(
                 + """ AS pitch_sort
                   FROM public.pitch_events
                   WHERE school_code = %(school_code)s
-                    AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                    AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 ) t
                 ORDER BY t.pitch_sort ASC, t.pitch_type ASC
                 """,
-                relevance_params,
+                {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             pitch_types = [str(row["pitch_type"]) for row in cur.fetchall()]
     except Exception as exc:
@@ -4962,7 +4924,7 @@ def catching_overview(
                   ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number
                 FROM public.pitch_events pe
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                 ORDER BY session_date, COALESCE(created_at, NOW()), id
@@ -4972,12 +4934,6 @@ def catching_overview(
                     "start_date": start_date,
                     "end_date": end_date,
                     "team_markers_norm": sorted(team_markers_norm),
-                    "known_pitchers": sorted(set(roster.get("team_only_norm", []) or [])),
-                    "known_pitchers_count": len(set(roster.get("team_only_norm", []) or [])),
-                    "known_hitters": sorted(hitter_norm),
-                    "known_hitters_count": len(hitter_norm),
-                    "known_campers": sorted(campers_norm),
-                    "known_campers_count": len(campers_norm),
                 },
             )
             rows = [dict(row) for row in cur.fetchall()]
