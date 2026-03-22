@@ -3773,23 +3773,23 @@ main {
   .portal-header {
     display: grid;
     grid-template-columns: auto 1fr auto;
-    align-items: start;
-    gap: 0.45rem;
-    padding: 0.55rem 0.65rem;
+    align-items: center;
+    gap: 0.42rem;
+    padding: 0.4rem 0.55rem;
   }
 
   .portal-header-left {
     align-items: center;
     justify-content: flex-start;
-    gap: 0.5rem;
+    gap: 0.35rem;
     width: auto;
   }
 
   .portal-header-right {
     display: inline-flex;
     justify-self: end;
-    align-items: flex-start;
-    gap: 0.35rem;
+    align-items: center;
+    gap: 0.25rem;
     min-width: 0;
   }
 
@@ -3800,13 +3800,13 @@ main {
   }
 
   .portal-header-right .portal-header-logo-link {
-    width: 42px;
-    height: 42px;
+    width: 36px;
+    height: 36px;
   }
 
   .portal-header-logo--pcu-right {
-    width: 42px;
-    height: 42px;
+    width: 36px;
+    height: 36px;
   }
 
   .portal-user-meta p {
@@ -3828,8 +3828,7 @@ main {
   .portal-nav-mobile-wrap {
     display: block;
     width: 100%;
-    display: grid;
-    gap: 0.35rem;
+    min-width: 0;
   }
 
   .portal-dashboard-suite-select-wrap {
@@ -3841,13 +3840,27 @@ main {
   }
 
   .portal-header-center {
-    grid-column: 1 / -1;
+    grid-column: auto;
     width: 100%;
+    min-width: 0;
   }
 
   .portal-header-nav-stack {
     width: 100%;
-    gap: 0.35rem;
+    gap: 0.2rem;
+  }
+
+  .portal-school-switcher-trigger--logo-only .portal-school-switcher-trigger-logo {
+    width: 36px;
+    height: 36px;
+  }
+
+  .portal-nav-mobile {
+    border-radius: 999px;
+    min-height: 36px;
+    padding: 0.44rem 1.8rem 0.44rem 0.72rem;
+    font-size: 0.74rem;
+    letter-spacing: 0.02em;
   }
 
   .portal-school-switcher {
