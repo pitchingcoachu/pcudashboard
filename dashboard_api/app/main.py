@@ -2130,7 +2130,7 @@ CASE
   ) OR (
     %(team_norm_count)s::int = 0
   ) THEN %(school_code)s
-  ELSE 'Opponents'
+  ELSE %(school_code)s
 END
 """
 
@@ -4498,7 +4498,7 @@ def hitting_overview(
             elif opponent_match or ((batter_is_marker or home_is_marker or away_is_marker) and not pitcher_is_marker):
                 row_team_bucket = "Opponents"
             else:
-                row_team_bucket = "Opponents"
+                row_team_bucket = school_code
             if row_team_bucket != team_type_value:
                 continue
         if selected_hitter_keys and _normalize_name_key(str(row.get("batter") or "")) not in selected_hitter_keys:
@@ -4881,7 +4881,7 @@ def catching_overview(
             elif opponent_match:
                 row_team_bucket = "Opponents"
             else:
-                row_team_bucket = "Opponents"
+                row_team_bucket = school_code
             if row_team_bucket != team_type_value:
                 continue
         if selected_catcher_keys and _normalize_name_key(str(row.get("catcher") or "")) not in selected_catcher_keys:
