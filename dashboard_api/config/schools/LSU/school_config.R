@@ -6,19 +6,28 @@ school_config <- list(
   # These are checked alongside team_code during allowed-player verification.
   team_code_markers = c("LSU_TIG", "LSU", "LSU_FAL"),
   allowed_pitchers = c(
-    "Guidry, Gavin","Schmidt, William","Rizy, Mavrick","Evans, Casan",
-    "Moore, Cooper","Cowan, Zac","Lachenmayer, Danny","Noot, Jaden",
-    "Williams, Cooper","Dathe, Dax","Garcia, Santiago","Ricken, Reagan",
-    "Plog, Ethan","Aase, Jonah","Fontenot, Grant","Primeaux, DJ",
-    "Benge, Connor","Sheerin, Deven","Smart, Ryler","Theophilus, Zion","Paz, Marcos", "Shahrdar, John"
+    "Arrambide, Cade","Stanfield, Chris","Milam, Steven","Reaves, Tanner",
+    "Curiel, Derek","Brown, Jake","Guidry, Gavin","Schmidt, William",
+    "Simpson, Brayden","Pearson, John","Yamin IV, Edward","Harden, Daniel",
+    "Clauss, Ethan","Rizy, Mavrick","Braun, Mason","Evans, Casan",
+    "Moore, Cooper","Patrick, William","Dardar, Seth","Serna Jr., Omar",
+    "Cowan, Zac","Noot, Jaden","Lachenmayer, Danny","Williams, Cooper",
+    "Dathe, Dax","Ruckert, Jack","Yorke, Zach","Garcia, Santiago",
+    "Ricken, Reagan","Plog, Ethan","Aase, Jonah","Fontenot, Grant",
+    "Primeaux, DJ","Benge, Connor","Caraway, Trent","Sheerin, Deven",
+    "Theophilus, Zion","Paz, Marcos"
   ),
   allowed_hitters = c(
-    "Guidry, Gavin","Schmidt, William","Rizy, Mavrick","Evans, Casan",
-    "Moore, Cooper","Cowan, Zac","Lachenmayer, Danny","Noot, Jaden",
-    "Williams, Cooper","Dathe, Dax","Garcia, Santiago","Ricken, Reagan",
-    "Plog, Ethan","Aase, Jonah","Fontenot, Grant","Primeaux, DJ",
-    "Benge, Connor","Sheerin, Deven","Smart, Ryler","Theophilus, Zion","Paz, Marcos", "Anderson, Kade", "Shahrdar, John"
-
+    "Arrambide, Cade","Stanfield, Chris","Milam, Steven","Reaves, Tanner",
+    "Curiel, Derek","Brown, Jake","Guidry, Gavin","Schmidt, William",
+    "Simpson, Brayden","Pearson, John","Yamin IV, Edward","Harden, Daniel",
+    "Clauss, Ethan","Rizy, Mavrick","Braun, Mason","Evans, Casan",
+    "Moore, Cooper","Patrick, William","Dardar, Seth","Serna Jr., Omar",
+    "Cowan, Zac","Noot, Jaden","Lachenmayer, Danny","Williams, Cooper",
+    "Dathe, Dax","Ruckert, Jack","Yorke, Zach","Garcia, Santiago",
+    "Ricken, Reagan","Plog, Ethan","Aase, Jonah","Fontenot, Grant",
+    "Primeaux, DJ","Benge, Connor","Caraway, Trent","Sheerin, Deven",
+    "Theophilus, Zion","Paz, Marcos"
   ),
   allowed_campers = c(
     "Guidry, Gavin","Schmidt, William","Rizy, Mavrick","Evans, Casan",

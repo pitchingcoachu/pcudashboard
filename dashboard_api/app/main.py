@@ -2203,8 +2203,9 @@ OPPONENT_TEAM_MATCH_SQL = """
   )
 )
 """
-# Keep global datasets broad; strict team-code checks are applied only for Opponents filters.
-SCHOOL_RELEVANT_TEAM_SQL = "TRUE"
+# Only include rows that are explicitly tied to the school by team code.
+# This prevents unrelated uploads (same school_code bucket) from leaking into All/Team/Opponent views.
+SCHOOL_RELEVANT_TEAM_SQL = "(" + PITCHER_TEAM_IS_MARKER_SQL + " OR " + BATTER_TEAM_IS_MARKER_SQL + ")"
 
 PITCHER_NAME_IS_KNOWN_SQL = """
 (
