@@ -15,59 +15,97 @@ type DashboardShellProps = {
   selectedSchoolCode: string;
 };
 
+type SuiteName =
+  | 'Pitching'
+  | 'Hitting'
+  | 'Catching'
+  | 'Custom Reports'
+  | 'Comparison Tool'
+  | 'Player Plans'
+  | 'Player Notes'
+  | 'Stuff+ Calculator';
+
 export default function DashboardShell({ role, selectedSchoolCode }: DashboardShellProps) {
-  const [suite, setSuite] = useState<
-    'Pitching' | 'Hitting' | 'Catching' | 'Custom Reports' | 'Comparison Tool' | 'Player Plans' | 'Player Notes' | 'Stuff+ Calculator'
-  >('Pitching');
+  const [suite, setSuite] = useState<SuiteName>('Pitching');
+  const [mountedSuites, setMountedSuites] = useState<Record<SuiteName, boolean>>({
+    Pitching: true,
+    Hitting: false,
+    Catching: false,
+    'Custom Reports': false,
+    'Comparison Tool': false,
+    'Player Plans': false,
+    'Player Notes': false,
+    'Stuff+ Calculator': false,
+  });
   const canAccessPlayerNotes = role === 'admin' || role === 'coach';
+  const suiteOptions: SuiteName[] = canAccessPlayerNotes
+    ? ['Pitching', 'Hitting', 'Catching', 'Custom Reports', 'Comparison Tool', 'Player Plans', 'Player Notes', 'Stuff+ Calculator']
+    : ['Pitching', 'Hitting', 'Catching', 'Custom Reports', 'Comparison Tool', 'Player Plans', 'Stuff+ Calculator'];
+  const showSuite = (name: SuiteName) => suite === name;
+  const activateSuite = (name: SuiteName) => {
+    setSuite(name);
+    setMountedSuites((current) => (current[name] ? current : { ...current, [name]: true }));
+  };
 
   return (
     <div style={{ display: 'grid', gap: 10 }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', paddingInline: 4 }}>
-        <button type="button" className={suite === 'Pitching' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setSuite('Pitching')}>
-          Pitching
-        </button>
-        <button type="button" className={suite === 'Hitting' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setSuite('Hitting')}>
-          Hitting
-        </button>
-        <button type="button" className={suite === 'Catching' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setSuite('Catching')}>
-          Catching
-        </button>
-        <button type="button" className={suite === 'Custom Reports' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setSuite('Custom Reports')}>
-          Custom Reports
-        </button>
-        <button type="button" className={suite === 'Comparison Tool' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setSuite('Comparison Tool')}>
-          Comparison Tool
-        </button>
-        <button type="button" className={suite === 'Player Plans' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setSuite('Player Plans')}>
-          Player Plans
-        </button>
-        {canAccessPlayerNotes ? (
-          <button type="button" className={suite === 'Player Notes' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setSuite('Player Notes')}>
-            Player Notes
-          </button>
-        ) : null}
-        <button type="button" className={suite === 'Stuff+ Calculator' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setSuite('Stuff+ Calculator')}>
-          Stuff+ Calculator
-        </button>
+      <div className="portal-dashboard-suite-select-wrap">
+        <label className="portal-nav-mobile-label" htmlFor="dashboard-suite-select">
+          Dashboard Suite
+        </label>
+        <select
+          id="dashboard-suite-select"
+          className="portal-nav-mobile"
+          value={suite}
+          onChange={(event) => activateSuite(event.target.value as SuiteName)}
+        >
+          {suiteOptions.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
       </div>
-      {suite === 'Pitching' ? (
-        <PitchingSuite role={role} />
-      ) : suite === 'Stuff+ Calculator' ? (
-        <StuffCalculatorSuite />
-      ) : suite === 'Hitting' ? (
-        <HittingSuite />
-      ) : suite === 'Catching' ? (
-        <CatchingSuite />
-      ) : suite === 'Comparison Tool' ? (
-        <ComparisonToolSuite />
-      ) : suite === 'Player Plans' ? (
-        <PlayerPlansSuite />
-      ) : suite === 'Player Notes' && canAccessPlayerNotes ? (
-        <PlayerNotesSuite />
-      ) : (
-        <CustomReportsSuite initialSchoolCode={selectedSchoolCode} />
-      )}
+      <div className="portal-dashboard-suite-tabs">
+        {suiteOptions.map((name) => (
+          <button
+            key={name}
+            type="button"
+            className={suite === name ? 'btn btn-primary' : 'btn btn-ghost'}
+            onClick={() => activateSuite(name)}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      {mountedSuites.Pitching ? <div style={{ display: showSuite('Pitching') ? 'block' : 'none' }}><PitchingSuite role={role} /></div> : null}
+      {mountedSuites.Hitting ? <div style={{ display: showSuite('Hitting') ? 'block' : 'none' }}><HittingSuite /></div> : null}
+      {mountedSuites.Catching ? <div style={{ display: showSuite('Catching') ? 'block' : 'none' }}><CatchingSuite /></div> : null}
+      {mountedSuites['Custom Reports'] ? (
+        <div style={{ display: showSuite('Custom Reports') ? 'block' : 'none' }}>
+          <CustomReportsSuite initialSchoolCode={selectedSchoolCode} />
+        </div>
+      ) : null}
+      {mountedSuites['Comparison Tool'] ? (
+        <div style={{ display: showSuite('Comparison Tool') ? 'block' : 'none' }}>
+          <ComparisonToolSuite />
+        </div>
+      ) : null}
+      {mountedSuites['Player Plans'] ? (
+        <div style={{ display: showSuite('Player Plans') ? 'block' : 'none' }}>
+          <PlayerPlansSuite />
+        </div>
+      ) : null}
+      {canAccessPlayerNotes && mountedSuites['Player Notes'] ? (
+        <div style={{ display: showSuite('Player Notes') ? 'block' : 'none' }}>
+          <PlayerNotesSuite />
+        </div>
+      ) : null}
+      {mountedSuites['Stuff+ Calculator'] ? (
+        <div style={{ display: showSuite('Stuff+ Calculator') ? 'block' : 'none' }}>
+          <StuffCalculatorSuite />
+        </div>
+      ) : null}
     </div>
   );
 }

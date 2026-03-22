@@ -1459,6 +1459,23 @@ main {
   display: none;
 }
 
+.portal-dashboard-suite-select-wrap {
+  display: none;
+  width: 100%;
+}
+
+.portal-dashboard-suite-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-bottom: 0.08rem;
+}
+
+.portal-dashboard-suite-tabs .btn {
+  white-space: nowrap;
+}
+
 .portal-school-switcher {
   position: relative;
 }
@@ -3742,6 +3759,14 @@ main {
     width: 100%;
   }
 
+  .portal-dashboard-suite-select-wrap {
+    display: block;
+  }
+
+  .portal-dashboard-suite-tabs {
+    display: none;
+  }
+
   .portal-header-center {
     width: 100%;
   }
@@ -3753,6 +3778,12 @@ main {
 
   .portal-school-switcher {
     align-self: center;
+  }
+
+  .portal-school-switcher-menu {
+    left: auto;
+    right: 0;
+    min-width: 148px;
   }
 
   .portal-panel {
@@ -3791,7 +3822,7 @@ main {
   }
 
   .portal-table {
-    min-width: 620px;
+    min-width: 520px;
   }
 
   .btn {
@@ -3815,6 +3846,34 @@ main {
 
   .portal-profile-goals-grid {
     grid-template-columns: 1fr;
+  }
+
+  .portal-dashboard-suite-layout > .portal-admin-card,
+  .portal-dashboard-suite-layout > .portal-admin-stack {
+    min-height: auto;
+  }
+
+  .portal-custom-reports-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-custom-reports-sidebar {
+    position: static;
+    top: auto;
+  }
+
+  .portal-custom-reports-cell {
+    min-height: 320px;
+  }
+
+  .portal-custom-reports-heatmap,
+  .portal-custom-reports-velocity {
+    min-height: 320px;
+    height: 320px;
+  }
+
+  .portal-day-card {
+    overflow-x: auto;
   }
 
   .portal-social-row {

@@ -9,16 +9,30 @@ import {
   SESSION_COOKIE_NAME,
 } from '../../../../lib/auth';
 import { resolveAllowedDashboardSchoolCodes } from '../../../../lib/dashboard-access';
+import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role !== 'admin') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (session.role !== 'admin' && session.role !== 'coach') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const body = (await request.json().catch(() => ({}))) as { schoolCode?: string | null };
   const requested = String(body.schoolCode ?? '').trim().toUpperCase();
-  const allowed = resolveAllowedDashboardSchoolCodes();
+  const allowed =
+    session.role === 'admin'
+      ? resolveAllowedDashboardSchoolCodes()
+      : await resolveSessionDashboardSchoolOptions({
+          userId: session.userId ?? 0,
+          email: session.email,
+          name: session.name,
+          role: 'coach',
+          organizationId: session.organizationId ?? 0,
+          playerId: session.playerId ?? null,
+          dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+          appUrl: session.appUrl,
+          apps: session.apps,
+        });
   const nextSchoolCode = requested && allowed.includes(requested) ? requested : null;
 
   const token = createSessionToken({

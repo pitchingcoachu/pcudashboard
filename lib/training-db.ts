@@ -674,7 +674,7 @@ export async function createStaffUser(input: {
   password: string;
   phone?: string;
   role: 'admin' | 'coach';
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true; reusedExistingPassword: boolean } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
@@ -688,15 +688,41 @@ export async function createStaffUser(input: {
     return { ok: false, error: 'Role must be admin or coach.' };
   }
 
-  const existing = await pool.query<{ id: number }>(
-    `SELECT id FROM auth_users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
-    [normalizedEmail]
+  const existingSameOrg = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM auth_users
+      WHERE LOWER(email) = LOWER($1)
+        AND organization_id = $2
+      LIMIT 1
+    `,
+    [normalizedEmail, input.organizationId]
   );
-  if ((existing.rowCount ?? 0) > 0) {
-    return { ok: false, error: 'A login already exists with that email.' };
+  if ((existingSameOrg.rowCount ?? 0) > 0) {
+    return { ok: false, error: 'A coach/admin login already exists with that email for this school.' };
   }
 
-  const passwordHash = createPasswordHash(input.password);
+  const existingAny = await pool.query<{ password_hash: string | null; role: string | null }>(
+    `
+      SELECT password_hash, role
+      FROM auth_users
+      WHERE LOWER(email) = LOWER($1)
+      ORDER BY id ASC
+      LIMIT 1
+    `,
+    [normalizedEmail]
+  );
+  if ((existingAny.rowCount ?? 0) > 0) {
+    const existingRole = String(existingAny.rows[0].role ?? '').trim().toLowerCase();
+    if (existingRole && existingRole !== 'admin' && existingRole !== 'coach') {
+      return { ok: false, error: 'This email is already used by a player account. Use a different email.' };
+    }
+  }
+
+  const reusedExistingPassword = Boolean((existingAny.rows[0]?.password_hash ?? '').trim());
+  const passwordHash = reusedExistingPassword
+    ? String(existingAny.rows[0]?.password_hash ?? '').trim()
+    : createPasswordHash(input.password);
   await pool.query(
     `
       INSERT INTO auth_users (
@@ -717,7 +743,7 @@ export async function createStaffUser(input: {
     ]
   );
 
-  return { ok: true };
+  return { ok: true, reusedExistingPassword };
 }
 
 export async function setStaffActiveStatus(input: {
@@ -793,12 +819,13 @@ export async function updateStaffUser(input: {
       FROM auth_users
       WHERE LOWER(email) = LOWER($1)
         AND id <> $2
+        AND organization_id = $3
       LIMIT 1
     `,
-    [normalizedEmail, input.staffUserId]
+    [normalizedEmail, input.staffUserId, input.organizationId]
   );
   if ((existing.rowCount ?? 0) > 0) {
-    return { ok: false, error: 'A login already exists with that email.' };
+    return { ok: false, error: 'A coach/admin login already exists with that email for this school.' };
   }
 
   const updated = await pool.query<{ id: number }>(

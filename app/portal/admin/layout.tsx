@@ -1,16 +1,17 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../lib/portal-session';
-import { resolveAllowedDashboardSchoolCodes, resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
+import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { canUseClientManagement, canUseProgrammingData } from '../../../lib/programming-scope';
 import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-brand';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
+import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const session = await requirePortalSession();
-  const schoolOptions = resolveAllowedDashboardSchoolCodes();
+  const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
   const brand = resolveSchoolBrand(selectedSchool);
   const canAccessProgramming = canUseProgrammingData(session);
@@ -24,7 +25,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
       <header className="portal-header">
         <div className="portal-header-left">
-          {session.role === 'admin' ? (
+          {session.role === 'admin' || session.role === 'coach' ? (
             <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
           ) : (
             <Link href="/portal/admin" className="portal-header-logo-link" aria-label={`${brand.schoolCode} Home`}>

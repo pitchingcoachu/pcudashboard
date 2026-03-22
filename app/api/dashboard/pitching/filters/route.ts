@@ -53,7 +53,7 @@ export async function GET() {
 
     const result = await fetchDashboardJsonWithCache({
       cacheKey: `pitching:filters:${url.toString()}`,
-      ttlMs: 15000,
+      ttlMs: 45000,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {

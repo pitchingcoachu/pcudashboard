@@ -48,7 +48,7 @@ export async function GET(request: Request) {
       filtersUrl.searchParams.set('school_code', schoolCode);
       const result = await fetchDashboardJsonWithCache({
         cacheKey: `player-plans:hitting:filters:${filtersUrl.toString()}`,
-        ttlMs: 12000,
+        ttlMs: 30000,
         fetcher: () => fetch(filtersUrl.toString(), { cache: 'no-store' }),
       });
       if (result.status < 200 || result.status >= 300) {
@@ -70,7 +70,7 @@ export async function GET(request: Request) {
 
     const result = await fetchDashboardJsonWithCache({
       cacheKey: `player-plans:${domain.toLowerCase()}:overview:${overviewUrl.toString()}`,
-      ttlMs: 12000,
+      ttlMs: 30000,
       fetcher: () => fetch(overviewUrl.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {

@@ -41,7 +41,14 @@ export async function POST(request: Request) {
     });
 
     if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);
-    return redirectWithMessage(request, redirectTo, 'ok', 'Coach profile created.');
+    return redirectWithMessage(
+      request,
+      redirectTo,
+      'ok',
+      result.reusedExistingPassword
+        ? 'Coach profile created. Existing password for this email was reused across schools.'
+        : 'Coach profile created.'
+    );
   } catch (error) {
     return redirectWithMessage(
       request,

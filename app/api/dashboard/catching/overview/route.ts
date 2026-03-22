@@ -72,7 +72,7 @@ export async function GET(request: Request) {
   try {
     const result = await fetchDashboardJsonWithCache({
       cacheKey: `catching:overview:${url.toString()}`,
-      ttlMs: 7000,
+      ttlMs: 15000,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {

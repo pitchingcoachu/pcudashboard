@@ -25,6 +25,32 @@ export type SessionUser = {
   playerId: number | null;
 };
 
+export async function listActiveStaffOrganizationIdsByEmail(email: string): Promise<number[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureAuthDbReady();
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) return [];
+  const pool = getDbPool();
+  const result = await pool.query<{ organization_id: number | null }>(
+    `
+      SELECT DISTINCT organization_id
+      FROM auth_users
+      WHERE LOWER(email) = LOWER($1)
+        AND COALESCE(is_active, TRUE) = TRUE
+        AND role IN ('admin', 'coach')
+        AND organization_id IS NOT NULL
+    `,
+    [normalizedEmail]
+  );
+  return Array.from(
+    new Set(
+      result.rows
+        .map((row) => Number(row.organization_id ?? 0))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    )
+  );
+}
+
 type ResetTokenRecord = {
   token: string;
   email: string;

@@ -57,7 +57,9 @@ function isGlobalAdminSession(session: SessionLike): boolean {
 }
 
 function resolveScopedOrganizationIdBySelectedSchool(session: SessionLike): number {
-  if (!isGlobalAdminSession(session)) return session.organizationId ?? 0;
+  const role = String(session.role ?? '').trim().toLowerCase();
+  const canScopeBySelectedSchool = isGlobalAdminSession(session) || role === 'coach';
+  if (!canScopeBySelectedSchool) return session.organizationId ?? 0;
   const selectedSchool = resolveProgrammingSchoolCode(session);
   const map = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
   const match = Object.entries(map).find(([, schoolCode]) => schoolCode === selectedSchool);

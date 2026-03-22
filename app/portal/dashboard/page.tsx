@@ -2,15 +2,16 @@ import Link from 'next/link';
 import { requirePortalSession } from '../../../lib/portal-session';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
-import { resolveAllowedDashboardSchoolCodes, resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
+import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { canUseDashboardData, canUseProgrammingData } from '../../../lib/programming-scope';
 import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-brand';
 import DashboardSchoolSelector from './dashboard-school-selector';
 import DashboardShell from './dashboard-shell';
+import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 
 export default async function PortalDashboardPage() {
   const session = await requirePortalSession();
-  const schoolOptions = resolveAllowedDashboardSchoolCodes();
+  const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
   const brand = resolveSchoolBrand(selectedSchool);
   const canAccessDashboard = canUseDashboardData(session);
@@ -20,7 +21,7 @@ export default async function PortalDashboardPage() {
     <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
       <header className="portal-header">
         <div className="portal-header-left">
-          {session.role === 'admin' ? (
+          {session.role === 'admin' || session.role === 'coach' ? (
             <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
           ) : (
             <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label={`${brand.schoolCode} Home`}>
