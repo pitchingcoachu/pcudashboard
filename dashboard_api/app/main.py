@@ -2673,14 +2673,45 @@ def pitching_overview(
           AND (
             %(team_type)s::text IS NULL OR %(team_type)s::text = '' OR %(team_type)s::text = 'All' OR
             (
-              %(team_type)s::text = 'Opponents' AND (
-                """ + OPPONENT_TEAM_MATCH_SQL + """
-                OR (""" + TEAM_BUCKET_SQL + """) = 'Opponents'
+              %(team_type)s::text = %(school_code)s::text AND (
+                (
+                  %(team_norm_count)s::int > 0 AND
+                  """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(team_norm)s::text[])
+                )
+                OR
+                (
+                  %(team_norm_count)s::int = 0 AND
+                  (""" + TEAM_BUCKET_SQL + """) = %(school_code)s::text
+                )
               )
             )
             OR
             (
-              %(team_type)s::text <> 'Opponents' AND (""" + TEAM_BUCKET_SQL + """) = %(team_type)s::text
+              %(team_type)s::text = 'Campers' AND
+              %(campers_norm_count)s::int > 0 AND
+              """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(campers_norm)s::text[])
+            )
+            OR
+            (
+              %(team_type)s::text = 'Opponents' AND (
+                (
+                  %(team_norm_count)s::int > 0 AND
+                  NOT (""" + PITCHER_NAME_NORM_SQL + """ = ANY(%(team_norm)s::text[])) AND
+                  NOT (%(campers_norm_count)s::int > 0 AND """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(campers_norm)s::text[]))
+                )
+                OR
+                (
+                  %(team_norm_count)s::int = 0 AND (
+                    """ + OPPONENT_TEAM_MATCH_SQL + """
+                    OR (""" + TEAM_BUCKET_SQL + """) = 'Opponents'
+                  )
+                )
+              )
+            )
+            OR
+            (
+              %(team_type)s::text NOT IN ('Opponents', 'Campers', %(school_code)s::text) AND
+              (""" + TEAM_BUCKET_SQL + """) = %(team_type)s::text
             )
           )
       ),
@@ -4306,7 +4337,7 @@ def hitting_overview(
     school_code = _validate_school_code(school_code)
     roster = _load_school_roster(school_code)
     hitter_norm = set(roster.get("hitter_norm", []) or [])
-    team_pitcher_norm = set(roster.get("team_only_norm", []) or [])
+    team_hitter_norm = set(roster.get("hitter_norm", []) or [])
     campers_norm = set(roster.get("campers_norm", []) or [])
     team_markers_norm = set(roster.get("team_markers_norm", []) or [])
     if start_date and end_date and start_date > end_date:
@@ -4484,7 +4515,7 @@ def hitting_overview(
     out_rows: List[Dict[str, Any]] = []
     for row in rows:
         if use_team_filter:
-            pitcher_key = _normalize_name_key(str(row.get("pitcher") or ""))
+            batter_key = _normalize_name_key(str(row.get("batter") or ""))
             pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
             batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
             home_team_code = _normalize_team_code(str(row.get("home_team_code") or ""))
@@ -4500,13 +4531,13 @@ def hitting_overview(
                 or (away_is_marker and bool(home_team_code) and not home_is_marker)
             )
 
-            if pitcher_key in campers_norm:
+            if batter_key in campers_norm:
                 row_team_bucket = "Campers"
-            elif pitcher_key in team_pitcher_norm or pitcher_is_marker:
+            elif batter_key in team_hitter_norm or batter_is_marker:
                 row_team_bucket = school_code
-            elif (not team_pitcher_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
+            elif (not team_hitter_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
                 row_team_bucket = school_code
-            elif opponent_match or ((batter_is_marker or home_is_marker or away_is_marker) and not pitcher_is_marker):
+            elif opponent_match or ((pitcher_is_marker or home_is_marker or away_is_marker) and not batter_is_marker):
                 row_team_bucket = "Opponents"
             else:
                 row_team_bucket = "Opponents"
@@ -4747,7 +4778,7 @@ def catching_overview(
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
     roster = _load_school_roster(school_code)
-    team_norm = set(roster.get("team_only_norm", []) or [])
+    team_norm = set(roster.get("hitter_norm", []) or [])
     campers_norm = set(roster.get("campers_norm", []) or [])
     team_markers_norm = set(roster.get("team_markers_norm", []) or [])
     if start_date and end_date and start_date > end_date:
@@ -4866,7 +4897,7 @@ def catching_overview(
     filtered: List[Dict[str, Any]] = []
     for row in rows:
         if use_team_filter:
-            pitcher_key = _normalize_name_key(str(row.get("pitcher") or ""))
+            catcher_key = _normalize_name_key(str(row.get("catcher") or ""))
             pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
             batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
             home_team_code = _normalize_team_code(str(row.get("home_team_code") or ""))
@@ -4882,13 +4913,13 @@ def catching_overview(
                 or (away_is_marker and bool(home_team_code) and not home_is_marker)
             )
 
-            if pitcher_key in campers_norm:
+            if catcher_key in campers_norm:
                 row_team_bucket = "Campers"
-            elif pitcher_key in team_norm or pitcher_is_marker or home_is_marker or away_is_marker:
+            elif catcher_key in team_norm:
                 row_team_bucket = school_code
             elif (not team_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
                 row_team_bucket = school_code
-            elif opponent_match:
+            elif opponent_match or ((pitcher_is_marker or home_is_marker or away_is_marker) and not batter_is_marker):
                 row_team_bucket = "Opponents"
             else:
                 row_team_bucket = "Opponents"
