@@ -16,6 +16,18 @@ export type PortalSession = {
   apps: Array<{ name: string; url: string }>;
 };
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    });
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function requirePortalSession(): Promise<PortalSession> {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -24,8 +36,16 @@ export async function requirePortalSession(): Promise<PortalSession> {
     redirect('/login');
   }
 
-  await ensureTrainingDbReady();
-  await refreshSchoolProductAccessCache();
+  try {
+    await withTimeout(ensureTrainingDbReady(), 6000, 'Training DB bootstrap');
+  } catch {
+    // Best-effort bootstrap; do not block page render if DB is slow/unavailable.
+  }
+  try {
+    await withTimeout(refreshSchoolProductAccessCache(), 3000, 'School access cache refresh');
+  } catch {
+    // Cache refresh is best-effort and should not block login/page load.
+  }
 
   return {
     userId: session.userId ?? 0,
