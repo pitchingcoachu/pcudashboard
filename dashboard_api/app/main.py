@@ -2124,23 +2124,52 @@ TEAM_BUCKET_SQL = """
 CASE
   WHEN (
     %(campers_norm_count)s::int > 0 AND
-    regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(campers_norm)s::text[])
+    regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(campers_norm)s::text[]) AND
+    (
+      EXISTS (
+        SELECT 1
+        FROM unnest(%(team_markers_norm)s::text[]) AS tm(code)
+        WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
+      )
+      OR
+      EXISTS (
+        SELECT 1
+        FROM unnest(%(team_markers_norm)s::text[]) AS tm(code)
+        WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
+      )
+    )
   ) THEN 'Campers'
   WHEN (
     %(team_norm_count)s::int > 0 AND
-    regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(team_norm)s::text[])
-  ) OR (
-    EXISTS (
-      SELECT 1
-      FROM unnest(%(team_markers_norm)s::text[]) AS tm(code)
-      WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
+    regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(team_norm)s::text[]) AND
+    (
+      EXISTS (
+        SELECT 1
+        FROM unnest(%(team_markers_norm)s::text[]) AS tm(code)
+        WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
+      )
+      OR
+      EXISTS (
+        SELECT 1
+        FROM unnest(%(team_markers_norm)s::text[]) AS tm(code)
+        WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
+      )
     )
   ) OR (
     %(team_norm_count)s::int = 0 AND
-    COALESCE(NULLIF(TRIM(pitcherteam), ''), '') = '' AND
-    COALESCE(NULLIF(TRIM(batterteam), ''), '') = '' AND
-    COALESCE(NULLIF(TRIM(hometeam), ''), '') = '' AND
-    COALESCE(NULLIF(TRIM(awayteam), ''), '') = ''
+    (
+      EXISTS (
+        SELECT 1
+        FROM unnest(%(team_markers_norm)s::text[]) AS tm(code)
+        WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
+      )
+      OR
+      EXISTS (
+        SELECT 1
+        FROM unnest(%(team_markers_norm)s::text[]) AS tm(code)
+        WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
+      )
+    )
   ) THEN %(school_code)s
   ELSE 'Opponents'
 END
@@ -2205,23 +2234,6 @@ OPPONENT_TEAM_MATCH_SQL = """
 """
 SCHOOL_RELEVANT_TEAM_SQL = "(" + PITCHER_TEAM_IS_MARKER_SQL + " OR " + BATTER_TEAM_IS_MARKER_SQL + ")"
 
-PITCHER_NAME_IS_KNOWN_SQL = """
-(
-  (%(known_pitchers_count)s::int > 0 AND """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(known_pitchers)s::text[]))
-  OR
-  (%(known_campers_count)s::int > 0 AND """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(known_campers)s::text[]))
-)
-"""
-BATTER_NAME_IS_KNOWN_SQL = """
-(
-  (%(known_hitters_count)s::int > 0 AND """ + BATTER_NAME_NORM_SQL + """ = ANY(%(known_hitters)s::text[]))
-  OR
-  (%(known_campers_count)s::int > 0 AND """ + BATTER_NAME_NORM_SQL + """ = ANY(%(known_campers)s::text[]))
-)
-"""
-SCHOOL_RELEVANT_ROW_SQL = "(" + SCHOOL_RELEVANT_TEAM_SQL + " OR " + PITCHER_NAME_IS_KNOWN_SQL + " OR " + BATTER_NAME_IS_KNOWN_SQL + ")"
-
-
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
@@ -2255,7 +2267,7 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
                   MAX(session_date)::text AS max_date
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 """,
                 relevance_params,
             )
@@ -2266,7 +2278,7 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
                 SELECT DISTINCT TRIM(pitcher) AS pitcher
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(pitcher), '') <> ''
                 ORDER BY pitcher ASC
                 """,
@@ -2279,7 +2291,7 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
                 SELECT DISTINCT TRIM(batter) AS opp_hitter
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(batter), '') <> ''
                 ORDER BY opp_hitter ASC
                 """,
@@ -2298,7 +2310,7 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
                     """ + PITCH_TYPE_ORDER_SQL + """ AS pitch_sort
                   FROM public.pitch_events
                   WHERE school_code = %(school_code)s
-                    AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                    AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 ) t
                 ORDER BY t.pitch_sort ASC, t.pitch_type ASC
                 """,
@@ -2650,7 +2662,7 @@ def pitching_overview(
                )
              ) = pd_play.playid_key
         WHERE school_code = %(school_code)s
-          AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+          AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
           AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
           AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
           AND (
@@ -4260,7 +4272,7 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                   MAX(session_date)::text AS max_date
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 """,
                 relevance_params,
             )
@@ -4271,7 +4283,7 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 SELECT DISTINCT TRIM(batter) AS hitter
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(batter), '') <> ''
                   AND (
                     %(hitter_count)s::int = 0 OR
@@ -4292,7 +4304,7 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 SELECT DISTINCT TRIM(pitcher) AS opp_pitcher
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(pitcher), '') <> ''
                 ORDER BY opp_pitcher ASC
                 """,
@@ -4316,7 +4328,7 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 + """ AS pitch_sort
                   FROM public.pitch_events
                   WHERE school_code = %(school_code)s
-                    AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                    AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 ) t
                 ORDER BY t.pitch_sort ASC, t.pitch_type ASC
                 """,
@@ -4551,7 +4563,7 @@ def hitting_overview(
                   ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number
                 FROM public.pitch_events pe
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                 ORDER BY session_date, COALESCE(created_at, NOW()), id
@@ -4592,12 +4604,11 @@ def hitting_overview(
                 or (home_is_marker and bool(away_team_code) and not away_is_marker)
                 or (away_is_marker and bool(home_team_code) and not home_is_marker)
             )
+            has_school_team_code = pitcher_is_marker or batter_is_marker
 
-            if batter_key in campers_norm:
+            if batter_key in campers_norm and has_school_team_code:
                 row_team_bucket = "Campers"
-            elif batter_key in team_hitter_norm or batter_is_marker:
-                row_team_bucket = school_code
-            elif (not team_hitter_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
+            elif batter_key in team_hitter_norm and has_school_team_code:
                 row_team_bucket = school_code
             elif opponent_match or ((pitcher_is_marker or home_is_marker or away_is_marker) and not batter_is_marker):
                 row_team_bucket = "Opponents"
@@ -4759,7 +4770,7 @@ def catching_filters(
                   MAX(session_date)::text AS max_date
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 """,
                 relevance_params,
             )
@@ -4770,7 +4781,7 @@ def catching_filters(
                 SELECT DISTINCT TRIM(catcher) AS catcher
                 FROM public.pitch_events
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(catcher), '') <> ''
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
@@ -4806,7 +4817,7 @@ def catching_filters(
                 + """ AS pitch_sort
                   FROM public.pitch_events
                   WHERE school_code = %(school_code)s
-                    AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                    AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                 ) t
                 ORDER BY t.pitch_sort ASC, t.pitch_type ASC
                 """,
@@ -4962,7 +4973,7 @@ def catching_overview(
                   ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number
                 FROM public.pitch_events pe
                 WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_ROW_SQL + """
+                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                 ORDER BY session_date, COALESCE(created_at, NOW()), id
@@ -5003,12 +5014,11 @@ def catching_overview(
                 or (home_is_marker and bool(away_team_code) and not away_is_marker)
                 or (away_is_marker and bool(home_team_code) and not home_is_marker)
             )
+            has_school_team_code = pitcher_is_marker or batter_is_marker
 
-            if catcher_key in campers_norm:
+            if catcher_key in campers_norm and has_school_team_code:
                 row_team_bucket = "Campers"
-            elif catcher_key in team_norm:
-                row_team_bucket = school_code
-            elif (not team_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
+            elif catcher_key in team_norm and has_school_team_code:
                 row_team_bucket = school_code
             elif opponent_match or ((pitcher_is_marker or home_is_marker or away_is_marker) and not batter_is_marker):
                 row_team_bucket = "Opponents"
