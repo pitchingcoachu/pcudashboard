@@ -2660,7 +2660,10 @@ def pitching_overview(
           AND (
             %(team_type)s::text IS NULL OR %(team_type)s::text = '' OR %(team_type)s::text = 'All' OR
             (
-              %(team_type)s::text = 'Opponents' AND """ + OPPONENT_TEAM_MATCH_SQL + """
+              %(team_type)s::text = 'Opponents' AND (
+                """ + OPPONENT_TEAM_MATCH_SQL + """
+                OR (""" + TEAM_BUCKET_SQL + """) = 'Opponents'
+              )
             )
             OR
             (
