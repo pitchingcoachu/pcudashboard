@@ -117,11 +117,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               </svg>
             </Link>
           </div>
-          {brand.logoSrc ? (
-            <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="PCU Home">
-              <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo portal-header-logo--pcu-right" />
-            </Link>
-          ) : null}
+          <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="PCU Home">
+            <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo portal-header-logo--pcu-right" />
+          </Link>
         </div>
       </header>
       <section className="portal-panel portal-admin-panel">{children}</section>
