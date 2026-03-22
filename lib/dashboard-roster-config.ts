@@ -18,13 +18,14 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
   if (!upper) return null;
   const envKey = `DASHBOARD_SCHOOL_CONFIG_PATH_${upper}`;
   const envPath = String(process.env[envKey] ?? '').trim();
+  const bundledRoot = process.cwd();
   const defaultPathBySchool: Record<string, string> = {
-    OSU: '/Users/jaredgaynor/Documents/GitHub/OklahomaState/config/school_config.R',
-    PCU: '/Users/jaredgaynor/Documents/GitHub/pcu/config/school_config.R',
-    CNU: '/Users/jaredgaynor/Documents/GitHub/carsonnewman/config/school_config.R',
-    GCU: '/Users/jaredgaynor/Documents/GitHub/gcu/config/school_config.R',
-    LSU: '/Users/jaredgaynor/Documents/GitHub/lsu/config/school_config.R',
-    SEMO: '/Users/jaredgaynor/Documents/GitHub/semo/config/school_config.R',
+    OSU: `${bundledRoot}/dashboard_api/config/schools/OSU/school_config.R`,
+    PCU: `${bundledRoot}/dashboard_api/config/schools/PCU/school_config.R`,
+    CNU: `${bundledRoot}/dashboard_api/config/schools/CNU/school_config.R`,
+    GCU: `${bundledRoot}/dashboard_api/config/schools/GCU/school_config.R`,
+    LSU: `${bundledRoot}/dashboard_api/config/schools/LSU/school_config.R`,
+    SEMO: `${bundledRoot}/dashboard_api/config/schools/SEMO/school_config.R`,
   };
   const configPath = envPath || defaultPathBySchool[upper] || '';
   if (!configPath || !fs.existsSync(configPath)) return null;

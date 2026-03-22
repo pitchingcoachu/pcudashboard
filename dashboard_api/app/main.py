@@ -1889,16 +1889,20 @@ def _normalize_team_code(value: str) -> str:
     return re.sub(r"[^A-Z0-9_]", "", (value or "").strip().upper())
 
 
+_API_DIR = os.path.dirname(__file__)
+_BUNDLED_SCHOOL_CONFIG_ROOT = os.path.normpath(os.path.join(_API_DIR, "..", "config", "schools"))
+
+
 @lru_cache(maxsize=16)
 def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
     env_path = (os.getenv(f"DASHBOARD_SCHOOL_CONFIG_PATH_{school_code.upper()}", "") or "").strip()
     default_path_by_school = {
-        "OSU": "/Users/jaredgaynor/Documents/GitHub/OklahomaState/config/school_config.R",
-        "PCU": "/Users/jaredgaynor/Documents/GitHub/pcu/config/school_config.R",
-        "CNU": "/Users/jaredgaynor/Documents/GitHub/carsonnewman/config/school_config.R",
-        "GCU": "/Users/jaredgaynor/Documents/GitHub/gcu/config/school_config.R",
-        "LSU": "/Users/jaredgaynor/Documents/GitHub/lsu/config/school_config.R",
-        "SEMO": "/Users/jaredgaynor/Documents/GitHub/semo/config/school_config.R",
+        "OSU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "OSU", "school_config.R"),
+        "PCU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "PCU", "school_config.R"),
+        "CNU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CNU", "school_config.R"),
+        "GCU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "GCU", "school_config.R"),
+        "LSU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "LSU", "school_config.R"),
+        "SEMO": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "SEMO", "school_config.R"),
     }
     config_path = env_path or default_path_by_school.get(school_code.upper(), "")
     if not config_path or not os.path.exists(config_path):
@@ -1924,6 +1928,10 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
     allowed_pitchers = _extract_r_vector(text, "allowed_pitchers")
     allowed_hitters = _extract_r_vector(text, "allowed_hitters")
     allowed_campers = _extract_r_vector(text, "allowed_campers")
+    if school_code.upper() == "PCU":
+        pcu_additions = ["Heather, Connor", "Carr, Jordan", "King, Stan", "Jones, Grady", "Birt, Henry"]
+        allowed_pitchers = sorted({*allowed_pitchers, *pcu_additions})
+        allowed_hitters = sorted({*allowed_hitters, *pcu_additions})
     team_code = _extract_r_scalar(text, "team_code")
     team_code_markers = _extract_r_vector(text, "team_code_markers")
     team_norm = {_normalize_name_key(name) for name in allowed_pitchers if _normalize_name_key(name)}
@@ -2128,9 +2136,13 @@ CASE
       WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
     )
   ) OR (
-    %(team_norm_count)s::int = 0
+    %(team_norm_count)s::int = 0 AND
+    COALESCE(NULLIF(TRIM(pitcherteam), ''), '') = '' AND
+    COALESCE(NULLIF(TRIM(batterteam), ''), '') = '' AND
+    COALESCE(NULLIF(TRIM(hometeam), ''), '') = '' AND
+    COALESCE(NULLIF(TRIM(awayteam), ''), '') = ''
   ) THEN %(school_code)s
-  ELSE %(school_code)s
+  ELSE 'Opponents'
 END
 """
 
@@ -4492,13 +4504,12 @@ def hitting_overview(
                 row_team_bucket = "Campers"
             elif pitcher_key in team_pitcher_norm or pitcher_is_marker:
                 row_team_bucket = school_code
-            elif not team_pitcher_norm:
-                # Fallback for schools where roster files are unavailable in deploy.
-                row_team_bucket = "Opponents" if opponent_match else school_code
+            elif (not team_pitcher_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
+                row_team_bucket = school_code
             elif opponent_match or ((batter_is_marker or home_is_marker or away_is_marker) and not pitcher_is_marker):
                 row_team_bucket = "Opponents"
             else:
-                row_team_bucket = school_code
+                row_team_bucket = "Opponents"
             if row_team_bucket != team_type_value:
                 continue
         if selected_hitter_keys and _normalize_name_key(str(row.get("batter") or "")) not in selected_hitter_keys:
@@ -4875,13 +4886,12 @@ def catching_overview(
                 row_team_bucket = "Campers"
             elif pitcher_key in team_norm or pitcher_is_marker or home_is_marker or away_is_marker:
                 row_team_bucket = school_code
-            elif not team_norm:
-                # Fallback for schools where roster files are unavailable in deploy.
-                row_team_bucket = "Opponents" if opponent_match else school_code
+            elif (not team_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
+                row_team_bucket = school_code
             elif opponent_match:
                 row_team_bucket = "Opponents"
             else:
-                row_team_bucket = school_code
+                row_team_bucket = "Opponents"
             if row_team_bucket != team_type_value:
                 continue
         if selected_catcher_keys and _normalize_name_key(str(row.get("catcher") or "")) not in selected_catcher_keys:
