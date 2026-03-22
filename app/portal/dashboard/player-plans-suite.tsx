@@ -2317,7 +2317,7 @@ export default function PlayerPlansSuite() {
   }
 
   return (
-    <div style={{ display: 'grid', gap: 12 }}>
+    <section className="portal-player-plans-suite" style={{ display: 'grid', gap: 12, minWidth: 0 }}>
       <article className="portal-admin-card">
         <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(180px, 1fr))' }}>
           <label>
@@ -2842,6 +2842,6 @@ export default function PlayerPlansSuite() {
           {goalChartHover.text}
         </div>
       ) : null}
-    </div>
+    </section>
   );
 }

@@ -5251,7 +5251,17 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                             </span>
                           ))}
                         </div>
-                        <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 400, border: '1px solid rgba(255,255,255,0.14)', borderRadius: 10 }} onMouseLeave={() => setTrendHover(null)}>
+                        <svg
+                          viewBox={`0 0 ${w} ${h}`}
+                          style={{
+                            width: '100%',
+                            height: isMobileView ? 'auto' : 400,
+                            aspectRatio: `${w} / ${h}`,
+                            border: '1px solid rgba(255,255,255,0.14)',
+                            borderRadius: 10,
+                          }}
+                          onMouseLeave={() => setTrendHover(null)}
+                        >
                           {yTicks.map((tick, idx) => (
                             <g key={`trend-y-${idx}`}>
                               <line x1={m.l} y1={py(tick)} x2={w - m.r} y2={py(tick)} stroke="rgba(255,255,255,0.14)" />
@@ -6212,7 +6222,17 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                       const xTicks = Array.from({ length: Math.floor(xMax / 5) + 1 }, (_, i) => i * 5);
                       return (
                         <div style={{ position: 'relative' }}>
-                          <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360, border: '1px solid rgba(255,255,255,0.14)', borderRadius: 10 }} onMouseLeave={() => setVelocityMainHover(null)}>
+                          <svg
+                            viewBox={`0 0 ${w} ${h}`}
+                            style={{
+                              width: '100%',
+                              height: isMobileView ? 'auto' : 360,
+                              aspectRatio: `${w} / ${h}`,
+                              border: '1px solid rgba(255,255,255,0.14)',
+                              borderRadius: 10,
+                            }}
+                            onMouseLeave={() => setVelocityMainHover(null)}
+                          >
                             {yTicks.map((t) => (
                               <g key={`v1-y-${t}`}>
                                 <line x1={m.l} y1={py(t)} x2={w - m.r} y2={py(t)} stroke="rgba(255,255,255,0.14)" />
@@ -6299,7 +6319,17 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                       }
                       return (
                         <div style={{ position: 'relative' }}>
-                          <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 430, border: '1px solid rgba(255,255,255,0.14)', borderRadius: 10 }} onMouseLeave={() => setVelocityGameHover(null)}>
+                          <svg
+                            viewBox={`0 0 ${w} ${h}`}
+                            style={{
+                              width: '100%',
+                              height: isMobileView ? 'auto' : 430,
+                              aspectRatio: `${w} / ${h}`,
+                              border: '1px solid rgba(255,255,255,0.14)',
+                              borderRadius: 10,
+                            }}
+                            onMouseLeave={() => setVelocityGameHover(null)}
+                          >
                             {yTicks.map((t) => (
                               <g key={`v2-y-${t}`}>
                                 <line x1={m.l} y1={py(t)} x2={w - m.r} y2={py(t)} stroke="rgba(255,255,255,0.14)" />
@@ -6391,7 +6421,17 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                       }
                       return (
                         <div style={{ position: 'relative' }}>
-                          <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360, border: '1px solid rgba(255,255,255,0.14)', borderRadius: 10 }} onMouseLeave={() => setVelocityInningHover(null)}>
+                          <svg
+                            viewBox={`0 0 ${w} ${h}`}
+                            style={{
+                              width: '100%',
+                              height: isMobileView ? 'auto' : 360,
+                              aspectRatio: `${w} / ${h}`,
+                              border: '1px solid rgba(255,255,255,0.14)',
+                              borderRadius: 10,
+                            }}
+                            onMouseLeave={() => setVelocityInningHover(null)}
+                          >
                             {yTicks.map((t) => (
                               <g key={`v3-y-${t}`}>
                                 <line x1={m.l} y1={py(t)} x2={w - m.r} y2={py(t)} stroke="rgba(255,255,255,0.14)" />

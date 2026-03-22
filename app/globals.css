@@ -3634,7 +3634,7 @@ main {
 
   .portal-header-center {
     display: flex;
-    justify-content: center;
+    justify-content: flex-start;
   }
 
   .portal-header-nav-stack {
@@ -3642,7 +3642,9 @@ main {
   }
 
   .portal-header-right {
-    justify-content: space-between;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 0.45rem;
   }
 
   .tutorial-video-grid {
@@ -3742,6 +3744,10 @@ main {
   .portal-ab-pa-card {
     min-height: 0;
   }
+
+  .portal-comparison-grid {
+    grid-template-columns: 1fr !important;
+  }
 }
 
 @media (max-width: 780px) {
@@ -3819,9 +3825,10 @@ main {
   }
 
   .portal-school-switcher-menu {
-    left: auto;
-    right: 0;
-    min-width: 148px;
+    left: 0;
+    right: auto;
+    min-width: min(220px, calc(100vw - 1.2rem));
+    max-width: calc(100vw - 1.2rem);
   }
 
   .portal-panel {
@@ -3918,6 +3925,23 @@ main {
   .portal-panel .portal-admin-card,
   .portal-panel .portal-day-card {
     min-width: 0;
+  }
+
+  .portal-comparison-suite .portal-admin-card,
+  .portal-player-plans-suite .portal-admin-card,
+  .portal-player-plans-suite .portal-day-card {
+    min-width: 0;
+  }
+
+  .portal-comparison-suite .portal-form-grid,
+  .portal-player-plans-suite .portal-form-grid,
+  .portal-player-plans-suite .portal-profile-goals-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .portal-comparison-suite div[style*='grid-template-columns'],
+  .portal-player-plans-suite div[style*='grid-template-columns'] {
+    grid-template-columns: 1fr !important;
   }
 
   .portal-custom-reports-layout {

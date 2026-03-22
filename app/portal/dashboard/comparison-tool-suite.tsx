@@ -538,7 +538,7 @@ function ControlSelect({ label, value, options, onChange }: { label: string; val
   );
 }
 
-function ComparisonPane({ title }: { title: string }) {
+function ComparisonPane({ title, compact = false }: { title: string; compact?: boolean }) {
   const paneId = useMemo(() => title.toLowerCase().replace(/[^a-z0-9]+/g, '-'), [title]);
   const [state, setState] = useState<PaneState>(emptyPaneState);
   const [filters, setFilters] = useState<FiltersPayload | null>(null);
@@ -1586,7 +1586,7 @@ function ComparisonPane({ title }: { title: string }) {
     <section style={{ minWidth: 0, display: 'grid', gap: 10 }}>
       <article className="portal-admin-card" style={{ padding: 12, display: 'grid', gap: 10 }}>
         <strong>{title}</strong>
-        <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(150px, 1fr))' }}>
+        <div className="portal-form-grid" style={{ gridTemplateColumns: compact ? '1fr' : 'repeat(3, minmax(150px, 1fr))' }}>
           <ControlSelect
             label="Domain"
             value={state.domain}
@@ -1664,7 +1664,7 @@ function ComparisonPane({ title }: { title: string }) {
       </article>
 
       <article className="portal-admin-card dashboard-panel" style={{ padding: 12, overflowX: 'auto' }}>
-        <div className="portal-form-grid" style={{ marginBottom: 10, gridTemplateColumns: 'repeat(3, minmax(160px, 260px))' }}>
+        <div className="portal-form-grid" style={{ marginBottom: 10, gridTemplateColumns: compact ? '1fr' : 'repeat(3, minmax(160px, 260px))' }}>
           <ControlSelect label="Table" value={state.tableMode} options={tableModeOptions} onChange={(next) => setState((current) => ({ ...current, tableMode: next }))} />
           <ControlSelect label="Split By" value={state.splitBy} options={splitByOptions} onChange={(next) => setState((current) => ({ ...current, splitBy: next }))} />
           <label style={{ display: 'grid', gap: 4 }}>
@@ -1717,11 +1717,31 @@ function ComparisonPane({ title }: { title: string }) {
 }
 
 export default function ComparisonToolSuite() {
+  const [isMobileView, setIsMobileView] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(max-width: 900px)');
+    const sync = () => setIsMobileView(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
   return (
-    <section style={{ display: 'grid', gap: 12 }}>
-      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(660px, 1fr))', alignItems: 'start' }}>
-        <ComparisonPane title="Left View" />
-        <ComparisonPane title="Right View" />
+    <section className="portal-comparison-suite" style={{ display: 'grid', gap: 12, minWidth: 0 }}>
+      <div
+        className="portal-comparison-grid"
+        style={{
+          display: 'grid',
+          gap: 12,
+          gridTemplateColumns: isMobileView ? '1fr' : 'repeat(auto-fit, minmax(660px, 1fr))',
+          alignItems: 'start',
+          minWidth: 0,
+        }}
+      >
+        <ComparisonPane title="Left View" compact={isMobileView} />
+        <ComparisonPane title="Right View" compact={isMobileView} />
       </div>
     </section>
   );
