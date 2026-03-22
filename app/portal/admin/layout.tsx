@@ -41,7 +41,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <div className="portal-header-nav-stack">
             <nav className="portal-nav" aria-label="Portal Navigation">
               <Link href="/portal/admin" className="portal-nav-link">
-                Admin Home
+                Home
               </Link>
               {(session.role === 'admin' || session.role === 'coach') && canAccessClientManagement && (
                 <Link href="/portal/admin/clients" className="portal-nav-link">
@@ -77,7 +77,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <MobileNavSelect
             loggedInAs={session.name ?? session.email}
             items={[
-              { href: '/portal/admin', label: 'Admin Home' },
+              { href: '/portal/admin', label: 'Home' },
               ...(session.role === 'admin' || session.role === 'coach'
                 ? [...(canAccessClientManagement ? [{ href: '/portal/admin/clients', label: 'Players' }] : [])]
                 : []),

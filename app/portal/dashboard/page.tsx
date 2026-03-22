@@ -38,7 +38,7 @@ export default async function PortalDashboardPage() {
             <nav className="portal-nav" aria-label="Portal Navigation">
               {(session.role === 'admin' || session.role === 'coach') && (
                 <Link href="/portal/admin" className="portal-nav-link">
-                  Admin Home
+                  Home
                 </Link>
               )}
               {session.role === 'player' ? (
@@ -75,7 +75,7 @@ export default async function PortalDashboardPage() {
             currentHref="/portal/dashboard"
             loggedInAs={session.name ?? session.email}
             items={[
-              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin Home' }] : []),
+              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Home' }] : []),
               ...(session.role === 'player'
                 ? [...(canAccessProgramming ? [{ href: '/portal/player', label: 'Profile' }, { href: '/portal/player/program', label: 'Program' }] : [])]
                 : [...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : [])]),
