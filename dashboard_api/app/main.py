@@ -2122,18 +2122,13 @@ CASE
     %(team_norm_count)s::int > 0 AND
     regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(team_norm)s::text[])
   ) OR (
-    %(team_norm_count)s::int = 0 AND
     EXISTS (
       SELECT 1
       FROM unnest(%(team_markers_norm)s::text[]) AS tm(code)
       WHERE regexp_replace(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '[^A-Z0-9_]', '', 'g') = tm.code
     )
   ) OR (
-    %(team_norm_count)s::int = 0 AND
-    COALESCE(NULLIF(TRIM(pitcherteam), ''), '') = '' AND
-    COALESCE(NULLIF(TRIM(batterteam), ''), '') = '' AND
-    COALESCE(NULLIF(TRIM(hometeam), ''), '') = '' AND
-    COALESCE(NULLIF(TRIM(awayteam), ''), '') = ''
+    %(team_norm_count)s::int = 0
   ) THEN %(school_code)s
   ELSE 'Opponents'
 END
@@ -4497,9 +4492,9 @@ def hitting_overview(
                 row_team_bucket = "Campers"
             elif pitcher_key in team_pitcher_norm or pitcher_is_marker:
                 row_team_bucket = school_code
-            elif (not team_pitcher_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
-                # Fallback for schools where team-code columns are blank in source data.
-                row_team_bucket = school_code
+            elif not team_pitcher_norm:
+                # Fallback for schools where roster files are unavailable in deploy.
+                row_team_bucket = "Opponents" if opponent_match else school_code
             elif opponent_match or ((batter_is_marker or home_is_marker or away_is_marker) and not pitcher_is_marker):
                 row_team_bucket = "Opponents"
             else:
@@ -4880,9 +4875,9 @@ def catching_overview(
                 row_team_bucket = "Campers"
             elif pitcher_key in team_norm or pitcher_is_marker or home_is_marker or away_is_marker:
                 row_team_bucket = school_code
-            elif (not team_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
-                # Fallback for schools where team-code columns are blank in source data.
-                row_team_bucket = school_code
+            elif not team_norm:
+                # Fallback for schools where roster files are unavailable in deploy.
+                row_team_bucket = "Opponents" if opponent_match else school_code
             elif opponent_match:
                 row_team_bucket = "Opponents"
             else:
