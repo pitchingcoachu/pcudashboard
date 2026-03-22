@@ -3776,7 +3776,7 @@ main {
 
   .portal-header {
     display: grid;
-    grid-template-columns: 56px minmax(0, 1fr) 56px;
+    grid-template-columns: 64px minmax(0, 1fr) 64px;
     align-items: center;
     gap: 0.42rem;
     padding: 0.4rem 0.55rem;
@@ -3787,7 +3787,7 @@ main {
     align-items: center;
     justify-content: center;
     gap: 0;
-    width: 56px;
+    width: 64px;
   }
 
   .portal-header-right {
@@ -3797,7 +3797,7 @@ main {
     align-items: center;
     gap: 0;
     min-width: 0;
-    width: 56px;
+    width: 64px;
   }
 
   .portal-header-right .portal-user-meta,
@@ -3807,13 +3807,13 @@ main {
   }
 
   .portal-header-right .portal-header-logo-link {
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
   }
 
   .portal-header-logo--pcu-right {
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
   }
 
   .portal-user-meta p {
@@ -3863,19 +3863,32 @@ main {
   }
 
   .portal-school-switcher-trigger--logo-only .portal-school-switcher-trigger-logo {
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
+  }
+
+  .portal-school-switcher-trigger-logo--OSU,
+  .portal-school-switcher-trigger-logo--GCU,
+  .portal-school-switcher-option-logo--OSU,
+  .portal-school-switcher-option-logo--GCU {
+    transform: none;
   }
 
   .portal-nav-mobile {
+    -webkit-appearance: none;
+    appearance: none;
     border-radius: 999px;
     min-height: 38px;
-    padding: 0.5rem 1.05rem;
+    padding: 0.5rem 2rem;
     line-height: 1.1;
     font-size: 0.74rem;
     letter-spacing: 0.02em;
     text-align: center;
     text-align-last: center;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23c9c9c9' d='M1.41.59 6 5.17 10.59.59 12 2l-6 6-6-6z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.72rem center;
+    background-size: 12px 8px;
   }
 
   .portal-mobile-page-select,
