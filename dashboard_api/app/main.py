@@ -2203,7 +2203,8 @@ OPPONENT_TEAM_MATCH_SQL = """
   )
 )
 """
-SCHOOL_RELEVANT_TEAM_SQL = "(" + PITCHER_TEAM_IS_MARKER_SQL + " OR " + BATTER_TEAM_IS_MARKER_SQL + ")"
+# Keep global datasets broad; strict team-code checks are applied only for Opponents filters.
+SCHOOL_RELEVANT_TEAM_SQL = "TRUE"
 
 PITCHER_NAME_IS_KNOWN_SQL = """
 (
@@ -2712,22 +2713,7 @@ def pitching_overview(
             OR
             (
               %(team_type)s::text = 'Opponents' AND (
-                (
-                  %(team_norm_count)s::int > 0 AND
-                  NOT (""" + PITCHER_NAME_NORM_SQL + """ = ANY(%(team_norm)s::text[])) AND
-                  NOT (%(campers_norm_count)s::int > 0 AND """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(campers_norm)s::text[]))
-                )
-                OR
-                (
-                  %(team_norm_count)s::int = 0 AND (
-                    (""" + TEAM_BUCKET_SQL + """) = 'Opponents'
-                    OR (
-                      """ + OPPONENT_TEAM_MATCH_SQL + """ AND
-                      (""" + TEAM_BUCKET_SQL + """) <> %(school_code)s::text AND
-                      (""" + TEAM_BUCKET_SQL + """) <> 'Campers'
-                    )
-                  )
-                )
+                """ + OPPONENT_TEAM_MATCH_SQL + """
               )
             )
             OR
@@ -4565,12 +4551,15 @@ def hitting_overview(
                 or (home_is_marker and bool(away_team_code) and not away_is_marker)
                 or (away_is_marker and bool(home_team_code) and not home_is_marker)
             )
+            has_school_team_code = pitcher_is_marker or batter_is_marker
 
-            if batter_key in campers_norm:
+            if team_type_value == "Opponents":
+                if not opponent_match:
+                    continue
+                row_team_bucket = "Opponents"
+            elif batter_key in campers_norm and has_school_team_code:
                 row_team_bucket = "Campers"
-            elif batter_key in team_hitter_norm or batter_is_marker:
-                row_team_bucket = school_code
-            elif (not team_hitter_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
+            elif batter_key in team_hitter_norm and has_school_team_code:
                 row_team_bucket = school_code
             elif opponent_match or ((pitcher_is_marker or home_is_marker or away_is_marker) and not batter_is_marker):
                 row_team_bucket = "Opponents"
@@ -4959,12 +4948,15 @@ def catching_overview(
                 or (home_is_marker and bool(away_team_code) and not away_is_marker)
                 or (away_is_marker and bool(home_team_code) and not home_is_marker)
             )
+            has_school_team_code = pitcher_is_marker or batter_is_marker
 
-            if catcher_key in campers_norm:
+            if team_type_value == "Opponents":
+                if not opponent_match:
+                    continue
+                row_team_bucket = "Opponents"
+            elif catcher_key in campers_norm and has_school_team_code:
                 row_team_bucket = "Campers"
-            elif catcher_key in team_norm:
-                row_team_bucket = school_code
-            elif (not team_norm) and (not pitcher_team_code) and (not batter_team_code) and (not home_team_code) and (not away_team_code):
+            elif catcher_key in team_norm and has_school_team_code:
                 row_team_bucket = school_code
             elif opponent_match or ((pitcher_is_marker or home_is_marker or away_is_marker) and not batter_is_marker):
                 row_team_bucket = "Opponents"
