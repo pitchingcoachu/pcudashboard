@@ -9,7 +9,7 @@
   --text-muted: #c9c9c9;
   --accent: #c8102e;
   --accent-soft: #8f0f24;
-  --portal-accent-rgb: 255, 255, 255;
+  --portal-accent-rgb: 200, 16, 46;
   --highlight: #ffffff;
 }
 
@@ -24,7 +24,7 @@ body {
   overflow-x: clip;
   color: var(--text-main);
   font-family: Manrope, sans-serif;
-  background: radial-gradient(circle at 10% 4%, rgba(var(--portal-accent-rgb, 255, 255, 255), 0.2), transparent 42%),
+  background: radial-gradient(circle at 10% 4%, rgba(var(--portal-accent-rgb, 200, 16, 46), 0.2), transparent 42%),
     radial-gradient(circle at 90% 0%, rgba(255, 255, 255, 0.1), transparent 36%),
     linear-gradient(128deg, #050505 0%, #0b0b0b 48%, #151515 100%);
 }
@@ -43,7 +43,7 @@ body::before {
 
 body:has(.portal-shell) {
   background:
-    radial-gradient(circle at 8% 6%, rgba(var(--portal-accent-rgb, 255, 255, 255), 0.2), transparent 42%),
+    radial-gradient(circle at 8% 6%, rgba(var(--portal-accent-rgb, 200, 16, 46), 0.2), transparent 42%),
     linear-gradient(128deg, #050505 0%, #0b0b0b 48%, #151515 100%);
 }
 
