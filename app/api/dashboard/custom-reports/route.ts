@@ -106,8 +106,31 @@ export async function GET() {
       `,
       [scopedOrganizationId, schoolCode, accessibleOrgIds, broadenSchoolScope]
     );
+    let rows = result.rows;
+    if (!rows.length && broadenSchoolScope) {
+      const fallback = await pool.query<{
+        id: number;
+        name: string;
+        applies_to_all_schools: boolean;
+        payload_json: unknown;
+        created_at: string;
+        updated_at: string;
+      }>(
+        `
+        SELECT id, name, applies_to_all_schools, payload_json, created_at, updated_at
+        FROM dashboard_custom_reports
+        WHERE school_code = $1
+           OR applies_to_all_schools = TRUE
+           OR organization_id = ANY($2::int[])
+        ORDER BY updated_at DESC, id DESC
+        `,
+        [schoolCode, accessibleOrgIds]
+      );
+      rows = fallback.rows;
+    }
+
     return NextResponse.json({
-      items: result.rows.map((row) => ({
+      items: rows.map((row) => ({
         id: Number(row.id),
         name: row.name,
         applyToAllSchools: Boolean(row.applies_to_all_schools),
