@@ -1889,6 +1889,44 @@ def _normalize_team_code(value: str) -> str:
     return re.sub(r"[^A-Z0-9_]", "", (value or "").strip().upper())
 
 
+def _filter_pitching_rows_by_team_type(
+    rows: List[Dict[str, Any]],
+    team_type_value: str,
+    school_code: str,
+    team_pitcher_norm: set[str],
+    campers_norm: set[str],
+    team_markers_norm: set[str],
+) -> List[Dict[str, Any]]:
+    if team_type_value in {"", "All"}:
+        return rows
+
+    filtered: List[Dict[str, Any]] = []
+    for row in rows:
+        pitcher_key = _normalize_name_key(str(row.get("pitcher") or ""))
+        pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+        batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
+        pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
+        batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
+        is_team_pitching_row = pitcher_is_marker and bool(batter_team_code) and not batter_is_marker
+        is_opponent_pitching_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
+
+        if team_type_value == "Opponents":
+            row_team_bucket = "Opponents" if is_opponent_pitching_row else None
+        elif team_type_value == "Campers":
+            row_team_bucket = "Campers" if (pitcher_key in campers_norm and is_team_pitching_row) else None
+        elif team_type_value == school_code:
+            if pitcher_key in campers_norm:
+                row_team_bucket = "Campers" if is_team_pitching_row else None
+            else:
+                row_team_bucket = school_code if (pitcher_key in team_pitcher_norm and is_team_pitching_row) else None
+        else:
+            row_team_bucket = None
+
+        if row_team_bucket == team_type_value:
+            filtered.append(row)
+    return filtered
+
+
 _API_DIR = os.path.dirname(__file__)
 _BUNDLED_SCHOOL_CONFIG_ROOT = os.path.normpath(os.path.join(_API_DIR, "..", "config", "schools"))
 
@@ -3079,6 +3117,139 @@ def pitching_overview(
             )
             table_source_rows = cur.fetchall()
             _annotate_times_through_order(table_source_rows)
+            team_type_value = (team_type or "").strip() or "All"
+            table_source_rows = _filter_pitching_rows_by_team_type(
+                [dict(row) for row in table_source_rows],
+                team_type_value=team_type_value,
+                school_code=school_code,
+                team_pitcher_norm=set(team_norm or []),
+                campers_norm=set(campers_norm or []),
+                team_markers_norm=set(team_markers_norm or []),
+            )
+
+            # Recompute aggregate/summary metrics from the post-filtered rows so team_type behavior
+            # is always exact, even if SQL team bucketing and route params diverge.
+            total_pitches = len(table_source_rows)
+            rel_speeds = [float(r["rel_speed"]) for r in table_source_rows if _is_num(r.get("rel_speed"))]
+            spins = [float(r["spin_rate"]) for r in table_source_rows if _is_num(r.get("spin_rate"))]
+            ivbs = [float(r["ivb"]) for r in table_source_rows if _is_num(r.get("ivb"))]
+            hbs = [float(r["hb"]) for r in table_source_rows if _is_num(r.get("hb"))]
+
+            zone_hits = [
+                1.0
+                for r in table_source_rows
+                if _is_num(r.get("plate_side"))
+                and _is_num(r.get("plate_height"))
+                and float(r["plate_side"]) >= ZONE_LEFT
+                and float(r["plate_side"]) <= ZONE_RIGHT
+                and float(r["plate_height"]) >= ZONE_BOTTOM
+                and float(r["plate_height"]) <= ZONE_TOP
+            ]
+            strike_hits = [
+                1.0
+                for r in table_source_rows
+                if str(r.get("pitch_call") or "")
+                in {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "InPlay"}
+            ]
+            whiff_values = []
+            for r in table_source_rows:
+                pc = str(r.get("pitch_call") or "")
+                if pc == "StrikeSwinging":
+                    whiff_values.append(1.0)
+                elif pc in {"InPlay", "FoulBall", "FoulBallFieldable", "StrikeCalled", "BallCalled", "BallinDirt", "HitByPitch"}:
+                    whiff_values.append(0.0)
+
+            overview = {
+                "total_pitches": total_pitches,
+                "avg_velo": (sum(rel_speeds) / len(rel_speeds)) if rel_speeds else None,
+                "max_velo": max(rel_speeds) if rel_speeds else None,
+                "avg_spin": (sum(spins) / len(spins)) if spins else None,
+                "avg_ivb": (sum(ivbs) / len(ivbs)) if ivbs else None,
+                "avg_hb": (sum(hbs) / len(hbs)) if hbs else None,
+                "zone_pct": (sum(zone_hits) / total_pitches) if total_pitches else None,
+                "strike_pct": (sum(strike_hits) / total_pitches) if total_pitches else None,
+                "whiff_pct": (sum(whiff_values) / len(whiff_values)) if whiff_values else None,
+            }
+
+            pitch_type_counts: Dict[str, Dict[str, Any]] = {}
+            for r in table_source_rows:
+                pitch_type = str(r.get("pitch_type") or "Undefined")
+                bucket = pitch_type_counts.setdefault(
+                    pitch_type,
+                    {
+                        "pitch_type": pitch_type,
+                        "pitches": 0,
+                        "usage_pct": 0.0,
+                        "avg_velo_vals": [],
+                        "max_velo_vals": [],
+                        "avg_spin_vals": [],
+                        "avg_ivb_vals": [],
+                        "avg_hb_vals": [],
+                    },
+                )
+                bucket["pitches"] += 1
+                if _is_num(r.get("rel_speed")):
+                    bucket["avg_velo_vals"].append(float(r["rel_speed"]))
+                    bucket["max_velo_vals"].append(float(r["rel_speed"]))
+                if _is_num(r.get("spin_rate")):
+                    bucket["avg_spin_vals"].append(float(r["spin_rate"]))
+                if _is_num(r.get("ivb")):
+                    bucket["avg_ivb_vals"].append(float(r["ivb"]))
+                if _is_num(r.get("hb")):
+                    bucket["avg_hb_vals"].append(float(r["hb"]))
+
+            raw_pitch_type_rows = []
+            pitch_order = {
+                "Fastball": 1,
+                "Sinker": 2,
+                "Cutter": 3,
+                "Slider": 4,
+                "Sweeper": 5,
+                "Curveball": 6,
+                "ChangeUp": 7,
+                "Splitter": 8,
+                "Knuckleball": 9,
+                "Undefined": 10,
+            }
+            for pitch_type, bucket in pitch_type_counts.items():
+                pitches = int(bucket["pitches"])
+                raw_pitch_type_rows.append(
+                    {
+                        "pitch_type": pitch_type,
+                        "pitches": pitches,
+                        "usage_pct": (100.0 * pitches / total_pitches) if total_pitches else 0.0,
+                        "avg_velo": (sum(bucket["avg_velo_vals"]) / len(bucket["avg_velo_vals"])) if bucket["avg_velo_vals"] else None,
+                        "max_velo": max(bucket["max_velo_vals"]) if bucket["max_velo_vals"] else None,
+                        "avg_spin": (sum(bucket["avg_spin_vals"]) / len(bucket["avg_spin_vals"])) if bucket["avg_spin_vals"] else None,
+                        "avg_ivb": (sum(bucket["avg_ivb_vals"]) / len(bucket["avg_ivb_vals"])) if bucket["avg_ivb_vals"] else None,
+                        "avg_hb": (sum(bucket["avg_hb_vals"]) / len(bucket["avg_hb_vals"])) if bucket["avg_hb_vals"] else None,
+                    }
+                )
+            raw_pitch_type_rows.sort(key=lambda r: (pitch_order.get(str(r.get("pitch_type") or ""), 99), str(r.get("pitch_type") or "")))
+
+            stuff_rows = [
+                {
+                    "id": r.get("id"),
+                    "session_date": r.get("session_date"),
+                    "pitch_no": r.get("pitch_no"),
+                    "pitch_uid": r.get("pitch_uid"),
+                    "play_id": r.get("play_id"),
+                    "pitch_number": r.get("pitch_number"),
+                    "pitcher": r.get("pitcher"),
+                    "pitch_type": r.get("pitch_type"),
+                    "rel_speed": r.get("rel_speed"),
+                    "ivb": r.get("ivb"),
+                    "hb": r.get("hb"),
+                    "rel_height": r.get("rel_height"),
+                    "ext_value": r.get("ext_value"),
+                    "is_lefty": r.get("is_lefty"),
+                    "hb_adj": r.get("hb") if bool(r.get("is_lefty")) else (-float(r["hb"]) if _is_num(r.get("hb")) else None),
+                }
+                for r in table_source_rows
+            ]
+            avg_stuff, avg_stuff_by_pitch_type = _compute_stuff_by_pitch_type(
+                stuff_rows, stuff_base or "Fastball", stuff_level or "College"
+            )
             table_columns, table_rows, available_table_columns = _build_dynamic_table(
                 table_source_rows,
                 table_mode,
