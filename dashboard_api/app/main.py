@@ -2203,6 +2203,34 @@ OPPONENT_TEAM_MATCH_SQL = """
   )
 )
 """
+PITCHING_TEAM_MATCH_SQL = """
+(
+  """ + PITCHER_TEAM_IS_MARKER_SQL + """
+  AND """ + BATTER_TEAM_NORM_SQL + """ <> ''
+  AND NOT (""" + BATTER_TEAM_IS_MARKER_SQL + """)
+)
+"""
+PITCHING_OPPONENT_MATCH_SQL = """
+(
+  """ + BATTER_TEAM_IS_MARKER_SQL + """
+  AND """ + PITCHER_TEAM_NORM_SQL + """ <> ''
+  AND NOT (""" + PITCHER_TEAM_IS_MARKER_SQL + """)
+)
+"""
+HITTING_TEAM_MATCH_SQL = """
+(
+  """ + BATTER_TEAM_IS_MARKER_SQL + """
+  AND """ + PITCHER_TEAM_NORM_SQL + """ <> ''
+  AND NOT (""" + PITCHER_TEAM_IS_MARKER_SQL + """)
+)
+"""
+HITTING_OPPONENT_MATCH_SQL = """
+(
+  """ + PITCHER_TEAM_IS_MARKER_SQL + """
+  AND """ + BATTER_TEAM_NORM_SQL + """ <> ''
+  AND NOT (""" + BATTER_TEAM_IS_MARKER_SQL + """)
+)
+"""
 # Only include rows that are explicitly tied to the school by team code.
 # This prevents unrelated uploads (same school_code bucket) from leaking into All/Team/Opponent views.
 SCHOOL_RELEVANT_TEAM_SQL = "(" + PITCHER_TEAM_IS_MARKER_SQL + " OR " + BATTER_TEAM_IS_MARKER_SQL + ")"
@@ -2694,27 +2722,20 @@ def pitching_overview(
             %(team_type)s::text IS NULL OR %(team_type)s::text = '' OR %(team_type)s::text = 'All' OR
             (
               %(team_type)s::text = %(school_code)s::text AND (
-                (
-                  %(team_norm_count)s::int > 0 AND
-                  """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(team_norm)s::text[])
-                )
-                OR
-                (
-                  %(team_norm_count)s::int = 0 AND
-                  (""" + TEAM_BUCKET_SQL + """) = %(school_code)s::text
-                )
+                """ + PITCHING_TEAM_MATCH_SQL + """
               )
             )
             OR
             (
               %(team_type)s::text = 'Campers' AND
               %(campers_norm_count)s::int > 0 AND
-              """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(campers_norm)s::text[])
+              """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(campers_norm)s::text[]) AND
+              """ + PITCHING_TEAM_MATCH_SQL + """
             )
             OR
             (
               %(team_type)s::text = 'Opponents' AND (
-                """ + OPPONENT_TEAM_MATCH_SQL + """
+                """ + PITCHING_OPPONENT_MATCH_SQL + """
               )
             )
             OR
@@ -4540,32 +4561,22 @@ def hitting_overview(
             batter_key = _normalize_name_key(str(row.get("batter") or ""))
             pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
             batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
-            home_team_code = _normalize_team_code(str(row.get("home_team_code") or ""))
-            away_team_code = _normalize_team_code(str(row.get("away_team_code") or ""))
             pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
             batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
-            home_is_marker = home_team_code in team_markers_norm if home_team_code else False
-            away_is_marker = away_team_code in team_markers_norm if away_team_code else False
-            opponent_match = (
-                (pitcher_is_marker and bool(batter_team_code) and not batter_is_marker)
-                or (batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker)
-                or (home_is_marker and bool(away_team_code) and not away_is_marker)
-                or (away_is_marker and bool(home_team_code) and not home_is_marker)
-            )
-            has_school_team_code = pitcher_is_marker or batter_is_marker
+            is_team_hitting_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
+            is_opponent_hitting_row = pitcher_is_marker and bool(batter_team_code) and not batter_is_marker
 
             if team_type_value == "Opponents":
-                if not opponent_match:
-                    continue
-                row_team_bucket = "Opponents"
-            elif batter_key in campers_norm and has_school_team_code:
-                row_team_bucket = "Campers"
-            elif batter_key in team_hitter_norm and has_school_team_code:
-                row_team_bucket = school_code
-            elif opponent_match or ((pitcher_is_marker or home_is_marker or away_is_marker) and not batter_is_marker):
-                row_team_bucket = "Opponents"
+                row_team_bucket = "Opponents" if is_opponent_hitting_row else None
+            elif team_type_value == "Campers":
+                row_team_bucket = "Campers" if (batter_key in campers_norm and is_team_hitting_row) else None
+            elif team_type_value == school_code:
+                if batter_key in campers_norm:
+                    row_team_bucket = "Campers" if is_team_hitting_row else None
+                else:
+                    row_team_bucket = school_code if (batter_key in team_hitter_norm and is_team_hitting_row) else None
             else:
-                row_team_bucket = "Opponents"
+                row_team_bucket = None
             if row_team_bucket != team_type_value:
                 continue
         if selected_hitter_keys and _normalize_name_key(str(row.get("batter") or "")) not in selected_hitter_keys:
@@ -4937,32 +4948,23 @@ def catching_overview(
             catcher_key = _normalize_name_key(str(row.get("catcher") or ""))
             pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
             batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
-            home_team_code = _normalize_team_code(str(row.get("home_team_code") or ""))
-            away_team_code = _normalize_team_code(str(row.get("away_team_code") or ""))
             pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
             batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
-            home_is_marker = home_team_code in team_markers_norm if home_team_code else False
-            away_is_marker = away_team_code in team_markers_norm if away_team_code else False
-            opponent_match = (
-                (pitcher_is_marker and bool(batter_team_code) and not batter_is_marker)
-                or (batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker)
-                or (home_is_marker and bool(away_team_code) and not away_is_marker)
-                or (away_is_marker and bool(home_team_code) and not home_is_marker)
-            )
-            has_school_team_code = pitcher_is_marker or batter_is_marker
+            # Catching team/opponent split is driven by pitcherteam/batterteam markers.
+            is_team_catching_row = pitcher_is_marker and bool(batter_team_code) and not batter_is_marker
+            is_opponent_catching_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
 
             if team_type_value == "Opponents":
-                if not opponent_match:
-                    continue
-                row_team_bucket = "Opponents"
-            elif catcher_key in campers_norm and has_school_team_code:
-                row_team_bucket = "Campers"
-            elif catcher_key in team_norm and has_school_team_code:
-                row_team_bucket = school_code
-            elif opponent_match or ((pitcher_is_marker or home_is_marker or away_is_marker) and not batter_is_marker):
-                row_team_bucket = "Opponents"
+                row_team_bucket = "Opponents" if is_opponent_catching_row else None
+            elif team_type_value == "Campers":
+                row_team_bucket = "Campers" if (catcher_key in campers_norm and is_team_catching_row) else None
+            elif team_type_value == school_code:
+                if catcher_key in campers_norm:
+                    row_team_bucket = "Campers" if is_team_catching_row else None
+                else:
+                    row_team_bucket = school_code if (catcher_key in team_norm and is_team_catching_row) else None
             else:
-                row_team_bucket = "Opponents"
+                row_team_bucket = None
             if row_team_bucket != team_type_value:
                 continue
         if selected_catcher_keys and _normalize_name_key(str(row.get("catcher") or "")) not in selected_catcher_keys:
