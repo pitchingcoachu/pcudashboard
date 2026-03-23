@@ -4,7 +4,7 @@ import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
 import { resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
 import { ensureTrainingDbReady } from '../../../../lib/training-db';
-import { getDbPool, listActiveStaffOrganizationIdsByEmail } from '../../../../lib/auth-db';
+import { getDbPool } from '../../../../lib/auth-db';
 import type { PortalSession } from '../../../../lib/portal-session';
 import type { Pool } from 'pg';
 
@@ -78,13 +78,6 @@ export async function GET() {
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
-  const accessibleOrgIdsRaw =
-    session.role === 'admin' || session.role === 'coach'
-      ? await listActiveStaffOrganizationIdsByEmail(session.email)
-      : [];
-  const accessibleOrgIds = Array.from(
-    new Set([scopedOrganizationId, ...accessibleOrgIdsRaw].filter((id) => Number.isFinite(id) && id > 0))
-  );
   const broadenSchoolScope = session.role === 'admin' || session.role === 'coach';
   const pool = getDbPool();
   try {
@@ -100,11 +93,11 @@ export async function GET() {
       `
       SELECT id, name, applies_to_all_schools, payload_json, created_at, updated_at
       FROM dashboard_custom_reports
-      WHERE ((school_code = $2) AND (organization_id = $1 OR organization_id = ANY($3::int[]) OR $4::boolean))
-         OR (applies_to_all_schools = TRUE AND (organization_id = ANY($3::int[]) OR $4::boolean))
+      WHERE ((school_code = $2) AND ($3::boolean OR organization_id = $1))
+         OR (applies_to_all_schools = TRUE AND ($3::boolean OR organization_id = $1))
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrganizationId, schoolCode, accessibleOrgIds, broadenSchoolScope]
+      [scopedOrganizationId, schoolCode, broadenSchoolScope]
     );
     let rows = result.rows;
     if (!rows.length && broadenSchoolScope) {
@@ -121,10 +114,10 @@ export async function GET() {
         FROM dashboard_custom_reports
         WHERE school_code = $1
            OR applies_to_all_schools = TRUE
-           OR organization_id = ANY($2::int[])
+           OR organization_id = $2
         ORDER BY updated_at DESC, id DESC
         `,
-        [schoolCode, accessibleOrgIds]
+        [schoolCode, scopedOrganizationId]
       );
       rows = fallback.rows;
     }
@@ -153,13 +146,7 @@ export async function POST(request: Request) {
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
-  const accessibleOrgIdsRaw =
-    session.role === 'admin' || session.role === 'coach'
-      ? await listActiveStaffOrganizationIdsByEmail(session.email)
-      : [];
-  const editableOrgIds = Array.from(
-    new Set([scopedOrganizationId, ...accessibleOrgIdsRaw].filter((id) => Number.isFinite(id) && id > 0))
-  );
+  const broadenSchoolScope = session.role === 'admin' || session.role === 'coach';
   const pool = getDbPool();
   try {
     await ensureDashboardCustomReportsSchema(pool);
@@ -187,10 +174,10 @@ export async function POST(request: Request) {
                payload_json = $4::jsonb,
                updated_at = NOW()
          WHERE id = $2
-           AND organization_id = ANY($6::int[])
+           AND (organization_id = $1 OR ($6::boolean AND school_code = $7))
          RETURNING id, name, applies_to_all_schools, payload_json, created_at, updated_at
         `,
-        [scopedOrganizationId, id, name, JSON.stringify(payload), applyToAllSchools, editableOrgIds]
+        [scopedOrganizationId, id, name, JSON.stringify(payload), applyToAllSchools, broadenSchoolScope, schoolCode]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });
@@ -265,13 +252,7 @@ export async function DELETE(request: Request) {
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
-  const accessibleOrgIdsRaw =
-    session.role === 'admin' || session.role === 'coach'
-      ? await listActiveStaffOrganizationIdsByEmail(session.email)
-      : [];
-  const editableOrgIds = Array.from(
-    new Set([scopedOrganizationId, ...accessibleOrgIdsRaw].filter((id) => Number.isFinite(id) && id > 0))
-  );
+  const broadenSchoolScope = session.role === 'admin' || session.role === 'coach';
   const id = Number(new URL(request.url).searchParams.get('id'));
   if (!Number.isFinite(id) || id <= 0) {
     return NextResponse.json({ error: 'Report id is required.' }, { status: 400 });
@@ -284,9 +265,9 @@ export async function DELETE(request: Request) {
       `
       DELETE FROM dashboard_custom_reports
       WHERE id = $1
-        AND organization_id = ANY($2::int[])
+        AND (organization_id = $2 OR ($3::boolean AND school_code = $4))
       `,
-      [id, editableOrgIds]
+      [id, scopedOrganizationId, broadenSchoolScope, schoolCode]
     );
     if (!deleted.rowCount) {
       return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });
