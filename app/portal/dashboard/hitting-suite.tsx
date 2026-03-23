@@ -355,6 +355,22 @@ function toOptions(values?: string[], formatNames = false): OptionItem[] {
   return values.map((value) => ({ value, label: formatNames ? formatNameFirstLast(value) : value }));
 }
 
+function pickDefaultTeamType(teamTypes: string[] | undefined, schoolCode: string | undefined): string {
+  if (!Array.isArray(teamTypes) || teamTypes.length === 0) return 'All';
+  const cleaned = teamTypes.map((value) => String(value ?? '').trim()).filter(Boolean);
+  if (cleaned.length === 0) return 'All';
+  const school = String(schoolCode ?? '').trim();
+  const schoolNorm = school.toUpperCase();
+  const exactSchool = cleaned.find((value) => value === school);
+  if (exactSchool) return exactSchool;
+  const normSchool = cleaned.find((value) => value.toUpperCase() === schoolNorm);
+  if (normSchool) return normSchool;
+  const teamOption = cleaned.find((value) => value.toLowerCase() === 'team');
+  if (teamOption) return teamOption;
+  const firstNonAll = cleaned.find((value) => value.toLowerCase() !== 'all');
+  return firstNonAll ?? 'All';
+}
+
 function normalizeMulti(values: string[]): string[] {
   const unique = Array.from(new Set(values.filter((value) => value.trim().length > 0)));
   if (unique.length === 0) return ['All'];
@@ -1216,6 +1232,7 @@ export default function HittingSuite() {
         }
         autoFallbackAppliedRef.current = false;
         setFilters(payload);
+        setTeamType(pickDefaultTeamType(payload.team_types, payload.school_code));
         setStartDate(payload.max_date ?? '');
         setEndDate(payload.max_date ?? '');
         setPitchTypes([]);
