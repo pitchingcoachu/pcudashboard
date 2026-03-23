@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
 import { resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
-import { ensureTrainingDbReady } from '../../../../lib/training-db';
 import { getDbPool } from '../../../../lib/auth-db';
 import type { PortalSession } from '../../../../lib/portal-session';
 import type { Pool } from 'pg';
@@ -14,6 +13,11 @@ type ReportPayload = {
   payload?: unknown;
   applyToAllSchools?: boolean;
 };
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __dashboardCustomReportsSchemaReady: boolean | undefined;
+}
 
 async function getSession(): Promise<PortalSession | null> {
   const cookieStore = await cookies();
@@ -35,9 +39,12 @@ async function getSession(): Promise<PortalSession | null> {
 }
 
 async function ensureDashboardCustomReportsSchema(pool: Pool): Promise<void> {
+  if (global.__dashboardCustomReportsSchemaReady) return;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query(`SET LOCAL lock_timeout = '3s';`);
+    await client.query(`SET LOCAL statement_timeout = '30s';`);
     // Prevent concurrent schema-creation races that can throw pg_class_relname_nsp_index.
     await client.query(`SELECT pg_advisory_xact_lock(77431102512031);`);
     await client.query(`
@@ -64,6 +71,7 @@ async function ensureDashboardCustomReportsSchema(pool: Pool): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_dashboard_custom_reports_org_global_updated ON dashboard_custom_reports (organization_id, applies_to_all_schools, updated_at DESC);`
     );
     await client.query('COMMIT');
+    global.__dashboardCustomReportsSchemaReady = true;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -75,7 +83,6 @@ async function ensureDashboardCustomReportsSchema(pool: Pool): Promise<void> {
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
   const broadenSchoolScope = session.role === 'admin' || session.role === 'coach';
@@ -143,7 +150,6 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
   const broadenSchoolScope = session.role === 'admin' || session.role === 'coach';
@@ -249,7 +255,6 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
   const broadenSchoolScope = session.role === 'admin' || session.role === 'coach';
