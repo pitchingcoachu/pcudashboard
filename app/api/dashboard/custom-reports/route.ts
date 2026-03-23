@@ -4,7 +4,7 @@ import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
 import { resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
 import { ensureTrainingDbReady } from '../../../../lib/training-db';
-import { getDbPool } from '../../../../lib/auth-db';
+import { getDbPool, listActiveStaffOrganizationIdsByEmail } from '../../../../lib/auth-db';
 import type { PortalSession } from '../../../../lib/portal-session';
 import type { Pool } from 'pg';
 
@@ -78,6 +78,13 @@ export async function GET() {
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
+  const accessibleOrgIdsRaw =
+    session.role === 'admin' || session.role === 'coach'
+      ? await listActiveStaffOrganizationIdsByEmail(session.email)
+      : [];
+  const accessibleOrgIds = Array.from(
+    new Set([scopedOrganizationId, ...accessibleOrgIdsRaw].filter((id) => Number.isFinite(id) && id > 0))
+  );
   const pool = getDbPool();
   try {
     await ensureDashboardCustomReportsSchema(pool);
@@ -93,10 +100,10 @@ export async function GET() {
       SELECT id, name, applies_to_all_schools, payload_json, created_at, updated_at
       FROM dashboard_custom_reports
       WHERE (organization_id = $1 AND school_code = $2)
-         OR applies_to_all_schools = TRUE
+         OR (applies_to_all_schools = TRUE AND organization_id = ANY($3::int[]))
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrganizationId, schoolCode]
+      [scopedOrganizationId, schoolCode, accessibleOrgIds]
     );
     return NextResponse.json({
       items: result.rows.map((row) => ({
@@ -122,6 +129,13 @@ export async function POST(request: Request) {
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
+  const accessibleOrgIdsRaw =
+    session.role === 'admin' || session.role === 'coach'
+      ? await listActiveStaffOrganizationIdsByEmail(session.email)
+      : [];
+  const editableOrgIds = Array.from(
+    new Set([scopedOrganizationId, ...accessibleOrgIdsRaw].filter((id) => Number.isFinite(id) && id > 0))
+  );
   const pool = getDbPool();
   try {
     await ensureDashboardCustomReportsSchema(pool);
@@ -149,10 +163,10 @@ export async function POST(request: Request) {
                payload_json = $4::jsonb,
                updated_at = NOW()
          WHERE id = $2
-           AND organization_id = $1
+           AND organization_id = ANY($6::int[])
          RETURNING id, name, applies_to_all_schools, payload_json, created_at, updated_at
         `,
-        [scopedOrganizationId, id, name, JSON.stringify(payload), applyToAllSchools]
+        [scopedOrganizationId, id, name, JSON.stringify(payload), applyToAllSchools, editableOrgIds]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });
@@ -227,6 +241,13 @@ export async function DELETE(request: Request) {
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
+  const accessibleOrgIdsRaw =
+    session.role === 'admin' || session.role === 'coach'
+      ? await listActiveStaffOrganizationIdsByEmail(session.email)
+      : [];
+  const editableOrgIds = Array.from(
+    new Set([scopedOrganizationId, ...accessibleOrgIdsRaw].filter((id) => Number.isFinite(id) && id > 0))
+  );
   const id = Number(new URL(request.url).searchParams.get('id'));
   if (!Number.isFinite(id) || id <= 0) {
     return NextResponse.json({ error: 'Report id is required.' }, { status: 400 });
@@ -239,9 +260,9 @@ export async function DELETE(request: Request) {
       `
       DELETE FROM dashboard_custom_reports
       WHERE id = $1
-        AND organization_id = $2
+        AND organization_id = ANY($2::int[])
       `,
-      [id, scopedOrganizationId]
+      [id, editableOrgIds]
     );
     if (!deleted.rowCount) {
       return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });
