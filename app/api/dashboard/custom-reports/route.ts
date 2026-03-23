@@ -85,6 +85,7 @@ export async function GET() {
   const accessibleOrgIds = Array.from(
     new Set([scopedOrganizationId, ...accessibleOrgIdsRaw].filter((id) => Number.isFinite(id) && id > 0))
   );
+  const broadenSchoolScope = session.role === 'admin' || session.role === 'coach';
   const pool = getDbPool();
   try {
     await ensureDashboardCustomReportsSchema(pool);
@@ -99,11 +100,11 @@ export async function GET() {
       `
       SELECT id, name, applies_to_all_schools, payload_json, created_at, updated_at
       FROM dashboard_custom_reports
-      WHERE (organization_id = $1 AND school_code = $2)
-         OR (applies_to_all_schools = TRUE AND organization_id = ANY($3::int[]))
+      WHERE ((school_code = $2) AND (organization_id = $1 OR organization_id = ANY($3::int[]) OR $4::boolean))
+         OR (applies_to_all_schools = TRUE AND (organization_id = ANY($3::int[]) OR $4::boolean))
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrganizationId, schoolCode, accessibleOrgIds]
+      [scopedOrganizationId, schoolCode, accessibleOrgIds, broadenSchoolScope]
     );
     return NextResponse.json({
       items: result.rows.map((row) => ({
