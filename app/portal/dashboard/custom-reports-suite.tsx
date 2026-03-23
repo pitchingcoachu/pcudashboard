@@ -1340,7 +1340,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     () =>
       savedReports.map((item) => ({
         value: String(item.id),
-        label: isAdminUser && item.applyToAllSchools ? `${item.name} (All Schools)` : item.name,
+        label:
+          isAdminUser && item.applyToAllSchools && !/\(all schools\)\s*$/i.test(item.name)
+            ? `${item.name} (All Schools)`
+            : item.name,
       })),
     [isAdminUser, savedReports]
   );

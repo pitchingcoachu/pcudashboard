@@ -14,6 +14,14 @@ type ReportPayload = {
   applyToAllSchools?: boolean;
 };
 
+function normalizedReportNameKey(name: string): string {
+  return name
+    .trim()
+    .replace(/\s*\(all schools\)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
 declare global {
   // eslint-disable-next-line no-var
   var __dashboardCustomReportsSchemaReady: boolean | undefined;
@@ -93,12 +101,13 @@ export async function GET() {
       id: number;
       name: string;
       applies_to_all_schools: boolean;
+      school_code: string;
       payload_json: unknown;
       created_at: string;
       updated_at: string;
     }>(
       `
-      SELECT id, name, applies_to_all_schools, payload_json, created_at, updated_at
+      SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
       FROM dashboard_custom_reports
       WHERE ((school_code = $2) AND ($3::boolean OR organization_id = $1))
          OR (applies_to_all_schools = TRUE AND ($3::boolean OR organization_id = $1))
@@ -112,12 +121,13 @@ export async function GET() {
         id: number;
         name: string;
         applies_to_all_schools: boolean;
+        school_code: string;
         payload_json: unknown;
         created_at: string;
         updated_at: string;
       }>(
         `
-        SELECT id, name, applies_to_all_schools, payload_json, created_at, updated_at
+        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
         FROM dashboard_custom_reports
         WHERE school_code = $1
            OR applies_to_all_schools = TRUE
@@ -128,6 +138,33 @@ export async function GET() {
       );
       rows = fallback.rows;
     }
+
+    // Collapse duplicate names (e.g., school-scoped + all-schools copy).
+    // Prefer school-specific rows for the selected school over global copies.
+    const deduped = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const key = normalizedReportNameKey(row.name);
+      const current = deduped.get(key);
+      if (!current) {
+        deduped.set(key, row);
+        continue;
+      }
+      const rowIsSchoolSpecific = !row.applies_to_all_schools && String(row.school_code || '').toUpperCase() === schoolCode;
+      const currentIsSchoolSpecific =
+        !current.applies_to_all_schools && String(current.school_code || '').toUpperCase() === schoolCode;
+      if (rowIsSchoolSpecific && !currentIsSchoolSpecific) {
+        deduped.set(key, row);
+        continue;
+      }
+      if (rowIsSchoolSpecific === currentIsSchoolSpecific) {
+        const rowLooksCanonical = !/\(all schools\)\s*$/i.test(row.name);
+        const currentLooksCanonical = !/\(all schools\)\s*$/i.test(current.name);
+        if (rowLooksCanonical && !currentLooksCanonical) {
+          deduped.set(key, row);
+        }
+      }
+    }
+    rows = Array.from(deduped.values());
 
     return NextResponse.json({
       items: rows.map((row) => ({
