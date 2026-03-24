@@ -65,6 +65,14 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentSoft: '#00437a',
     accentRgb: '0, 92, 169',
   },
+  HARVARD: {
+    schoolCode: 'HARVARD',
+    logoSrc: '/harvard-logo.png',
+    logoAlt: 'Harvard logo',
+    accent: '#a51c30',
+    accentSoft: '#781421',
+    accentRgb: '165, 28, 48',
+  },
 };
 
 export function resolveSchoolBrand(schoolCode: string | null | undefined): SchoolBrand {
