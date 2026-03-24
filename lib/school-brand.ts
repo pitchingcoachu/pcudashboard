@@ -59,7 +59,7 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
   },
   CREIGHTON: {
     schoolCode: 'CREIGHTON',
-    logoSrc: null,
+    logoSrc: '/creighton-logo.png',
     logoAlt: 'Creighton logo',
     accent: '#005ca9',
     accentSoft: '#00437a',
