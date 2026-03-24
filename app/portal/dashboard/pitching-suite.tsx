@@ -4158,6 +4158,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
     row: Record<string, string | number | null>,
     column: string
   ): { backgroundColor: string; color: string } | null => {
+    const thresholdPitchType = isLeaderboardPage ? 'all' : pitchTypeForRow(row);
     if (column === splitColName && effectiveSplitBy === 'Pitch Types') {
       const pitchType = pitchTypeForRow(row);
       if (pitchType === 'all') return null;
@@ -4168,7 +4169,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
     if (!shouldColorTable) return null;
     const normalizedColumn = normalizeColorColumnName(column);
     if (!tableColorColumnSet.has(normalizedColumn)) return null;
-    const colors = getCellColorScale(row[column], normalizedColumn, pitchTypeForRow(row));
+    const colors = getCellColorScale(row[column], normalizedColumn, thresholdPitchType);
     if (!colors) return null;
     return { backgroundColor: colors.bg, color: colors.text };
   };
