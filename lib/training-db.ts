@@ -244,8 +244,14 @@ type Queryable = {
 };
 
 function isAuthUsersPrimaryKeyViolation(error: unknown): boolean {
-  const typed = error as { code?: string; constraint?: string } | null;
-  return typed?.code === '23505' && typed?.constraint === 'auth_users_pkey';
+  const typed = error as { code?: string; constraint?: string; message?: string } | null;
+  const message = String(typed?.message ?? '').toLowerCase();
+  return (
+    typed?.code === '23505' &&
+    (typed?.constraint === 'auth_users_pkey' ||
+      message.includes('auth_users_pkey') ||
+      (message.includes('duplicate key') && message.includes('auth_users')))
+  );
 }
 
 async function ensureAuthUsersIdSequence(db: Queryable): Promise<void> {
@@ -257,13 +263,26 @@ async function ensureAuthUsersIdSequenceStructure(db: Queryable): Promise<void> 
   if (global.__pcuAuthUsersSequenceStructureReady) return;
   await db.query(`CREATE SEQUENCE IF NOT EXISTS auth_users_id_seq;`);
   await db.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS id BIGINT;`);
-  await db.query(`ALTER TABLE auth_users ALTER COLUMN id SET DEFAULT nextval('auth_users_id_seq');`);
+  await db.query(`
+    DO $$
+    BEGIN
+      IF pg_get_serial_sequence('auth_users', 'id') IS NULL THEN
+        EXECUTE 'ALTER TABLE auth_users ALTER COLUMN id SET DEFAULT nextval(''auth_users_id_seq'')';
+      END IF;
+    END $$;
+  `);
   await db.query(`UPDATE auth_users SET id = nextval('auth_users_id_seq') WHERE id IS NULL;`);
   global.__pcuAuthUsersSequenceStructureReady = true;
 }
 
 async function syncAuthUsersIdSequence(db: Queryable): Promise<void> {
-  await db.query(`SELECT setval('auth_users_id_seq', COALESCE((SELECT MAX(id) FROM auth_users), 0) + 1, false);`);
+  await db.query(`
+    SELECT setval(
+      COALESCE(pg_get_serial_sequence('auth_users', 'id'), 'auth_users_id_seq'),
+      COALESCE((SELECT MAX(id) FROM auth_users), 0) + 1,
+      false
+    );
+  `);
 }
 
 export async function ensureTrainingDbReady(): Promise<void> {
