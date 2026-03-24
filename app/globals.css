@@ -1615,8 +1615,10 @@ main {
 
 .portal-school-switcher-trigger-logo--OSU,
 .portal-school-switcher-trigger-logo--GCU,
+.portal-school-switcher-trigger-logo--CREIGHTON,
 .portal-school-switcher-option-logo--OSU,
-.portal-school-switcher-option-logo--GCU {
+.portal-school-switcher-option-logo--GCU,
+.portal-school-switcher-option-logo--CREIGHTON {
   transform: scale(1.2);
   transform-origin: center;
 }
@@ -3869,8 +3871,10 @@ main {
 
   .portal-school-switcher-trigger-logo--OSU,
   .portal-school-switcher-trigger-logo--GCU,
+  .portal-school-switcher-trigger-logo--CREIGHTON,
   .portal-school-switcher-option-logo--OSU,
-  .portal-school-switcher-option-logo--GCU {
+  .portal-school-switcher-option-logo--GCU,
+  .portal-school-switcher-option-logo--CREIGHTON {
     transform: none;
   }
 
