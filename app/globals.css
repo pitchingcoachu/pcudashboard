@@ -1630,6 +1630,12 @@ main {
   transform: scale(1.55);
 }
 
+.portal-school-switcher-trigger-logo--CBU,
+.portal-school-switcher-option-logo--CBU {
+  transform: scale(1.35);
+  transform-origin: center;
+}
+
 .portal-nav-mobile-label {
   position: absolute;
   width: 1px;

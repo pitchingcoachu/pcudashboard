@@ -455,6 +455,23 @@ def _normalize_session_type_filter(value: Optional[str]) -> Optional[str]:
     return None
 
 
+def _session_bucket_for_row(row: Dict[str, Any], team_markers_norm) -> Optional[str]:
+    st_compact = re.sub(r"\s+", "", str(row.get("session_type_norm") or "").strip().lower())
+    if "bull" in st_compact or "prac" in st_compact or st_compact == "bp":
+        return "Bullpen"
+    pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+    batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
+    pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
+    batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
+    if pitcher_is_marker and batter_is_marker and bool(batter_team_code):
+        return "Live"
+    if pitcher_is_marker and bool(batter_team_code) and not batter_is_marker:
+        return "Season"
+    if batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker:
+        return "Season"
+    return None
+
+
 def _norm_hand(value: Optional[str]) -> str:
     v = (value or "").strip().upper()
     if v.startswith("L"):
@@ -2726,34 +2743,25 @@ def pitching_overview(
               regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)'
             ) OR
             (
-              %(session_type_filter)s::text = 'Season' AND
-              (
+              %(session_type_filter)s::text = 'Season' AND (
                 (
-                  %(use_osu_date_session_rules)s::boolean = TRUE AND
-                  session_date >= %(osu_season_start)s::date AND
-                  session_date <= %(osu_season_end)s::date AND
-                  NOT (regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)')
+                  """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
+                  """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
+                  NOT (""" + BATTER_TEAM_IS_MARKER_SQL + """)
                 )
                 OR
                 (
-                  %(use_osu_date_session_rules)s::boolean = FALSE AND
-                  NOT (regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|live|ab|game)')
+                  """ + BATTER_TEAM_IS_MARKER_SQL + """ AND
+                  """ + PITCHER_TEAM_NORM_SQL + """ <> '' AND
+                  NOT (""" + PITCHER_TEAM_IS_MARKER_SQL + """)
                 )
               )
             ) OR
             (
-              %(session_type_filter)s::text = 'Live' AND
-              (
-                (
-                  %(use_osu_date_session_rules)s::boolean = TRUE AND
-                  session_date < %(osu_season_start)s::date AND
-                  NOT (regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)')
-                )
-                OR
-                (
-                  %(use_osu_date_session_rules)s::boolean = FALSE AND
-                  regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(live|ab|game)'
-                )
+              %(session_type_filter)s::text = 'Live' AND (
+                """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
+                """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
+                (""" + BATTER_TEAM_IS_MARKER_SQL + """)
               )
             )
           )
@@ -3459,35 +3467,24 @@ def pitching_ab_report(
                         regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)'
                       ) OR
                       (
-                        %(session_type_filter)s::text = 'Live' AND
-                        (
-                          (
-                            %(use_osu_date_session_rules)s::boolean = TRUE AND
-                            session_date < %(osu_season_start)s::date AND
-                            NOT (regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)')
-                          )
-                          OR
-                          (
-                            %(use_osu_date_session_rules)s::boolean = FALSE AND
-                            regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(live|ab|game)'
-                          )
+                        %(session_type_filter)s::text = 'Live' AND (
+                          """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
+                          """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
+                          (""" + BATTER_TEAM_IS_MARKER_SQL + """)
                         )
                       ) OR
                       (
-                        %(session_type_filter)s::text = 'Season' AND
-                        (
+                        %(session_type_filter)s::text = 'Season' AND (
                           (
-                            %(use_osu_date_session_rules)s::boolean = TRUE AND
-                            session_date >= %(osu_season_start)s::date AND
-                            session_date <= %(osu_season_end)s::date AND
-                            NOT (regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)')
+                            """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
+                            """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
+                            NOT (""" + BATTER_TEAM_IS_MARKER_SQL + """)
                           )
                           OR
                           (
-                            %(use_osu_date_session_rules)s::boolean = FALSE AND
-                            NOT (
-                              regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|live|ab|game)'
-                            )
+                            """ + BATTER_TEAM_IS_MARKER_SQL + """ AND
+                            """ + PITCHER_TEAM_NORM_SQL + """ <> '' AND
+                            NOT (""" + PITCHER_TEAM_IS_MARKER_SQL + """)
                           )
                         )
                       )
@@ -3757,35 +3754,24 @@ def hitting_ab_report(
                         regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)'
                       ) OR
                       (
-                        %(session_type_filter)s::text = 'Live' AND
-                        (
-                          (
-                            %(use_osu_date_session_rules)s::boolean = TRUE AND
-                            session_date < %(osu_season_start)s::date AND
-                            NOT (regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)')
-                          )
-                          OR
-                          (
-                            %(use_osu_date_session_rules)s::boolean = FALSE AND
-                            regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(live|ab|game)'
-                          )
+                        %(session_type_filter)s::text = 'Live' AND (
+                          """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
+                          """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
+                          (""" + BATTER_TEAM_IS_MARKER_SQL + """)
                         )
                       ) OR
                       (
-                        %(session_type_filter)s::text = 'Season' AND
-                        (
+                        %(session_type_filter)s::text = 'Season' AND (
                           (
-                            %(use_osu_date_session_rules)s::boolean = TRUE AND
-                            session_date >= %(osu_season_start)s::date AND
-                            session_date <= %(osu_season_end)s::date AND
-                            NOT (regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)')
+                            """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
+                            """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
+                            NOT (""" + BATTER_TEAM_IS_MARKER_SQL + """)
                           )
                           OR
                           (
-                            %(use_osu_date_session_rules)s::boolean = FALSE AND
-                            NOT (
-                              regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|live|ab|game)'
-                            )
+                            """ + BATTER_TEAM_IS_MARKER_SQL + """ AND
+                            """ + PITCHER_TEAM_NORM_SQL + """ <> '' AND
+                            NOT (""" + PITCHER_TEAM_IS_MARKER_SQL + """)
                           )
                         )
                       )
@@ -4523,6 +4509,7 @@ def hitting_overview(
     school_code: str = Query(..., min_length=1),
     start_date: Optional[date] = Query(default=None),
     end_date: Optional[date] = Query(default=None),
+    session_type: Optional[str] = Query(default=None),
     team_type: Optional[str] = Query(default=None),
     hitter: Optional[str] = Query(default=None),
     opp_pitcher: Optional[str] = Query(default=None),
@@ -4568,6 +4555,7 @@ def hitting_overview(
     selected_after_count_filters = _parse_csv_list(after_count_filter)
     selected_bip_results = _parse_csv_list(bip_result)
     selected_custom_columns = _parse_csv_list(custom_columns)
+    session_type_filter = _normalize_session_type_filter(session_type)
 
     parsed_velo_min = _parse_optional_float(velo_min, "velo_min")
     parsed_velo_max = _parse_optional_float(velo_max, "velo_max")
@@ -4729,6 +4717,9 @@ def hitting_overview(
 
     out_rows: List[Dict[str, Any]] = []
     for row in rows:
+        row_session_bucket = _session_bucket_for_row(row, team_markers_norm)
+        if session_type_filter and row_session_bucket != session_type_filter:
+            continue
         if use_team_filter:
             batter_key = _normalize_name_key(str(row.get("batter") or ""))
             pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
@@ -4882,6 +4873,7 @@ def catching_filters(
     campers_norm = set(roster.get("campers_norm", []) or [])
     team_catcher_norm = set(roster.get("hitter_norm", []) or []) - campers_norm
     team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
+    session_type_filter = _normalize_session_type_filter(session_type)
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
     try:
@@ -4909,21 +4901,31 @@ def catching_filters(
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                   AND (
-                    %(session_type)s::text IS NULL
-                    OR %(session_type)s::text = ''
-                    OR %(session_type)s::text = 'All'
+                    %(session_type_filter)s::text IS NULL
                     OR (
-                      %(session_type)s::text = 'Bullpen' AND
+                      %(session_type_filter)s::text = 'Bullpen' AND
                       regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)'
                     )
                     OR (
-                      %(session_type)s::text = 'Live BP' AND
-                      regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(live|ab|game)'
+                      %(session_type_filter)s::text = 'Live' AND (
+                        """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
+                        """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
+                        (""" + BATTER_TEAM_IS_MARKER_SQL + """)
+                      )
                     )
                     OR (
-                      %(session_type)s::text = 'Season' AND
-                      NOT (
-                        regexp_replace(lower(COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|live|ab|game)'
+                      %(session_type_filter)s::text = 'Season' AND (
+                        (
+                          """ + PITCHER_TEAM_IS_MARKER_SQL + """ AND
+                          """ + BATTER_TEAM_NORM_SQL + """ <> '' AND
+                          NOT (""" + BATTER_TEAM_IS_MARKER_SQL + """)
+                        )
+                        OR
+                        (
+                          """ + BATTER_TEAM_IS_MARKER_SQL + """ AND
+                          """ + PITCHER_TEAM_NORM_SQL + """ <> '' AND
+                          NOT (""" + PITCHER_TEAM_IS_MARKER_SQL + """)
+                        )
                       )
                     )
                   )
@@ -4933,7 +4935,7 @@ def catching_filters(
                     "school_code": school_code,
                     "start_date": start_date,
                     "end_date": end_date,
-                    "session_type": session_type,
+                    "session_type_filter": session_type_filter,
                     "team_markers_norm": team_markers_norm,
                 },
             )
@@ -5155,13 +5157,7 @@ def catching_overview(
                 continue
         if selected_catcher_keys and _normalize_name_key(str(row.get("catcher") or "")) not in selected_catcher_keys:
             continue
-        st_compact = re.sub(r"\\s+", "", str(row.get("session_type_norm") or "").strip().lower())
-        if "bull" in st_compact or "prac" in st_compact or st_compact == "bp":
-            row_session_bucket = "Bullpen"
-        elif "live" in st_compact or "ab" in st_compact or "game" in st_compact:
-            row_session_bucket = "Live"
-        else:
-            row_session_bucket = "Season"
+        row_session_bucket = _session_bucket_for_row(row, team_markers_norm)
         if session_type_filter and row_session_bucket != session_type_filter:
             continue
         if hand and hand != "All" and _norm_hand(row.get("pitcherthrows")) != hand:
