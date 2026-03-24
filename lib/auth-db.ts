@@ -684,7 +684,7 @@ export async function validateLoginWithDatabase(email: string, password: string)
       ORDER BY
         CASE WHEN COALESCE(u.is_active, TRUE) = TRUE THEN 0 ELSE 1 END,
         CASE WHEN u.role = 'admin' THEN 0 WHEN u.role = 'coach' THEN 1 WHEN u.role = 'player' THEN 2 ELSE 3 END,
-        u.id ASC
+        u.id DESC
     `,
     [normalizedEmail]
   );
@@ -740,7 +740,7 @@ export async function getSessionUserByEmail(email: string): Promise<SessionUser 
         AND COALESCE(u.is_active, TRUE) = TRUE
       ORDER BY
         CASE WHEN u.role = 'admin' THEN 0 WHEN u.role = 'coach' THEN 1 WHEN u.role = 'player' THEN 2 ELSE 3 END,
-        u.id ASC
+        u.id DESC
       LIMIT 1
     `,
     [normalizedEmail]
