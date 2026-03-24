@@ -694,6 +694,7 @@ export async function createClientWithLogin(input: {
     }
 
     const passwordHash = createPasswordHash(input.password);
+    await client.query(`SAVEPOINT sp_insert_auth_user_player`);
     let insertedUser;
     try {
       insertedUser = await client.query<{ id: number }>(
@@ -714,6 +715,7 @@ export async function createClientWithLogin(input: {
       );
     } catch (error) {
       if (!isAuthUsersPrimaryKeyViolation(error)) throw error;
+      await client.query(`ROLLBACK TO SAVEPOINT sp_insert_auth_user_player`);
       await ensureAuthUsersIdSequence(client);
       insertedUser = await client.query<{ id: number }>(
         `
@@ -731,6 +733,8 @@ export async function createClientWithLogin(input: {
           input.organizationId,
         ]
       );
+    } finally {
+      await client.query(`RELEASE SAVEPOINT sp_insert_auth_user_player`);
     }
 
     if (assignedCoachUserId) {
@@ -1167,6 +1171,7 @@ export async function syncStaffUserSchools(input: {
           input.role,
           orgId,
         ];
+        await client.query(`SAVEPOINT sp_insert_auth_user_staff`);
         try {
           await client.query(
             `
@@ -1179,6 +1184,7 @@ export async function syncStaffUserSchools(input: {
           );
         } catch (error) {
           if (!isAuthUsersPrimaryKeyViolation(error)) throw error;
+          await client.query(`ROLLBACK TO SAVEPOINT sp_insert_auth_user_staff`);
           await ensureAuthUsersIdSequence(client);
           await client.query(
             `
@@ -1189,6 +1195,8 @@ export async function syncStaffUserSchools(input: {
             `,
             insertValues
           );
+        } finally {
+          await client.query(`RELEASE SAVEPOINT sp_insert_auth_user_staff`);
         }
       }
     }

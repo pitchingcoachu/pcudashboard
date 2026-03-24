@@ -124,19 +124,24 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
           {isGlobalAdmin ? (
             <fieldset className="portal-choice-block">
               <legend>Schools</legend>
-              <div className="portal-choice-line">
-                {allSchoolCodes.map((schoolCode) => (
-                  <label key={schoolCode}>
-                    <input
-                      type="checkbox"
-                      name="schoolCodes"
-                      value={schoolCode}
-                      defaultChecked={schoolCode === programmingSchoolCode}
-                    />
-                    {schoolCode}
-                  </label>
-                ))}
-              </div>
+              <details>
+                <summary className="btn btn-ghost" style={{ width: 'fit-content' }}>
+                  Select Schools
+                </summary>
+                <div className="portal-choice-line" style={{ marginTop: '0.5rem' }}>
+                  {allSchoolCodes.map((schoolCode) => (
+                    <label key={schoolCode}>
+                      <input
+                        type="checkbox"
+                        name="schoolCodes"
+                        value={schoolCode}
+                        defaultChecked={schoolCode === programmingSchoolCode}
+                      />
+                      {schoolCode}
+                    </label>
+                  ))}
+                </div>
+              </details>
             </fieldset>
           ) : null}
           <label>
@@ -181,19 +186,24 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
             {isGlobalAdmin ? (
               <fieldset className="portal-choice-block">
                 <legend>Schools</legend>
-                <div className="portal-choice-line">
-                  {allSchoolCodes.map((schoolCode) => (
-                    <label key={schoolCode}>
-                      <input
-                        type="checkbox"
-                        name="schoolCodes"
-                        value={schoolCode}
-                        defaultChecked={(editCoachSchoolCodes.length > 0 ? editCoachSchoolCodes : [programmingSchoolCode]).includes(schoolCode)}
-                      />
-                      {schoolCode}
-                    </label>
-                  ))}
-                </div>
+                <details>
+                  <summary className="btn btn-ghost" style={{ width: 'fit-content' }}>
+                    Select Schools
+                  </summary>
+                  <div className="portal-choice-line" style={{ marginTop: '0.5rem' }}>
+                    {allSchoolCodes.map((schoolCode) => (
+                      <label key={schoolCode}>
+                        <input
+                          type="checkbox"
+                          name="schoolCodes"
+                          value={schoolCode}
+                          defaultChecked={(editCoachSchoolCodes.length > 0 ? editCoachSchoolCodes : [programmingSchoolCode]).includes(schoolCode)}
+                        />
+                        {schoolCode}
+                      </label>
+                    ))}
+                  </div>
+                </details>
               </fieldset>
             ) : null}
             <div className="portal-choice-line-actions">
