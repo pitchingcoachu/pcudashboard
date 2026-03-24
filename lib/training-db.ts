@@ -1,4 +1,4 @@
-import { createPasswordHash, ensureAuthDbReady, getDbPool, isDatabaseConfigured } from './auth-db';
+import { createPasswordHash, ensureAuthDbReady, getDbPool, isDatabaseConfigured, verifyPasswordAgainstHash } from './auth-db';
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 
 declare global {
@@ -731,9 +731,9 @@ export async function createStaffUser(input: {
     return { ok: false, error: 'Only global admin can link the same coach email across multiple schools.' };
   }
 
-  const existingAny = await pool.query<{ password_hash: string | null; role: string | null }>(
+  const existingAny = await pool.query<{ password_hash: string | null; role: string | null; name: string | null }>(
     `
-      SELECT password_hash, role
+      SELECT password_hash, role, name
       FROM auth_users
       WHERE LOWER(email) = LOWER($1)
       ORDER BY id ASC
@@ -748,10 +748,23 @@ export async function createStaffUser(input: {
     }
   }
 
+  const existingNameRaw = String(existingAny.rows[0]?.name ?? '').trim();
+  const normalizeName = (value: string) => value.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (existingNameRaw && normalizeName(existingNameRaw) !== normalizeName(name)) {
+    return { ok: false, error: `This email is already linked as "${existingNameRaw}". Use that same name.` };
+  }
+
   const reusedExistingPassword = Boolean((existingAny.rows[0]?.password_hash ?? '').trim());
+  if (reusedExistingPassword) {
+    const existingHash = String(existingAny.rows[0]?.password_hash ?? '').trim();
+    if (!verifyPasswordAgainstHash(existingHash, input.password)) {
+      return { ok: false, error: 'This email already exists. Enter the same existing password for this email.' };
+    }
+  }
   const passwordHash = reusedExistingPassword
     ? String(existingAny.rows[0]?.password_hash ?? '').trim()
     : createPasswordHash(input.password);
+  const canonicalName = existingNameRaw || name;
   await pool.query(
     `
       INSERT INTO auth_users (
@@ -762,7 +775,7 @@ export async function createStaffUser(input: {
     [
       normalizedEmail,
       deriveUsernameFromEmail(normalizedEmail),
-      name,
+      canonicalName,
       (input.phone ?? '').trim() || null,
       passwordHash,
       passwordHash,

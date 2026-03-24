@@ -177,6 +177,11 @@ function verifyPassword(storedHash: string, password: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+export function verifyPasswordAgainstHash(storedHash: string, password: string): boolean {
+  if (!storedHash || !password) return false;
+  return verifyPassword(storedHash, password);
+}
+
 function hashResetToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
