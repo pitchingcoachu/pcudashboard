@@ -544,62 +544,86 @@ function normalizePitchTypeName(value: string): string {
   return v.replace(/\s+/g, '');
 }
 
+function normalizeColorColumnName(value: string): string {
+  const compact = String(value ?? '').replace(/\s+/g, '').replace(/％/g, '%').trim();
+  const lower = compact.toLowerCase();
+  if (lower === 'inzone%') return 'InZone%';
+  if (lower === 'comp%') return 'Comp%';
+  if (lower === 'strike%') return 'Strike%';
+  if (lower === 'swing%') return 'Swing%';
+  if (lower === 'fps%') return 'FPS%';
+  if (lower === 'early%') return 'Early%';
+  if (lower === 'ahead%') return 'Ahead%';
+  if (lower === 'e+a%' || lower === 'ea%') return 'E+A%';
+  if (lower === '1-1w%') return '1-1W%';
+  if (lower === 'qp%') return 'QP%';
+  if (lower === 'whiff%') return 'Whiff%';
+  if (lower === 'csw%') return 'CSW%';
+  if (lower === 'k%') return 'K%';
+  if (lower === 'bb%') return 'BB%';
+  if (lower === 'gb%') return 'GB%';
+  if (lower === 'barrel%') return 'Barrel%';
+  if (lower === 'rv/100') return 'RV/100';
+  return String(value ?? '').trim();
+}
+
 function getProcessThresholds(columnName: string, pitchTypeRaw: string): { poor: number; avg: number; great: number } | null {
+  const metric = normalizeColorColumnName(columnName);
   const pitchType = normalizePitchTypeName(pitchTypeRaw);
-  if (columnName === 'InZone%') {
+  if (metric === 'InZone%') {
     if (['fastball', 'sinker'].includes(pitchType)) return { poor: 43, avg: 50, great: 57 };
     if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 37, avg: 43, great: 49 };
     if (['changeup', 'splitter', 'knuckleball'].includes(pitchType)) return { poor: 30, avg: 37, great: 44 };
     if (pitchType === 'all') return { poor: 42, avg: 47, great: 52 };
   }
-  if (columnName === 'Comp%') {
+  if (metric === 'Comp%') {
     if (['fastball', 'sinker'].includes(pitchType)) return { poor: 79, avg: 83, great: 87 };
     if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 70, avg: 76, great: 82 };
     if (['changeup', 'splitter', 'knuckleball'].includes(pitchType)) return { poor: 65, avg: 74, great: 83 };
     if (pitchType === 'all') return { poor: 76, avg: 79, great: 82 };
   }
-  if (columnName === 'Strike%') return { poor: 57, avg: 62, great: 67 };
-  if (columnName === 'Swing%') {
+  if (metric === 'Strike%') return { poor: 57, avg: 62, great: 67 };
+  if (metric === 'Swing%') {
     if (['fastball', 'sinker'].includes(pitchType)) return { poor: 40, avg: 44, great: 48 };
     if (['cutter', 'slider', 'sweeper'].includes(pitchType)) return { poor: 37, avg: 43, great: 49 };
     if (pitchType === 'curveball') return { poor: 28, avg: 35, great: 42 };
     if (['changeup', 'splitter'].includes(pitchType)) return { poor: 43, avg: 47, great: 51 };
     if (pitchType === 'all') return { poor: 40, avg: 45, great: 50 };
   }
-  if (columnName === 'FPS%') return { poor: 55, avg: 60, great: 65 };
-  if (columnName === 'E+A%' && pitchType === 'all') return { poor: 65, avg: 70, great: 75 };
-  if (columnName === '1-1W%') return { poor: 58, avg: 63, great: 68 };
-  if (columnName === 'Ahead%') return { poor: 32, avg: 37, great: 42 };
-  if (columnName === 'QP%') return { poor: 38, avg: 48, great: 58 };
-  if (columnName === 'Ctrl+') return { poor: 75, avg: 85, great: 95 };
-  if (columnName === 'QP+') return { poor: 75, avg: 90, great: 105 };
-  if (columnName === 'Pitching+') return { poor: 80, avg: 95, great: 110 };
-  if (columnName === 'K%' && pitchType === 'all') return { poor: 18, avg: 23, great: 28 };
-  if (columnName === 'BB%' && pitchType === 'all') return { poor: 11, avg: 9, great: 7 };
-  if (columnName === 'Whiff%') {
+  if (metric === 'FPS%') return { poor: 55, avg: 60, great: 65 };
+  if (metric === 'E+A%' && pitchType === 'all') return { poor: 65, avg: 70, great: 75 };
+  if (metric === '1-1W%') return { poor: 58, avg: 63, great: 68 };
+  if (metric === 'Ahead%') return { poor: 32, avg: 37, great: 42 };
+  if (metric === 'QP%') return { poor: 38, avg: 48, great: 58 };
+  if (metric === 'Ctrl+') return { poor: 75, avg: 85, great: 95 };
+  if (metric === 'QP+') return { poor: 75, avg: 90, great: 105 };
+  if (metric === 'Pitching+') return { poor: 80, avg: 95, great: 110 };
+  if (metric === 'K%' && pitchType === 'all') return { poor: 18, avg: 23, great: 28 };
+  if (metric === 'BB%' && pitchType === 'all') return { poor: 11, avg: 9, great: 7 };
+  if (metric === 'Whiff%') {
     if (pitchType === 'fastball') return { poor: 18, avg: 22, great: 26 };
     if (pitchType === 'sinker') return { poor: 9, avg: 13, great: 17 };
     if (pitchType === 'cutter') return { poor: 22, avg: 27, great: 32 };
     if (['sweeper', 'curveball', 'slider', 'changeup', 'splitter'].includes(pitchType)) return { poor: 29, avg: 35, great: 41 };
     if (pitchType === 'all') return { poor: 21, avg: 26, great: 31 };
   }
-  if (columnName === 'CSW%') {
+  if (metric === 'CSW%') {
     if (['fastball', 'sinker'].includes(pitchType)) return { poor: 23, avg: 27, great: 31 };
     if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 29, avg: 32, great: 35 };
     if (['splitter', 'changeup'].includes(pitchType)) return { poor: 22, avg: 28, great: 34 };
     if (pitchType === 'all') return { poor: 26, avg: 29, great: 32 };
   }
-  if (columnName === 'GB%') {
+  if (metric === 'GB%') {
     if (pitchType === 'fastball') return { poor: 31, avg: 39, great: 47 };
     if (pitchType === 'sinker') return { poor: 43, avg: 54, great: 65 };
     if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 36, avg: 43, great: 50 };
     if (['changeup', 'splitter'].includes(pitchType)) return { poor: 35, avg: 47, great: 59 };
     if (pitchType === 'all') return { poor: 38, avg: 43, great: 48 };
   }
-  if (columnName === 'Barrel%') return { poor: 20, avg: 15, great: 10 };
-  if (columnName === 'EV') return { poor: 95, avg: 85, great: 75 };
-  if (columnName === 'Stuff+') return { poor: 90, avg: 100, great: 110 };
-  if (columnName === 'RV/100') {
+  if (metric === 'Barrel%') return { poor: 20, avg: 15, great: 10 };
+  if (metric === 'EV') return { poor: 95, avg: 85, great: 75 };
+  if (metric === 'Stuff+') return { poor: 90, avg: 100, great: 110 };
+  if (metric === 'RV/100') {
     if (pitchType === 'fastball') return { poor: 1.5, avg: 0.7, great: -0.1 };
     if (pitchType === 'sinker') return { poor: 2.3, avg: 0.9, great: -0.5 };
     if (pitchType === 'cutter') return { poor: 0.9, avg: -0.2, great: -1.3 };
@@ -617,12 +641,13 @@ function getCellColorScale(
   columnName: string,
   pitchType: string
 ): CellColors | null {
+  const metric = normalizeColorColumnName(columnName);
   const parsed = parseSortableNumber(value);
   if (parsed === null) return null;
-  const thresholds = getProcessThresholds(columnName, pitchType);
+  const thresholds = getProcessThresholds(metric, pitchType);
   if (!thresholds) return null;
   const { poor, avg, great } = thresholds;
-  const reverseScale = ['EV', 'Barrel%', 'BB%', 'RV/100'].includes(columnName);
+  const reverseScale = ['EV', 'Barrel%', 'BB%', 'RV/100'].includes(metric);
   if (reverseScale) {
     if (parsed >= poor) return { bg: '#0066CC', text: 'white' };
     if (parsed >= (poor + avg) / 2) return { bg: '#66B2FF', text: 'black' };
@@ -4019,6 +4044,10 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
   };
 
   const tableColorColumns = useMemo(() => colorColumnsByMode[tableColorMode] ?? [], [tableColorMode]);
+  const tableColorColumnSet = useMemo(
+    () => new Set(tableColorColumns.map((column) => normalizeColorColumnName(column))),
+    [tableColorColumns]
+  );
   const splitColName = overview?.table_columns?.[0] ?? '';
   const tableModeOptions = useMemo(
     () => [
@@ -4137,8 +4166,9 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
       return { backgroundColor: bg, color: pitchHoverTextColor(bg) };
     }
     if (!shouldColorTable) return null;
-    if (!tableColorColumns.includes(column)) return null;
-    const colors = getCellColorScale(row[column], column, pitchTypeForRow(row));
+    const normalizedColumn = normalizeColorColumnName(column);
+    if (!tableColorColumnSet.has(normalizedColumn)) return null;
+    const colors = getCellColorScale(row[column], normalizedColumn, pitchTypeForRow(row));
     if (!colors) return null;
     return { backgroundColor: colors.bg, color: colors.text };
   };
