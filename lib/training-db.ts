@@ -289,7 +289,6 @@ export async function ensureTrainingDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
   if (global.__pcuTrainingDbReady) {
     const pool = getDbPool();
-    await syncAuthUsersIdSequence(pool);
     await pool.query(`ALTER TABLE exercise_library ADD COLUMN IF NOT EXISTS tracking_type TEXT NOT NULL DEFAULT 'lbs';`);
     await pool.query(`UPDATE exercise_library SET tracking_type = 'lbs' WHERE tracking_type IS NULL OR LENGTH(TRIM(tracking_type)) = 0;`);
     return;
@@ -622,7 +621,6 @@ export async function createClientWithLogin(input: {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
-  await syncAuthUsersIdSequence(pool);
 
   const normalizedEmail = input.email.trim().toLowerCase();
   const fullName = input.fullName.trim();
@@ -773,7 +771,6 @@ export async function createStaffUser(input: {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
-  await syncAuthUsersIdSequence(pool);
 
   const normalizedEmail = input.email.trim().toLowerCase();
   const name = input.name.trim();
