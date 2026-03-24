@@ -78,8 +78,8 @@ export async function GET(request: Request) {
       cacheKey: `catching:overview:${url.toString()}`,
       ttlMs: 30000,
       staleTtlMs: 120000,
-      timeoutMs: 12000,
-      retries: 1,
+      timeoutMs: 30000,
+      retries: 2,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {

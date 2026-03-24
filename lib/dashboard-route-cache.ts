@@ -72,7 +72,7 @@ export async function fetchDashboardJsonWithCache(options: {
   pruneExpiredEntries(store, now);
   const hit = store.get(options.cacheKey);
   const staleTtlMs = Math.max(0, options.staleTtlMs ?? Math.max(15000, options.ttlMs * 4));
-  const timeoutMs = Math.max(1000, options.timeoutMs ?? 14000);
+  const timeoutMs = Math.max(1000, options.timeoutMs ?? 30000);
   const retries = Math.max(0, options.retries ?? 1);
   const staleUntil = hit ? Number((hit as CacheEntry & { staleUntil?: number }).staleUntil ?? hit.expiresAt) : 0;
   const staleHit = hit && staleUntil > now ? hit : null;
