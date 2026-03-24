@@ -238,16 +238,26 @@ export type DashboardCustomTableRow = {
   updatedAt: string;
 };
 
+async function ensureAuthUsersIdSequence(pool: ReturnType<typeof getDbPool>): Promise<void> {
+  await pool.query(`CREATE SEQUENCE IF NOT EXISTS auth_users_id_seq;`);
+  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS id BIGINT;`);
+  await pool.query(`ALTER TABLE auth_users ALTER COLUMN id SET DEFAULT nextval('auth_users_id_seq');`);
+  await pool.query(`UPDATE auth_users SET id = nextval('auth_users_id_seq') WHERE id IS NULL;`);
+  await pool.query(`SELECT setval('auth_users_id_seq', COALESCE((SELECT MAX(id) FROM auth_users), 0) + 1, false);`);
+}
+
 export async function ensureTrainingDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
   if (global.__pcuTrainingDbReady) {
     const pool = getDbPool();
+    await ensureAuthUsersIdSequence(pool);
     await pool.query(`ALTER TABLE exercise_library ADD COLUMN IF NOT EXISTS tracking_type TEXT NOT NULL DEFAULT 'lbs';`);
     await pool.query(`UPDATE exercise_library SET tracking_type = 'lbs' WHERE tracking_type IS NULL OR LENGTH(TRIM(tracking_type)) = 0;`);
     return;
   }
   await ensureAuthDbReady();
   const pool = getDbPool();
+  await ensureAuthUsersIdSequence(pool);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS height TEXT;`);
@@ -551,6 +561,7 @@ export async function createClientWithLogin(input: {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
+  await ensureAuthUsersIdSequence(pool);
 
   const normalizedEmail = input.email.trim().toLowerCase();
   const fullName = input.fullName.trim();
@@ -678,6 +689,7 @@ export async function createStaffUser(input: {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
+  await ensureAuthUsersIdSequence(pool);
 
   const normalizedEmail = input.email.trim().toLowerCase();
   const name = input.name.trim();
