@@ -15,6 +15,27 @@ type LoginPayload = {
   password?: string;
 };
 
+function parseOrgSchoolMap(raw: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([k, v]) => k.trim().length > 0 && typeof v === 'string' && v.trim().length > 0)
+        .map(([k, v]) => [k.trim(), String(v).trim().toUpperCase()])
+    );
+  } catch {
+    return {};
+  }
+}
+
+function resolveMappedSchoolCodeForOrgId(organizationId: number | null | undefined): string | null {
+  const orgId = Number(organizationId ?? 0);
+  if (!Number.isFinite(orgId) || orgId <= 0) return null;
+  const map = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
+  const code = map[String(orgId)];
+  return code ? String(code).trim().toUpperCase() : null;
+}
+
 function resolveLoginDefaultDashboardSchoolCode(email: string, current: string | null | undefined): string | null | undefined {
   const normalizedEmail = String(email ?? '').trim().toLowerCase();
   if (normalizedEmail === 'jgaynor@pitchingcoachu.com') {
@@ -57,9 +78,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid credentials.' }, { status: 401 });
     }
 
+    const orgMappedSchoolCode =
+      user.role === 'admin' ? null : resolveMappedSchoolCodeForOrgId(user.organizationId ?? null);
+    const resolvedDashboardSchoolCode =
+      orgMappedSchoolCode ?? resolveLoginDefaultDashboardSchoolCode(user.email, user.dashboardSchoolCode);
+
     const token = createSessionToken({
       ...user,
-      dashboardSchoolCode: resolveLoginDefaultDashboardSchoolCode(user.email, user.dashboardSchoolCode),
+      dashboardSchoolCode: resolvedDashboardSchoolCode,
     });
     const hostname = requestUrl.hostname;
 
