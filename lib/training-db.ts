@@ -578,6 +578,49 @@ export async function listStaffOrganizationIdsByEmail(email: string): Promise<nu
     .filter((id) => Number.isFinite(id) && id > 0);
 }
 
+export async function resolveOrganizationIdsForSchoolCodes(schoolCodes: string[]): Promise<number[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const codes = Array.from(
+    new Set(
+      schoolCodes
+        .map((value) => String(value ?? '').trim().toUpperCase())
+        .filter(Boolean)
+    )
+  );
+  if (codes.length < 1) return [];
+
+  const fromEnv = (() => {
+    try {
+      const parsed = JSON.parse(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}') as Record<string, unknown>;
+      return Object.entries(parsed)
+        .filter(([orgIdRaw, schoolRaw]) => {
+          const orgId = Number(orgIdRaw);
+          const school = typeof schoolRaw === 'string' ? schoolRaw.trim().toUpperCase() : '';
+          return Number.isFinite(orgId) && orgId > 0 && codes.includes(school);
+        })
+        .map(([orgIdRaw]) => Number(orgIdRaw));
+    } catch {
+      return [] as number[];
+    }
+  })();
+
+  const pool = getDbPool();
+  const orgRows = await pool.query<{ id: number; name: string | null }>(`SELECT id, name FROM organizations`);
+  const fromNames = orgRows.rows
+    .map((row) => ({
+      id: Number(row.id ?? 0),
+      nameUpper: String(row.name ?? '').toUpperCase(),
+      nameCompact: String(row.name ?? '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, ''),
+    }))
+    .filter((row) => Number.isFinite(row.id) && row.id > 0)
+    .filter((row) => codes.some((code) => row.nameUpper.includes(code) || row.nameCompact.includes(code)));
+
+  return Array.from(new Set([...fromEnv, ...fromNames.map((row) => row.id)]));
+}
+
 export async function isCoachAssignedToPlayer(input: {
   organizationId: number;
   coachUserId: number;
@@ -859,15 +902,10 @@ export async function createStaffUser(input: {
   try {
     await pool.query(
       `
-        WITH next_id AS (
-          SELECT COALESCE(MAX(id), 0) + 1 AS id
-          FROM auth_users
-        )
         INSERT INTO auth_users (
-          id, email, username, name, phone, password, password_hash, app_url, role, organization_id
+          email, username, name, phone, password, password_hash, app_url, role, organization_id
         )
-        SELECT next_id.id, $1, $2, $3, $4, $5, $6, $7, $8, $9
-        FROM next_id
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `,
       insertValues
     );
@@ -876,15 +914,10 @@ export async function createStaffUser(input: {
     await ensureAuthUsersIdSequence(pool);
     await pool.query(
       `
-        WITH next_id AS (
-          SELECT COALESCE(MAX(id), 0) + 1 AS id
-          FROM auth_users
-        )
         INSERT INTO auth_users (
-          id, email, username, name, phone, password, password_hash, app_url, role, organization_id
+          email, username, name, phone, password, password_hash, app_url, role, organization_id
         )
-        SELECT next_id.id, $1, $2, $3, $4, $5, $6, $7, $8, $9
-        FROM next_id
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `,
       insertValues
     );
@@ -1123,30 +1156,40 @@ export async function syncStaffUserSchools(input: {
           [name, normalizedEmail, deriveUsernameFromEmail(normalizedEmail), (input.phone ?? '').trim() || null, input.role, existingId]
         );
       } else {
-        await client.query(
-          `
-            WITH next_id AS (
-              SELECT COALESCE(MAX(id), 0) + 1 AS id
-              FROM auth_users
-            )
-            INSERT INTO auth_users (
-              id, email, username, name, phone, password, password_hash, app_url, role, organization_id
-            )
-            SELECT next_id.id, $1, $2, $3, $4, $5, $6, $7, $8, $9
-            FROM next_id
-          `,
-          [
-            normalizedEmail,
-            deriveUsernameFromEmail(normalizedEmail),
-            name,
-            (input.phone ?? '').trim() || null,
-            sourcePassword || sourcePasswordHash,
-            sourcePasswordHash,
-            DEFAULT_DASHBOARD_URL,
-            input.role,
-            orgId,
-          ]
-        );
+        const insertValues = [
+          normalizedEmail,
+          deriveUsernameFromEmail(normalizedEmail),
+          name,
+          (input.phone ?? '').trim() || null,
+          sourcePassword || sourcePasswordHash,
+          sourcePasswordHash,
+          DEFAULT_DASHBOARD_URL,
+          input.role,
+          orgId,
+        ];
+        try {
+          await client.query(
+            `
+              INSERT INTO auth_users (
+                email, username, name, phone, password, password_hash, app_url, role, organization_id
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            `,
+            insertValues
+          );
+        } catch (error) {
+          if (!isAuthUsersPrimaryKeyViolation(error)) throw error;
+          await ensureAuthUsersIdSequence(client);
+          await client.query(
+            `
+              INSERT INTO auth_users (
+                email, username, name, phone, password, password_hash, app_url, role, organization_id
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            `,
+            insertValues
+          );
+        }
       }
     }
 

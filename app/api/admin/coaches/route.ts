@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveClientManagementOrganizationId } from '../../../../lib/programming-scope';
-import { createStaffUser } from '../../../../lib/training-db';
+import { createStaffUser, resolveOrganizationIdsForSchoolCodes } from '../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -23,22 +23,6 @@ function isGlobalAdminEmail(email: string): boolean {
   const normalized = String(email ?? '').trim().toLowerCase();
   if (!normalized) return false;
   return parseGlobalAdminEmails().includes(normalized);
-}
-
-function parseOrgSchoolMap(raw: string): Record<number, string> {
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const out: Record<number, string> = {};
-    for (const [orgIdRaw, schoolRaw] of Object.entries(parsed)) {
-      const orgId = Number(orgIdRaw);
-      const school = typeof schoolRaw === 'string' ? schoolRaw.trim().toUpperCase() : '';
-      if (!Number.isFinite(orgId) || orgId <= 0 || !school) continue;
-      out[orgId] = school;
-    }
-    return out;
-  } catch {
-    return {};
-  }
 }
 
 export async function POST(request: Request) {
@@ -70,17 +54,7 @@ export async function POST(request: Request) {
           .filter(Boolean)
       )
     );
-    const map = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
-    const selectedOrgIds = globalAdmin
-      ? Array.from(
-          new Set(
-            Object.entries(map)
-              .filter(([, school]) => selectedSchoolCodes.includes(school))
-              .map(([orgId]) => Number(orgId))
-              .filter((orgId) => Number.isFinite(orgId) && orgId > 0)
-          )
-        )
-      : [];
+    const selectedOrgIds = globalAdmin ? await resolveOrganizationIdsForSchoolCodes(selectedSchoolCodes) : [];
     const targetOrganizationIds = selectedOrgIds.length > 0 ? selectedOrgIds : [organizationId];
 
     for (const orgId of targetOrganizationIds) {

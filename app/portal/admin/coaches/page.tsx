@@ -122,16 +122,22 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
             </select>
           </label>
           {isGlobalAdmin ? (
-            <label>
-              Schools (multi-select)
-              <select name="schoolCodes" multiple defaultValue={[programmingSchoolCode]} size={Math.min(8, Math.max(4, allSchoolCodes.length))}>
+            <fieldset className="portal-choice-block">
+              <legend>Schools</legend>
+              <div className="portal-choice-line">
                 {allSchoolCodes.map((schoolCode) => (
-                  <option key={schoolCode} value={schoolCode}>
+                  <label key={schoolCode}>
+                    <input
+                      type="checkbox"
+                      name="schoolCodes"
+                      value={schoolCode}
+                      defaultChecked={schoolCode === programmingSchoolCode}
+                    />
                     {schoolCode}
-                  </option>
+                  </label>
                 ))}
-              </select>
-            </label>
+              </div>
+            </fieldset>
           ) : null}
           <label>
             Temporary Password
@@ -173,21 +179,22 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
               </select>
             </label>
             {isGlobalAdmin ? (
-              <label>
-                Schools (multi-select)
-                <select
-                  name="schoolCodes"
-                  multiple
-                  defaultValue={editCoachSchoolCodes.length > 0 ? editCoachSchoolCodes : [programmingSchoolCode]}
-                  size={Math.min(8, Math.max(4, allSchoolCodes.length))}
-                >
+              <fieldset className="portal-choice-block">
+                <legend>Schools</legend>
+                <div className="portal-choice-line">
                   {allSchoolCodes.map((schoolCode) => (
-                    <option key={schoolCode} value={schoolCode}>
+                    <label key={schoolCode}>
+                      <input
+                        type="checkbox"
+                        name="schoolCodes"
+                        value={schoolCode}
+                        defaultChecked={(editCoachSchoolCodes.length > 0 ? editCoachSchoolCodes : [programmingSchoolCode]).includes(schoolCode)}
+                      />
                       {schoolCode}
-                    </option>
+                    </label>
                   ))}
-                </select>
-              </label>
+                </div>
+              </fieldset>
             ) : null}
             <div className="portal-choice-line-actions">
               <button type="submit" className="btn btn-primary">
