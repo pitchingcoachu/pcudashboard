@@ -2274,6 +2274,22 @@ PITCHING_TEAM_MATCH_SQL = """
   """ + PITCHER_TEAM_IS_MARKER_SQL + """
   AND NOT (""" + BATTER_TEAM_IS_MARKER_SQL + """)
 )
+OR
+(
+  UPPER(COALESCE(%(school_code)s::text, '')) = 'PCU'
+  AND """ + BLANK_TEAM_CODES_SQL + """
+  AND (
+    (
+      %(known_pitchers_count)s::int > 0
+      AND """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(known_pitchers)s::text[])
+    )
+    OR
+    (
+      %(known_campers_count)s::int > 0
+      AND """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(known_campers)s::text[])
+    )
+  )
+)
 """
 PITCHING_OPPONENT_MATCH_SQL = """
 (
@@ -2286,6 +2302,22 @@ HITTING_TEAM_MATCH_SQL = """
 (
   """ + BATTER_TEAM_IS_MARKER_SQL + """
   AND NOT (""" + PITCHER_TEAM_IS_MARKER_SQL + """)
+)
+OR
+(
+  UPPER(COALESCE(%(school_code)s::text, '')) = 'PCU'
+  AND """ + BLANK_TEAM_CODES_SQL + """
+  AND (
+    (
+      %(known_hitters_count)s::int > 0
+      AND """ + BATTER_NAME_NORM_SQL + """ = ANY(%(known_hitters)s::text[])
+    )
+    OR
+    (
+      %(known_campers_count)s::int > 0
+      AND """ + BATTER_NAME_NORM_SQL + """ = ANY(%(known_campers)s::text[])
+    )
+  )
 )
 """
 HITTING_OPPONENT_MATCH_SQL = """
