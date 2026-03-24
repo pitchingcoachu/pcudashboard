@@ -238,12 +238,21 @@ export type DashboardCustomTableRow = {
   updatedAt: string;
 };
 
-async function ensureAuthUsersIdSequence(pool: ReturnType<typeof getDbPool>): Promise<void> {
-  await pool.query(`CREATE SEQUENCE IF NOT EXISTS auth_users_id_seq;`);
-  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS id BIGINT;`);
-  await pool.query(`ALTER TABLE auth_users ALTER COLUMN id SET DEFAULT nextval('auth_users_id_seq');`);
-  await pool.query(`UPDATE auth_users SET id = nextval('auth_users_id_seq') WHERE id IS NULL;`);
-  await pool.query(`SELECT setval('auth_users_id_seq', COALESCE((SELECT MAX(id) FROM auth_users), 0) + 1, false);`);
+type Queryable = {
+  query: (text: string, values?: unknown[]) => Promise<unknown>;
+};
+
+function isAuthUsersPrimaryKeyViolation(error: unknown): boolean {
+  const typed = error as { code?: string; constraint?: string } | null;
+  return typed?.code === '23505' && typed?.constraint === 'auth_users_pkey';
+}
+
+async function ensureAuthUsersIdSequence(db: Queryable): Promise<void> {
+  await db.query(`CREATE SEQUENCE IF NOT EXISTS auth_users_id_seq;`);
+  await db.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS id BIGINT;`);
+  await db.query(`ALTER TABLE auth_users ALTER COLUMN id SET DEFAULT nextval('auth_users_id_seq');`);
+  await db.query(`UPDATE auth_users SET id = nextval('auth_users_id_seq') WHERE id IS NULL;`);
+  await db.query(`SELECT setval('auth_users_id_seq', COALESCE((SELECT MAX(id) FROM auth_users), 0) + 1, false);`);
 }
 
 export async function ensureTrainingDbReady(): Promise<void> {
@@ -592,22 +601,44 @@ export async function createClientWithLogin(input: {
     }
 
     const passwordHash = createPasswordHash(input.password);
-    const insertedUser = await client.query<{ id: number }>(
-      `
-        INSERT INTO auth_users (email, username, name, password, password_hash, app_url, role, organization_id)
-        VALUES ($1, $2, $3, $4, $5, $6, 'player', $7)
-        RETURNING id
-      `,
-      [
-        normalizedEmail,
-        deriveUsernameFromEmail(normalizedEmail),
-        fullName,
-        passwordHash,
-        passwordHash,
-        DEFAULT_DASHBOARD_URL,
-        input.organizationId,
-      ]
-    );
+    let insertedUser;
+    try {
+      insertedUser = await client.query<{ id: number }>(
+        `
+          INSERT INTO auth_users (email, username, name, password, password_hash, app_url, role, organization_id)
+          VALUES ($1, $2, $3, $4, $5, $6, 'player', $7)
+          RETURNING id
+        `,
+        [
+          normalizedEmail,
+          deriveUsernameFromEmail(normalizedEmail),
+          fullName,
+          passwordHash,
+          passwordHash,
+          DEFAULT_DASHBOARD_URL,
+          input.organizationId,
+        ]
+      );
+    } catch (error) {
+      if (!isAuthUsersPrimaryKeyViolation(error)) throw error;
+      await ensureAuthUsersIdSequence(client);
+      insertedUser = await client.query<{ id: number }>(
+        `
+          INSERT INTO auth_users (email, username, name, password, password_hash, app_url, role, organization_id)
+          VALUES ($1, $2, $3, $4, $5, $6, 'player', $7)
+          RETURNING id
+        `,
+        [
+          normalizedEmail,
+          deriveUsernameFromEmail(normalizedEmail),
+          fullName,
+          passwordHash,
+          passwordHash,
+          DEFAULT_DASHBOARD_URL,
+          input.organizationId,
+        ]
+      );
+    }
 
     if (assignedCoachUserId) {
       const coachResult = await client.query<{ id: number }>(
@@ -765,25 +796,40 @@ export async function createStaffUser(input: {
     ? String(existingAny.rows[0]?.password_hash ?? '').trim()
     : createPasswordHash(input.password);
   const canonicalName = existingNameRaw || name;
-  await pool.query(
-    `
-      INSERT INTO auth_users (
-        email, username, name, phone, password, password_hash, app_url, role, organization_id
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    `,
-    [
-      normalizedEmail,
-      deriveUsernameFromEmail(normalizedEmail),
-      canonicalName,
-      (input.phone ?? '').trim() || null,
-      passwordHash,
-      passwordHash,
-      DEFAULT_DASHBOARD_URL,
-      input.role,
-      input.organizationId,
-    ]
-  );
+  const insertValues = [
+    normalizedEmail,
+    deriveUsernameFromEmail(normalizedEmail),
+    canonicalName,
+    (input.phone ?? '').trim() || null,
+    passwordHash,
+    passwordHash,
+    DEFAULT_DASHBOARD_URL,
+    input.role,
+    input.organizationId,
+  ];
+  try {
+    await pool.query(
+      `
+        INSERT INTO auth_users (
+          email, username, name, phone, password, password_hash, app_url, role, organization_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `,
+      insertValues
+    );
+  } catch (error) {
+    if (!isAuthUsersPrimaryKeyViolation(error)) throw error;
+    await ensureAuthUsersIdSequence(pool);
+    await pool.query(
+      `
+        INSERT INTO auth_users (
+          email, username, name, phone, password, password_hash, app_url, role, organization_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `,
+      insertValues
+    );
+  }
 
   return { ok: true, reusedExistingPassword };
 }
