@@ -73,6 +73,14 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentSoft: '#781421',
     accentRgb: '165, 28, 48',
   },
+  CBU: {
+    schoolCode: 'CBU',
+    logoSrc: '/cbu-logo.webp',
+    logoAlt: 'CBU logo',
+    accent: '#002554',
+    accentSoft: '#001f3f',
+    accentRgb: '0, 37, 84',
+  },
 };
 
 export function resolveSchoolBrand(schoolCode: string | null | undefined): SchoolBrand {

@@ -1935,6 +1935,7 @@ _BUNDLED_SCHOOL_CONFIG_ROOT = os.path.normpath(os.path.join(_API_DIR, "..", "con
 def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
     env_path = (os.getenv(f"DASHBOARD_SCHOOL_CONFIG_PATH_{school_code.upper()}", "") or "").strip()
     default_path_by_school = {
+        "CBU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CBU", "school_config.R"),
         "OSU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "OSU", "school_config.R"),
         "PCU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "PCU", "school_config.R"),
         "CNU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CNU", "school_config.R"),
