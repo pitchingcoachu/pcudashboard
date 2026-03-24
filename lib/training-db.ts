@@ -557,6 +557,28 @@ export async function listCoachesByOrganization(organizationId: number): Promise
     .filter((row) => row.role === 'admin' || row.role === 'coach');
 }
 
+export async function listStaffOrganizationIdsByEmail(email: string): Promise<number[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const normalizedEmail = String(email ?? '').trim().toLowerCase();
+  if (!normalizedEmail) return [];
+  const result = await pool.query<{ organization_id: number | null }>(
+    `
+      SELECT DISTINCT organization_id
+      FROM auth_users
+      WHERE LOWER(email) = LOWER($1)
+        AND role IN ('admin', 'coach')
+        AND organization_id IS NOT NULL
+      ORDER BY organization_id ASC
+    `,
+    [normalizedEmail]
+  );
+  return result.rows
+    .map((row) => Number(row.organization_id ?? 0))
+    .filter((id) => Number.isFinite(id) && id > 0);
+}
+
 export async function isCoachAssignedToPlayer(input: {
   organizationId: number;
   coachUserId: number;
@@ -840,10 +862,15 @@ export async function createStaffUser(input: {
   try {
     await pool.query(
       `
-        INSERT INTO auth_users (
-          email, username, name, phone, password, password_hash, app_url, role, organization_id
+        WITH next_id AS (
+          SELECT COALESCE(MAX(id), 0) + 1 AS id
+          FROM auth_users
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        INSERT INTO auth_users (
+          id, email, username, name, phone, password, password_hash, app_url, role, organization_id
+        )
+        SELECT next_id.id, $1, $2, $3, $4, $5, $6, $7, $8, $9
+        FROM next_id
       `,
       insertValues
     );
@@ -852,10 +879,15 @@ export async function createStaffUser(input: {
     await ensureAuthUsersIdSequence(pool);
     await pool.query(
       `
-        INSERT INTO auth_users (
-          email, username, name, phone, password, password_hash, app_url, role, organization_id
+        WITH next_id AS (
+          SELECT COALESCE(MAX(id), 0) + 1 AS id
+          FROM auth_users
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        INSERT INTO auth_users (
+          id, email, username, name, phone, password, password_hash, app_url, role, organization_id
+        )
+        SELECT next_id.id, $1, $2, $3, $4, $5, $6, $7, $8, $9
+        FROM next_id
       `,
       insertValues
     );
@@ -973,6 +1005,175 @@ export async function updateStaffUser(input: {
   );
   if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Coach user not found.' };
   return { ok: true };
+}
+
+export async function syncStaffUserSchools(input: {
+  organizationId: number;
+  staffUserId: number;
+  name: string;
+  email: string;
+  phone?: string;
+  role: 'admin' | 'coach';
+  targetOrganizationIds: number[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    const normalizedEmail = input.email.trim().toLowerCase();
+    const name = input.name.trim();
+    if (!name || !normalizedEmail) return { ok: false, error: 'Name and email are required.' };
+    if (input.role !== 'admin' && input.role !== 'coach') return { ok: false, error: 'Role must be admin or coach.' };
+    const targetOrganizationIds = Array.from(
+      new Set(
+        input.targetOrganizationIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      )
+    );
+    if (targetOrganizationIds.length < 1) return { ok: false, error: 'Select at least one school.' };
+
+    await client.query('BEGIN');
+    await client.query(`SELECT pg_advisory_xact_lock($1)`, [947231]);
+
+    const anchorResult = await client.query<{
+      id: number;
+      email: string;
+      password: string | null;
+      password_hash: string | null;
+    }>(
+      `
+        SELECT id, email, password, password_hash
+        FROM auth_users
+        WHERE id = $1
+          AND organization_id = $2
+          AND role IN ('admin', 'coach')
+        LIMIT 1
+      `,
+      [input.staffUserId, input.organizationId]
+    );
+    if ((anchorResult.rowCount ?? 0) !== 1) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'Coach user not found.' };
+    }
+    const sourcePassword = String(anchorResult.rows[0]?.password ?? '').trim();
+    const sourcePasswordHash = String(anchorResult.rows[0]?.password_hash ?? '').trim();
+    if (!sourcePasswordHash) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'Existing password hash is missing for this user.' };
+    }
+    const oldEmail = String(anchorResult.rows[0]?.email ?? '').trim().toLowerCase();
+
+    const emailConflict = await client.query<{ id: number }>(
+      `
+        SELECT id
+        FROM auth_users
+        WHERE LOWER(email) = LOWER($1)
+          AND organization_id = ANY($2::int[])
+          AND id <> ALL(
+            COALESCE(
+              (
+                SELECT array_agg(id)
+                FROM auth_users
+                WHERE LOWER(email) = LOWER($3)
+                  AND role IN ('admin', 'coach')
+              ),
+              ARRAY[]::int[]
+            )
+          )
+        LIMIT 1
+      `,
+      [normalizedEmail, targetOrganizationIds, oldEmail]
+    );
+    if ((emailConflict.rowCount ?? 0) > 0) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'Another coach/admin already uses that email in one of the selected schools.' };
+    }
+
+    const existingRows = await client.query<{ id: number; organization_id: number | null }>(
+      `
+        SELECT id, organization_id
+        FROM auth_users
+        WHERE LOWER(email) = LOWER($1)
+          AND role IN ('admin', 'coach')
+      `,
+      [oldEmail]
+    );
+    const existingByOrg = new Map<number, number>();
+    for (const row of existingRows.rows) {
+      const orgId = Number(row.organization_id ?? 0);
+      const rowId = Number(row.id ?? 0);
+      if (!Number.isFinite(orgId) || orgId <= 0 || !Number.isFinite(rowId) || rowId <= 0) continue;
+      existingByOrg.set(orgId, rowId);
+    }
+
+    for (const orgId of targetOrganizationIds) {
+      const existingId = existingByOrg.get(orgId);
+      if (existingId) {
+        await client.query(
+          `
+            UPDATE auth_users
+            SET
+              name = $1,
+              email = $2,
+              username = $3,
+              phone = $4,
+              role = $5,
+              updated_at = NOW()
+            WHERE id = $6
+          `,
+          [name, normalizedEmail, deriveUsernameFromEmail(normalizedEmail), (input.phone ?? '').trim() || null, input.role, existingId]
+        );
+      } else {
+        await client.query(
+          `
+            WITH next_id AS (
+              SELECT COALESCE(MAX(id), 0) + 1 AS id
+              FROM auth_users
+            )
+            INSERT INTO auth_users (
+              id, email, username, name, phone, password, password_hash, app_url, role, organization_id
+            )
+            SELECT next_id.id, $1, $2, $3, $4, $5, $6, $7, $8, $9
+            FROM next_id
+          `,
+          [
+            normalizedEmail,
+            deriveUsernameFromEmail(normalizedEmail),
+            name,
+            (input.phone ?? '').trim() || null,
+            sourcePassword || sourcePasswordHash,
+            sourcePasswordHash,
+            DEFAULT_DASHBOARD_URL,
+            input.role,
+            orgId,
+          ]
+        );
+      }
+    }
+
+    const removeOrgIds = Array.from(existingByOrg.keys()).filter((orgId) => !targetOrganizationIds.includes(orgId));
+    if (removeOrgIds.length > 0) {
+      await client.query(
+        `
+          DELETE FROM auth_users
+          WHERE LOWER(email) = LOWER($1)
+            AND role IN ('admin', 'coach')
+            AND organization_id = ANY($2::int[])
+        `,
+        [oldEmail, removeOrgIds]
+      );
+    }
+
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to sync coach schools.' };
+  } finally {
+    client.release();
+  }
 }
 
 export async function deleteClientUser(input: {

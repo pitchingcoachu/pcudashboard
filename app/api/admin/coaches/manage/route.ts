@@ -2,12 +2,43 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveClientManagementOrganizationId } from '../../../../../lib/programming-scope';
-import { deleteStaffUser, setStaffActiveStatus, updateStaffUser } from '../../../../../lib/training-db';
+import { deleteStaffUser, setStaffActiveStatus, syncStaffUserSchools, updateStaffUser } from '../../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
   url.searchParams.set(key, value);
   return NextResponse.redirect(url, 303);
+}
+
+function parseGlobalAdminEmails(): string[] {
+  const raw = String(process.env.GLOBAL_ADMIN_EMAILS ?? 'jgaynor@pitchingcoachu.com');
+  const values = raw
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set(values));
+}
+
+function isGlobalAdminEmail(email: string): boolean {
+  const normalized = String(email ?? '').trim().toLowerCase();
+  if (!normalized) return false;
+  return parseGlobalAdminEmails().includes(normalized);
+}
+
+function parseOrgSchoolMap(raw: string): Record<number, string> {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<number, string> = {};
+    for (const [orgIdRaw, schoolRaw] of Object.entries(parsed)) {
+      const orgId = Number(orgIdRaw);
+      const school = typeof schoolRaw === 'string' ? schoolRaw.trim().toUpperCase() : '';
+      if (!Number.isFinite(orgId) || orgId <= 0 || !school) continue;
+      out[orgId] = school;
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 export async function POST(request: Request) {
@@ -51,6 +82,37 @@ export async function POST(request: Request) {
     if (action === 'update') {
       const roleRaw = String(form.get('role') ?? '').trim().toLowerCase();
       const role = roleRaw === 'coach' ? 'coach' : 'admin';
+      const globalAdmin = isGlobalAdminEmail(session.email);
+      const selectedSchoolCodes = Array.from(
+        new Set(
+          form
+            .getAll('schoolCodes')
+            .map((value) => String(value ?? '').trim().toUpperCase())
+            .filter(Boolean)
+        )
+      );
+      if (globalAdmin && selectedSchoolCodes.length > 0) {
+        const map = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
+        const targetOrgIds = Array.from(
+          new Set(
+            Object.entries(map)
+              .filter(([, school]) => selectedSchoolCodes.includes(school))
+              .map(([orgId]) => Number(orgId))
+              .filter((orgId) => Number.isFinite(orgId) && orgId > 0)
+          )
+        );
+        const syncResult = await syncStaffUserSchools({
+          organizationId,
+          staffUserId,
+          name: String(form.get('name') ?? ''),
+          email: String(form.get('email') ?? ''),
+          phone: String(form.get('phone') ?? ''),
+          role,
+          targetOrganizationIds: targetOrgIds.length > 0 ? targetOrgIds : [organizationId],
+        });
+        if (!syncResult.ok) return redirectWithMessage(request, redirectTo, 'error', syncResult.error);
+        return redirectWithMessage(request, redirectTo, 'ok', 'Coach updated across selected schools.');
+      }
       const result = await updateStaffUser({
         organizationId,
         staffUserId,

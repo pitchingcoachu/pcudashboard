@@ -25,6 +25,22 @@ function isGlobalAdminEmail(email: string): boolean {
   return parseGlobalAdminEmails().includes(normalized);
 }
 
+function parseOrgSchoolMap(raw: string): Record<number, string> {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<number, string> = {};
+    for (const [orgIdRaw, schoolRaw] of Object.entries(parsed)) {
+      const orgId = Number(orgIdRaw);
+      const school = typeof schoolRaw === 'string' ? schoolRaw.trim().toUpperCase() : '';
+      if (!Number.isFinite(orgId) || orgId <= 0 || !school) continue;
+      out[orgId] = school;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const cookieStore = await cookies();
@@ -45,24 +61,47 @@ export async function POST(request: Request) {
 
     const roleRaw = String(form.get('role') ?? '').trim().toLowerCase();
     const role = roleRaw === 'coach' ? 'coach' : 'admin';
+    const globalAdmin = isGlobalAdminEmail(session.email);
+    const selectedSchoolCodes = Array.from(
+      new Set(
+        form
+          .getAll('schoolCodes')
+          .map((value) => String(value ?? '').trim().toUpperCase())
+          .filter(Boolean)
+      )
+    );
+    const map = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
+    const selectedOrgIds = globalAdmin
+      ? Array.from(
+          new Set(
+            Object.entries(map)
+              .filter(([, school]) => selectedSchoolCodes.includes(school))
+              .map(([orgId]) => Number(orgId))
+              .filter((orgId) => Number.isFinite(orgId) && orgId > 0)
+          )
+        )
+      : [];
+    const targetOrganizationIds = selectedOrgIds.length > 0 ? selectedOrgIds : [organizationId];
 
-    const result = await createStaffUser({
-      organizationId,
-      name: String(form.get('name') ?? ''),
-      email: String(form.get('email') ?? ''),
-      phone: String(form.get('phone') ?? ''),
-      password: String(form.get('password') ?? ''),
-      role,
-      allowCrossSchoolLinking: isGlobalAdminEmail(session.email),
-    });
+    for (const orgId of targetOrganizationIds) {
+      const result = await createStaffUser({
+        organizationId: orgId,
+        name: String(form.get('name') ?? ''),
+        email: String(form.get('email') ?? ''),
+        phone: String(form.get('phone') ?? ''),
+        password: String(form.get('password') ?? ''),
+        role,
+        allowCrossSchoolLinking: globalAdmin,
+      });
+      if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);
+    }
 
-    if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);
     return redirectWithMessage(
       request,
       redirectTo,
       'ok',
-      result.reusedExistingPassword
-        ? 'Coach profile created. Existing password for this email was reused across schools.'
+      targetOrganizationIds.length > 1
+        ? 'Coach profile created for selected schools.'
         : 'Coach profile created.'
     );
   } catch (error) {
