@@ -1924,7 +1924,14 @@ def _filter_pitching_rows_by_team_type(
         batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
         pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
         batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
-        is_team_pitching_row = pitcher_is_marker and not batter_is_marker
+        is_pcu_blank_team_row = (
+            school_code == "PCU"
+            and not pitcher_team_code
+            and not batter_team_code
+            and bool(pitcher_key)
+            and pitcher_key in (team_pitcher_norm | campers_norm)
+        )
+        is_team_pitching_row = (pitcher_is_marker and not batter_is_marker) or is_pcu_blank_team_row
         is_opponent_pitching_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
 
         if team_type_value == "Opponents":
@@ -2240,6 +2247,7 @@ EXISTS (
 """
 PITCHER_TEAM_IS_MARKER_SQL = TEAM_MARKER_MATCH_TEMPLATE_SQL.format(team_expr=PITCHER_TEAM_NORM_SQL)
 BATTER_TEAM_IS_MARKER_SQL = TEAM_MARKER_MATCH_TEMPLATE_SQL.format(team_expr=BATTER_TEAM_NORM_SQL)
+BLANK_TEAM_CODES_SQL = "(" + PITCHER_TEAM_NORM_SQL + " = '' AND " + BATTER_TEAM_NORM_SQL + " = '')"
 HOME_TEAM_IS_MARKER_SQL = TEAM_MARKER_MATCH_TEMPLATE_SQL.format(team_expr=HOME_TEAM_NORM_SQL)
 AWAY_TEAM_IS_MARKER_SQL = TEAM_MARKER_MATCH_TEMPLATE_SQL.format(team_expr=AWAY_TEAM_NORM_SQL)
 OPPONENT_TEAM_MATCH_SQL = """
@@ -2289,7 +2297,16 @@ HITTING_OPPONENT_MATCH_SQL = """
 """
 # Only include rows that are explicitly tied to the school by team code.
 # This prevents unrelated uploads (same school_code bucket) from leaking into All/Team/Opponent views.
-SCHOOL_RELEVANT_TEAM_SQL = "(" + PITCHER_TEAM_IS_MARKER_SQL + " OR " + BATTER_TEAM_IS_MARKER_SQL + ")"
+SCHOOL_RELEVANT_TEAM_SQL = (
+    "("
+    + PITCHER_TEAM_IS_MARKER_SQL
+    + " OR "
+    + BATTER_TEAM_IS_MARKER_SQL
+    + " OR (UPPER(COALESCE(%(school_code)s::text, '')) = 'PCU' AND "
+    + BLANK_TEAM_CODES_SQL
+    + ")"
+    + ")"
+)
 
 PITCHER_NAME_IS_KNOWN_SQL = """
 (
@@ -4726,7 +4743,14 @@ def hitting_overview(
             batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
             pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
             batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
-            is_team_hitting_row = batter_is_marker and not pitcher_is_marker
+            is_pcu_blank_team_row = (
+                school_code == "PCU"
+                and not pitcher_team_code
+                and not batter_team_code
+                and bool(batter_key)
+                and batter_key in (team_hitter_norm | campers_norm)
+            )
+            is_team_hitting_row = (batter_is_marker and not pitcher_is_marker) or is_pcu_blank_team_row
             is_opponent_hitting_row = pitcher_is_marker and bool(batter_team_code) and not batter_is_marker
 
             if team_type_value == "Opponents":
@@ -5139,7 +5163,14 @@ def catching_overview(
             pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
             batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
             # Catching team/opponent split is driven by pitcherteam/batterteam markers.
-            is_team_catching_row = pitcher_is_marker and not batter_is_marker
+            is_pcu_blank_team_row = (
+                school_code == "PCU"
+                and not pitcher_team_code
+                and not batter_team_code
+                and bool(catcher_key)
+                and catcher_key in (team_catcher_norm | campers_norm)
+            )
+            is_team_catching_row = (pitcher_is_marker and not batter_is_marker) or is_pcu_blank_team_row
             is_opponent_catching_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
 
             if team_type_value == "Opponents":
