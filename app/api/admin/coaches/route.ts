@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveClientManagementOrganizationId } from '../../../../lib/programming-scope';
-import { createStaffUser, resolveOrganizationIdsForSchoolCodes } from '../../../../lib/training-db';
+import { createStaffUser } from '../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -46,16 +46,15 @@ export async function POST(request: Request) {
     const roleRaw = String(form.get('role') ?? '').trim().toLowerCase();
     const role = roleRaw === 'coach' ? 'coach' : 'admin';
     const globalAdmin = isGlobalAdminEmail(session.email);
-    const selectedSchoolCodes = Array.from(
+    const selectedOrganizationIds = Array.from(
       new Set(
         form
-          .getAll('schoolCodes')
-          .map((value) => String(value ?? '').trim().toUpperCase())
-          .filter(Boolean)
+          .getAll('organizationIds')
+          .map((value) => Number(String(value ?? '').trim()))
+          .filter((value) => Number.isFinite(value) && value > 0)
       )
     );
-    const selectedOrgIds = globalAdmin ? await resolveOrganizationIdsForSchoolCodes(selectedSchoolCodes) : [];
-    const targetOrganizationIds = selectedOrgIds.length > 0 ? selectedOrgIds : [organizationId];
+    const targetOrganizationIds = globalAdmin && selectedOrganizationIds.length > 0 ? selectedOrganizationIds : [organizationId];
 
     for (const orgId of targetOrganizationIds) {
       const result = await createStaffUser({

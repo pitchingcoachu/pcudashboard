@@ -239,6 +239,12 @@ export type DashboardCustomTableRow = {
   updatedAt: string;
 };
 
+export type OrganizationOptionRow = {
+  organizationId: number;
+  organizationName: string;
+  schoolCode: string;
+};
+
 type Queryable = {
   query: (text: string, values?: unknown[]) => Promise<unknown>;
 };
@@ -578,47 +584,38 @@ export async function listStaffOrganizationIdsByEmail(email: string): Promise<nu
     .filter((id) => Number.isFinite(id) && id > 0);
 }
 
-export async function resolveOrganizationIdsForSchoolCodes(schoolCodes: string[]): Promise<number[]> {
+export async function listOrganizationOptions(): Promise<OrganizationOptionRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
-  const codes = Array.from(
-    new Set(
-      schoolCodes
-        .map((value) => String(value ?? '').trim().toUpperCase())
-        .filter(Boolean)
-    )
-  );
-  if (codes.length < 1) return [];
-
-  const fromEnv = (() => {
-    try {
-      const parsed = JSON.parse(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}') as Record<string, unknown>;
-      return Object.entries(parsed)
-        .filter(([orgIdRaw, schoolRaw]) => {
-          const orgId = Number(orgIdRaw);
-          const school = typeof schoolRaw === 'string' ? schoolRaw.trim().toUpperCase() : '';
-          return Number.isFinite(orgId) && orgId > 0 && codes.includes(school);
-        })
-        .map(([orgIdRaw]) => Number(orgIdRaw));
-    } catch {
-      return [] as number[];
-    }
-  })();
-
   const pool = getDbPool();
   const orgRows = await pool.query<{ id: number; name: string | null }>(`SELECT id, name FROM organizations`);
-  const fromNames = orgRows.rows
+  const schoolByOrgId = (() => {
+    try {
+      const parsed = JSON.parse(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}') as Record<string, unknown>;
+      const out: Record<number, string> = {};
+      for (const [orgIdRaw, schoolRaw] of Object.entries(parsed)) {
+        const orgId = Number(orgIdRaw);
+        const school = typeof schoolRaw === 'string' ? schoolRaw.trim().toUpperCase() : '';
+        if (!Number.isFinite(orgId) || orgId <= 0 || !school) continue;
+        out[orgId] = school;
+      }
+      return out;
+    } catch {
+      return {} as Record<number, string>;
+    }
+  })();
+  return orgRows.rows
     .map((row) => ({
-      id: Number(row.id ?? 0),
-      nameUpper: String(row.name ?? '').toUpperCase(),
-      nameCompact: String(row.name ?? '')
-        .toUpperCase()
-        .replace(/[^A-Z0-9]/g, ''),
+      organizationId: Number(row.id ?? 0),
+      organizationName: String(row.name ?? '').trim() || `Organization ${row.id}`,
+      schoolCode: String(schoolByOrgId[Number(row.id ?? 0)] ?? '').trim().toUpperCase(),
     }))
-    .filter((row) => Number.isFinite(row.id) && row.id > 0)
-    .filter((row) => codes.some((code) => row.nameUpper.includes(code) || row.nameCompact.includes(code)));
-
-  return Array.from(new Set([...fromEnv, ...fromNames.map((row) => row.id)]));
+    .filter((row) => Number.isFinite(row.organizationId) && row.organizationId > 0)
+    .sort((a, b) => {
+      const aKey = `${a.schoolCode || 'ZZZ'} ${a.organizationName}`.toUpperCase();
+      const bKey = `${b.schoolCode || 'ZZZ'} ${b.organizationName}`.toUpperCase();
+      return aKey.localeCompare(bKey);
+    });
 }
 
 export async function isCoachAssignedToPlayer(input: {

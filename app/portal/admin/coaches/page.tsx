@@ -1,8 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requirePortalSession } from '../../../../lib/portal-session';
-import { listClientsByOrganization, listCoachesByOrganization, listStaffOrganizationIdsByEmail } from '../../../../lib/training-db';
-import { resolveAllowedDashboardSchoolCodes } from '../../../../lib/dashboard-access';
+import { listClientsByOrganization, listCoachesByOrganization, listOrganizationOptions, listStaffOrganizationIdsByEmail } from '../../../../lib/training-db';
 import {
   canUseClientManagement,
   resolveClientManagementOrganizationId,
@@ -37,22 +36,6 @@ function isGlobalAdminEmail(email: string): boolean {
   return parseGlobalAdminEmails().includes(normalized);
 }
 
-function parseOrgSchoolMap(raw: string): Record<number, string> {
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const out: Record<number, string> = {};
-    for (const [orgIdRaw, schoolRaw] of Object.entries(parsed)) {
-      const orgId = Number(orgIdRaw);
-      const school = typeof schoolRaw === 'string' ? schoolRaw.trim().toUpperCase() : '';
-      if (!Number.isFinite(orgId) || orgId <= 0 || !school) continue;
-      out[orgId] = school;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
 export default async function AdminCoachesPage({ searchParams }: CoachPageProps) {
   const session = await requirePortalSession();
   if (session.role !== 'admin') notFound();
@@ -60,11 +43,11 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
   const clientManagementOrganizationId = resolveClientManagementOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const isGlobalAdmin = isGlobalAdminEmail(session.email);
-  const allSchoolCodes = resolveAllowedDashboardSchoolCodes();
 
-  const [coaches, clients, params] = await Promise.all([
+  const [coaches, clients, orgOptions, params] = await Promise.all([
     clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
     clientManagementOrganizationId > 0 ? listClientsByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
+    isGlobalAdmin ? listOrganizationOptions() : Promise.resolve([]),
     searchParams,
   ]);
   const { ok, error } = readMessage(params);
@@ -74,15 +57,7 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
     Number.isFinite(editId) && editId > 0
       ? coaches.find((coach) => Number(coach.userId) === editId) ?? null
       : null;
-  const orgMap = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
   const editCoachOrgIds = coachToEdit ? await listStaffOrganizationIdsByEmail(coachToEdit.email) : [];
-  const editCoachSchoolCodes = Array.from(
-    new Set(
-      editCoachOrgIds
-        .map((orgId) => orgMap[orgId])
-        .filter((code): code is string => Boolean(code))
-    )
-  );
 
   return (
     <div className="portal-admin-stack">
@@ -129,15 +104,18 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
                   Select Schools
                 </summary>
                 <div className="portal-choice-line" style={{ marginTop: '0.5rem' }}>
-                  {allSchoolCodes.map((schoolCode) => (
-                    <label key={schoolCode}>
+                  {orgOptions.map((org) => (
+                    <label key={org.organizationId}>
                       <input
                         type="checkbox"
-                        name="schoolCodes"
-                        value={schoolCode}
-                        defaultChecked={schoolCode === programmingSchoolCode}
+                        name="organizationIds"
+                        value={String(org.organizationId)}
+                        defaultChecked={
+                          (org.schoolCode && org.schoolCode === programmingSchoolCode) ||
+                          org.organizationId === clientManagementOrganizationId
+                        }
                       />
-                      {schoolCode}
+                      {org.schoolCode ? `${org.schoolCode} (${org.organizationName})` : org.organizationName}
                     </label>
                   ))}
                 </div>
@@ -191,15 +169,15 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
                     Select Schools
                   </summary>
                   <div className="portal-choice-line" style={{ marginTop: '0.5rem' }}>
-                    {allSchoolCodes.map((schoolCode) => (
-                      <label key={schoolCode}>
+                    {orgOptions.map((org) => (
+                      <label key={org.organizationId}>
                         <input
                           type="checkbox"
-                          name="schoolCodes"
-                          value={schoolCode}
-                          defaultChecked={(editCoachSchoolCodes.length > 0 ? editCoachSchoolCodes : [programmingSchoolCode]).includes(schoolCode)}
+                          name="organizationIds"
+                          value={String(org.organizationId)}
+                          defaultChecked={editCoachOrgIds.includes(org.organizationId)}
                         />
-                        {schoolCode}
+                        {org.schoolCode ? `${org.schoolCode} (${org.organizationName})` : org.organizationName}
                       </label>
                     ))}
                   </div>

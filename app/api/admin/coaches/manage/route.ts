@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveClientManagementOrganizationId } from '../../../../../lib/programming-scope';
-import { deleteStaffUser, resolveOrganizationIdsForSchoolCodes, setStaffActiveStatus, syncStaffUserSchools, updateStaffUser } from '../../../../../lib/training-db';
+import { deleteStaffUser, setStaffActiveStatus, syncStaffUserSchools, updateStaffUser } from '../../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -67,16 +67,15 @@ export async function POST(request: Request) {
       const roleRaw = String(form.get('role') ?? '').trim().toLowerCase();
       const role = roleRaw === 'coach' ? 'coach' : 'admin';
       const globalAdmin = isGlobalAdminEmail(session.email);
-      const selectedSchoolCodes = Array.from(
+      const selectedOrganizationIds = Array.from(
         new Set(
           form
-            .getAll('schoolCodes')
-            .map((value) => String(value ?? '').trim().toUpperCase())
-            .filter(Boolean)
+            .getAll('organizationIds')
+            .map((value) => Number(String(value ?? '').trim()))
+            .filter((value) => Number.isFinite(value) && value > 0)
         )
       );
-      if (globalAdmin && selectedSchoolCodes.length > 0) {
-        const targetOrgIds = await resolveOrganizationIdsForSchoolCodes(selectedSchoolCodes);
+      if (globalAdmin && selectedOrganizationIds.length > 0) {
         const syncResult = await syncStaffUserSchools({
           organizationId,
           staffUserId,
@@ -84,7 +83,7 @@ export async function POST(request: Request) {
           email: String(form.get('email') ?? ''),
           phone: String(form.get('phone') ?? ''),
           role,
-          targetOrganizationIds: targetOrgIds.length > 0 ? targetOrgIds : [organizationId],
+          targetOrganizationIds: selectedOrganizationIds,
         });
         if (!syncResult.ok) return redirectWithMessage(request, redirectTo, 'error', syncResult.error);
         return redirectWithMessage(request, redirectTo, 'ok', 'Coach updated across selected schools.');
