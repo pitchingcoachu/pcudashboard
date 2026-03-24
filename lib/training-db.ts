@@ -685,6 +685,7 @@ export async function createStaffUser(input: {
   password: string;
   phone?: string;
   role: 'admin' | 'coach';
+  allowCrossSchoolLinking?: boolean;
 }): Promise<{ ok: true; reusedExistingPassword: boolean } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
@@ -712,6 +713,22 @@ export async function createStaffUser(input: {
   );
   if ((existingSameOrg.rowCount ?? 0) > 0) {
     return { ok: false, error: 'A coach/admin login already exists with that email for this school.' };
+  }
+
+  const existingOtherOrgs = await pool.query<{ organization_id: number | null }>(
+    `
+      SELECT DISTINCT organization_id
+      FROM auth_users
+      WHERE LOWER(email) = LOWER($1)
+        AND role IN ('admin', 'coach')
+        AND organization_id IS NOT NULL
+        AND organization_id <> $2
+      LIMIT 1
+    `,
+    [normalizedEmail, input.organizationId]
+  );
+  if ((existingOtherOrgs.rowCount ?? 0) > 0 && !input.allowCrossSchoolLinking) {
+    return { ok: false, error: 'Only global admin can link the same coach email across multiple schools.' };
   }
 
   const existingAny = await pool.query<{ password_hash: string | null; role: string | null }>(

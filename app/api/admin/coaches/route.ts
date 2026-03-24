@@ -10,6 +10,21 @@ function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | '
   return NextResponse.redirect(url, 303);
 }
 
+function parseGlobalAdminEmails(): string[] {
+  const raw = String(process.env.GLOBAL_ADMIN_EMAILS ?? 'jgaynor@pitchingcoachu.com');
+  const values = raw
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set(values));
+}
+
+function isGlobalAdminEmail(email: string): boolean {
+  const normalized = String(email ?? '').trim().toLowerCase();
+  if (!normalized) return false;
+  return parseGlobalAdminEmails().includes(normalized);
+}
+
 export async function POST(request: Request) {
   try {
     const cookieStore = await cookies();
@@ -38,6 +53,7 @@ export async function POST(request: Request) {
       phone: String(form.get('phone') ?? ''),
       password: String(form.get('password') ?? ''),
       role,
+      allowCrossSchoolLinking: isGlobalAdminEmail(session.email),
     });
 
     if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);

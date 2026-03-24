@@ -51,6 +51,36 @@ export async function listActiveStaffOrganizationIdsByEmail(email: string): Prom
   );
 }
 
+export async function listActiveStaffOrganizationsByEmail(
+  email: string
+): Promise<Array<{ organizationId: number; organizationName: string | null }>> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureAuthDbReady();
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) return [];
+  const pool = getDbPool();
+  const result = await pool.query<{ organization_id: number | null; organization_name: string | null }>(
+    `
+      SELECT DISTINCT
+        u.organization_id,
+        o.name AS organization_name
+      FROM auth_users u
+      LEFT JOIN organizations o ON o.id = u.organization_id
+      WHERE LOWER(u.email) = LOWER($1)
+        AND COALESCE(u.is_active, TRUE) = TRUE
+        AND u.role IN ('admin', 'coach')
+        AND u.organization_id IS NOT NULL
+    `,
+    [normalizedEmail]
+  );
+  return result.rows
+    .map((row) => ({
+      organizationId: Number(row.organization_id ?? 0),
+      organizationName: row.organization_name,
+    }))
+    .filter((row) => Number.isFinite(row.organizationId) && row.organizationId > 0);
+}
+
 type ResetTokenRecord = {
   token: string;
   email: string;
