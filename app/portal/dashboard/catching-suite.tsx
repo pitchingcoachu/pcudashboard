@@ -532,17 +532,7 @@ export default function CatchingSuite() {
         }
         if (!active) return;
         const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
-        const minDate = String(filters?.min_date ?? '').trim();
-        const maxDate = String(filters?.max_date ?? '').trim();
-        const isSingleLatest = Boolean(dateStart) && dateStart === dateEnd && dateStart === maxDate;
-        if (noRows && !autoFallbackAppliedRef.current) {
-          autoFallbackAppliedRef.current = true;
-          if (isSingleLatest && minDate && maxDate && minDate !== maxDate) {
-            setDateStart(minDate);
-            setDateEnd(maxDate);
-            return;
-          }
-        }
+        if (noRows && !autoFallbackAppliedRef.current) autoFallbackAppliedRef.current = true;
         setOverview(payload);
         setError(null);
       })

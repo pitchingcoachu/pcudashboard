@@ -1418,17 +1418,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load pitching overview.');
         if (!active) return;
         const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
-        const minDate = String(filters?.min_date ?? '').trim();
-        const maxDate = String(filters?.max_date ?? '').trim();
-        const isSingleLatest = Boolean(startDate) && startDate === endDate && startDate === maxDate;
-        if (noRows && !autoFallbackAppliedRef.current) {
-          autoFallbackAppliedRef.current = true;
-          if (isSingleLatest && minDate && maxDate && minDate !== maxDate) {
-            setStartDate(minDate);
-            setEndDate(maxDate);
-            return;
-          }
-        }
+        if (noRows && !autoFallbackAppliedRef.current) autoFallbackAppliedRef.current = true;
         setOverview(payload);
       })
       .catch((requestError) => {
