@@ -1340,12 +1340,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     () =>
       savedReports.map((item) => ({
         value: String(item.id),
-        label:
-          isAdminUser && item.applyToAllSchools && !/\(all schools\)\s*$/i.test(item.name)
-            ? `${item.name} (All Schools)`
-            : item.name,
+        label: String(item.name ?? '').replace(/\s*\(all schools\)\s*$/i, '').trim(),
       })),
-    [isAdminUser, savedReports]
+    [savedReports]
   );
 
   const pitchTypeLegend = useMemo(() => {
