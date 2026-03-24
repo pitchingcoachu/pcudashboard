@@ -537,10 +537,6 @@ export default function CatchingSuite() {
         const isSingleLatest = Boolean(dateStart) && dateStart === dateEnd && dateStart === maxDate;
         if (noRows && !autoFallbackAppliedRef.current) {
           autoFallbackAppliedRef.current = true;
-          if (teamType !== 'All') {
-            setTeamType('All');
-            return;
-          }
           if (isSingleLatest && minDate && maxDate && minDate !== maxDate) {
             setDateStart(minDate);
             setDateEnd(maxDate);

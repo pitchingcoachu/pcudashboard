@@ -1616,11 +1616,18 @@ main {
 .portal-school-switcher-trigger-logo--OSU,
 .portal-school-switcher-trigger-logo--GCU,
 .portal-school-switcher-trigger-logo--CREIGHTON,
+.portal-school-switcher-trigger-logo--HARVARD,
 .portal-school-switcher-option-logo--OSU,
 .portal-school-switcher-option-logo--GCU,
-.portal-school-switcher-option-logo--CREIGHTON {
+.portal-school-switcher-option-logo--CREIGHTON,
+.portal-school-switcher-option-logo--HARVARD {
   transform: scale(1.2);
   transform-origin: center;
+}
+
+.portal-school-switcher-trigger-logo--HARVARD,
+.portal-school-switcher-option-logo--HARVARD {
+  transform: scale(1.55);
 }
 
 .portal-nav-mobile-label {
@@ -3872,9 +3879,11 @@ main {
   .portal-school-switcher-trigger-logo--OSU,
   .portal-school-switcher-trigger-logo--GCU,
   .portal-school-switcher-trigger-logo--CREIGHTON,
+  .portal-school-switcher-trigger-logo--HARVARD,
   .portal-school-switcher-option-logo--OSU,
   .portal-school-switcher-option-logo--GCU,
-  .portal-school-switcher-option-logo--CREIGHTON {
+  .portal-school-switcher-option-logo--CREIGHTON,
+  .portal-school-switcher-option-logo--HARVARD {
     transform: none;
   }
 

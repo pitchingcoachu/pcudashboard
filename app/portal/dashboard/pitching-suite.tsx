@@ -1423,10 +1423,6 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
         const isSingleLatest = Boolean(startDate) && startDate === endDate && startDate === maxDate;
         if (noRows && !autoFallbackAppliedRef.current) {
           autoFallbackAppliedRef.current = true;
-          if (teamType !== 'All') {
-            setTeamType('All');
-            return;
-          }
           if (isSingleLatest && minDate && maxDate && minDate !== maxDate) {
             setStartDate(minDate);
             setEndDate(maxDate);

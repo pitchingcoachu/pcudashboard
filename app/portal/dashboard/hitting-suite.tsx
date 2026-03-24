@@ -1385,10 +1385,6 @@ export default function HittingSuite() {
         const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
         if (noRows && !autoFallbackAppliedRef.current) {
           autoFallbackAppliedRef.current = true;
-          if (teamType !== 'All') {
-            setTeamType('All');
-            return;
-          }
         }
         setOverview(payload);
       })
