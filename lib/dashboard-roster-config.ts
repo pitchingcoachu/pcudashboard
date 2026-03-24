@@ -20,12 +20,15 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
   const envPath = String(process.env[envKey] ?? '').trim();
   const bundledRoot = process.cwd();
   const defaultPathBySchool: Record<string, string> = {
+    CBU: `${bundledRoot}/dashboard_api/config/schools/CBU/school_config.R`,
     OSU: `${bundledRoot}/dashboard_api/config/schools/OSU/school_config.R`,
     PCU: `${bundledRoot}/dashboard_api/config/schools/PCU/school_config.R`,
     CNU: `${bundledRoot}/dashboard_api/config/schools/CNU/school_config.R`,
     GCU: `${bundledRoot}/dashboard_api/config/schools/GCU/school_config.R`,
     LSU: `${bundledRoot}/dashboard_api/config/schools/LSU/school_config.R`,
     SEMO: `${bundledRoot}/dashboard_api/config/schools/SEMO/school_config.R`,
+    CREIGHTON: `${bundledRoot}/dashboard_api/config/schools/CREIGHTON/school_config.R`,
+    HARVARD: `${bundledRoot}/dashboard_api/config/schools/HARVARD/school_config.R`,
   };
   const configPath = envPath || defaultPathBySchool[upper] || '';
   if (!configPath || !fs.existsSync(configPath)) return null;
