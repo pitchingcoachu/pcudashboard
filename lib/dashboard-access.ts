@@ -31,7 +31,9 @@ export function resolveAllowedDashboardSchoolCodes(): string[] {
   const envValues = parseAllowedSchoolCodes(process.env.DASHBOARD_ALLOWED_SCHOOL_CODES ?? '');
   const mapValues = Object.values(parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}')).map((value) => normalizeSchoolCode(value));
   const fallback = normalizeSchoolCode(process.env.DASHBOARD_DEFAULT_SCHOOL_CODE ?? 'OSU') || 'OSU';
-  const combined = Array.from(new Set([...envValues, ...mapValues, fallback, 'PCU', 'OSU', 'CNU', 'GCU', 'LSU', 'SEMO'].filter(Boolean)));
+  const combined = Array.from(
+    new Set([...envValues, ...mapValues, fallback, 'PCU', 'OSU', 'CNU', 'GCU', 'LSU', 'SEMO', 'CREIGHTON'].filter(Boolean))
+  );
   return combined;
 }
 

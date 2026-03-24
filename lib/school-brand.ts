@@ -57,6 +57,14 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentSoft: '#a31228',
     accentRgb: '219, 25, 52',
   },
+  CREIGHTON: {
+    schoolCode: 'CREIGHTON',
+    logoSrc: null,
+    logoAlt: 'Creighton logo',
+    accent: '#005ca9',
+    accentSoft: '#00437a',
+    accentRgb: '0, 92, 169',
+  },
 };
 
 export function resolveSchoolBrand(schoolCode: string | null | undefined): SchoolBrand {

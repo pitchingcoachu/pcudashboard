@@ -1941,6 +1941,7 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
         "GCU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "GCU", "school_config.R"),
         "LSU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "LSU", "school_config.R"),
         "SEMO": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "SEMO", "school_config.R"),
+        "CREIGHTON": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CREIGHTON", "school_config.R"),
     }
     config_path = env_path or default_path_by_school.get(school_code.upper(), "")
     if not config_path or not os.path.exists(config_path):
