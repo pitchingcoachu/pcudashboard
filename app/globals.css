@@ -2220,10 +2220,22 @@ main {
   border-radius: 10px;
   padding: 0.5rem;
   background: rgba(6, 8, 14, 0.62);
+  position: relative;
   display: grid;
   gap: 0.45rem;
   min-height: 360px;
   box-shadow: none;
+}
+
+.portal-custom-reports-row-player-label {
+  position: absolute;
+  top: -1rem;
+  left: 0.45rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.96);
+  pointer-events: none;
 }
 
 .portal-custom-reports-cell--collapsed {

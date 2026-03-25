@@ -2150,9 +2150,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       style={{ gridColumn: `span ${colSpan}` }}
                     >
                       {reportScope === 'Multi-Player' && colNumber === 1 ? (
-                        <h4 className="portal-custom-reports-cell-title" style={{ marginBottom: 8 }}>
+                        <div className="portal-custom-reports-row-player-label">
                           {toFirstLast(inheritedPlayer) || 'All'}
-                        </h4>
+                        </div>
                       ) : null}
                       <div className="portal-custom-reports-cell-controls">
                         {!isExportingPdf ? (
