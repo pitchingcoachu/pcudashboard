@@ -1066,7 +1066,13 @@ export async function syncStaffUserSchools(input: {
     if (targetOrganizationIds.length < 1) return { ok: false, error: 'Select at least one school.' };
 
     await client.query('BEGIN');
-    await client.query(`SELECT pg_advisory_xact_lock($1)`, [947231]);
+    await client.query(`SET LOCAL lock_timeout = '5s'`);
+    await client.query(`SET LOCAL statement_timeout = '20s'`);
+    const lockResult = await client.query<{ locked: boolean }>(`SELECT pg_try_advisory_xact_lock($1) AS locked`, [947231]);
+    if (!Boolean(lockResult.rows[0]?.locked)) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'Another coach update is already running. Please try again in a few seconds.' };
+    }
 
     const anchorResult = await client.query<{
       id: number;
