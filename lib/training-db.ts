@@ -714,24 +714,33 @@ export async function createClientWithLogin(input: {
       if (!isAuthUsersPrimaryKeyViolation(error)) throw error;
       await client.query(`ROLLBACK TO SAVEPOINT sp_insert_auth_user_player`);
       await ensureAuthUsersIdSequence(client);
-      insertedUser = await client.query<{ id: number }>(
-        `
-          INSERT INTO auth_users (email, username, name, password, password_hash, app_url, role, organization_id)
-          VALUES ($1, $2, $3, $4, $5, $6, 'player', $7)
-          RETURNING id
-        `,
-        [
-          normalizedEmail,
-          deriveUsernameFromEmail(normalizedEmail),
-          fullName,
-          passwordHash,
-          passwordHash,
-          DEFAULT_DASHBOARD_URL,
-          input.organizationId,
-        ]
-      );
+      try {
+        insertedUser = await client.query<{ id: number }>(
+          `
+            INSERT INTO auth_users (email, username, name, password, password_hash, app_url, role, organization_id)
+            VALUES ($1, $2, $3, $4, $5, $6, 'player', $7)
+            RETURNING id
+          `,
+          [
+            normalizedEmail,
+            deriveUsernameFromEmail(normalizedEmail),
+            fullName,
+            passwordHash,
+            passwordHash,
+            DEFAULT_DASHBOARD_URL,
+            input.organizationId,
+          ]
+        );
+      } catch (retryError) {
+        await client.query(`ROLLBACK TO SAVEPOINT sp_insert_auth_user_player`);
+        throw retryError;
+      }
     } finally {
-      await client.query(`RELEASE SAVEPOINT sp_insert_auth_user_player`);
+      try {
+        await client.query(`RELEASE SAVEPOINT sp_insert_auth_user_player`);
+      } catch {
+        // ignore; outer transaction cleanup handles final state
+      }
     }
 
     if (assignedCoachUserId) {
@@ -1189,17 +1198,26 @@ export async function syncStaffUserSchools(input: {
           if (!isAuthUsersPrimaryKeyViolation(error)) throw error;
           await client.query(`ROLLBACK TO SAVEPOINT sp_insert_auth_user_staff`);
           await ensureAuthUsersIdSequence(client);
-          await client.query(
-            `
-              INSERT INTO auth_users (
-                email, username, name, phone, password, password_hash, app_url, role, organization_id
-              )
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            `,
-            insertValues
-          );
+          try {
+            await client.query(
+              `
+                INSERT INTO auth_users (
+                  email, username, name, phone, password, password_hash, app_url, role, organization_id
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+              `,
+              insertValues
+            );
+          } catch (retryError) {
+            await client.query(`ROLLBACK TO SAVEPOINT sp_insert_auth_user_staff`);
+            throw retryError;
+          }
         } finally {
-          await client.query(`RELEASE SAVEPOINT sp_insert_auth_user_staff`);
+          try {
+            await client.query(`RELEASE SAVEPOINT sp_insert_auth_user_staff`);
+          } catch {
+            // ignore; outer transaction cleanup handles final state
+          }
         }
       }
     }
