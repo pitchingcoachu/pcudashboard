@@ -5,6 +5,8 @@ import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../..
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
+export const maxDuration = 300;
+
 const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=5, stale-while-revalidate=55',
 } as const;
