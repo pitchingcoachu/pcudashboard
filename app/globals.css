@@ -1893,6 +1893,18 @@ main {
   text-align: center;
 }
 
+.portal-dashboard-sidebar .dashboard-panel {
+  overflow: visible;
+}
+
+.portal-dashboard-sidebar .portal-search-select {
+  z-index: 5;
+}
+
+.portal-dashboard-sidebar .portal-search-select-menu {
+  z-index: 90;
+}
+
 .portal-dashboard-sidebar--compact {
   height: auto;
   align-self: start;

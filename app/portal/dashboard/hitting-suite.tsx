@@ -388,6 +388,15 @@ function hoverTextColor(bg?: string): string {
 function resultLabelForSwing(playResult: string): string {
   const value = (playResult || '').trim();
   if (!value || value === 'Undefined') return 'Unknown';
+  const compact = value.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (compact === 'homerun' || compact === 'homeruns' || compact === 'homer') return 'HomeRun';
+  if (compact === 'single') return 'Single';
+  if (compact === 'double') return 'Double';
+  if (compact === 'triple') return 'Triple';
+  if (compact === 'out') return 'Out';
+  if (compact === 'fielderschoice') return 'FieldersChoice';
+  if (compact === 'sacrifice') return 'Sacrifice';
+  if (compact === 'error') return 'Error';
   return value;
 }
 
@@ -899,10 +908,11 @@ function SprayChart({
     .filter((p): p is ChartPoint & { x: number; y: number } => p !== null);
 
   const outcomeColor = (playResult: string) => {
-    if (playResult === 'Single') return '#34d399';
-    if (playResult === 'Double') return '#60a5fa';
-    if (playResult === 'Triple') return '#c084fc';
-    if (playResult === 'HomeRun') return '#f87171';
+    const normalized = resultLabelForSwing(playResult);
+    if (normalized === 'Single') return '#34d399';
+    if (normalized === 'Double') return '#60a5fa';
+    if (normalized === 'Triple') return '#c084fc';
+    if (normalized === 'HomeRun') return '#f87171';
     return '#e5e7eb';
   };
 
@@ -985,10 +995,11 @@ function SprayChart({
         <polygon points={baseDiamondOnLine(thirdBaseOuter.x, thirdBaseOuter.y)} fill="rgba(255,255,255,0.75)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
         <polygon points={centeredDiamond(secondBaseCenter.x, secondBaseCenter.y, 6)} fill="rgba(255,255,255,0.7)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
         {livePoints.map((p, idx) => {
-          const color = outcomeColor(p.play_result || 'Out');
+          const normalizedPlayResult = resultLabelForSwing(p.play_result || 'Out');
+          const color = outcomeColor(normalizedPlayResult);
           const tip = [
             p.pitch_type,
-            p.play_result || 'Out',
+            normalizedPlayResult,
             p.exit_speed ? `EV ${p.exit_speed.toFixed(1)}` : 'EV: —',
             p.angle ? `LA ${p.angle.toFixed(1)}` : 'LA: —',
             p.distance ? `${p.distance.toFixed(0)} ft` : 'Distance: —',

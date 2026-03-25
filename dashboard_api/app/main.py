@@ -4531,7 +4531,7 @@ def pitching_debug_team_codes(
 
 def _hit_result_label(pitch_call: Any, play_result: Any) -> str:
     pc = str(pitch_call or "").strip()
-    pr = str(play_result or "").strip()
+    pr = _canonical_play_result(play_result)
     if pc == "HitByPitch":
         return "Ball"
     if pc == "StrikeCalled":
@@ -4551,6 +4551,51 @@ def _hit_result_label(pitch_call: Any, play_result: Any) -> str:
             return "Error"
         return "In Play (Out)"
     return "Ball"
+
+
+def _canonical_play_result(play_result: Any) -> str:
+    raw = str(play_result or "").strip()
+    if not raw:
+        return ""
+    compact = re.sub(r"[^a-z0-9]", "", raw.lower())
+    aliases = {
+        "single": "Single",
+        "double": "Double",
+        "triple": "Triple",
+        "homerun": "HomeRun",
+        "homeruns": "HomeRun",
+        "homer": "HomeRun",
+        "homeurn": "HomeRun",
+        "out": "Out",
+        "fielderschoice": "FieldersChoice",
+        "sacrifice": "Sacrifice",
+        "error": "Error",
+        "walk": "Walk",
+        "intentionalwalk": "IntentionalWalk",
+        "hitbypitch": "HitByPitch",
+        "undefined": "Undefined",
+    }
+    return aliases.get(compact, raw)
+
+
+def _pitch_result_filter_match(selected_pitch_results: List[str], result_label: str, play_result: Any) -> bool:
+    if not selected_pitch_results:
+        return True
+    selected = {str(token or "").strip() for token in selected_pitch_results if str(token or "").strip()}
+    if not selected:
+        return True
+    if result_label in selected:
+        return True
+    pr = _canonical_play_result(play_result)
+    if not pr:
+        return False
+    if pr in selected:
+        return True
+    if pr in {"Single", "Double", "Triple", "HomeRun"} and "In Play (Hit)" in selected:
+        return True
+    if pr in {"Out", "FieldersChoice", "Sacrifice"} and "In Play (Out)" in selected:
+        return True
+    return False
 
 
 def _count_token_match(token: str, balls: Any, strikes: Any) -> bool:
@@ -5059,7 +5104,7 @@ def hitting_overview(
             if not any(tok == inz for tok in selected_in_zone):
                 continue
         result_label = _hit_result_label(row.get("pitch_call"), row.get("play_result"))
-        if selected_pitch_results and result_label not in selected_pitch_results:
+        if not _pitch_result_filter_match(selected_pitch_results, result_label, row.get("play_result")):
             continue
         if selected_count_filters and not any(_count_token_match(tok, row.get("balls_num"), row.get("strikes_num")) for tok in selected_count_filters):
             continue
@@ -5553,7 +5598,7 @@ def catching_overview(
             if not any(tok == inz for tok in selected_in_zone):
                 continue
         result_label = _hit_result_label(row.get("pitch_call"), row.get("play_result"))
-        if selected_pitch_results and result_label not in selected_pitch_results:
+        if not _pitch_result_filter_match(selected_pitch_results, result_label, row.get("play_result")):
             continue
         if selected_count_filters and not any(_count_token_match(tok, row.get("balls_num"), row.get("strikes_num")) for tok in selected_count_filters):
             continue

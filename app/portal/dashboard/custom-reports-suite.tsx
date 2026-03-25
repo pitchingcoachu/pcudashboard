@@ -209,6 +209,9 @@ type ReportPayload = {
   cols: number;
   useGlobalDates: boolean;
   showPitchTypeKey: boolean;
+  showLocationChartKey?: boolean;
+  showExitVelocityKey?: boolean;
+  showBattedResultsKey?: boolean;
   enableTableColors?: boolean;
   globalStartDate: string;
   globalEndDate: string;
@@ -899,6 +902,15 @@ const formatPitchResult = (pitchCallRaw: string | null | undefined, playResultRa
 const resultLabelForSwing = (playResultRaw: string | null | undefined): string => {
   const value = (playResultRaw || '').trim();
   if (!value || value === 'Undefined') return 'Unknown';
+  const compact = value.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (compact === 'homerun' || compact === 'homeruns' || compact === 'homer') return 'HomeRun';
+  if (compact === 'single') return 'Single';
+  if (compact === 'double') return 'Double';
+  if (compact === 'triple') return 'Triple';
+  if (compact === 'out') return 'Out';
+  if (compact === 'fielderschoice') return 'FieldersChoice';
+  if (compact === 'sacrifice') return 'Sacrifice';
+  if (compact === 'error') return 'Error';
   return value;
 };
 const evBin = (value: number | null | undefined): (typeof EV_BINS)[number] => {
@@ -1204,8 +1216,13 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [reportPlayers, setReportPlayers] = useState<string[]>(['All']);
   const [reportRows, setReportRows] = useState(1);
   const [reportCols, setReportCols] = useState(1);
+  const [reportRowsInput, setReportRowsInput] = useState('1');
+  const [reportColsInput, setReportColsInput] = useState('1');
   const [useGlobalDates, setUseGlobalDates] = useState(false);
   const [showPitchTypeKey, setShowPitchTypeKey] = useState(true);
+  const [showLocationChartKey, setShowLocationChartKey] = useState(false);
+  const [showExitVelocityKey, setShowExitVelocityKey] = useState(false);
+  const [showBattedResultsKey, setShowBattedResultsKey] = useState(false);
   const [enableTableColors, setEnableTableColors] = useState(true);
   const [globalStartDate, setGlobalStartDate] = useState('');
   const [globalEndDate, setGlobalEndDate] = useState('');
@@ -1213,6 +1230,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [rowNotes, setRowNotes] = useState<string[]>(Array.from({ length: 15 }, () => ''));
   const [rowNoteSpans, setRowNoteSpans] = useState<number[]>(Array.from({ length: 15 }, () => 1));
   const [cellConfigs, setCellConfigs] = useState<Record<string, CellConfig>>({ r1c1: emptyCell() });
+  const [colSpanInputs, setColSpanInputs] = useState<Record<string, string>>({});
   const [savedReports, setSavedReports] = useState<SavedReportItem[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
   const [saveScope, setSaveScope] = useState<'Current School' | 'All Schools'>('Current School');
@@ -1377,10 +1395,33 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     }
     return orderedPitchStats(counts).map(([pitchType]) => pitchType);
   }, [cellsData]);
+  const battedResultLegend = useMemo(
+    () => ['Single', 'Double', 'Triple', 'HomeRun', 'Out', 'Error', 'FieldersChoice', 'Sacrifice', 'Foul Ball'],
+    []
+  );
 
   useEffect(() => {
     setCellConfigs((current) => ensureCellConfigMap(current, reportRows, reportCols));
   }, [reportRows, reportCols]);
+
+  useEffect(() => {
+    setColSpanInputs((current) => {
+      const next: Record<string, string> = {};
+      const validKeys = new Set(Object.keys(cellConfigs));
+      for (const [key, value] of Object.entries(current)) {
+        if (validKeys.has(key)) next[key] = value;
+      }
+      return next;
+    });
+  }, [cellConfigs]);
+
+  useEffect(() => {
+    setReportRowsInput(String(reportRows));
+  }, [reportRows]);
+
+  useEffect(() => {
+    setReportColsInput(String(reportCols));
+  }, [reportCols]);
 
   useEffect(() => {
     setCellConfigs((current) => {
@@ -1699,6 +1740,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setReportCols(Math.max(1, Math.min(5, Number(payload.cols) || 1)));
     setUseGlobalDates(Boolean(payload.useGlobalDates));
     setShowPitchTypeKey(payload.showPitchTypeKey !== false);
+    setShowLocationChartKey(Boolean(payload.showLocationChartKey));
+    setShowExitVelocityKey(Boolean(payload.showExitVelocityKey));
+    setShowBattedResultsKey(Boolean(payload.showBattedResultsKey));
     setEnableTableColors(payload.enableTableColors !== false);
     setGlobalStartDate(payload.globalStartDate || '');
     setGlobalEndDate(payload.globalEndDate || '');
@@ -1719,6 +1763,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     cols: reportCols,
     useGlobalDates,
     showPitchTypeKey,
+    showLocationChartKey,
+    showExitVelocityKey,
+    showBattedResultsKey,
     enableTableColors,
     globalStartDate,
     globalEndDate,
@@ -1790,6 +1837,34 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setCellConfigs({ r1c1: emptyCell() });
     setSelectedReportId(null);
     setSaveScope('Current School');
+  };
+
+  const applyReportRowsInput = () => {
+    const parsed = Number(reportRowsInput);
+    const normalized = Number.isFinite(parsed) ? Math.max(1, Math.min(15, Math.trunc(parsed))) : reportRows;
+    setReportRows(normalized);
+    setReportRowsInput(String(normalized));
+  };
+
+  const applyReportColsInput = () => {
+    const parsed = Number(reportColsInput);
+    const normalized = Number.isFinite(parsed) ? Math.max(1, Math.min(5, Math.trunc(parsed))) : reportCols;
+    setReportCols(normalized);
+    setReportColsInput(String(normalized));
+  };
+
+  const applyColSpanInput = (cellId: string, maxSpan: number, fallback: number) => {
+    const raw = colSpanInputs[cellId];
+    const parsed = Number(raw);
+    const normalized = Number.isFinite(parsed) ? Math.max(1, Math.min(maxSpan, Math.trunc(parsed))) : Math.max(1, Math.min(maxSpan, fallback || 1));
+    setCellConfigs((current) => ({
+      ...current,
+      [cellId]: {
+        ...(current[cellId] ?? emptyCell()),
+        colSpan: normalized,
+      },
+    }));
+    setColSpanInputs((current) => ({ ...current, [cellId]: String(normalized) }));
   };
   const downloadReportPdf = async () => {
     const reportNode = reportCanvasRef.current;
@@ -1957,8 +2032,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   type="number"
                   min={1}
                   max={15}
-                  value={reportRows}
-                  onChange={(event) => setReportRows(Math.max(1, Math.min(15, Number(event.target.value) || 1)))}
+                  value={reportRowsInput}
+                  onChange={(event) => setReportRowsInput(event.target.value)}
+                  onBlur={applyReportRowsInput}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      applyReportRowsInput();
+                    }
+                  }}
                 />
               </label>
               <label>
@@ -1967,8 +2049,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   type="number"
                   min={1}
                   max={5}
-                  value={reportCols}
-                  onChange={(event) => setReportCols(Math.max(1, Math.min(5, Number(event.target.value) || 1)))}
+                  value={reportColsInput}
+                  onChange={(event) => setReportColsInput(event.target.value)}
+                  onBlur={applyReportColsInput}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      applyReportColsInput();
+                    }
+                  }}
                 />
               </label>
             </div>
@@ -1981,6 +2070,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 <label className="portal-checkbox-label">
                   <input type="checkbox" checked={showPitchTypeKey} onChange={(event) => setShowPitchTypeKey(event.target.checked)} />
                   Show pitch type key
+                </label>
+                <label className="portal-checkbox-label">
+                  <input type="checkbox" checked={showLocationChartKey} onChange={(event) => setShowLocationChartKey(event.target.checked)} />
+                  Show location chart key
+                </label>
+                <label className="portal-checkbox-label">
+                  <input type="checkbox" checked={showExitVelocityKey} onChange={(event) => setShowExitVelocityKey(event.target.checked)} />
+                  Show exit velocity key
+                </label>
+                <label className="portal-checkbox-label">
+                  <input type="checkbox" checked={showBattedResultsKey} onChange={(event) => setShowBattedResultsKey(event.target.checked)} />
+                  Show batted results key
                 </label>
                 <label className="portal-checkbox-label">
                   <input type="checkbox" checked={enableTableColors} onChange={(event) => setEnableTableColors(event.target.checked)} />
@@ -2216,27 +2317,29 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           }
                         />
                         <label>Column Span</label>
+                        {(() => {
+                          const maxSpan = Math.max(1, reportCols - Number(cellId.match(/^r\d+c(\d+)$/)?.[1] ?? '1') + 1);
+                          const displayValue = colSpanInputs[cellId] ?? String(config.colSpan ?? 1);
+                          return (
                         <input
-                          type="number"
-                          min={1}
-                          max={Math.max(1, reportCols - Number(cellId.match(/^r\d+c(\d+)$/)?.[1] ?? '1') + 1)}
-                          value={config.colSpan ?? 1}
-                          onChange={(event) =>
-                            setCellConfigs((current) => ({
-                              ...current,
-                              [cellId]: {
-                                ...(current[cellId] ?? emptyCell()),
-                                colSpan: Math.max(
-                                  1,
-                                  Math.min(
-                                    reportCols - Number(cellId.match(/^r\d+c(\d+)$/)?.[1] ?? '1') + 1,
-                                    Number(event.target.value) || 1
-                                  )
-                                ),
-                              },
-                            }))
-                          }
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          value={displayValue}
+                          onChange={(event) => {
+                            const next = event.target.value.replace(/[^\d]/g, '');
+                            setColSpanInputs((current) => ({ ...current, [cellId]: next }));
+                          }}
+                          onBlur={() => applyColSpanInput(cellId, maxSpan, Number(config.colSpan) || 1)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault();
+                              applyColSpanInput(cellId, maxSpan, Number(config.colSpan) || 1);
+                            }
+                          }}
                         />
+                          );
+                        })()}
                         {isSummaryTable ? (
                           <>
                             <label>Table</label>
@@ -3381,10 +3484,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     .filter((point): point is { x: number; y: number; play: string; ev: number | null; la: number | null; distance: number } => point !== null)
                                 : points;
                             const outcomeColor = (playResult: string) => {
-                              if (playResult === 'Single') return '#34d399';
-                              if (playResult === 'Double') return '#60a5fa';
-                              if (playResult === 'Triple') return '#c084fc';
-                              if (playResult === 'HomeRun') return '#f87171';
+                              const normalized = resultLabelForSwing(playResult);
+                              if (normalized === 'Single') return '#34d399';
+                              if (normalized === 'Double') return '#60a5fa';
+                              if (normalized === 'Triple') return '#c084fc';
+                              if (normalized === 'HomeRun') return '#f87171';
                               return '#e5e7eb';
                             };
                             const fence: Array<{ x: number; y: number }> = [];
@@ -3453,25 +3557,29 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 <polygon points={baseDiamondOnLine(firstBaseOuter.x, firstBaseOuter.y)} fill="rgba(255,255,255,0.75)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
                                 <polygon points={baseDiamondOnLine(thirdBaseOuter.x, thirdBaseOuter.y)} fill="rgba(255,255,255,0.75)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
                                 <polygon points={centeredDiamond(secondBaseCenter.x, secondBaseCenter.y, 6)} fill="rgba(255,255,255,0.7)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
-                                {fallbackPoints.slice(0, 1200).map((point, idx) => (
-                                  <circle
-                                    key={`${cellId}-spr-${idx}`}
-                                    cx={xScale(point.x)}
-                                    cy={yScale(point.y)}
-                                    r={3.8}
-                                    fill={outcomeColor(point.play)}
-                                    opacity={0.95}
-                                    onMouseMove={(event) =>
-                                      setChartHover({
-                                        x: event.clientX,
-                                        y: event.clientY,
-                                        bg: outcomeColor(point.play),
-                                        text: `Result: ${point.play || 'Out'}\nEV: ${point.ev !== null ? `${point.ev.toFixed(1)} mph` : '-'}\nLA: ${point.la !== null ? `${point.la.toFixed(1)}°` : '-'}\nDistance: ${point.distance.toFixed(0)} ft`,
-                                      })
-                                    }
-                                    onMouseLeave={() => setChartHover(null)}
-                                  />
-                                ))}
+                                {fallbackPoints.slice(0, 1200).map((point, idx) => {
+                                  const normalizedPlayResult = resultLabelForSwing(point.play);
+                                  const pointColor = outcomeColor(normalizedPlayResult);
+                                  return (
+                                    <circle
+                                      key={`${cellId}-spr-${idx}`}
+                                      cx={xScale(point.x)}
+                                      cy={yScale(point.y)}
+                                      r={3.8}
+                                      fill={pointColor}
+                                      opacity={0.95}
+                                      onMouseMove={(event) =>
+                                        setChartHover({
+                                          x: event.clientX,
+                                          y: event.clientY,
+                                          bg: pointColor,
+                                          text: `Result: ${normalizedPlayResult || 'Out'}\nEV: ${point.ev !== null ? `${point.ev.toFixed(1)} mph` : '-'}\nLA: ${point.la !== null ? `${point.la.toFixed(1)}°` : '-'}\nDistance: ${point.distance.toFixed(0)} ft`,
+                                        })
+                                      }
+                                      onMouseLeave={() => setChartHover(null)}
+                                    />
+                                  );
+                                })}
                               </svg>
                             );
                           })()}
@@ -3943,16 +4051,76 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   );
                 })}
               </div>
-              {showPitchTypeKey ? (
-                <div className="portal-custom-reports-legend">
-                  <div className="portal-custom-reports-legend-grid">
-                    {pitchTypeLegend.map((pitchType) => (
-                      <span key={pitchType} className="portal-custom-reports-legend-item">
-                        <span className="portal-custom-reports-legend-dot" style={{ background: PITCH_COLORS[pitchType] ?? '#9ca3af' }} />
-                        <span>{pitchType}</span>
-                      </span>
-                    ))}
-                  </div>
+              {showPitchTypeKey || showLocationChartKey || showExitVelocityKey || showBattedResultsKey ? (
+                <div className="portal-custom-reports-legend" style={{ display: 'grid', gap: 8 }}>
+                  {showPitchTypeKey ? (
+                    <div>
+                      <div className="portal-muted-text" style={{ marginBottom: 6 }}>Pitch Types</div>
+                      <div className="portal-custom-reports-legend-grid">
+                        {pitchTypeLegend.map((pitchType) => (
+                          <span key={pitchType} className="portal-custom-reports-legend-item">
+                            <span className="portal-custom-reports-legend-dot" style={{ background: PITCH_COLORS[pitchType] ?? '#9ca3af' }} />
+                            <span>{pitchType}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {showLocationChartKey ? (
+                    <div>
+                      <div className="portal-muted-text" style={{ marginBottom: 6 }}>Location Chart Results</div>
+                      <div className="portal-custom-reports-legend-grid">
+                        {[
+                          { key: 'called_strike', label: 'Called Strike' },
+                          { key: 'ball', label: 'Ball' },
+                          { key: 'foul', label: 'Foul' },
+                          { key: 'whiff', label: 'Whiff' },
+                          { key: 'in_play_out', label: 'In Play (Out)' },
+                          { key: 'in_play_hit', label: 'In Play (Hit)' },
+                          { key: 'error', label: 'Error' },
+                        ].map((row) => (
+                          <span key={`loc-key-${row.key}`} className="portal-custom-reports-legend-item">
+                            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                              {row.key === 'called_strike' ? <circle cx="7" cy="7" r="4" fill="#fff" /> : null}
+                              {row.key === 'ball' ? <circle cx="7" cy="7" r="4" fill="none" stroke="#fff" strokeWidth="1.8" /> : null}
+                              {row.key === 'foul' ? <polygon points="7,2 12,11 2,11" fill="none" stroke="#fff" strokeWidth="1.8" /> : null}
+                              {row.key === 'whiff' ? <polygon points="7,1.5 8.7,5.2 12.8,5.2 9.5,7.6 10.8,11.8 7,9.3 3.2,11.8 4.5,7.6 1.2,5.2 5.3,5.2" fill="#fff" /> : null}
+                              {row.key === 'in_play_out' ? <polygon points="7,2 12,11 2,11" fill="#fff" /> : null}
+                              {row.key === 'in_play_hit' ? <rect x="3" y="3" width="8" height="8" fill="#fff" /> : null}
+                              {row.key === 'error' ? <rect x="3" y="3" width="8" height="8" fill="none" stroke="#fff" strokeWidth="1.8" /> : null}
+                            </svg>
+                            <span>{row.label}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {showExitVelocityKey ? (
+                    <div>
+                      <div className="portal-muted-text" style={{ marginBottom: 6 }}>Exit Velocity</div>
+                      <div className="portal-custom-reports-legend-grid">
+                        {EV_BINS.map((bin) => (
+                          <span key={`ev-key-${bin}`} className="portal-custom-reports-legend-item">
+                            <span className="portal-custom-reports-legend-dot" style={{ background: EV_COLOR_PALETTE[bin] }} />
+                            <span>{bin}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {showBattedResultsKey ? (
+                    <div>
+                      <div className="portal-muted-text" style={{ marginBottom: 6 }}>Batted Results</div>
+                      <div className="portal-custom-reports-legend-grid">
+                        {battedResultLegend.map((result) => (
+                          <span key={`batted-key-${result}`} className="portal-custom-reports-legend-item">
+                            <span className="portal-custom-reports-legend-dot" style={{ background: RESULT_COLOR_PALETTE[result] ?? RESULT_COLOR_PALETTE.Unknown }} />
+                            <span>{result}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               {chartHover ? (
