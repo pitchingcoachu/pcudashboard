@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from datetime import date
+import hashlib
+import json
 from math import isfinite, isnan
 import os
 import re
 import time
 from functools import lru_cache
+import threading
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -135,6 +138,90 @@ SEP_FB_HB = {"Cutter": 10.0, "Slider": 12.0, "Sweeper": 22.0, "Curveball": 18.0,
 SEP_SI_IVB = {"Cutter": 2.0, "Slider": -6.0, "Sweeper": -7.0, "Curveball": -18.0, "ChangeUp": -4.0, "Splitter": -5.0}
 SEP_SI_HB = {"Cutter": 18.0, "Slider": 20.0, "Sweeper": 30.0, "Curveball": 25.0, "ChangeUp": 1.0, "Splitter": 2.0}
 VELO_AVG_BY_LEVEL = {"Pro": 94.0, "College": 89.0, "High School": 82.0}
+
+_OVERVIEW_CACHE_TTL_SECONDS = max(0, int(os.getenv("DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS", "45")))
+_OVERVIEW_CACHE_MAX_ENTRIES = max(64, int(os.getenv("DASHBOARD_OVERVIEW_CACHE_MAX_ENTRIES", "256")))
+_CHART_POINTS_MAX = max(1000, int(os.getenv("DASHBOARD_CHART_POINTS_MAX", "6000")))
+_OVERVIEW_CACHE: Dict[str, tuple[float, Any]] = {}
+_OVERVIEW_CACHE_LOCK = threading.Lock()
+
+
+def _json_stable(value: Any) -> Any:
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, set):
+        return sorted(_json_stable(v) for v in value)
+    if isinstance(value, tuple):
+        return [_json_stable(v) for v in value]
+    if isinstance(value, list):
+        return [_json_stable(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_stable(v) for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
+    return value
+
+
+def _overview_cache_key(endpoint: str, school_code: str, payload: Dict[str, Any]) -> str:
+    normalized = _json_stable(payload)
+    digest = hashlib.sha256(json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+    return f"{endpoint}|{school_code}|{digest}"
+
+
+def _overview_cache_get(key: str) -> Any:
+    if _OVERVIEW_CACHE_TTL_SECONDS <= 0:
+        return None
+    now = time.time()
+    with _OVERVIEW_CACHE_LOCK:
+        hit = _OVERVIEW_CACHE.get(key)
+        if not hit:
+            return None
+        ts, value = hit
+        if now - ts > _OVERVIEW_CACHE_TTL_SECONDS:
+            _OVERVIEW_CACHE.pop(key, None)
+            return None
+        return value
+
+
+def _overview_cache_set(key: str, value: Any) -> None:
+    if _OVERVIEW_CACHE_TTL_SECONDS <= 0:
+        return
+    now = time.time()
+    with _OVERVIEW_CACHE_LOCK:
+        _OVERVIEW_CACHE[key] = (now, value)
+        if len(_OVERVIEW_CACHE) > _OVERVIEW_CACHE_MAX_ENTRIES:
+            for stale_key, _ in sorted(_OVERVIEW_CACHE.items(), key=lambda item: item[1][0])[: max(1, len(_OVERVIEW_CACHE) - _OVERVIEW_CACHE_MAX_ENTRIES)]:
+                _OVERVIEW_CACHE.pop(stale_key, None)
+
+
+def _overview_cache_invalidate_school(school_code: str) -> None:
+    school = (school_code or "").strip().upper()
+    if not school:
+        return
+    token = f"|{school}|"
+    with _OVERVIEW_CACHE_LOCK:
+        keys = [key for key in _OVERVIEW_CACHE.keys() if token in key]
+        for key in keys:
+            _OVERVIEW_CACHE.pop(key, None)
+
+
+def _downsample_rows_for_chart_points(rows: List[Dict[str, Any]], max_points: int = _CHART_POINTS_MAX) -> List[Dict[str, Any]]:
+    total = len(rows)
+    if max_points <= 0 or total <= max_points:
+        return rows
+    if max_points == 1:
+        return [rows[-1]]
+    step = (total - 1) / float(max_points - 1)
+    out: List[Dict[str, Any]] = []
+    used = set()
+    for i in range(max_points):
+        idx = int(round(i * step))
+        idx = min(total - 1, max(0, idx))
+        if idx in used:
+            continue
+        used.add(idx)
+        out.append(rows[idx])
+    if out[-1] is not rows[-1]:
+        out[-1] = rows[-1]
+    return out
 
 
 def _is_num(value: Any) -> bool:
@@ -2068,6 +2155,19 @@ def _ensure_performance_indexes() -> None:
         return
 
     statements = [
+        """
+        CREATE INDEX IF NOT EXISTS idx_pe_school_date_created_id
+        ON public.pitch_events (school_code, session_date, created_at, id)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pe_school_date_session_type_norm
+        ON public.pitch_events
+        (school_code, session_date, (regexp_replace(lower(COALESCE(NULLIF(TRIM(COALESCE(session_type, sessiontype)), ''), '')), '\\s+', '', 'g')))
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pe_school_date_team_codes
+        ON public.pitch_events (school_code, session_date, pitcherteam, batterteam)
+        """,
         # Core school/date and normalized-name filters used by overview endpoints.
         """
         CREATE INDEX IF NOT EXISTS idx_pe_school_date_pitcher_norm
@@ -2694,6 +2794,49 @@ def pitching_overview(
         "zone_dx": ZONE_DX,
         "zone_dy": ZONE_DY,
     }
+    overview_cache_key = _overview_cache_key(
+        "pitching_overview",
+        school_code,
+        {
+            "school_code": school_code,
+            "start_date": start_date,
+            "end_date": end_date,
+            "pitcher": selected_pitchers,
+            "team_type": team_type,
+            "opp_hitter": selected_opp_hitters,
+            "with_video": with_video,
+            "break_lines": break_lines,
+            "stuff_level": stuff_level,
+            "stuff_base": stuff_base,
+            "hand": hand,
+            "batter_side": batter_side,
+            "session_type": session_type_filter,
+            "table_mode": table_mode,
+            "split_by": split_by,
+            "custom_columns": selected_custom_columns,
+            "visual_option": visual_option,
+            "in_zone": selected_in_zone,
+            "qp_locations": qp_locations,
+            "pitch_types": selected_pitch_types,
+            "zone_locations": selected_zone_locations,
+            "pitch_results": selected_pitch_results,
+            "count_filter": selected_count_filters,
+            "after_count_filter": selected_after_count_filters,
+            "velo_min": parsed_velo_min,
+            "velo_max": parsed_velo_max,
+            "ivb_min": parsed_ivb_min,
+            "ivb_max": parsed_ivb_max,
+            "hb_min": parsed_hb_min,
+            "hb_max": parsed_hb_max,
+            "pc_min": parsed_pc_min,
+            "pc_max": parsed_pc_max,
+        },
+    )
+    cached_overview = _overview_cache_get(overview_cache_key)
+    if cached_overview is not None:
+        return cached_overview
+    need_prev_counts = bool(selected_after_count_filters) or (split_by == "After Count")
+    need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
 
     query = """
       WITH
@@ -2812,11 +2955,9 @@ def pitching_overview(
           END AS is_lefty,
           (regexp_match(COALESCE(balls::text, ''), '[-+]?[0-9]+'))[1]::int AS balls_num,
           (regexp_match(COALESCE(strikes::text, ''), '[-+]?[0-9]+'))[1]::int AS strikes_num,
-          LAG((regexp_match(COALESCE(balls::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY COALESCE(created_at, NOW()), id) AS prev_balls,
-          LAG((regexp_match(COALESCE(strikes::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY COALESCE(created_at, NOW()), id) AS prev_strikes,
-          ROW_NUMBER() OVER (
-            ORDER BY session_date, COALESCE(created_at, NOW()), id
-          ) AS pitch_number
+          __PREV_BALLS_SQL__,
+          __PREV_STRIKES_SQL__,
+          __PITCH_NUMBER_SQL__
         FROM public.pitch_events pe
         LEFT JOIN pd_uid_map pd_uid
           ON lower(
@@ -3093,10 +3234,28 @@ def pitching_overview(
                   )
                 """
 
+            prev_balls_sql = (
+                "LAG((regexp_match(COALESCE(balls::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY COALESCE(created_at, NOW()), id) AS prev_balls"
+                if need_prev_counts
+                else "NULL::int AS prev_balls"
+            )
+            prev_strikes_sql = (
+                "LAG((regexp_match(COALESCE(strikes::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY COALESCE(created_at, NOW()), id) AS prev_strikes"
+                if need_prev_counts
+                else "NULL::int AS prev_strikes"
+            )
+            pitch_number_sql = (
+                "ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number"
+                if need_pitch_number
+                else "NULL::int AS pitch_number"
+            )
             query_resolved = (
                 query.replace("__VIDEO_MAP_CTE__", video_map_cte)
                 .replace("__VIDEO_MAP_JOIN__", video_map_join)
                 .replace("__HAS_VIDEO_EXPR__", has_video_expr)
+                .replace("__PREV_BALLS_SQL__", prev_balls_sql)
+                .replace("__PREV_STRIKES_SQL__", prev_strikes_sql)
+                .replace("__PITCH_NUMBER_SQL__", pitch_number_sql)
             )
 
             cur.execute(
@@ -3307,7 +3466,10 @@ def pitching_overview(
                 )
                 for row in raw_pitch_type_rows
             ]
-            chart_points = _build_chart_points(table_source_rows, avg_stuff_by_pitch_type)
+            chart_points = _build_chart_points(
+                _downsample_rows_for_chart_points(table_source_rows),
+                avg_stuff_by_pitch_type,
+            )
             row_pitches_by_key = _build_row_pitch_map(table_source_rows, split_by, avg_stuff_by_pitch_type)
             trend_rows = _build_trend_rows(
                 table_source_rows,
@@ -3315,7 +3477,7 @@ def pitching_overview(
                 use_osu_date_session_rules=use_osu_date_session_rules,
             )
 
-        return PitchingOverviewResponse(
+        response_payload = PitchingOverviewResponse(
             school_code=school_code,
             pitcher=selected_pitchers[0] if len(selected_pitchers) == 1 else None,
             team_type=team_type,
@@ -3356,6 +3518,8 @@ def pitching_overview(
             chart_points=chart_points,
             trend_rows=trend_rows,
         )
+        _overview_cache_set(overview_cache_key, response_payload)
+        return response_payload
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"overview query failed: {exc}") from exc
 
@@ -3664,6 +3828,8 @@ def hitting_ab_report(
     end_date: Optional[date] = Query(default=None),
 ) -> HittingAbReportResponse:
     school_code = _validate_school_code(school_code)
+    roster = _load_school_roster(school_code)
+    team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
 
@@ -3697,6 +3863,7 @@ def hitting_ab_report(
         "pitch_types_count": len(selected_pitch_types),
         "start_date": start_date,
         "end_date": end_date,
+        "team_markers_norm": team_markers_norm,
     }
 
     try:
@@ -4608,10 +4775,64 @@ def hitting_overview(
     mode_map = {"Results": "Hitting Results", "Swing Decisions": "Swing Decisions", "Batted Ball Data": "Batted Ball Data", "Custom": "Custom"}
     table_mode_mapped = mode_map.get(mode_raw, "Results")
     split_by = (split_by or "Pitch Types").strip() or "Pitch Types"
+    overview_cache_key = _overview_cache_key(
+        "hitting_overview",
+        school_code,
+        {
+            "school_code": school_code,
+            "start_date": start_date,
+            "end_date": end_date,
+            "session_type": session_type_filter,
+            "team_type": team_type_value,
+            "hitter": sorted(selected_hitter_keys),
+            "opp_pitcher": sorted(selected_opp_pitcher_keys),
+            "hand": hand,
+            "batter_side": batter_side,
+            "table_mode": table_mode_mapped,
+            "split_by": split_by,
+            "custom_columns": selected_custom_columns,
+            "in_zone": selected_in_zone,
+            "pitch_types": selected_pitch_types,
+            "zone_locations": selected_zone_locations,
+            "pitch_results": selected_pitch_results,
+            "count_filter": selected_count_filters,
+            "after_count_filter": selected_after_count_filters,
+            "bip_result": selected_bip_results,
+            "velo_min": parsed_velo_min,
+            "velo_max": parsed_velo_max,
+            "ivb_min": parsed_ivb_min,
+            "ivb_max": parsed_ivb_max,
+            "hb_min": parsed_hb_min,
+            "hb_max": parsed_hb_max,
+            "pc_min": parsed_pc_min,
+            "pc_max": parsed_pc_max,
+        },
+    )
+    cached_overview = _overview_cache_get(overview_cache_key)
+    if cached_overview is not None:
+        return cached_overview
+    need_prev_counts = bool(selected_after_count_filters) or (split_by == "After Count")
+    need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
 
     try:
         with get_conn() as conn, conn.cursor() as cur:
+            prev_balls_sql = (
+                "LAG((regexp_match(COALESCE(balls::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS prev_balls"
+                if need_prev_counts
+                else "NULL::int AS prev_balls"
+            )
+            prev_strikes_sql = (
+                "LAG((regexp_match(COALESCE(strikes::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS prev_strikes"
+                if need_prev_counts
+                else "NULL::int AS prev_strikes"
+            )
+            pitch_number_sql = (
+                "ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number"
+                if need_pitch_number
+                else "NULL::int AS pitch_number"
+            )
             cur.execute(
+                (
                 """
                 SELECT
                   id AS pitch_event_id,
@@ -4731,9 +4952,9 @@ def hitting_overview(
                   ))[1]::double precision AS bat_speed,
                   (regexp_match(COALESCE(balls::text, ''), '[-+]?[0-9]+'))[1]::int AS balls_num,
                   (regexp_match(COALESCE(strikes::text, ''), '[-+]?[0-9]+'))[1]::int AS strikes_num,
-                  LAG((regexp_match(COALESCE(balls::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS prev_balls,
-                  LAG((regexp_match(COALESCE(strikes::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS prev_strikes,
-                  ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number
+                  __PREV_BALLS_SQL__,
+                  __PREV_STRIKES_SQL__,
+                  __PITCH_NUMBER_SQL__
                 FROM public.pitch_events pe
                 WHERE school_code = %(school_code)s
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
@@ -4754,7 +4975,8 @@ def hitting_overview(
                   )
                   AND (%(pitch_types_count)s::int = 0 OR """ + PITCH_TYPE_NORMALIZE_SQL + """ = ANY(%(pitch_types)s::text[]))
                 ORDER BY session_date, COALESCE(created_at, NOW()), id
-                """,
+                """
+                ).replace("__PREV_BALLS_SQL__", prev_balls_sql).replace("__PREV_STRIKES_SQL__", prev_strikes_sql).replace("__PITCH_NUMBER_SQL__", pitch_number_sql),
                 {
                     "school_code": school_code,
                     "start_date": start_date,
@@ -4900,10 +5122,10 @@ def hitting_overview(
             "bat_speed": row.get("bat_speed"),
             "pitch_number": row.get("pitch_number"),
         }
-        for row in out_rows
+        for row in _downsample_rows_for_chart_points(out_rows)
     ]
 
-    return {
+    response_payload = {
         "school_code": school_code,
         "hitter": hitter or None,
         "opp_pitcher": opp_pitcher or None,
@@ -4926,6 +5148,8 @@ def hitting_overview(
         "table_rows": table_rows,
         "chart_points": chart_points,
     }
+    _overview_cache_set(overview_cache_key, response_payload)
+    return response_payload
 
 
 @app.get("/v1/catching/filters")
@@ -5106,6 +5330,39 @@ def catching_overview(
     if mode_raw == "Data":
         mode_raw = "Catching Data"
     split_by_raw = (split_by or "Pitch Types").strip() or "Pitch Types"
+    overview_cache_key = _overview_cache_key(
+        "catching_overview",
+        school_code,
+        {
+            "school_code": school_code,
+            "start_date": start_date,
+            "end_date": end_date,
+            "session_type": session_type_filter,
+            "team_type": team_type_value,
+            "catcher": sorted(selected_catcher_keys),
+            "hand": hand,
+            "batter_side": batter_side,
+            "in_zone": selected_in_zone,
+            "pitch_types": selected_pitch_types,
+            "zone_locations": selected_zone_locations,
+            "pitch_results": selected_pitch_results,
+            "count_filter": selected_count_filters,
+            "after_count_filter": selected_after_count_filters,
+            "table_mode": mode_raw,
+            "split_by": split_by_raw,
+            "custom_columns": selected_custom_columns,
+            "hm_results": selected_hm_results,
+            "velo_min": parsed_velo_min,
+            "velo_max": parsed_velo_max,
+            "pc_min": parsed_pc_min,
+            "pc_max": parsed_pc_max,
+        },
+    )
+    cached_overview = _overview_cache_get(overview_cache_key)
+    if cached_overview is not None:
+        return cached_overview
+    need_prev_counts = bool(selected_after_count_filters) or (split_by_raw == "After Count")
+    need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
 
     def _catch_bucket_label(row: Dict[str, Any]) -> str:
         ps = row.get("plate_side")
@@ -5127,7 +5384,23 @@ def catching_overview(
 
     try:
         with get_conn() as conn, conn.cursor() as cur:
+            prev_balls_sql = (
+                "LAG((regexp_match(COALESCE(balls::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS prev_balls"
+                if need_prev_counts
+                else "NULL::int AS prev_balls"
+            )
+            prev_strikes_sql = (
+                "LAG((regexp_match(COALESCE(strikes::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS prev_strikes"
+                if need_prev_counts
+                else "NULL::int AS prev_strikes"
+            )
+            pitch_number_sql = (
+                "ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number"
+                if need_pitch_number
+                else "NULL::int AS pitch_number"
+            )
             cur.execute(
+                (
                 """
                 SELECT
                   id AS pitch_event_id,
@@ -5177,9 +5450,9 @@ def catching_overview(
                   (regexp_match(COALESCE(to_jsonb(pe)->>'BasePositionZ', to_jsonb(pe)->>'basepositionz', to_jsonb(pe)->>'ThrowEndZ', to_jsonb(pe)->>'throwendz', to_jsonb(pe)->>'ArrivalZ', to_jsonb(pe)->>'arrivalz', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS base_z,
                   (regexp_match(COALESCE(balls::text, ''), '[-+]?[0-9]+'))[1]::int AS balls_num,
                   (regexp_match(COALESCE(strikes::text, ''), '[-+]?[0-9]+'))[1]::int AS strikes_num,
-                  LAG((regexp_match(COALESCE(balls::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS prev_balls,
-                  LAG((regexp_match(COALESCE(strikes::text, ''), '[-+]?[0-9]+'))[1]::int) OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS prev_strikes,
-                  ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number
+                  __PREV_BALLS_SQL__,
+                  __PREV_STRIKES_SQL__,
+                  __PITCH_NUMBER_SQL__
                 FROM public.pitch_events pe
                 WHERE school_code = %(school_code)s
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
@@ -5199,7 +5472,8 @@ def catching_overview(
                   )
                   AND (%(pitch_types_count)s::int = 0 OR """ + PITCH_TYPE_NORMALIZE_SQL + """ = ANY(%(pitch_types)s::text[]))
                 ORDER BY session_date, COALESCE(created_at, NOW()), id
-                """,
+                """
+                ).replace("__PREV_BALLS_SQL__", prev_balls_sql).replace("__PREV_STRIKES_SQL__", prev_strikes_sql).replace("__PITCH_NUMBER_SQL__", pitch_number_sql),
                 {
                     "school_code": school_code,
                     "start_date": start_date,
@@ -5469,7 +5743,7 @@ def catching_overview(
             "base_z": row.get("base_z"),
             "pitch_number": row.get("pitch_number"),
         }
-        for row in filtered
+        for row in _downsample_rows_for_chart_points(filtered)
     ]
 
     pitch_type_legend = sorted(
@@ -5482,7 +5756,7 @@ def catching_overview(
     else:
         hm_points = chart_points
 
-    return {
+    response_payload = {
         "school_code": school_code,
         "start_date": start_date.isoformat() if start_date else None,
         "end_date": end_date.isoformat() if end_date else None,
@@ -5502,6 +5776,8 @@ def catching_overview(
         "chart_points": chart_points,
         "heatmap_points": hm_points,
     }
+    _overview_cache_set(overview_cache_key, response_payload)
+    return response_payload
 
 
 @app.post("/v1/pitching/pitch-edit", response_model=PitchEditResponse)
@@ -5555,6 +5831,7 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"pitch edit failed: {exc}") from exc
 
+    _overview_cache_invalidate_school(school_code)
     return PitchEditResponse(ok=True, updated_count=len(pitch_ids))
 
 
