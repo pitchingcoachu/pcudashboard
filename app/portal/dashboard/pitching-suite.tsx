@@ -3574,13 +3574,13 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
         onMouseLeave: () => setLocationHover(null),
         onClick: () => (point ? openActionModal([point]) : undefined),
       };
-      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={5.1} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
+      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={6.2} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
       if (result === 'Foul') return <polygon key={key} points={`${x},${y-6} ${x-5.4},${y+4.6} ${x+5.4},${y+4.6}`} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
       if (result === 'Whiff') return <text key={key} x={x} y={y + 4.8} fontSize={13} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
       if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y-6} ${x-5.4},${y+4.6} ${x+5.4},${y+4.6}`} fill={fill} {...hoverProps} />;
       if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill={fill} {...hoverProps} />;
       if (result === 'Error') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill="none" stroke={fill} strokeWidth={1.6} {...hoverProps} />;
-      return <circle key={key} cx={x} cy={y} r={5.1} fill={fill} {...hoverProps} />;
+      return <circle key={key} cx={x} cy={y} r={6.2} fill={fill} {...hoverProps} />;
     };
     return (
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setLocationHover(null)}>
@@ -3852,13 +3852,13 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
         onMouseLeave: () => setLocationHover(null),
         onClick: () => (point ? openActionModal([point]) : undefined),
       };
-      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={5.2} fill="none" stroke={fill} strokeWidth={1.9} {...hoverProps} />;
+      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={6.3} fill="none" stroke={fill} strokeWidth={1.9} {...hoverProps} />;
       if (result === 'Foul') return <polygon key={key} points={`${x},${y - 6} ${x - 5.4},${y + 4.6} ${x + 5.4},${y + 4.6}`} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
       if (result === 'Whiff') return <text key={key} x={x} y={y + 5} fontSize={13} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
       if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 6} ${x - 5.4},${y + 4.6} ${x + 5.4},${y + 4.6}`} fill={fill} {...hoverProps} />;
       if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill={fill} {...hoverProps} />;
       if (result === 'Error') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill="none" stroke={fill} strokeWidth={1.6} {...hoverProps} />;
-      return <circle key={key} cx={x} cy={y} r={5.2} fill={fill} {...hoverProps} />;
+      return <circle key={key} cx={x} cy={y} r={6.3} fill={fill} {...hoverProps} />;
     };
     return (
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 460, border: '1px solid rgba(255,255,255,0.16)', borderRadius: 10 }} onMouseLeave={() => setLocationHover(null)}>
@@ -6178,13 +6178,13 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                                       onMouseLeave: () => setQpLocationsHover(null),
                                       onClick: () => openActionModal([point]),
                                     };
-                                    if (result === 'Ball') return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={4.6} fill="none" stroke={color} strokeWidth={1.6} {...hoverProps} />;
+                                    if (result === 'Ball') return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={5.6} fill="none" stroke={color} strokeWidth={1.6} {...hoverProps} />;
                                     if (result === 'Foul') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 5} ${x - 4.5},${y + 3.8} ${x + 4.5},${y + 3.8}`} fill="none" stroke={color} strokeWidth={1.6} {...hoverProps} />;
                                     if (result === 'Whiff') return <text key={`qpl-pt-${idx}`} x={x} y={y + 4} fontSize={11} textAnchor="middle" fill={color} {...hoverProps}>★</text>;
                                     if (result === 'In Play (Out)') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 5} ${x - 4.5},${y + 3.8} ${x + 4.5},${y + 3.8}`} fill={color} {...hoverProps} />;
                                     if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={`qpl-pt-${idx}`} x={x - 4.3} y={y - 4.3} width={8.6} height={8.6} fill={color} {...hoverProps} />;
                                     if (result === 'Error') return <rect key={`qpl-pt-${idx}`} x={x - 4.3} y={y - 4.3} width={8.6} height={8.6} fill="none" stroke={color} strokeWidth={1.5} {...hoverProps} />;
-                                    return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={4.5} fill={color} {...hoverProps} />;
+                                    return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={5.5} fill={color} {...hoverProps} />;
                                   })}
                                 </svg>
                               </div>
@@ -6287,7 +6287,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                                   key={`v1-pt-${p.pitch_event_id ?? p.pitch_count}`}
                                   cx={x}
                                   cy={y}
-                                  r={3.6}
+                                  r={4.6}
                                   fill={pitchColors[p.pitch_type] ?? '#9ca3af'}
                                   stroke="rgba(0,0,0,0.5)"
                                   onMouseMove={(event) =>
@@ -6380,7 +6380,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                                 key={`v2-pt-${idx}`}
                                 cx={Number(dateX.get(r.date))}
                                 cy={py(Number(r.velo))}
-                                r={3.8}
+                                r={4.8}
                                 fill={pitchColors[r.pitch_type] ?? '#9ca3af'}
                                 stroke="rgba(0,0,0,0.5)"
                                 onMouseMove={(event) =>
@@ -6480,7 +6480,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                                 key={`v3-pt-${idx}`}
                                 cx={px(r.inning_ord)}
                                 cy={py(Number(r.velo))}
-                                r={3.8}
+                                r={4.8}
                                 fill={pitchColors[r.pitch_type] ?? '#9ca3af'}
                                 stroke="rgba(0,0,0,0.5)"
                                 onMouseMove={(event) =>

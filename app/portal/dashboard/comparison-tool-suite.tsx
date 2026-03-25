@@ -881,13 +881,13 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         onMouseMove: (event: { clientX: number; clientY: number }) => setLocationHover({ x: event.clientX, y: event.clientY, text: titleText, bg: fill }),
         onMouseLeave: () => setLocationHover(null),
       };
-      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={5.1} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
+      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={6.2} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
       if (result === 'Foul') return <polygon key={key} points={`${x},${y - 6} ${x - 5.4},${y + 4.6} ${x + 5.4},${y + 4.6}`} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
       if (result === 'Whiff') return <text key={key} x={x} y={y + 4.8} fontSize={13} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
       if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 6} ${x - 5.4},${y + 4.6} ${x + 5.4},${y + 4.6}`} fill={fill} {...hoverProps} />;
       if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill={fill} {...hoverProps} />;
       if (result === 'Error') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill="none" stroke={fill} strokeWidth={1.6} {...hoverProps} />;
-      return <circle key={key} cx={x} cy={y} r={5.1} fill={fill} {...hoverProps} />;
+      return <circle key={key} cx={x} cy={y} r={6.2} fill={fill} {...hoverProps} />;
     };
     return (
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setLocationHover(null)}>
@@ -1002,7 +1002,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
                   key={`cmp-v1-pt-${point.pitch_event_id ?? point.pitch_count}`}
                   cx={x}
                   cy={y}
-                  r={3.6}
+                  r={4.6}
                   fill={color}
                   stroke="rgba(0,0,0,0.5)"
                   onMouseMove={(event) =>
@@ -1577,7 +1577,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
               : 320 - ((toNum(point.rel_speed) ?? toNum(point.velo) ?? 70) - 70) * 5;
         const pitchType = String(point.pitch_type || 'Undefined');
         const color = PITCH_COLORS[pitchType] ?? PITCH_COLORS.Undefined;
-        return <circle key={idx} cx={px} cy={py} r={state.chartType === 'Velocity Chart' ? 2.8 : 3.8} fill={color} opacity={0.85} stroke="rgba(0,0,0,0.45)" strokeWidth={1} />;
+        return <circle key={idx} cx={px} cy={py} r={state.chartType === 'Velocity Chart' ? 3.8 : 3.8} fill={color} opacity={0.85} stroke="rgba(0,0,0,0.45)" strokeWidth={1} />;
       })}
     </svg>
   );

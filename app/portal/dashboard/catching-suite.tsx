@@ -315,7 +315,7 @@ function pitchResultDetailLabel(p: CatchingPoint): string {
 }
 
 function markerShape(shape: string, x: number, y: number, color: string, key: string) {
-  if (shape === 'ring') return <circle key={key} cx={x} cy={y} r={5.1} fill="none" stroke={color} strokeWidth={2} />;
+  if (shape === 'ring') return <circle key={key} cx={x} cy={y} r={6.2} fill="none" stroke={color} strokeWidth={2} />;
   if (shape === 'triangle') return <polygon key={key} points={`${x},${y - 6.2} ${x - 5.2},${y + 4.4} ${x + 5.2},${y + 4.4}`} fill="none" stroke={color} strokeWidth={1.8} />;
   if (shape === 'square') return <rect key={key} x={x - 4.4} y={y - 4.4} width={8.8} height={8.8} fill={color} stroke="rgba(255,255,255,0.45)" strokeWidth={0.7} />;
   if (shape === 'star') {
@@ -325,7 +325,7 @@ function markerShape(shape: string, x: number, y: number, color: string, key: st
     ].map((p) => p.join(',')).join(' ');
     return <polygon key={key} points={pts} fill={color} />;
   }
-  return <circle key={key} cx={x} cy={y} r={4.2} fill={color} stroke="rgba(255,255,255,0.45)" strokeWidth={0.7} />;
+  return <circle key={key} cx={x} cy={y} r={5.2} fill={color} stroke="rgba(255,255,255,0.45)" strokeWidth={0.7} />;
 }
 
 function fmtNum(v: number | null | undefined, d = 1): string {

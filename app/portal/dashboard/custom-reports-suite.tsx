@@ -2064,7 +2064,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 <img
                   src={schoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
                   alt={schoolBrand.logoSrc ? schoolBrand.logoAlt : schoolCode || 'School'}
-                  className="portal-custom-reports-brand-logo portal-custom-reports-brand-logo--school"
+                  className={`portal-custom-reports-brand-logo portal-custom-reports-brand-logo--school${
+                    String(activeSchoolCode || '').toUpperCase() === 'GCU' ? ' portal-custom-reports-brand-logo--school-gcu' : ''
+                  }`}
                 />
               </div>
               <div className="portal-custom-reports-grid" style={{ gridTemplateColumns: `repeat(${reportCols}, minmax(0, 1fr))` }}>
@@ -2712,14 +2714,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   }),
                                 onMouseLeave: () => setChartHover(null),
                               };
-                              if (shape === 'Ball') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.058} fill="none" stroke={color} strokeWidth={0.02} {...hoverProps} />;
-                              if (shape === 'Called Strike') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.056} fill={color} stroke={color} strokeWidth={0.016} {...hoverProps} />;
+                              if (shape === 'Ball') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.07} fill="none" stroke={color} strokeWidth={0.02} {...hoverProps} />;
+                              if (shape === 'Called Strike') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.068} fill={color} stroke={color} strokeWidth={0.016} {...hoverProps} />;
                               if (shape === 'Foul') return <polygon key={`${cellId}-loc-${idx}`} points={`${px},${py - 0.066} ${px - 0.058},${py + 0.052} ${px + 0.058},${py + 0.052}`} fill="none" stroke={color} strokeWidth={0.02} {...hoverProps} />;
                               if (shape === 'Whiff') return <text key={`${cellId}-loc-${idx}`} x={px} y={py + 0.055} fontSize={0.17} textAnchor="middle" fill={color} {...hoverProps}>★</text>;
                               if (shape === 'In Play (Out)') return <polygon key={`${cellId}-loc-${idx}`} points={`${px},${py - 0.066} ${px - 0.058},${py + 0.052} ${px + 0.058},${py + 0.052}`} fill={color} {...hoverProps} />;
                               if (shape === 'In Play (Hit)') return <rect key={`${cellId}-loc-${idx}`} x={px - 0.054} y={py - 0.054} width={0.108} height={0.108} fill={color} {...hoverProps} />;
                               if (shape === 'Error') return <rect key={`${cellId}-loc-${idx}`} x={px - 0.054} y={py - 0.054} width={0.108} height={0.108} fill="none" stroke={color} strokeWidth={0.02} {...hoverProps} />;
-                              return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.054} fill={color} {...hoverProps} />;
+                              return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.066} fill={color} {...hoverProps} />;
                             })}
                           </svg>
                         </div>
@@ -3772,7 +3774,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                         key={`${cellId}-vl-pt-${pitchType}-${idx}`}
                                         cx={px(row.x)}
                                         cy={py(row.y)}
-                                        r={4}
+                                        r={5}
                                         fill={PITCH_COLORS[pitchType] ?? '#9ca3af'}
                                         stroke="rgba(0,0,0,0.55)"
                                         onMouseMove={(event) =>

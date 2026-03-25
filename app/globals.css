@@ -2185,9 +2185,14 @@ main {
 
 .portal-custom-reports-brand-logo--school {
   width: auto;
+  height: 56px;
+  max-width: 140px;
+  justify-self: end;
+}
+
+.portal-custom-reports-brand-logo--school-gcu {
   height: 48px;
   max-width: 120px;
-  justify-self: end;
 }
 
 .portal-custom-reports-header {
