@@ -41,7 +41,10 @@ function parseOrgSchoolMap(raw: string): Record<number, string> {
 }
 
 function parseGlobalAdminEmails(): string[] {
-  const raw = String(process.env.GLOBAL_ADMIN_EMAILS ?? 'jgaynor@pitchingcoachu.com');
+  const raw = String(
+    process.env.GLOBAL_ADMIN_EMAILS ??
+      'jgaynor@pitchingcoachu.com,ahalverson@pitchingcoachu.com,jchipman@pitchingcoachu.com'
+  );
   const values = raw
     .split(',')
     .map((entry) => entry.trim().toLowerCase())

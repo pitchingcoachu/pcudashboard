@@ -967,19 +967,33 @@ export async function deleteStaffUser(input: {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
-
-  const deleted = await pool.query<{ id: number }>(
-    `
-      DELETE FROM auth_users
-      WHERE id = $1
-        AND organization_id = $2
-        AND role IN ('admin', 'coach')
-      RETURNING id
-    `,
-    [input.staffUserId, input.organizationId]
-  );
-  if ((deleted.rowCount ?? 0) !== 1) return { ok: false, error: 'Coach user not found.' };
-  return { ok: true };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL lock_timeout = '3s'`);
+    await client.query(`SET LOCAL statement_timeout = '8s'`);
+    const deleted = await client.query<{ id: number }>(
+      `
+        DELETE FROM auth_users
+        WHERE id = $1
+          AND organization_id = $2
+          AND role IN ('admin', 'coach')
+        RETURNING id
+      `,
+      [input.staffUserId, input.organizationId]
+    );
+    if ((deleted.rowCount ?? 0) !== 1) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'Coach user not found.' };
+    }
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to delete coach.' };
+  } finally {
+    client.release();
+  }
 }
 
 export async function updateStaffUser(input: {

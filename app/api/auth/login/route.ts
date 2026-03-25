@@ -36,9 +36,26 @@ function resolveMappedSchoolCodeForOrgId(organizationId: number | null | undefin
   return code ? String(code).trim().toUpperCase() : null;
 }
 
+function parseGlobalAdminEmails(): string[] {
+  const raw = String(
+    process.env.GLOBAL_ADMIN_EMAILS ??
+      'jgaynor@pitchingcoachu.com,ahalverson@pitchingcoachu.com,jchipman@pitchingcoachu.com'
+  );
+  const values = raw
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set(values));
+}
+
+function isGlobalAdminEmail(email: string): boolean {
+  const normalized = String(email ?? '').trim().toLowerCase();
+  if (!normalized) return false;
+  return parseGlobalAdminEmails().includes(normalized);
+}
+
 function resolveLoginDefaultDashboardSchoolCode(email: string, current: string | null | undefined): string | null | undefined {
-  const normalizedEmail = String(email ?? '').trim().toLowerCase();
-  if (normalizedEmail === 'jgaynor@pitchingcoachu.com') {
+  if (isGlobalAdminEmail(email)) {
     return 'PCU';
   }
   return current;
