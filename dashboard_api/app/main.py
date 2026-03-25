@@ -2021,6 +2021,8 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
 
 _MOD_SYNC_INTERVAL_SECONDS = 90.0
 _MOD_SYNC_LAST_AT: Dict[str, float] = {}
+_PERF_INDEX_SYNC_INTERVAL_SECONDS = 3600.0
+_PERF_INDEX_LAST_AT: float = 0.0
 
 
 def _ensure_pitch_event_edits_table(cur: Any) -> None:
@@ -2049,6 +2051,80 @@ def _ensure_pitch_event_edits_table(cur: Any) -> None:
           ON public.pitch_event_edits (school_code, pitch_event_id, pitch_type, pitcher)
         """
     )
+
+
+def _ensure_performance_indexes() -> None:
+    """
+    Additive DB performance indexes for large date-range dashboard queries.
+    Safe no-op when already present; failures are intentionally non-fatal.
+    """
+    global _PERF_INDEX_LAST_AT
+    now = time.monotonic()
+    if (now - _PERF_INDEX_LAST_AT) < _PERF_INDEX_SYNC_INTERVAL_SECONDS:
+        return
+
+    statements = [
+        # Core school/date and normalized-name filters used by overview endpoints.
+        """
+        CREATE INDEX IF NOT EXISTS idx_pe_school_date_pitcher_norm
+        ON public.pitch_events
+        (school_code, session_date, (regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g')))
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pe_school_date_batter_norm
+        ON public.pitch_events
+        (school_code, session_date, (regexp_replace(lower(COALESCE(NULLIF(TRIM(batter), ''), '')), '[^a-z0-9]', '', 'g')))
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pe_school_date_catcher_norm
+        ON public.pitch_events
+        (school_code, session_date, (regexp_replace(lower(COALESCE(NULLIF(TRIM(catcher), ''), '')), '[^a-z0-9]', '', 'g')))
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pe_school_date_pitch_type_norm
+        ON public.pitch_events
+        (school_code, session_date, (
+          CASE
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Four-Seam' THEN 'Fastball'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Two-Seam' THEN 'Sinker'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Changeup' THEN 'ChangeUp'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Knuckleball' THEN 'Knuckleball'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Splitter' THEN 'Splitter'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Knuckle-Curve' THEN 'Curveball'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Slider' THEN 'Slider'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Curveball' THEN 'Curveball'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Sweeper' THEN 'Sweeper'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Sinker' THEN 'Sinker'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Cutter' THEN 'Cutter'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), NULLIF(TRIM(autopitchtype), ''), '') = 'Fastball' THEN 'Fastball'
+            ELSE 'Undefined'
+          END
+        ))
+        """,
+        # Backing indexes for inning fallback lookups by PitchUID/PlayID.
+        """
+        CREATE INDEX IF NOT EXISTS idx_pitch_data_pitchuid_key_date
+        ON public.pitch_data ((lower(btrim("PitchUID"::text))), "Date")
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pitch_data_playid_key_date
+        ON public.pitch_data ((lower(btrim("PlayID"::text))), "Date")
+        """,
+    ]
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout = '2s'")
+            cur.execute("SET LOCAL statement_timeout = '20s'")
+            for statement in statements:
+                try:
+                    cur.execute(statement)
+                except Exception:
+                    continue
+        _PERF_INDEX_LAST_AT = now
+    except Exception:
+        # Keep API serving even if index create fails due permissions/locks.
+        return
 
 
 def _mod_namespaces_for_school(school_code: str) -> List[str]:
@@ -2369,6 +2445,7 @@ def health() -> Dict[str, str]:
 @app.get("/v1/pitching/filters", response_model=PitchingFiltersResponse)
 def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFiltersResponse:
     school_code = _validate_school_code(school_code)
+    _ensure_performance_indexes()
     _sync_modifications_into_pitch_events(school_code)
     roster = _load_school_roster(school_code)
     team_norm = set(roster.get("team_only_norm", []) or [])
@@ -2506,6 +2583,7 @@ def pitching_overview(
     pc_max: Optional[str] = Query(default=None),
 ) -> PitchingOverviewResponse:
     school_code = _validate_school_code(school_code)
+    _ensure_performance_indexes()
     _sync_modifications_into_pitch_events(school_code)
     roster = _load_school_roster(school_code)
     team_norm = roster.get("team_only_norm", [])
@@ -4341,6 +4419,7 @@ def _zone_location_match(token: str, row: Dict[str, Any]) -> bool:
 @app.get("/v1/hitting/filters")
 def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
+    _ensure_performance_indexes()
     roster = _load_school_roster(school_code)
     campers_norm = set(roster.get("campers_norm", []) or [])
     hitter_norm_set = set(roster.get("hitter_norm", []) or [])
@@ -4486,6 +4565,7 @@ def hitting_overview(
     pc_max: Optional[str] = Query(default=None),
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
+    _ensure_performance_indexes()
     roster = _load_school_roster(school_code)
     hitter_norm = set(roster.get("hitter_norm", []) or [])
     campers_norm = set(roster.get("campers_norm", []) or [])
@@ -4848,6 +4928,7 @@ def catching_filters(
     session_type: Optional[str] = Query(default=None),
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
+    _ensure_performance_indexes()
     roster = _load_school_roster(school_code)
     campers_norm = set(roster.get("campers_norm", []) or [])
     team_catcher_norm = set(roster.get("hitter_norm", []) or []) - campers_norm
@@ -4988,6 +5069,7 @@ def catching_overview(
     pc_max: Optional[str] = Query(default=None),
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
+    _ensure_performance_indexes()
     roster = _load_school_roster(school_code)
     campers_norm = set(roster.get("campers_norm", []) or [])
     hitter_norm = set(roster.get("hitter_norm", []) or [])
