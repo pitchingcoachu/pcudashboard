@@ -1082,6 +1082,8 @@ export async function syncStaffUserSchools(input: {
       await client.query('ROLLBACK');
       return { ok: false, error: 'Another coach update is already running. Please try again in a few seconds.' };
     }
+    await client.query(`LOCK TABLE auth_users IN SHARE ROW EXCLUSIVE MODE`);
+    await ensureAuthUsersIdSequence(client);
 
     const anchorResult = await client.query<{
       id: number;
