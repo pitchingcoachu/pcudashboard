@@ -886,6 +886,10 @@ def _pitch_type_sort_rank(name: str) -> int:
     return order.get((name or "").strip(), 99)
 
 
+def _valid_pitch_types(values: List[str]) -> List[str]:
+    return [value for value in values if str(value or "").strip() and str(value).strip() != "Undefined"]
+
+
 ALL_TABLE_COLUMNS: List[str] = [
     "#",
     "Usage",
@@ -2510,7 +2514,7 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
                 """,
                 {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
-            pitch_types = [str(row["pitch_type"]) for row in cur.fetchall()]
+            pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
 
             team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
@@ -2609,7 +2613,7 @@ def pitching_overview(
     selected_in_zone = _parse_csv_list(in_zone)
     qp_locations = (qp_locations or "").strip() or None
 
-    selected_pitch_types = _parse_csv_list(pitch_types)
+    selected_pitch_types = _valid_pitch_types(_parse_csv_list(pitch_types))
     selected_zone_locations = _parse_csv_list(zone_locations)
     selected_pitch_results = _parse_csv_list(pitch_results)
     selected_count_filters = _parse_csv_list(count_filter)
@@ -2700,7 +2704,7 @@ def pitching_overview(
           pd."Inning"::text AS inning
         FROM public.pitch_data pd
         WHERE
-          (%(session_type_filter)s::text IS NULL OR %(session_type_filter)s::text = 'Live')
+          (%(session_type_filter)s::text = 'Live')
           AND pd."PitchUID" IS NOT NULL
           AND btrim(pd."PitchUID"::text) <> ''
           AND pd."Inning" IS NOT NULL
@@ -2715,7 +2719,7 @@ def pitching_overview(
           pd."Inning"::text AS inning
         FROM public.pitch_data pd
         WHERE
-          (%(session_type_filter)s::text IS NULL OR %(session_type_filter)s::text = 'Live')
+          (%(session_type_filter)s::text = 'Live')
           AND pd."PlayID" IS NOT NULL
           AND btrim(pd."PlayID"::text) <> ''
           AND pd."Inning" IS NOT NULL
@@ -2932,7 +2936,8 @@ def pitching_overview(
           vmw.video_clip_3 AS video_clip_3_vm
         FROM base_raw br
         __VIDEO_MAP_JOIN__
-        WHERE (
+        WHERE br.pitch_type <> 'Undefined'
+          AND (
             %(with_video)s::text IS NULL OR %(with_video)s::text = '' OR %(with_video)s::text = 'All' OR
             (%(with_video)s::text = 'Yes' AND __HAS_VIDEO_EXPR__) OR
             (%(with_video)s::text = 'No' AND NOT (__HAS_VIDEO_EXPR__))
@@ -3153,7 +3158,7 @@ def pitching_overview(
                 """,
                 params,
             )
-            table_source_rows = cur.fetchall()
+            table_source_rows = [row for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
             _annotate_times_through_order(table_source_rows)
             team_type_value = (team_type or "").strip() or "All"
             table_source_rows = _filter_pitching_rows_by_team_type(
@@ -3385,7 +3390,7 @@ def pitching_ab_report(
     batter_side = (batter_side or "").strip() or None
     session_type_filter = _normalize_session_type_filter(session_type)
     use_osu_date_session_rules = school_code.upper() == "OSU"
-    selected_pitch_types = _parse_csv_list(pitch_types)
+    selected_pitch_types = _valid_pitch_types(_parse_csv_list(pitch_types))
     game_key = (game_key or "").strip() or None
 
     params = {
@@ -3465,6 +3470,7 @@ def pitching_ab_report(
                     ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number
                   FROM public.pitch_events pe
                   WHERE school_code = %(school_code)s
+                    AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
                     AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                     AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                     AND (
@@ -3672,7 +3678,7 @@ def hitting_ab_report(
     batter_side = (batter_side or "").strip() or None
     session_type_filter = _normalize_session_type_filter(session_type)
     use_osu_date_session_rules = school_code.upper() == "OSU"
-    selected_pitch_types = _parse_csv_list(pitch_types)
+    selected_pitch_types = _valid_pitch_types(_parse_csv_list(pitch_types))
     game_key = (game_key or "").strip() or None
 
     params = {
@@ -3752,6 +3758,7 @@ def hitting_ab_report(
                     ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number
                   FROM public.pitch_events pe
                   WHERE school_code = %(school_code)s
+                    AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
                     AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                     AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                     AND (
@@ -4497,7 +4504,7 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 """,
                 {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
-            pitch_types = [str(row["pitch_type"]) for row in cur.fetchall()]
+            pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"hitting filters query failed: {exc}") from exc
 
@@ -4579,7 +4586,7 @@ def hitting_overview(
     selected_hitter_keys = _name_filter_keys(_parse_name_list(hitter))
     selected_opp_pitcher_keys = _name_filter_keys(_parse_name_list(opp_pitcher))
     selected_in_zone = _parse_csv_list(in_zone)
-    selected_pitch_types = _parse_csv_list(pitch_types)
+    selected_pitch_types = _valid_pitch_types(_parse_csv_list(pitch_types))
     selected_zone_locations = _parse_csv_list(zone_locations)
     selected_pitch_results = _parse_csv_list(pitch_results)
     selected_count_filters = _parse_csv_list(count_filter)
@@ -4730,6 +4737,7 @@ def hitting_overview(
                 FROM public.pitch_events pe
                 WHERE school_code = %(school_code)s
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                  AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                   AND (%(hitter_count)s::int = 0 OR """ + BATTER_NAME_NORM_SQL + """ = ANY(%(hitters_norm)s::text[]))
@@ -4762,7 +4770,7 @@ def hitting_overview(
                     "pitch_types": selected_pitch_types,
                 },
             )
-            rows = [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
             _annotate_times_through_order(rows)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"hitting overview query failed: {exc}") from exc
@@ -5022,7 +5030,7 @@ def catching_filters(
                 """,
                 {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
-            pitch_types = [str(row["pitch_type"]) for row in cur.fetchall()]
+            pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"catching filters query failed: {exc}") from exc
 
@@ -5082,7 +5090,7 @@ def catching_overview(
     team_type_value = (team_type or "").strip() or "All"
     use_team_filter = team_type_value not in {"", "All"}
     selected_in_zone = _parse_csv_list(in_zone)
-    selected_pitch_types = _parse_csv_list(pitch_types)
+    selected_pitch_types = _valid_pitch_types(_parse_csv_list(pitch_types))
     selected_zone_locations = _parse_csv_list(zone_locations)
     selected_pitch_results = _parse_csv_list(pitch_results)
     selected_count_filters = _parse_csv_list(count_filter)
@@ -5175,6 +5183,7 @@ def catching_overview(
                 FROM public.pitch_events pe
                 WHERE school_code = %(school_code)s
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                  AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                   AND (%(catcher_count)s::int = 0 OR """ + CATCHER_NAME_NORM_SQL + """ = ANY(%(catchers_norm)s::text[]))
@@ -5204,7 +5213,7 @@ def catching_overview(
                     "pitch_types": selected_pitch_types,
                 },
             )
-            rows = [dict(row) for row in cur.fetchall()]
+            rows = [dict(row) for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
             _annotate_times_through_order(rows)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"catching overview query failed: {exc}") from exc
