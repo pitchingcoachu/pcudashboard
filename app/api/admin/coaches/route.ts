@@ -10,21 +10,6 @@ function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | '
   return NextResponse.redirect(url, 303);
 }
 
-function parseGlobalAdminEmails(): string[] {
-  const raw = String(process.env.GLOBAL_ADMIN_EMAILS ?? 'jgaynor@pitchingcoachu.com');
-  const values = raw
-    .split(',')
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
-  return Array.from(new Set(values));
-}
-
-function isGlobalAdminEmail(email: string): boolean {
-  const normalized = String(email ?? '').trim().toLowerCase();
-  if (!normalized) return false;
-  return parseGlobalAdminEmails().includes(normalized);
-}
-
 export async function POST(request: Request) {
   try {
     const cookieStore = await cookies();
@@ -45,38 +30,17 @@ export async function POST(request: Request) {
 
     const roleRaw = String(form.get('role') ?? '').trim().toLowerCase();
     const role = roleRaw === 'coach' ? 'coach' : 'admin';
-    const globalAdmin = isGlobalAdminEmail(session.email);
-    const selectedOrganizationIds = Array.from(
-      new Set(
-        form
-          .getAll('organizationIds')
-          .map((value) => Number(String(value ?? '').trim()))
-          .filter((value) => Number.isFinite(value) && value > 0)
-      )
-    );
-    const targetOrganizationIds = globalAdmin && selectedOrganizationIds.length > 0 ? selectedOrganizationIds : [organizationId];
-
-    for (const orgId of targetOrganizationIds) {
-      const result = await createStaffUser({
-        organizationId: orgId,
-        name: String(form.get('name') ?? ''),
-        email: String(form.get('email') ?? ''),
-        phone: String(form.get('phone') ?? ''),
-        password: String(form.get('password') ?? ''),
-        role,
-        allowCrossSchoolLinking: globalAdmin,
-      });
-      if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);
-    }
-
-    return redirectWithMessage(
-      request,
-      redirectTo,
-      'ok',
-      targetOrganizationIds.length > 1
-        ? 'Coach profile created for selected schools.'
-        : 'Coach profile created.'
-    );
+    const result = await createStaffUser({
+      organizationId,
+      name: String(form.get('name') ?? ''),
+      email: String(form.get('email') ?? ''),
+      phone: String(form.get('phone') ?? ''),
+      password: String(form.get('password') ?? ''),
+      role,
+      allowCrossSchoolLinking: false,
+    });
+    if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);
+    return redirectWithMessage(request, redirectTo, 'ok', 'Coach profile created.');
   } catch (error) {
     return redirectWithMessage(
       request,
