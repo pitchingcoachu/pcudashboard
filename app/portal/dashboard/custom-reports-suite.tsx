@@ -1162,6 +1162,28 @@ function ensureCellConfigMap(map: Record<string, CellConfig>, rows: number, cols
   return next;
 }
 
+function rowColFromCellId(cellId: string): { row: number; col: number } {
+  const row = Number(cellId.match(/^r(\d+)c/)?.[1] ?? '1');
+  const col = Number(cellId.match(/^r\d+c(\d+)$/)?.[1] ?? '1');
+  return { row, col };
+}
+
+function templateCellIdForRow(cellId: string): string {
+  const { col } = rowColFromCellId(cellId);
+  return `r1c${col}`;
+}
+
+function effectiveCellConfigForScope(
+  cellId: string,
+  scope: ReportScope,
+  map: Record<string, CellConfig>
+): CellConfig {
+  if (scope !== 'Multi-Player') return normalizeCellConfig(map[cellId]);
+  const { row } = rowColFromCellId(cellId);
+  if (row <= 1) return normalizeCellConfig(map[cellId]);
+  return normalizeCellConfig(map[templateCellIdForRow(cellId)]);
+}
+
 type CustomReportsSuiteProps = {
   initialSchoolCode?: string;
 };
@@ -1309,7 +1331,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       for (let c = 1; c <= reportCols; c += 1) {
         const key = `r${r}c${c}`;
         if (occupied.has(key)) continue;
-        const cfg = normalizeCellConfig(cellConfigs[key]);
+        const cfg = effectiveCellConfigForScope(key, reportScope, cellConfigs);
         const colSpan = Math.max(1, Math.min(reportCols - c + 1, Number(cfg.colSpan) || 1));
         for (let cc = c + 1; cc <= c + colSpan - 1; cc += 1) {
           occupied.add(`r${r}c${cc}`);
@@ -1318,7 +1340,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       }
     }
     return out;
-  }, [reportRows, reportCols, cellConfigs]);
+  }, [reportRows, reportCols, reportScope, cellConfigs]);
 
   const visibleCellKeys = useMemo(() => cellSlots.map((entry) => entry.cellId), [cellSlots]);
 
@@ -1524,7 +1546,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const CACHE_TTL_MS = 20_000;
     async function loadCellsData() {
       const requests = visibleCellKeys
-        .map((cellId) => ({ cellId, config: cellConfigs[cellId] }))
+        .map((cellId) => ({ cellId, config: effectiveCellConfigForScope(cellId, reportScope, cellConfigs) }))
         .filter(({ config }) => config && config.panelType !== 'Note Section')
         .slice(0, 24);
       if (!requests.length) {
@@ -2071,7 +2093,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               </div>
               <div className="portal-custom-reports-grid" style={{ gridTemplateColumns: `repeat(${reportCols}, minmax(0, 1fr))` }}>
                 {cellSlots.map(({ cellId, colSpan }) => {
-                  const config = cellConfigs[cellId] ?? emptyCell();
+                  const rawConfig = normalizeCellConfig(cellConfigs[cellId]);
+                  const config = effectiveCellConfigForScope(cellId, reportScope, cellConfigs);
                   const payload = cellsData[cellId] ?? {};
                   const tableColumns = payload.table_columns ?? [];
                   const tableRows = payload.table_rows ?? [];
@@ -2086,7 +2109,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       : sortedRowsBase;
                   const chartPoints = payload.chart_points ?? [];
                   const heatmapPoints = payload.heatmap_points ?? chartPoints;
-                  const rowNumber = Number(cellId.match(/^r(\d+)c/)?.[1] ?? '1');
+                  const { row: rowNumber, col: colNumber } = rowColFromCellId(cellId);
+                  const isTemplateDrivenCell = reportScope === 'Multi-Player' && rowNumber > 1;
                   const inheritedPlayer =
                     reportScope === 'Multi-Player'
                       ? rowPlayers[rowNumber - 1] ?? 'All'
@@ -2125,13 +2149,22 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       className={`portal-custom-reports-cell${!(config.showControls ?? true) ? ' portal-custom-reports-cell--collapsed' : ''}`}
                       style={{ gridColumn: `span ${colSpan}` }}
                     >
+                      {reportScope === 'Multi-Player' && colNumber === 1 ? (
+                        <h4 className="portal-custom-reports-cell-title" style={{ marginBottom: 8 }}>
+                          {toFirstLast(inheritedPlayer) || 'All'}
+                        </h4>
+                      ) : null}
                       <div className="portal-custom-reports-cell-controls">
                         {!isExportingPdf ? (
                           <button
                             type="button"
                             className={`btn btn-ghost ${(config.showControls ?? true) ? '' : 'portal-custom-reports-show-btn'}`.trim()}
                             data-export-ignore="true"
+                            disabled={isTemplateDrivenCell}
                             onClick={() =>
+                              isTemplateDrivenCell
+                                ? undefined
+                                :
                               setCellConfigs((current) => ({
                                 ...current,
                                 [cellId]: { ...(current[cellId] ?? emptyCell()), showControls: !(current[cellId]?.showControls ?? true) },
@@ -2142,6 +2175,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           </button>
                         ) : null}
                         {(config.showControls ?? true) ? (
+                          <>
+                        {isTemplateDrivenCell ? (
+                          <div className="portal-muted-text">This row mirrors Row 1 settings for this column.</div>
+                        ) : null}
+                        {!isTemplateDrivenCell ? (
                           <>
                         <SearchableSingleSelect
                           options={panelTypeOptions}
@@ -2676,13 +2714,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         ) : null}
                           </>
                         ) : null}
+                          </>
+                        ) : null}
                       </div>
                       {config.title ? <h4 className="portal-custom-reports-cell-title">{config.title}</h4> : null}
                       {isNote ? (
                         <textarea
                           className="portal-custom-reports-notes"
                           placeholder="Notes..."
-                          value={config.noteText}
+                          value={isTemplateDrivenCell ? config.noteText : rawConfig.noteText}
                           onChange={(event) =>
                             setCellConfigs((current) => ({
                               ...current,
