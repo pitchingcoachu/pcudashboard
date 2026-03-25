@@ -2241,6 +2241,7 @@ HOME_TEAM_NORM_SQL = "regexp_replace(UPPER(COALESCE(NULLIF(TRIM(hometeam), ''), 
 AWAY_TEAM_NORM_SQL = "regexp_replace(UPPER(COALESCE(NULLIF(TRIM(awayteam), ''), '')), '[^A-Z0-9_]', '', 'g')"
 PITCHER_NAME_NORM_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g')"
 BATTER_NAME_NORM_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(batter), ''), '')), '[^a-z0-9]', '', 'g')"
+CATCHER_NAME_NORM_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(catcher), ''), '')), '[^a-z0-9]', '', 'g')"
 
 TEAM_MARKER_MATCH_TEMPLATE_SQL = """
 EXISTS (
@@ -3015,109 +3016,6 @@ def pitching_overview(
                 .replace("__HAS_VIDEO_EXPR__", has_video_expr)
             )
 
-            cur.execute(
-                query_resolved
-                + """
-                SELECT
-                  COUNT(*)::int AS total_pitches,
-                  AVG(rel_speed) AS avg_velo,
-                  MAX(rel_speed) AS max_velo,
-                  AVG(spin_rate) AS avg_spin,
-                  AVG(ivb) AS avg_ivb,
-                  AVG(hb) AS avg_hb,
-                  AVG(CASE
-                        WHEN plate_side IS NOT NULL
-                         AND plate_height IS NOT NULL
-                         AND plate_side BETWEEN %(zone_left)s AND %(zone_right)s
-                         AND plate_height BETWEEN %(zone_bottom)s AND %(zone_top)s
-                        THEN 1.0
-                        ELSE 0.0
-                      END) AS zone_pct,
-                  AVG(CASE
-                        WHEN pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','InPlay')
-                        THEN 1.0
-                        ELSE 0.0
-                      END) AS strike_pct,
-                  AVG(CASE
-                        WHEN pitch_call = 'StrikeSwinging' THEN 1.0
-                        WHEN pitch_call IN ('InPlay','FoulBall','FoulBallFieldable','StrikeCalled','BallCalled','BallinDirt','HitByPitch') THEN 0.0
-                        ELSE NULL
-                      END) AS whiff_pct
-                FROM base
-                """,
-                params,
-            )
-            overview = cur.fetchone() or {}
-
-            cur.execute(
-                query_resolved
-                + """
-                , totals AS (SELECT COUNT(*)::double precision AS total_pitches FROM base)
-                SELECT
-                  pitch_type,
-                  COUNT(*)::int AS pitches,
-                  ROUND((100.0 * COUNT(*)::numeric / NULLIF((SELECT total_pitches FROM totals), 0))::numeric, 1)::double precision AS usage_pct,
-                  AVG(rel_speed) AS avg_velo,
-                  MAX(rel_speed) AS max_velo,
-                  AVG(spin_rate) AS avg_spin,
-                  AVG(ivb) AS avg_ivb,
-                  AVG(hb) AS avg_hb
-                FROM base
-                GROUP BY pitch_type
-                ORDER BY
-                  CASE pitch_type
-                    WHEN 'Fastball' THEN 1
-                    WHEN 'Sinker' THEN 2
-                    WHEN 'Cutter' THEN 3
-                    WHEN 'Slider' THEN 4
-                    WHEN 'Sweeper' THEN 5
-                    WHEN 'Curveball' THEN 6
-                    WHEN 'ChangeUp' THEN 7
-                    WHEN 'Splitter' THEN 8
-                    WHEN 'Knuckleball' THEN 9
-                    WHEN 'Undefined' THEN 10
-                    ELSE 99
-                  END,
-                  pitch_type ASC
-                """,
-                params,
-            )
-            raw_pitch_type_rows = cur.fetchall()
-
-            cur.execute(
-                query_resolved
-                + """
-                SELECT
-                  id,
-                  session_date,
-                  pitch_no,
-                  pitch_uid,
-                  play_id,
-                  COALESCE(video_clip_1_vm, video_clip_1) AS video_clip_1,
-                  COALESCE(video_clip_2_vm, video_clip_2) AS video_clip_2,
-                  COALESCE(video_clip_3_vm, video_clip_3) AS video_clip_3,
-                  pitch_number,
-                  pitcher,
-                  pitch_type,
-                  rel_speed,
-                  ivb,
-                  hb,
-                  rel_height,
-                  ext_value,
-                  is_lefty
-                FROM base
-                """,
-                params,
-            )
-            stuff_rows = cur.fetchall()
-            for row in stuff_rows:
-                hb_value = row.get("hb")
-                is_lefty = bool(row.get("is_lefty"))
-                row["hb_adj"] = hb_value if is_lefty else (-hb_value if _is_num(hb_value) else None)
-
-            avg_stuff, avg_stuff_by_pitch_type = _compute_stuff_by_pitch_type(
-                stuff_rows, stuff_base or "Fastball", stuff_level or "College"
-            )
             cur.execute(
                 query_resolved
                 + """
@@ -4754,6 +4652,19 @@ def hitting_overview(
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
+                  AND (%(hitter_count)s::int = 0 OR """ + BATTER_NAME_NORM_SQL + """ = ANY(%(hitters_norm)s::text[]))
+                  AND (%(opp_pitcher_count)s::int = 0 OR """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(opp_pitchers_norm)s::text[]))
+                  AND (
+                    %(hand_filter)s::text IS NULL OR %(hand_filter)s::text = '' OR %(hand_filter)s::text = 'All' OR
+                    (%(hand_filter)s::text = 'Left' AND UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'L') OR
+                    (%(hand_filter)s::text = 'Right' AND UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'R')
+                  )
+                  AND (
+                    %(batter_side_filter)s::text IS NULL OR %(batter_side_filter)s::text = '' OR %(batter_side_filter)s::text = 'All' OR
+                    (%(batter_side_filter)s::text = 'Left' AND UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'L') OR
+                    (%(batter_side_filter)s::text = 'Right' AND UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'R')
+                  )
+                  AND (%(pitch_types_count)s::int = 0 OR """ + PITCH_TYPE_NORMALIZE_SQL + """ = ANY(%(pitch_types)s::text[]))
                 ORDER BY session_date, COALESCE(created_at, NOW()), id
                 """,
                 {
@@ -4761,6 +4672,14 @@ def hitting_overview(
                     "start_date": start_date,
                     "end_date": end_date,
                     "team_markers_norm": sorted(team_markers_norm),
+                    "hitter_count": len(selected_hitter_keys),
+                    "hitters_norm": sorted(selected_hitter_keys),
+                    "opp_pitcher_count": len(selected_opp_pitcher_keys),
+                    "opp_pitchers_norm": sorted(selected_opp_pitcher_keys),
+                    "hand_filter": hand,
+                    "batter_side_filter": batter_side,
+                    "pitch_types_count": len(selected_pitch_types),
+                    "pitch_types": selected_pitch_types,
                 },
             )
             rows = [dict(row) for row in cur.fetchall()]
@@ -5176,6 +5095,18 @@ def catching_overview(
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
+                  AND (%(catcher_count)s::int = 0 OR """ + CATCHER_NAME_NORM_SQL + """ = ANY(%(catchers_norm)s::text[]))
+                  AND (
+                    %(hand_filter)s::text IS NULL OR %(hand_filter)s::text = '' OR %(hand_filter)s::text = 'All' OR
+                    (%(hand_filter)s::text = 'Left' AND UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'L') OR
+                    (%(hand_filter)s::text = 'Right' AND UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'R')
+                  )
+                  AND (
+                    %(batter_side_filter)s::text IS NULL OR %(batter_side_filter)s::text = '' OR %(batter_side_filter)s::text = 'All' OR
+                    (%(batter_side_filter)s::text = 'Left' AND UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'L') OR
+                    (%(batter_side_filter)s::text = 'Right' AND UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'R')
+                  )
+                  AND (%(pitch_types_count)s::int = 0 OR """ + PITCH_TYPE_NORMALIZE_SQL + """ = ANY(%(pitch_types)s::text[]))
                 ORDER BY session_date, COALESCE(created_at, NOW()), id
                 """,
                 {
@@ -5183,6 +5114,12 @@ def catching_overview(
                     "start_date": start_date,
                     "end_date": end_date,
                     "team_markers_norm": sorted(team_markers_norm),
+                    "catcher_count": len(selected_catcher_keys),
+                    "catchers_norm": sorted(selected_catcher_keys),
+                    "hand_filter": hand,
+                    "batter_side_filter": batter_side,
+                    "pitch_types_count": len(selected_pitch_types),
+                    "pitch_types": selected_pitch_types,
                 },
             )
             rows = [dict(row) for row in cur.fetchall()]
