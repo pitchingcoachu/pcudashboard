@@ -3540,6 +3540,8 @@ def pitching_ab_report(
 ) -> PitchingAbReportResponse:
     school_code = _validate_school_code(school_code)
     _sync_modifications_into_pitch_events(school_code)
+    roster = _load_school_roster(school_code)
+    team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
 
@@ -3573,6 +3575,7 @@ def pitching_ab_report(
         "pitch_types_count": len(selected_pitch_types),
         "start_date": start_date,
         "end_date": end_date,
+        "team_markers_norm": team_markers_norm,
     }
 
     try:
@@ -3730,8 +3733,6 @@ def pitching_ab_report(
 
     game_meta: Dict[str, Dict[str, Any]] = {}
     for row in rows:
-        if not _ab_is_terminal(row):
-            continue
         key = _row_game_key(dict(row))
         if not key:
             continue
@@ -3779,6 +3780,12 @@ def pitching_ab_report(
         rows_for_game = [row for row in rows if _row_game_key(dict(row)) == selected_game_key]
         game_entry = next((entry for entry in available_games if entry["game_key"] == selected_game_key), None)
         selected_game_date = game_entry.get("date") if game_entry else None
+    elif rows:
+        rows_for_game = list(rows)
+        dated_rows = [row.get("session_date") for row in rows if row.get("session_date")]
+        if dated_rows:
+            latest = max(dated_rows)
+            selected_game_date = latest.isoformat() if hasattr(latest, "isoformat") else str(latest)
     grouped_pas = _ab_group_rows(rows_for_game)
 
     batter_sections: Dict[str, List[Dict[str, Any]]] = {}
@@ -4020,8 +4027,6 @@ def hitting_ab_report(
 
     game_meta: Dict[str, Dict[str, Any]] = {}
     for row in rows:
-        if not _ab_is_terminal(row):
-            continue
         key = _row_game_key(dict(row))
         if not key:
             continue
@@ -4069,6 +4074,12 @@ def hitting_ab_report(
         rows_for_game = [row for row in rows if _row_game_key(dict(row)) == selected_game_key]
         game_entry = next((entry for entry in available_games if entry["game_key"] == selected_game_key), None)
         selected_game_date = game_entry.get("date") if game_entry else None
+    elif rows:
+        rows_for_game = list(rows)
+        dated_rows = [row.get("session_date") for row in rows if row.get("session_date")]
+        if dated_rows:
+            latest = max(dated_rows)
+            selected_game_date = latest.isoformat() if hasattr(latest, "isoformat") else str(latest)
     grouped_pas = _ab_group_rows(rows_for_game)
 
     pitcher_sections: Dict[str, List[Dict[str, Any]]] = {}
