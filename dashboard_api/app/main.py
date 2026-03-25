@@ -1964,7 +1964,9 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
         "PCU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "PCU", "school_config.R"),
         "CNU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CNU", "school_config.R"),
         "GCU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "GCU", "school_config.R"),
+        "GMU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "GMU", "school_config.R"),
         "LSU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "LSU", "school_config.R"),
+        "UNM": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "UNM", "school_config.R"),
         "SEMO": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "SEMO", "school_config.R"),
         "CREIGHTON": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CREIGHTON", "school_config.R"),
         "HARVARD": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "HARVARD", "school_config.R"),
@@ -2053,9 +2055,11 @@ def _mod_namespaces_for_school(school_code: str) -> List[str]:
     code = (school_code or "").strip().upper()
     base_map = {
         "GCU": ["gcubaseball"],
+        "GMU": ["gmubaseball", "gmu"],
         "OSU": ["oklahomastate", "osubaseball"],
         "CNU": ["cnubaseball", "carsonnewman"],
         "LSU": ["lsubaseball", "lsu"],
+        "UNM": ["unmbaseball", "unm", "newmexico"],
         "SEMO": ["semobaseball", "semo"],
         "PCU": ["tmdata", "pcu", "pcubaseball"],
     }

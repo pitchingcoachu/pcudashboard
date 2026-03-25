@@ -81,6 +81,22 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentSoft: '#001f3f',
     accentRgb: '0, 37, 84',
   },
+  GMU: {
+    schoolCode: 'GMU',
+    logoSrc: '/gmu-logo.png',
+    logoAlt: 'GMU logo',
+    accent: '#105135',
+    accentSoft: '#0b3b27',
+    accentRgb: '16, 81, 53',
+  },
+  UNM: {
+    schoolCode: 'UNM',
+    logoSrc: '/unm-logo.png',
+    logoAlt: 'UNM logo',
+    accent: '#ba0c2f',
+    accentSoft: '#8b0923',
+    accentRgb: '186, 12, 47',
+  },
 };
 
 export function resolveSchoolBrand(schoolCode: string | null | undefined): SchoolBrand {
