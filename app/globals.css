@@ -1893,6 +1893,11 @@ main {
   text-align: center;
 }
 
+.portal-dashboard-sidebar--compact {
+  height: auto;
+  align-self: start;
+}
+
 .portal-admin-list {
   margin: 0;
   padding-left: 1rem;
@@ -2169,9 +2174,20 @@ main {
 }
 
 .portal-custom-reports-brand-logo {
+  object-fit: contain;
+  object-position: center;
+}
+
+.portal-custom-reports-brand-logo--pcu {
   width: 64px;
   height: 64px;
-  object-fit: contain;
+}
+
+.portal-custom-reports-brand-logo--school {
+  width: auto;
+  height: 56px;
+  max-width: 140px;
+  justify-self: end;
 }
 
 .portal-custom-reports-header {

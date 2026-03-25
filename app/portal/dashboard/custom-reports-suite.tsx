@@ -2055,7 +2055,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               className={`portal-day-card portal-custom-reports-canvas${isExportingPdf ? ' portal-custom-reports-canvas--export' : ''}`}
             >
               <div className="portal-custom-reports-brandbar">
-                <img src="/pitching-coach-u-logo.png" alt="PCU" className="portal-custom-reports-brand-logo" />
+                <img src="/pitching-coach-u-logo.png" alt="PCU" className="portal-custom-reports-brand-logo portal-custom-reports-brand-logo--pcu" />
                 <header className="portal-custom-reports-header">
                   <h3>{reportHeaderTitle}</h3>
                   <p>{reportHeaderPlayer}</p>
@@ -2064,7 +2064,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 <img
                   src={schoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
                   alt={schoolBrand.logoSrc ? schoolBrand.logoAlt : schoolCode || 'School'}
-                  className="portal-custom-reports-brand-logo"
+                  className="portal-custom-reports-brand-logo portal-custom-reports-brand-logo--school"
                 />
               </div>
               <div className="portal-custom-reports-grid" style={{ gridTemplateColumns: `repeat(${reportCols}, minmax(0, 1fr))` }}>

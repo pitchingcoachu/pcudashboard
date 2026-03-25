@@ -1915,7 +1915,7 @@ export default function HittingSuite() {
         style={isSidebarHidden ? { gridTemplateColumns: 'minmax(0, 1fr)' } : undefined}
       >
         {!isSidebarHidden ? (
-          <article className="portal-admin-card portal-dashboard-sidebar">
+          <article className={`portal-admin-card portal-dashboard-sidebar${isLeaderboardPage ? ' portal-dashboard-sidebar--compact' : ''}`}>
             <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden(true)}>
               Hide Filters
             </button>

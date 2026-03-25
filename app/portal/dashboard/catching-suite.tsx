@@ -862,7 +862,7 @@ export default function CatchingSuite() {
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
       <div className="portal-dashboard-suite-layout">
           {!isSidebarHidden ? (
-            <article className="portal-admin-card portal-dashboard-sidebar">
+            <article className={`portal-admin-card portal-dashboard-sidebar${isLeaderboardPage ? ' portal-dashboard-sidebar--compact' : ''}`}>
               <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden(true)}>
                 Hide Filters
               </button>

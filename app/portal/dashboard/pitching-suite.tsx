@@ -4186,7 +4186,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
       >
         {!isSidebarHidden ? (
           <article
-            className="portal-admin-card portal-dashboard-sidebar"
+            className={`portal-admin-card portal-dashboard-sidebar${isLeaderboardPage ? ' portal-dashboard-sidebar--compact' : ''}`}
             style={dashboardPage === 'AB Report' ? { minHeight: 'auto', height: 'fit-content', alignSelf: 'start' } : undefined}
           >
           <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden(true)}>
