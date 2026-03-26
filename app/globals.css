@@ -1898,11 +1898,15 @@ main {
 }
 
 .portal-dashboard-sidebar .portal-search-select {
-  z-index: 5;
+  z-index: 1;
+}
+
+.portal-dashboard-sidebar .portal-search-select:has(.portal-search-select-menu) {
+  z-index: 260;
 }
 
 .portal-dashboard-sidebar .portal-search-select-menu {
-  z-index: 90;
+  z-index: 261;
 }
 
 .portal-dashboard-sidebar--compact {
