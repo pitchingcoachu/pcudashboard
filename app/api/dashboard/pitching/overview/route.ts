@@ -123,13 +123,14 @@ export async function GET(request: Request) {
   const start = parseIsoDate(startDate);
   const end = parseIsoDate(endDate);
   const daySpan = start && end ? Math.floor((end.getTime() - start.getTime()) / 86400000) + 1 : 0;
-  const forceLeagueLight = isLeague && daySpan >= 30;
+  const forceLeagueLight = isLeague && daySpan >= 14;
 
   if (includeChartPoints) url.searchParams.set('include_chart_points', includeChartPoints);
   if (includeRowPitches) url.searchParams.set('include_row_pitches', includeRowPitches);
   if (includeTrendRows) url.searchParams.set('include_trend_rows', includeTrendRows);
   if (forceLeagueLight) {
-    url.searchParams.set('include_chart_points', '0');
+    url.searchParams.set('include_chart_points', '1');
+    url.searchParams.set('chart_points_limit', '2000');
     url.searchParams.set('include_row_pitches', '0');
     url.searchParams.set('include_trend_rows', '0');
   } else if (isLeague && !includeRowPitches) {

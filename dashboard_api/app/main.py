@@ -224,6 +224,23 @@ def _downsample_rows_for_chart_points(rows: List[Dict[str, Any]], max_points: in
     return out
 
 
+def _latest_rows_for_chart_points(rows: List[Dict[str, Any]], max_points: int) -> List[Dict[str, Any]]:
+    if max_points <= 0:
+        return []
+    if len(rows) <= max_points:
+        return rows
+    ordered = sorted(
+        rows,
+        key=lambda r: (
+            str(r.get("session_date") or ""),
+            int(r.get("pitch_number") or 0),
+            int(r.get("pitch_no") or 0),
+            int(r.get("id") or 0),
+        ),
+    )
+    return ordered[-max_points:]
+
+
 def _is_num(value: Any) -> bool:
     if value is None:
         return False
@@ -3316,6 +3333,7 @@ def pitching_overview(
     pc_min: Optional[str] = Query(default=None),
     pc_max: Optional[str] = Query(default=None),
     include_chart_points: bool = Query(default=True),
+    chart_points_limit: Optional[int] = Query(default=None),
     include_row_pitches: bool = Query(default=True),
     include_trend_rows: bool = Query(default=True),
 ) -> PitchingOverviewResponse:
@@ -3361,6 +3379,9 @@ def pitching_overview(
     parsed_hb_max = _parse_optional_float(hb_max, "hb_max")
     parsed_pc_min = _parse_optional_int(pc_min, "pc_min")
     parsed_pc_max = _parse_optional_int(pc_max, "pc_max")
+    parsed_chart_points_limit = (
+        max(100, min(int(chart_points_limit), 6000)) if chart_points_limit is not None else None
+    )
 
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
@@ -3465,6 +3486,7 @@ def pitching_overview(
             "pc_min": parsed_pc_min,
             "pc_max": parsed_pc_max,
             "include_chart_points": include_chart_points,
+            "chart_points_limit": parsed_chart_points_limit,
             "include_row_pitches": include_row_pitches,
             "include_trend_rows": include_trend_rows,
         },
@@ -4148,7 +4170,11 @@ def pitching_overview(
             ]
             chart_points = (
                 _build_chart_points(
-                    _downsample_rows_for_chart_points(table_source_rows),
+                    (
+                        _latest_rows_for_chart_points(table_source_rows, parsed_chart_points_limit)
+                        if (school_code == "LEAGUE" and parsed_chart_points_limit is not None)
+                        else _downsample_rows_for_chart_points(table_source_rows)
+                    ),
                     avg_stuff_by_pitch_type,
                 )
                 if include_chart_points
