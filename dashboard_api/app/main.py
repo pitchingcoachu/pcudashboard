@@ -3774,7 +3774,13 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
     try:
         with get_conn() as conn, conn.cursor() as cur:
             session_types = ["Season", "All"] if school_code == "LEAGUE" else ["Season", "Bullpen", "Live BP", "All"]
+            use_league_rollup_filters = False
             if school_code == "LEAGUE":
+                cur.execute("SELECT to_regclass('public.pitch_events_daily_rollup_league')::text AS table_name")
+                reg = cur.fetchone() or {}
+                use_league_rollup_filters = bool(reg.get("table_name"))
+
+            if school_code == "LEAGUE" and use_league_rollup_filters:
                 cur.execute(
                     """
                     SELECT
@@ -3956,7 +3962,22 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
                     {"school_code": school_code, "team_markers_norm": team_markers_norm},
                 )
                 pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
-                team_types = ["All", school_code, "Opponents", "Campers"]
+                if school_code == "LEAGUE":
+                    cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
+                    league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
+                    team_types = ["All", *league_team_codes]
+                    cur.execute(_league_name_map_sql_expr("pitcherteam", "pitcher"), {"school_code": school_code})
+                    pitchers_by_team_code = {
+                        str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
+                        for row in cur.fetchall()
+                    }
+                    cur.execute(_league_name_map_sql_expr("pitcherteam", "batter"), {"school_code": school_code})
+                    opp_hitters_by_team_code = {
+                        str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
+                        for row in cur.fetchall()
+                    }
+                else:
+                    team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"filters query failed: {exc}") from exc
 
