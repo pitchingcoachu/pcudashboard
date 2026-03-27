@@ -111,6 +111,7 @@ export default async function AdminWorkoutsPage({ searchParams }: WorkoutPagePro
               <option value="lbs">lbs</option>
               <option value="seconds">seconds</option>
               <option value="inches">inches</option>
+              <option value="body_weight">Body Weight</option>
             </select>
           </label>
           <label className="portal-checkbox-label">

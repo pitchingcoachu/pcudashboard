@@ -111,7 +111,7 @@ export type TrackedExerciseRow = {
   exerciseId: number;
   name: string;
   category: string;
-  trackingType: 'lbs' | 'seconds' | 'inches';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
 };
 
 export type ExerciseCategoryRow = {
@@ -124,7 +124,7 @@ export type ExerciseRow = {
   name: string;
   category: string;
   repMeasure: 'reps' | 'seconds' | 'distance';
-  trackingType: 'lbs' | 'seconds' | 'inches';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
   repsPerSide: boolean;
   description: string | null;
   instructionVideoUrl: string | null;
@@ -145,7 +145,7 @@ export type WorkoutEditorItem = {
   exerciseName: string;
   category: string;
   repMeasure: 'reps' | 'seconds' | 'distance';
-  trackingType: 'lbs' | 'seconds' | 'inches';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
   repsPerSide: boolean;
   sortOrder: number;
   prefix: string | null;
@@ -168,7 +168,7 @@ export type WorkoutExerciseAssignment = {
   name: string;
   category: string;
   repMeasure: 'reps' | 'seconds' | 'distance';
-  trackingType: 'lbs' | 'seconds' | 'inches';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
   repsPerSide: boolean;
   prescribedSets: string | null;
   prescribedReps: string | null;
@@ -193,7 +193,7 @@ export type ProgramItemRow = {
   workoutExerciseNames: string[];
   workoutExercises: WorkoutExerciseAssignment[];
   repMeasure: 'reps' | 'seconds' | 'distance';
-  trackingType: 'lbs' | 'seconds' | 'inches';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
   repsPerSide: boolean;
   exerciseDescription: string | null;
   exerciseCoachingCues: string | null;
@@ -215,7 +215,7 @@ export type ExerciseLoadHistoryEntry = {
   loads: string[];
   prescribedReps: string | null;
   repMeasure: 'reps' | 'seconds' | 'distance';
-  trackingType: 'lbs' | 'seconds' | 'inches';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
   repsPerSide: boolean;
 };
 
@@ -390,12 +390,13 @@ function normalizeCategoryName(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-function normalizeTrackingType(value: string | null | undefined): 'lbs' | 'seconds' | 'inches' {
+function normalizeTrackingType(value: string | null | undefined): 'lbs' | 'seconds' | 'inches' | 'body_weight' {
   const normalized = String(value ?? '')
     .trim()
     .toLowerCase();
   if (normalized === 'seconds') return 'seconds';
   if (normalized === 'inches') return 'inches';
+  if (normalized === 'body_weight' || normalized === 'body weight' || normalized === 'bodyweight') return 'body_weight';
   return 'lbs';
 }
 

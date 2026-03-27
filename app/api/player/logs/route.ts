@@ -6,6 +6,28 @@ import { canManagePlayer } from '../../../../lib/portal-access';
 
 const ASSESSMENT_NOTES_TOKEN = '[ASSESSMENT_NOTES]';
 
+function parseBodyWeightSetValues(form: FormData): string[] {
+  const raw = form
+    .getAll('performedBodyWeightSetValues')
+    .map((value) => String(value).trim())
+    .filter((value) => /^\d+:[01]$/.test(value));
+  if (!raw.length) return [];
+
+  const bySet = new Map<number, number>();
+  for (const entry of raw) {
+    const [setIndexRaw, checkedRaw] = entry.split(':');
+    const setIndex = Number(setIndexRaw);
+    const checked = Number(checkedRaw);
+    if (!Number.isFinite(setIndex) || setIndex < 0) continue;
+    const prior = bySet.get(setIndex) ?? 0;
+    bySet.set(setIndex, Math.max(prior, checked === 1 ? 1 : 0));
+  }
+
+  return Array.from(bySet.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, checked]) => String(checked));
+}
+
 function redirectWithMessage(request: Request, target: string, params: Record<string, string>) {
   const url = new URL(target, request.url);
   for (const [key, value] of Object.entries(params)) {
@@ -38,7 +60,10 @@ export async function POST(request: Request) {
   const assessmentNoteValues = form
     .getAll('assessmentNoteValues')
     .map((value) => String(value).trim());
-  const performedLoadCombined = (assessmentScoreValues.length > 0 ? assessmentScoreValues : performedLoadValues).join(', ');
+  const bodyWeightSetValues = parseBodyWeightSetValues(form);
+  const baseLoadValues =
+    assessmentScoreValues.length > 0 ? assessmentScoreValues : bodyWeightSetValues.length > 0 ? bodyWeightSetValues : performedLoadValues;
+  const performedLoadCombined = baseLoadValues.join(', ');
   const baseNotes = String(form.get('notes') ?? '').trim();
   const hasAssessmentNotes = assessmentNoteValues.some((value) => value.length > 0);
   const notes = hasAssessmentNotes

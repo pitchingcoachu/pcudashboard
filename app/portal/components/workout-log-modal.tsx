@@ -83,7 +83,8 @@ function formatLoadNumber(value: number): string {
   return value.toFixed(1).replace(/\.0$/, '');
 }
 
-function trackingPlaceholder(trackingType: 'lbs' | 'seconds' | 'inches'): string {
+function trackingPlaceholder(trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight'): string {
+  if (trackingType === 'body_weight') return 'completed';
   if (trackingType === 'seconds') return 'sec';
   if (trackingType === 'inches') return 'in';
   return 'lbs';
@@ -91,8 +92,9 @@ function trackingPlaceholder(trackingType: 'lbs' | 'seconds' | 'inches'): string
 
 function formatMaxHistory(
   entries: ExerciseLoadHistoryEntry[],
-  trackingType: 'lbs' | 'seconds' | 'inches'
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight'
 ): { load: number; dayDate: string; repsText: string } | null {
+  if (trackingType === 'body_weight') return null;
   let best: { load: number; dayDate: string; repsText: string } | null = null;
   for (const entry of entries) {
     for (const loadValue of entry.loads) {
@@ -345,14 +347,32 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                           {Array.from({ length: setCount }).map((_, setIdx) => {
                             const current = isCycleItem ? '' : loadValues[loadIndex] ?? '';
                             loadIndex += 1;
+                            const checked = ['1', 'true', 'yes', 'on', 'checked'].includes(current.trim().toLowerCase());
                             return (
                               <label key={`${item.itemId}-modal-ex-${exerciseIdx}-set-${setIdx}`}>
                                 Set {setIdx + 1}
-                                <input
-                                  name="performedLoadValues"
-                                  defaultValue={current}
-                                  placeholder={trackingPlaceholder(exercise.trackingType)}
-                                />
+                                {exercise.trackingType === 'body_weight' ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                    <input
+                                      type="hidden"
+                                      name="performedBodyWeightSetValues"
+                                      value={`${setIdx}:0`}
+                                    />
+                                    <input
+                                      type="checkbox"
+                                      name="performedBodyWeightSetValues"
+                                      value={`${setIdx}:1`}
+                                      defaultChecked={checked}
+                                    />
+                                    <span>Completed</span>
+                                  </div>
+                                ) : (
+                                  <input
+                                    name="performedLoadValues"
+                                    defaultValue={current}
+                                    placeholder={trackingPlaceholder(exercise.trackingType)}
+                                  />
+                                )}
                               </label>
                             );
                           })}
@@ -405,16 +425,33 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                   })()
                 : null}
               <div className="portal-set-weights">
-                {Array.from({ length: parseSetCount(item.prescribedSets) }).map((_, setIdx) => (
-                  <label key={`${item.itemId}-modal-set-${setIdx}`}>
-                    Set {setIdx + 1}
-                    <input
-                      name="performedLoadValues"
-                      defaultValue={isCycleItem ? '' : loadValues[setIdx] ?? ''}
-                      placeholder={trackingPlaceholder(item.trackingType)}
-                    />
-                  </label>
-                ))}
+                {Array.from({ length: parseSetCount(item.prescribedSets) }).map((_, setIdx) => {
+                  const current = isCycleItem ? '' : loadValues[setIdx] ?? '';
+                  const checked = ['1', 'true', 'yes', 'on', 'checked'].includes(current.trim().toLowerCase());
+                  return (
+                    <label key={`${item.itemId}-modal-set-${setIdx}`}>
+                      Set {setIdx + 1}
+                      {item.trackingType === 'body_weight' ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                          <input type="hidden" name="performedBodyWeightSetValues" value={`${setIdx}:0`} />
+                          <input
+                            type="checkbox"
+                            name="performedBodyWeightSetValues"
+                            value={`${setIdx}:1`}
+                            defaultChecked={checked}
+                          />
+                          <span>Completed</span>
+                        </div>
+                      ) : (
+                        <input
+                          name="performedLoadValues"
+                          defaultValue={current}
+                          placeholder={trackingPlaceholder(item.trackingType)}
+                        />
+                      )}
+                    </label>
+                  );
+                })}
               </div>
             </div>
           )}

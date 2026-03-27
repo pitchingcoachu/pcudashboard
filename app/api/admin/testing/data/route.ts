@@ -13,7 +13,7 @@ import {
 type MetricOption = {
   key: string;
   label: string;
-  trackingType: 'lbs' | 'seconds' | 'inches';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
   group: 'Weight Progress' | 'Speed' | 'Jump Height' | 'Exercises';
 };
 

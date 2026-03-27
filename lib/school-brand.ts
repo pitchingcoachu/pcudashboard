@@ -97,6 +97,14 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentSoft: '#8b0923',
     accentRgb: '186, 12, 47',
   },
+  LEAGUE: {
+    schoolCode: 'LEAGUE',
+    logoSrc: null,
+    logoAlt: 'League',
+    accent: '#c8102e',
+    accentSoft: '#8f0f24',
+    accentRgb: '200, 16, 46',
+  },
 };
 
 export function resolveSchoolBrand(schoolCode: string | null | undefined): SchoolBrand {
