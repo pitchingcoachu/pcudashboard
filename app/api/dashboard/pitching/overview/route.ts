@@ -15,6 +15,12 @@ function resolveOverviewTimeoutMs(schoolCode: string): number {
   return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 300000 : 120000;
 }
 
+function parseIsoDate(value: string): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -113,9 +119,23 @@ export async function GET(request: Request) {
   if (hbMax) url.searchParams.set('hb_max', hbMax);
   if (pcMin) url.searchParams.set('pc_min', pcMin);
   if (pcMax) url.searchParams.set('pc_max', pcMax);
+  const isLeague = String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE';
+  const start = parseIsoDate(startDate);
+  const end = parseIsoDate(endDate);
+  const daySpan = start && end ? Math.floor((end.getTime() - start.getTime()) / 86400000) + 1 : 0;
+  const forceLeagueLight = isLeague && daySpan >= 30;
+
   if (includeChartPoints) url.searchParams.set('include_chart_points', includeChartPoints);
   if (includeRowPitches) url.searchParams.set('include_row_pitches', includeRowPitches);
   if (includeTrendRows) url.searchParams.set('include_trend_rows', includeTrendRows);
+  if (forceLeagueLight) {
+    url.searchParams.set('include_chart_points', '0');
+    url.searchParams.set('include_row_pitches', '0');
+    url.searchParams.set('include_trend_rows', '0');
+  } else if (isLeague && !includeRowPitches) {
+    // Default League calls to lighter payload unless explicitly requested for short windows.
+    url.searchParams.set('include_row_pitches', '0');
+  }
 
   try {
     const result = await fetchDashboardJsonWithCache({
