@@ -997,7 +997,13 @@ function AbPaChart({
   );
 }
 
-export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'player' }) {
+export default function PitchingSuite({
+  role,
+  selectedSchoolCode,
+}: {
+  role?: 'admin' | 'coach' | 'player';
+  selectedSchoolCode?: string;
+}) {
   const canUsePitchEdits = role === 'admin' || role === 'coach';
   const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
@@ -1049,6 +1055,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
   const [splitBy, setSplitBy] = useState('Pitch Types');
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
+  const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const autoFallbackAppliedRef = useRef(false);
   const [abSortColumn, setAbSortColumn] = useState('Pitch #');
   const [abSortDirection, setAbSortDirection] = useState<SortDirection>('asc');
@@ -1137,12 +1144,14 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
   const [actionVideoTime, setActionVideoTime] = useState(0);
   const [actionVideoDuration, setActionVideoDuration] = useState(0);
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
-  const effectiveSplitBy = isLeaderboardPage ? 'Pitcher' : splitBy;
+  const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Pitcher') : splitBy;
   const leftCompareVideoRef = useRef<HTMLVideoElement | null>(null);
   const rightCompareVideoRef = useRef<HTMLVideoElement | null>(null);
   const actionViewRef = useRef<HTMLDivElement | null>(null);
 
-  const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+  const isLeague =
+    String(selectedSchoolCode ?? '').toUpperCase() === 'LEAGUE' ||
+    String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
   const canShowVeloManualEntry = !isLeague;
   const filteredPitchers = useMemo(() => {
     if (!filters) return [];
@@ -1190,6 +1199,11 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
       setDashboardPage('Summary');
     }
   }, [canShowVeloManualEntry, dashboardPage]);
+  useEffect(() => {
+    if (!isLeague && leaderboardViewBy !== 'Player') {
+      setLeaderboardViewBy('Player');
+    }
+  }, [isLeague, leaderboardViewBy]);
 
   const manualPitcherOptions = useMemo(() => {
     const fromFilters = filters?.pitchers ?? [];
@@ -1474,6 +1488,17 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
     if (hbMax) params.set('hb_max', hbMax);
     if (pcMin) params.set('pc_min', pcMin);
     if (pcMax) params.set('pc_max', pcMax);
+    const isTrendPage = dashboardPage === 'Trend';
+    const isLeaderboard = dashboardPage === 'Leaderboard';
+    if (isLeaderboard) {
+      params.set('include_chart_points', '0');
+      params.set('include_row_pitches', '0');
+      params.set('include_trend_rows', '0');
+    } else {
+      params.set('include_chart_points', '1');
+      params.set('include_row_pitches', '1');
+      params.set('include_trend_rows', isTrendPage ? '1' : '0');
+    }
 
     fetch(`/api/dashboard/pitching/overview?${params.toString()}`, { signal: controller.signal })
       .then(async (response) => {
@@ -1528,6 +1553,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
     breakLines,
     stuffLevel,
     stuffBase,
+    dashboardPage,
     veloMax,
     veloMin,
     withVideo,
@@ -4739,7 +4765,15 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
               ) : null}
 
               <div className="portal-table-wrap" style={{ marginTop: '1rem' }}>
-                <div className="portal-form-grid" style={{ marginBottom: '0.8rem', gridTemplateColumns: isLeaderboardPage ? 'minmax(160px, 260px)' : 'repeat(2, minmax(160px, 260px))' }}>
+                <div
+                  className="portal-form-grid"
+                  style={{
+                    marginBottom: '0.8rem',
+                    gridTemplateColumns: isLeaderboardPage
+                      ? (isLeague ? 'repeat(2, minmax(160px, 260px))' : 'minmax(160px, 260px)')
+                      : 'repeat(2, minmax(160px, 260px))',
+                  }}
+                >
                   <label>
                     Tables
                     <SearchableSingleSelect
@@ -4776,6 +4810,20 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                       placeholder="Stuff"
                     />
                   </label>
+                  {isLeaderboardPage && isLeague ? (
+                    <label>
+                      View By
+                      <SearchableSingleSelect
+                        options={[
+                          { value: 'Player', label: 'Player' },
+                          { value: 'Team', label: 'Team' },
+                        ]}
+                        value={leaderboardViewBy}
+                        onChange={(next) => setLeaderboardViewBy(next as 'Player' | 'Team')}
+                        placeholder="Player"
+                      />
+                    </label>
+                  ) : null}
                   {!isLeaderboardPage ? (
                     <label>
                       <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
@@ -4959,7 +5007,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                       {displayedTableColumns.map((column, colIndex) => {
                         const isSortable = true;
                         const activeSort = leaderboardSortColumn === column;
-                        const label = isLeaderboardPage && colIndex === 0 ? 'Player' : column;
+                        const label = isLeaderboardPage && colIndex === 0 ? (leaderboardViewBy === 'Team' ? 'Team' : 'Player') : column;
                         return (
                           <th
                             key={column}

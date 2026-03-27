@@ -91,7 +91,11 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
           </button>
         ))}
       </div>
-      {mountedSuites.Pitching ? <div style={{ display: showSuite('Pitching') ? 'block' : 'none' }}><PitchingSuite role={role} /></div> : null}
+      {mountedSuites.Pitching ? (
+        <div style={{ display: showSuite('Pitching') ? 'block' : 'none' }}>
+          <PitchingSuite role={role} selectedSchoolCode={selectedSchoolCode} />
+        </div>
+      ) : null}
       {mountedSuites.Hitting ? <div style={{ display: showSuite('Hitting') ? 'block' : 'none' }}><HittingSuite /></div> : null}
       {mountedSuites.Catching ? <div style={{ display: showSuite('Catching') ? 'block' : 'none' }}><CatchingSuite /></div> : null}
       {mountedSuites['Custom Reports'] ? (

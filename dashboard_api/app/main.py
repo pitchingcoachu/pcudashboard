@@ -835,7 +835,8 @@ def _qp_weight_for_square(sq: Optional[int], pitch_type: str, hand: str, state: 
 
 def _compute_qp_point(row: Dict[str, Any]) -> Optional[float]:
     st = str(row.get("session_type_norm") or "").strip()
-    if st.lower() != "live":
+    s = st.lower()
+    if not (("live" in s) or ("game" in s) or ("ab" in s) or ("season" in s)):
         return None
     sq = _zone9_square(row.get("plate_side"), row.get("plate_height"))
     if sq is None:
@@ -844,6 +845,11 @@ def _compute_qp_point(row: Dict[str, Any]) -> Optional[float]:
     pitch_type = str(row.get("pitch_type") or "Undefined")
     hand = str(row.get("pitcherthrows") or ("Left" if row.get("is_lefty") else "Right"))
     return _qp_weight_for_square(sq, pitch_type, hand, state)
+
+
+def _is_competitive_row(row: Dict[str, Any]) -> bool:
+    st = str(row.get("session_type_norm") or "").strip().lower()
+    return ("live" in st) or ("game" in st) or ("ab" in st) or ("season" in st)
 
 
 def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
@@ -886,8 +892,20 @@ def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
         return _bucket_metric(row.get("hb"), 5.0, "")
     if split == "Pitcher":
         return str(row.get("pitcher") or "Unknown")
+    if split == "Pitcher Team":
+        norm = str(row.get("pitcher_team_norm") or "").strip()
+        if norm:
+            return norm
+        raw = str(row.get("pitcherteam") or row.get("pitcher_team_code") or "").strip()
+        return _normalize_team_code(raw) or "Unknown"
     if split == "Batter":
         return str(row.get("batter") or "Unknown")
+    if split == "Batter Team":
+        norm = str(row.get("batter_team_norm_eff") or row.get("batter_team_norm") or "").strip()
+        if norm:
+            return norm
+        raw = str(row.get("batterteam") or row.get("batter_team_code") or "").strip()
+        return _normalize_team_code(raw) or "Unknown"
     if split == "Catcher":
         return str(row.get("catcher") or "Unknown")
     return str(row.get("pitch_type") or "Unknown")
@@ -1125,7 +1143,7 @@ def _build_dynamic_table(
         spin_vals = [r.get("spin_rate") for r in grp if _is_num(r.get("spin_rate"))]
         r_tilt_vals = [r.get("release_tilt") for r in grp]
         b_tilt_vals = [r.get("break_tilt") for r in grp]
-        live_rows = [r for r in grp if str(r.get("session_type_norm") or "").strip().lower() == "live"]
+        live_rows = [r for r in grp if _is_competitive_row(r)]
         ev_vals = [r.get("exit_speed") for r in live_rows if _is_num(r.get("exit_speed"))]
         la_vals = [r.get("angle") for r in live_rows if _is_num(r.get("angle"))]
         height_vals = [r.get("rel_height") for r in grp if _is_num(r.get("rel_height"))]
@@ -1283,16 +1301,11 @@ def _build_dynamic_table(
 
         pitch_types = [str(r.get("pitch_type") or "") for r in grp]
         stuff_vals = [avg_stuff_by_pitch_type.get(pt) for pt in pitch_types if avg_stuff_by_pitch_type.get(pt) is not None]
-        def _is_live_row(r: Dict[str, Any]) -> bool:
-            st = str(r.get("session_type_norm") or "")
-            s = st.strip().lower()
-            return ("live" in s) or ("game" in s) or ("ab" in s)
-
-        fps_opp = sum(1 for r in grp if _is_live_row(r) and r.get("balls_num") == 0 and r.get("strikes_num") == 0)
+        fps_opp = sum(1 for r in grp if _is_competitive_row(r) and r.get("balls_num") == 0 and r.get("strikes_num") == 0)
         fps_yes = sum(
             1
             for r in grp
-            if _is_live_row(r)
+            if _is_competitive_row(r)
             and r.get("balls_num") == 0
             and r.get("strikes_num") == 0
             and str(r.get("pitch_call") or "") in strike_calls
@@ -1300,7 +1313,7 @@ def _build_dynamic_table(
         early_n = sum(
             1
             for r in grp
-            if _is_live_row(r)
+            if _is_competitive_row(r)
             and (
                 (r.get("balls_num"), r.get("strikes_num")) in {(0, 0), (0, 1), (1, 0), (1, 1)}
             )
@@ -1309,7 +1322,7 @@ def _build_dynamic_table(
         ahead_state_n = sum(
             1
             for r in grp
-            if _is_live_row(r)
+            if _is_competitive_row(r)
             and (r.get("balls_num"), r.get("strikes_num")) in {(0, 1), (1, 1)}
             and str(r.get("pitch_call") or "") in ahead_strike_calls
         )
@@ -1318,13 +1331,13 @@ def _build_dynamic_table(
             for r in grp
             if r.get("balls_num") == 0
             and r.get("strikes_num") == 0
-            and _is_live_row(r)
+            and _is_competitive_row(r)
             and str(r.get("pitch_call") or "") == "InPlay"
         ) + sum(
             1
             for r in grp
             if (
-                _is_live_row(r)
+                _is_competitive_row(r)
                 and (
                     (
                         (r.get("balls_num"), r.get("strikes_num")) in {(0, 1), (1, 1)}
@@ -2747,6 +2760,9 @@ def pitching_overview(
     hb_max: Optional[str] = Query(default=None),
     pc_min: Optional[str] = Query(default=None),
     pc_max: Optional[str] = Query(default=None),
+    include_chart_points: bool = Query(default=True),
+    include_row_pitches: bool = Query(default=True),
+    include_trend_rows: bool = Query(default=True),
 ) -> PitchingOverviewResponse:
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
@@ -2893,6 +2909,9 @@ def pitching_overview(
             "hb_max": parsed_hb_max,
             "pc_min": parsed_pc_min,
             "pc_max": parsed_pc_max,
+            "include_chart_points": include_chart_points,
+            "include_row_pitches": include_row_pitches,
+            "include_trend_rows": include_trend_rows,
         },
     )
     cached_overview = _overview_cache_get(overview_cache_key)
@@ -3536,15 +3555,27 @@ def pitching_overview(
                 )
                 for row in raw_pitch_type_rows
             ]
-            chart_points = _build_chart_points(
-                _downsample_rows_for_chart_points(table_source_rows),
-                avg_stuff_by_pitch_type,
+            chart_points = (
+                _build_chart_points(
+                    _downsample_rows_for_chart_points(table_source_rows),
+                    avg_stuff_by_pitch_type,
+                )
+                if include_chart_points
+                else []
             )
-            row_pitches_by_key = _build_row_pitch_map(table_source_rows, split_by, avg_stuff_by_pitch_type)
-            trend_rows = _build_trend_rows(
-                table_source_rows,
-                avg_stuff_by_pitch_type,
-                use_osu_date_session_rules=use_osu_date_session_rules,
+            row_pitches_by_key = (
+                _build_row_pitch_map(table_source_rows, split_by, avg_stuff_by_pitch_type)
+                if include_row_pitches
+                else {}
+            )
+            trend_rows = (
+                _build_trend_rows(
+                    table_source_rows,
+                    avg_stuff_by_pitch_type,
+                    use_osu_date_session_rules=use_osu_date_session_rules,
+                )
+                if include_trend_rows
+                else []
             )
 
         response_payload = PitchingOverviewResponse(
@@ -4884,6 +4915,7 @@ def hitting_overview(
     hb_max: Optional[str] = Query(default=None),
     pc_min: Optional[str] = Query(default=None),
     pc_max: Optional[str] = Query(default=None),
+    include_chart_points: bool = Query(default=True),
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
@@ -4953,6 +4985,7 @@ def hitting_overview(
             "hb_max": parsed_hb_max,
             "pc_min": parsed_pc_min,
             "pc_max": parsed_pc_max,
+            "include_chart_points": include_chart_points,
         },
     )
     cached_overview = _overview_cache_get(overview_cache_key)
@@ -5247,36 +5280,40 @@ def hitting_overview(
         key=lambda name: (_pitch_type_sort_rank(name), name),
     )
 
-    chart_points = [
-        {
-            "pitch_event_id": row.get("pitch_event_id"),
-            "session_date": row.get("session_date").isoformat() if row.get("session_date") else None,
-            "pitcher": str(row.get("pitcher") or ""),
-            "batter": str(row.get("batter") or ""),
-            "pitcherthrows": str(row.get("pitcherthrows") or ""),
-            "batterside": str(row.get("batterside") or ""),
-            "pitch_type": str(row.get("pitch_type") or "Undefined"),
-            "pitch_call": str(row.get("pitch_call") or ""),
-            "play_result": str(row.get("play_result") or ""),
-            "result_label": str(row.get("result_label") or ""),
-            "session_type": str(row.get("session_type_norm") or ""),
-            "rel_speed": row.get("rel_speed"),
-            "exit_speed": row.get("exit_speed"),
-            "angle": row.get("angle"),
-            "distance": row.get("distance"),
-            "direction": row.get("direction"),
-            "plate_side": row.get("plate_side"),
-            "plate_height": row.get("plate_height"),
-            "contact_position_x": row.get("contact_position_x"),
-            "contact_position_y": row.get("contact_position_y"),
-            "contact_position_z": row.get("contact_position_z"),
-            "vertical_attack_angle": row.get("vertical_attack_angle"),
-            "horizontal_attack_angle": row.get("horizontal_attack_angle"),
-            "bat_speed": row.get("bat_speed"),
-            "pitch_number": row.get("pitch_number"),
-        }
-        for row in _downsample_rows_for_chart_points(out_rows)
-    ]
+    chart_points = (
+        [
+            {
+                "pitch_event_id": row.get("pitch_event_id"),
+                "session_date": row.get("session_date").isoformat() if row.get("session_date") else None,
+                "pitcher": str(row.get("pitcher") or ""),
+                "batter": str(row.get("batter") or ""),
+                "pitcherthrows": str(row.get("pitcherthrows") or ""),
+                "batterside": str(row.get("batterside") or ""),
+                "pitch_type": str(row.get("pitch_type") or "Undefined"),
+                "pitch_call": str(row.get("pitch_call") or ""),
+                "play_result": str(row.get("play_result") or ""),
+                "result_label": str(row.get("result_label") or ""),
+                "session_type": str(row.get("session_type_norm") or ""),
+                "rel_speed": row.get("rel_speed"),
+                "exit_speed": row.get("exit_speed"),
+                "angle": row.get("angle"),
+                "distance": row.get("distance"),
+                "direction": row.get("direction"),
+                "plate_side": row.get("plate_side"),
+                "plate_height": row.get("plate_height"),
+                "contact_position_x": row.get("contact_position_x"),
+                "contact_position_y": row.get("contact_position_y"),
+                "contact_position_z": row.get("contact_position_z"),
+                "vertical_attack_angle": row.get("vertical_attack_angle"),
+                "horizontal_attack_angle": row.get("horizontal_attack_angle"),
+                "bat_speed": row.get("bat_speed"),
+                "pitch_number": row.get("pitch_number"),
+            }
+            for row in _downsample_rows_for_chart_points(out_rows)
+        ]
+        if include_chart_points
+        else []
+    )
 
     response_payload = {
         "school_code": school_code,
@@ -5466,6 +5503,7 @@ def catching_overview(
     velo_max: Optional[str] = Query(default=None),
     pc_min: Optional[str] = Query(default=None),
     pc_max: Optional[str] = Query(default=None),
+    include_chart_points: bool = Query(default=True),
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
@@ -5523,6 +5561,7 @@ def catching_overview(
             "velo_max": parsed_velo_max,
             "pc_min": parsed_pc_min,
             "pc_max": parsed_pc_max,
+            "include_chart_points": include_chart_points,
         },
     )
     cached_overview = _overview_cache_get(overview_cache_key)
@@ -5890,34 +5929,38 @@ def catching_overview(
         table_columns = ["Split", "#", "# Throws", "Velo", "ExchangeTime", "PopTime", "SL+"]
         available_columns = ["#", "# Throws", "Velo", "ExchangeTime", "PopTime", "SL+"]
 
-    chart_points = [
-        {
-            "pitch_event_id": row.get("pitch_event_id"),
-            "session_date": row.get("session_date").isoformat() if row.get("session_date") else None,
-            "session_type": str(row.get("session_type_norm") or ""),
-            "catcher": str(row.get("catcher") or ""),
-            "pitcher": str(row.get("pitcher") or ""),
-            "batter": str(row.get("batter") or ""),
-            "pitcherthrows": str(row.get("pitcherthrows") or ""),
-            "batterside": str(row.get("batterside") or ""),
-            "pitch_type": str(row.get("pitch_type") or "Undefined"),
-            "pitch_call": str(row.get("pitch_call") or ""),
-            "play_result": str(row.get("play_result") or ""),
-            "result_label": str(row.get("result_label") or ""),
-            "rel_speed": row.get("rel_speed"),
-            "plate_side": row.get("plate_side"),
-            "plate_height": row.get("plate_height"),
-            "throw_speed": row.get("throw_speed"),
-            "exchange_time": row.get("exchange_time"),
-            "pop_time": row.get("pop_time"),
-            "target_base": row.get("target_base"),
-            "base_x": row.get("base_x"),
-            "base_y": row.get("base_y"),
-            "base_z": row.get("base_z"),
-            "pitch_number": row.get("pitch_number"),
-        }
-        for row in _downsample_rows_for_chart_points(filtered)
-    ]
+    chart_points = (
+        [
+            {
+                "pitch_event_id": row.get("pitch_event_id"),
+                "session_date": row.get("session_date").isoformat() if row.get("session_date") else None,
+                "session_type": str(row.get("session_type_norm") or ""),
+                "catcher": str(row.get("catcher") or ""),
+                "pitcher": str(row.get("pitcher") or ""),
+                "batter": str(row.get("batter") or ""),
+                "pitcherthrows": str(row.get("pitcherthrows") or ""),
+                "batterside": str(row.get("batterside") or ""),
+                "pitch_type": str(row.get("pitch_type") or "Undefined"),
+                "pitch_call": str(row.get("pitch_call") or ""),
+                "play_result": str(row.get("play_result") or ""),
+                "result_label": str(row.get("result_label") or ""),
+                "rel_speed": row.get("rel_speed"),
+                "plate_side": row.get("plate_side"),
+                "plate_height": row.get("plate_height"),
+                "throw_speed": row.get("throw_speed"),
+                "exchange_time": row.get("exchange_time"),
+                "pop_time": row.get("pop_time"),
+                "target_base": row.get("target_base"),
+                "base_x": row.get("base_x"),
+                "base_y": row.get("base_y"),
+                "base_z": row.get("base_z"),
+                "pitch_number": row.get("pitch_number"),
+            }
+            for row in _downsample_rows_for_chart_points(filtered)
+        ]
+        if include_chart_points
+        else []
+    )
 
     pitch_type_legend = sorted(
         {str(row.get("pitch_type") or "Undefined") for row in filtered},

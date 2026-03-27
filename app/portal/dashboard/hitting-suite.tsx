@@ -1188,6 +1188,7 @@ export default function HittingSuite() {
   const [heatmapStat, setHeatmapStat] = useState('Frequency');
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
+  const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const autoFallbackAppliedRef = useRef(false);
   const [abSortColumn, setAbSortColumn] = useState('Pitch #');
   const [abSortDirection, setAbSortDirection] = useState<SortDirection>('asc');
@@ -1223,8 +1224,13 @@ export default function HittingSuite() {
   }, [isMobileView]);
 
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
-  const effectiveSplitBy = isLeaderboardPage ? 'Batter' : splitBy;
+  const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Batter Team' : 'Batter') : splitBy;
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+  useEffect(() => {
+    if (!isLeague && leaderboardViewBy !== 'Player') {
+      setLeaderboardViewBy('Player');
+    }
+  }, [isLeague, leaderboardViewBy]);
   const teamTypeOptions = useMemo(() => {
     const school = String(filters?.school_code ?? '').trim();
     const base = ['All', school || 'OSU', 'Opponents', 'Campers'];
@@ -1408,6 +1414,7 @@ export default function HittingSuite() {
     if (hbMax.trim()) params.set('hb_max', hbMax.trim());
     if (pcMin.trim()) params.set('pc_min', pcMin.trim());
     if (pcMax.trim()) params.set('pc_max', pcMax.trim());
+    params.set('include_chart_points', dashboardPage === 'Leaderboard' ? '0' : '1');
 
     fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { signal: controller.signal })
       .then((r) => r.json())
@@ -1436,7 +1443,7 @@ export default function HittingSuite() {
       cancelled = true;
       controller.abort();
     };
-  }, [appliedFilterVersion, filters, startDate, endDate, hitter, teamType, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax]);
+  }, [appliedFilterVersion, filters, startDate, endDate, hitter, teamType, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage]);
 
   const selectedSingleHitter = hitter && hitter !== 'All' ? hitter : '';
 
@@ -2241,7 +2248,15 @@ export default function HittingSuite() {
             ) : null}
 
             <div className="dashboard-panel" style={{ overflowX: 'auto', marginTop: 10 }}>
-          <div className="portal-form-grid" style={{ marginBottom: '0.8rem', gridTemplateColumns: isLeaderboardPage ? 'minmax(160px, 260px)' : 'repeat(2, minmax(160px, 260px))' }}>
+          <div
+            className="portal-form-grid"
+            style={{
+              marginBottom: '0.8rem',
+              gridTemplateColumns: isLeaderboardPage
+                ? (isLeague ? 'repeat(2, minmax(160px, 260px))' : 'minmax(160px, 260px)')
+                : 'repeat(2, minmax(160px, 260px))',
+            }}
+          >
             <label>
               Table
               <SearchableSingleSelect
@@ -2278,6 +2293,20 @@ export default function HittingSuite() {
                 placeholder={TABLE_MODE_DEFAULT}
               />
             </label>
+            {isLeaderboardPage && isLeague ? (
+              <label>
+                View By
+                <SearchableSingleSelect
+                  options={[
+                    { value: 'Player', label: 'Player' },
+                    { value: 'Team', label: 'Team' },
+                  ]}
+                  value={leaderboardViewBy}
+                  onChange={(next) => setLeaderboardViewBy(next as 'Player' | 'Team')}
+                  placeholder="Player"
+                />
+              </label>
+            ) : null}
             {!isLeaderboardPage ? (
               <label>
                 Split By
@@ -2443,7 +2472,7 @@ export default function HittingSuite() {
                   {displayedTableColumns.map((col, colIndex) => {
                     const isSortable = true;
                     const activeSort = leaderboardSortColumn === col;
-                    const label = isLeaderboardPage && colIndex === 0 ? 'Player' : col;
+                    const label = isLeaderboardPage && colIndex === 0 ? (leaderboardViewBy === 'Team' ? 'Team' : 'Player') : col;
                     return (
                       <th
                         key={col}

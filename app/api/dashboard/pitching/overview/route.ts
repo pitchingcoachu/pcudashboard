@@ -11,6 +11,10 @@ const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=5, stale-while-revalidate=55',
 } as const;
 
+function resolveOverviewTimeoutMs(schoolCode: string): number {
+  return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 300000 : 120000;
+}
+
 export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -48,6 +52,9 @@ export async function GET(request: Request) {
   const hbMax = inputUrl.searchParams.get('hb_max')?.trim() ?? '';
   const pcMin = inputUrl.searchParams.get('pc_min')?.trim() ?? '';
   const pcMax = inputUrl.searchParams.get('pc_max')?.trim() ?? '';
+  const includeChartPoints = inputUrl.searchParams.get('include_chart_points')?.trim() ?? '';
+  const includeRowPitches = inputUrl.searchParams.get('include_row_pitches')?.trim() ?? '';
+  const includeTrendRows = inputUrl.searchParams.get('include_trend_rows')?.trim() ?? '';
   const playerIdentity = await resolveDashboardPlayerIdentity({
     role: session.role,
     organizationId: session.organizationId,
@@ -106,13 +113,16 @@ export async function GET(request: Request) {
   if (hbMax) url.searchParams.set('hb_max', hbMax);
   if (pcMin) url.searchParams.set('pc_min', pcMin);
   if (pcMax) url.searchParams.set('pc_max', pcMax);
+  if (includeChartPoints) url.searchParams.set('include_chart_points', includeChartPoints);
+  if (includeRowPitches) url.searchParams.set('include_row_pitches', includeRowPitches);
+  if (includeTrendRows) url.searchParams.set('include_trend_rows', includeTrendRows);
 
   try {
     const result = await fetchDashboardJsonWithCache({
       cacheKey: `pitching:overview:${url.toString()}`,
       ttlMs: 30000,
       staleTtlMs: 120000,
-      timeoutMs: 120000,
+      timeoutMs: resolveOverviewTimeoutMs(schoolCode),
       retries: 0,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });

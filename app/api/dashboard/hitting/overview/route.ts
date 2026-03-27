@@ -11,6 +11,10 @@ const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=5, stale-while-revalidate=55',
 } as const;
 
+function resolveOverviewTimeoutMs(schoolCode: string): number {
+  return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 300000 : 120000;
+}
+
 export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -65,6 +69,7 @@ export async function GET(request: Request) {
     'hb_max',
     'pc_min',
     'pc_max',
+    'include_chart_points',
   ] as const;
 
   const apiBase = resolveDashboardApiBaseUrl();
@@ -84,7 +89,7 @@ export async function GET(request: Request) {
       cacheKey: `hitting:overview:${url.toString()}`,
       ttlMs: 30000,
       staleTtlMs: 120000,
-      timeoutMs: 120000,
+      timeoutMs: resolveOverviewTimeoutMs(schoolCode),
       retries: 0,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });

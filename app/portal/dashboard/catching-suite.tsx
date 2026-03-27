@@ -411,14 +411,20 @@ export default function CatchingSuite() {
   const [showCustomEditor, setShowCustomEditor] = useState(false);
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
+  const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
 
   const [hmChartType, setHmChartType] = useState<'Heat' | 'Pitch'>('Heat');
   const [hmStat, setHmStat] = useState('Frequency');
   const [hmHover, setHmHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
   const autoFallbackAppliedRef = useRef(false);
   const isLeaderboardPage = page === 'Leaderboard';
-  const effectiveSplitBy = isLeaderboardPage ? 'Catcher' : splitBy;
+  const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Catcher') : splitBy;
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+  useEffect(() => {
+    if (!isLeague && leaderboardViewBy !== 'Player') {
+      setLeaderboardViewBy('Player');
+    }
+  }, [isLeague, leaderboardViewBy]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -524,6 +530,7 @@ export default function CatchingSuite() {
     params.set('table_mode', tableMode);
     if (effectiveSplitBy) params.set('split_by', effectiveSplitBy);
     if (tableMode === 'Custom' && customCols.length) params.set('custom_columns', customCols.join(','));
+    params.set('include_chart_points', page === 'Leaderboard' ? '0' : '1');
 
     setLoadingOverview(true);
     fetch(`/api/dashboard/catching/overview?${params.toString()}`, { signal: controller.signal })
@@ -551,7 +558,7 @@ export default function CatchingSuite() {
       active = false;
       controller.abort();
     };
-  }, [dateStart, dateEnd, sessionType, teamType, catcher, hand, batterSide, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols]);
+  }, [dateStart, dateEnd, sessionType, teamType, catcher, hand, batterSide, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols, page]);
 
   useEffect(() => {
     let active = true;
@@ -987,7 +994,15 @@ export default function CatchingSuite() {
             {page === 'Data and Performance' || page === 'Leaderboard' ? (
               <article className="portal-day-card">
                 <div className="portal-stack">
-                <div className="portal-form-grid" style={{ marginBottom: '0.8rem', gridTemplateColumns: page === 'Leaderboard' ? 'minmax(160px, 260px)' : 'repeat(2, minmax(160px, 260px))' }}>
+                <div
+                  className="portal-form-grid"
+                  style={{
+                    marginBottom: '0.8rem',
+                    gridTemplateColumns: page === 'Leaderboard'
+                      ? (isLeague ? 'repeat(2, minmax(160px, 260px))' : 'minmax(160px, 260px)')
+                      : 'repeat(2, minmax(160px, 260px))',
+                  }}
+                >
                   <label>
                     Tables
                     <SearchableSingleSelect
@@ -1023,6 +1038,20 @@ export default function CatchingSuite() {
                       placeholder="Catching Data"
                     />
                   </label>
+                  {page === 'Leaderboard' && isLeague ? (
+                    <label>
+                      View By
+                      <SearchableSingleSelect
+                        options={[
+                          { value: 'Player', label: 'Player' },
+                          { value: 'Team', label: 'Team' },
+                        ]}
+                        value={leaderboardViewBy}
+                        onChange={(next) => setLeaderboardViewBy(next as 'Player' | 'Team')}
+                        placeholder="Player"
+                      />
+                    </label>
+                  ) : null}
                   {page !== 'Leaderboard' ? (
                     <label>
                       <span>Split By</span>
@@ -1120,7 +1149,7 @@ export default function CatchingSuite() {
                         {(overview?.table_columns ?? []).map((c, colIndex) => {
                           const isSortable = true;
                           const activeSort = leaderboardSortColumn === c;
-                          const label = page === 'Leaderboard' && colIndex === 0 ? 'Player' : c;
+                          const label = page === 'Leaderboard' && colIndex === 0 ? (leaderboardViewBy === 'Team' ? 'Team' : 'Player') : c;
                           return (
                             <th
                               key={c}
