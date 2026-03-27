@@ -18,6 +18,7 @@ type CatchingFiltersPayload = {
   pitch_results: string[];
   count_options: string[];
   after_count_options: string[];
+  catchers_by_team_code?: Record<string, string[]>;
 };
 
 type CatchingPoint = {
@@ -134,6 +135,7 @@ function pickDefaultTeamType(teamTypes: string[] | undefined, schoolCode: string
   const cleaned = teamTypes.map((value) => String(value ?? '').trim()).filter(Boolean);
   if (cleaned.length === 0) return 'All';
   const school = String(schoolCode ?? '').trim();
+  if (school.toUpperCase() === 'LEAGUE') return 'All';
   const schoolNorm = school.toUpperCase();
   const exactSchool = cleaned.find((value) => value === school);
   if (exactSchool) return exactSchool;
@@ -416,6 +418,7 @@ export default function CatchingSuite() {
   const autoFallbackAppliedRef = useRef(false);
   const isLeaderboardPage = page === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? 'Catcher' : splitBy;
+  const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -481,7 +484,7 @@ export default function CatchingSuite() {
         if (!active) return;
         setFilters((prev) => {
           if (!prev) return payload;
-          return { ...prev, catchers: payload.catchers };
+          return { ...prev, catchers: payload.catchers, catchers_by_team_code: payload.catchers_by_team_code };
         });
         if (catcher !== 'All' && !payload.catchers.includes(catcher)) setCatcher('All');
       })
@@ -764,19 +767,22 @@ export default function CatchingSuite() {
     return buildHeatCells(heatPoints, heatmapDisplayView);
   }, [page, hmChartType, heatPoints, heatmapDisplayView]);
 
-  const catcherOptions = useMemo(
-    () =>
-      withAll(filters?.catchers ?? []).map((value) => ({
-        value,
-        label: value === 'All' ? 'All' : formatNameFirstLast(value),
-      })),
-    [filters?.catchers]
-  );
+  const catcherOptions = useMemo(() => {
+    const values = !isLeague || teamType === 'All' ? (filters?.catchers ?? []) : (filters?.catchers_by_team_code?.[teamType] ?? []);
+    return withAll(values).map((value) => ({
+      value,
+      label: value === 'All' ? 'All' : formatNameFirstLast(value),
+    }));
+  }, [filters?.catchers, filters?.catchers_by_team_code, isLeague, teamType]);
   const teamTypeOptions = useMemo(() => {
     const school = String(filters?.school_code ?? '').trim();
     const base = ['All', school || 'OSU', 'Opponents', 'Campers'];
     return toOptions(withAll(filters?.team_types ?? base));
   }, [filters?.school_code, filters?.team_types]);
+  useEffect(() => {
+    const allowed = new Set(catcherOptions.map((option) => option.value));
+    if (!allowed.has(catcher)) setCatcher('All');
+  }, [catcher, catcherOptions]);
   const handOptions = useMemo(() => toOptions(withAll(filters?.hands ?? ['All', 'Left', 'Right'])), [filters?.hands]);
   const batterSideOptions = useMemo(() => toOptions(withAll(filters?.batter_sides ?? ['All', 'Left', 'Right'])), [filters?.batter_sides]);
   const pitchTypeOptions = useMemo(() => toOptions(withAll(filters?.pitch_types ?? [])), [filters?.pitch_types]);

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import CatchingSuite from './catching-suite';
 import ComparisonToolSuite from './comparison-tool-suite';
 import CustomReportsSuite from './custom-reports-suite';
@@ -38,9 +38,22 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
     'Stuff+ Calculator': false,
   });
   const canAccessPlayerNotes = role === 'admin' || role === 'coach';
-  const suiteOptions: SuiteName[] = canAccessPlayerNotes
-    ? ['Pitching', 'Hitting', 'Catching', 'Custom Reports', 'Comparison Tool', 'Player Plans', 'Player Notes', 'Stuff+ Calculator']
-    : ['Pitching', 'Hitting', 'Catching', 'Custom Reports', 'Comparison Tool', 'Player Plans', 'Stuff+ Calculator'];
+  const isLeague = String(selectedSchoolCode || '').toUpperCase() === 'LEAGUE';
+  const suiteOptions: SuiteName[] = useMemo(() => {
+    const base: SuiteName[] = ['Pitching', 'Hitting', 'Catching', 'Custom Reports', 'Comparison Tool'];
+    if (!isLeague) base.push('Player Plans');
+    if (!isLeague && canAccessPlayerNotes) base.push('Player Notes');
+    if (!isLeague) base.push('Stuff+ Calculator');
+    return base;
+  }, [canAccessPlayerNotes, isLeague]);
+
+  useEffect(() => {
+    if (!suiteOptions.includes(suite)) {
+      setSuite('Pitching');
+      setMountedSuites((current) => (current.Pitching ? current : { ...current, Pitching: true }));
+    }
+  }, [suite, suiteOptions]);
+
   const showSuite = (name: SuiteName) => suite === name;
   const activateSuite = (name: SuiteName) => {
     setSuite(name);
@@ -91,17 +104,17 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
           <ComparisonToolSuite />
         </div>
       ) : null}
-      {mountedSuites['Player Plans'] ? (
+      {!isLeague && mountedSuites['Player Plans'] ? (
         <div style={{ display: showSuite('Player Plans') ? 'block' : 'none' }}>
           <PlayerPlansSuite />
         </div>
       ) : null}
-      {canAccessPlayerNotes && mountedSuites['Player Notes'] ? (
+      {!isLeague && canAccessPlayerNotes && mountedSuites['Player Notes'] ? (
         <div style={{ display: showSuite('Player Notes') ? 'block' : 'none' }}>
           <PlayerNotesSuite />
         </div>
       ) : null}
-      {mountedSuites['Stuff+ Calculator'] ? (
+      {!isLeague && mountedSuites['Stuff+ Calculator'] ? (
         <div style={{ display: showSuite('Stuff+ Calculator') ? 'block' : 'none' }}>
           <StuffCalculatorSuite />
         </div>

@@ -2007,6 +2007,15 @@ def _filter_pitching_rows_by_team_type(
 ) -> List[Dict[str, Any]]:
     if team_type_value in {"", "All"}:
         return rows
+    if school_code == "LEAGUE":
+        selected_code = _normalize_team_code(team_type_value)
+        if not selected_code:
+            return rows
+        return [
+            row
+            for row in rows
+            if _normalize_team_code(str(row.get("pitcher_team_code") or "")) == selected_code
+        ]
 
     filtered: List[Dict[str, Any]] = []
     for row in rows:
@@ -2040,6 +2049,39 @@ def _filter_pitching_rows_by_team_type(
         if row_team_bucket == team_type_value:
             filtered.append(row)
     return filtered
+
+
+def _league_team_codes_sql_expr() -> str:
+    return """
+    SELECT team_code
+    FROM (
+      SELECT DISTINCT NULLIF(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '') AS team_code
+      FROM public.pitch_events
+      WHERE school_code = %(school_code)s
+      UNION
+      SELECT DISTINCT NULLIF(UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')), '') AS team_code
+      FROM public.pitch_events
+      WHERE school_code = %(school_code)s
+    ) t
+    WHERE team_code IS NOT NULL
+    ORDER BY team_code
+    """
+
+
+def _league_name_map_sql_expr(team_col: str, name_col: str) -> str:
+    return f"""
+    SELECT team_code, array_agg(name ORDER BY name) AS names
+    FROM (
+      SELECT DISTINCT
+        NULLIF(UPPER(COALESCE(NULLIF(TRIM({team_col}), ''), '')), '') AS team_code,
+        NULLIF(TRIM({name_col}), '') AS name
+      FROM public.pitch_events
+      WHERE school_code = %(school_code)s
+    ) t
+    WHERE team_code IS NOT NULL AND name IS NOT NULL
+    GROUP BY team_code
+    ORDER BY team_code
+    """
 
 
 _API_DIR = os.path.dirname(__file__)
@@ -2519,6 +2561,7 @@ SCHOOL_RELEVANT_TEAM_SQL = (
     + PITCHER_TEAM_IS_MARKER_SQL
     + " OR "
     + BATTER_TEAM_IS_MARKER_SQL
+    + " OR (UPPER(COALESCE(%(school_code)s::text, '')) = 'LEAGUE')"
     + " OR (UPPER(COALESCE(%(school_code)s::text, '')) = 'PCU' AND "
     + BLANK_TEAM_CODES_SQL
     + ")"
@@ -2556,6 +2599,8 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
     hitter_norm = set(roster.get("hitter_norm", []) or [])
     campers_norm = set(roster.get("campers_norm", []) or [])
     team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
+    pitchers_by_team_code: Dict[str, List[str]] = {}
+    opp_hitters_by_team_code: Dict[str, List[str]] = {}
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -2597,7 +2642,7 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
             )
             opp_hitters = [str(row["opp_hitter"]) for row in cur.fetchall()]
 
-            session_types = ["Season", "Bullpen", "Live BP", "All"]
+            session_types = ["Season", "All"] if school_code == "LEAGUE" else ["Season", "Bullpen", "Live BP", "All"]
 
             cur.execute(
                 """
@@ -2616,7 +2661,22 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
             )
             pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
 
-            team_types = ["All", school_code, "Opponents", "Campers"]
+            if school_code == "LEAGUE":
+                cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
+                league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
+                team_types = ["All", *league_team_codes]
+                cur.execute(_league_name_map_sql_expr("pitcherteam", "pitcher"), {"school_code": school_code})
+                pitchers_by_team_code = {
+                    str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
+                    for row in cur.fetchall()
+                }
+                cur.execute(_league_name_map_sql_expr("pitcherteam", "batter"), {"school_code": school_code})
+                opp_hitters_by_team_code = {
+                    str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
+                    for row in cur.fetchall()
+                }
+            else:
+                team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"filters query failed: {exc}") from exc
 
@@ -2648,6 +2708,8 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
         pitch_results=PITCH_RESULT_CHOICES,
         count_options=COUNT_CHOICES,
         after_count_options=COUNT_CHOICES,
+        pitchers_by_team_code=pitchers_by_team_code or None,
+        opp_hitters_by_team_code=opp_hitters_by_team_code or None,
     )
 
 
@@ -2739,6 +2801,7 @@ def pitching_overview(
         "pitchers_norm": selected_pitcher_keys,
         "pitchers_count": len(selected_pitcher_keys),
         "team_type": team_type,
+        "team_type_norm": _normalize_team_code(team_type or ""),
         "team_norm": team_norm,
         "team_norm_count": len(team_norm),
         "known_pitchers": team_norm,
@@ -3045,6 +3108,12 @@ def pitching_overview(
           AND (
             %(team_type)s::text IS NULL OR %(team_type)s::text = '' OR %(team_type)s::text = 'All' OR
             (
+              UPPER(COALESCE(%(school_code)s::text, '')) = 'LEAGUE'
+              AND %(team_type_norm)s::text <> ''
+              AND """ + PITCHER_TEAM_NORM_SQL + """ = %(team_type_norm)s::text
+            )
+            OR
+            (
               %(team_type)s::text = %(school_code)s::text AND (
                 """ + PITCHING_TEAM_MATCH_SQL + """
               )
@@ -3064,6 +3133,7 @@ def pitching_overview(
             )
             OR
             (
+              UPPER(COALESCE(%(school_code)s::text, '')) <> 'LEAGUE' AND
               %(team_type)s::text NOT IN ('Opponents', 'Campers', %(school_code)s::text) AND
               (""" + TEAM_BUCKET_SQL + """) = %(team_type)s::text
             )
@@ -4655,6 +4725,8 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
     hitter_norm_set = set(roster.get("hitter_norm", []) or [])
     team_hitter_norm = sorted(hitter_norm_set - campers_norm)
     team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
+    hitters_by_team_code: Dict[str, List[str]] = {}
+    opp_pitchers_by_team_code: Dict[str, List[str]] = {}
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -4728,6 +4800,23 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
                 {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
+            team_types: List[str]
+            if school_code == "LEAGUE":
+                cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
+                league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
+                team_types = ["All", *league_team_codes]
+                cur.execute(_league_name_map_sql_expr("batterteam", "batter"), {"school_code": school_code})
+                hitters_by_team_code = {
+                    str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
+                    for row in cur.fetchall()
+                }
+                cur.execute(_league_name_map_sql_expr("batterteam", "pitcher"), {"school_code": school_code})
+                opp_pitchers_by_team_code = {
+                    str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
+                    for row in cur.fetchall()
+                }
+            else:
+                team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"hitting filters query failed: {exc}") from exc
 
@@ -4737,7 +4826,7 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
         "max_date": date_row.get("max_date"),
         "hitters": hitters,
         "opp_pitchers": opp_pitchers,
-        "team_types": ["All", school_code, "Opponents", "Campers"] if (roster.get("hitter_norm") or roster.get("campers_norm")) else ["All", school_code, "Opponents", "Campers"],
+        "team_types": team_types,
         "hands": ["All", "Left", "Right"],
         "batter_sides": ["All", "Left", "Right"],
         "pitch_types": pitch_types,
@@ -4747,6 +4836,8 @@ def hitting_filters(school_code: str = Query(..., min_length=1)) -> Dict[str, An
         "count_options": COUNT_CHOICES,
         "after_count_options": COUNT_CHOICES,
         "bip_results": ["All", "Single", "Double", "Triple", "HomeRun", "Out"],
+        "hitters_by_team_code": hitters_by_team_code,
+        "opp_pitchers_by_team_code": opp_pitchers_by_team_code,
         "table_modes": ["Results", "Swing Decisions", "Batted Ball Data", "Custom"],
         "split_by_options": [
             "Pitch Types",
@@ -5059,34 +5150,40 @@ def hitting_overview(
         if session_type_filter and row_session_bucket != session_type_filter:
             continue
         if use_team_filter:
-            batter_key = _normalize_name_key(str(row.get("batter") or ""))
-            pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
-            batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
-            pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
-            batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
-            is_pcu_blank_team_row = (
-                school_code == "PCU"
-                and not pitcher_team_code
-                and not batter_team_code
-                and bool(batter_key)
-                and batter_key in (team_hitter_norm | campers_norm)
-            )
-            is_team_hitting_row = (batter_is_marker and not pitcher_is_marker) or is_pcu_blank_team_row
-            is_opponent_hitting_row = pitcher_is_marker and bool(batter_team_code) and not batter_is_marker
-
-            if team_type_value == "Opponents":
-                row_team_bucket = "Opponents" if is_opponent_hitting_row else None
-            elif team_type_value == "Campers":
-                row_team_bucket = "Campers" if (batter_key in campers_norm and is_team_hitting_row) else None
-            elif team_type_value == school_code:
-                if batter_key in campers_norm:
-                    row_team_bucket = "Campers" if is_team_hitting_row else None
-                else:
-                    row_team_bucket = school_code if is_team_hitting_row else None
+            if school_code == "LEAGUE":
+                selected_code = _normalize_team_code(team_type_value)
+                row_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
+                if not selected_code or row_code != selected_code:
+                    continue
             else:
-                row_team_bucket = None
-            if row_team_bucket != team_type_value:
-                continue
+                batter_key = _normalize_name_key(str(row.get("batter") or ""))
+                pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+                batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
+                pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
+                batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
+                is_pcu_blank_team_row = (
+                    school_code == "PCU"
+                    and not pitcher_team_code
+                    and not batter_team_code
+                    and bool(batter_key)
+                    and batter_key in (team_hitter_norm | campers_norm)
+                )
+                is_team_hitting_row = (batter_is_marker and not pitcher_is_marker) or is_pcu_blank_team_row
+                is_opponent_hitting_row = pitcher_is_marker and bool(batter_team_code) and not batter_is_marker
+
+                if team_type_value == "Opponents":
+                    row_team_bucket = "Opponents" if is_opponent_hitting_row else None
+                elif team_type_value == "Campers":
+                    row_team_bucket = "Campers" if (batter_key in campers_norm and is_team_hitting_row) else None
+                elif team_type_value == school_code:
+                    if batter_key in campers_norm:
+                        row_team_bucket = "Campers" if is_team_hitting_row else None
+                    else:
+                        row_team_bucket = school_code if is_team_hitting_row else None
+                else:
+                    row_team_bucket = None
+                if row_team_bucket != team_type_value:
+                    continue
         if selected_hitter_keys and _normalize_name_key(str(row.get("batter") or "")) not in selected_hitter_keys:
             continue
         if selected_opp_pitcher_keys and _normalize_name_key(str(row.get("pitcher") or "")) not in selected_opp_pitcher_keys:
@@ -5221,6 +5318,7 @@ def catching_filters(
     campers_norm = set(roster.get("campers_norm", []) or [])
     team_catcher_norm = set(roster.get("hitter_norm", []) or []) - campers_norm
     team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
+    catchers_by_team_code: Dict[str, List[str]] = {}
     session_type_filter = _normalize_session_type_filter(session_type)
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
@@ -5311,6 +5409,18 @@ def catching_filters(
                 {"school_code": school_code, "team_markers_norm": team_markers_norm},
             )
             pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
+            team_types: List[str]
+            if school_code == "LEAGUE":
+                cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
+                league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
+                team_types = ["All", *league_team_codes]
+                cur.execute(_league_name_map_sql_expr("pitcherteam", "catcher"), {"school_code": school_code})
+                catchers_by_team_code = {
+                    str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
+                    for row in cur.fetchall()
+                }
+            else:
+                team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"catching filters query failed: {exc}") from exc
 
@@ -5319,7 +5429,7 @@ def catching_filters(
         "min_date": date_row.get("min_date"),
         "max_date": date_row.get("max_date"),
         "catchers": catchers,
-        "team_types": ["All", school_code, "Opponents", "Campers"] if (team_catcher_norm or campers_norm) else ["All", school_code, "Opponents", "Campers"],
+        "team_types": team_types,
         "pitch_types": pitch_types,
         "hands": ["All", "Left", "Right"],
         "batter_sides": ["All", "Left", "Right"],
@@ -5328,6 +5438,7 @@ def catching_filters(
         "pitch_results": PITCH_RESULT_CHOICES,
         "count_options": COUNT_CHOICES,
         "after_count_options": COUNT_CHOICES,
+        "catchers_by_team_code": catchers_by_team_code,
     }
 
 
@@ -5551,35 +5662,41 @@ def catching_overview(
     filtered: List[Dict[str, Any]] = []
     for row in rows:
         if use_team_filter:
-            catcher_key = _normalize_name_key(str(row.get("catcher") or ""))
-            pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
-            batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
-            pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
-            batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
-            # Catching team/opponent split is driven by pitcherteam/batterteam markers.
-            is_pcu_blank_team_row = (
-                school_code == "PCU"
-                and not pitcher_team_code
-                and not batter_team_code
-                and bool(catcher_key)
-                and catcher_key in (team_catcher_norm | campers_norm)
-            )
-            is_team_catching_row = (pitcher_is_marker and not batter_is_marker) or is_pcu_blank_team_row
-            is_opponent_catching_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
-
-            if team_type_value == "Opponents":
-                row_team_bucket = "Opponents" if is_opponent_catching_row else None
-            elif team_type_value == "Campers":
-                row_team_bucket = "Campers" if (catcher_key in campers_norm and is_team_catching_row) else None
-            elif team_type_value == school_code:
-                if catcher_key in campers_norm:
-                    row_team_bucket = "Campers" if is_team_catching_row else None
-                else:
-                    row_team_bucket = school_code if is_team_catching_row else None
+            if school_code == "LEAGUE":
+                selected_code = _normalize_team_code(team_type_value)
+                row_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+                if not selected_code or row_code != selected_code:
+                    continue
             else:
-                row_team_bucket = None
-            if row_team_bucket != team_type_value:
-                continue
+                catcher_key = _normalize_name_key(str(row.get("catcher") or ""))
+                pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+                batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
+                pitcher_is_marker = pitcher_team_code in team_markers_norm if pitcher_team_code else False
+                batter_is_marker = batter_team_code in team_markers_norm if batter_team_code else False
+                # Catching team/opponent split is driven by pitcherteam/batterteam markers.
+                is_pcu_blank_team_row = (
+                    school_code == "PCU"
+                    and not pitcher_team_code
+                    and not batter_team_code
+                    and bool(catcher_key)
+                    and catcher_key in (team_norm | campers_norm)
+                )
+                is_team_catching_row = (pitcher_is_marker and not batter_is_marker) or is_pcu_blank_team_row
+                is_opponent_catching_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
+
+                if team_type_value == "Opponents":
+                    row_team_bucket = "Opponents" if is_opponent_catching_row else None
+                elif team_type_value == "Campers":
+                    row_team_bucket = "Campers" if (catcher_key in campers_norm and is_team_catching_row) else None
+                elif team_type_value == school_code:
+                    if catcher_key in campers_norm:
+                        row_team_bucket = "Campers" if is_team_catching_row else None
+                    else:
+                        row_team_bucket = school_code if is_team_catching_row else None
+                else:
+                    row_team_bucket = None
+                if row_team_bucket != team_type_value:
+                    continue
         if selected_catcher_keys and _normalize_name_key(str(row.get("catcher") or "")) not in selected_catcher_keys:
             continue
         row_session_bucket = _session_bucket_for_row(row, team_markers_norm)

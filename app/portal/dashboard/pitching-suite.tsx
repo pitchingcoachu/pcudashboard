@@ -24,6 +24,8 @@ type FiltersPayload = {
   pitch_results: string[];
   count_options: string[];
   after_count_options: string[];
+  pitchers_by_team_code?: Record<string, string[]>;
+  opp_hitters_by_team_code?: Record<string, string[]>;
 };
 
 type OptionItem = { value: string; label: string };
@@ -395,6 +397,7 @@ function pickDefaultTeamType(teamTypes: string[], schoolCode: string): string {
   const cleaned = teamTypes.map((value) => String(value ?? '').trim()).filter(Boolean);
   if (cleaned.length === 0) return 'All';
   const school = String(schoolCode ?? '').trim();
+  if (school.toUpperCase() === 'LEAGUE') return 'All';
   const schoolNorm = school.toUpperCase();
   const exactSchool = cleaned.find((value) => value === school);
   if (exactSchool) return exactSchool;
@@ -1139,8 +1142,19 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
   const rightCompareVideoRef = useRef<HTMLVideoElement | null>(null);
   const actionViewRef = useRef<HTMLDivElement | null>(null);
 
-  const pitcherOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filters.pitchers, true)] : []), [filters]);
-  const hitterOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filters.opp_hitters, true)] : []), [filters]);
+  const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+  const filteredPitchers = useMemo(() => {
+    if (!filters) return [];
+    if (!isLeague || teamType === 'All') return filters.pitchers ?? [];
+    return filters.pitchers_by_team_code?.[teamType] ?? [];
+  }, [filters, isLeague, teamType]);
+  const filteredOppHitters = useMemo(() => {
+    if (!filters) return [];
+    if (!isLeague || teamType === 'All') return filters.opp_hitters ?? [];
+    return filters.opp_hitters_by_team_code?.[teamType] ?? [];
+  }, [filters, isLeague, teamType]);
+  const pitcherOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filteredPitchers, true)] : []), [filters, filteredPitchers]);
+  const hitterOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filteredOppHitters, true)] : []), [filters, filteredOppHitters]);
   const pitchTypeOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filters.pitch_types)] : []), [filters]);
   const zoneLocationOptions = useMemo(
     () => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filters.zone_locations)] : []),
@@ -1176,6 +1190,23 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
     const unique = Array.from(new Set([...fromFilters, ...fromManual])).sort((a, b) => a.localeCompare(b));
     return [{ value: 'All', label: 'All' }, ...toOptions(unique, true)];
   }, [filters?.pitchers, manualEntries]);
+  useEffect(() => {
+    const allowed = new Set(pitcherOptions.map((option) => option.value));
+    const next = selectedPitchers.filter((value) => allowed.has(value));
+    const normalized = next.length ? next : ['All'];
+    if (normalized.length !== selectedPitchers.length || normalized.some((value, index) => value !== selectedPitchers[index])) {
+      setSelectedPitchers(normalized);
+    }
+  }, [pitcherOptions, selectedPitchers]);
+
+  useEffect(() => {
+    const allowed = new Set(hitterOptions.map((option) => option.value));
+    const next = selectedHitters.filter((value) => allowed.has(value));
+    const normalized = next.length ? next : ['All'];
+    if (normalized.length !== selectedHitters.length || normalized.some((value, index) => value !== selectedHitters[index])) {
+      setSelectedHitters(normalized);
+    }
+  }, [hitterOptions, selectedHitters]);
   const manualThrowTypeOptions = useMemo(() => {
     const defaults = ['Pulldowns', 'Mound Velo', 'Plyo Velo', 'Bullpen', 'Other'];
     const fromManual = manualEntries.map((entry) => entry.throw_type).filter(Boolean);

@@ -26,6 +26,8 @@ class PitchingFiltersResponse(BaseModel):
     pitch_results: List[str]
     count_options: List[str]
     after_count_options: List[str]
+    pitchers_by_team_code: Optional[Dict[str, List[str]]] = None
+    opp_hitters_by_team_code: Optional[Dict[str, List[str]]] = None
 
 
 class PitchTypeSummaryRow(BaseModel):

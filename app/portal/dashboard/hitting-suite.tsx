@@ -24,6 +24,8 @@ type HittingFiltersPayload = {
   bip_results: string[];
   table_modes: string[];
   split_by_options: string[];
+  hitters_by_team_code?: Record<string, string[]>;
+  opp_pitchers_by_team_code?: Record<string, string[]>;
 };
 
 type ChartPoint = {
@@ -360,6 +362,7 @@ function pickDefaultTeamType(teamTypes: string[] | undefined, schoolCode: string
   const cleaned = teamTypes.map((value) => String(value ?? '').trim()).filter(Boolean);
   if (cleaned.length === 0) return 'All';
   const school = String(schoolCode ?? '').trim();
+  if (school.toUpperCase() === 'LEAGUE') return 'All';
   const schoolNorm = school.toUpperCase();
   const exactSchool = cleaned.find((value) => value === school);
   if (exactSchool) return exactSchool;
@@ -1221,6 +1224,7 @@ export default function HittingSuite() {
 
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? 'Batter' : splitBy;
+  const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
   const teamTypeOptions = useMemo(() => {
     const school = String(filters?.school_code ?? '').trim();
     const base = ['All', school || 'OSU', 'Opponents', 'Campers'];
@@ -1228,6 +1232,26 @@ export default function HittingSuite() {
     const unique = Array.from(new Set(combined.filter(Boolean)));
     return toOptions(unique);
   }, [filters?.school_code, filters?.team_types]);
+  const hitterOptions = useMemo(() => {
+    if (!filters) return [{ value: 'All', label: 'All' }];
+    const values = !isLeague || teamType === 'All' ? (filters.hitters ?? []) : (filters.hitters_by_team_code?.[teamType] ?? []);
+    return [{ value: 'All', label: 'All' }, ...toOptions(values, true)];
+  }, [filters, isLeague, teamType]);
+  const oppPitcherOptions = useMemo(() => {
+    if (!filters) return [{ value: 'All', label: 'All' }];
+    const values = !isLeague || teamType === 'All' ? (filters.opp_pitchers ?? []) : (filters.opp_pitchers_by_team_code?.[teamType] ?? []);
+    return [{ value: 'All', label: 'All' }, ...toOptions(values, true)];
+  }, [filters, isLeague, teamType]);
+
+  useEffect(() => {
+    const allowed = new Set(hitterOptions.map((option) => option.value));
+    if (!allowed.has(hitter)) setHitter('All');
+  }, [hitter, hitterOptions]);
+
+  useEffect(() => {
+    const allowed = new Set(oppPitcherOptions.map((option) => option.value));
+    if (!allowed.has(oppPitcher)) setOppPitcher('All');
+  }, [oppPitcher, oppPitcherOptions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1946,7 +1970,7 @@ export default function HittingSuite() {
                   <label>
                     Hitters
                     <SearchableSingleSelect
-                      options={[{ value: 'All', label: 'All' }, ...toOptions(filters.hitters, true)]}
+                      options={hitterOptions}
                       value={hitter}
                       onChange={setHitter}
                       placeholder="All"
@@ -1963,7 +1987,7 @@ export default function HittingSuite() {
                   </label>
                   <label>
                     Opponent Pitchers
-                    <SearchableMultiSelect options={[{ value: 'All', label: 'All' }, ...toOptions(filters.opp_pitchers, true)]} values={oppPitcher === 'All' ? ['All'] : [oppPitcher]} onChange={(next) => setOppPitcher(next[0] ?? 'All')} />
+                    <SearchableMultiSelect options={oppPitcherOptions} values={oppPitcher === 'All' ? ['All'] : [oppPitcher]} onChange={(next) => setOppPitcher(next[0] ?? 'All')} />
                   </label>
                   <label>
                     Pitcher Hand
