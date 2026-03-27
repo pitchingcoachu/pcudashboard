@@ -4121,6 +4121,23 @@ def pitching_overview(
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
 
+    if school_code == "LEAGUE":
+        span_days: Optional[int] = None
+        if start_date and end_date:
+            span_days = max(0, (end_date - start_date).days + 1)
+
+        large_window = bool(span_days and span_days > 14)
+        if large_window:
+            include_row_pitches = False
+            include_trend_rows = False
+            include_chart_points = False
+
+        if not include_row_pitches and not include_trend_rows:
+            if table_mode not in {"Live", "Process", "Results", "Usage"}:
+                table_mode = "Live"
+            if split_by not in {"Pitch Types", "Pitcher", "Batter", "Catcher", "Pitcher Hand", "Batter Hand", "Team", "Pitcher Team"}:
+                split_by = "Pitch Types"
+
     params = {
         "school_code": school_code,
         "start_date": start_date,

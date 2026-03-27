@@ -1159,6 +1159,14 @@ export default function PitchingSuite({
   const allHittersSelected = selectedHitters.length === 0 || selectedHitters.every((value) => value === 'All');
   const hideLeagueSummaryCharts =
     isLeague && dashboardPage === 'Summary' && teamType === 'All' && allPitchersSelected && allHittersSelected;
+  const leagueWindowDays = useMemo(() => {
+    if (!isLeague || !startDate || !endDate) return 0;
+    const start = Date.parse(startDate);
+    const end = Date.parse(endDate);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+    return Math.max(0, Math.floor((end - start) / 86400000) + 1);
+  }, [isLeague, startDate, endDate]);
+  const shouldForceLeagueFastTable = isLeague && (dashboardPage === 'Summary' || dashboardPage === 'Leaderboard') && leagueWindowDays > 14;
   const filteredPitchers = useMemo(() => {
     if (!filters) return [];
     if (!isLeague || teamType === 'All') return filters.pitchers ?? [];
@@ -1221,7 +1229,22 @@ export default function PitchingSuite({
     if (!allowedTableModes.has(tableMode)) {
       setTableMode('Live');
     }
-    const allowedSplitBy = new Set(['Pitch Types', 'Pitcher', 'Pitcher Hand', 'Batter Hand', 'Batter', 'Catcher', 'Pitcher Team']);
+    const allowedSplitBy = new Set([
+      'Pitch Types',
+      'Pitcher',
+      'Pitcher Hand',
+      'Batter Hand',
+      'Count',
+      'After Count',
+      'Zone Location',
+      'Times Through Order',
+      'Velocity',
+      'IVB',
+      'HB',
+      'Batter',
+      'Catcher',
+      'Pitcher Team',
+    ]);
     if (!allowedSplitBy.has(splitBy)) {
       setSplitBy('Pitch Types');
     }
@@ -1524,7 +1547,7 @@ export default function PitchingSuite({
       params.set('include_chart_points', '0');
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
-    } else if (hideLeagueSummaryCharts) {
+    } else if (hideLeagueSummaryCharts || shouldForceLeagueFastTable) {
       params.set('include_chart_points', '0');
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
@@ -1572,6 +1595,7 @@ export default function PitchingSuite({
     tableMode,
     effectiveSplitBy,
     hideLeagueSummaryCharts,
+    shouldForceLeagueFastTable,
     customTableColumns,
     visualOption,
     selectedAfterCountFilters,
@@ -4178,6 +4202,13 @@ export default function PitchingSuite({
             { value: 'Pitcher', label: 'Pitcher' },
             { value: 'Pitcher Hand', label: 'Pitcher Hand' },
             { value: 'Batter Hand', label: 'Batter Hand' },
+            { value: 'Count', label: 'Count' },
+            { value: 'After Count', label: 'After Count' },
+            { value: 'Zone Location', label: 'Zone Location' },
+            { value: 'Times Through Order', label: 'Times Through Order' },
+            { value: 'Velocity', label: 'Velocity' },
+            { value: 'IVB', label: 'IVB' },
+            { value: 'HB', label: 'HB' },
             { value: 'Batter', label: 'Batter' },
             { value: 'Catcher', label: 'Catcher' },
             { value: 'Pitcher Team', label: 'Team' },
