@@ -234,6 +234,7 @@ const PITCH_TYPE_DISPLAY_ORDER = [
   'Knuckleball',
   'Undefined',
 ] as const;
+const LEAGUE_SEASON_START = '2026-02-13';
 
 
 function fmtNum(value: number | null | undefined, digits = 1): string {
@@ -1152,7 +1153,12 @@ export default function PitchingSuite({
   const isLeague =
     String(selectedSchoolCode ?? '').toUpperCase() === 'LEAGUE' ||
     String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+  const canShowLeagueHeavyPages = !isLeague;
   const canShowVeloManualEntry = !isLeague;
+  const allPitchersSelected = selectedPitchers.length === 0 || selectedPitchers.every((value) => value === 'All');
+  const allHittersSelected = selectedHitters.length === 0 || selectedHitters.every((value) => value === 'All');
+  const hideLeagueSummaryCharts =
+    isLeague && dashboardPage === 'Summary' && teamType === 'All' && allPitchersSelected && allHittersSelected;
   const filteredPitchers = useMemo(() => {
     if (!filters) return [];
     if (!isLeague || teamType === 'All') return filters.pitchers ?? [];
@@ -1200,10 +1206,26 @@ export default function PitchingSuite({
     }
   }, [canShowVeloManualEntry, dashboardPage]);
   useEffect(() => {
+    if (!canShowLeagueHeavyPages && (dashboardPage === 'Velocity' || dashboardPage === 'Trend' || dashboardPage === 'QP Locations')) {
+      setDashboardPage('Summary');
+    }
+  }, [canShowLeagueHeavyPages, dashboardPage]);
+  useEffect(() => {
     if (!isLeague && leaderboardViewBy !== 'Player') {
       setLeaderboardViewBy('Player');
     }
   }, [isLeague, leaderboardViewBy]);
+  useEffect(() => {
+    if (!isLeague) return;
+    const allowedTableModes = new Set(['Live', 'Process', 'Results', 'Usage', 'Custom']);
+    if (!allowedTableModes.has(tableMode)) {
+      setTableMode('Live');
+    }
+    const allowedSplitBy = new Set(['Pitch Types', 'Pitcher', 'Pitcher Hand', 'Batter Hand', 'Batter', 'Catcher', 'Pitcher Team']);
+    if (!allowedSplitBy.has(splitBy)) {
+      setSplitBy('Pitch Types');
+    }
+  }, [isLeague, tableMode, splitBy]);
 
   const manualPitcherOptions = useMemo(() => {
     const fromFilters = filters?.pitchers ?? [];
@@ -1299,8 +1321,16 @@ export default function PitchingSuite({
         setFilters(payload);
         setTeamType(pickDefaultTeamType(payload.team_types ?? [], payload.school_code ?? ''));
         const latestDate = payload.max_date ?? '';
-        setStartDate(latestDate);
-        setEndDate(latestDate);
+        const minDate = payload.min_date ?? '';
+        const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
+        if (isLeagueSchool) {
+          const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
+          setStartDate(leagueStart);
+          setEndDate(latestDate || leagueStart);
+        } else {
+          setStartDate(latestDate);
+          setEndDate(latestDate);
+        }
       })
       .catch((requestError) => {
         if (!active) return;
@@ -1494,6 +1524,10 @@ export default function PitchingSuite({
       params.set('include_chart_points', '0');
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
+    } else if (hideLeagueSummaryCharts) {
+      params.set('include_chart_points', '0');
+      params.set('include_row_pitches', '0');
+      params.set('include_trend_rows', '0');
     } else {
       params.set('include_chart_points', '1');
       params.set('include_row_pitches', '1');
@@ -1537,6 +1571,7 @@ export default function PitchingSuite({
     qpLocations,
     tableMode,
     effectiveSplitBy,
+    hideLeagueSummaryCharts,
     customTableColumns,
     visualOption,
     selectedAfterCountFilters,
@@ -4114,19 +4149,53 @@ export default function PitchingSuite({
   );
   const splitColName = overview?.table_columns?.[0] ?? '';
   const tableModeOptions = useMemo(
-    () => [
-      { value: 'Stuff', label: 'Stuff' },
-      { value: 'Process', label: 'Process' },
-      { value: 'Results', label: 'Results' },
-      { value: 'Bullpen', label: 'Bullpen' },
-      { value: 'Live', label: 'Live' },
-      { value: 'Usage', label: 'Usage' },
-      { value: 'Raw Data', label: 'Raw Data' },
-      { value: 'Batted Ball Data', label: 'Batted Ball Data' },
-      ...customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: item.name })),
-      { value: 'Custom', label: 'Custom' },
-    ],
-    [customTables]
+    () =>
+      (isLeague
+        ? [
+            { value: 'Live', label: 'Live' },
+            { value: 'Process', label: 'Process' },
+            { value: 'Results', label: 'Results' },
+            { value: 'Usage', label: 'Usage' },
+          ]
+        : [
+            { value: 'Stuff', label: 'Stuff' },
+            { value: 'Process', label: 'Process' },
+            { value: 'Results', label: 'Results' },
+            { value: 'Bullpen', label: 'Bullpen' },
+            { value: 'Live', label: 'Live' },
+            { value: 'Usage', label: 'Usage' },
+            { value: 'Raw Data', label: 'Raw Data' },
+            { value: 'Batted Ball Data', label: 'Batted Ball Data' },
+          ]
+      ).concat([...customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: item.name })), { value: 'Custom', label: 'Custom' }]),
+    [customTables, isLeague]
+  );
+  const splitByOptions = useMemo(
+    () =>
+      isLeague
+        ? [
+            { value: 'Pitch Types', label: 'Pitch Types' },
+            { value: 'Pitcher', label: 'Pitcher' },
+            { value: 'Pitcher Hand', label: 'Pitcher Hand' },
+            { value: 'Batter Hand', label: 'Batter Hand' },
+            { value: 'Batter', label: 'Batter' },
+            { value: 'Catcher', label: 'Catcher' },
+            { value: 'Pitcher Team', label: 'Team' },
+          ]
+        : [
+            { value: 'Pitch Types', label: 'Pitch Types' },
+            { value: 'Batter Hand', label: 'Batter Hand' },
+            { value: 'Count', label: 'Count' },
+            { value: 'After Count', label: 'After Count' },
+            { value: 'Zone Location', label: 'Zone Location' },
+            { value: 'Times Through Order', label: 'Times Through Order' },
+            { value: 'Velocity', label: 'Velocity' },
+            { value: 'IVB', label: 'IVB' },
+            { value: 'HB', label: 'HB' },
+            { value: 'Batter', label: 'Batter' },
+            { value: 'Catcher', label: 'Catcher' },
+          ],
+    [isLeague]
   );
   const tableModeSelectValue = useMemo(
     () => (tableMode === 'Custom' && selectedCustomTableId ? `custom_saved:${selectedCustomTableId}` : tableMode),
@@ -4478,10 +4547,10 @@ export default function PitchingSuite({
                   <option value="Summary">Summary</option>
                   <option value="Leaderboard">Leaderboard</option>
                   <option value="AB Report">AB Report</option>
-                  <option value="Velocity">Velocity</option>
-                  <option value="Trend">Trend</option>
+                  {canShowLeagueHeavyPages ? <option value="Velocity">Velocity</option> : null}
+                  {canShowLeagueHeavyPages ? <option value="Trend">Trend</option> : null}
                   <option value="HeatMaps">HeatMaps</option>
-                  <option value="QP Locations">QP Locations</option>
+                  {canShowLeagueHeavyPages ? <option value="QP Locations">QP Locations</option> : null}
                   {canShowVeloManualEntry ? <option value="Velo Manual Entry">Velo Manual Entry</option> : null}
                 </select>
               </label>
@@ -4508,20 +4577,24 @@ export default function PitchingSuite({
                 >
                   AB Report
                 </button>
-                <button
-                  type="button"
-                  className={dashboardPage === 'Velocity' ? 'btn btn-primary' : 'btn btn-ghost'}
-                  onClick={() => setDashboardPage('Velocity')}
-                >
-                  Velocity
-                </button>
-                <button
-                  type="button"
-                  className={dashboardPage === 'Trend' ? 'btn btn-primary' : 'btn btn-ghost'}
-                  onClick={() => setDashboardPage('Trend')}
-                >
-                  Trend
-                </button>
+                {canShowLeagueHeavyPages ? (
+                  <button
+                    type="button"
+                    className={dashboardPage === 'Velocity' ? 'btn btn-primary' : 'btn btn-ghost'}
+                    onClick={() => setDashboardPage('Velocity')}
+                  >
+                    Velocity
+                  </button>
+                ) : null}
+                {canShowLeagueHeavyPages ? (
+                  <button
+                    type="button"
+                    className={dashboardPage === 'Trend' ? 'btn btn-primary' : 'btn btn-ghost'}
+                    onClick={() => setDashboardPage('Trend')}
+                  >
+                    Trend
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className={dashboardPage === 'HeatMaps' ? 'btn btn-primary' : 'btn btn-ghost'}
@@ -4529,13 +4602,15 @@ export default function PitchingSuite({
                 >
                   HeatMaps
                 </button>
-                <button
-                  type="button"
-                  className={dashboardPage === 'QP Locations' ? 'btn btn-primary' : 'btn btn-ghost'}
-                  onClick={() => setDashboardPage('QP Locations')}
-                >
-                  QP Locations
-                </button>
+                {canShowLeagueHeavyPages ? (
+                  <button
+                    type="button"
+                    className={dashboardPage === 'QP Locations' ? 'btn btn-primary' : 'btn btn-ghost'}
+                    onClick={() => setDashboardPage('QP Locations')}
+                  >
+                    QP Locations
+                  </button>
+                ) : null}
                 {canShowVeloManualEntry ? (
                   <button
                     type="button"
@@ -4581,7 +4656,13 @@ export default function PitchingSuite({
                     />
                   </div>
                   <div style={{ position: 'relative' }}>
-                    {releaseSvg}
+                    {hideLeagueSummaryCharts ? (
+                      <p className="portal-muted-text" style={{ textAlign: 'center', margin: '0.5rem 0 0.75rem' }}>
+                        Select a team or player to view chart data.
+                      </p>
+                    ) : (
+                      releaseSvg
+                    )}
                     {releaseHover ? (
                       <div
                         style={{
@@ -4624,7 +4705,13 @@ export default function PitchingSuite({
                     </button>
                   </div>
                   <div style={{ position: 'relative' }}>
-                    {movementSvg}
+                    {hideLeagueSummaryCharts ? (
+                      <p className="portal-muted-text" style={{ textAlign: 'center', margin: '0.5rem 0 0.75rem' }}>
+                        Select a team or player to view chart data.
+                      </p>
+                    ) : (
+                      movementSvg
+                    )}
                     {movementHover ? (
                       <div
                         style={{
@@ -4668,7 +4755,11 @@ export default function PitchingSuite({
                     />
                   </div>
                   <div style={{ position: 'relative' }}>
-                    {locationView !== 'Pitch' ? (
+                    {hideLeagueSummaryCharts ? (
+                      <p className="portal-muted-text" style={{ textAlign: 'center', margin: '0.5rem 0 0.75rem' }}>
+                        Select a team or player to view chart data.
+                      </p>
+                    ) : locationView !== 'Pitch' ? (
                       <div style={{ display: 'grid', justifyItems: 'center', gap: 4, marginBottom: 6 }}>
                         <div
                           style={{
@@ -4686,7 +4777,7 @@ export default function PitchingSuite({
                         <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>{locationView === 'Frequency' ? 'Pitch Frequency' : locationView}</div>
                       </div>
                     ) : null}
-                    {locationSvg}
+                    {!hideLeagueSummaryCharts ? locationSvg : null}
                     {locationHover ? (
                       <div
                         style={{
@@ -4841,19 +4932,7 @@ export default function PitchingSuite({
                         </span>
                       </span>
                       <SearchableSingleSelect
-                        options={[
-                          { value: 'Pitch Types', label: 'Pitch Types' },
-                          { value: 'Batter Hand', label: 'Batter Hand' },
-                          { value: 'Count', label: 'Count' },
-                          { value: 'After Count', label: 'After Count' },
-                          { value: 'Zone Location', label: 'Zone Location' },
-                          { value: 'Times Through Order', label: 'Times Through Order' },
-                          { value: 'Velocity', label: 'Velocity' },
-                          { value: 'IVB', label: 'IVB' },
-                          { value: 'HB', label: 'HB' },
-                          { value: 'Batter', label: 'Batter' },
-                          { value: 'Catcher', label: 'Catcher' },
-                        ]}
+                        options={splitByOptions}
                         value={splitBy}
                         onChange={setSplitBy}
                         placeholder="Pitch Types"

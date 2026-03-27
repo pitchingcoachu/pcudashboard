@@ -144,6 +144,10 @@ _OVERVIEW_CACHE_MAX_ENTRIES = max(64, int(os.getenv("DASHBOARD_OVERVIEW_CACHE_MA
 _CHART_POINTS_MAX = max(1000, int(os.getenv("DASHBOARD_CHART_POINTS_MAX", "6000")))
 _OVERVIEW_CACHE: Dict[str, tuple[float, Any]] = {}
 _OVERVIEW_CACHE_LOCK = threading.Lock()
+_FILTERS_CACHE_TTL_SECONDS = max(0, int(os.getenv("DASHBOARD_FILTERS_CACHE_TTL_SECONDS", "120")))
+_FILTERS_CACHE_MAX_ENTRIES = max(32, int(os.getenv("DASHBOARD_FILTERS_CACHE_MAX_ENTRIES", "128")))
+_FILTERS_CACHE: Dict[str, tuple[float, Any]] = {}
+_FILTERS_CACHE_LOCK = threading.Lock()
 
 
 def _json_stable(value: Any) -> Any:
@@ -201,6 +205,49 @@ def _overview_cache_invalidate_school(school_code: str) -> None:
         keys = [key for key in _OVERVIEW_CACHE.keys() if token in key]
         for key in keys:
             _OVERVIEW_CACHE.pop(key, None)
+
+
+def _filters_cache_key(endpoint: str, school_code: str) -> str:
+    school = (school_code or "").strip().upper()
+    return f"{endpoint}|{school}"
+
+
+def _filters_cache_get(key: str) -> Any:
+    if _FILTERS_CACHE_TTL_SECONDS <= 0:
+        return None
+    now = time.time()
+    with _FILTERS_CACHE_LOCK:
+        hit = _FILTERS_CACHE.get(key)
+        if not hit:
+            return None
+        ts, value = hit
+        if now - ts > _FILTERS_CACHE_TTL_SECONDS:
+            _FILTERS_CACHE.pop(key, None)
+            return None
+        return value
+
+
+def _filters_cache_set(key: str, value: Any) -> None:
+    if _FILTERS_CACHE_TTL_SECONDS <= 0:
+        return
+    now = time.time()
+    with _FILTERS_CACHE_LOCK:
+        _FILTERS_CACHE[key] = (now, value)
+        if len(_FILTERS_CACHE) > _FILTERS_CACHE_MAX_ENTRIES:
+            stale_count = max(1, len(_FILTERS_CACHE) - _FILTERS_CACHE_MAX_ENTRIES)
+            for stale_key, _ in sorted(_FILTERS_CACHE.items(), key=lambda item: item[1][0])[:stale_count]:
+                _FILTERS_CACHE.pop(stale_key, None)
+
+
+def _filters_cache_invalidate_school(school_code: str) -> None:
+    school = (school_code or "").strip().upper()
+    if not school:
+        return
+    token = f"|{school}"
+    with _FILTERS_CACHE_LOCK:
+        keys = [key for key in _FILTERS_CACHE.keys() if key.endswith(token)]
+        for key in keys:
+            _FILTERS_CACHE.pop(key, None)
 
 
 def _downsample_rows_for_chart_points(rows: List[Dict[str, Any]], max_points: int = _CHART_POINTS_MAX) -> List[Dict[str, Any]]:
@@ -2184,12 +2231,16 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
 
 _MOD_SYNC_INTERVAL_SECONDS = 90.0
 _MOD_SYNC_LAST_AT: Dict[str, float] = {}
+_MOD_SYNC_REFRESH_LOCK = threading.Lock()
+_MOD_SYNC_REFRESH_RUNNING: set[str] = set()
 _PERF_INDEX_SYNC_INTERVAL_SECONDS = 3600.0
 _PERF_INDEX_LAST_AT: float = 0.0
 _LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS = max(
     60.0, float(os.getenv("DASHBOARD_LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS", "300"))
 )
 _LEAGUE_DAILY_ROLLUP_LAST_AT: float = 0.0
+_LEAGUE_DAILY_ROLLUP_REFRESH_LOCK = threading.Lock()
+_LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING = False
 
 
 def _ensure_pitch_event_edits_table(cur: Any) -> None:
@@ -2698,6 +2749,29 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
         return
 
 
+def _kick_league_rollup_refresh_background() -> None:
+    global _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING
+    with _LEAGUE_DAILY_ROLLUP_REFRESH_LOCK:
+        if _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING:
+            return
+        _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING = True
+
+    def _worker() -> None:
+        global _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING
+        try:
+            _refresh_league_daily_rollup(force=True)
+        finally:
+            with _LEAGUE_DAILY_ROLLUP_REFRESH_LOCK:
+                _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING = False
+
+    try:
+        thread = threading.Thread(target=_worker, name="league-rollup-refresh", daemon=True)
+        thread.start()
+    except Exception:
+        with _LEAGUE_DAILY_ROLLUP_REFRESH_LOCK:
+            _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING = False
+
+
 def _try_pitching_overview_daily_rollup(
     *,
     school_code: str,
@@ -2750,6 +2824,7 @@ def _try_pitching_overview_daily_rollup(
         "Pitcher Hand": ("pitcherthrows_norm", "Pitcher Hand"),
         "Batter Hand": ("batterside_norm", "Batter Hand"),
         "Team": ("pitcher_team_norm", "Team"),
+        "Pitcher Team": ("pitcher_team_norm", "Pitcher Team"),
     }
     split_conf = split_to_rollup_col.get(split_clean)
     if split_conf is None:
@@ -2765,7 +2840,9 @@ def _try_pitching_overview_daily_rollup(
         return None
     if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max, parsed_pc_min, parsed_pc_max]):
         return None
-    _refresh_league_daily_rollup()
+    now = time.monotonic()
+    if (now - _LEAGUE_DAILY_ROLLUP_LAST_AT) >= _LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS:
+        _kick_league_rollup_refresh_background()
 
     params: Dict[str, Any] = {
         "start_date": start_date,
@@ -2859,6 +2936,69 @@ def _try_pitching_overview_daily_rollup(
             grouped_rows = [dict(r) for r in cur.fetchall()]
     except Exception:
         return None
+
+    if not grouped_rows:
+        # Rollup may be empty on cold start / first deploy; do one synchronous build and retry once.
+        _refresh_league_daily_rollup(force=True)
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                      {split_rollup_col} AS split_value,
+                      pitch_type,
+                      SUM(pitches)::int AS pitches,
+                      SUM(velo_sum)::double precision AS velo_sum,
+                      SUM(velo_n)::int AS velo_n,
+                      MAX(velo_max)::double precision AS velo_max,
+                      SUM(spin_sum)::double precision AS spin_sum,
+                      SUM(spin_n)::int AS spin_n,
+                      SUM(ivb_sum)::double precision AS ivb_sum,
+                      SUM(ivb_n)::int AS ivb_n,
+                      SUM(hb_sum)::double precision AS hb_sum,
+                      SUM(hb_n)::int AS hb_n,
+                      SUM(in_zone_n)::int AS in_zone_n,
+                      SUM(loc_n)::int AS loc_n,
+                      SUM(strike_n)::int AS strike_n,
+                      SUM(swing_n)::int AS swing_n,
+                      SUM(whiff_n)::int AS whiff_n,
+                      SUM(csw_n)::int AS csw_n,
+                      SUM(comp_n)::int AS comp_n,
+                      SUM(fps_num)::int AS fps_num,
+                      SUM(fps_den)::int AS fps_den,
+                      SUM(early_num)::int AS early_num,
+                      SUM(early_den)::int AS early_den,
+                      SUM(ahead_num)::int AS ahead_num,
+                      SUM(ahead_den)::int AS ahead_den,
+                      SUM(oneone_num)::int AS oneone_num,
+                      SUM(oneone_den)::int AS oneone_den,
+                      SUM(ea_num)::int AS ea_num,
+                      SUM(ea_den)::int AS ea_den,
+                      SUM(in_play_n)::int AS in_play_n,
+                      SUM(gb_n)::int AS gb_n,
+                      SUM(barrel_n)::int AS barrel_n,
+                      SUM(ev_sum)::double precision AS ev_sum,
+                      SUM(ev_n)::int AS ev_n,
+                      SUM(la_sum)::double precision AS la_sum,
+                      SUM(la_n)::int AS la_n,
+                      SUM(count_00_n)::int AS count_00_n,
+                      SUM(count_behind_n)::int AS count_behind_n,
+                      SUM(count_even_n)::int AS count_even_n,
+                      SUM(count_ahead_n)::int AS count_ahead_n,
+                      SUM(count_lt2k_n)::int AS count_lt2k_n,
+                      SUM(count_2k_n)::int AS count_2k_n,
+                      SUM(bf_n)::int AS bf_n,
+                      SUM(k_n)::int AS k_n,
+                      SUM(bb_n)::int AS bb_n
+                    FROM public.pitch_events_daily_rollup_league
+                    WHERE {where_sql}
+                    GROUP BY {split_rollup_col}, pitch_type
+                    """,
+                    params,
+                )
+                grouped_rows = [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return None
 
     if not grouped_rows:
         mode_columns_map: Dict[str, List[str]] = {
@@ -3379,6 +3519,32 @@ def _sync_modifications_into_pitch_events(school_code: str, force: bool = False)
         _MOD_SYNC_LAST_AT[normalized_school] = now
 
 
+def _kick_modifications_sync_background(school_code: str) -> None:
+    normalized_school = _validate_school_code(school_code)
+    with _MOD_SYNC_REFRESH_LOCK:
+        if normalized_school in _MOD_SYNC_REFRESH_RUNNING:
+            return
+        _MOD_SYNC_REFRESH_RUNNING.add(normalized_school)
+
+    def _worker() -> None:
+        try:
+            _sync_modifications_into_pitch_events(normalized_school, force=False)
+        finally:
+            with _MOD_SYNC_REFRESH_LOCK:
+                _MOD_SYNC_REFRESH_RUNNING.discard(normalized_school)
+
+    try:
+        thread = threading.Thread(
+            target=_worker,
+            name=f"mod-sync-{normalized_school.lower()}",
+            daemon=True,
+        )
+        thread.start()
+    except Exception:
+        with _MOD_SYNC_REFRESH_LOCK:
+            _MOD_SYNC_REFRESH_RUNNING.discard(normalized_school)
+
+
 PITCH_TYPE_NORMALIZE_SQL = """
 CASE
   WHEN regexp_replace(lower(COALESCE(TRIM(taggedpitchtype), '')), '[^a-z0-9]', '', 'g')
@@ -3589,7 +3755,15 @@ def health() -> Dict[str, str]:
 def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFiltersResponse:
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
-    _sync_modifications_into_pitch_events(school_code)
+    if school_code == "LEAGUE":
+        _kick_modifications_sync_background(school_code)
+        _kick_league_rollup_refresh_background()
+    else:
+        _sync_modifications_into_pitch_events(school_code)
+    filters_cache_key = _filters_cache_key("pitching_filters", school_code)
+    cached_filters = _filters_cache_get(filters_cache_key)
+    if cached_filters is not None:
+        return cached_filters
     roster = _load_school_roster(school_code)
     team_norm = set(roster.get("team_only_norm", []) or [])
     hitter_norm = set(roster.get("hitter_norm", []) or [])
@@ -3599,79 +3773,189 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
     opp_hitters_by_team_code: Dict[str, List[str]] = {}
     try:
         with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                  MIN(session_date)::text AS min_date,
-                  MAX(session_date)::text AS max_date
-                FROM public.pitch_events
-                WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
-                """,
-                {"school_code": school_code, "team_markers_norm": team_markers_norm},
-            )
-            date_row = cur.fetchone() or {}
-
-            cur.execute(
-                """
-                SELECT DISTINCT TRIM(pitcher) AS pitcher
-                FROM public.pitch_events
-                WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
-                  AND COALESCE(TRIM(pitcher), '') <> ''
-                ORDER BY pitcher ASC
-                """,
-                {"school_code": school_code, "team_markers_norm": team_markers_norm},
-            )
-            pitchers = [str(row["pitcher"]) for row in cur.fetchall()]
-
-            cur.execute(
-                """
-                SELECT DISTINCT TRIM(batter) AS opp_hitter
-                FROM public.pitch_events
-                WHERE school_code = %(school_code)s
-                  AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
-                  AND COALESCE(TRIM(batter), '') <> ''
-                ORDER BY opp_hitter ASC
-                """,
-                {"school_code": school_code, "team_markers_norm": team_markers_norm},
-            )
-            opp_hitters = [str(row["opp_hitter"]) for row in cur.fetchall()]
-
             session_types = ["Season", "All"] if school_code == "LEAGUE" else ["Season", "Bullpen", "Live BP", "All"]
-
-            cur.execute(
-                """
-                SELECT pitch_type
-                FROM (
-                  SELECT DISTINCT
-                    """ + PITCH_TYPE_NORMALIZE_SQL + """ AS pitch_type,
-                    """ + PITCH_TYPE_ORDER_SQL + """ AS pitch_sort
-                  FROM public.pitch_events
-                  WHERE school_code = %(school_code)s
-                    AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
-                ) t
-                ORDER BY t.pitch_sort ASC, t.pitch_type ASC
-                """,
-                {"school_code": school_code, "team_markers_norm": team_markers_norm},
-            )
-            pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
-
             if school_code == "LEAGUE":
-                cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
+                cur.execute(
+                    """
+                    SELECT
+                      MIN(session_date)::text AS min_date,
+                      MAX(session_date)::text AS max_date
+                    FROM public.pitch_events_daily_rollup_league
+                    WHERE school_code = %(school_code)s
+                    """,
+                    {"school_code": school_code},
+                )
+                date_row = cur.fetchone() or {}
+
+                cur.execute(
+                    """
+                    SELECT DISTINCT NULLIF(TRIM(pitcher_name), '') AS pitcher
+                    FROM public.pitch_events_daily_rollup_league
+                    WHERE school_code = %(school_code)s
+                      AND NULLIF(TRIM(pitcher_name), '') IS NOT NULL
+                    ORDER BY pitcher ASC
+                    """,
+                    {"school_code": school_code},
+                )
+                pitchers = [str(row["pitcher"]) for row in cur.fetchall()]
+
+                cur.execute(
+                    """
+                    SELECT DISTINCT NULLIF(TRIM(batter_name), '') AS opp_hitter
+                    FROM public.pitch_events_daily_rollup_league
+                    WHERE school_code = %(school_code)s
+                      AND NULLIF(TRIM(batter_name), '') IS NOT NULL
+                    ORDER BY opp_hitter ASC
+                    """,
+                    {"school_code": school_code},
+                )
+                opp_hitters = [str(row["opp_hitter"]) for row in cur.fetchall()]
+
+                cur.execute(
+                    """
+                    SELECT pitch_type
+                    FROM (
+                      SELECT DISTINCT
+                        pitch_type,
+                        CASE pitch_type
+                          WHEN 'Fastball' THEN 1
+                          WHEN 'Sinker' THEN 2
+                          WHEN 'Cutter' THEN 3
+                          WHEN 'Slider' THEN 4
+                          WHEN 'Sweeper' THEN 5
+                          WHEN 'Curveball' THEN 6
+                          WHEN 'ChangeUp' THEN 7
+                          WHEN 'Splitter' THEN 8
+                          WHEN 'Knuckleball' THEN 9
+                          WHEN 'Undefined' THEN 10
+                          ELSE 99
+                        END AS pitch_sort
+                      FROM public.pitch_events_daily_rollup_league
+                      WHERE school_code = %(school_code)s
+                    ) t
+                    ORDER BY t.pitch_sort ASC, t.pitch_type ASC
+                    """,
+                    {"school_code": school_code},
+                )
+                pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
+
+                cur.execute(
+                    """
+                    SELECT team_code
+                    FROM (
+                      SELECT DISTINCT NULLIF(TRIM(pitcher_team_norm), '') AS team_code
+                      FROM public.pitch_events_daily_rollup_league
+                      WHERE school_code = %(school_code)s
+                      UNION
+                      SELECT DISTINCT NULLIF(TRIM(batter_team_norm_eff), '') AS team_code
+                      FROM public.pitch_events_daily_rollup_league
+                      WHERE school_code = %(school_code)s
+                    ) t
+                    WHERE team_code IS NOT NULL
+                    ORDER BY team_code
+                    """,
+                    {"school_code": school_code},
+                )
                 league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
                 team_types = ["All", *league_team_codes]
-                cur.execute(_league_name_map_sql_expr("pitcherteam", "pitcher"), {"school_code": school_code})
+
+                cur.execute(
+                    """
+                    SELECT team_code, array_agg(name ORDER BY name) AS names
+                    FROM (
+                      SELECT DISTINCT
+                        NULLIF(TRIM(pitcher_team_norm), '') AS team_code,
+                        NULLIF(TRIM(pitcher_name), '') AS name
+                      FROM public.pitch_events_daily_rollup_league
+                      WHERE school_code = %(school_code)s
+                    ) t
+                    WHERE team_code IS NOT NULL AND name IS NOT NULL
+                    GROUP BY team_code
+                    ORDER BY team_code
+                    """,
+                    {"school_code": school_code},
+                )
                 pitchers_by_team_code = {
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
-                cur.execute(_league_name_map_sql_expr("pitcherteam", "batter"), {"school_code": school_code})
+
+                cur.execute(
+                    """
+                    SELECT team_code, array_agg(name ORDER BY name) AS names
+                    FROM (
+                      SELECT DISTINCT
+                        NULLIF(TRIM(pitcher_team_norm), '') AS team_code,
+                        NULLIF(TRIM(batter_name), '') AS name
+                      FROM public.pitch_events_daily_rollup_league
+                      WHERE school_code = %(school_code)s
+                    ) t
+                    WHERE team_code IS NOT NULL AND name IS NOT NULL
+                    GROUP BY team_code
+                    ORDER BY team_code
+                    """,
+                    {"school_code": school_code},
+                )
                 opp_hitters_by_team_code = {
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
             else:
+                cur.execute(
+                    """
+                    SELECT
+                      MIN(session_date)::text AS min_date,
+                      MAX(session_date)::text AS max_date
+                    FROM public.pitch_events
+                    WHERE school_code = %(school_code)s
+                      AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                    """,
+                    {"school_code": school_code, "team_markers_norm": team_markers_norm},
+                )
+                date_row = cur.fetchone() or {}
+
+                cur.execute(
+                    """
+                    SELECT DISTINCT TRIM(pitcher) AS pitcher
+                    FROM public.pitch_events
+                    WHERE school_code = %(school_code)s
+                      AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                      AND COALESCE(TRIM(pitcher), '') <> ''
+                    ORDER BY pitcher ASC
+                    """,
+                    {"school_code": school_code, "team_markers_norm": team_markers_norm},
+                )
+                pitchers = [str(row["pitcher"]) for row in cur.fetchall()]
+
+                cur.execute(
+                    """
+                    SELECT DISTINCT TRIM(batter) AS opp_hitter
+                    FROM public.pitch_events
+                    WHERE school_code = %(school_code)s
+                      AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                      AND COALESCE(TRIM(batter), '') <> ''
+                    ORDER BY opp_hitter ASC
+                    """,
+                    {"school_code": school_code, "team_markers_norm": team_markers_norm},
+                )
+                opp_hitters = [str(row["opp_hitter"]) for row in cur.fetchall()]
+
+                cur.execute(
+                    """
+                    SELECT pitch_type
+                    FROM (
+                      SELECT DISTINCT
+                        """ + PITCH_TYPE_NORMALIZE_SQL + """ AS pitch_type,
+                        """ + PITCH_TYPE_ORDER_SQL + """ AS pitch_sort
+                      FROM public.pitch_events
+                      WHERE school_code = %(school_code)s
+                        AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                    ) t
+                    ORDER BY t.pitch_sort ASC, t.pitch_type ASC
+                    """,
+                    {"school_code": school_code, "team_markers_norm": team_markers_norm},
+                )
+                pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
                 team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"filters query failed: {exc}") from exc
@@ -3683,7 +3967,7 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
     if known_hitter_keys:
         opp_hitters = [name for name in opp_hitters if _normalize_name_key(name) not in known_hitter_keys]
 
-    return PitchingFiltersResponse(
+    response = PitchingFiltersResponse(
         school_code=school_code,
         min_date=date_row.get("min_date"),
         max_date=date_row.get("max_date"),
@@ -3707,6 +3991,8 @@ def pitching_filters(school_code: str = Query(..., min_length=1)) -> PitchingFil
         pitchers_by_team_code=pitchers_by_team_code or None,
         opp_hitters_by_team_code=opp_hitters_by_team_code or None,
     )
+    _filters_cache_set(filters_cache_key, response)
+    return response
 
 
 @app.get("/v1/pitching/overview", response_model=PitchingOverviewResponse)
@@ -3750,7 +4036,10 @@ def pitching_overview(
 ) -> PitchingOverviewResponse:
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
-    _sync_modifications_into_pitch_events(school_code)
+    if school_code == "LEAGUE":
+        _kick_modifications_sync_background(school_code)
+    else:
+        _sync_modifications_into_pitch_events(school_code)
     roster = _load_school_roster(school_code)
     team_norm = roster.get("team_only_norm", [])
     hitter_norm = roster.get("hitter_norm", [])
@@ -7091,6 +7380,7 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
         raise HTTPException(status_code=500, detail=f"pitch edit failed: {exc}") from exc
 
     _overview_cache_invalidate_school(school_code)
+    _filters_cache_invalidate_school(school_code)
     return PitchEditResponse(ok=True, updated_count=len(pitch_ids))
 
 
