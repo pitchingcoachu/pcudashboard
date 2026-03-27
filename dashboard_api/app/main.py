@@ -3769,7 +3769,21 @@ def pitching_overview(
     batter_side = (batter_side or "").strip() or None
     session_type_filter = _normalize_session_type_filter(session_type)
     use_osu_date_session_rules = school_code.upper() == "OSU"
-    table_mode = (table_mode or "").strip() or "Stuff"
+    table_mode_raw = (table_mode or "").strip() or "Stuff"
+    table_mode_map = {
+        "stuff": "Stuff",
+        "process": "Process",
+        "results": "Results",
+        "hitting results": "Hitting Results",
+        "bullpen": "Bullpen",
+        "live": "Live",
+        "usage": "Usage",
+        "raw data": "Raw Data",
+        "batted ball data": "Batted Ball Data",
+        "swing decisions": "Swing Decisions",
+        "custom": "Custom",
+    }
+    table_mode = table_mode_map.get(table_mode_raw.lower(), table_mode_raw)
     split_by = (split_by or "").strip() or "Pitch Types"
     visual_option = (visual_option or "").strip() or "Play Video"
     selected_in_zone = _parse_csv_list(in_zone)
