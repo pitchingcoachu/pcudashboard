@@ -9,6 +9,10 @@ const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=20, stale-while-revalidate=100',
 } as const;
 
+function resolveFiltersTimeoutMs(schoolCode: string): number {
+  return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 60000 : 15000;
+}
+
 function uniqueNames(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
 }
@@ -59,7 +63,7 @@ export async function GET() {
       cacheKey: `pitching:filters:${url.toString()}`,
       ttlMs: 120000,
       staleTtlMs: 300000,
-      timeoutMs: 10000,
+      timeoutMs: resolveFiltersTimeoutMs(schoolCode),
       retries: 1,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });

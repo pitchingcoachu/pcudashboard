@@ -1143,6 +1143,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
   const actionViewRef = useRef<HTMLDivElement | null>(null);
 
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+  const canShowVeloManualEntry = !isLeague;
   const filteredPitchers = useMemo(() => {
     if (!filters) return [];
     if (!isLeague || teamType === 'All') return filters.pitchers ?? [];
@@ -1183,6 +1184,12 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
     const all = Array.from(new Set([...fromFilters, ...actionPitches.map((pitch) => pitch.pitcher).filter(Boolean)]));
     return toOptions(all, true);
   }, [filters?.pitchers, actionPitches]);
+
+  useEffect(() => {
+    if (!canShowVeloManualEntry && dashboardPage === 'Velo Manual Entry') {
+      setDashboardPage('Summary');
+    }
+  }, [canShowVeloManualEntry, dashboardPage]);
 
   const manualPitcherOptions = useMemo(() => {
     const fromFilters = filters?.pitchers ?? [];
@@ -4449,7 +4456,7 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                   <option value="Trend">Trend</option>
                   <option value="HeatMaps">HeatMaps</option>
                   <option value="QP Locations">QP Locations</option>
-                  <option value="Velo Manual Entry">Velo Manual Entry</option>
+                  {canShowVeloManualEntry ? <option value="Velo Manual Entry">Velo Manual Entry</option> : null}
                 </select>
               </label>
             ) : (
@@ -4503,13 +4510,15 @@ export default function PitchingSuite({ role }: { role?: 'admin' | 'coach' | 'pl
                 >
                   QP Locations
                 </button>
-                <button
-                  type="button"
-                  className={dashboardPage === 'Velo Manual Entry' ? 'btn btn-primary' : 'btn btn-ghost'}
-                  onClick={() => setDashboardPage('Velo Manual Entry')}
-                >
-                  Velo Manual Entry
-                </button>
+                {canShowVeloManualEntry ? (
+                  <button
+                    type="button"
+                    className={dashboardPage === 'Velo Manual Entry' ? 'btn btn-primary' : 'btn btn-ghost'}
+                    onClick={() => setDashboardPage('Velo Manual Entry')}
+                  >
+                    Velo Manual Entry
+                  </button>
+                ) : null}
               </div>
             )}
             {isMobileView ? (
