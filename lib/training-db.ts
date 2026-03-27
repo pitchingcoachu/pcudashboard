@@ -681,6 +681,13 @@ export async function createClientWithLogin(input: {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query(`SET LOCAL lock_timeout = '5s'`);
+    await client.query(`SET LOCAL statement_timeout = '20s'`);
+    const lockResult = await client.query<{ locked: boolean }>(`SELECT pg_try_advisory_xact_lock($1) AS locked`, [947232]);
+    if (!Boolean(lockResult.rows[0]?.locked)) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'Another player create/update is already running. Please try again in a few seconds.' };
+    }
 
     const existingUser = await client.query<{ id: number }>(
       `SELECT id FROM auth_users WHERE LOWER(email) = LOWER($1) LIMIT 1`,

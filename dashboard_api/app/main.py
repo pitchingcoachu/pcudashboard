@@ -2236,6 +2236,9 @@ def _ensure_performance_indexes() -> None:
           school_code TEXT NOT NULL,
           session_date DATE NOT NULL,
           pitch_type TEXT NOT NULL,
+          pitcher_name TEXT NOT NULL,
+          batter_name TEXT NOT NULL,
+          catcher_name TEXT NOT NULL,
           pitcher_norm TEXT NOT NULL,
           batter_norm TEXT NOT NULL,
           catcher_norm TEXT NOT NULL,
@@ -2259,10 +2262,31 @@ def _ensure_performance_indexes() -> None:
           strike_n INT NOT NULL,
           swing_n INT NOT NULL,
           whiff_n INT NOT NULL,
+          csw_n INT NOT NULL,
+          comp_n INT NOT NULL,
           fps_num INT NOT NULL,
           fps_den INT NOT NULL,
+          early_num INT NOT NULL,
+          early_den INT NOT NULL,
+          ahead_num INT NOT NULL,
+          ahead_den INT NOT NULL,
+          oneone_num INT NOT NULL,
+          oneone_den INT NOT NULL,
           ea_num INT NOT NULL,
           ea_den INT NOT NULL,
+          in_play_n INT NOT NULL,
+          gb_n INT NOT NULL,
+          barrel_n INT NOT NULL,
+          ev_sum DOUBLE PRECISION NOT NULL,
+          ev_n INT NOT NULL,
+          la_sum DOUBLE PRECISION NOT NULL,
+          la_n INT NOT NULL,
+          count_00_n INT NOT NULL,
+          count_behind_n INT NOT NULL,
+          count_even_n INT NOT NULL,
+          count_ahead_n INT NOT NULL,
+          count_lt2k_n INT NOT NULL,
+          count_2k_n INT NOT NULL,
           bf_n INT NOT NULL,
           k_n INT NOT NULL,
           bb_n INT NOT NULL,
@@ -2271,6 +2295,81 @@ def _ensure_performance_indexes() -> None:
             pitcher_team_norm, batter_team_norm_eff, pitcherthrows_norm, batterside_norm, session_bucket
           )
         )
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league
+        ADD COLUMN IF NOT EXISTS pitcher_name TEXT NOT NULL DEFAULT ''
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league
+        ADD COLUMN IF NOT EXISTS batter_name TEXT NOT NULL DEFAULT ''
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league
+        ADD COLUMN IF NOT EXISTS catcher_name TEXT NOT NULL DEFAULT ''
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS csw_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS comp_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS early_num INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS early_den INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS ahead_num INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS ahead_den INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS oneone_num INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS oneone_den INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS in_play_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS gb_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS barrel_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS ev_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS ev_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS la_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS la_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS count_00_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS count_behind_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS count_even_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS count_ahead_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS count_lt2k_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS count_2k_n INT NOT NULL DEFAULT 0
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_pe_school_date_created_id
@@ -2417,6 +2516,9 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                   SELECT
                     pe.session_date::date AS session_date,
                     """ + PITCH_TYPE_NORMALIZE_SQL + """ AS pitch_type,
+                    COALESCE(NULLIF(TRIM(pe.pitcher), ''), 'Unknown Pitcher') AS pitcher_name,
+                    COALESCE(NULLIF(TRIM(pe.batter), ''), 'Unknown Batter') AS batter_name,
+                    COALESCE(NULLIF(TRIM(pe.catcher), ''), 'Unknown Catcher') AS catcher_name,
                     """ + PITCHER_NAME_NORM_SQL + """ AS pitcher_norm,
                     """ + BATTER_NAME_NORM_SQL + """ AS batter_norm,
                     """ + CATCHER_NAME_NORM_SQL + """ AS catcher_norm,
@@ -2444,6 +2546,9 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                     (regexp_match(COALESCE(pe.horzbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS hb,
                     (regexp_match(COALESCE(pe.platelocside, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS plate_side,
                     (regexp_match(COALESCE(pe.platelocheight, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS plate_height,
+                    (regexp_match(COALESCE(pe.exitspeed, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS exit_speed,
+                    (regexp_match(COALESCE(pe.angle, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS angle,
+                    COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), '') AS tagged_hit_type,
                     COALESCE(NULLIF(TRIM(pe.pitchcall), ''), '') AS pitch_call,
                     COALESCE(NULLIF(TRIM(pe.korbb), ''), '') AS korbb,
                     COALESCE(NULLIF(TRIM(pe.playresult), ''), '') AS play_result,
@@ -2464,15 +2569,22 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                     AND pe.session_date <= %(max_date)s::date
                 )
                 INSERT INTO public.pitch_events_daily_rollup_league (
-                  school_code, session_date, pitch_type, pitcher_norm, batter_norm, catcher_norm,
+                  school_code, session_date, pitch_type, pitcher_name, batter_name, catcher_name, pitcher_norm, batter_norm, catcher_norm,
                   pitcher_team_norm, batter_team_norm_eff, pitcherthrows_norm, batterside_norm, session_bucket,
                   pitches, velo_sum, velo_n, velo_max, spin_sum, spin_n, ivb_sum, ivb_n, hb_sum, hb_n,
-                  in_zone_n, loc_n, strike_n, swing_n, whiff_n, fps_num, fps_den, ea_num, ea_den, bf_n, k_n, bb_n
+                  in_zone_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_den,
+                  early_num, early_den, ahead_num, ahead_den, oneone_num, oneone_den,
+                  ea_num, ea_den, in_play_n, gb_n, barrel_n, ev_sum, ev_n, la_sum, la_n,
+                  count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
+                  bf_n, k_n, bb_n
                 )
                 SELECT
                   'LEAGUE',
                   b.session_date,
                   b.pitch_type,
+                  MIN(b.pitcher_name) AS pitcher_name,
+                  MIN(b.batter_name) AS batter_name,
+                  MIN(b.catcher_name) AS catcher_name,
                   b.pitcher_norm,
                   b.batter_norm,
                   b.catcher_norm,
@@ -2504,12 +2616,36 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                     CASE WHEN b.pitch_call IN ('StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay') THEN 1 ELSE 0 END
                   )::int AS swing_n,
                   SUM(CASE WHEN b.pitch_call = 'StrikeSwinging' THEN 1 ELSE 0 END)::int AS whiff_n,
+                  SUM(CASE WHEN b.pitch_call = 'StrikeCalled' OR b.pitch_call = 'StrikeSwinging' THEN 1 ELSE 0 END)::int AS csw_n,
+                  SUM(
+                    CASE WHEN b.plate_side BETWEEN -1.5::double precision AND 1.5::double precision
+                           AND b.plate_height BETWEEN 1.17::double precision AND 3.93::double precision
+                      THEN 1 ELSE 0 END
+                  )::int AS comp_n,
                   SUM(
                     CASE WHEN b.balls_num = 0 AND b.strikes_num = 0
                               AND b.pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay')
                       THEN 1 ELSE 0 END
                   )::int AS fps_num,
                   SUM(CASE WHEN b.balls_num = 0 AND b.strikes_num = 0 THEN 1 ELSE 0 END)::int AS fps_den,
+                  SUM(
+                    CASE WHEN (b.balls_num + b.strikes_num) <= 1
+                              AND b.pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay')
+                      THEN 1 ELSE 0 END
+                  )::int AS early_num,
+                  SUM(CASE WHEN (b.balls_num + b.strikes_num) <= 1 THEN 1 ELSE 0 END)::int AS early_den,
+                  SUM(
+                    CASE WHEN (b.strikes_num > b.balls_num)
+                              AND b.pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay')
+                      THEN 1 ELSE 0 END
+                  )::int AS ahead_num,
+                  SUM(CASE WHEN (b.strikes_num > b.balls_num) THEN 1 ELSE 0 END)::int AS ahead_den,
+                  SUM(
+                    CASE WHEN b.balls_num = 1 AND b.strikes_num = 1
+                              AND b.pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay')
+                      THEN 1 ELSE 0 END
+                  )::int AS oneone_num,
+                  SUM(CASE WHEN b.balls_num = 1 AND b.strikes_num = 1 THEN 1 ELSE 0 END)::int AS oneone_den,
                   SUM(
                     CASE WHEN (
                       (b.balls_num = 0 AND b.strikes_num = 0 AND b.pitch_call = 'InPlay')
@@ -2519,6 +2655,26 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                     ) THEN 1 ELSE 0 END
                   )::int AS ea_num,
                   SUM(CASE WHEN b.balls_num = 0 AND b.strikes_num = 0 THEN 1 ELSE 0 END)::int AS ea_den,
+                  SUM(CASE WHEN b.pitch_call = 'InPlay' THEN 1 ELSE 0 END)::int AS in_play_n,
+                  SUM(CASE WHEN b.pitch_call = 'InPlay' AND lower(b.tagged_hit_type) LIKE '%ground%' THEN 1 ELSE 0 END)::int AS gb_n,
+                  SUM(
+                    CASE WHEN b.pitch_call = 'InPlay'
+                              AND b.exit_speed IS NOT NULL
+                              AND b.angle IS NOT NULL
+                              AND b.exit_speed >= 95.0
+                              AND b.angle BETWEEN 10.0 AND 35.0
+                         THEN 1 ELSE 0 END
+                  )::int AS barrel_n,
+                  SUM(CASE WHEN b.pitch_call = 'InPlay' AND b.exit_speed IS NOT NULL THEN b.exit_speed ELSE 0.0 END)::double precision AS ev_sum,
+                  SUM(CASE WHEN b.pitch_call = 'InPlay' AND b.exit_speed IS NOT NULL THEN 1 ELSE 0 END)::int AS ev_n,
+                  SUM(CASE WHEN b.pitch_call = 'InPlay' AND b.angle IS NOT NULL THEN b.angle ELSE 0.0 END)::double precision AS la_sum,
+                  SUM(CASE WHEN b.pitch_call = 'InPlay' AND b.angle IS NOT NULL THEN 1 ELSE 0 END)::int AS la_n,
+                  SUM(CASE WHEN b.balls_num = 0 AND b.strikes_num = 0 THEN 1 ELSE 0 END)::int AS count_00_n,
+                  SUM(CASE WHEN (b.balls_num, b.strikes_num) IN ((1,0),(2,0),(3,0),(3,1),(2,1)) THEN 1 ELSE 0 END)::int AS count_behind_n,
+                  SUM(CASE WHEN (b.balls_num, b.strikes_num) IN ((0,0),(1,1),(2,2),(3,2)) THEN 1 ELSE 0 END)::int AS count_even_n,
+                  SUM(CASE WHEN (b.balls_num, b.strikes_num) IN ((0,1),(0,2),(1,2)) THEN 1 ELSE 0 END)::int AS count_ahead_n,
+                  SUM(CASE WHEN b.strikes_num < 2 THEN 1 ELSE 0 END)::int AS count_lt2k_n,
+                  SUM(CASE WHEN b.strikes_num = 2 THEN 1 ELSE 0 END)::int AS count_2k_n,
                   COUNT(DISTINCT CASE WHEN b.balls_num = 0 AND b.strikes_num = 0 THEN b.pa_key END)::int AS bf_n,
                   COUNT(DISTINCT CASE WHEN b.korbb = 'Strikeout' THEN b.pa_key END)::int AS k_n,
                   COUNT(DISTINCT CASE WHEN b.korbb = 'Walk' THEN b.pa_key END)::int AS bb_n
@@ -2573,18 +2729,32 @@ def _try_pitching_overview_daily_rollup(
     parsed_pc_min: Optional[int],
     parsed_pc_max: Optional[int],
     include_chart_points: bool,
+    chart_points_limit: Optional[int],
     include_row_pitches: bool,
     include_trend_rows: bool,
 ) -> Optional[PitchingOverviewResponse]:
     if school_code != "LEAGUE":
         return None
-    # This fast path is intentionally strict and only used for heavy league windows.
-    if include_chart_points or include_row_pitches or include_trend_rows:
+    # Fast path for high-volume league windows.
+    if include_row_pitches or include_trend_rows:
         return None
-    if (table_mode or "Live").strip() != "Live":
+    mode_clean = (table_mode or "Live").strip()
+    if mode_clean not in {"Live", "Process", "Results", "Usage"}:
         return None
-    if (split_by or "Pitch Types").strip() != "Pitch Types":
+    split_clean = (split_by or "Pitch Types").strip()
+    split_to_rollup_col: Dict[str, tuple[str, str]] = {
+        "Pitch Types": ("pitch_type", "Pitch"),
+        "Pitcher": ("pitcher_name", "Pitcher"),
+        "Batter": ("batter_name", "Batter"),
+        "Catcher": ("catcher_name", "Catcher"),
+        "Pitcher Hand": ("pitcherthrows_norm", "Pitcher Hand"),
+        "Batter Hand": ("batterside_norm", "Batter Hand"),
+        "Team": ("pitcher_team_norm", "Team"),
+    }
+    split_conf = split_to_rollup_col.get(split_clean)
+    if split_conf is None:
         return None
+    split_rollup_col, split_col_name = split_conf
     if selected_opp_hitters:
         return None
     if (with_video or "").strip() not in {"", "All"}:
@@ -2629,11 +2799,13 @@ def _try_pitching_overview_daily_rollup(
         params["team_type_norm"] = team_type_norm
     where_sql = " AND ".join(where_parts)
 
+    # Aggregate rows by split + pitch type.
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 f"""
                 SELECT
+                  {split_rollup_col} AS split_value,
                   pitch_type,
                   SUM(pitches)::int AS pitches,
                   SUM(velo_sum)::double precision AS velo_sum,
@@ -2650,16 +2822,37 @@ def _try_pitching_overview_daily_rollup(
                   SUM(strike_n)::int AS strike_n,
                   SUM(swing_n)::int AS swing_n,
                   SUM(whiff_n)::int AS whiff_n,
+                  SUM(csw_n)::int AS csw_n,
+                  SUM(comp_n)::int AS comp_n,
                   SUM(fps_num)::int AS fps_num,
                   SUM(fps_den)::int AS fps_den,
+                  SUM(early_num)::int AS early_num,
+                  SUM(early_den)::int AS early_den,
+                  SUM(ahead_num)::int AS ahead_num,
+                  SUM(ahead_den)::int AS ahead_den,
+                  SUM(oneone_num)::int AS oneone_num,
+                  SUM(oneone_den)::int AS oneone_den,
                   SUM(ea_num)::int AS ea_num,
                   SUM(ea_den)::int AS ea_den,
+                  SUM(in_play_n)::int AS in_play_n,
+                  SUM(gb_n)::int AS gb_n,
+                  SUM(barrel_n)::int AS barrel_n,
+                  SUM(ev_sum)::double precision AS ev_sum,
+                  SUM(ev_n)::int AS ev_n,
+                  SUM(la_sum)::double precision AS la_sum,
+                  SUM(la_n)::int AS la_n,
+                  SUM(count_00_n)::int AS count_00_n,
+                  SUM(count_behind_n)::int AS count_behind_n,
+                  SUM(count_even_n)::int AS count_even_n,
+                  SUM(count_ahead_n)::int AS count_ahead_n,
+                  SUM(count_lt2k_n)::int AS count_lt2k_n,
+                  SUM(count_2k_n)::int AS count_2k_n,
                   SUM(bf_n)::int AS bf_n,
                   SUM(k_n)::int AS k_n,
                   SUM(bb_n)::int AS bb_n
                 FROM public.pitch_events_daily_rollup_league
                 WHERE {where_sql}
-                GROUP BY pitch_type
+                GROUP BY {split_rollup_col}, pitch_type
                 """,
                 params,
             )
@@ -2668,6 +2861,12 @@ def _try_pitching_overview_daily_rollup(
         return None
 
     if not grouped_rows:
+        mode_columns_map: Dict[str, List[str]] = {
+            "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
+            "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+"],
+            "Results": [split_col_name, "#", "BF", "K%", "BB%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
+            "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
+        }
         return PitchingOverviewResponse(
             school_code=school_code,
             pitcher=selected_pitchers[0] if len(selected_pitchers) == 1 else None,
@@ -2701,7 +2900,7 @@ def _try_pitching_overview_daily_rollup(
             zone_pct=None,
             strike_pct=None,
             whiff_pct=None,
-            table_columns=["Pitch", "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
+            table_columns=mode_columns_map.get(mode_clean, mode_columns_map["Live"]),
             available_table_columns=ALL_TABLE_COLUMNS,
             table_rows=[],
             row_pitches_by_key={},
@@ -2719,6 +2918,11 @@ def _try_pitching_overview_daily_rollup(
             return f"{round((100.0 * n) / d, 1)}%"
         except Exception:
             return None
+
+    grouped_by_split: Dict[str, List[Dict[str, Any]]] = {}
+    for row in grouped_rows:
+        split_val = str(row.get("split_value") or "Unknown")
+        grouped_by_split.setdefault(split_val, []).append(row)
 
     total_pitches = int(sum(int(r.get("pitches") or 0) for r in grouped_rows))
     total_velo_n = int(sum(int(r.get("velo_n") or 0) for r in grouped_rows))
@@ -2755,66 +2959,273 @@ def _try_pitching_overview_daily_rollup(
         "Knuckleball": 9,
         "Undefined": 10,
     }
-    grouped_rows.sort(key=lambda r: (pitch_order.get(str(r.get("pitch_type") or ""), 99), str(r.get("pitch_type") or "")))
-
     table_rows: List[Dict[str, Any]] = []
     pitch_type_rows: List[PitchTypeSummaryRow] = []
+    pitch_summary_by_type: Dict[str, Dict[str, Any]] = {}
     for row in grouped_rows:
-        pitches = int(row.get("pitches") or 0)
-        velo_n = int(row.get("velo_n") or 0)
-        spin_n = int(row.get("spin_n") or 0)
-        ivb_n = int(row.get("ivb_n") or 0)
-        hb_n = int(row.get("hb_n") or 0)
-        bf_n = int(row.get("bf_n") or 0)
-        row_obj = {
-            "Pitch": str(row.get("pitch_type") or ""),
-            "#": pitches,
-            "Velo": round(float(row.get("velo_sum") or 0.0) / velo_n, 1) if velo_n > 0 else None,
-            "Max": round(float(row.get("velo_max")), 1) if _is_num(row.get("velo_max")) else None,
-            "IVB": round(float(row.get("ivb_sum") or 0.0) / ivb_n, 1) if ivb_n > 0 else None,
-            "HB": round(float(row.get("hb_sum") or 0.0) / hb_n, 1) if hb_n > 0 else None,
-            "FPS%": _safe_pct(row.get("fps_num"), row.get("fps_den")),
-            "E+A%": _safe_pct(row.get("ea_num"), row.get("ea_den")),
-            "InZone%": _safe_pct(row.get("in_zone_n"), row.get("loc_n")),
-            "Strike%": _safe_pct(row.get("strike_n"), pitches),
-            "Whiff%": _safe_pct(row.get("whiff_n"), row.get("swing_n")),
-            "K%": _safe_pct(row.get("k_n"), bf_n),
-            "BB%": _safe_pct(row.get("bb_n"), bf_n),
-            "QP+": None,
-        }
-        table_rows.append(row_obj)
+        pt = str(row.get("pitch_type") or "")
+        bucket = pitch_summary_by_type.setdefault(
+            pt,
+            {
+                "pitch_type": pt,
+                "pitches": 0,
+                "velo_sum": 0.0,
+                "velo_n": 0,
+                "velo_max": None,
+                "spin_sum": 0.0,
+                "spin_n": 0,
+                "ivb_sum": 0.0,
+                "ivb_n": 0,
+                "hb_sum": 0.0,
+                "hb_n": 0,
+            },
+        )
+        bucket["pitches"] += int(row.get("pitches") or 0)
+        bucket["velo_sum"] += float(row.get("velo_sum") or 0.0)
+        bucket["velo_n"] += int(row.get("velo_n") or 0)
+        vmax = float(row.get("velo_max")) if _is_num(row.get("velo_max")) else None
+        if vmax is not None:
+            bucket["velo_max"] = vmax if bucket["velo_max"] is None else max(float(bucket["velo_max"]), vmax)
+        bucket["spin_sum"] += float(row.get("spin_sum") or 0.0)
+        bucket["spin_n"] += int(row.get("spin_n") or 0)
+        bucket["ivb_sum"] += float(row.get("ivb_sum") or 0.0)
+        bucket["ivb_n"] += int(row.get("ivb_n") or 0)
+        bucket["hb_sum"] += float(row.get("hb_sum") or 0.0)
+        bucket["hb_n"] += int(row.get("hb_n") or 0)
+
+    for pt, bucket in sorted(pitch_summary_by_type.items(), key=lambda kv: (pitch_order.get(str(kv[0]), 99), str(kv[0]))):
+        pitches = int(bucket["pitches"])
+        velo_n = int(bucket["velo_n"])
+        spin_n = int(bucket["spin_n"])
+        ivb_n = int(bucket["ivb_n"])
+        hb_n = int(bucket["hb_n"])
         pitch_type_rows.append(
             PitchTypeSummaryRow(
-                pitch_type=str(row.get("pitch_type") or ""),
+                pitch_type=pt,
                 pitches=pitches,
                 usage_pct=(100.0 * pitches / total_pitches) if total_pitches > 0 else 0.0,
-                avg_velo=(float(row.get("velo_sum") or 0.0) / velo_n) if velo_n > 0 else None,
-                max_velo=float(row.get("velo_max")) if _is_num(row.get("velo_max")) else None,
-                avg_spin=(float(row.get("spin_sum") or 0.0) / spin_n) if spin_n > 0 else None,
-                avg_ivb=(float(row.get("ivb_sum") or 0.0) / ivb_n) if ivb_n > 0 else None,
-                avg_hb=(float(row.get("hb_sum") or 0.0) / hb_n) if hb_n > 0 else None,
+                avg_velo=(float(bucket["velo_sum"]) / velo_n) if velo_n > 0 else None,
+                max_velo=float(bucket["velo_max"]) if _is_num(bucket.get("velo_max")) else None,
+                avg_spin=(float(bucket["spin_sum"]) / spin_n) if spin_n > 0 else None,
+                avg_ivb=(float(bucket["ivb_sum"]) / ivb_n) if ivb_n > 0 else None,
+                avg_hb=(float(bucket["hb_sum"]) / hb_n) if hb_n > 0 else None,
                 avg_stuff=None,
             )
         )
 
+    split_items = list(grouped_by_split.items())
+    if split_clean == "Pitch Types":
+        split_items.sort(key=lambda kv: (pitch_order.get(str(kv[0]), 99), str(kv[0])))
+    else:
+        split_items.sort(key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
+
+    for split_value, rows_for_split in split_items:
+        pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
+        velo_n = int(sum(int(r.get("velo_n") or 0) for r in rows_for_split))
+        ivb_n = int(sum(int(r.get("ivb_n") or 0) for r in rows_for_split))
+        hb_n = int(sum(int(r.get("hb_n") or 0) for r in rows_for_split))
+        bf_n = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
+        split_max_velo_vals = [float(r.get("velo_max")) for r in rows_for_split if _is_num(r.get("velo_max"))]
+        common = {
+            split_col_name: split_value,
+            "#": pitches,
+            "BF": bf_n,
+            "Velo": round(sum(float(r.get("velo_sum") or 0.0) for r in rows_for_split) / velo_n, 1) if velo_n > 0 else None,
+            "Max": round(max(split_max_velo_vals), 1) if split_max_velo_vals else None,
+            "IVB": round(sum(float(r.get("ivb_sum") or 0.0) for r in rows_for_split) / ivb_n, 1) if ivb_n > 0 else None,
+            "HB": round(sum(float(r.get("hb_sum") or 0.0) for r in rows_for_split) / hb_n, 1) if hb_n > 0 else None,
+            "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+            "E+A%": _safe_pct(sum(int(r.get("ea_num") or 0) for r in rows_for_split), sum(int(r.get("ea_den") or 0) for r in rows_for_split)),
+            "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
+            "Comp%": _safe_pct(sum(int(r.get("comp_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
+            "Strike%": _safe_pct(sum(int(r.get("strike_n") or 0) for r in rows_for_split), pitches),
+            "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
+            "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), sum(int(r.get("swing_n") or 0) for r in rows_for_split)),
+            "K%": _safe_pct(sum(int(r.get("k_n") or 0) for r in rows_for_split), bf_n),
+            "BB%": _safe_pct(sum(int(r.get("bb_n") or 0) for r in rows_for_split), bf_n),
+            "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
+            "GB%": _safe_pct(sum(int(r.get("gb_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
+            "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
+            "EV": round(sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("ev_n") or 0) for r in rows_for_split)), 1)
+            if sum(int(r.get("ev_n") or 0) for r in rows_for_split) > 0
+            else None,
+            "LA": round(sum(float(r.get("la_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("la_n") or 0) for r in rows_for_split)), 1)
+            if sum(int(r.get("la_n") or 0) for r in rows_for_split) > 0
+            else None,
+            "Early%": _safe_pct(sum(int(r.get("early_num") or 0) for r in rows_for_split), sum(int(r.get("early_den") or 0) for r in rows_for_split)),
+            "Ahead%": _safe_pct(sum(int(r.get("ahead_num") or 0) for r in rows_for_split), sum(int(r.get("ahead_den") or 0) for r in rows_for_split)),
+            "1-1W%": _safe_pct(sum(int(r.get("oneone_num") or 0) for r in rows_for_split), sum(int(r.get("oneone_den") or 0) for r in rows_for_split)),
+            "Usage": _safe_pct(pitches, total_pitches),
+            "0-0": _safe_pct(sum(int(r.get("count_00_n") or 0) for r in rows_for_split), pitches),
+            "Behind": _safe_pct(sum(int(r.get("count_behind_n") or 0) for r in rows_for_split), pitches),
+            "Even": _safe_pct(sum(int(r.get("count_even_n") or 0) for r in rows_for_split), pitches),
+            "Ahead": _safe_pct(sum(int(r.get("count_ahead_n") or 0) for r in rows_for_split), pitches),
+            "<2K": _safe_pct(sum(int(r.get("count_lt2k_n") or 0) for r in rows_for_split), pitches),
+            "2K": _safe_pct(sum(int(r.get("count_2k_n") or 0) for r in rows_for_split), pitches),
+            "QP%": None,
+            "Ctrl+": None,
+            "QP+": None,
+            "Pitching+": None,
+            "RV/100": None,
+        }
+        table_rows.append(common)
+
     all_row = {
-        "Pitch": "All",
+        split_col_name: "All",
         "#": total_pitches,
         "Velo": round(avg_velo, 1) if _is_num(avg_velo) else None,
         "Max": round(max_velo, 1) if _is_num(max_velo) else None,
         "IVB": round(avg_ivb, 1) if _is_num(avg_ivb) else None,
         "HB": round(avg_hb, 1) if _is_num(avg_hb) else None,
         "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in grouped_rows), sum(int(r.get("fps_den") or 0) for r in grouped_rows)),
+        "Early%": _safe_pct(sum(int(r.get("early_num") or 0) for r in grouped_rows), sum(int(r.get("early_den") or 0) for r in grouped_rows)),
+        "Ahead%": _safe_pct(sum(int(r.get("ahead_num") or 0) for r in grouped_rows), sum(int(r.get("ahead_den") or 0) for r in grouped_rows)),
+        "1-1W%": _safe_pct(sum(int(r.get("oneone_num") or 0) for r in grouped_rows), sum(int(r.get("oneone_den") or 0) for r in grouped_rows)),
         "E+A%": _safe_pct(sum(int(r.get("ea_num") or 0) for r in grouped_rows), sum(int(r.get("ea_den") or 0) for r in grouped_rows)),
         "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in grouped_rows), total_loc_n),
+        "Comp%": _safe_pct(sum(int(r.get("comp_n") or 0) for r in grouped_rows), total_loc_n),
         "Strike%": _safe_pct(sum(int(r.get("strike_n") or 0) for r in grouped_rows), total_pitches),
+        "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in grouped_rows), total_pitches),
         "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in grouped_rows), total_swing_n),
+        "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in grouped_rows), total_pitches),
         "K%": _safe_pct(sum(int(r.get("k_n") or 0) for r in grouped_rows), sum(int(r.get("bf_n") or 0) for r in grouped_rows)),
         "BB%": _safe_pct(sum(int(r.get("bb_n") or 0) for r in grouped_rows), sum(int(r.get("bf_n") or 0) for r in grouped_rows)),
+        "GB%": _safe_pct(sum(int(r.get("gb_n") or 0) for r in grouped_rows), sum(int(r.get("in_play_n") or 0) for r in grouped_rows)),
+        "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in grouped_rows), sum(int(r.get("in_play_n") or 0) for r in grouped_rows)),
+        "EV": round(sum(float(r.get("ev_sum") or 0.0) for r in grouped_rows) / max(1, sum(int(r.get("ev_n") or 0) for r in grouped_rows)), 1)
+        if sum(int(r.get("ev_n") or 0) for r in grouped_rows) > 0
+        else None,
+        "LA": round(sum(float(r.get("la_sum") or 0.0) for r in grouped_rows) / max(1, sum(int(r.get("la_n") or 0) for r in grouped_rows)), 1)
+        if sum(int(r.get("la_n") or 0) for r in grouped_rows) > 0
+        else None,
+        "BF": sum(int(r.get("bf_n") or 0) for r in grouped_rows),
+        "Usage": "100.0%",
+        "0-0": _safe_pct(sum(int(r.get("count_00_n") or 0) for r in grouped_rows), total_pitches),
+        "Behind": _safe_pct(sum(int(r.get("count_behind_n") or 0) for r in grouped_rows), total_pitches),
+        "Even": _safe_pct(sum(int(r.get("count_even_n") or 0) for r in grouped_rows), total_pitches),
+        "Ahead": _safe_pct(sum(int(r.get("count_ahead_n") or 0) for r in grouped_rows), total_pitches),
+        "<2K": _safe_pct(sum(int(r.get("count_lt2k_n") or 0) for r in grouped_rows), total_pitches),
+        "2K": _safe_pct(sum(int(r.get("count_2k_n") or 0) for r in grouped_rows), total_pitches),
+        "QP%": None,
+        "Ctrl+": None,
         "QP+": None,
+        "Pitching+": None,
+        "RV/100": None,
     }
     table_rows.append(all_row)
 
+    chart_points: List[Dict[str, Any]] = []
+    if include_chart_points:
+        limit = max(100, min(int(chart_points_limit or 2000), 6000))
+        chart_params: Dict[str, Any] = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "pitchers_norm": selected_pitcher_keys,
+            "pitchers_count": len(selected_pitcher_keys),
+            "pitch_types": selected_pitch_types,
+            "pitch_types_count": len(selected_pitch_types),
+            "limit_count": limit,
+            "zone_left": ZONE_LEFT,
+            "zone_right": ZONE_RIGHT,
+            "zone_bottom": ZONE_BOTTOM,
+            "zone_top": ZONE_TOP,
+        }
+        chart_where = [
+            "pe.school_code = 'LEAGUE'",
+            "(%(start_date)s::date IS NULL OR pe.session_date >= %(start_date)s::date)",
+            "(%(end_date)s::date IS NULL OR pe.session_date <= %(end_date)s::date)",
+            "(%(pitchers_count)s::int = 0 OR " + PITCHER_NAME_NORM_SQL.replace("COALESCE(NULLIF(TRIM(pitcher), ''), '')", "COALESCE(NULLIF(TRIM(pe.pitcher), ''), '')") + " = ANY(%(pitchers_norm)s::text[]))",
+            "(%(pitch_types_count)s::int = 0 OR " + PITCH_TYPE_NORMALIZE_SQL.replace("taggedpitchtype", "pe.taggedpitchtype").replace("autopitchtype", "pe.autopitchtype") + " = ANY(%(pitch_types)s::text[]))",
+        ]
+        if (session_type_filter or "").strip() and session_type_filter != "All":
+            if session_type_filter == "Season":
+                chart_where.append(
+                    "regexp_replace(lower(COALESCE(NULLIF(TRIM(COALESCE(pe.session_type, pe.sessiontype)), ''), '')), '\\\\s+', '', 'g') NOT LIKE '%bull%'"
+                )
+            else:
+                chart_where.append(
+                    "regexp_replace(lower(COALESCE(NULLIF(TRIM(COALESCE(pe.session_type, pe.sessiontype)), ''), '')), '\\\\s+', '', 'g') LIKE '%bull%'"
+                )
+        if hand_norm and hand_norm != "All":
+            chart_where.append("CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.pitcherthrows), ''), ''), 1)) = 'L' THEN 'Left' WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.pitcherthrows), ''), ''), 1)) = 'R' THEN 'Right' ELSE 'Unknown' END = %(pitcherthrows_norm)s::text")
+            chart_params["pitcherthrows_norm"] = hand_norm
+        if batter_side_norm and batter_side_norm != "All":
+            chart_where.append("CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.batterside), ''), ''), 1)) = 'L' THEN 'Left' WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.batterside), ''), ''), 1)) = 'R' THEN 'Right' ELSE 'Unknown' END = %(batterside_norm)s::text")
+            chart_params["batterside_norm"] = batter_side_norm
+        if team_type_norm and team_type_norm != "all":
+            chart_where.append(PITCHER_TEAM_NORM_SQL.replace("pitcherteam", "pe.pitcherteam") + " = %(team_type_norm)s::text")
+            chart_params["team_type_norm"] = team_type_norm
+        chart_where_sql = " AND ".join(chart_where)
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                      pe.id,
+                      pe.session_date,
+                      (regexp_match(COALESCE(pe.pitchid::text, pe.pitchno::text, ''), '[-+]?[0-9]+'))[1]::int AS pitch_no,
+                      (regexp_match(COALESCE(pe.pitchid::text, pe.pitchno::text, ''), '[-+]?[0-9]+'))[1]::int AS pitch_number,
+                      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'pitchuid', to_jsonb(pe)->>'pitch_uid', pe.pitchuid::text, '')), ''), '') AS pitch_uid,
+                      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'playid', to_jsonb(pe)->>'play_id', pe.playid::text, '')), ''), '') AS play_id,
+                      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameid', to_jsonb(pe)->>'GameID', '')), ''), '') AS game_id,
+                      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameuid', to_jsonb(pe)->>'GameUID', '')), ''), '') AS game_uid,
+                      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameforeignid', to_jsonb(pe)->>'GameForeignID', '')), ''), '') AS game_foreign_id,
+                      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'inning', to_jsonb(pe)->>'Inning', '')), ''), '') AS inning,
+                      COALESCE(NULLIF(TRIM(pe.pitcher), ''), 'Unknown Pitcher') AS pitcher,
+                      COALESCE(NULLIF(TRIM(pe.batter), ''), '') AS batter,
+                      COALESCE(NULLIF(TRIM(pe.catcher), ''), '') AS catcher,
+                      COALESCE(NULLIF(TRIM(pe.pitcherthrows), ''), '') AS pitcherthrows,
+                      COALESCE(NULLIF(TRIM(pe.batterside), ''), '') AS batterside,
+                      UPPER(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), '')) AS pitcher_team_code,
+                      UPPER(COALESCE(NULLIF(TRIM(pe.batterteam), ''), '')) AS batter_team_code,
+                      """ + PITCHER_TEAM_NORM_SQL.replace("pitcherteam", "pe.pitcherteam") + """ AS pitcher_team_norm,
+                      """ + BATTER_TEAM_NORM_EFF_SQL.replace("batterteam", "pe.batterteam") + """ AS batter_team_norm_eff,
+                      """ + PITCH_TYPE_NORMALIZE_SQL.replace("taggedpitchtype", "pe.taggedpitchtype").replace("autopitchtype", "pe.autopitchtype") + """ AS pitch_type,
+                      COALESCE(NULLIF(TRIM(COALESCE(pe.session_type, pe.sessiontype)), ''), 'Unknown') AS session_type_norm,
+                      COALESCE(NULLIF(TRIM(pe.pitchcall), ''), '') AS pitch_call,
+                      COALESCE(NULLIF(TRIM(pe.playresult), ''), '') AS play_result,
+                      COALESCE(NULLIF(TRIM(pe.korbb), ''), '') AS korbb,
+                      COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), '') AS tagged_hit_type,
+                      (regexp_match(COALESCE(pe.balls::text, ''), '[-+]?[0-9]+'))[1]::int AS balls_num,
+                      (regexp_match(COALESCE(pe.strikes::text, ''), '[-+]?[0-9]+'))[1]::int AS strikes_num,
+                      (regexp_match(COALESCE(to_jsonb(pe)->>'outs', ''), '[-+]?[0-9]+'))[1]::int AS outs_num,
+                      (regexp_match(COALESCE(pe.outsonplay::text, ''), '[-+]?[0-9]+'))[1]::int AS outs_on_play_num,
+                      (regexp_match(COALESCE(pe.relside, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS rel_side,
+                      (regexp_match(COALESCE(pe.relheight, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS rel_height,
+                      (regexp_match(COALESCE(pe.extension, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS ext_value,
+                      (regexp_match(COALESCE(pe.horzbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS hb,
+                      (regexp_match(COALESCE(pe.inducedvertbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS ivb,
+                      (regexp_match(COALESCE(pe.platelocside, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS plate_side,
+                      (regexp_match(COALESCE(pe.platelocheight, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS plate_height,
+                      (regexp_match(COALESCE(pe.relspeed, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS rel_speed,
+                      (regexp_match(COALESCE(pe.spinrate, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS spin_rate,
+                      COALESCE(NULLIF(TRIM(pe.releasetilt), ''), '') AS release_tilt,
+                      COALESCE(NULLIF(TRIM(pe.breaktilt), ''), '') AS break_tilt,
+                      (regexp_match(COALESCE(pe.spinefficiency, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS spin_eff,
+                      (regexp_match(COALESCE(pe.exitspeed, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS exit_speed,
+                      (regexp_match(COALESCE(pe.angle, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS angle,
+                      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip', '')), ''), '') AS video_clip_1,
+                      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip2', '')), ''), '') AS video_clip_2,
+                      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip3', '')), ''), '') AS video_clip_3
+                    FROM public.pitch_events pe
+                    WHERE {chart_where_sql}
+                    ORDER BY pe.session_date DESC, COALESCE(pe.created_at, NOW()) DESC, pe.id DESC
+                    LIMIT %(limit_count)s::int
+                    """,
+                    chart_params,
+                )
+                chart_rows = [dict(r) for r in cur.fetchall()]
+                chart_rows.reverse()
+                chart_points = _build_chart_points(chart_rows, {}, max_points=limit)
+        except Exception:
+            chart_points = []
+
+    mode_columns_map: Dict[str, List[str]] = {
+        "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
+        "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+"],
+        "Results": [split_col_name, "#", "BF", "K%", "BB%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
+        "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
+    }
     return PitchingOverviewResponse(
         school_code=school_code,
         pitcher=selected_pitchers[0] if len(selected_pitchers) == 1 else None,
@@ -2848,12 +3259,12 @@ def _try_pitching_overview_daily_rollup(
         zone_pct=zone_pct,
         strike_pct=strike_pct,
         whiff_pct=whiff_pct,
-        table_columns=["Pitch", "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
+        table_columns=mode_columns_map.get(mode_clean, mode_columns_map["Live"]),
         available_table_columns=ALL_TABLE_COLUMNS,
         table_rows=table_rows,
         row_pitches_by_key={},
         pitch_types=pitch_type_rows,
-        chart_points=[],
+        chart_points=chart_points,
         trend_rows=[],
     )
 
@@ -3524,6 +3935,7 @@ def pitching_overview(
         parsed_pc_min=parsed_pc_min,
         parsed_pc_max=parsed_pc_max,
         include_chart_points=include_chart_points,
+        chart_points_limit=parsed_chart_points_limit,
         include_row_pitches=include_row_pitches,
         include_trend_rows=include_trend_rows,
     )
