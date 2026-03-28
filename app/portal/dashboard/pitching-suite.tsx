@@ -1552,9 +1552,9 @@ export default function PitchingSuite({
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
     } else {
-      params.set('include_chart_points', '1');
-      params.set('include_row_pitches', '1');
-      params.set('include_trend_rows', isTrendPage ? '1' : '0');
+      params.set('include_chart_points', isLeague ? '0' : '1');
+      params.set('include_row_pitches', '0');
+      params.set('include_trend_rows', isLeague ? '0' : (isTrendPage ? '1' : '0'));
     }
 
     fetch(`/api/dashboard/pitching/overview?${params.toString()}`, { signal: controller.signal })
