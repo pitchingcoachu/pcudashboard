@@ -4687,6 +4687,78 @@ def pitching_overview(
     if rollup_fast_response is not None:
         _overview_cache_set(overview_cache_key, rollup_fast_response)
         return rollup_fast_response
+    if school_code == "LEAGUE" and (not include_row_pitches) and (not include_trend_rows):
+        # Never fall back to raw league query path in table-safe mode; it can OOM on large windows.
+        # Trigger async rollup refresh and return an empty safe payload immediately.
+        _kick_league_rollup_refresh_background()
+        split_col_map: Dict[str, str] = {
+            "Pitch Types": "Pitch",
+            "Pitcher": "Pitcher",
+            "Batter": "Batter",
+            "Catcher": "Catcher",
+            "Pitcher Hand": "Pitcher Hand",
+            "Batter Hand": "Batter Hand",
+            "Team": "Team",
+            "Pitcher Team": "Pitcher Team",
+            "Count": "Count",
+            "After Count": "After Count",
+            "Zone Location": "Zone Location",
+            "Times Through Order": "Times Through Order",
+            "Velocity": "Velocity",
+            "IVB": "IVB",
+            "HB": "HB",
+        }
+        split_col_name = split_col_map.get((split_by or "Pitch Types").strip(), "Pitch")
+        mode_clean = (table_mode or "Live").strip()
+        mode_columns_map: Dict[str, List[str]] = {
+            "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
+            "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+"],
+            "Results": [split_col_name, "#", "BF", "K%", "BB%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
+            "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
+        }
+        empty_response = PitchingOverviewResponse(
+            school_code=school_code,
+            pitcher=selected_pitchers[0] if len(selected_pitchers) == 1 else None,
+            team_type=team_type,
+            opp_hitter=selected_opp_hitters[0] if len(selected_opp_hitters) == 1 else None,
+            with_video=with_video,
+            break_lines=break_lines,
+            stuff_level=stuff_level,
+            stuff_base=stuff_base,
+            hand=hand,
+            batter_side=batter_side,
+            in_zone=selected_in_zone[0] if len(selected_in_zone) == 1 else None,
+            qp_locations=qp_locations,
+            session_type=(session_type_filter if session_type_filter != "Live" else "Live BP"),
+            table_mode=table_mode,
+            split_by=split_by,
+            selected_zone_locations=selected_zone_locations,
+            selected_pitch_types=selected_pitch_types,
+            selected_pitch_results=selected_pitch_results,
+            selected_count_filters=selected_count_filters,
+            selected_after_count_filters=selected_after_count_filters,
+            start_date=start_date.isoformat() if start_date else None,
+            end_date=end_date.isoformat() if end_date else None,
+            total_pitches=0,
+            avg_velo=None,
+            max_velo=None,
+            avg_spin=None,
+            avg_ivb=None,
+            avg_hb=None,
+            avg_stuff=None,
+            zone_pct=None,
+            strike_pct=None,
+            whiff_pct=None,
+            table_columns=mode_columns_map.get(mode_clean, mode_columns_map["Live"]),
+            available_table_columns=ALL_TABLE_COLUMNS,
+            table_rows=[],
+            row_pitches_by_key={},
+            pitch_types=[],
+            chart_points=[],
+            trend_rows=[],
+        )
+        _overview_cache_set(overview_cache_key, empty_response)
+        return empty_response
     need_prev_counts = bool(selected_after_count_filters) or (split_by == "After Count")
     need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
 
