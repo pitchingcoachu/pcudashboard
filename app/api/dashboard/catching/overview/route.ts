@@ -44,6 +44,7 @@ export async function GET(request: Request) {
   }
   const scopedCatcher = playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Catching') : '';
   const pass = [
+    'level',
     'start_date',
     'end_date',
     'session_type',

@@ -6,14 +6,15 @@ import { resolveDashboardPlayerIdentity, selectScopedPlayerName } from '../../..
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 const RESPONSE_CACHE_HEADERS = {
-  'cache-control': 'private, max-age=20, stale-while-revalidate=100',
+  'cache-control': 'private, no-store, max-age=0',
+  vary: 'Cookie',
 } as const;
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 60000 : 15000;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -31,8 +32,11 @@ export async function GET() {
   });
 
   const apiBase = resolveDashboardApiBaseUrl();
+  const inputUrl = new URL(request.url);
+  const level = inputUrl.searchParams.get('level')?.trim() ?? '';
   const url = new URL(`${apiBase}/v1/hitting/filters`);
   url.searchParams.set('school_code', schoolCode);
+  if (level) url.searchParams.set('level', level);
 
   try {
     const playerIdentity = await resolveDashboardPlayerIdentity({

@@ -105,6 +105,14 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentSoft: '#8f0f24',
     accentRgb: '200, 16, 46',
   },
+  PRO: {
+    schoolCode: 'PRO',
+    logoSrc: '/mlb-logo.png',
+    logoAlt: 'MLB',
+    accent: '#041e42',
+    accentSoft: '#02152f',
+    accentRgb: '4, 30, 66',
+  },
 };
 
 export function resolveSchoolBrand(schoolCode: string | null | undefined): SchoolBrand {

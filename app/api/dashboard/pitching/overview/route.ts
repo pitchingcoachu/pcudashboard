@@ -39,6 +39,7 @@ export async function GET(request: Request) {
   const hand = inputUrl.searchParams.get('hand')?.trim() ?? '';
   const batterSide = inputUrl.searchParams.get('batter_side')?.trim() ?? '';
   const sessionType = inputUrl.searchParams.get('session_type')?.trim() ?? '';
+  const level = inputUrl.searchParams.get('level')?.trim() ?? '';
   const tableMode = inputUrl.searchParams.get('table_mode')?.trim() ?? '';
   const splitBy = inputUrl.searchParams.get('split_by')?.trim() ?? '';
   const customColumns = inputUrl.searchParams.get('custom_columns')?.trim() ?? '';
@@ -100,6 +101,7 @@ export async function GET(request: Request) {
   if (hand) url.searchParams.set('hand', hand);
   if (batterSide) url.searchParams.set('batter_side', batterSide);
   if (sessionType) url.searchParams.set('session_type', sessionType);
+  if (level) url.searchParams.set('level', level);
   if (tableMode) url.searchParams.set('table_mode', tableMode);
   if (splitBy) url.searchParams.set('split_by', splitBy);
   if (customColumns) url.searchParams.set('custom_columns', customColumns);

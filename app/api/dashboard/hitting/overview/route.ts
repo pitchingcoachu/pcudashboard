@@ -44,6 +44,7 @@ export async function GET(request: Request) {
   }
   const scopedHitter = playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Hitting') : '';
   const pass = [
+    'level',
     'start_date',
     'end_date',
     'hitter',

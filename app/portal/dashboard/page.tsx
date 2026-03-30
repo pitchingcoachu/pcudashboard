@@ -114,7 +114,7 @@ export default async function PortalDashboardPage() {
       </header>
 
       {canAccessDashboard ? (
-        <DashboardShell role={session.role} selectedSchoolCode={selectedSchool} />
+        <DashboardShell key={`dashboard-shell-${selectedSchool}`} role={session.role} selectedSchoolCode={selectedSchool} />
       ) : (
         <section className="portal-panel">
           <h2>Dashboard Access</h2>

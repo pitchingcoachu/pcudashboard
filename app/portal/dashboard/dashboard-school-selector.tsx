@@ -9,6 +9,12 @@ type Props = {
   logoOnly?: boolean;
 };
 
+function formatSchoolCodeLabel(schoolCode: string): string {
+  const code = String(schoolCode ?? '').trim().toUpperCase();
+  if (code === 'PRO') return 'MLB';
+  return code;
+}
+
 export default function DashboardSchoolSelector({ options, initialValue, logoOnly = false }: Props) {
   const [value, setValue] = useState(initialValue);
   const [saving, setSaving] = useState(false);
@@ -41,7 +47,7 @@ export default function DashboardSchoolSelector({ options, initialValue, logoOnl
       if (!response.ok) {
         throw new Error('Failed to switch school.');
       }
-      window.location.reload();
+      window.location.assign(`/portal/dashboard?school_switch=${Date.now()}`);
     } catch {
       setSaving(false);
     }
@@ -67,14 +73,14 @@ export default function DashboardSchoolSelector({ options, initialValue, logoOnl
         disabled={saving}
         aria-expanded={open}
         aria-haspopup="menu"
-        title={saving ? 'Switching school...' : `School: ${value}`}
+        title={saving ? 'Switching school...' : `School: ${formatSchoolCodeLabel(value)}`}
       >
         <img
           src={activeBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
           alt={activeBrand.logoSrc ? activeBrand.logoAlt : 'PCU logo'}
           className={`portal-school-switcher-trigger-logo portal-school-switcher-trigger-logo--${activeBrand.schoolCode}`}
         />
-        {!logoOnly ? <span className="portal-school-switcher-trigger-label">{value}</span> : null}
+        {!logoOnly ? <span className="portal-school-switcher-trigger-label">{formatSchoolCodeLabel(value)}</span> : null}
         {!logoOnly ? (
           <span className="portal-school-switcher-caret" aria-hidden="true">
             ▾
@@ -101,7 +107,7 @@ export default function DashboardSchoolSelector({ options, initialValue, logoOnl
                   alt={brand.logoSrc ? brand.logoAlt : 'PCU logo'}
                   className={`portal-school-switcher-option-logo portal-school-switcher-option-logo--${brand.schoolCode}`}
                 />
-                <span>{schoolCode}</span>
+                <span>{formatSchoolCodeLabel(schoolCode)}</span>
               </button>
             );
           })}

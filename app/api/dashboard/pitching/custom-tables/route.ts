@@ -154,7 +154,14 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
+  const scopedOrganizationIdResolved = resolveSchoolScopedOrganizationId(session);
+  const scopedOrganizationId =
+    Number.isFinite(scopedOrganizationIdResolved) && scopedOrganizationIdResolved > 0
+      ? scopedOrganizationIdResolved
+      : Number(session.organizationId ?? 0);
+  if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
+    return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
+  }
   const pool = getDbPool();
   try {
     await ensureDashboardCustomTableSchema(pool);
@@ -195,7 +202,14 @@ export async function POST(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
+  const scopedOrganizationIdResolved = resolveSchoolScopedOrganizationId(session);
+  const scopedOrganizationId =
+    Number.isFinite(scopedOrganizationIdResolved) && scopedOrganizationIdResolved > 0
+      ? scopedOrganizationIdResolved
+      : Number(session.organizationId ?? 0);
+  if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
+    return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
+  }
   const pool = getDbPool();
   try {
     await ensureDashboardCustomTableSchema(pool);
@@ -298,7 +312,14 @@ export async function DELETE(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
+  const scopedOrganizationIdResolved = resolveSchoolScopedOrganizationId(session);
+  const scopedOrganizationId =
+    Number.isFinite(scopedOrganizationIdResolved) && scopedOrganizationIdResolved > 0
+      ? scopedOrganizationIdResolved
+      : Number(session.organizationId ?? 0);
+  if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
+    return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
+  }
   const url = new URL(request.url);
   const id = Number(url.searchParams.get('id'));
   if (!Number.isFinite(id) || id <= 0) {

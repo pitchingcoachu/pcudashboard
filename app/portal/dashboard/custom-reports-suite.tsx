@@ -5,10 +5,12 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching';
 type ReportScope = 'Single Player' | 'Multi-Player';
+type SprayViewMode = 'Batted Balls' | 'Bins';
 type PanelType =
   | ''
   | 'Movement Plot'
@@ -50,6 +52,9 @@ type PitchingFiltersPayload = {
   min_date: string | null;
   max_date: string | null;
   pitchers: string[];
+  team_types?: string[];
+  pitchers_by_team_code?: Record<string, string[]>;
+  level_options?: string[];
   session_types: string[];
   pitch_types: string[];
   batter_sides: string[];
@@ -67,6 +72,9 @@ type HittingFiltersPayload = {
   min_date: string | null;
   max_date: string | null;
   hitters: string[];
+  team_types?: string[];
+  hitters_by_team_code?: Record<string, string[]>;
+  level_options?: string[];
   session_types?: string[];
   pitch_types: string[];
   batter_sides: string[];
@@ -86,6 +94,8 @@ type CatchingFiltersPayload = {
   max_date: string | null;
   catchers: string[];
   team_types?: string[];
+  catchers_by_team_code?: Record<string, string[]>;
+  level_options?: string[];
   pitch_types: string[];
   hands: string[];
   batter_sides: string[];
@@ -122,6 +132,10 @@ type OverviewLitePayload = {
     horizontal_attack_angle?: number | null;
     bat_speed?: number | null;
     inning?: number | null;
+    pitcher?: string | null;
+    game_id?: string | null;
+    game_uid?: string | null;
+    game_foreign_id?: string | null;
     pitch_call?: string | null;
     play_result?: string | null;
     tagged_hit_type?: string | null;
@@ -196,6 +210,7 @@ type CellConfig = {
   batSpeedDisplay: 'average' | 'individual';
   batSpeedColorBy: 'pitch_type' | 'exit_velocity' | 'result';
   evlaColorBy: 'result' | 'pitch_type';
+  sprayView: SprayViewMode;
 };
 
 type ReportPayload = {
@@ -274,6 +289,7 @@ const FILTER_TOKENS: FilterToken[] = [
   'IVB Min/Max',
   'HB Min/Max',
 ];
+const splitByLabel = (value: string): string => (value === 'Inning' ? 'Inning of Appearance' : value);
 const UNIVERSAL_SPLIT_BY = [
   'Pitch Types',
   'Batter Side',
@@ -285,6 +301,8 @@ const UNIVERSAL_SPLIT_BY = [
   'In Zone',
   'Zone Location',
   'Times Through Order',
+  'Inning',
+  'Pitch Count',
   'Velocity',
   'IVB',
   'HB',
@@ -313,7 +331,6 @@ const PITCH_ABBR: Record<string, string> = {
   Knuckleball: 'KN',
   Undefined: 'UN',
 };
-const TEAM_OPTIONS = ['All', 'Campers', 'Opponents'];
 const PITCH_COLORS: Record<string, string> = {
   Fastball: '#ffffff',
   Sinker: 'orange',
@@ -404,13 +421,6 @@ function fmtShortDate(value: string | null | undefined): string {
 function normalizeNameForApi(value: string): string {
   const trimmed = (value ?? '').trim();
   if (!trimmed || trimmed === 'All') return '';
-  if (trimmed.includes(',')) return trimmed;
-  const pieces = trimmed.split(/\s+/).filter(Boolean);
-  if (pieces.length >= 2) {
-    const last = pieces[pieces.length - 1];
-    const first = pieces.slice(0, -1).join(' ');
-    return `${last}, ${first}`;
-  }
   return trimmed;
 }
 
@@ -449,6 +459,27 @@ function selectedValues(values: string[] | undefined): string[] {
   return list;
 }
 
+function normalizeNameKey(value: string): string {
+  return String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function buildPlayerTeamMap(byTeamCode: Record<string, string[]> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  Object.entries(byTeamCode ?? {}).forEach(([teamCodeRaw, names]) => {
+    const teamCode = String(teamCodeRaw ?? '').trim().toUpperCase();
+    if (!teamCode) return;
+    (names ?? []).forEach((nameRaw) => {
+      const name = String(nameRaw ?? '').trim();
+      if (!name) return;
+      const formatted = toFirstLast(name);
+      [name, formatted, normalizeNameKey(name), normalizeNameKey(formatted)].forEach((key) => {
+        if (key) out[key] = teamCode;
+      });
+    });
+  });
+  return out;
+}
+
 function timesThroughOrderRank(value: unknown): number {
   const text = String(value ?? '').trim().toLowerCase();
   if (!text) return 8;
@@ -467,6 +498,48 @@ function reorderTimesThroughOrderRows<T extends Record<string, unknown>>(rows: T
   nonAllRows.sort((a, b) => {
     const rankA = timesThroughOrderRank(a[splitColumn]);
     const rankB = timesThroughOrderRank(b[splitColumn]);
+    if (rankA !== rankB) return rankA - rankB;
+    return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
+  });
+  return [...allRows, ...nonAllRows];
+}
+
+function reorderInningRows<T extends Record<string, unknown>>(rows: T[], splitColumn: string): T[] {
+  if (!splitColumn) return rows;
+  const allRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() === 'all');
+  const nonAllRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() !== 'all');
+  const inningRank = (value: unknown): number => {
+    const raw = String(value ?? '').trim();
+    if (!raw || raw.toLowerCase() === 'unknown') return Number.MAX_SAFE_INTEGER;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return Math.trunc(parsed);
+    const match = raw.match(/\d+/);
+    return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
+  };
+  nonAllRows.sort((a, b) => {
+    const rankA = inningRank(a[splitColumn]);
+    const rankB = inningRank(b[splitColumn]);
+    if (rankA !== rankB) return rankA - rankB;
+    return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
+  });
+  return [...allRows, ...nonAllRows];
+}
+
+function reorderPitchCountRows<T extends Record<string, unknown>>(rows: T[], splitColumn: string): T[] {
+  if (!splitColumn) return rows;
+  const allRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() === 'all');
+  const nonAllRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() !== 'all');
+  const binRank = (value: unknown): number => {
+    const raw = String(value ?? '').trim();
+    if (!raw || raw.toLowerCase() === 'unknown') return Number.MAX_SAFE_INTEGER;
+    const range = raw.match(/^\s*(\d+)\s*-\s*(\d+)\s*$/);
+    if (range) return Number(range[1]);
+    const match = raw.match(/\d+/);
+    return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
+  };
+  nonAllRows.sort((a, b) => {
+    const rankA = binRank(a[splitColumn]);
+    const rankB = binRank(b[splitColumn]);
     if (rankA !== rankB) return rankA - rankB;
     return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
   });
@@ -798,6 +871,7 @@ function emptyCell(): CellConfig {
     batSpeedDisplay: 'average',
     batSpeedColorBy: 'pitch_type',
     evlaColorBy: 'result',
+    sprayView: 'Batted Balls',
   };
 }
 
@@ -827,6 +901,7 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
   merged.batSpeedDisplay = merged.batSpeedDisplay === 'individual' ? 'individual' : 'average';
   merged.batSpeedColorBy = merged.batSpeedColorBy === 'exit_velocity' || merged.batSpeedColorBy === 'result' ? merged.batSpeedColorBy : 'pitch_type';
   merged.evlaColorBy = merged.evlaColorBy === 'pitch_type' ? 'pitch_type' : 'result';
+  merged.sprayView = merged.sprayView === 'Bins' ? 'Bins' : 'Batted Balls';
   return merged;
 }
 
@@ -855,18 +930,10 @@ function orderedPitchStats(map: Record<string, number>): Array<[string, number]>
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const rgb = (r: number, g: number, b: number) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
-const shinyHeatSequential = (tRaw: number): string => {
-  const t = Math.max(0, Math.min(1, tRaw));
-  if (t < 0.2) return rgb(lerp(232, 142, t / 0.2), lerp(238, 183, t / 0.2), lerp(247, 225, t / 0.2));
-  if (t < 0.45) return rgb(lerp(142, 170, (t - 0.2) / 0.25), lerp(183, 211, (t - 0.2) / 0.25), lerp(225, 235, (t - 0.2) / 0.25));
-  if (t < 0.7) return rgb(lerp(170, 240, (t - 0.45) / 0.25), lerp(211, 218, (t - 0.45) / 0.25), lerp(235, 154, (t - 0.45) / 0.25));
-  if (t < 0.88) return rgb(lerp(240, 235, (t - 0.7) / 0.18), lerp(218, 120, (t - 0.7) / 0.18), lerp(154, 82, (t - 0.7) / 0.18));
-  return rgb(lerp(235, 216, (t - 0.88) / 0.12), lerp(120, 43, (t - 0.88) / 0.12), lerp(82, 52, (t - 0.88) / 0.12));
-};
 const sequentialColor = (value: number, min: number, max: number): string => {
   if (!Number.isFinite(value)) return 'rgba(255,255,255,0.08)';
-  const t = Math.max(0, Math.min(1, (value - min) / Math.max(1e-9, max - min)));
-  return shinyHeatSequential(t);
+  const mid = min + (max - min) * 0.5;
+  return divergingColor(value, min, mid, max);
 };
 const divergingColor = (value: number, min: number, mid: number, max: number): string => {
   if (!Number.isFinite(value)) return 'rgba(255,255,255,0.08)';
@@ -877,7 +944,73 @@ const divergingColor = (value: number, min: number, mid: number, max: number): s
   const t = Math.max(0, Math.min(1, (value - mid) / Math.max(1e-9, max - mid)));
   return rgb(lerp(248, 176, t), lerp(248, 11, t), lerp(248, 52, t));
 };
-const resultShape = (pitchCall: string, playResult: string): string => {
+const normalizePitchTypeName = (value: string): string => {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (!v) return 'all';
+  if (v === 'all') return 'all';
+  return v.replace(/\s+/g, '');
+};
+const heatmapScaleFromMetricAndPitchTypes = (
+  metricRaw: string,
+  selectedPitchTypesRaw: string[]
+): { min: number; mid: number; max: number } | null => {
+  const metric = String(metricRaw ?? '').trim();
+  const selectedPitchTypes = selectedPitchTypesRaw
+    .map((value) => normalizePitchTypeName(value))
+    .filter((value) => value && value !== 'all');
+
+  if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
+
+  if (metric === 'Whiff Rate') {
+    if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
+    const pt = selectedPitchTypes[0];
+    if (pt === 'fastball') return { min: 10, mid: 20, max: 30 };
+    if (pt === 'sinker') return { min: 5, mid: 12.5, max: 20 };
+    return { min: 20, mid: 32.5, max: 45 };
+  }
+  if (metric === 'Swing Rate') return { min: 20, mid: 50, max: 80 };
+  if (metric === 'GB Rate') return { min: 38, mid: 43, max: 48 };
+  if (metric === 'Contact Rate') {
+    if (selectedPitchTypes.length !== 1) return { min: 60, mid: 75, max: 90 };
+    const pt = selectedPitchTypes[0];
+    if (pt === 'fastball') return { min: 70, mid: 80, max: 90 };
+    if (pt === 'sinker') return { min: 80, mid: 87.5, max: 95 };
+    return { min: 55, mid: 67.5, max: 80 };
+  }
+  return null;
+};
+const resultShape = (pitchCall: string, playResult: string, isProSchool = false): string => {
+  if (isProSchool) {
+    const norm = (value: string): string => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const callN = norm(pitchCall);
+    const prN = norm(playResult);
+    if (callN === 'called_strike' || callN === 'strikecalled') return 'Called Strike';
+    if (
+      callN === 'hit_by_pitch' ||
+      callN === 'hitbypitch' ||
+      prN === 'hit_by_pitch' ||
+      prN === 'hitbypitch' ||
+      callN === 'ball' ||
+      callN === 'ballcalled' ||
+      callN === 'ball_called' ||
+      callN === 'ballindirt' ||
+      callN === 'ball_in_dirt' ||
+      callN === 'blocked_ball' ||
+      callN === 'pitchout' ||
+      callN === 'ball_pitchout' ||
+      callN === 'intentional_ball' ||
+      callN === 'intent_ball'
+    ) {
+      return 'Ball';
+    }
+    if (callN.includes('foul')) return 'Foul';
+    if (callN === 'swinging_strike' || callN === 'swinging_strike_blocked' || callN === 'swinging_strike_pitchout' || callN === 'missed_bunt') return 'Whiff';
+    if (prN === 'single' || prN === 'double' || prN === 'triple' || prN === 'home_run' || prN === 'homerun') return 'In Play (Hit)';
+    if (prN === 'field_error' || prN === 'error') return 'Error';
+    if (callN.startsWith('in_play') || callN.startsWith('hit_into_play')) return 'In Play (Out)';
+    if (prN && !['walk', 'intent_walk', 'intentional_walk', 'strikeout', 'strikeout_double_play', 'hit_by_pitch', 'hitbypitch'].includes(prN)) return 'In Play (Out)';
+    return '';
+  }
   if (pitchCall === 'HitByPitch' || playResult === 'HitByPitch') return 'Ball';
   if (pitchCall === 'StrikeCalled') return 'Called Strike';
   if (pitchCall === 'BallCalled' || pitchCall === 'BallinDirt') return 'Ball';
@@ -936,7 +1069,7 @@ const swingColorFor = (
 const inZoneLabel = (x: number | null, y: number | null): string => {
   if (x === null || y === null) return 'No';
   const inZone = x >= -0.88 && x <= 0.88 && y >= 1.5 && y <= 3.6;
-  const comp = x >= -1.5 && x <= 1.5 && y >= 1.15 && y <= 4.15;
+  const comp = x >= -1.5 && x <= 1.5 && y >= 1.05 && y <= 4.05;
   if (inZone) return 'Yes';
   if (comp) return 'Competitive';
   return 'No';
@@ -1027,8 +1160,8 @@ function strikeZoneOverlay() {
   const strikeTop = 3.6;
   const compLeft = -1.5;
   const compRight = 1.5;
-  const compBottom = 1.15;
-  const compTop = 4.15;
+  const compBottom = 1.05;
+  const compTop = 4.05;
   const midY = (strikeBottom + strikeTop) / 2;
   return (
     <>
@@ -1047,20 +1180,65 @@ function strikeZoneOverlay() {
   );
 }
 
-function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>, metric: string) {
+function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>, metric: string, isProSchool = false) {
   const xMin = -2.5;
   const xMax = 2.5;
   const yMin = 0;
   const yMax = 4.5;
-  const cols = 40;
-  const rows = 40;
+  const cols = isProSchool ? 44 : 40;
+  const rows = isProSchool ? 44 : 40;
   const cellW = (xMax - xMin) / cols;
   const cellH = (yMax - yMin) / rows;
-  const sigmaX = 0.36;
-  const sigmaY = 0.36;
+  const sigmaX = isProSchool ? 0.22 : 0.36;
+  const sigmaY = isProSchool ? 0.22 : 0.36;
   const eps = 1e-9;
+  const normDesc = (value: unknown): string =>
+    String(value ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  const isInPlayCall = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): boolean => {
+    const raw = String(point.pitch_call ?? '');
+    if (raw === 'InPlay') return true;
+    const d = normDesc(raw);
+    return d.startsWith('in_play') || d.startsWith('hit_into_play');
+  };
+  const isSwingCall = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): boolean => {
+    const raw = String(point.pitch_call ?? '');
+    if (!isProSchool) {
+      return raw === 'StrikeSwinging' || raw === 'FoulBall' || raw === 'FoulBallFieldable' || raw === 'FoulBallNotFieldable' || raw === 'InPlay';
+    }
+    const d = normDesc(raw);
+    return (
+      isInPlayCall(point) ||
+      d === 'swinging_strike' ||
+      d === 'swinging_strike_blocked' ||
+      d === 'swinging_strike_pitchout' ||
+      d === 'foul' ||
+      d === 'foul_tip' ||
+      d === 'foul_bunt' ||
+      d === 'foul_pitchout' ||
+      d === 'missed_bunt' ||
+      d.startsWith('foul')
+    );
+  };
+  const isWhiffCall = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): boolean => {
+    const raw = String(point.pitch_call ?? '');
+    if (!isProSchool) return raw === 'StrikeSwinging';
+    const d = normDesc(raw);
+    return d === 'swinging_strike' || d === 'swinging_strike_blocked' || d === 'foul_tip';
+  };
+  const isGroundBall = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): boolean => {
+    const tagged = normDesc(point.tagged_hit_type ?? '');
+    return tagged.includes('ground_ball') || tagged === 'groundball';
+  };
   const valid = points
-    .map((point) => ({ point, x: point.plate_side, y: point.plate_height }))
+    .map((point) => {
+      const rawX = point.plate_side;
+      const adjustedX = typeof rawX === 'number' ? (isProSchool ? -rawX : rawX) : rawX;
+      return { point, x: adjustedX, y: point.plate_height };
+    })
     .filter(
       (row): row is { point: NonNullable<OverviewLitePayload['chart_points']>[number]; x: number; y: number } =>
         row.x !== null && row.y !== null && row.x !== undefined && row.y !== undefined
@@ -1069,6 +1247,7 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
 
   const runValue = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
     if (typeof point.run_value === 'number' && Number.isFinite(point.run_value)) return point.run_value;
+    if (isProSchool) return 0;
     const pitchCall = point.pitch_call || '';
     const playResult = point.play_result || '';
     const korbb = point.korbb || '';
@@ -1087,14 +1266,11 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
     return 0;
   };
 
-  const globalSwingCount = valid.filter((row) => {
-    const call = row.point.pitch_call || '';
-    return call === 'StrikeSwinging' || call === 'FoulBall' || call === 'FoulBallFieldable' || call === 'FoulBallNotFieldable' || call === 'InPlay';
-  }).length;
-  const globalWhiffCount = valid.filter((row) => (row.point.pitch_call || '') === 'StrikeSwinging').length;
-  const globalInPlayCount = valid.filter((row) => (row.point.pitch_call || '') === 'InPlay').length;
-  const globalGbCount = valid.filter((row) => row.point.tagged_hit_type === 'GroundBall').length;
-  const globalEvRows = valid.filter((row) => (row.point.pitch_call || '') === 'InPlay' && typeof row.point.exit_speed === 'number');
+  const globalSwingCount = valid.filter((row) => isSwingCall(row.point)).length;
+  const globalWhiffCount = valid.filter((row) => isWhiffCall(row.point)).length;
+  const globalInPlayCount = valid.filter((row) => isInPlayCall(row.point)).length;
+  const globalGbCount = valid.filter((row) => isInPlayCall(row.point) && isGroundBall(row.point)).length;
+  const globalEvRows = valid.filter((row) => isInPlayCall(row.point) && typeof row.point.exit_speed === 'number');
   const globalTakeRows = valid.filter((row) => ['StrikeCalled', 'BallCalled', 'BallinDirt'].includes(row.point.pitch_call || ''));
   const globalEvAvg = globalEvRows.length > 0 ? globalEvRows.reduce((sum, row) => sum + Number(row.point.exit_speed || 0), 0) / globalEvRows.length : 0;
   const globalRvAvg = valid.length > 0 ? valid.reduce((sum, row) => sum + runValue(row.point), 0) / valid.length : 0;
@@ -1102,8 +1278,9 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
   const globalSwingRate = valid.length > 0 ? globalSwingCount / valid.length : 0;
   const globalWhiffRate = globalSwingCount > 0 ? globalWhiffCount / globalSwingCount : 0;
   const globalGbRate = globalInPlayCount > 0 ? globalGbCount / globalInPlayCount : 0;
-  const globalContactRate = globalSwingCount > 0 ? globalInPlayCount / globalSwingCount : 0;
+  const globalContactRate = globalSwingCount > 0 ? (globalSwingCount - globalWhiffCount) / globalSwingCount : 0;
   const shrinkStrength = 8;
+  const runValueShrinkStrength = 0.5;
 
   const cells: Array<{ x: number; y: number; w: number; h: number; value: number; density: number }> = [];
   for (let row = 0; row < rows; row += 1) {
@@ -1126,13 +1303,13 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
         const weight = Math.exp(-0.5 * (dx * dx + dy * dy));
         if (weight < 1e-6) continue;
         const call = rowPoint.point.pitch_call || '';
-        const swing = call === 'StrikeSwinging' || call === 'FoulBall' || call === 'FoulBallFieldable' || call === 'FoulBallNotFieldable' || call === 'InPlay';
-        const inPlay = call === 'InPlay';
-        const gb = rowPoint.point.tagged_hit_type === 'GroundBall';
+        const swing = isSwingCall(rowPoint.point);
+        const inPlay = isInPlayCall(rowPoint.point);
+        const gb = isGroundBall(rowPoint.point);
         const isTake = call === 'StrikeCalled' || call === 'BallCalled' || call === 'BallinDirt';
         sumW += weight;
         if (swing) swingW += weight;
-        if (call === 'StrikeSwinging') whiffW += weight;
+        if (isWhiffCall(rowPoint.point)) whiffW += weight;
         if (inPlay) inPlayW += weight;
         if (gb) gbW += weight;
         if (isTake) {
@@ -1149,10 +1326,10 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
       if (metric === 'Called Strike Rate') value = 100 * ((csW + shrinkStrength * globalCsRate) / Math.max(eps, takeW + shrinkStrength));
       if (metric === 'Whiff Rate') value = 100 * ((whiffW + shrinkStrength * globalWhiffRate) / Math.max(eps, swingW + shrinkStrength));
       if (metric === 'GB Rate') value = 100 * ((gbW + shrinkStrength * globalGbRate) / Math.max(eps, inPlayW + shrinkStrength));
-      if (metric === 'Contact Rate') value = 100 * ((inPlayW + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
+      if (metric === 'Contact Rate') value = 100 * (((swingW - whiffW) + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
       if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
       if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
-      if (metric === 'Run Values') value = (rvWSum + shrinkStrength * globalRvAvg) / Math.max(eps, sumW + shrinkStrength);
+      if (metric === 'Run Values') value = ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
       cells.push({ x: xMin + col * cellW, y: yMin + row * cellH, w: cellW, h: cellH, value, density: sumW });
     }
   }
@@ -1236,7 +1413,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [saveScope, setSaveScope] = useState<'Current School' | 'All Schools'>('Current School');
   const [userRole, setUserRole] = useState<'admin' | 'coach' | 'player'>('coach');
   const [playersByTeam, setPlayersByTeam] = useState<string[]>([]);
+  const [playerTeamCodeByName, setPlayerTeamCodeByName] = useState<Record<string, string>>({});
+  const [teamTypeOptions, setTeamTypeOptions] = useState<string[]>(['All']);
   const [sessionTypeOptions, setSessionTypeOptions] = useState<string[]>(['All']);
+  const [levelOptions, setLevelOptions] = useState<string[]>(['All', 'MLB', 'AAA']);
   const [pitchTypeOptions, setPitchTypeOptions] = useState<string[]>(['All']);
   const [batterSideOptions, setBatterSideOptions] = useState<string[]>(['All']);
   const [pitcherHandOptions, setPitcherHandOptions] = useState<string[]>(['All']);
@@ -1284,19 +1464,20 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const metric = column.trim();
     const pitchType = String(pitchTypeRaw || 'All').trim().toLowerCase().replace(/\s+/g, '');
     const threshold = (() => {
+      const isProSchool = String(schoolCode || '').trim().toUpperCase() === 'PRO';
       if (metric === 'InZone%') {
-        if (['fastball', 'sinker'].includes(pitchType)) return { poor: 43, avg: 50, great: 57 };
+        if (['fastball', 'sinker'].includes(pitchType)) return isProSchool ? { poor: 48, avg: 55, great: 62 } : { poor: 43, avg: 50, great: 57 };
         if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 37, avg: 43, great: 49 };
         if (['changeup', 'splitter', 'knuckleball'].includes(pitchType)) return { poor: 30, avg: 37, great: 44 };
-        return { poor: 42, avg: 47, great: 52 };
+        return isProSchool ? { poor: 44, avg: 49, great: 54 } : { poor: 42, avg: 47, great: 52 };
       }
       if (metric === 'Comp%') return { poor: 76, avg: 79, great: 82 };
-      if (metric === 'Strike%') return { poor: 57, avg: 62, great: 67 };
+      if (metric === 'Strike%') return isProSchool ? { poor: 59, avg: 64, great: 69 } : { poor: 57, avg: 62, great: 67 };
       if (metric === 'Swing%') return { poor: 40, avg: 45, great: 50 };
-      if (metric === 'FPS%') return { poor: 55, avg: 60, great: 65 };
-      if (metric === 'E+A%') return { poor: 65, avg: 70, great: 75 };
+      if (metric === 'FPS%') return isProSchool ? { poor: 57, avg: 62, great: 67 } : { poor: 55, avg: 60, great: 65 };
+      if (metric === 'E+A%') return isProSchool ? { poor: 68, avg: 73, great: 78 } : { poor: 65, avg: 70, great: 75 };
       if (metric === '1-1W%') return { poor: 58, avg: 63, great: 68 };
-      if (metric === 'Ahead%') return { poor: 32, avg: 37, great: 42 };
+      if (metric === 'Ahead%') return isProSchool ? { poor: 34, avg: 39, great: 44 } : { poor: 32, avg: 37, great: 42 };
       if (metric === 'QP%') return { poor: 38, avg: 48, great: 58 };
       if (metric === 'Ctrl+') return { poor: 75, avg: 85, great: 95 };
       if (metric === 'QP+') return { poor: 75, avg: 90, great: 105 };
@@ -1313,7 +1494,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       return null;
     })();
     if (!threshold) return null;
-    const reverseScale = ['EV', 'Barrel%', 'BB%', 'RV/100'].includes(metric);
+    const reverseScale =
+      ['EV', 'Barrel%', 'BB%'].includes(metric) ||
+      (metric === 'RV/100' && reportType === 'Pitching');
     const { poor, avg, great } = threshold;
     const color = (() => {
       if (reverseScale) {
@@ -1372,9 +1555,17 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const availableSplitByOptions = useMemo(() => splitByOptionsForReportType(reportType), [reportType]);
 
   const teamOptions = useMemo<OptionItem[]>(() => {
-    const selectedSchool = String(schoolCode ?? '').trim().toUpperCase() || 'OSU';
-    return [{ value: 'All', label: 'All' }, { value: selectedSchool, label: selectedSchool }, ...TEAM_OPTIONS.filter((entry) => entry !== 'All').map((entry) => ({ value: entry, label: entry }))];
-  }, [schoolCode]);
+    const deduped = Array.from(new Set((teamTypeOptions ?? []).map((entry) => String(entry ?? '').trim()).filter(Boolean)));
+    const normalized = deduped.map((entry) => ({ value: entry, label: entry }));
+    if (!normalized.some((entry) => entry.value === 'All')) return [{ value: 'All', label: 'All' }, ...normalized];
+    return normalized;
+  }, [teamTypeOptions]);
+
+  useEffect(() => {
+    if (!teamOptions.some((entry) => entry.value === reportTeam)) {
+      setReportTeam('All');
+    }
+  }, [teamOptions, reportTeam]);
 
   const reportOptions = useMemo<OptionItem[]>(
     () =>
@@ -1467,8 +1658,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const typed = payload as unknown as PitchingFiltersPayload;
           const pitchers = Array.from(new Set((typed.pitchers ?? []).filter((entry) => entry && entry.trim())));
           setPlayersByTeam(pitchers);
+          setPlayerTeamCodeByName(buildPlayerTeamMap(typed.pitchers_by_team_code));
           setSchoolCode(typed.school_code ?? '');
+          setTeamTypeOptions(['All', ...Array.from(new Set((typed.team_types ?? []).filter(Boolean)))]);
           setSessionTypeOptions(['All', ...Array.from(new Set((typed.session_types ?? []).filter(Boolean)))]);
+          setLevelOptions(['All', ...Array.from(new Set((typed.level_options ?? ['MLB', 'AAA']).filter(Boolean)))]);
           setPitchTypeOptions(['All', ...Array.from(new Set((typed.pitch_types ?? []).filter(Boolean)))]);
           setBatterSideOptions(['All', ...Array.from(new Set((typed.batter_sides ?? []).filter(Boolean)))]);
           setPitcherHandOptions(['All', ...Array.from(new Set((typed.hands ?? []).filter(Boolean)))]);
@@ -1486,8 +1680,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const typed = payload as unknown as HittingFiltersPayload;
           const hitters = Array.from(new Set((typed.hitters ?? []).filter((entry) => entry && entry.trim())));
           setPlayersByTeam(hitters);
+          setPlayerTeamCodeByName(buildPlayerTeamMap(typed.hitters_by_team_code));
           setSchoolCode(typed.school_code ?? '');
+          setTeamTypeOptions(['All', ...Array.from(new Set((typed.team_types ?? []).filter(Boolean)))]);
           setSessionTypeOptions(['All', ...Array.from(new Set((typed.session_types ?? ['Bullpen', 'Live BP', 'Season']).filter(Boolean)))]);
+          setLevelOptions(['All', ...Array.from(new Set((typed.level_options ?? ['MLB', 'AAA']).filter(Boolean)))]);
           setPitchTypeOptions(['All', ...Array.from(new Set((typed.pitch_types ?? []).filter(Boolean)))]);
           setBatterSideOptions(['All', ...Array.from(new Set((typed.batter_sides ?? []).filter(Boolean)))]);
           setPitcherHandOptions(['All', ...Array.from(new Set((typed.hands ?? []).filter(Boolean)))]);
@@ -1505,8 +1702,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const typed = payload as unknown as CatchingFiltersPayload;
           const catchers = Array.from(new Set((typed.catchers ?? []).filter((entry) => entry && entry.trim())));
           setPlayersByTeam(catchers);
+          setPlayerTeamCodeByName(buildPlayerTeamMap(typed.catchers_by_team_code));
           setSchoolCode(typed.school_code ?? '');
+          setTeamTypeOptions(['All', ...Array.from(new Set((typed.team_types ?? []).filter(Boolean)))]);
           setSessionTypeOptions(['All', ...Array.from(new Set((['Season', 'Bullpen', 'Live BP'] as const).filter(Boolean)))]);
+          setLevelOptions(['All', ...Array.from(new Set((typed.level_options ?? ['MLB', 'AAA']).filter(Boolean)))]);
           setPitchTypeOptions(['All', ...Array.from(new Set((typed.pitch_types ?? []).filter(Boolean)))]);
           setBatterSideOptions(['All', ...Array.from(new Set((typed.batter_sides ?? []).filter(Boolean)))]);
           setPitcherHandOptions(['All', ...Array.from(new Set((typed.hands ?? []).filter(Boolean)))]);
@@ -1606,12 +1806,17 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const endDate = useGlobalDates ? globalEndDate : config.dateEnd || globalEndDate;
           const cellFilters = config.filterSelect ?? ['Dates', 'Session Type', 'Pitch Types'];
           const params = new URLSearchParams();
+          const isProSchool = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
           if (startDate) params.set('start_date', startDate);
           if (endDate) params.set('end_date', endDate);
           params.set('split_by', config.splitBy || 'Pitch Types');
           params.set('table_mode', config.tableMode || defaultTableModeForReportType(reportType));
-          if (cellFilters.includes('Session Type') && config.sessionType && config.sessionType !== 'All') {
-            params.set('session_type', config.sessionType);
+          if (cellFilters.includes('Session Type')) {
+            const sessionOrLevel = (config.sessionType || (isProSchool ? 'MLB' : 'All')).trim();
+            if (sessionOrLevel && sessionOrLevel !== 'All') {
+              if (isProSchool) params.set('level', sessionOrLevel);
+              else params.set('session_type', sessionOrLevel);
+            }
           }
           if (cellFilters.includes('Pitch Types')) {
             const pitchTypes = selectedValues(config.pitchTypes);
@@ -1939,12 +2144,37 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const reportHeaderTitle = useMemo(() => reportTitle.trim() || 'Custom Report', [reportTitle]);
   const activeSchoolCode = schoolCode || initialSchoolCode;
   const schoolBrand = useMemo(() => resolveSchoolBrand(activeSchoolCode), [activeSchoolCode]);
+  const isProSchool = String(activeSchoolCode || '').trim().toUpperCase() === 'PRO';
   const reportHeaderPlayer = useMemo(() => {
     if (reportScope === 'Multi-Player') return 'Multi-Player';
     const chosen = selectedValues(reportPlayers);
     if (!chosen.length) return 'All';
     return chosen.map((name) => toFirstLast(name) || name).join(', ');
   }, [reportScope, reportPlayers]);
+  const customReportRightLogoSrc = useMemo(() => {
+    if (!isProSchool) return schoolBrand.logoSrc ?? '/pitching-coach-u-logo.png';
+    const chosen = reportScope === 'Single Player' ? selectedValues(reportPlayers) : [];
+    let teamCode = '';
+    if (chosen.length === 1) {
+      const selected = chosen[0] ?? '';
+      const formatted = toFirstLast(selected);
+      teamCode =
+        playerTeamCodeByName[selected] ??
+        playerTeamCodeByName[formatted] ??
+        playerTeamCodeByName[normalizeNameKey(selected)] ??
+        playerTeamCodeByName[normalizeNameKey(formatted)] ??
+        '';
+    }
+    if (!teamCode && reportTeam && reportTeam !== 'All') {
+      teamCode = inferProTeamCode(reportTeam);
+    }
+    if (!teamCode) return '/mlb-logo.png';
+    return getProTeamLogoUrl(teamCode) || '/mlb-logo.png';
+  }, [isProSchool, schoolBrand.logoSrc, reportScope, reportPlayers, playerTeamCodeByName, reportTeam]);
+  const customReportRightLogoAlt = useMemo(() => {
+    if (!isProSchool) return schoolBrand.logoSrc ? schoolBrand.logoAlt : schoolCode || 'School';
+    return 'Team';
+  }, [isProSchool, schoolBrand.logoSrc, schoolBrand.logoAlt, schoolCode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2185,8 +2415,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   {reportSubtitle ? <p>{reportSubtitle}</p> : null}
                 </header>
                 <img
-                  src={schoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
-                  alt={schoolBrand.logoSrc ? schoolBrand.logoAlt : schoolCode || 'School'}
+                  src={customReportRightLogoSrc}
+                  alt={customReportRightLogoAlt}
                   className={`portal-custom-reports-brand-logo portal-custom-reports-brand-logo--school${
                     String(activeSchoolCode || '').toUpperCase() === 'GCU' ? ' portal-custom-reports-brand-logo--school-gcu' : ''
                   }`}
@@ -2207,6 +2437,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const sortedTableRows =
                     (config.splitBy || 'Pitch Types') === 'Times Through Order'
                       ? reorderTimesThroughOrderRows(sortedRowsBase, tableColumns[0] ?? '')
+                      : (config.splitBy || 'Pitch Types') === 'Inning'
+                        ? reorderInningRows(sortedRowsBase, tableColumns[0] ?? '')
+                      : (config.splitBy || 'Pitch Types') === 'Pitch Count'
+                        ? reorderPitchCountRows(sortedRowsBase, tableColumns[0] ?? '')
                       : sortedRowsBase;
                   const chartPoints = payload.chart_points ?? [];
                   const heatmapPoints = payload.heatmap_points ?? chartPoints;
@@ -2227,7 +2461,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     label: entry || 'Select',
                   }));
                   const filterTokenOptions = FILTER_TOKENS.map((entry) => ({ value: entry, label: entry }));
-                  const splitByOptions = availableSplitByOptions.map((entry) => ({ value: entry, label: entry }));
+                  const splitByOptions = availableSplitByOptions.map((entry) => ({ value: entry, label: splitByLabel(entry) }));
                   const contentType = normalizePanelType(config.panelType);
                   const isNote = contentType === 'Note Section';
                   const isSummaryTable = contentType === 'Summary Table';
@@ -2242,7 +2476,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const pitchTypeCountList = orderedPitchStats(pitchTypeCounts);
                   const totalPitchCount = chartPoints.length || 1;
                   const pieTotal = pitchTypeCountList.reduce((sum, entry) => sum + entry[1], 0) || 1;
-                  const heatCells = isHeatMap ? buildHeatCells(heatmapPoints, config.heatStat || 'Frequency') : [];
+                  const isProSchool = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
+                  const heatCells = isHeatMap ? buildHeatCells(heatmapPoints, config.heatStat || 'Frequency', isProSchool) : [];
 
                   return (
                     <article
@@ -2437,10 +2672,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             ) : null}
                             {(config.filterSelect ?? []).includes('Session Type') ? (
                               <>
-                                <label>Session Type</label>
+                                <label>{String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO' ? 'Level' : 'Session Type'}</label>
                                 <SearchableSingleSelect
-                                  options={sessionTypeOptions.map((entry) => ({ value: entry, label: entry }))}
-                                  value={config.sessionType || 'All'}
+                                  options={(
+                                    String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO'
+                                      ? levelOptions
+                                      : sessionTypeOptions
+                                  ).map((entry) => ({ value: entry, label: entry }))}
+                                  value={config.sessionType || (String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO' ? 'MLB' : 'All')}
                                   onChange={(next) =>
                                     setCellConfigs((current) => ({
                                       ...current,
@@ -2838,12 +3077,17 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           <svg viewBox="-2 -0.3 4 5.4" role="img" aria-label="Location plot" onMouseLeave={() => setChartHover(null)}>
                             {strikeZoneOverlay()}
                             {chartPoints.slice(0, 320).map((point, idx) => {
-                              const x = Number(point.plate_side ?? NaN);
+                              const rawX = Number(point.plate_side ?? NaN);
                               const y = Number(point.plate_height ?? NaN);
-                              if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                              if (!Number.isFinite(rawX) || !Number.isFinite(y)) return null;
+                              const x = isProSchool ? -rawX : rawX;
                               const pitchType = (point.pitch_type ?? '').trim() || 'Undefined';
                               const color = PITCH_COLORS[pitchType] ?? '#9ca3af';
-                              const shape = resultShape(String(point.pitch_call ?? ''), String(point.play_result ?? ''));
+                              const shape = resultShape(
+                                String(point.pitch_call ?? ''),
+                                String(point.play_result ?? ''),
+                                String(schoolCode || '').trim().toUpperCase() === 'PRO'
+                              );
                               const px = x;
                               const py = 4.8 - y;
                               const hoverText = `Session: ${point.session_date ? fmtShortDate(point.session_date) : '-'}\nResult: ${formatPitchResult(point.pitch_call, point.play_result)}\nVelo: ${toNum(point.rel_speed ?? point.velo)?.toFixed(1) ?? '-'} mph\nIVB: ${toNum(point.ivb)?.toFixed(1) ?? '-'} in\nHB: ${toNum(point.hb)?.toFixed(1) ?? '-'} in\nEV: ${toNum(point.exit_speed)?.toFixed(1) ?? '-'} mph\nLA: ${toNum(point.angle)?.toFixed(1) ?? '-'}`;
@@ -2857,14 +3101,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   }),
                                 onMouseLeave: () => setChartHover(null),
                               };
-                              if (shape === 'Ball') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.07} fill="none" stroke={color} strokeWidth={0.02} {...hoverProps} />;
-                              if (shape === 'Called Strike') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.068} fill={color} stroke={color} strokeWidth={0.016} {...hoverProps} />;
-                              if (shape === 'Foul') return <polygon key={`${cellId}-loc-${idx}`} points={`${px},${py - 0.066} ${px - 0.058},${py + 0.052} ${px + 0.058},${py + 0.052}`} fill="none" stroke={color} strokeWidth={0.02} {...hoverProps} />;
-                              if (shape === 'Whiff') return <text key={`${cellId}-loc-${idx}`} x={px} y={py + 0.055} fontSize={0.17} textAnchor="middle" fill={color} {...hoverProps}>★</text>;
-                              if (shape === 'In Play (Out)') return <polygon key={`${cellId}-loc-${idx}`} points={`${px},${py - 0.066} ${px - 0.058},${py + 0.052} ${px + 0.058},${py + 0.052}`} fill={color} {...hoverProps} />;
-                              if (shape === 'In Play (Hit)') return <rect key={`${cellId}-loc-${idx}`} x={px - 0.054} y={py - 0.054} width={0.108} height={0.108} fill={color} {...hoverProps} />;
-                              if (shape === 'Error') return <rect key={`${cellId}-loc-${idx}`} x={px - 0.054} y={py - 0.054} width={0.108} height={0.108} fill="none" stroke={color} strokeWidth={0.02} {...hoverProps} />;
-                              return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.066} fill={color} {...hoverProps} />;
+                              if (shape === 'Ball') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.095} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={0.026} {...hoverProps} />;
+                              if (shape === 'Called Strike') return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.092} fill={color} stroke={color} strokeWidth={0.021} {...hoverProps} />;
+                              if (shape === 'Foul') return <polygon key={`${cellId}-loc-${idx}`} points={`${px},${py - 0.09} ${px - 0.078},${py + 0.07} ${px + 0.078},${py + 0.07}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={0.026} {...hoverProps} />;
+                              if (shape === 'Whiff') return <text key={`${cellId}-loc-${idx}`} x={px} y={py + 0.074} fontSize={0.26} textAnchor="middle" fill={color} {...hoverProps}>★</text>;
+                              if (shape === 'In Play (Out)') return <polygon key={`${cellId}-loc-${idx}`} points={`${px},${py - 0.09} ${px - 0.078},${py + 0.07} ${px + 0.078},${py + 0.07}`} fill={color} {...hoverProps} />;
+                              if (shape === 'In Play (Hit)') return <rect key={`${cellId}-loc-${idx}`} x={px - 0.073} y={py - 0.073} width={0.146} height={0.146} fill={color} {...hoverProps} />;
+                              if (shape === 'Error') return <rect key={`${cellId}-loc-${idx}`} x={px - 0.073} y={py - 0.073} width={0.146} height={0.146} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={0.026} {...hoverProps} />;
+                              return <circle key={`${cellId}-loc-${idx}`} cx={px} cy={py} r={0.09} fill={color} {...hoverProps} />;
                             })}
                           </svg>
                         </div>
@@ -3069,7 +3313,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 width: '72%',
                                 justifySelf: 'center',
                                 border: '1px solid rgba(255,255,255,0.25)',
-                                background: 'linear-gradient(90deg, #e8eef7 0%, #8eb7e1 20%, #aad3ea 40%, #f0e2aa 62%, #eb7852 82%, #d82f31 100%)',
+                                background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(176,11,52) 100%)',
                               }}
                             />
                             <div style={{ display: 'flex', justifyContent: 'space-between', width: '72%', justifySelf: 'center', fontSize: '0.78rem', color: 'rgba(255,255,255,0.9)' }}>
@@ -3100,10 +3344,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const compBottom = strikeCenterY - 1.5;
                               const compTop = strikeCenterY + 1.5;
                               const values = heatCells.map((c) => c.value).sort((a, b) => a - b);
-                              const minVal = values.length ? values[0] : 0;
-                              const maxVal = values.length ? values[values.length - 1] : 1;
-                              const midVal = values.length ? values[Math.floor(values.length / 2)] : 0;
-                              const maxAbs = Math.max(1, ...heatCells.map((c) => Math.abs(c.value)));
+                              const dynamicMinVal = values.length ? values[0] : 0;
+                              const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
+                              const dynamicMidVal = values.length ? values[Math.floor(values.length / 2)] : 0;
+                              const selectedHeatPitchTypes = (config.pitchTypes ?? []).filter((value) => value && value !== 'All');
+                              const fixedScale = heatmapScaleFromMetricAndPitchTypes(valueLabel, selectedHeatPitchTypes);
+                              const contactVisibilityScale = valueLabel === 'Contact Rate' ? heatmapScaleFromMetricAndPitchTypes('Whiff Rate', selectedHeatPitchTypes) : null;
+                              const minVal = fixedScale?.min ?? dynamicMinVal;
+                              const maxVal = fixedScale?.max ?? dynamicMaxVal;
+                              const midVal = fixedScale?.mid ?? dynamicMidVal;
+                              const maxAbs = Math.max(1e-9, ...heatCells.map((c) => Math.abs(c.value)));
+                              const rvMin = isProSchool ? -5 : -2;
+                              const rvMax = isProSchool ? 5 : 2;
                               const densityMax = Math.max(1e-9, ...heatCells.map((c) => c.density));
                               return (
                                 <>
@@ -3112,7 +3364,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       <rect x={0} y={0} width={w} height={h} />
                                     </clipPath>
                                     <filter id={`custom-heat-blur-${cellId}`} x="-20%" y="-20%" width="140%" height="140%">
-                                      <feGaussianBlur stdDeviation={valueLabel === 'Run Values' ? 1.25 : 2.1} />
+                                      <feGaussianBlur stdDeviation={isProSchool ? (valueLabel === 'Run Values' ? 0.75 : 1.2) : (valueLabel === 'Run Values' ? 1.25 : 2.1)} />
                                     </filter>
                                   </defs>
                                   <g transform={`translate(${w / 2} ${h / 2}) scale(1.0) translate(${-w / 2} ${-h / 2})`} clipPath={`url(#custom-heat-clip-${cellId})`}>
@@ -3120,21 +3372,35 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       {heatCells.map((c) => {
                                         const cx = px(c.x + c.w / 2);
                                         const cy = py(c.y + c.h / 2);
-                                        const radius = Math.max(2.8, c.w * scale * 2.05);
+                                        const radius = isProSchool ? Math.max(2.0, c.w * scale * 1.45) : Math.max(2.8, c.w * scale * 2.05);
                                         const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                                         let fill = 'rgba(255,255,255,0.12)';
                                         if (valueLabel === 'Frequency') {
                                           fill = sequentialColor(c.value, minVal, maxVal);
                                         } else if (valueLabel === 'Run Values') {
-                                          const ratio = c.value / maxAbs;
-                                          fill = ratio >= 0 ? `rgba(255,48,48,${0.24 + Math.abs(ratio) * 0.76})` : `rgba(54,129,255,${0.24 + Math.abs(ratio) * 0.76})`;
+                                          const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
+                                          fill = divergingColor(rvClamped, rvMin, 0, rvMax);
                                         } else {
                                           fill = divergingColor(c.value, minVal, midVal, maxVal);
                                         }
-                                        const normalized = valueLabel === 'Run Values' ? Math.abs(c.value) / maxAbs : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
+                                        const normalized =
+                                          valueLabel === 'Run Values'
+                                            ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
+                                            : valueLabel === 'Contact Rate' && contactVisibilityScale
+                                              ? Math.max(
+                                                  0,
+                                                  Math.min(
+                                                    1,
+                                                    ((100 - c.value) - contactVisibilityScale.min) /
+                                                      Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min)
+                                                  )
+                                                )
+                                              : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                                         const runValueBoost = valueLabel === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                                        if (valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < 0.16) return null;
-                                        if (valueLabel !== 'Run Values' && normalized < 0.06) return null;
+                                        const isSwingRateView = valueLabel === 'Swing Rate';
+                                        if (valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+                                        if (valueLabel !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                                        if (valueLabel === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0.15) return null;
                                         return (
                                           <circle
                                             key={`${cellId}-heat-blur-${c.x}-${c.y}`}
@@ -3142,7 +3408,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                             cy={cy}
                                             r={radius}
                                             fill={fill}
-                                            opacity={Math.max(0.3, runValueBoost * 1.25 * (valueLabel === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))}
+                                            opacity={
+                                              valueLabel === 'Run Values'
+                                                ? Math.max(0.06, runValueBoost * 1.15 * Math.max(0.45, densityNorm))
+                                                : Math.max(0.3, runValueBoost * 1.25 * (valueLabel === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                                            }
                                           />
                                         );
                                       })}
@@ -3150,21 +3420,35 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     {heatCells.map((c) => {
                                       const cx = px(c.x + c.w / 2);
                                       const cy = py(c.y + c.h / 2);
-                                      const radius = Math.max(1.4, c.w * scale * 1.08);
+                                      const radius = isProSchool ? Math.max(1.0, c.w * scale * 0.75) : Math.max(1.4, c.w * scale * 1.08);
                                       const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                                       let fill = 'rgba(255,255,255,0.12)';
                                       if (valueLabel === 'Frequency') {
                                         fill = sequentialColor(c.value, minVal, maxVal);
                                       } else if (valueLabel === 'Run Values') {
-                                        const ratio = c.value / maxAbs;
-                                        fill = ratio >= 0 ? `rgba(255,48,48,${0.2 + Math.abs(ratio) * 0.8})` : `rgba(54,129,255,${0.2 + Math.abs(ratio) * 0.8})`;
+                                        const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
+                                        fill = divergingColor(rvClamped, rvMin, 0, rvMax);
                                       } else {
                                         fill = divergingColor(c.value, minVal, midVal, maxVal);
                                       }
-                                      const normalized = valueLabel === 'Run Values' ? Math.abs(c.value) / maxAbs : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
+                                      const normalized =
+                                        valueLabel === 'Run Values'
+                                          ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
+                                          : valueLabel === 'Contact Rate' && contactVisibilityScale
+                                            ? Math.max(
+                                                0,
+                                                Math.min(
+                                                  1,
+                                                  ((100 - c.value) - contactVisibilityScale.min) /
+                                                    Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min)
+                                                )
+                                              )
+                                            : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                                       const runValueBoost = valueLabel === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                                      if (valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < 0.16) return null;
-                                      if (valueLabel !== 'Run Values' && normalized < 0.06) return null;
+                                      const isSwingRateView = valueLabel === 'Swing Rate';
+                                      if (valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+                                      if (valueLabel !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                                      if (valueLabel === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0.15) return null;
                                       return (
                                         <circle
                                           key={`${cellId}-heat-core-${c.x}-${c.y}`}
@@ -3172,7 +3456,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                           cy={cy}
                                           r={radius}
                                           fill={fill}
-                                          opacity={Math.max(0.2, runValueBoost * 0.72 * (valueLabel === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))}
+                                          opacity={
+                                            valueLabel === 'Run Values'
+                                              ? Math.max(0.04, runValueBoost * 0.7 * Math.max(0.45, densityNorm))
+                                              : Math.max(0.2, runValueBoost * 0.72 * (valueLabel === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                                          }
                                           onMouseMove={(event) =>
                                             setChartHover({
                                               x: event.clientX,
@@ -3305,7 +3593,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           {(() => {
                             const points = chartPoints
                               .map((point) => ({
-                                x: toNum(point.release_side),
+                                x: (() => {
+                                  const rs = toNum(point.release_side);
+                                  if (rs === null) return null;
+                                  return isProSchool ? -rs : rs;
+                                })(),
                                 y: toNum(point.release_height),
                                 ext: toNum(point.extension),
                                 sessionDate: point.session_date ?? null,
@@ -3394,7 +3686,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   ? averages.map((point) => (
                                       <circle
                                         key={`${cellId}-rel-a-${point.pitchType}`}
-                                        cx={52 + (((point.releaseSide ?? 0) + 4) / 8) * 416}
+                                        cx={52 + ((((point.releaseSide ?? 0) * (isProSchool ? -1 : 1)) + 4) / 8) * 416}
                                         cy={22 + ((6.5 - (point.releaseHeight ?? 0)) / 6.5) * 316}
                                         r={8.6}
                                         fill={PITCH_COLORS[point.pitchType] ?? '#9ca3af'}
@@ -3406,7 +3698,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                             x: event.clientX,
                                             y: event.clientY,
                                             bg: PITCH_COLORS[point.pitchType] ?? '#111827',
-                                            text: `${point.pitchType}\nAvg Height: ${point.releaseHeight?.toFixed(1) ?? '-'} ft\nAvg Side: ${point.releaseSide?.toFixed(1) ?? '-'} ft`,
+                                            text: `${point.pitchType}\nAvg Height: ${point.releaseHeight?.toFixed(1) ?? '-'} ft\nAvg Side: ${point.releaseSide !== null && point.releaseSide !== undefined ? (point.releaseSide * (isProSchool ? -1 : 1)).toFixed(1) : '-'} ft`,
                                           })
                                         }
                                         onMouseLeave={() => setChartHover(null)}
@@ -3424,6 +3716,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             const h = 340;
                             const xScale = (x: number) => ((x + 260) / 520) * w;
                             const yScale = (y: number) => h - (y / 420) * h;
+                            const sprayView = config.sprayView === 'Bins' ? 'Bins' : 'Batted Balls';
                             const points = chartPoints
                               .map((point) => {
                                 const pointAny = point as unknown as Record<string, unknown>;
@@ -3450,12 +3743,28 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   String(point.pitch_call ?? '') === 'InPlay' ||
                                   Boolean(String(point.play_result ?? '').trim());
                                 if (!isInPlay) return null;
-                                const dir = inferredDir;
-                                const dist = inferredDist;
-                                if (dir === null || dist === null || dist <= 0) return null;
-                                const radians = (dir * Math.PI) / 180;
-                                const x = dist * Math.sin(radians);
-                                const y = dist * Math.cos(radians);
+                                const hcX = toNum(pointAny.hc_x as number | string | null);
+                                const hcY = toNum(pointAny.hc_y as number | string | null);
+                                let x: number | null = null;
+                                let y: number | null = null;
+                                let dist = inferredDist;
+                                if (hcX !== null && hcY !== null) {
+                                  const vx = hcX - 125.42;
+                                  const vy = 198.27 - hcY;
+                                  const mag = Math.hypot(vx, vy);
+                                  if (mag > 0.001) {
+                                    const resolvedDist = dist ?? Math.hypot(vx, vy) * 2;
+                                    x = (vx / mag) * resolvedDist;
+                                    y = (vy / mag) * resolvedDist;
+                                    dist = resolvedDist;
+                                  }
+                                }
+                                if ((x === null || y === null) && inferredDir !== null && dist !== null && dist > 0) {
+                                  const radians = (inferredDir * Math.PI) / 180;
+                                  x = dist * Math.sin(radians);
+                                  y = dist * Math.cos(radians);
+                                }
+                                if (x === null || y === null || dist === null || dist <= 0) return null;
                                 return {
                                   x,
                                   y,
@@ -3483,6 +3792,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     })
                                     .filter((point): point is { x: number; y: number; play: string; ev: number | null; la: number | null; distance: number } => point !== null)
                                 : points;
+                            const pointsWithPolar = fallbackPoints.map((point) => ({
+                              ...point,
+                              angleDeg: (Math.atan2(point.x, point.y) * 180) / Math.PI,
+                              distanceFt: Math.hypot(point.x, point.y),
+                            }));
                             const outcomeColor = (playResult: string) => {
                               const normalized = resultLabelForSwing(playResult);
                               if (normalized === 'Single') return '#34d399';
@@ -3509,6 +3823,68 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             const moundCenter = { x: 0, y: 60.5 };
                             const innerDirtRadius = 82;
                             const outerDirtRadius = 138;
+                            type SprayBin = {
+                              key: string;
+                              group: 'Infield' | 'Outfield';
+                              label: string;
+                              angleMin: number;
+                              angleMax: number;
+                              rInner: number;
+                              rOuter: number;
+                            };
+                            const sprayBins: SprayBin[] = [
+                              { key: 'infield-left', group: 'Infield', label: 'L', angleMin: -45, angleMax: -15, rInner: 0, rOuter: 130 },
+                              { key: 'infield-center', group: 'Infield', label: 'C', angleMin: -15, angleMax: 15, rInner: 0, rOuter: 130 },
+                              { key: 'infield-right', group: 'Infield', label: 'R', angleMin: 15, angleMax: 45, rInner: 0, rOuter: 130 },
+                              { key: 'outfield-left', group: 'Outfield', label: 'L', angleMin: -45, angleMax: -15, rInner: 150, rOuter: 420 },
+                              { key: 'outfield-center', group: 'Outfield', label: 'C', angleMin: -15, angleMax: 15, rInner: 150, rOuter: 420 },
+                              { key: 'outfield-right', group: 'Outfield', label: 'R', angleMin: 15, angleMax: 45, rInner: 150, rOuter: 420 },
+                            ];
+                            const infieldTotal = pointsWithPolar.filter((point) => point.distanceFt <= 138).length;
+                            const outfieldTotal = pointsWithPolar.length - infieldTotal;
+                            const binStats = sprayBins.map((bin) => {
+                              const count = pointsWithPolar.filter(
+                                (point) =>
+                                  point.distanceFt > bin.rInner &&
+                                  point.distanceFt <= bin.rOuter &&
+                                  point.angleDeg >= bin.angleMin &&
+                                  point.angleDeg < bin.angleMax
+                              ).length;
+                              const denominator = bin.group === 'Infield' ? infieldTotal : outfieldTotal;
+                              const pct = denominator > 0 ? (count / denominator) * 100 : 0;
+                              return { ...bin, count, pct };
+                            });
+                            const infieldPcts = binStats.filter((bin) => bin.group === 'Infield').map((bin) => bin.pct);
+                            const outfieldPcts = binStats.filter((bin) => bin.group === 'Outfield').map((bin) => bin.pct);
+                            const infieldMinPct = infieldPcts.length ? Math.min(...infieldPcts) : 0;
+                            const infieldMaxPct = infieldPcts.length ? Math.max(...infieldPcts) : 0;
+                            const outfieldMinPct = outfieldPcts.length ? Math.min(...outfieldPcts) : 0;
+                            const outfieldMaxPct = outfieldPcts.length ? Math.max(...outfieldPcts) : 0;
+                            const colorForBin = (pct: number, group: 'Infield' | 'Outfield') => {
+                              const min = group === 'Infield' ? infieldMinPct : outfieldMinPct;
+                              const max = group === 'Infield' ? infieldMaxPct : outfieldMaxPct;
+                              if (max - min < 1e-6) return 'rgb(248, 248, 248)';
+                              return divergingColor(pct, min, min + (max - min) * 0.5, max);
+                            };
+                            const ringSlicePath = (rInner: number, rOuter: number, angleMin: number, angleMax: number) => {
+                              const outerStart = { x: rOuter * Math.sin((angleMin * Math.PI) / 180), y: rOuter * Math.cos((angleMin * Math.PI) / 180) };
+                              const outerEnd = { x: rOuter * Math.sin((angleMax * Math.PI) / 180), y: rOuter * Math.cos((angleMax * Math.PI) / 180) };
+                              const innerStart = { x: rInner * Math.sin((angleMax * Math.PI) / 180), y: rInner * Math.cos((angleMax * Math.PI) / 180) };
+                              const innerEnd = { x: rInner * Math.sin((angleMin * Math.PI) / 180), y: rInner * Math.cos((angleMin * Math.PI) / 180) };
+                              const largeArc = Math.abs(angleMax - angleMin) > 180 ? 1 : 0;
+                              return [
+                                `M ${xScale(outerStart.x)} ${yScale(outerStart.y)}`,
+                                `A ${Math.abs(xScale(rOuter) - xScale(0))} ${Math.abs(xScale(rOuter) - xScale(0))} 0 ${largeArc} 1 ${xScale(outerEnd.x)} ${yScale(outerEnd.y)}`,
+                                `L ${xScale(innerStart.x)} ${yScale(innerStart.y)}`,
+                                `A ${Math.abs(xScale(rInner) - xScale(0))} ${Math.abs(xScale(rInner) - xScale(0))} 0 ${largeArc} 0 ${xScale(innerEnd.x)} ${yScale(innerEnd.y)}`,
+                                'Z',
+                              ].join(' ');
+                            };
+                            const labelPoint = (bin: SprayBin) => {
+                              const angleMid = ((bin.angleMin + bin.angleMax) / 2) * (Math.PI / 180);
+                              const radius = bin.group === 'Infield' ? 148 : 435;
+                              return { x: xScale(radius * Math.sin(angleMid)), y: yScale(radius * Math.cos(angleMid)) };
+                            };
                             const arcEndpoint = (radius: number) => radius / Math.sqrt(2);
                             const baseDiamondOnLine = (outerX: number, outerY: number, sidePx = 9): string => {
                               const mag = Math.hypot(outerX, outerY) || 1;
@@ -3532,7 +3908,36 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               return `${x},${y - sizePx} ${x + sizePx},${y} ${x},${y + sizePx} ${x - sizePx},${y}`;
                             };
                             return (
+                              <div style={{ display: 'grid', gap: 8 }}>
+                                <div style={{ width: '100%', maxWidth: 240, justifySelf: 'center' }}>
+                                  <SearchableSingleSelect
+                                    options={[
+                                      { value: 'Batted Balls', label: 'Batted Balls' },
+                                      { value: 'Bins', label: 'Bins' },
+                                    ]}
+                                    value={sprayView}
+                                    onChange={(next) =>
+                                      setCellConfigs((current) => ({
+                                        ...current,
+                                        [cellId]: { ...(current[cellId] ?? emptyCell()), sprayView: next === 'Bins' ? 'Bins' : 'Batted Balls' },
+                                      }))
+                                    }
+                                    placeholder="Batted Balls"
+                                  />
+                                </div>
                               <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Spray chart" onMouseLeave={() => setChartHover(null)}>
+                                {sprayView === 'Bins'
+                                  ? binStats.map((bin) => (
+                                      <path
+                                        key={`${cellId}-spray-bin-${bin.key}`}
+                                        d={ringSlicePath(bin.rInner, bin.rOuter, bin.angleMin, bin.angleMax)}
+                                        fill={colorForBin(bin.pct, bin.group)}
+                                        opacity={0.45}
+                                        stroke="rgba(255,255,255,0.18)"
+                                        strokeWidth={1}
+                                      />
+                                    ))
+                                  : null}
                                 <polyline points={fence.map((p) => `${xScale(p.x)},${yScale(p.y)}`).join(' ')} fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="1" />
                                 <line x1={xScale(0)} y1={yScale(0)} x2={xScale(-233)} y2={yScale(233)} stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
                                 <line x1={xScale(0)} y1={yScale(0)} x2={xScale(233)} y2={yScale(233)} stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
@@ -3557,30 +3962,51 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 <polygon points={baseDiamondOnLine(firstBaseOuter.x, firstBaseOuter.y)} fill="rgba(255,255,255,0.75)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
                                 <polygon points={baseDiamondOnLine(thirdBaseOuter.x, thirdBaseOuter.y)} fill="rgba(255,255,255,0.75)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
                                 <polygon points={centeredDiamond(secondBaseCenter.x, secondBaseCenter.y, 6)} fill="rgba(255,255,255,0.7)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
-                                {fallbackPoints.slice(0, 1200).map((point, idx) => {
-                                  const normalizedPlayResult = resultLabelForSwing(point.play);
-                                  const pointColor = outcomeColor(normalizedPlayResult);
-                                  return (
-                                    <circle
-                                      key={`${cellId}-spr-${idx}`}
-                                      cx={xScale(point.x)}
-                                      cy={yScale(point.y)}
-                                      r={3.8}
-                                      fill={pointColor}
-                                      opacity={0.95}
-                                      onMouseMove={(event) =>
-                                        setChartHover({
-                                          x: event.clientX,
-                                          y: event.clientY,
-                                          bg: pointColor,
-                                          text: `Result: ${normalizedPlayResult || 'Out'}\nEV: ${point.ev !== null ? `${point.ev.toFixed(1)} mph` : '-'}\nLA: ${point.la !== null ? `${point.la.toFixed(1)}°` : '-'}\nDistance: ${point.distance.toFixed(0)} ft`,
-                                        })
-                                      }
-                                      onMouseLeave={() => setChartHover(null)}
-                                    />
-                                  );
-                                })}
+                                {sprayView === 'Batted Balls'
+                                  ? fallbackPoints.slice(0, 1200).map((point, idx) => {
+                                      const normalizedPlayResult = resultLabelForSwing(point.play);
+                                      const pointColor = outcomeColor(normalizedPlayResult);
+                                      return (
+                                        <circle
+                                          key={`${cellId}-spr-${idx}`}
+                                          cx={xScale(point.x)}
+                                          cy={yScale(point.y)}
+                                          r={3.8}
+                                          fill={pointColor}
+                                          opacity={0.95}
+                                          onMouseMove={(event) =>
+                                            setChartHover({
+                                              x: event.clientX,
+                                              y: event.clientY,
+                                              bg: pointColor,
+                                              text: `Result: ${normalizedPlayResult || 'Out'}\nEV: ${point.ev !== null ? `${point.ev.toFixed(1)} mph` : '-'}\nLA: ${point.la !== null ? `${point.la.toFixed(1)}°` : '-'}\nDistance: ${point.distance.toFixed(0)} ft`,
+                                            })
+                                          }
+                                          onMouseLeave={() => setChartHover(null)}
+                                        />
+                                      );
+                                    })
+                                  : null}
+                                {sprayView === 'Bins'
+                                  ? binStats.map((bin) => {
+                                      const pt = labelPoint(bin);
+                                      return (
+                                        <text
+                                          key={`${cellId}-spray-bin-label-${bin.key}`}
+                                          x={pt.x}
+                                          y={pt.y}
+                                          textAnchor="middle"
+                                          fill="rgba(255,255,255,0.95)"
+                                          fontSize={12}
+                                          fontWeight={700}
+                                        >
+                                          {`${bin.pct.toFixed(0)}%`}
+                                        </text>
+                                      );
+                                    })
+                                  : null}
                               </svg>
+                              </div>
                             );
                           })()}
                         </div>
@@ -3788,9 +4214,30 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   date: (point.session_date ?? '').slice(0, 10),
                                   velo: toNum(point.rel_speed ?? point.velo),
                                   inning: toNum(point.inning),
+                                  inningRaw: String(point.inning ?? '').trim(),
+                                  pitcher: String(point.pitcher ?? '').trim(),
+                                  gameKey: String(point.game_id || point.game_uid || point.game_foreign_id || '').trim(),
                                   pitchType: ((point.pitch_type ?? '').trim() || 'Undefined') as string,
+                                  pitchNumber: toNum(point.pitch_number),
+                                  pitchNo: toNum(point.pitch_no),
+                                  pitchEventId: toNum(point.pitch_event_id),
                                 }))
-                                .filter((point): point is { date: string; velo: number; inning: number | null; pitchType: string } => Boolean(point.date) && point.velo !== null);
+                                .filter(
+                                  (
+                                    point
+                                  ): point is {
+                                    date: string;
+                                    velo: number;
+                                    inning: number | null;
+                                    inningRaw: string;
+                                    pitcher: string;
+                                    gameKey: string;
+                                    pitchType: string;
+                                    pitchNumber: number | null;
+                                    pitchNo: number | null;
+                                    pitchEventId: number | null;
+                                  } => Boolean(point.date) && point.velo !== null
+                                );
                               if (!raw.length) return null;
                               const mode = config.velocityChart || 'Velocity Chart (Game/Inning)';
                               const m = { l: 46, r: 14, t: 10, b: mode === 'Average Velocity by Game' ? 64 : 30 };
@@ -3799,11 +4246,44 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const pw = w - m.l - m.r;
                               const ph = h - m.t - m.b;
                               const byType = new Map<string, Array<{ xKey: string; x: number; y: number }>>();
+                              const inningBoundaries: number[] = [];
                               if (mode === 'Velocity Chart (Game/Inning)') {
-                                for (let idx = 0; idx < raw.length; idx += 1) {
-                                  const row = raw[idx];
+                                const ordered = [...raw]
+                                  .sort((a, b) => {
+                                    const dCmp = a.date.localeCompare(b.date);
+                                    if (dCmp !== 0) return dCmp;
+                                    const pnCmp = (a.pitchNumber ?? 0) - (b.pitchNumber ?? 0);
+                                    if (pnCmp !== 0) return pnCmp;
+                                    const pnoCmp = (a.pitchNo ?? 0) - (b.pitchNo ?? 0);
+                                    if (pnoCmp !== 0) return pnoCmp;
+                                    return (a.pitchEventId ?? 0) - (b.pitchEventId ?? 0);
+                                  })
+                                  .map((row, idx) => ({ ...row, pitchCount: idx + 1 }));
+                                const dateSet = new Set(ordered.map((row) => row.date).filter(Boolean));
+                                const gameSet = new Set(ordered.map((row) => row.gameKey).filter(Boolean));
+                                const dataPitcherSet = new Set(ordered.map((row) => row.pitcher).filter(Boolean));
+                                const hasSingleGameOrDate = (gameSet.size > 0 && gameSet.size <= 1) || dateSet.size <= 1;
+                                const selectedPlayer = String(config.player ?? '').trim();
+                                const hasSinglePitcher = (selectedPlayer.length > 0 && selectedPlayer !== 'All') || dataPitcherSet.size === 1;
+                                const showInningBoundaries = hasSinglePitcher && hasSingleGameOrDate;
+                                const inningToKey = (value: unknown): string => {
+                                  const raw = String(value ?? '').trim();
+                                  if (!raw) return '';
+                                  const numeric = Number(raw);
+                                  if (Number.isFinite(numeric)) return String(Math.floor(numeric));
+                                  const match = raw.match(/\d+/);
+                                  return match ? match[0] : raw.toLowerCase();
+                                };
+                                if (showInningBoundaries) {
+                                  for (let i = 1; i < ordered.length; i += 1) {
+                                    const prev = inningToKey(ordered[i - 1].inningRaw);
+                                    const cur = inningToKey(ordered[i].inningRaw);
+                                    if (prev && cur && prev !== cur) inningBoundaries.push(ordered[i].pitchCount);
+                                  }
+                                }
+                                for (const row of ordered) {
                                   const arr = byType.get(row.pitchType) ?? [];
-                                  arr.push({ xKey: row.date, x: idx + 1, y: row.velo });
+                                  arr.push({ xKey: row.date, x: row.pitchCount, y: row.velo });
                                   byType.set(row.pitchType, arr);
                                 }
                               } else if (mode === 'Average Velocity by Inning') {
@@ -3853,20 +4333,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const values = allRows.map((row) => row.y);
                               const minRaw = Math.min(...values);
                               const maxRaw = Math.max(...values);
-                              const valueRange = Math.max(0.1, maxRaw - minRaw);
-                              const pad = Math.max(0.5, valueRange * 0.08);
-                              let yMin = minRaw - pad;
-                              let yMax = maxRaw + pad;
-                              if (yMax - yMin < 2) {
-                                const mid = (yMax + yMin) / 2;
-                                yMin = mid - 1;
-                                yMax = mid + 1;
-                              }
-                              const targetStep = (yMax - yMin) / 4;
-                              const stepCandidates = [0.5, 1, 2, 2.5, 5, 10];
-                              const yStep = stepCandidates.find((step) => step >= targetStep) ?? 10;
-                              const yMinTick = Math.floor(yMin / yStep) * yStep;
-                              const yMaxTick = Math.ceil(yMax / yStep) * yStep;
+                              const yMin = Math.floor(minRaw / 5) * 5;
+                              const yMax = Math.max(yMin + 5, Math.ceil(maxRaw / 5) * 5);
+                              const yStep = 5;
                               const span = Math.max(0.1, yMax - yMin);
                               const px = (x: number) => m.l + ((x - xMin) / Math.max(1, xMax - xMin)) * pw;
                               const py = (y: number) => m.t + ((yMax - y) / span) * ph;
@@ -3877,8 +4346,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   })()
                                 : Array.from({ length: Math.max(1, xMax) }, (_, idx) => idx + 1);
                               const xTicks = Array.from(new Set(xTicksRaw));
-                              const yTickCount = Math.max(2, Math.floor((yMaxTick - yMinTick) / yStep) + 1);
-                              const yTicks = Array.from({ length: yTickCount }, (_, idx) => yMinTick + idx * yStep);
+                              const yTickCount = Math.max(2, Math.floor((yMax - yMin) / yStep) + 1);
+                              const yTicks = Array.from({ length: yTickCount }, (_, idx) => yMin + idx * yStep);
                               return (
                                 <>
                                   {yTicks.map((tick) => (
@@ -3892,6 +4361,20 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   {xTicks.map((tick) => (
                                     <line key={`${cellId}-vv-x-${tick}`} x1={px(tick)} y1={m.t} x2={px(tick)} y2={h - m.b} stroke="rgba(255,255,255,0.08)" />
                                   ))}
+                                  {mode === 'Velocity Chart (Game/Inning)'
+                                    ? inningBoundaries.map((value) => (
+                                        <line
+                                          key={`${cellId}-vv-bound-${value}`}
+                                          x1={px(value)}
+                                          y1={m.t}
+                                          x2={px(value)}
+                                          y2={h - m.b}
+                                          stroke="rgba(255,255,255,0.92)"
+                                          strokeDasharray="6,6"
+                                          strokeWidth={1.5}
+                                        />
+                                      ))
+                                    : null}
                                   {Array.from(byType.entries()).map(([pitchType, rows]) => {
                                     const sorted = [...rows].sort((a, b) => a.x - b.x);
                                     const points = sorted.map((row) => `${px(row.x)},${py(row.y)}`).join(' ');

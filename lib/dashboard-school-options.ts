@@ -70,11 +70,11 @@ async function resolveStaffSchoolCodes(email: string): Promise<string[]> {
 
 export async function resolveSessionDashboardSchoolOptions(session: PortalSession): Promise<string[]> {
   if (session.role === 'admin') {
-    if (isGlobalAdminEmail(session.email)) return Array.from(new Set([...resolveAllowedDashboardSchoolCodes(), 'LEAGUE']));
+    if (isGlobalAdminEmail(session.email)) return Array.from(new Set([...resolveAllowedDashboardSchoolCodes(), 'LEAGUE', 'PRO']));
     const codes = await resolveStaffSchoolCodes(session.email);
     const fallback = resolveDashboardSchoolCode(session);
     const selected = normalizeSchoolCode(session.dashboardSchoolCode ?? '');
-    const merged = Array.from(new Set([...codes, selected, fallback, 'LEAGUE'].filter(Boolean)));
+    const merged = Array.from(new Set([...codes, selected, fallback, 'LEAGUE', 'PRO'].filter(Boolean)));
     return merged.length > 0 ? merged : [fallback];
   }
 
@@ -82,7 +82,7 @@ export async function resolveSessionDashboardSchoolOptions(session: PortalSessio
     const codes = await resolveStaffSchoolCodes(session.email);
     const fallback = resolveDashboardSchoolCode(session);
     const selected = normalizeSchoolCode(session.dashboardSchoolCode ?? '');
-    const merged = Array.from(new Set([...codes, selected, fallback, 'LEAGUE'].filter(Boolean)));
+    const merged = Array.from(new Set([...codes, selected, fallback, 'LEAGUE', 'PRO'].filter(Boolean)));
     return merged.length > 0 ? merged : [fallback];
   }
 

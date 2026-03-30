@@ -2098,14 +2098,14 @@ export default function PlayerPlansSuite() {
           onMouseMove: (event: { clientX: number; clientY: number }) => setGoalChartHover({ x: event.clientX, y: event.clientY, text: title, bg: fill }),
           onMouseLeave: () => setGoalChartHover(null),
         };
-        if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={5.1} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
-        if (result === 'Foul') return <polygon key={key} points={`${x},${y - 6} ${x - 5.4},${y + 4.6} ${x + 5.4},${y + 4.6}`} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
-        if (result === 'Whiff') return <text key={key} x={x} y={y + 4.8} fontSize={13} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
-        if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 6} ${x - 5.4},${y + 4.6} ${x + 5.4},${y + 4.6}`} fill={fill} {...hoverProps} />;
+        if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={8.4} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
+        if (result === 'Foul') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
+        if (result === 'Whiff') return <text key={key} x={x} y={y + 6.3} fontSize={19} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
+        if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill={fill} {...hoverProps} />;
         if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun')
-          return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill={fill} {...hoverProps} />;
-        if (result === 'Error') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill="none" stroke={fill} strokeWidth={1.6} {...hoverProps} />;
-        return <circle key={key} cx={x} cy={y} r={5.1} fill={fill} {...hoverProps} />;
+          return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill={fill} {...hoverProps} />;
+        if (result === 'Error') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={1.9} {...hoverProps} />;
+        return <circle key={key} cx={x} cy={y} r={8.4} fill={fill} {...hoverProps} />;
       };
 
       const cells = goal.chartType === 'HeatMaps' ? buildGoalHeatCells(points, selectedHeatmapView) : [];

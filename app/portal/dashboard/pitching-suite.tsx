@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 
 type FiltersPayload = {
   school_code: string;
@@ -24,6 +25,7 @@ type FiltersPayload = {
   pitch_results: string[];
   count_options: string[];
   after_count_options: string[];
+  level_options?: string[];
   pitchers_by_team_code?: Record<string, string[]>;
   opp_hitters_by_team_code?: Record<string, string[]>;
 };
@@ -109,6 +111,8 @@ type OverviewPayload = {
     spin_eff: number | null;
     exit_speed: number | null;
     angle: number | null;
+    estimated_woba_using_speedangle?: number | null;
+    estimated_ba_using_speedangle?: number | null;
     stuff_plus: number | null;
     qp_plus: number | null;
     video_clip_1: string;
@@ -160,6 +164,8 @@ type OverviewPayload = {
     spin_eff: number | null;
     exit_speed: number | null;
     angle: number | null;
+    estimated_woba_using_speedangle?: number | null;
+    estimated_ba_using_speedangle?: number | null;
     stuff_plus: number | null;
     qp_plus: number | null;
     video_clip_1: string;
@@ -390,7 +396,10 @@ function resolvePitcherName(
 }
 
 function toOptions(values: string[], formatNames = false): OptionItem[] {
-  return values.map((value) => ({ value, label: formatNames ? formatNameFirstLast(value) : value }));
+  return values.map((value) => ({
+    value,
+    label: formatNames ? formatNameFirstLast(value) : (value === 'Inning' ? 'Inning of Appearance' : value),
+  }));
 }
 
 function pickDefaultTeamType(teamTypes: string[], schoolCode: string): string {
@@ -398,7 +407,7 @@ function pickDefaultTeamType(teamTypes: string[], schoolCode: string): string {
   const cleaned = teamTypes.map((value) => String(value ?? '').trim()).filter(Boolean);
   if (cleaned.length === 0) return 'All';
   const school = String(schoolCode ?? '').trim();
-  if (school.toUpperCase() === 'LEAGUE') return 'All';
+  if (school.toUpperCase() === 'LEAGUE' || school.toUpperCase() === 'PRO') return 'All';
   const schoolNorm = school.toUpperCase();
   const exactSchool = cleaned.find((value) => value === school);
   if (exactSchool) return exactSchool;
@@ -571,14 +580,19 @@ function normalizeColorColumnName(value: string): string {
   return String(value ?? '').trim();
 }
 
-function getProcessThresholds(columnName: string, pitchTypeRaw: string): { poor: number; avg: number; great: number } | null {
+function getProcessThresholds(
+  columnName: string,
+  pitchTypeRaw: string,
+  schoolCode?: string
+): { poor: number; avg: number; great: number } | null {
   const metric = normalizeColorColumnName(columnName);
   const pitchType = normalizePitchTypeName(pitchTypeRaw);
+  const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
   if (metric === 'InZone%') {
-    if (['fastball', 'sinker'].includes(pitchType)) return { poor: 43, avg: 50, great: 57 };
+    if (['fastball', 'sinker'].includes(pitchType)) return isPro ? { poor: 48, avg: 55, great: 62 } : { poor: 43, avg: 50, great: 57 };
     if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 37, avg: 43, great: 49 };
     if (['changeup', 'splitter', 'knuckleball'].includes(pitchType)) return { poor: 30, avg: 37, great: 44 };
-    if (pitchType === 'all') return { poor: 42, avg: 47, great: 52 };
+    if (pitchType === 'all') return isPro ? { poor: 44, avg: 49, great: 54 } : { poor: 42, avg: 47, great: 52 };
   }
   if (metric === 'Comp%') {
     if (['fastball', 'sinker'].includes(pitchType)) return { poor: 79, avg: 83, great: 87 };
@@ -586,7 +600,7 @@ function getProcessThresholds(columnName: string, pitchTypeRaw: string): { poor:
     if (['changeup', 'splitter', 'knuckleball'].includes(pitchType)) return { poor: 65, avg: 74, great: 83 };
     if (pitchType === 'all') return { poor: 76, avg: 79, great: 82 };
   }
-  if (metric === 'Strike%') return { poor: 57, avg: 62, great: 67 };
+  if (metric === 'Strike%') return isPro ? { poor: 59, avg: 64, great: 69 } : { poor: 57, avg: 62, great: 67 };
   if (metric === 'Swing%') {
     if (['fastball', 'sinker'].includes(pitchType)) return { poor: 40, avg: 44, great: 48 };
     if (['cutter', 'slider', 'sweeper'].includes(pitchType)) return { poor: 37, avg: 43, great: 49 };
@@ -594,10 +608,10 @@ function getProcessThresholds(columnName: string, pitchTypeRaw: string): { poor:
     if (['changeup', 'splitter'].includes(pitchType)) return { poor: 43, avg: 47, great: 51 };
     if (pitchType === 'all') return { poor: 40, avg: 45, great: 50 };
   }
-  if (metric === 'FPS%') return { poor: 55, avg: 60, great: 65 };
-  if (metric === 'E+A%' && pitchType === 'all') return { poor: 65, avg: 70, great: 75 };
+  if (metric === 'FPS%') return isPro ? { poor: 57, avg: 62, great: 67 } : { poor: 55, avg: 60, great: 65 };
+  if (metric === 'E+A%' && pitchType === 'all') return isPro ? { poor: 68, avg: 73, great: 78 } : { poor: 65, avg: 70, great: 75 };
   if (metric === '1-1W%') return { poor: 58, avg: 63, great: 68 };
-  if (metric === 'Ahead%') return { poor: 32, avg: 37, great: 42 };
+  if (metric === 'Ahead%') return isPro ? { poor: 34, avg: 39, great: 44 } : { poor: 32, avg: 37, great: 42 };
   if (metric === 'QP%') return { poor: 38, avg: 48, great: 58 };
   if (metric === 'Ctrl+') return { poor: 75, avg: 85, great: 95 };
   if (metric === 'QP+') return { poor: 75, avg: 90, great: 105 };
@@ -640,18 +654,55 @@ function getProcessThresholds(columnName: string, pitchTypeRaw: string): { poor:
   return null;
 }
 
+function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]): { min: number; mid: number; max: number } | null {
+  const metric = String(metricRaw ?? '').trim();
+  const selectedPitchTypes = selectedPitchTypesRaw
+    .map((value) => normalizePitchTypeName(value))
+    .filter((value) => value && value !== 'all');
+
+  if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
+  if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
+  if (metric === 'xBA') return { min: 0.2, mid: 0.27, max: 0.34 };
+
+  if (metric === 'Whiff Rate' || metric === 'Whiff%') {
+    if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
+    const pt = selectedPitchTypes[0];
+    if (pt === 'fastball') return { min: 10, mid: 20, max: 30 };
+    if (pt === 'sinker') return { min: 5, mid: 12.5, max: 20 };
+    return { min: 20, mid: 32.5, max: 45 };
+  }
+
+  const pitchTypeForThreshold = selectedPitchTypes.length === 1 ? selectedPitchTypes[0] : 'all';
+  if (metric === 'Swing Rate' || metric === 'Swing%') {
+    return { min: 20, mid: 50, max: 80 };
+  }
+  if (metric === 'GB Rate' || metric === 'GB%') {
+    const threshold = getProcessThresholds('GB%', pitchTypeForThreshold);
+    if (threshold) return { min: threshold.poor, mid: threshold.avg, max: threshold.great };
+  }
+  if (metric === 'Contact Rate' || metric === 'Contact%') {
+    if (selectedPitchTypes.length !== 1) return { min: 60, mid: 75, max: 90 };
+    const pt = selectedPitchTypes[0];
+    if (pt === 'fastball') return { min: 70, mid: 80, max: 90 };
+    if (pt === 'sinker') return { min: 80, mid: 87.5, max: 95 };
+    return { min: 55, mid: 67.5, max: 80 };
+  }
+  return null;
+}
+
 function getCellColorScale(
   value: string | number | null | undefined,
   columnName: string,
-  pitchType: string
+  pitchType: string,
+  schoolCode?: string
 ): CellColors | null {
   const metric = normalizeColorColumnName(columnName);
   const parsed = parseSortableNumber(value);
   if (parsed === null) return null;
-  const thresholds = getProcessThresholds(metric, pitchType);
+  const thresholds = getProcessThresholds(metric, pitchType, schoolCode);
   if (!thresholds) return null;
   const { poor, avg, great } = thresholds;
-  const reverseScale = ['EV', 'Barrel%', 'BB%', 'RV/100'].includes(metric);
+  const reverseScale = ['EV', 'Barrel%', 'BB%'].includes(metric) || metric === 'RV/100';
   if (reverseScale) {
     if (parsed >= poor) return { bg: '#0066CC', text: 'white' };
     if (parsed >= (poor + avg) / 2) return { bg: '#66B2FF', text: 'black' };
@@ -828,11 +879,15 @@ function AbPaChart({
   resultLabel,
   onPitchClick,
   pitchColors,
+  flipX = false,
+  isProSchool = false,
 }: {
   pitches: PitchActionPoint[];
   resultLabel: string;
   onPitchClick: (pitch: PitchActionPoint) => void;
   pitchColors: Record<string, string>;
+  flipX?: boolean;
+  isProSchool?: boolean;
 }) {
   const [hover, setHover] = useState<ChartHover>(null);
   const abHoverTextColor = (bg?: string): string => {
@@ -865,6 +920,37 @@ function AbPaChart({
   const resultShape = (pitch: PitchActionPoint): string => {
     const call = pitch.pitch_call || '';
     const pr = pitch.play_result || '';
+    if (isProSchool) {
+      const norm = (value: string): string => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      const callN = norm(call);
+      const prN = norm(pr);
+      if (callN === 'called_strike' || callN === 'strikecalled') return 'Called Strike';
+      if (
+        callN === 'hit_by_pitch' ||
+        callN === 'hitbypitch' ||
+        prN === 'hit_by_pitch' ||
+        prN === 'hitbypitch' ||
+        callN === 'ball' ||
+        callN === 'ballcalled' ||
+        callN === 'ball_called' ||
+        callN === 'ballindirt' ||
+        callN === 'ball_in_dirt' ||
+        callN === 'blocked_ball' ||
+        callN === 'pitchout' ||
+        callN === 'ball_pitchout' ||
+        callN === 'intentional_ball' ||
+        callN === 'intent_ball'
+      ) {
+        return 'Ball';
+      }
+      if (callN.includes('foul')) return 'Foul';
+      if (callN === 'swinging_strike' || callN === 'swinging_strike_blocked' || callN === 'swinging_strike_pitchout' || callN === 'missed_bunt') return 'Whiff';
+      if (prN === 'single' || prN === 'double' || prN === 'triple' || prN === 'home_run' || prN === 'homerun') return 'In Play (Hit)';
+      if (prN === 'field_error' || prN === 'error') return 'Error';
+      if (callN.startsWith('in_play') || callN.startsWith('hit_into_play')) return 'In Play (Out)';
+      if (prN && !['walk', 'intent_walk', 'intentional_walk', 'strikeout', 'strikeout_double_play', 'hit_by_pitch', 'hitbypitch'].includes(prN)) return 'In Play (Out)';
+      return '';
+    }
     if (call === 'HitByPitch' || pr === 'HitByPitch') return 'Ball';
     if (call === 'StrikeCalled') return 'Called Strike';
     if (call === 'BallCalled' || call === 'BallinDirt') return 'Ball';
@@ -882,6 +968,8 @@ function AbPaChart({
     const resultPart = resolveAbPitchResult(pitch);
     return [
       `Pitch #${idx + 1}`,
+      `Pitcher: ${formatNameFirstLast(String(pitch.pitcher || '')) || '-'}`,
+      `Batter: ${formatNameFirstLast(String(pitch.batter || '')) || '-'}`,
       `${pitch.pitch_type || 'Pitch'}`,
       `Velo: ${fmtNum(pitch.velo, 1)} mph`,
       `IVB: ${fmtNum(pitch.ivb, 1)}`,
@@ -919,7 +1007,7 @@ function AbPaChart({
         {pitches
           .filter((pitch) => typeof pitch.plate_side === 'number' && typeof pitch.plate_height === 'number')
           .map((pitch, i) => {
-            const x = px(Number(pitch.plate_side));
+            const x = px(flipX ? -Number(pitch.plate_side) : Number(pitch.plate_side));
             const y = py(Number(pitch.plate_height));
             const shape = resultShape(pitch);
             const color = pitchColors[pitch.pitch_type] ?? '#9ca3af';
@@ -955,14 +1043,14 @@ function AbPaChart({
                 }}
                 style={{ cursor: 'pointer' }}
               >
-                {shape === 'Ball' ? <circle cx={x} cy={y} r={5.6} fill="none" stroke={color} strokeWidth={2} /> : null}
-                {shape === 'Called Strike' ? <circle cx={x} cy={y} r={5.4} fill={color} stroke={color} strokeWidth={1.5} /> : null}
-                {shape === 'Foul' ? <polygon points={`${x},${y - 6} ${x - 5.2},${y + 4.6} ${x + 5.2},${y + 4.6}`} fill="none" stroke={color} strokeWidth={1.8} /> : null}
-                {shape === 'Whiff' ? <text x={x} y={y + 4.8} fontSize={14} textAnchor="middle" fill={color}>★</text> : null}
-                {shape === 'In Play (Out)' ? <polygon points={`${x},${y - 6} ${x - 5.2},${y + 4.6} ${x + 5.2},${y + 4.6}`} fill={color} /> : null}
-                {shape === 'In Play (Hit)' ? <rect x={x - 5.2} y={y - 5.2} width={10.4} height={10.4} fill={color} /> : null}
-                {shape === 'Error' ? <rect x={x - 5.2} y={y - 5.2} width={10.4} height={10.4} fill="none" stroke={color} strokeWidth={1.8} /> : null}
-                {shape === '' ? <circle cx={x} cy={y} r={5.2} fill={color} /> : null}
+                {shape === 'Ball' ? <circle cx={x} cy={y} r={7.6} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.2} /> : null}
+                {shape === 'Called Strike' ? <circle cx={x} cy={y} r={7.3} fill={color} stroke={color} strokeWidth={1.8} /> : null}
+                {shape === 'Foul' ? <polygon points={`${x},${y - 8.1} ${x - 7.1},${y + 6.2} ${x + 7.1},${y + 6.2}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.1} /> : null}
+                {shape === 'Whiff' ? <text x={x} y={y + 6.3} fontSize={20} textAnchor="middle" fill={color}>★</text> : null}
+                {shape === 'In Play (Out)' ? <polygon points={`${x},${y - 8.1} ${x - 7.1},${y + 6.2} ${x + 7.1},${y + 6.2}`} fill={color} /> : null}
+                {shape === 'In Play (Hit)' ? <rect x={x - 7.1} y={y - 7.1} width={14.2} height={14.2} fill={color} /> : null}
+                {shape === 'Error' ? <rect x={x - 7.1} y={y - 7.1} width={14.2} height={14.2} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.1} /> : null}
+                {shape === '' ? <circle cx={x} cy={y} r={7.0} fill={color} /> : null}
                 <text x={x} y={y - 8} fontSize={11} textAnchor="middle" fill="white" stroke="rgba(0,0,0,0.55)" strokeWidth={0.6}>
                   {i + 1}
                 </text>
@@ -1051,6 +1139,7 @@ export default function PitchingSuite({
   const [hand, setHand] = useState('All');
   const [batterSide, setBatterSide] = useState('All');
   const [sessionType, setSessionType] = useState('');
+  const [level, setLevel] = useState('MLB');
   const [qpLocations, setQpLocations] = useState('All');
   const [tableMode, setTableMode] = useState('Live');
   const [splitBy, setSplitBy] = useState('Pitch Types');
@@ -1153,12 +1242,17 @@ export default function PitchingSuite({
   const isLeague =
     String(selectedSchoolCode ?? '').toUpperCase() === 'LEAGUE' ||
     String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+  const isPro =
+    String(selectedSchoolCode ?? '').toUpperCase() === 'PRO' ||
+    String(filters?.school_code ?? '').toUpperCase() === 'PRO';
+  const orientX = (x: number): number => (isPro ? -x : x);
   const canShowLeagueHeavyPages = !isLeague;
   const canShowVeloManualEntry = !isLeague;
   const allPitchersSelected = selectedPitchers.length === 0 || selectedPitchers.every((value) => value === 'All');
   const allHittersSelected = selectedHitters.length === 0 || selectedHitters.every((value) => value === 'All');
+  const isLeagueAllSelection = isLeague && teamType === 'All' && allPitchersSelected && allHittersSelected;
   const hideLeagueSummaryCharts =
-    isLeague && dashboardPage === 'Summary' && teamType === 'All' && allPitchersSelected && allHittersSelected;
+    isLeague && dashboardPage === 'Summary' && isLeagueAllSelection;
   const leagueWindowDays = useMemo(() => {
     if (!isLeague || !startDate || !endDate) return 0;
     const start = Date.parse(startDate);
@@ -1166,7 +1260,8 @@ export default function PitchingSuite({
     if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
     return Math.max(0, Math.floor((end - start) / 86400000) + 1);
   }, [isLeague, startDate, endDate]);
-  const shouldForceLeagueFastTable = isLeague && (dashboardPage === 'Summary' || dashboardPage === 'Leaderboard') && leagueWindowDays > 14;
+  const shouldForceLeagueFastTable =
+    isLeague && (dashboardPage === 'Summary' || dashboardPage === 'Leaderboard') && leagueWindowDays > 14 && isLeagueAllSelection;
   const filteredPitchers = useMemo(() => {
     if (!filters) return [];
     if (!isLeague || teamType === 'All') return filters.pitchers ?? [];
@@ -1225,7 +1320,7 @@ export default function PitchingSuite({
   }, [isLeague, leaderboardViewBy]);
   useEffect(() => {
     if (!isLeague) return;
-    const allowedTableModes = new Set(['Live', 'Process', 'Results', 'Usage', 'Custom']);
+    const allowedTableModes = new Set(['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Raw Data', 'Batted Ball Data', 'Custom']);
     if (!allowedTableModes.has(tableMode)) {
       setTableMode('Live');
     }
@@ -1238,6 +1333,8 @@ export default function PitchingSuite({
       'After Count',
       'Zone Location',
       'Times Through Order',
+      'Inning',
+      'Pitch Count',
       'Velocity',
       'IVB',
       'HB',
@@ -1335,7 +1432,9 @@ export default function PitchingSuite({
     const controller = new AbortController();
     setLoadingFilters(true);
     setError('');
-    fetch('/api/dashboard/pitching/filters', { signal: controller.signal })
+    const filterParams = new URLSearchParams();
+    if (level) filterParams.set('level', level);
+    fetch(`/api/dashboard/pitching/filters?${filterParams.toString()}`, { signal: controller.signal, cache: 'no-store' })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as FiltersPayload & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load dashboard filters.');
@@ -1368,11 +1467,21 @@ export default function PitchingSuite({
       active = false;
       controller.abort();
     };
-  }, []);
+  }, [level]);
 
   useEffect(() => {
     if (!manualDate) setManualDate(new Date().toISOString().slice(0, 10));
   }, [manualDate]);
+
+  useEffect(() => {
+    if (!isPro) return;
+    if (stuffLevel !== 'Pro') setStuffLevel('Pro');
+  }, [isPro, stuffLevel]);
+
+  useEffect(() => {
+    if (!isPro) return;
+    if (!level) setLevel('MLB');
+  }, [isPro, level]);
 
   const loadManualEntries = useCallback(async () => {
     setLoadingManualEntries(true);
@@ -1500,13 +1609,14 @@ export default function PitchingSuite({
     params.set('end_date', endDate);
 
     if (teamType && teamType !== 'All') params.set('team_type', teamType);
+    if (isPro && level && level !== 'All') params.set('level', level);
     if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
     if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
     if (stuffLevel) params.set('stuff_level', stuffLevel);
     if (stuffBase) params.set('stuff_base', stuffBase);
     if (hand && hand !== 'All') params.set('hand', hand);
     if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
-    if (sessionType) params.set('session_type', sessionType);
+    if (!isPro && sessionType) params.set('session_type', sessionType);
     if (qpLocations && qpLocations !== 'All') params.set('qp_locations', qpLocations);
     if (tableMode) params.set('table_mode', tableMode);
     if (effectiveSplitBy) params.set('split_by', effectiveSplitBy);
@@ -1543,17 +1653,22 @@ export default function PitchingSuite({
     if (pcMax) params.set('pc_max', pcMax);
     const isTrendPage = dashboardPage === 'Trend';
     const isLeaderboard = dashboardPage === 'Leaderboard';
+    const shouldLoadLeagueCharts = isLeague && !isLeagueAllSelection && !shouldForceLeagueFastTable;
+    const shouldIncludeRowPitches =
+      !isLeague || (!hideLeagueSummaryCharts && !shouldForceLeagueFastTable && leagueWindowDays <= 14);
     if (isLeaderboard) {
-      params.set('include_chart_points', '0');
-      params.set('include_row_pitches', '0');
+      params.set('include_chart_points', '1');
+      if (isLeague) params.set('chart_points_limit', '2000');
+      params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
       params.set('include_trend_rows', '0');
     } else if (hideLeagueSummaryCharts || shouldForceLeagueFastTable) {
       params.set('include_chart_points', '0');
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
     } else {
-      params.set('include_chart_points', isLeague ? '0' : '1');
-      params.set('include_row_pitches', '0');
+      params.set('include_chart_points', shouldLoadLeagueCharts ? '1' : (isLeague ? '0' : '1'));
+      if (shouldLoadLeagueCharts) params.set('chart_points_limit', '2000');
+      params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
       params.set('include_trend_rows', isLeague ? '0' : (isTrendPage ? '1' : '0'));
     }
 
@@ -1596,6 +1711,7 @@ export default function PitchingSuite({
     effectiveSplitBy,
     hideLeagueSummaryCharts,
     shouldForceLeagueFastTable,
+    leagueWindowDays,
     customTableColumns,
     visualOption,
     selectedAfterCountFilters,
@@ -1609,6 +1725,7 @@ export default function PitchingSuite({
     sessionType,
     startDate,
     teamType,
+    level,
     breakLines,
     stuffLevel,
     stuffBase,
@@ -1670,6 +1787,7 @@ export default function PitchingSuite({
     startDate,
     endDate,
     sessionType,
+    isPro,
     hand,
     batterSide,
     selectedHitters,
@@ -1913,14 +2031,6 @@ export default function PitchingSuite({
   };
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
   const rgb = (r: number, g: number, b: number) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
-  const shinyHeatSequential = (tRaw: number): string => {
-    const t = Math.max(0, Math.min(1, tRaw));
-    if (t < 0.2) return rgb(lerp(232, 142, t / 0.2), lerp(238, 183, t / 0.2), lerp(247, 225, t / 0.2));
-    if (t < 0.45) return rgb(lerp(142, 170, (t - 0.2) / 0.25), lerp(183, 211, (t - 0.2) / 0.25), lerp(225, 235, (t - 0.2) / 0.25));
-    if (t < 0.7) return rgb(lerp(170, 240, (t - 0.45) / 0.25), lerp(211, 218, (t - 0.45) / 0.25), lerp(235, 154, (t - 0.45) / 0.25));
-    if (t < 0.88) return rgb(lerp(240, 235, (t - 0.7) / 0.18), lerp(218, 120, (t - 0.7) / 0.18), lerp(154, 82, (t - 0.7) / 0.18));
-    return rgb(lerp(235, 216, (t - 0.88) / 0.12), lerp(120, 43, (t - 0.88) / 0.12), lerp(82, 52, (t - 0.88) / 0.12));
-  };
   const divergingColor = (value: number, min: number, mid: number, max: number): string => {
     if (!Number.isFinite(value)) return 'rgba(255,255,255,0.08)';
     if (value <= mid) {
@@ -1932,10 +2042,41 @@ export default function PitchingSuite({
   };
   const sequentialColor = (value: number, min: number, max: number): string => {
     if (!Number.isFinite(value)) return 'rgba(255,255,255,0.08)';
-    const t = Math.max(0, Math.min(1, (value - min) / Math.max(1e-9, max - min)));
-    return shinyHeatSequential(t);
+    const mid = min + (max - min) * 0.5;
+    return divergingColor(value, min, mid, max);
   };
   const resultShape = (pitchCall: string, playResult: string): string => {
+    if (String(selectedSchoolCode || '').trim().toUpperCase() === 'PRO') {
+      const norm = (value: string): string => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      const callN = norm(pitchCall);
+      const prN = norm(playResult);
+      if (callN === 'called_strike' || callN === 'strikecalled') return 'Called Strike';
+      if (
+        callN === 'hit_by_pitch' ||
+        callN === 'hitbypitch' ||
+        prN === 'hit_by_pitch' ||
+        prN === 'hitbypitch' ||
+        callN === 'ball' ||
+        callN === 'ballcalled' ||
+        callN === 'ball_called' ||
+        callN === 'ballindirt' ||
+        callN === 'ball_in_dirt' ||
+        callN === 'blocked_ball' ||
+        callN === 'pitchout' ||
+        callN === 'ball_pitchout' ||
+        callN === 'intentional_ball' ||
+        callN === 'intent_ball'
+      ) {
+        return 'Ball';
+      }
+      if (callN.includes('foul')) return 'Foul';
+      if (callN === 'swinging_strike' || callN === 'swinging_strike_blocked' || callN === 'swinging_strike_pitchout' || callN === 'missed_bunt') return 'Whiff';
+      if (prN === 'single' || prN === 'double' || prN === 'triple' || prN === 'home_run' || prN === 'homerun') return 'In Play (Hit)';
+      if (prN === 'field_error' || prN === 'error') return 'Error';
+      if (callN.startsWith('in_play') || callN.startsWith('hit_into_play')) return 'In Play (Out)';
+      if (prN && !['walk', 'intent_walk', 'intentional_walk', 'strikeout', 'strikeout_double_play', 'hit_by_pitch', 'hitbypitch'].includes(prN)) return 'In Play (Out)';
+      return '';
+    }
     if (pitchCall === 'HitByPitch' || playResult === 'HitByPitch') return 'Ball';
     if (pitchCall === 'StrikeCalled') return 'Called Strike';
     if (pitchCall === 'BallCalled' || pitchCall === 'BallinDirt') return 'Ball';
@@ -1955,9 +2096,9 @@ export default function PitchingSuite({
     return 'No';
   };
   const tooltipHtml = (point: OverviewPayload['chart_points'][number]): string =>
-    `Session: ${point.session_type || '-'}\nResult: ${resolvePitchResultLabel(point.pitch_call, point.play_result)}\nVelo: ${point.velo !== null ? point.velo.toFixed(1) : '-'} mph\nIVB: ${point.ivb !== null ? point.ivb.toFixed(1) : '-'} in\nHB: ${point.hb !== null ? point.hb.toFixed(1) : '-'} in\nEV: ${point.exit_speed !== null ? point.exit_speed.toFixed(1) : '-'} mph\nLA: ${point.angle !== null ? point.angle.toFixed(1) : '-'}°\nStuff+: ${point.stuff_plus !== null ? point.stuff_plus.toFixed(1) : '-'}\nIn Zone: ${inZoneLabel(point.plate_side, point.plate_height)}`;
+    `Pitcher: ${formatNameFirstLast(String(point.pitcher || '')) || '-'}\nBatter: ${formatNameFirstLast(String(point.batter || '')) || '-'}\nSession: ${point.session_type || '-'}\nResult: ${resolvePitchResultLabel(point.pitch_call, point.play_result)}\nVelo: ${point.velo !== null ? point.velo.toFixed(1) : '-'} mph\nIVB: ${point.ivb !== null ? point.ivb.toFixed(1) : '-'} in\nHB: ${point.hb !== null ? point.hb.toFixed(1) : '-'} in\nEV: ${point.exit_speed !== null ? point.exit_speed.toFixed(1) : '-'} mph\nLA: ${point.angle !== null ? point.angle.toFixed(1) : '-'}°\nStuff+: ${point.stuff_plus !== null ? point.stuff_plus.toFixed(1) : '-'}\nIn Zone: ${inZoneLabel(point.plate_side, point.plate_height)}`;
   const releaseTooltipHtml = (point: OverviewPayload['chart_points'][number]): string =>
-    `Session: ${point.session_type || '-'}\nHeight: ${point.release_height !== null ? point.release_height.toFixed(2) : '-'} ft\nSide: ${point.release_side !== null ? point.release_side.toFixed(2) : '-'} ft\nExtension: ${point.extension !== null ? point.extension.toFixed(2) : '-'} ft`;
+    `Session: ${point.session_type || '-'}\nHeight: ${point.release_height !== null ? point.release_height.toFixed(2) : '-'} ft\nSide: ${point.release_side !== null ? orientX(point.release_side).toFixed(2) : '-'} ft\nExtension: ${point.extension !== null ? point.extension.toFixed(2) : '-'} ft`;
   const parseTiltToDegrees = (tilt: string): number | null => {
     const raw = (tilt ?? '').trim();
     if (!raw) return null;
@@ -2326,7 +2467,7 @@ export default function PitchingSuite({
     : [];
   const actionPlateX =
     currentActionPitch?.plate_side !== null && currentActionPitch?.plate_side !== undefined
-      ? 120 + (currentActionPitch.plate_side / 2.5) * 107
+      ? 120 + (orientX(currentActionPitch.plate_side) / 2.5) * 107
       : null;
   const actionPlateY =
     currentActionPitch?.plate_height !== null && currentActionPitch?.plate_height !== undefined
@@ -2497,7 +2638,7 @@ export default function PitchingSuite({
       <div>rTilt: {formatTiltClock(pitch.release_tilt)}</div>
       <div>bTilt: {formatTiltClock(pitch.break_tilt)}</div>
       <div>Height: {fmtNum(pitch.release_height, 1)}</div>
-      <div>Side: {fmtNum(pitch.release_side, 1)}</div>
+      <div>Side: {typeof pitch.release_side === 'number' ? fmtNum(orientX(pitch.release_side), 1) : '-'}</div>
     </div>
   );
 
@@ -2554,19 +2695,36 @@ export default function PitchingSuite({
       avg_velo: agg.n > 0 ? agg.sum / agg.n : null,
     }));
 
-    const sessionTypes = Array.from(new Set(points.map((p) => (p.session_type || '').toLowerCase()).filter(Boolean)));
-    const allLive = sessionTypes.length === 1 && sessionTypes[0] === 'live';
+    const selectedPitcherCount = selectedPitchers.filter((value) => value !== 'All').length;
+    const dataPitcherSet = new Set(points.map((point) => String(point.pitcher ?? '').trim()).filter(Boolean));
+    const dateSet = new Set(points.map((point) => String(point.session_date ?? '').slice(0, 10)).filter(Boolean));
+    const gameSet = new Set(
+      points
+        .map((point) => String(point.game_id || point.game_uid || point.game_foreign_id || '').trim())
+        .filter(Boolean)
+    );
+    const hasSingleGameOrDate = (gameSet.size > 0 && gameSet.size <= 1) || dateSet.size <= 1;
+    const hasSinglePitcher = selectedPitcherCount === 1 || dataPitcherSet.size === 1;
+    const showInningBoundaries = hasSinglePitcher && hasSingleGameOrDate;
+    const inningToKey = (value: unknown): string => {
+      const raw = String(value ?? '').trim();
+      if (!raw) return '';
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric)) return String(Math.floor(numeric));
+      const match = raw.match(/\d+/);
+      return match ? match[0] : raw.toLowerCase();
+    };
     const inningBoundaries: number[] = [];
-    if (allLive) {
+    if (showInningBoundaries) {
       for (let i = 1; i < points.length; i += 1) {
-        const prev = (points[i - 1].inning || '').trim();
-        const cur = (points[i].inning || '').trim();
+        const prev = inningToKey(points[i - 1].inning);
+        const cur = inningToKey(points[i].inning);
         if (prev && cur && prev !== cur) inningBoundaries.push(points[i].pitch_count);
       }
     }
 
-    return { points, avgByType, inningBoundaries };
-  }, [summaryPoints]);
+    return { points, avgByType, inningBoundaries, showInningBoundaries };
+  }, [summaryPoints, selectedPitchers]);
 
   const velocityByGameData = useMemo(() => {
     const grouped = new Map<string, { date: string; pitch_type: string; session_type: string; sumV: number; sumIvb: number; ivbN: number; sumHb: number; hbN: number; n: number }>();
@@ -3157,12 +3315,54 @@ export default function PitchingSuite({
     const rows = 40;
     const cellW = (xMax - xMin) / cols;
     const cellH = (yMax - yMin) / rows;
-    const sigmaX = 0.36;
-    const sigmaY = 0.36;
+    const sigmaX = 0.22;
+    const sigmaY = 0.22;
     const eps = 1e-9;
-    const runValue = (pitch: OverviewPayload['chart_points'][number]): number => {
+    const normDesc = (value: unknown): string =>
+      String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    const isInPlayCall = (pitch: OverviewPayload['chart_points'][number]): boolean => {
+      const raw = String(pitch.pitch_call ?? '');
+      if (raw === 'InPlay') return true;
+      const d = normDesc(raw);
+      return d.startsWith('in_play') || d.startsWith('hit_into_play');
+    };
+    const isSwingCall = (pitch: OverviewPayload['chart_points'][number]): boolean => {
+      const raw = String(pitch.pitch_call ?? '');
+      if (!isPro) {
+        return raw === 'StrikeSwinging' || raw === 'FoulBall' || raw === 'FoulBallFieldable' || raw === 'FoulBallNotFieldable' || raw === 'InPlay';
+      }
+      const d = normDesc(raw);
+      return (
+        isInPlayCall(pitch) ||
+        d === 'swinging_strike' ||
+        d === 'swinging_strike_blocked' ||
+        d === 'swinging_strike_pitchout' ||
+        d === 'foul' ||
+        d === 'foul_tip' ||
+        d === 'foul_bunt' ||
+        d === 'foul_pitchout' ||
+        d === 'missed_bunt' ||
+        d.startsWith('foul')
+      );
+    };
+    const isWhiffCall = (pitch: OverviewPayload['chart_points'][number]): boolean => {
+      const raw = String(pitch.pitch_call ?? '');
+      if (!isPro) return raw === 'StrikeSwinging';
+      const d = normDesc(raw);
+      return d === 'swinging_strike' || d === 'swinging_strike_blocked' || d === 'foul_tip';
+    };
+    const isGroundBall = (pitch: OverviewPayload['chart_points'][number]): boolean => {
+      const tagged = normDesc(pitch.tagged_hit_type ?? '');
+      return tagged.includes('ground_ball') || tagged === 'groundball';
+    };
+    const runValue = (pitch: OverviewPayload['chart_points'][number]): number | null => {
       if (typeof pitch.run_value === 'number' && Number.isFinite(pitch.run_value)) return pitch.run_value;
-      // Fallback for older payloads.
+      if (isPro) return null;
+      // Non-PRO fallback when run_value is missing on chart points.
       const pitchCall = pitch.pitch_call || '';
       const playResult = pitch.play_result || '';
       const korbb = pitch.korbb || '';
@@ -3181,18 +3381,30 @@ export default function PitchingSuite({
       return 0;
     };
     const valid = points
-      .map((p) => ({ p, x: p[xKey], y: p[yKey] }))
+      .map((p) => {
+        const rawX = p[xKey];
+        const rawY = p[yKey];
+        const adjustedX = typeof rawX === 'number' ? orientX(rawX) : rawX;
+        return { p, x: adjustedX, y: rawY };
+      })
       .filter((row): row is { p: OverviewPayload['chart_points'][number]; x: number; y: number } => row.x !== null && row.y !== null);
     if (!valid.length) return [];
+    const globalXwobaRows = valid.filter(
+      (rowPoint) =>
+        typeof rowPoint.p.estimated_woba_using_speedangle === 'number' &&
+        Number.isFinite(rowPoint.p.estimated_woba_using_speedangle)
+    );
+    const globalXbaRows = valid.filter(
+      (rowPoint) =>
+        typeof rowPoint.p.estimated_ba_using_speedangle === 'number' &&
+        Number.isFinite(rowPoint.p.estimated_ba_using_speedangle)
+    );
 
-    const globalSwingCount = valid.filter((rowPoint) => {
-      const call = rowPoint.p.pitch_call || '';
-      return call === 'StrikeSwinging' || call === 'FoulBall' || call === 'FoulBallFieldable' || call === 'FoulBallNotFieldable' || call === 'InPlay';
-    }).length;
-    const globalWhiffCount = valid.filter((rowPoint) => (rowPoint.p.pitch_call || '') === 'StrikeSwinging').length;
-    const globalInPlayCount = valid.filter((rowPoint) => (rowPoint.p.pitch_call || '') === 'InPlay').length;
-    const globalGbCount = valid.filter((rowPoint) => rowPoint.p.tagged_hit_type === 'GroundBall').length;
-    const globalEvRows = valid.filter((rowPoint) => (rowPoint.p.pitch_call || '') === 'InPlay' && typeof rowPoint.p.exit_speed === 'number');
+    const globalSwingCount = valid.filter((rowPoint) => isSwingCall(rowPoint.p)).length;
+    const globalWhiffCount = valid.filter((rowPoint) => isWhiffCall(rowPoint.p)).length;
+    const globalInPlayCount = valid.filter((rowPoint) => isInPlayCall(rowPoint.p)).length;
+    const globalGbCount = valid.filter((rowPoint) => isInPlayCall(rowPoint.p) && isGroundBall(rowPoint.p)).length;
+    const globalEvRows = valid.filter((rowPoint) => isInPlayCall(rowPoint.p) && typeof rowPoint.p.exit_speed === 'number');
     const globalQpRows = valid.filter((rowPoint) => typeof rowPoint.p.qp_plus === 'number' && Number.isFinite(rowPoint.p.qp_plus));
     const globalEvAvg =
       globalEvRows.length > 0
@@ -3202,16 +3414,26 @@ export default function PitchingSuite({
       globalQpRows.length > 0
         ? globalQpRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.qp_plus || 0), 0) / globalQpRows.length
         : 100;
-    const globalRvAvg =
-      valid.length > 0
-        ? valid.reduce((sum, rowPoint) => sum + runValue(rowPoint.p), 0) / valid.length
-        : 0;
+    const rvRows = valid
+      .map((rowPoint) => runValue(rowPoint.p))
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    const globalRvAvg = rvRows.length > 0 ? rvRows.reduce((sum, value) => sum + value, 0) / rvRows.length : 0;
+    const globalXwobaAvg =
+      globalXwobaRows.length > 0
+        ? globalXwobaRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.estimated_woba_using_speedangle || 0), 0) / globalXwobaRows.length
+        : 0.35;
+    const globalXbaAvg =
+      globalXbaRows.length > 0
+        ? globalXbaRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.estimated_ba_using_speedangle || 0), 0) / globalXbaRows.length
+        : 0.3;
 
     const globalSwingRate = valid.length > 0 ? globalSwingCount / valid.length : 0;
     const globalWhiffRate = globalSwingCount > 0 ? globalWhiffCount / globalSwingCount : 0;
     const globalGbRate = globalInPlayCount > 0 ? globalGbCount / globalInPlayCount : 0;
-    const globalContactRate = globalSwingCount > 0 ? globalInPlayCount / globalSwingCount : 0;
+    const globalContactRate = globalSwingCount > 0 ? (globalSwingCount - globalWhiffCount) / globalSwingCount : 0;
     const shrinkStrength = 8;
+    const runValueShrinkStrength = 0.5;
+    const xMetricShrinkStrength = 0.4;
 
     const cells: HeatCell[] = [];
     for (let row = 0; row < rows; row += 1) {
@@ -3228,20 +3450,24 @@ export default function PitchingSuite({
         let qpWSum = 0;
         let qpW = 0;
         let rvWSum = 0;
+        let rvW = 0;
+        let xwobaWSum = 0;
+        let xwobaW = 0;
+        let xbaWSum = 0;
+        let xbaW = 0;
 
         for (const rowPoint of valid) {
           const dx = (cx - rowPoint.x) / sigmaX;
           const dy = (cy - rowPoint.y) / sigmaY;
           const w = Math.exp(-0.5 * (dx * dx + dy * dy));
           if (w < 1e-6) continue;
-          const call = rowPoint.p.pitch_call || '';
-          const swing = call === 'StrikeSwinging' || call === 'FoulBall' || call === 'FoulBallFieldable' || call === 'FoulBallNotFieldable' || call === 'InPlay';
-          const inPlay = call === 'InPlay';
-          const gb = rowPoint.p.tagged_hit_type === 'GroundBall';
+          const swing = isSwingCall(rowPoint.p);
+          const inPlay = isInPlayCall(rowPoint.p);
+          const gb = isGroundBall(rowPoint.p);
 
           sumW += w;
           if (swing) swingW += w;
-          if (call === 'StrikeSwinging') whiffW += w;
+          if (isWhiffCall(rowPoint.p)) whiffW += w;
           if (inPlay) inPlayW += w;
           if (gb) gbW += w;
           if (inPlay && typeof rowPoint.p.exit_speed === 'number') {
@@ -3252,17 +3478,36 @@ export default function PitchingSuite({
             qpWSum += w * rowPoint.p.qp_plus;
             qpW += w;
           }
-          rvWSum += w * runValue(rowPoint.p);
+          const rv = runValue(rowPoint.p);
+          if (typeof rv === 'number' && Number.isFinite(rv)) {
+            rvWSum += w * rv;
+            rvW += w;
+          }
+          if (typeof rowPoint.p.estimated_woba_using_speedangle === 'number' && Number.isFinite(rowPoint.p.estimated_woba_using_speedangle)) {
+            xwobaWSum += w * rowPoint.p.estimated_woba_using_speedangle;
+            xwobaW += w;
+          }
+          if (typeof rowPoint.p.estimated_ba_using_speedangle === 'number' && Number.isFinite(rowPoint.p.estimated_ba_using_speedangle)) {
+            xbaWSum += w * rowPoint.p.estimated_ba_using_speedangle;
+            xbaW += w;
+          }
         }
 
         let value = sumW;
         if (metric === 'Whiff Rate') value = 100 * ((whiffW + shrinkStrength * globalWhiffRate) / Math.max(eps, swingW + shrinkStrength));
         if (metric === 'GB Rate') value = 100 * ((gbW + shrinkStrength * globalGbRate) / Math.max(eps, inPlayW + shrinkStrength));
-        if (metric === 'Contact Rate') value = 100 * ((inPlayW + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
+        if (metric === 'Contact Rate') value = 100 * (((swingW - whiffW) + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
         if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
         if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
         if (metric === 'QP+') value = (qpWSum + shrinkStrength * globalQpAvg) / Math.max(eps, qpW + shrinkStrength);
-        if (metric === 'Run Values') value = (rvWSum + shrinkStrength * globalRvAvg) / Math.max(eps, sumW + shrinkStrength);
+        if (metric === 'Run Values') {
+          value =
+            rvW > eps
+              ? ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, rvW + runValueShrinkStrength)) * 100
+              : Number.NaN;
+        }
+        if (metric === 'xWOBA') value = (xwobaWSum + xMetricShrinkStrength * globalXwobaAvg) / Math.max(eps, xwobaW + xMetricShrinkStrength);
+        if (metric === 'xBA') value = (xbaWSum + xMetricShrinkStrength * globalXbaAvg) / Math.max(eps, xbaW + xMetricShrinkStrength);
         cells.push({ x: xMin + col * cellW, y: yMin + row * cellH, w: cellW, h: cellH, value, density: sumW });
       }
     }
@@ -3417,7 +3662,7 @@ export default function PitchingSuite({
               .map((p, i) => (
                 <circle
                   key={`r-p-${i}`}
-                  cx={px(Number(p.release_side))}
+                  cx={px(orientX(Number(p.release_side)))}
                   cy={py(Number(p.release_height))}
                   r={3.2}
                   fill={pitchColors[p.pitch_type] ?? '#9ca3af'}
@@ -3443,7 +3688,7 @@ export default function PitchingSuite({
               .map((p) => (
                 <circle
                   key={`r-a-${p.pitch_type}`}
-                  cx={px(Number(p.release_side))}
+                  cx={px(orientX(Number(p.release_side)))}
                   cy={py(Number(p.release_height))}
                   r={8.6}
                   fill={pitchColors[p.pitch_type] ?? '#9ca3af'}
@@ -3454,7 +3699,7 @@ export default function PitchingSuite({
                     setReleaseHover({
                       x: event.clientX,
                       y: event.clientY,
-                      text: `${p.pitch_type}\nHeight: ${p.release_height?.toFixed(1) ?? '-'} ft\nSide: ${p.release_side?.toFixed(1) ?? '-'} ft\nExtension: ${p.extension?.toFixed(1) ?? '-'} ft`,
+                      text: `${p.pitch_type}\nHeight: ${p.release_height?.toFixed(1) ?? '-'} ft\nSide: ${p.release_side !== null && p.release_side !== undefined ? orientX(Number(p.release_side)).toFixed(1) : '-'} ft\nExtension: ${p.extension?.toFixed(1) ?? '-'} ft`,
                       bg: pitchColors[p.pitch_type] ?? '#0f172a',
                     })
                   }
@@ -3468,7 +3713,7 @@ export default function PitchingSuite({
           : null}
       </svg>
     );
-  }, [summaryPoints, avgByType, releaseView]);
+  }, [summaryPoints, avgByType, releaseView, isPro]);
 
   const movementSvg = useMemo(() => {
     const w = 520;
@@ -3676,12 +3921,19 @@ export default function PitchingSuite({
     const zoom = locationView === 'Pitch' ? 1 : 1.2;
     const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
     const cells = locationView === 'Pitch' ? [] : buildHeatCells(summaryPoints, 'plate_side', 'plate_height', locationView);
-    const values = cells.map((c) => c.value).sort((a, b) => a - b);
+    const values = cells.map((c) => c.value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
     const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
-    const minVal = values.length ? values[0] : 0;
-    const maxVal = values.length ? values[values.length - 1] : 1;
-    const midVal = values.length ? values[Math.floor(values.length / 2)] : 0;
-    const maxAbs = Math.max(1, ...cells.map((c) => Math.abs(c.value)));
+    const dynamicMinVal = values.length ? values[0] : 0;
+    const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
+    const dynamicMidVal = values.length ? values[Math.floor(values.length / 2)] : 0;
+    const fixedScale = getHeatmapFixedScale(locationView, selectedPitchTypes);
+    const contactVisibilityScale = locationView === 'Contact Rate' ? getHeatmapFixedScale('Whiff Rate', selectedPitchTypes) : null;
+    const minVal = fixedScale?.min ?? dynamicMinVal;
+    const maxVal = fixedScale?.max ?? dynamicMaxVal;
+    const midVal = fixedScale?.mid ?? dynamicMidVal;
+    const maxAbs = Math.max(1e-9, ...cells.map((c) => (Number.isFinite(c.value) ? Math.abs(c.value) : 0)));
+    const rvMin = -5;
+    const rvMax = 5;
     const glyph = (
       result: string,
       x: number,
@@ -3697,13 +3949,13 @@ export default function PitchingSuite({
         onMouseLeave: () => setLocationHover(null),
         onClick: () => (point ? openActionModal([point]) : undefined),
       };
-      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={6.2} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
-      if (result === 'Foul') return <polygon key={key} points={`${x},${y-6} ${x-5.4},${y+4.6} ${x+5.4},${y+4.6}`} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
-      if (result === 'Whiff') return <text key={key} x={x} y={y + 4.8} fontSize={13} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
-      if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y-6} ${x-5.4},${y+4.6} ${x+5.4},${y+4.6}`} fill={fill} {...hoverProps} />;
-      if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill={fill} {...hoverProps} />;
-      if (result === 'Error') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill="none" stroke={fill} strokeWidth={1.6} {...hoverProps} />;
-      return <circle key={key} cx={x} cy={y} r={6.2} fill={fill} {...hoverProps} />;
+      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={8.4} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
+      if (result === 'Foul') return <polygon key={key} points={`${x},${y-8.1} ${x-7.3},${y+6.2} ${x+7.3},${y+6.2}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
+      if (result === 'Whiff') return <text key={key} x={x} y={y + 6.3} fontSize={19} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
+      if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y-8.1} ${x-7.3},${y+6.2} ${x+7.3},${y+6.2}`} fill={fill} {...hoverProps} />;
+      if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill={fill} {...hoverProps} />;
+      if (result === 'Error') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={1.9} {...hoverProps} />;
+      return <circle key={key} cx={x} cy={y} r={8.4} fill={fill} {...hoverProps} />;
     };
     return (
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setLocationHover(null)}>
@@ -3712,10 +3964,10 @@ export default function PitchingSuite({
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
           <filter id="location-heat-blur" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+            <feGaussianBlur stdDeviation="1.2" />
           </filter>
           <filter id="location-heat-blur-rv" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="1.25" />
+            <feGaussianBlur stdDeviation="0.75" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath="url(#location-zoom-clip)">
@@ -3724,27 +3976,38 @@ export default function PitchingSuite({
             <>
               <g filter={locationView === 'Run Values' ? 'url(#location-heat-blur-rv)' : 'url(#location-heat-blur)'}>
                 {cells.map((c) => {
+                  if (!Number.isFinite(c.value)) return null;
                   const cx = px(c.x + c.w / 2);
                   const cy = py(c.y + c.h / 2);
-                  const radius = Math.max(2.8, c.w * scale * 2.05);
+                  const radius = Math.max(2.0, c.w * scale * 1.45);
                   const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                   let fill = 'rgba(255,255,255,0.12)';
                   if (locationView === 'Frequency') {
                     fill = sequentialColor(c.value, minVal, maxVal);
                   } else if (locationView === 'Run Values') {
-                    const ratio = c.value / maxAbs;
-                    if (ratio >= 0) fill = `rgba(255,48,48,${0.24 + Math.abs(ratio) * 0.76})`;
-                    else fill = `rgba(54,129,255,${0.24 + Math.abs(ratio) * 0.76})`;
+                    const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
+                    fill = divergingColor(-rvClamped, rvMin, 0, rvMax);
                   } else {
                     fill = divergingColor(c.value, minVal, midVal, maxVal);
                   }
                   const normalized =
                     locationView === 'Run Values'
-                      ? Math.abs(c.value) / maxAbs
-                      : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
+                      ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
+                      : locationView === 'Contact Rate' && contactVisibilityScale
+                        ? Math.max(
+                            0,
+                            Math.min(
+                              1,
+                              ((100 - c.value) - contactVisibilityScale.min) /
+                                Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min)
+                            )
+                          )
+                        : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                   const runValueBoost = locationView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                  if (locationView !== 'Frequency' && densityNorm < 0.16) return null;
-                  if (locationView !== 'Run Values' && normalized < 0.06) return null;
+                  const isSwingRateView = locationView === 'Swing Rate';
+                  if (locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+                  if (locationView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                  if (locationView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                   return (
                     <circle
                       key={`blur-${c.x}-${c.y}`}
@@ -3752,33 +4015,48 @@ export default function PitchingSuite({
                       cy={cy}
                       r={radius}
                       fill={fill}
-                      opacity={Math.max(0.3, runValueBoost * 1.25 * (locationView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))}
+                      opacity={
+                        locationView === 'Run Values'
+                          ? Math.max(0.45, runValueBoost * 1.1 * Math.max(0.65, densityNorm))
+                          : Math.max(0.3, runValueBoost * 1.25 * (locationView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                      }
                     />
                   );
                 })}
               </g>
               {cells.map((c) => {
+                if (!Number.isFinite(c.value)) return null;
                 const cx = px(c.x + c.w / 2);
                 const cy = py(c.y + c.h / 2);
-                const radius = Math.max(1.4, c.w * scale * 1.08);
+                const radius = Math.max(1.0, c.w * scale * 0.75);
                 const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                 let fill = 'rgba(255,255,255,0.12)';
                 if (locationView === 'Frequency') {
                   fill = sequentialColor(c.value, minVal, maxVal);
                 } else if (locationView === 'Run Values') {
-                  const ratio = c.value / maxAbs;
-                  if (ratio >= 0) fill = `rgba(255,48,48,${0.2 + Math.abs(ratio) * 0.8})`;
-                  else fill = `rgba(54,129,255,${0.2 + Math.abs(ratio) * 0.8})`;
+                  const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
+                  fill = divergingColor(-rvClamped, rvMin, 0, rvMax);
                 } else {
                   fill = divergingColor(c.value, minVal, midVal, maxVal);
                 }
                 const normalized =
                   locationView === 'Run Values'
-                    ? Math.abs(c.value) / maxAbs
-                    : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
+                    ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
+                    : locationView === 'Contact Rate' && contactVisibilityScale
+                      ? Math.max(
+                          0,
+                          Math.min(
+                            1,
+                            ((100 - c.value) - contactVisibilityScale.min) /
+                              Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min)
+                          )
+                        )
+                      : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                 const runValueBoost = locationView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                if (locationView !== 'Frequency' && densityNorm < 0.16) return null;
-                if (locationView !== 'Run Values' && normalized < 0.06) return null;
+                const isSwingRateView = locationView === 'Swing Rate';
+                if (locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+                if (locationView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                if (locationView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                 return (
                   <circle
                     key={`core-${c.x}-${c.y}`}
@@ -3786,12 +4064,16 @@ export default function PitchingSuite({
                     cy={cy}
                     r={radius}
                     fill={fill}
-                    opacity={Math.max(0.2, runValueBoost * 0.72 * (locationView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))}
+                    opacity={
+                      locationView === 'Run Values'
+                        ? Math.max(0.3, runValueBoost * 0.85 * Math.max(0.6, densityNorm))
+                        : Math.max(0.2, runValueBoost * 0.72 * (locationView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                    }
                     onMouseMove={(event) =>
                       setLocationHover({
                         x: event.clientX,
                         y: event.clientY,
-                        text: `${locationView}: ${c.value.toFixed(locationView === 'Run Values' || locationView === 'Exit Velocity' ? 2 : 1)}`,
+                        text: `${locationView}: ${c.value.toFixed(locationView === 'xWOBA' || locationView === 'xBA' ? 3 : (locationView === 'Run Values' || locationView === 'Exit Velocity' ? 2 : 1))}`,
                       })
                     }
                     onMouseLeave={() => setLocationHover(null)}
@@ -3820,7 +4102,7 @@ export default function PitchingSuite({
           ? summaryPoints
               .filter((p) => p.plate_side !== null && p.plate_height !== null)
               .map((p, i) => {
-                const x = px(Number(p.plate_side));
+                const x = px(orientX(Number(p.plate_side)));
                 const y = py(Number(p.plate_height));
                 const color = pitchColors[p.pitch_type] ?? '#9ca3af';
                 const result = resultShape(p.pitch_call, p.play_result);
@@ -3830,7 +4112,7 @@ export default function PitchingSuite({
         </g>
       </svg>
     );
-  }, [summaryPoints, locationView]);
+  }, [summaryPoints, locationView, isPro, selectedPitchTypes]);
 
   const heatmapStatOptions = useMemo(
     () => [
@@ -3840,10 +4122,11 @@ export default function PitchingSuite({
       { value: 'Contact Rate', label: 'Contact Rate' },
       { value: 'Swing Rate', label: 'Swing Rate' },
       { value: 'Exit Velocity', label: 'Exit Velocity' },
+      ...(isPro ? ([{ value: 'xWOBA', label: 'xWOBA' }, { value: 'xBA', label: 'xBA' }] as OptionItem[]) : []),
       { value: 'Run Values', label: 'Run Values' },
       { value: 'QP+', label: 'QP+' },
     ],
-    []
+    [isPro]
   );
   const heatmapDisplayView = useMemo(() => {
     if (heatmapChartType === 'Pitch') return 'Pitch';
@@ -3954,12 +4237,19 @@ export default function PitchingSuite({
         : heatmapDisplayView === 'QP+'
           ? buildQpPresetCells(qpSelectedPitchType, qpSelectedHand, qpSelectedCountBucket)
           : buildHeatCells(summaryPoints, 'plate_side', 'plate_height', heatmapDisplayView);
-    const values = cells.map((c) => c.value).sort((a, b) => a - b);
+    const values = cells.map((c) => c.value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
     const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
-    const minVal = values.length ? values[0] : 0;
-    const maxVal = values.length ? values[values.length - 1] : 1;
-    const midVal = values.length ? values[Math.floor(values.length / 2)] : 0;
-    const maxAbs = Math.max(1, ...cells.map((c) => Math.abs(c.value)));
+    const dynamicMinVal = values.length ? values[0] : 0;
+    const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
+    const dynamicMidVal = values.length ? values[Math.floor(values.length / 2)] : 0;
+    const fixedScale = getHeatmapFixedScale(heatmapDisplayView, selectedPitchTypes);
+    const contactVisibilityScale = heatmapDisplayView === 'Contact Rate' ? getHeatmapFixedScale('Whiff Rate', selectedPitchTypes) : null;
+    const minVal = fixedScale?.min ?? dynamicMinVal;
+    const maxVal = fixedScale?.max ?? dynamicMaxVal;
+    const midVal = fixedScale?.mid ?? dynamicMidVal;
+    const maxAbs = Math.max(1e-9, ...cells.map((c) => (Number.isFinite(c.value) ? Math.abs(c.value) : 0)));
+    const rvMin = -5;
+    const rvMax = 5;
     const glyph = (
       result: string,
       x: number,
@@ -3975,13 +4265,13 @@ export default function PitchingSuite({
         onMouseLeave: () => setLocationHover(null),
         onClick: () => (point ? openActionModal([point]) : undefined),
       };
-      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={6.3} fill="none" stroke={fill} strokeWidth={1.9} {...hoverProps} />;
-      if (result === 'Foul') return <polygon key={key} points={`${x},${y - 6} ${x - 5.4},${y + 4.6} ${x + 5.4},${y + 4.6}`} fill="none" stroke={fill} strokeWidth={1.8} {...hoverProps} />;
-      if (result === 'Whiff') return <text key={key} x={x} y={y + 5} fontSize={13} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
-      if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 6} ${x - 5.4},${y + 4.6} ${x + 5.4},${y + 4.6}`} fill={fill} {...hoverProps} />;
-      if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill={fill} {...hoverProps} />;
-      if (result === 'Error') return <rect key={key} x={x - 5.1} y={y - 5.1} width={10.2} height={10.2} fill="none" stroke={fill} strokeWidth={1.6} {...hoverProps} />;
-      return <circle key={key} cx={x} cy={y} r={6.3} fill={fill} {...hoverProps} />;
+      if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={8.6} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
+      if (result === 'Foul') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
+      if (result === 'Whiff') return <text key={key} x={x} y={y + 6.4} fontSize={19} textAnchor="middle" fill={fill} {...hoverProps}>★</text>;
+      if (result === 'In Play (Out)') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill={fill} {...hoverProps} />;
+      if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill={fill} {...hoverProps} />;
+      if (result === 'Error') return <rect key={key} x={x - 6.9} y={y - 6.9} width={13.8} height={13.8} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={1.9} {...hoverProps} />;
+      return <circle key={key} cx={x} cy={y} r={8.6} fill={fill} {...hoverProps} />;
     };
     return (
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 460, border: '1px solid rgba(255,255,255,0.16)', borderRadius: 10 }} onMouseLeave={() => setLocationHover(null)}>
@@ -3990,10 +4280,10 @@ export default function PitchingSuite({
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
           <filter id="location-heat-blur-heatmaps-page" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+            <feGaussianBlur stdDeviation="1.2" />
           </filter>
           <filter id="location-heat-blur-rv-heatmaps-page" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="1.25" />
+            <feGaussianBlur stdDeviation="0.75" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath="url(#location-zoom-clip-heatmaps-page)">
@@ -4001,9 +4291,10 @@ export default function PitchingSuite({
             <>
               <g filter={heatmapDisplayView === 'Run Values' ? 'url(#location-heat-blur-rv-heatmaps-page)' : 'url(#location-heat-blur-heatmaps-page)'}>
                 {cells.map((c) => {
+                  if (!Number.isFinite(c.value)) return null;
                   const cx = px(c.x + c.w / 2);
                   const cy = py(c.y + c.h / 2);
-                  const radius = Math.max(2.8, c.w * scale * 2.05);
+                  const radius = Math.max(2.0, c.w * scale * 1.45);
                   const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                   let fill = 'rgba(255,255,255,0.12)';
                   if (heatmapDisplayView === 'Frequency') {
@@ -4011,9 +4302,8 @@ export default function PitchingSuite({
                   } else if (heatmapDisplayView === 'QP+') {
                     fill = divergingColor(c.value, 0, 100, 200);
                   } else if (heatmapDisplayView === 'Run Values') {
-                    const ratio = c.value / maxAbs;
-                    if (ratio >= 0) fill = `rgba(255,48,48,${0.24 + Math.abs(ratio) * 0.76})`;
-                    else fill = `rgba(54,129,255,${0.24 + Math.abs(ratio) * 0.76})`;
+                    const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
+                    fill = divergingColor(-rvClamped, rvMin, 0, rvMax);
                   } else {
                     fill = divergingColor(c.value, minVal, midVal, maxVal);
                   }
@@ -4021,11 +4311,22 @@ export default function PitchingSuite({
                     heatmapDisplayView === 'QP+'
                       ? Math.abs(c.value - 100) / 100
                       : heatmapDisplayView === 'Run Values'
-                      ? Math.abs(c.value) / maxAbs
-                      : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
+                        ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
+                        : heatmapDisplayView === 'Contact Rate' && contactVisibilityScale
+                          ? Math.max(
+                              0,
+                              Math.min(
+                                1,
+                                ((100 - c.value) - contactVisibilityScale.min) /
+                                  Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min)
+                              )
+                            )
+                          : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                   const runValueBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                  if (heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && densityNorm < 0.16) return null;
-                  if (heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && normalized < 0.06) return null;
+                  const isSwingRateView = heatmapDisplayView === 'Swing Rate';
+                  if (heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+                  if (heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && normalized < 0.06) return null;
+                  if (heatmapDisplayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                   return (
                     <circle
                       key={`hp-blur-${c.x}-${c.y}`}
@@ -4033,15 +4334,20 @@ export default function PitchingSuite({
                       cy={cy}
                       r={radius}
                       fill={fill}
-                      opacity={Math.max(0.3, runValueBoost * 1.25 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))}
+                      opacity={
+                        heatmapDisplayView === 'Run Values'
+                          ? Math.max(0.45, runValueBoost * 1.1 * Math.max(0.65, densityNorm))
+                          : Math.max(0.3, runValueBoost * 1.25 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                      }
                     />
                   );
                 })}
               </g>
               {cells.map((c) => {
+                if (!Number.isFinite(c.value)) return null;
                 const cx = px(c.x + c.w / 2);
                 const cy = py(c.y + c.h / 2);
-                const radius = Math.max(1.4, c.w * scale * 1.08);
+                const radius = Math.max(1.0, c.w * scale * 0.75);
                 const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                 let fill = 'rgba(255,255,255,0.12)';
                 if (heatmapDisplayView === 'Frequency') {
@@ -4049,9 +4355,8 @@ export default function PitchingSuite({
                 } else if (heatmapDisplayView === 'QP+') {
                   fill = divergingColor(c.value, 0, 100, 200);
                 } else if (heatmapDisplayView === 'Run Values') {
-                  const ratio = c.value / maxAbs;
-                  if (ratio >= 0) fill = `rgba(255,48,48,${0.2 + Math.abs(ratio) * 0.8})`;
-                  else fill = `rgba(54,129,255,${0.2 + Math.abs(ratio) * 0.8})`;
+                  const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
+                  fill = divergingColor(-rvClamped, rvMin, 0, rvMax);
                 } else {
                   fill = divergingColor(c.value, minVal, midVal, maxVal);
                 }
@@ -4059,11 +4364,22 @@ export default function PitchingSuite({
                   heatmapDisplayView === 'QP+'
                     ? Math.abs(c.value - 100) / 100
                     : heatmapDisplayView === 'Run Values'
-                    ? Math.abs(c.value) / maxAbs
-                    : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
+                      ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
+                      : heatmapDisplayView === 'Contact Rate' && contactVisibilityScale
+                        ? Math.max(
+                            0,
+                            Math.min(
+                              1,
+                              ((100 - c.value) - contactVisibilityScale.min) /
+                                Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min)
+                            )
+                          )
+                        : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                 const runValueBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                if (heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && densityNorm < 0.16) return null;
-                if (heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && normalized < 0.06) return null;
+                const isSwingRateView = heatmapDisplayView === 'Swing Rate';
+                if (heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+                if (heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && normalized < 0.06) return null;
+                if (heatmapDisplayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                 return (
                   <circle
                     key={`hp-core-${c.x}-${c.y}`}
@@ -4071,12 +4387,16 @@ export default function PitchingSuite({
                     cy={cy}
                     r={radius}
                     fill={fill}
-                    opacity={Math.max(0.2, runValueBoost * 0.72 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))}
+                    opacity={
+                      heatmapDisplayView === 'Run Values'
+                        ? Math.max(0.3, runValueBoost * 0.85 * Math.max(0.6, densityNorm))
+                        : Math.max(0.2, runValueBoost * 0.72 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                    }
                     onMouseMove={(event) =>
                       setLocationHover({
                         x: event.clientX,
                         y: event.clientY,
-                        text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'Run Values' || heatmapDisplayView === 'Exit Velocity' || heatmapDisplayView === 'QP+' ? 2 : 1)}`,
+                        text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xBA' ? 3 : (heatmapDisplayView === 'Run Values' || heatmapDisplayView === 'Exit Velocity' || heatmapDisplayView === 'QP+' ? 2 : 1))}`,
                       })
                     }
                     onMouseLeave={() => setLocationHover(null)}
@@ -4104,7 +4424,7 @@ export default function PitchingSuite({
             ? summaryPoints
                 .filter((p) => p.plate_side !== null && p.plate_height !== null)
                 .map((p, i) => {
-                  const x = px(Number(p.plate_side));
+                  const x = px(orientX(Number(p.plate_side)));
                   const y = py(Number(p.plate_height));
                   const color = pitchColors[p.pitch_type] ?? '#9ca3af';
                   const result = resultShape(p.pitch_call, p.play_result);
@@ -4122,7 +4442,7 @@ export default function PitchingSuite({
         </g>
       </svg>
     );
-  }, [summaryPoints, heatmapDisplayView, canRenderQpHeatmap, qpSelectedPitchType, qpSelectedCountBucket, qpSelectedHand]);
+  }, [summaryPoints, heatmapDisplayView, canRenderQpHeatmap, qpSelectedPitchType, qpSelectedCountBucket, qpSelectedHand, isPro, selectedPitchTypes]);
 
   const tableColorMode = useMemo(() => {
     if (!tableMode) return '';
@@ -4176,10 +4496,14 @@ export default function PitchingSuite({
     () =>
       (isLeague
         ? [
+            { value: 'Stuff', label: 'Stuff' },
             { value: 'Live', label: 'Live' },
             { value: 'Process', label: 'Process' },
             { value: 'Results', label: 'Results' },
+            { value: 'Bullpen', label: 'Bullpen' },
             { value: 'Usage', label: 'Usage' },
+            { value: 'Raw Data', label: 'Raw Data' },
+            { value: 'Batted Ball Data', label: 'Batted Ball Data' },
           ]
         : [
             { value: 'Stuff', label: 'Stuff' },
@@ -4206,6 +4530,8 @@ export default function PitchingSuite({
             { value: 'After Count', label: 'After Count' },
             { value: 'Zone Location', label: 'Zone Location' },
             { value: 'Times Through Order', label: 'Times Through Order' },
+            { value: 'Inning', label: 'Inning of Appearance' },
+            { value: 'Pitch Count', label: 'Pitch Count' },
             { value: 'Velocity', label: 'Velocity' },
             { value: 'IVB', label: 'IVB' },
             { value: 'HB', label: 'HB' },
@@ -4220,6 +4546,8 @@ export default function PitchingSuite({
             { value: 'After Count', label: 'After Count' },
             { value: 'Zone Location', label: 'Zone Location' },
             { value: 'Times Through Order', label: 'Times Through Order' },
+            { value: 'Inning', label: 'Inning of Appearance' },
+            { value: 'Pitch Count', label: 'Pitch Count' },
             { value: 'Velocity', label: 'Velocity' },
             { value: 'IVB', label: 'IVB' },
             { value: 'HB', label: 'HB' },
@@ -4262,6 +4590,69 @@ export default function PitchingSuite({
     const splitColumn = leaderboardBaseColumns[0] ?? '';
     return sortTableRows(rows, sortCol, leaderboardSortDirection, splitColumn);
   }, [overview?.table_rows, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
+  const latestTeamByPitcher = useMemo(() => {
+    const points = overview?.chart_points ?? [];
+    const latestTsByName: Record<string, number> = {};
+    const out: Record<string, string> = {};
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    points.forEach((point) => {
+      const name = String(point.pitcher ?? '').trim();
+      const team = String(point.pitcher_team_code ?? '').trim().toUpperCase();
+      if (!name || !team) return;
+      const ts = point.session_date ? Date.parse(point.session_date) : NaN;
+      const stamp = Number.isFinite(ts) ? ts : 0;
+      const keys = [name, formatNameFirstLast(name), norm(name), norm(formatNameFirstLast(name))].filter(Boolean);
+      const latestKnown = Math.max(...keys.map((k) => latestTsByName[k] ?? -1));
+      if (stamp >= latestKnown) {
+        keys.forEach((k) => {
+          latestTsByName[k] = stamp;
+          out[k] = team;
+        });
+      }
+    });
+    return out;
+  }, [overview?.chart_points]);
+  const filterTeamByPitcher = useMemo(() => {
+    const out: Record<string, string> = {};
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const byTeam = filters?.pitchers_by_team_code ?? {};
+    Object.entries(byTeam).forEach(([teamCodeRaw, names]) => {
+      const teamCode = String(teamCodeRaw ?? '').trim().toUpperCase();
+      if (!teamCode) return;
+      (names ?? []).forEach((nameRaw) => {
+        const name = String(nameRaw ?? '').trim();
+        if (!name) return;
+        const formatted = formatNameFirstLast(name);
+        [name, formatted, norm(name), norm(formatted)].forEach((k) => {
+          if (k) out[k] = teamCode;
+        });
+      });
+    });
+    return out;
+  }, [filters?.pitchers_by_team_code]);
+  const summaryTeamLogoUrl = useMemo(() => {
+    if (!isPro || dashboardPage !== 'Summary') return '';
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    let teamCode = '';
+    if (selectedSinglePitcher) {
+      const key = String(selectedSinglePitcher ?? '').trim();
+      const formatted = formatNameFirstLast(key);
+      teamCode =
+        latestTeamByPitcher[key] ??
+        latestTeamByPitcher[formatted] ??
+        latestTeamByPitcher[norm(key)] ??
+        latestTeamByPitcher[norm(formatted)] ??
+        filterTeamByPitcher[key] ??
+        filterTeamByPitcher[formatted] ??
+        filterTeamByPitcher[norm(key)] ??
+        filterTeamByPitcher[norm(formatted)] ??
+        '';
+    }
+    if (!teamCode && teamType && teamType !== 'All') {
+      teamCode = inferProTeamCode(teamType);
+    }
+    return getProTeamLogoUrl(teamCode) || '';
+  }, [isPro, dashboardPage, selectedSinglePitcher, latestTeamByPitcher, filterTeamByPitcher, teamType]);
   const sortedManualEntries = useMemo(
     () =>
       sortTableRows(
@@ -4333,7 +4724,7 @@ export default function PitchingSuite({
     if (!shouldColorTable) return null;
     const normalizedColumn = normalizeColorColumnName(column);
     if (!tableColorColumnSet.has(normalizedColumn)) return null;
-    const colors = getCellColorScale(row[column], normalizedColumn, thresholdPitchType);
+    const colors = getCellColorScale(row[column], normalizedColumn, thresholdPitchType, selectedSchoolCode);
     if (!colors) return null;
     return { backgroundColor: colors.bg, color: colors.text };
   };
@@ -4381,20 +4772,32 @@ export default function PitchingSuite({
                     placeholder="All"
                   />
                 </label>
-                <label>
-                  Session Type
-                  <SearchableSingleSelect
-                    options={[
-                      { value: '', label: 'All' },
-                      { value: 'Season', label: 'Season' },
-                      { value: 'Bullpen', label: 'Bullpen' },
-                      { value: 'Live BP', label: 'Live BP' },
-                    ]}
-                    value={sessionType}
-                    onChange={setSessionType}
-                    placeholder="All"
-                  />
-                </label>
+                {isPro ? (
+                  <label>
+                    Level
+                    <SearchableSingleSelect
+                      options={toOptions(filters.level_options ?? ['All', 'MLB', 'AAA'])}
+                      value={level}
+                      onChange={setLevel}
+                      placeholder="MLB"
+                    />
+                  </label>
+                ) : (
+                  <label>
+                    Session Type
+                    <SearchableSingleSelect
+                      options={[
+                        { value: '', label: 'All' },
+                        { value: 'Season', label: 'Season' },
+                        { value: 'Bullpen', label: 'Bullpen' },
+                        { value: 'Live BP', label: 'Live BP' },
+                      ]}
+                      value={sessionType}
+                      onChange={setSessionType}
+                      placeholder="All"
+                    />
+                  </label>
+                )}
                 <label>
                   With Video
                   <SearchableSingleSelect
@@ -4665,7 +5068,16 @@ export default function PitchingSuite({
           </div>
           {dashboardPage === 'Summary' || dashboardPage === 'Leaderboard' ? (
             <>
-              <h3>{overviewHeaderLabel}</h3>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <h3 style={{ margin: 0 }}>{overviewHeaderLabel}</h3>
+                {summaryTeamLogoUrl ? (
+                  <img
+                    src={summaryTeamLogoUrl}
+                    alt="Team"
+                    style={{ width: 42, height: 42, objectFit: 'contain', flexShrink: 0 }}
+                  />
+                ) : null}
+              </div>
               {loadingOverview ? <p>Loading pitching data...</p> : null}
               {overview ? (
                 <>
@@ -4797,8 +5209,7 @@ export default function PitchingSuite({
                             width: 220,
                             height: 20,
                             border: '1px solid rgba(255,255,255,0.25)',
-                            background:
-                              'linear-gradient(90deg, #e8eef7 0%, #8eb7e1 20%, #aad3ea 40%, #f0e2aa 62%, #eb7852 82%, #d82f31 100%)',
+                            background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(176,11,52) 100%)',
                           }}
                         />
                         <div style={{ width: 220, display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'rgba(255,255,255,0.92)' }}>
@@ -4886,7 +5297,7 @@ export default function PitchingSuite({
               </>
               ) : null}
 
-              <div className="portal-table-wrap" style={{ marginTop: '1rem' }}>
+              <div className="portal-table-wrap" style={{ marginTop: '1rem', ...(isLeaderboardPage ? { maxHeight: '68vh', overflowY: 'auto' as const } : {}) }}>
                 <div
                   className="portal-form-grid"
                   style={{
@@ -5113,7 +5524,7 @@ export default function PitchingSuite({
                 <table className="portal-table">
                   <thead>
                     <tr>
-                      {isLeaderboardPage ? <th style={{ textAlign: 'center' }}>Rank</th> : null}
+                      {isLeaderboardPage ? <th style={{ textAlign: 'center', position: isLeaderboardPage ? 'sticky' : undefined, top: isLeaderboardPage ? 0 : undefined, zIndex: isLeaderboardPage ? 3 : undefined, background: isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined }}>Rank</th> : null}
                       {displayedTableColumns.map((column, colIndex) => {
                         const isSortable = true;
                         const activeSort = leaderboardSortColumn === column;
@@ -5121,7 +5532,7 @@ export default function PitchingSuite({
                         return (
                           <th
                             key={column}
-                            style={{ textAlign: 'center', cursor: isSortable ? 'pointer' : 'default' }}
+                            style={{ textAlign: 'center', cursor: isSortable ? 'pointer' : 'default', position: isLeaderboardPage ? 'sticky' : undefined, top: isLeaderboardPage ? 0 : undefined, zIndex: isLeaderboardPage ? 3 : undefined, background: isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined }}
                             onClick={
                               isSortable
                                   ? () => {
@@ -5159,11 +5570,14 @@ export default function PitchingSuite({
                             style={isAllRow ? { background: 'rgba(255,255,255,0.12)', fontWeight: 700 } : undefined}
                           >
                             {isLeaderboardPage ? <td style={{ textAlign: 'center' }}>{rankValue}</td> : null}
-                            {displayedTableColumns.map((column) => (
+                            {displayedTableColumns.map((column, colIndex) => (
                               <td
                                 key={`${idx}-${column}`}
                                 style={{
-                                  textAlign: 'center',
+                                  textAlign:
+                                    isLeaderboardPage && leaderboardViewBy === 'Player' && colIndex === 0
+                                      ? (isAllRow ? 'center' : 'left')
+                                      : 'center',
                                   cursor: column === '#' && rowPitches.length ? 'pointer' : undefined,
                                   textDecoration: column === '#' && rowPitches.length ? 'underline' : undefined,
                                 }}
@@ -5174,9 +5588,36 @@ export default function PitchingSuite({
                                   const rawValue = row[column] ?? '-';
                                   const value =
                                     isLeaderboardPage && column === displayedTableColumns[0] && typeof rawValue === 'string'
-                                      ? formatNameFirstLast(rawValue)
+                                      ? (() => {
+                                          const formatted = formatNameFirstLast(rawValue);
+                                          if (leaderboardViewBy !== 'Player') return formatted;
+                                          const key = String(rawValue).trim();
+                                          const keyNorm = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+                                          const formattedNorm = formatted.toLowerCase().replace(/[^a-z0-9]/g, '');
+                                          const teamCode =
+                                            latestTeamByPitcher[key] ??
+                                            latestTeamByPitcher[keyNorm] ??
+                                            latestTeamByPitcher[formatted] ??
+                                            latestTeamByPitcher[formattedNorm] ??
+                                            filterTeamByPitcher[key] ??
+                                            filterTeamByPitcher[keyNorm] ??
+                                            filterTeamByPitcher[formatted] ??
+                                            filterTeamByPitcher[formattedNorm];
+                                          if (!teamCode || key.toLowerCase() === 'all') return formatted;
+                                          const logoUrl = isPro ? getProTeamLogoUrl(teamCode) : '';
+                                          if (!logoUrl) return formatted;
+                                          return (
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                                              <img src={logoUrl} alt={teamCode} style={{ width: 16, height: 16, objectFit: 'contain', display: 'inline-block' }} />
+                                              <span>{formatted}</span>
+                                            </span>
+                                          );
+                                        })()
                                       : rawValue;
-                                  const displayValue = formatTableDisplayValue(column, value);
+                                  const displayValue =
+                                    typeof value === 'string' || typeof value === 'number' || value === null || value === undefined
+                                      ? formatTableDisplayValue(column, value)
+                                      : value;
                                   if (!cellStyle) return displayValue;
                                   return (
                                     <span
@@ -5327,6 +5768,8 @@ export default function PitchingSuite({
                                   resultLabel={pa.result_label}
                                   onPitchClick={(pitch) => openActionModal([pitch])}
                                   pitchColors={pitchColors}
+                                  flipX={isPro}
+                                  isProSchool={isPro}
                                 />
                                 <div className="portal-table-wrap portal-ab-pa-table-wrap" style={{ marginTop: 8 }}>
                                   <table className="portal-table">
@@ -5467,14 +5910,16 @@ export default function PitchingSuite({
 
                     return (
                       <div style={{ position: 'relative' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, marginBottom: 8 }}>
-                          {series.map((entry) => (
-                            <span key={`trend-legend-${entry.session}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.82rem' }}>
-                              <span style={{ width: 14, height: 3, borderRadius: 999, background: entry.color }} />
-                              <span>{entry.session}</span>
-                            </span>
-                          ))}
-                        </div>
+                        {!isPro ? (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, marginBottom: 8 }}>
+                            {series.map((entry) => (
+                              <span key={`trend-legend-${entry.session}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.82rem' }}>
+                                <span style={{ width: 14, height: 3, borderRadius: 999, background: entry.color }} />
+                                <span>{entry.session}</span>
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                         <svg
                           viewBox={`0 0 ${w} ${h}`}
                           style={{
@@ -5524,7 +5969,7 @@ export default function PitchingSuite({
                                         x: event.clientX,
                                         y: event.clientY,
                                         bg: '#111827',
-                                        text: `${entry.session}\n${formatShortDate(row.date)}\n${trendMetric}: ${row.value.toFixed(valueDigits)}${suffix}\nPitches: ${row.pitches ?? row.rowPitches.length}`,
+                                        text: `${!isPro ? `${entry.session}\n` : ''}${formatShortDate(row.date)}\n${trendMetric}: ${row.value.toFixed(valueDigits)}${suffix}\nPitches: ${row.pitches ?? row.rowPitches.length}`,
                                       })
                                     }
                                     onClick={() => {
@@ -5648,8 +6093,7 @@ export default function PitchingSuite({
                             width: 260,
                             height: 20,
                             border: '1px solid rgba(255,255,255,0.25)',
-                            background:
-                              'linear-gradient(90deg, #e8eef7 0%, #8eb7e1 20%, #aad3ea 40%, #f0e2aa 62%, #eb7852 82%, #d82f31 100%)',
+                            background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(176,11,52) 100%)',
                           }}
                         />
                         <div style={{ width: 260, display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'rgba(255,255,255,0.92)' }}>
@@ -6365,7 +6809,7 @@ export default function PitchingSuite({
                                   <line x1={px(-0.88)} y1={py(1.5 + ((3.6 - 1.5) / 3))} x2={px(0.88)} y2={py(1.5 + ((3.6 - 1.5) / 3))} stroke="rgba(255,255,255,0.45)" />
                                   <line x1={px(-0.88)} y1={py(1.5 + (((3.6 - 1.5) * 2) / 3))} x2={px(0.88)} y2={py(1.5 + (((3.6 - 1.5) * 2) / 3))} stroke="rgba(255,255,255,0.45)" />
                                   {points.map((point, idx) => {
-                                    const x = px(Number(point.plate_side));
+                                    const x = px(orientX(Number(point.plate_side)));
                                     const y = py(Number(point.plate_height));
                                     const color = pitchColors[point.pitch_type] ?? '#9ca3af';
                                     const result = resultShape(point.pitch_call, point.play_result);
@@ -6376,13 +6820,13 @@ export default function PitchingSuite({
                                       onMouseLeave: () => setQpLocationsHover(null),
                                       onClick: () => openActionModal([point]),
                                     };
-                                    if (result === 'Ball') return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={5.6} fill="none" stroke={color} strokeWidth={1.6} {...hoverProps} />;
-                                    if (result === 'Foul') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 5} ${x - 4.5},${y + 3.8} ${x + 4.5},${y + 3.8}`} fill="none" stroke={color} strokeWidth={1.6} {...hoverProps} />;
-                                    if (result === 'Whiff') return <text key={`qpl-pt-${idx}`} x={x} y={y + 4} fontSize={11} textAnchor="middle" fill={color} {...hoverProps}>★</text>;
-                                    if (result === 'In Play (Out)') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 5} ${x - 4.5},${y + 3.8} ${x + 4.5},${y + 3.8}`} fill={color} {...hoverProps} />;
-                                    if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={`qpl-pt-${idx}`} x={x - 4.3} y={y - 4.3} width={8.6} height={8.6} fill={color} {...hoverProps} />;
-                                    if (result === 'Error') return <rect key={`qpl-pt-${idx}`} x={x - 4.3} y={y - 4.3} width={8.6} height={8.6} fill="none" stroke={color} strokeWidth={1.5} {...hoverProps} />;
-                                    return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={5.5} fill={color} {...hoverProps} />;
+                                    if (result === 'Ball') return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={7.4} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={1.9} {...hoverProps} />;
+                                    if (result === 'Foul') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 6.7} ${x - 6.0},${y + 5.1} ${x + 6.0},${y + 5.1}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={1.9} {...hoverProps} />;
+                                    if (result === 'Whiff') return <text key={`qpl-pt-${idx}`} x={x} y={y + 5.3} fontSize={17} textAnchor="middle" fill={color} {...hoverProps}>★</text>;
+                                    if (result === 'In Play (Out)') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 6.7} ${x - 6.0},${y + 5.1} ${x + 6.0},${y + 5.1}`} fill={color} {...hoverProps} />;
+                                    if (result === 'In Play (Hit)' || result === 'Single' || result === 'Double' || result === 'Triple' || result === 'HomeRun') return <rect key={`qpl-pt-${idx}`} x={x - 5.7} y={y - 5.7} width={11.4} height={11.4} fill={color} {...hoverProps} />;
+                                    if (result === 'Error') return <rect key={`qpl-pt-${idx}`} x={x - 5.7} y={y - 5.7} width={11.4} height={11.4} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={1.8} {...hoverProps} />;
+                                    return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={7.2} fill={color} {...hoverProps} />;
                                   })}
                                 </svg>
                               </div>
@@ -6474,9 +6918,20 @@ export default function PitchingSuite({
                               .map((r) => (
                                 <line key={`v1-avg-${r.pitch_type}`} x1={m.l} y1={py(Number(r.avg_velo))} x2={w - m.r} y2={py(Number(r.avg_velo))} stroke={pitchColors[r.pitch_type] ?? '#9ca3af'} strokeWidth={1.1} opacity={0.8} />
                               ))}
-                            {velocityMainData.inningBoundaries.map((v) => (
-                              <line key={`v1-bound-${v}`} x1={px(v)} y1={m.t} x2={px(v)} y2={h - m.b} stroke="rgba(255,255,255,0.5)" strokeDasharray="4,4" />
-                            ))}
+                            {velocityMainData.showInningBoundaries
+                              ? velocityMainData.inningBoundaries.map((v) => (
+                                  <line
+                                    key={`v1-bound-${v}`}
+                                    x1={px(v)}
+                                    y1={m.t}
+                                    x2={px(v)}
+                                    y2={h - m.b}
+                                    stroke="rgba(255,255,255,0.92)"
+                                    strokeDasharray="6,6"
+                                    strokeWidth={1.5}
+                                  />
+                                ))
+                              : null}
                             {pts.map((p) => {
                               const x = px(p.pitch_count);
                               const y = py(Number(p.velo));
@@ -7047,7 +7502,7 @@ export default function PitchingSuite({
                     <div>rTilt: {formatTiltClock(currentActionPitch.release_tilt)}</div>
                     <div>bTilt: {formatTiltClock(currentActionPitch.break_tilt)}</div>
                     <div>Height: {fmtNum(currentActionPitch.release_height, 1)}</div>
-                    <div>Side: {fmtNum(currentActionPitch.release_side, 1)}</div>
+                    <div>Side: {typeof currentActionPitch.release_side === 'number' ? fmtNum(orientX(currentActionPitch.release_side), 1) : '-'}</div>
                     <div style={{ display: 'grid', justifyContent: 'center', marginTop: 8 }}>
                       <svg viewBox="0 0 240 252" style={{ width: 120, height: 126 }}>
                         <rect x={40} y={45} width={160} height={120} fill="none" stroke="#111827" strokeWidth="6" />

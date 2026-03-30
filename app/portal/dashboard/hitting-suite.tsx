@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
@@ -11,6 +12,7 @@ type HittingFiltersPayload = {
   min_date: string | null;
   max_date: string | null;
   team_types?: string[];
+  level_options?: string[];
   hitters: string[];
   opp_pitchers: string[];
   hands: string[];
@@ -33,6 +35,8 @@ type ChartPoint = {
   session_date: string | null;
   pitcher: string;
   batter: string;
+  pitcher_team_code?: string;
+  batter_team_code?: string;
   pitcherthrows: string;
   batterside: string;
   pitch_type: string;
@@ -43,8 +47,13 @@ type ChartPoint = {
   rel_speed: number | null;
   exit_speed: number | null;
   angle: number | null;
+  run_value?: number | null;
+  estimated_woba_using_speedangle?: number | null;
+  estimated_ba_using_speedangle?: number | null;
   distance: number | null;
   direction: number | null;
+  hc_x?: number | null;
+  hc_y?: number | null;
   plate_side: number | null;
   plate_height: number | null;
   contact_position_x?: number | null;
@@ -169,6 +178,23 @@ const RESULT_LABELS: Record<string, string> = {
   'In Play (Hit)': 'In Play (Hit)',
   Error: 'Error',
 };
+const SPRAY_RESULT_ORDER = ['Single', 'Double', 'Triple', 'HomeRun', 'Out', 'Error'] as const;
+const SPRAY_RESULT_LABELS: Record<(typeof SPRAY_RESULT_ORDER)[number], string> = {
+  Single: 'Single',
+  Double: 'Double',
+  Triple: 'Triple',
+  HomeRun: 'Home Run',
+  Out: 'Out',
+  Error: 'Error',
+};
+const SPRAY_RESULT_COLORS: Record<(typeof SPRAY_RESULT_ORDER)[number], string> = {
+  Single: '#34d399',
+  Double: '#60a5fa',
+  Triple: '#c084fc',
+  HomeRun: '#f87171',
+  Out: '#e5e7eb',
+  Error: '#f59e0b',
+};
 const SPLIT_BY_DEFAULT = 'Pitch Types';
 const TABLE_MODE_DEFAULT = 'Results';
 const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
@@ -268,29 +294,29 @@ function reorderColumns(columns: string[], fromIndex: number, toIndex: number): 
 }
 
 function markerForResult(resultLabel: string, x: number, y: number, color: string, key: string) {
-  const strokeWidth = 1.8;
-  const r = 5.5;
+  const strokeWidth = 2.2;
+  const r = 7.6;
   switch (resultLabel) {
     case 'Ball':
-      return <circle key={key} cx={x} cy={y} r={r} fill="none" stroke={color} strokeWidth={strokeWidth} />;
+      return <circle key={key} cx={x} cy={y} r={r} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={strokeWidth} />;
     case 'Foul': {
-      const pts = `${x},${y - 7} ${x - 6.5},${y + 5.5} ${x + 6.5},${y + 5.5}`;
-      return <polygon key={key} points={pts} fill="none" stroke={color} strokeWidth={strokeWidth} />;
+      const pts = `${x},${y - 9.5} ${x - 8.8},${y + 7.4} ${x + 8.8},${y + 7.4}`;
+      return <polygon key={key} points={pts} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={strokeWidth} />;
     }
     case 'Whiff':
       return (
-        <text key={key} x={x} y={y + 5.5} fill={color} fontSize="28" fontWeight={700} textAnchor="middle" dominantBaseline="middle">
+        <text key={key} x={x} y={y + 7.2} fill={color} fontSize="36" fontWeight={700} textAnchor="middle" dominantBaseline="middle">
           *
         </text>
       );
     case 'In Play (Out)': {
-      const pts = `${x},${y - 7} ${x - 6.5},${y + 5.5} ${x + 6.5},${y + 5.5}`;
+      const pts = `${x},${y - 9.5} ${x - 8.8},${y + 7.4} ${x + 8.8},${y + 7.4}`;
       return <polygon key={key} points={pts} fill={color} stroke={color} strokeWidth={1.2} />;
     }
     case 'In Play (Hit)':
-      return <rect key={key} x={x - 5} y={y - 5} width={10} height={10} fill={color} stroke={color} strokeWidth={1.2} />;
+      return <rect key={key} x={x - 6.8} y={y - 6.8} width={13.6} height={13.6} fill={color} stroke={color} strokeWidth={1.6} />;
     case 'Error':
-      return <rect key={key} x={x - 5.5} y={y - 5.5} width={11} height={11} fill="none" stroke={color} strokeWidth={strokeWidth} />;
+      return <rect key={key} x={x - 7.4} y={y - 7.4} width={14.8} height={14.8} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={strokeWidth} />;
     default:
       return <circle key={key} cx={x} cy={y} r={r} fill={color} stroke={color} strokeWidth={1.2} />;
   }
@@ -362,7 +388,7 @@ function pickDefaultTeamType(teamTypes: string[] | undefined, schoolCode: string
   const cleaned = teamTypes.map((value) => String(value ?? '').trim()).filter(Boolean);
   if (cleaned.length === 0) return 'All';
   const school = String(schoolCode ?? '').trim();
-  if (school.toUpperCase() === 'LEAGUE') return 'All';
+  if (school.toUpperCase() === 'LEAGUE' || school.toUpperCase() === 'PRO') return 'All';
   const schoolNorm = school.toUpperCase();
   const exactSchool = cleaned.find((value) => value === school);
   if (exactSchool) return exactSchool;
@@ -418,15 +444,6 @@ function evBin(value: number | null | undefined): (typeof EV_BINS)[number] {
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const rgb = (r: number, g: number, b: number) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
-function shinyHeatSequential(tRaw: number): string {
-  const t = Math.max(0, Math.min(1, tRaw));
-  if (t < 0.2) return rgb(lerp(232, 142, t / 0.2), lerp(238, 183, t / 0.2), lerp(247, 225, t / 0.2));
-  if (t < 0.45) return rgb(lerp(142, 170, (t - 0.2) / 0.25), lerp(183, 211, (t - 0.2) / 0.25), lerp(225, 235, (t - 0.2) / 0.25));
-  if (t < 0.7) return rgb(lerp(170, 240, (t - 0.45) / 0.25), lerp(211, 218, (t - 0.45) / 0.25), lerp(235, 154, (t - 0.45) / 0.25));
-  if (t < 0.88) return rgb(lerp(240, 235, (t - 0.7) / 0.18), lerp(218, 120, (t - 0.7) / 0.18), lerp(154, 82, (t - 0.7) / 0.18));
-  return rgb(lerp(235, 216, (t - 0.88) / 0.12), lerp(120, 43, (t - 0.88) / 0.12), lerp(82, 52, (t - 0.88) / 0.12));
-}
-
 function divergingColor(value: number, min: number, mid: number, max: number): string {
   if (!Number.isFinite(value)) return 'rgba(255,255,255,0.08)';
   if (value <= mid) {
@@ -439,8 +456,50 @@ function divergingColor(value: number, min: number, mid: number, max: number): s
 
 function sequentialColor(value: number, min: number, max: number): string {
   if (!Number.isFinite(value)) return 'rgba(255,255,255,0.08)';
-  const t = Math.max(0, Math.min(1, (value - min) / Math.max(1e-9, max - min)));
-  return shinyHeatSequential(t);
+  const mid = min + (max - min) * 0.5;
+  return divergingColor(value, min, mid, max);
+}
+
+function normalizePitchTypeName(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]): { min: number; mid: number; max: number } | null {
+  const metric = String(metricRaw ?? '').trim();
+  const selectedPitchTypes = selectedPitchTypesRaw
+    .map((value) => normalizePitchTypeName(value))
+    .filter((value) => value && value !== 'all');
+
+  if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
+  if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
+  if (metric === 'Whiff Rate') {
+    if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
+    const pt = selectedPitchTypes[0];
+    if (pt === 'fastball') return { min: 10, mid: 20, max: 30 };
+    if (pt === 'sinker') return { min: 5, mid: 12.5, max: 20 };
+    return { min: 20, mid: 32.5, max: 45 };
+  }
+  if (metric === 'Swing Rate') return { min: 20, mid: 50, max: 80 };
+  if (metric === 'GB Rate') {
+    if (selectedPitchTypes.length !== 1) return { min: 35, mid: 45, max: 55 };
+    const pt = selectedPitchTypes[0];
+    if (pt === 'sinker') return { min: 43, mid: 54, max: 65 };
+    if (pt === 'fastball') return { min: 31, mid: 39, max: 47 };
+    if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pt)) return { min: 36, mid: 43, max: 50 };
+    if (['changeup', 'splitter'].includes(pt)) return { min: 35, mid: 47, max: 59 };
+    return { min: 35, mid: 45, max: 55 };
+  }
+  if (metric === 'Contact Rate') {
+    if (selectedPitchTypes.length !== 1) return { min: 60, mid: 75, max: 90 };
+    const pt = selectedPitchTypes[0];
+    if (pt === 'fastball') return { min: 70, mid: 80, max: 90 };
+    if (pt === 'sinker') return { min: 80, mid: 87.5, max: 95 };
+    return { min: 55, mid: 67.5, max: 80 };
+  }
+  return null;
 }
 
 function SearchableSingleSelect({
@@ -605,11 +664,21 @@ async function ensurePlotlyLoaded(): Promise<void> {
 function LocationChart({
   title,
   points,
+  displayView,
+  selectedPitchTypes,
+  strictRunValue,
+  viewOptions,
+  onViewChange,
   onPointHover,
   onPointLeave,
 }: {
   title: string;
   points: ChartPoint[];
+  displayView: string;
+  selectedPitchTypes: string[];
+  strictRunValue: boolean;
+  viewOptions: OptionItem[];
+  onViewChange: (next: string) => void;
   onPointHover: (hover: Exclude<ChartHover, null>) => void;
   onPointLeave: () => void;
 }) {
@@ -638,12 +707,147 @@ function LocationChart({
   const greenHalf = 7 / 12;
 
   const inZone = points.filter((p) => parseNumber(p.plate_side) !== null && parseNumber(p.plate_height) !== null);
+  const cells = displayView === 'Pitch' ? [] : buildHeatCells(inZone, displayView, strictRunValue);
+  const values = cells.map((cell) => cell.value).sort((a, b) => a - b);
+  const densityMax = Math.max(1e-9, ...cells.map((cell) => cell.density));
+  const dynamicMinVal = values.length ? values[0] : 0;
+  const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
+  const dynamicMidVal = values.length ? values[Math.floor(values.length / 2)] : 0;
+  const fixedScale = getHeatmapFixedScale(displayView, selectedPitchTypes);
+  const contactVisibilityScale = displayView === 'Contact Rate' ? getHeatmapFixedScale('Whiff Rate', selectedPitchTypes) : null;
+  const minVal = fixedScale?.min ?? dynamicMinVal;
+  const maxVal = fixedScale?.max ?? dynamicMaxVal;
+  const midVal = fixedScale?.mid ?? dynamicMidVal;
+  const rvMin = -5;
+  const rvMax = 5;
+  const zoom = displayView === 'Pitch' ? 1 : 1.2;
+  const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
+  const idBase = title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
   return (
     <div className="dashboard-panel" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <h4 style={{ margin: 0, textAlign: 'center' }}>{title}</h4>
+      <div style={{ display: 'grid', justifyItems: 'center' }}>
+        <div style={{ width: '100%', maxWidth: 260 }}>
+          <SearchableSingleSelect options={viewOptions} value={displayView} onChange={onViewChange} placeholder="Pitch" />
+        </div>
+      </div>
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 340, border: '1px solid rgba(255,255,255,0.14)', borderRadius: 10 }}>
-        <rect x={xScale(midX - greenHalf)} y={yScale(midY + greenHalf)} width={xScale(midX + greenHalf) - xScale(midX - greenHalf)} height={yScale(midY - greenHalf) - yScale(midY + greenHalf)} fill="rgba(80,220,120,0.16)" />
+        <defs>
+          <clipPath id={`hitting-loc-zoom-clip-${idBase}`}>
+            <rect x={0} y={0} width={w} height={h} />
+          </clipPath>
+          <filter id={`hitting-loc-heat-blur-${idBase}`} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="1.2" />
+          </filter>
+          <filter id={`hitting-loc-heat-blur-rv-${idBase}`} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="0.75" />
+          </filter>
+        </defs>
+        <g transform={zoomTransform} clipPath={`url(#hitting-loc-zoom-clip-${idBase})`}>
+        {displayView !== 'Pitch' ? (
+          <>
+            <g filter={displayView === 'Run Values' ? `url(#hitting-loc-heat-blur-rv-${idBase})` : `url(#hitting-loc-heat-blur-${idBase})`}>
+              {cells.map((cell) => {
+                if (!Number.isFinite(cell.value)) return null;
+                const cx = xScale(cell.x + cell.w / 2);
+                const cy = yScale(cell.y + cell.h / 2);
+                const radius = Math.max(2.0, cell.w * ((w - pad * 2) / (xMax - xMin)) * 1.45);
+                const densityNorm = Math.max(0, Math.min(1, cell.density / densityMax));
+                let fill = 'rgba(255,255,255,0.12)';
+                if (displayView === 'Frequency') fill = sequentialColor(cell.value, minVal, maxVal);
+                else if (displayView === 'Run Values') fill = divergingColor(Math.max(rvMin, Math.min(rvMax, cell.value)), rvMin, 0, rvMax);
+                else fill = divergingColor(cell.value, minVal, midVal, maxVal);
+                const normalized =
+                  displayView === 'Run Values'
+                    ? Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) / rvMax
+                    : displayView === 'Contact Rate' && contactVisibilityScale
+                      ? Math.max(
+                          0,
+                          Math.min(
+                            1,
+                            ((100 - cell.value) - contactVisibilityScale.min) /
+                              Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min)
+                          )
+                        )
+                      : Math.max(0, Math.min(1, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal)));
+                const runValueBoost = displayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
+                const isSwingRateView = displayView === 'Swing Rate';
+                if (displayView !== 'Frequency' && displayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+                if (displayView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                if (displayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) < 0.15) return null;
+                return (
+                  <circle
+                    key={`loc-heat-${cell.x}-${cell.y}`}
+                    cx={cx}
+                    cy={cy}
+                    r={radius}
+                    fill={fill}
+                    opacity={
+                      displayView === 'Run Values'
+                        ? Math.max(0.06, runValueBoost * 1.15 * Math.max(0.45, densityNorm))
+                        : Math.max(0.3, runValueBoost * 1.25 * (displayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                    }
+                  />
+                );
+              })}
+            </g>
+            {cells.map((cell) => {
+              if (!Number.isFinite(cell.value)) return null;
+              const cx = xScale(cell.x + cell.w / 2);
+              const cy = yScale(cell.y + cell.h / 2);
+              const radius = Math.max(1.0, cell.w * ((w - pad * 2) / (xMax - xMin)) * 0.75);
+              const densityNorm = Math.max(0, Math.min(1, cell.density / densityMax));
+              let fill = 'rgba(255,255,255,0.12)';
+              if (displayView === 'Frequency') fill = sequentialColor(cell.value, minVal, maxVal);
+              else if (displayView === 'Run Values') fill = divergingColor(Math.max(rvMin, Math.min(rvMax, cell.value)), rvMin, 0, rvMax);
+              else fill = divergingColor(cell.value, minVal, midVal, maxVal);
+              const normalized =
+                displayView === 'Run Values'
+                  ? Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) / rvMax
+                  : displayView === 'Contact Rate' && contactVisibilityScale
+                    ? Math.max(
+                        0,
+                        Math.min(
+                          1,
+                          ((100 - cell.value) - contactVisibilityScale.min) /
+                            Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min)
+                        )
+                      )
+                    : Math.max(0, Math.min(1, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal)));
+              const runValueBoost = displayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
+              const isSwingRateView = displayView === 'Swing Rate';
+              if (displayView !== 'Frequency' && displayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+              if (displayView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+              if (displayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) < 0.15) return null;
+              return (
+                <circle
+                  key={`loc-heat-core-${cell.x}-${cell.y}`}
+                  cx={cx}
+                  cy={cy}
+                  r={radius}
+                  fill={fill}
+                  opacity={
+                    displayView === 'Run Values'
+                      ? Math.max(0.04, runValueBoost * 0.7 * Math.max(0.45, densityNorm))
+                      : Math.max(0.2, runValueBoost * 0.72 * (displayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                  }
+                  onMouseMove={(event) =>
+                    onPointHover({
+                      x: event.clientX,
+                      y: event.clientY,
+                      text: `${displayView}: ${cell.value.toFixed(displayView === 'xWOBA' ? 3 : (displayView === 'Run Values' || displayView === 'Exit Velocity' ? 2 : 1))}`,
+                    })
+                  }
+                  onMouseLeave={onPointLeave}
+                />
+              );
+            })}
+          </>
+        ) : null}
+        {displayView === 'Pitch' ? (
+          <rect x={xScale(midX - greenHalf)} y={yScale(midY + greenHalf)} width={xScale(midX + greenHalf) - xScale(midX - greenHalf)} height={yScale(midY - greenHalf) - yScale(midY + greenHalf)} fill="rgba(80,220,120,0.16)" />
+        ) : null}
         <rect x={xScale(zoneLeft)} y={yScale(zoneTop)} width={xScale(zoneRight) - xScale(zoneLeft)} height={yScale(zoneBottom) - yScale(zoneTop)} fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth="1.2" />
         <line x1={xScale(zoneLeft + (zoneRight - zoneLeft) / 3)} y1={yScale(zoneBottom)} x2={xScale(zoneLeft + (zoneRight - zoneLeft) / 3)} y2={yScale(zoneTop)} stroke="rgba(255,255,255,0.4)" strokeWidth="0.8" />
         <line x1={xScale(zoneLeft + (zoneRight - zoneLeft) * 2 / 3)} y1={yScale(zoneBottom)} x2={xScale(zoneLeft + (zoneRight - zoneLeft) * 2 / 3)} y2={yScale(zoneTop)} stroke="rgba(255,255,255,0.4)" strokeWidth="0.8" />
@@ -660,45 +864,50 @@ function LocationChart({
         <line x1={xScale(zoneRight)} y1={yScale(midY)} x2={xScale(compRight)} y2={yScale(midY)} stroke="rgba(255,255,255,0.58)" strokeWidth="1" />
         <line x1={xScale(midX)} y1={yScale(compBottom)} x2={xScale(midX)} y2={yScale(zoneBottom)} stroke="rgba(255,255,255,0.58)" strokeWidth="1" />
         <line x1={xScale(midX)} y1={yScale(zoneTop)} x2={xScale(midX)} y2={yScale(compTop)} stroke="rgba(255,255,255,0.58)" strokeWidth="1" />
-        {inZone.map((point, idx) => {
-          const ps = parseNumber(point.plate_side);
-          const ph = parseNumber(point.plate_height);
-          if (ps === null || ph === null) return null;
-          const x = xScale(ps);
-          const y = yScale(ph);
-          const color = PITCH_COLORS[point.pitch_type] ?? PITCH_COLORS.Undefined;
-          const tip = [
-            point.pitch_type,
-            point.result_label,
-            point.rel_speed ? `${point.rel_speed.toFixed(1)} mph` : 'Velo: —',
-            point.exit_speed ? `EV ${point.exit_speed.toFixed(1)}` : 'EV: —',
-            point.angle ? `LA ${point.angle.toFixed(1)}` : 'LA: —',
-          ].join('\n');
-          return (
-            <g
-              key={`pt-${idx}`}
-              onMouseEnter={(event) =>
-                onPointHover({
-                  x: event.clientX,
-                  y: event.clientY,
-                  text: tip,
-                  bg: color,
-                })
-              }
-              onMouseMove={(event) =>
-                onPointHover({
-                  x: event.clientX,
-                  y: event.clientY,
-                  text: tip,
-                  bg: color,
-                })
-              }
-              onMouseLeave={onPointLeave}
-            >
-              {markerForResult(point.result_label, x, y, color, `m-${idx}`)}
-            </g>
-          );
-        })}
+        {displayView === 'Pitch'
+          ? inZone.map((point, idx) => {
+              const ps = parseNumber(point.plate_side);
+              const ph = parseNumber(point.plate_height);
+              if (ps === null || ph === null) return null;
+              const x = xScale(ps);
+              const y = yScale(ph);
+              const color = PITCH_COLORS[point.pitch_type] ?? PITCH_COLORS.Undefined;
+              const tip = [
+                `Pitcher: ${formatNameFirstLast(String(point.pitcher || '')) || '-'}`,
+                `Batter: ${formatNameFirstLast(String(point.batter || '')) || '-'}`,
+                point.pitch_type,
+                point.result_label,
+                point.rel_speed ? `${point.rel_speed.toFixed(1)} mph` : 'Velo: —',
+                point.exit_speed ? `EV ${point.exit_speed.toFixed(1)}` : 'EV: —',
+                point.angle ? `LA ${point.angle.toFixed(1)}` : 'LA: —',
+              ].join('\n');
+              return (
+                <g
+                  key={`pt-${idx}`}
+                  onMouseEnter={(event) =>
+                    onPointHover({
+                      x: event.clientX,
+                      y: event.clientY,
+                      text: tip,
+                      bg: color,
+                    })
+                  }
+                  onMouseMove={(event) =>
+                    onPointHover({
+                      x: event.clientX,
+                      y: event.clientY,
+                      text: tip,
+                      bg: color,
+                    })
+                  }
+                  onMouseLeave={onPointLeave}
+                >
+                  {markerForResult(point.result_label, x, y, color, `m-${idx}`)}
+                </g>
+              );
+            })
+          : null}
+        </g>
       </svg>
     </div>
   );
@@ -759,6 +968,8 @@ function AbPaChart({
     const resultPart = resolveAbPitchResult(pitch);
     return [
       `Pitch #${idx + 1}`,
+      `Pitcher: ${formatNameFirstLast(String(pitch.pitcher || '')) || '-'}`,
+      `Batter: ${formatNameFirstLast(String(pitch.batter || '')) || '-'}`,
       `${pitch.pitch_type || 'Pitch'}`,
       `Velo: ${velo !== null && velo !== undefined ? velo.toFixed(1) : '-'} mph`,
       `IVB: ${ivb !== null && ivb !== undefined ? ivb.toFixed(1) : '-'}`,
@@ -830,14 +1041,14 @@ function AbPaChart({
                   });
                 }}
               >
-                {shape === 'Ball' ? <circle cx={x} cy={y} r={5.6} fill="none" stroke={color} strokeWidth={2} /> : null}
-                {shape === 'Called Strike' ? <circle cx={x} cy={y} r={5.4} fill={color} stroke={color} strokeWidth={1.5} /> : null}
-                {shape === 'Foul' ? <polygon points={`${x},${y - 6} ${x - 5.2},${y + 4.6} ${x + 5.2},${y + 4.6}`} fill="none" stroke={color} strokeWidth={1.8} /> : null}
-                {shape === 'Whiff' ? <text x={x} y={y + 4.8} fontSize={14} textAnchor="middle" fill={color}>★</text> : null}
-                {shape === 'In Play (Out)' ? <polygon points={`${x},${y - 6} ${x - 5.2},${y + 4.6} ${x + 5.2},${y + 4.6}`} fill={color} /> : null}
-                {shape === 'In Play (Hit)' ? <rect x={x - 5.2} y={y - 5.2} width={10.4} height={10.4} fill={color} /> : null}
-                {shape === 'Error' ? <rect x={x - 5.2} y={y - 5.2} width={10.4} height={10.4} fill="none" stroke={color} strokeWidth={1.8} /> : null}
-                {shape === '' ? <circle cx={x} cy={y} r={5.2} fill={color} /> : null}
+                {shape === 'Ball' ? <circle cx={x} cy={y} r={7.6} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.2} /> : null}
+                {shape === 'Called Strike' ? <circle cx={x} cy={y} r={7.3} fill={color} stroke={color} strokeWidth={1.8} /> : null}
+                {shape === 'Foul' ? <polygon points={`${x},${y - 8.1} ${x - 7.1},${y + 6.2} ${x + 7.1},${y + 6.2}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.1} /> : null}
+                {shape === 'Whiff' ? <text x={x} y={y + 6.3} fontSize={20} textAnchor="middle" fill={color}>★</text> : null}
+                {shape === 'In Play (Out)' ? <polygon points={`${x},${y - 8.1} ${x - 7.1},${y + 6.2} ${x + 7.1},${y + 6.2}`} fill={color} /> : null}
+                {shape === 'In Play (Hit)' ? <rect x={x - 7.1} y={y - 7.1} width={14.2} height={14.2} fill={color} /> : null}
+                {shape === 'Error' ? <rect x={x - 7.1} y={y - 7.1} width={14.2} height={14.2} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.1} /> : null}
+                {shape === '' ? <circle cx={x} cy={y} r={7.0} fill={color} /> : null}
                 <text x={x} y={y - 8} fontSize={11} textAnchor="middle" fill="white" stroke="rgba(0,0,0,0.55)" strokeWidth={0.6}>
                   {i + 1}
                 </text>
@@ -875,10 +1086,14 @@ function AbPaChart({
 
 function SprayChart({
   points,
+  view,
+  onViewChange,
   onPointHover,
   onPointLeave,
 }: {
   points: ChartPoint[];
+  view: 'Batted Balls' | 'Bins';
+  onViewChange: (next: 'Batted Balls' | 'Bins') => void;
   onPointHover: (hover: Exclude<ChartHover, null>) => void;
   onPointLeave: () => void;
 }) {
@@ -899,16 +1114,111 @@ function SprayChart({
   const livePoints = points
     .filter((p) => (p.pitch_call || '') === 'InPlay')
     .map((p) => {
+      const hcX = parseNumber((p as ChartPoint & { hc_x?: number | null }).hc_x ?? null);
+      const hcY = parseNumber((p as ChartPoint & { hc_y?: number | null }).hc_y ?? null);
       const direction = parseNumber(p.direction);
       const distance = parseNumber(p.distance);
-      if (direction === null || distance === null) return null;
-      const mapped = (direction * 110) / 90;
-      const rad = (mapped * Math.PI) / 180;
-      const x = distance * Math.sin(rad);
-      const y = distance * Math.cos(rad);
+      let x: number | null = null;
+      let y: number | null = null;
+
+      // Preferred Statcast path: use hit coordinates for spray angle vector and
+      // hit_distance_sc for radial distance.
+      if (hcX !== null && hcY !== null) {
+        const vx = hcX - 125.42;
+        const vy = 198.27 - hcY;
+        const mag = Math.hypot(vx, vy);
+        if (mag > 0.001) {
+          if (distance !== null) {
+            x = (vx / mag) * distance;
+            y = (vy / mag) * distance;
+          } else {
+            // Coordinate-only fallback if distance missing.
+            x = vx * 2;
+            y = vy * 2;
+          }
+        }
+      }
+
+      // Legacy direction/distance path.
+      if ((x === null || y === null) && direction !== null && distance !== null) {
+        const mapped = (direction * 110) / 90;
+        const rad = (mapped * Math.PI) / 180;
+        x = distance * Math.sin(rad);
+        y = distance * Math.cos(rad);
+      }
+      if (x === null || y === null) return null;
       return { ...p, x, y };
     })
     .filter((p): p is ChartPoint & { x: number; y: number } => p !== null);
+  const pointsWithPolar = livePoints.map((point) => {
+    const angleDeg = (Math.atan2(point.x, point.y) * 180) / Math.PI;
+    const distanceFt = Math.hypot(point.x, point.y);
+    return { ...point, angleDeg, distanceFt };
+  });
+  type SprayBin = {
+    key: string;
+    group: 'Infield' | 'Outfield';
+    label: string;
+    angleMin: number;
+    angleMax: number;
+    rInner: number;
+    rOuter: number;
+  };
+  const sprayBins: SprayBin[] = [
+    { key: 'infield-left', group: 'Infield', label: 'L', angleMin: -45, angleMax: -15, rInner: 0, rOuter: 130 },
+    { key: 'infield-center', group: 'Infield', label: 'C', angleMin: -15, angleMax: 15, rInner: 0, rOuter: 130 },
+    { key: 'infield-right', group: 'Infield', label: 'R', angleMin: 15, angleMax: 45, rInner: 0, rOuter: 130 },
+    { key: 'outfield-left', group: 'Outfield', label: 'L', angleMin: -45, angleMax: -15, rInner: 150, rOuter: 420 },
+    { key: 'outfield-center', group: 'Outfield', label: 'C', angleMin: -15, angleMax: 15, rInner: 150, rOuter: 420 },
+    { key: 'outfield-right', group: 'Outfield', label: 'R', angleMin: 15, angleMax: 45, rInner: 150, rOuter: 420 },
+  ];
+  const infieldTotal = pointsWithPolar.filter((point) => point.distanceFt <= 138).length;
+  const outfieldTotal = pointsWithPolar.length - infieldTotal;
+  const binStats = sprayBins.map((bin) => {
+    const count = pointsWithPolar.filter(
+      (point) =>
+        point.distanceFt > bin.rInner &&
+        point.distanceFt <= bin.rOuter &&
+        point.angleDeg >= bin.angleMin &&
+        point.angleDeg < bin.angleMax
+    ).length;
+    const denominator = bin.group === 'Infield' ? infieldTotal : outfieldTotal;
+    const pct = denominator > 0 ? (count / denominator) * 100 : 0;
+    return { ...bin, count, pct };
+  });
+  const infieldPcts = binStats.filter((bin) => bin.group === 'Infield').map((bin) => bin.pct);
+  const outfieldPcts = binStats.filter((bin) => bin.group === 'Outfield').map((bin) => bin.pct);
+  const infieldMinPct = infieldPcts.length ? Math.min(...infieldPcts) : 0;
+  const infieldMaxPct = infieldPcts.length ? Math.max(...infieldPcts) : 0;
+  const outfieldMinPct = outfieldPcts.length ? Math.min(...outfieldPcts) : 0;
+  const outfieldMaxPct = outfieldPcts.length ? Math.max(...outfieldPcts) : 0;
+  const colorForBin = (pct: number, group: 'Infield' | 'Outfield') => {
+    const min = group === 'Infield' ? infieldMinPct : outfieldMinPct;
+    const max = group === 'Infield' ? infieldMaxPct : outfieldMaxPct;
+    if (max - min < 1e-6) return 'rgb(248, 248, 248)';
+    return divergingColor(pct, min, min + (max - min) * 0.5, max);
+  };
+  const ringSlicePath = (rInner: number, rOuter: number, angleMin: number, angleMax: number) => {
+    const outerStart = { x: rOuter * Math.sin((angleMin * Math.PI) / 180), y: rOuter * Math.cos((angleMin * Math.PI) / 180) };
+    const outerEnd = { x: rOuter * Math.sin((angleMax * Math.PI) / 180), y: rOuter * Math.cos((angleMax * Math.PI) / 180) };
+    const innerStart = { x: rInner * Math.sin((angleMax * Math.PI) / 180), y: rInner * Math.cos((angleMax * Math.PI) / 180) };
+    const innerEnd = { x: rInner * Math.sin((angleMin * Math.PI) / 180), y: rInner * Math.cos((angleMin * Math.PI) / 180) };
+    const largeArc = Math.abs(angleMax - angleMin) > 180 ? 1 : 0;
+    return [
+      `M ${xScale(outerStart.x)} ${yScale(outerStart.y)}`,
+      `A ${Math.abs(xScale(rOuter) - xScale(0))} ${Math.abs(xScale(rOuter) - xScale(0))} 0 ${largeArc} 1 ${xScale(outerEnd.x)} ${yScale(outerEnd.y)}`,
+      `L ${xScale(innerStart.x)} ${yScale(innerStart.y)}`,
+      `A ${Math.abs(xScale(rInner) - xScale(0))} ${Math.abs(xScale(rInner) - xScale(0))} 0 ${largeArc} 0 ${xScale(innerEnd.x)} ${yScale(innerEnd.y)}`,
+      'Z',
+    ].join(' ');
+  };
+  const labelPoint = (bin: SprayBin) => {
+    const angleMid = ((bin.angleMin + bin.angleMax) / 2) * (Math.PI / 180);
+    const infieldLabelRadius = 148;
+    const outfieldLabelRadius = 435;
+    const radius = bin.group === 'Infield' ? infieldLabelRadius : outfieldLabelRadius;
+    return { x: xScale(radius * Math.sin(angleMid)), y: yScale(radius * Math.cos(angleMid)) };
+  };
 
   const outcomeColor = (playResult: string) => {
     const normalized = resultLabelForSwing(playResult);
@@ -972,7 +1282,30 @@ function SprayChart({
   return (
     <div className="dashboard-panel" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <h4 style={{ margin: 0, textAlign: 'center' }}>Spray Chart</h4>
+      <div style={{ width: '100%', maxWidth: 240, margin: '0 auto' }}>
+        <SearchableSingleSelect
+          options={[
+            { value: 'Batted Balls', label: 'Batted Balls' },
+            { value: 'Bins', label: 'Bins' },
+          ]}
+          value={view}
+          onChange={(next) => onViewChange(next as 'Batted Balls' | 'Bins')}
+          placeholder="Batted Balls"
+        />
+      </div>
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 340, border: '1px solid rgba(255,255,255,0.14)', borderRadius: 10 }}>
+        {view === 'Bins'
+          ? binStats.map((bin) => (
+              <path
+                key={`spray-bin-${bin.key}`}
+                d={ringSlicePath(bin.rInner, bin.rOuter, bin.angleMin, bin.angleMax)}
+                fill={colorForBin(bin.pct, bin.group)}
+                opacity={0.45}
+                stroke="rgba(255,255,255,0.18)"
+                strokeWidth={1}
+              />
+            ))
+          : null}
         <polyline points={fence.map((p) => `${xScale(p.x)},${yScale(p.y)}`).join(' ')} fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="1" />
         <line x1={xScale(0)} y1={yScale(0)} x2={xScale(-233)} y2={yScale(233)} stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
         <line x1={xScale(0)} y1={yScale(0)} x2={xScale(233)} y2={yScale(233)} stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
@@ -997,51 +1330,73 @@ function SprayChart({
         <polygon points={baseDiamondOnLine(firstBaseOuter.x, firstBaseOuter.y)} fill="rgba(255,255,255,0.75)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
         <polygon points={baseDiamondOnLine(thirdBaseOuter.x, thirdBaseOuter.y)} fill="rgba(255,255,255,0.75)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
         <polygon points={centeredDiamond(secondBaseCenter.x, secondBaseCenter.y, 6)} fill="rgba(255,255,255,0.7)" stroke="rgba(255,255,255,0.95)" strokeWidth="0.9" />
-        {livePoints.map((p, idx) => {
-          const normalizedPlayResult = resultLabelForSwing(p.play_result || 'Out');
-          const color = outcomeColor(normalizedPlayResult);
-          const tip = [
-            p.pitch_type,
-            normalizedPlayResult,
-            p.exit_speed ? `EV ${p.exit_speed.toFixed(1)}` : 'EV: —',
-            p.angle ? `LA ${p.angle.toFixed(1)}` : 'LA: —',
-            p.distance ? `${p.distance.toFixed(0)} ft` : 'Distance: —',
-          ].join('\n');
-          return (
-            <g key={`spray-${idx}`}>
-              <circle
-                cx={xScale(p.x)}
-                cy={yScale(p.y)}
-                r={3.6}
-                fill={color}
-                opacity={0.95}
-                onMouseEnter={(event) =>
-                  onPointHover({
-                    x: event.clientX,
-                    y: event.clientY,
-                    text: tip,
-                    bg: color,
-                  })
-                }
-                onMouseMove={(event) =>
-                  onPointHover({
-                    x: event.clientX,
-                    y: event.clientY,
-                    text: tip,
-                    bg: color,
-                  })
-                }
-                onMouseLeave={onPointLeave}
-              />
-            </g>
-          );
-        })}
+        {view === 'Batted Balls'
+          ? livePoints.map((p, idx) => {
+              const normalizedPlayResult = resultLabelForSwing(p.play_result || 'Out');
+              const color = outcomeColor(normalizedPlayResult);
+              const tip = [
+                `Pitcher: ${formatNameFirstLast(String(p.pitcher || '')) || '-'}`,
+                `Batter: ${formatNameFirstLast(String(p.batter || '')) || '-'}`,
+                p.pitch_type,
+                normalizedPlayResult,
+                p.exit_speed ? `EV ${p.exit_speed.toFixed(1)}` : 'EV: —',
+                p.angle ? `LA ${p.angle.toFixed(1)}` : 'LA: —',
+                p.distance ? `${p.distance.toFixed(0)} ft` : 'Distance: —',
+              ].join('\n');
+              return (
+                <g key={`spray-${idx}`}>
+                  <circle
+                    cx={xScale(p.x)}
+                    cy={yScale(p.y)}
+                    r={3.6}
+                    fill={color}
+                    opacity={0.95}
+                    onMouseEnter={(event) =>
+                      onPointHover({
+                        x: event.clientX,
+                        y: event.clientY,
+                        text: tip,
+                        bg: color,
+                      })
+                    }
+                    onMouseMove={(event) =>
+                      onPointHover({
+                        x: event.clientX,
+                        y: event.clientY,
+                        text: tip,
+                        bg: color,
+                      })
+                    }
+                    onMouseLeave={onPointLeave}
+                  />
+                </g>
+              );
+            })
+          : null}
+        {view === 'Bins'
+          ? binStats.map((bin) => {
+              const pt = labelPoint(bin);
+              return (
+                <text
+                  key={`spray-bin-label-${bin.key}`}
+                  x={pt.x}
+                  y={pt.y}
+                  textAnchor="middle"
+                  fill="rgba(255,255,255,0.95)"
+                  fontSize={12}
+                  fontWeight={700}
+                >
+                  {`${bin.pct.toFixed(0)}%`}
+                </text>
+              );
+            })
+          : null}
       </svg>
     </div>
   );
 }
 
-function buildHeatCells(points: ChartPoint[], metric: string): HeatCell[] {
+function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = false): HeatCell[] {
   const xMin = -2.5;
   const xMax = 2.5;
   const yMin = 0;
@@ -1050,8 +1405,8 @@ function buildHeatCells(points: ChartPoint[], metric: string): HeatCell[] {
   const rows = 40;
   const cellW = (xMax - xMin) / cols;
   const cellH = (yMax - yMin) / rows;
-  const sigmaX = 0.36;
-  const sigmaY = 0.36;
+  const sigmaX = 0.22;
+  const sigmaY = 0.22;
   const eps = 1e-9;
   const valid = points
     .map((p) => ({ p, x: p.plate_side, y: p.plate_height }))
@@ -1062,7 +1417,27 @@ function buildHeatCells(points: ChartPoint[], metric: string): HeatCell[] {
     call === 'StrikeSwinging' || call === 'FoulBall' || call === 'FoulBallFieldable' || call === 'FoulBallNotFieldable' || call === 'InPlay';
   const isWhiff = (call: string) => call === 'StrikeSwinging';
   const isContact = (call: string) => call === 'InPlay';
-  const runValue = (point: ChartPoint): number => {
+  const isGroundBall = (point: ChartPoint) => {
+    const tagged = String((point as ChartPoint & { tagged_hit_type?: string | null }).tagged_hit_type ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    return tagged.includes('ground_ball') || tagged === 'groundball';
+  };
+  const xwobaRows = valid.filter(
+    (row) =>
+      typeof row.p.estimated_woba_using_speedangle === 'number' &&
+      Number.isFinite(row.p.estimated_woba_using_speedangle)
+  );
+  const xbaRows = valid.filter(
+    (row) =>
+      typeof row.p.estimated_ba_using_speedangle === 'number' &&
+      Number.isFinite(row.p.estimated_ba_using_speedangle)
+  );
+  const runValue = (point: ChartPoint): number | null => {
+    if (typeof point.run_value === 'number' && Number.isFinite(point.run_value)) return point.run_value;
+    if (strictRunValue) return null;
     const call = point.pitch_call || '';
     const play = point.play_result || '';
     if (call === 'BallCalled' || call === 'BallinDirt' || call === 'BallIntentional') return 0.03;
@@ -1081,13 +1456,28 @@ function buildHeatCells(points: ChartPoint[], metric: string): HeatCell[] {
   const globalSwingCount = valid.filter((row) => isSwing(row.p.pitch_call || '')).length;
   const globalWhiffCount = valid.filter((row) => isWhiff(row.p.pitch_call || '')).length;
   const globalInPlayCount = valid.filter((row) => isContact(row.p.pitch_call || '')).length;
+  const globalGbCount = valid.filter((row) => isContact(row.p.pitch_call || '') && isGroundBall(row.p)).length;
   const globalEvRows = valid.filter((row) => isContact(row.p.pitch_call || '') && typeof row.p.exit_speed === 'number');
-  const globalRvAvg = valid.length ? valid.reduce((sum, row) => sum + runValue(row.p), 0) / valid.length : 0;
+  const rvRows = valid
+    .map((row) => runValue(row.p))
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const globalRvAvg = rvRows.length ? rvRows.reduce((sum, value) => sum + value, 0) / rvRows.length : 0;
   const globalEvAvg = globalEvRows.length ? globalEvRows.reduce((sum, row) => sum + Number(row.p.exit_speed || 0), 0) / globalEvRows.length : 0;
+  const globalXwobaAvg =
+    xwobaRows.length > 0
+      ? xwobaRows.reduce((sum, row) => sum + Number(row.p.estimated_woba_using_speedangle || 0), 0) / xwobaRows.length
+      : 0.35;
+  const globalXbaAvg =
+    xbaRows.length > 0
+      ? xbaRows.reduce((sum, row) => sum + Number(row.p.estimated_ba_using_speedangle || 0), 0) / xbaRows.length
+      : 0.3;
   const globalSwingRate = valid.length ? globalSwingCount / valid.length : 0;
   const globalWhiffRate = globalSwingCount ? globalWhiffCount / globalSwingCount : 0;
-  const globalContactRate = globalSwingCount ? globalInPlayCount / globalSwingCount : 0;
+  const globalGbRate = globalInPlayCount ? globalGbCount / globalInPlayCount : 0;
+  const globalContactRate = globalSwingCount ? (globalSwingCount - globalWhiffCount) / globalSwingCount : 0;
   const shrinkStrength = 8;
+  const runValueShrinkStrength = 0.5;
+  const xMetricShrinkStrength = 0;
 
   const cells: HeatCell[] = [];
   for (let row = 0; row < rows; row += 1) {
@@ -1098,9 +1488,15 @@ function buildHeatCells(points: ChartPoint[], metric: string): HeatCell[] {
       let swingW = 0;
       let whiffW = 0;
       let inPlayW = 0;
+      let gbW = 0;
       let evWSum = 0;
       let evW = 0;
       let rvWSum = 0;
+      let rvW = 0;
+      let xwobaWSum = 0;
+      let xwobaW = 0;
+      let xbaWSum = 0;
+      let xbaW = 0;
       for (const rowPoint of valid) {
         const dx = (cx - rowPoint.x) / sigmaX;
         const dy = (cy - rowPoint.y) / sigmaY;
@@ -1109,23 +1505,55 @@ function buildHeatCells(points: ChartPoint[], metric: string): HeatCell[] {
         const call = rowPoint.p.pitch_call || '';
         const swing = isSwing(call);
         const inPlay = isContact(call);
+        const gb = isGroundBall(rowPoint.p);
         sumW += w;
         if (swing) swingW += w;
         if (isWhiff(call)) whiffW += w;
         if (inPlay) inPlayW += w;
+        if (gb) gbW += w;
         if (inPlay && typeof rowPoint.p.exit_speed === 'number') {
           evWSum += w * rowPoint.p.exit_speed;
           evW += w;
         }
-        rvWSum += w * runValue(rowPoint.p);
+        const rv = runValue(rowPoint.p);
+        if (typeof rv === 'number' && Number.isFinite(rv)) {
+          rvWSum += w * rv;
+          rvW += w;
+        }
+        if (typeof rowPoint.p.estimated_woba_using_speedangle === 'number' && Number.isFinite(rowPoint.p.estimated_woba_using_speedangle)) {
+          xwobaWSum += w * rowPoint.p.estimated_woba_using_speedangle;
+          xwobaW += w;
+        }
+        if (typeof rowPoint.p.estimated_ba_using_speedangle === 'number' && Number.isFinite(rowPoint.p.estimated_ba_using_speedangle)) {
+          xbaWSum += w * rowPoint.p.estimated_ba_using_speedangle;
+          xbaW += w;
+        }
       }
 
       let value = sumW;
       if (metric === 'Whiff Rate') value = 100 * ((whiffW + shrinkStrength * globalWhiffRate) / Math.max(eps, swingW + shrinkStrength));
-      if (metric === 'Contact Rate') value = 100 * ((inPlayW + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
+      if (metric === 'GB Rate') value = 100 * ((gbW + shrinkStrength * globalGbRate) / Math.max(eps, inPlayW + shrinkStrength));
+      if (metric === 'Contact Rate') value = 100 * (((swingW - whiffW) + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
       if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
       if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
-      if (metric === 'Run Values') value = (rvWSum + shrinkStrength * globalRvAvg) / Math.max(eps, sumW + shrinkStrength);
+      if (metric === 'Run Values') {
+        value =
+          rvW > eps
+            ? ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, rvW + runValueShrinkStrength)) * 100
+            : Number.NaN;
+      }
+      if (metric === 'xWOBA') {
+        value =
+          xwobaW > eps
+            ? (xwobaWSum + xMetricShrinkStrength * globalXwobaAvg) / Math.max(eps, xwobaW + xMetricShrinkStrength)
+            : Number.NaN;
+      }
+      if (metric === 'xBA') {
+        value =
+          xbaW > eps
+            ? (xbaWSum + xMetricShrinkStrength * globalXbaAvg) / Math.max(eps, xbaW + xMetricShrinkStrength)
+            : Number.NaN;
+      }
 
       cells.push({ x: xMin + col * cellW, y: yMin + row * cellH, w: cellW, h: cellH, value, density: sumW });
     }
@@ -1155,6 +1583,7 @@ export default function HittingSuite() {
   const [endDate, setEndDate] = useState('');
   const [hitter, setHitter] = useState('All');
   const [teamType, setTeamType] = useState('All');
+  const [level, setLevel] = useState('MLB');
   const [oppPitcher, setOppPitcher] = useState('All');
   const [hand, setHand] = useState('All');
   const [batterSide, setBatterSide] = useState('All');
@@ -1186,6 +1615,9 @@ export default function HittingSuite() {
   const swing3dRef = useRef<HTMLDivElement | null>(null);
   const [heatmapChartType, setHeatmapChartType] = useState<'Heat' | 'Pitch'>('Pitch');
   const [heatmapStat, setHeatmapStat] = useState('Frequency');
+  const [summaryRhpLocationView, setSummaryRhpLocationView] = useState('Pitch');
+  const [summaryLhpLocationView, setSummaryLhpLocationView] = useState('Pitch');
+  const [summarySprayView, setSummarySprayView] = useState<'Batted Balls' | 'Bins'>('Batted Balls');
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
@@ -1226,6 +1658,7 @@ export default function HittingSuite() {
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Batter Team' : 'Batter') : splitBy;
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+  const isPro = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
   useEffect(() => {
     if (!isLeague && leaderboardViewBy !== 'Player') {
       setLeaderboardViewBy('Player');
@@ -1263,7 +1696,9 @@ export default function HittingSuite() {
     let cancelled = false;
     const controller = new AbortController();
     setLoadingFilters(true);
-    fetch('/api/dashboard/hitting/filters', { signal: controller.signal })
+    const filterParams = new URLSearchParams();
+    if (level) filterParams.set('level', level);
+    fetch(`/api/dashboard/hitting/filters?${filterParams.toString()}`, { signal: controller.signal, cache: 'no-store' })
       .then((r) => r.json())
       .then((payload: HittingFiltersPayload & { error?: string }) => {
         if (cancelled) return;
@@ -1296,7 +1731,12 @@ export default function HittingSuite() {
       cancelled = true;
       controller.abort();
     };
-  }, []);
+  }, [level]);
+
+  useEffect(() => {
+    if (!isPro) return;
+    if (!level) setLevel('MLB');
+  }, [isPro, level]);
 
   const loadCustomTables = async () => {
     setLoadingCustomTables(true);
@@ -1391,6 +1831,7 @@ export default function HittingSuite() {
     if (endDate) params.set('end_date', endDate);
     if (hitter && hitter !== 'All') params.set('hitter', hitter);
     if (teamType && teamType !== 'All') params.set('team_type', teamType);
+    if (isPro && level && level !== 'All') params.set('level', level);
     if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
     if (hand && hand !== 'All') params.set('hand', hand);
     if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
@@ -1414,7 +1855,7 @@ export default function HittingSuite() {
     if (hbMax.trim()) params.set('hb_max', hbMax.trim());
     if (pcMin.trim()) params.set('pc_min', pcMin.trim());
     if (pcMax.trim()) params.set('pc_max', pcMax.trim());
-    params.set('include_chart_points', dashboardPage === 'Leaderboard' ? '0' : '1');
+    params.set('include_chart_points', '1');
 
     fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { signal: controller.signal })
       .then((r) => r.json())
@@ -1443,7 +1884,7 @@ export default function HittingSuite() {
       cancelled = true;
       controller.abort();
     };
-  }, [appliedFilterVersion, filters, startDate, endDate, hitter, teamType, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage]);
+  }, [appliedFilterVersion, filters, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro]);
 
   const selectedSingleHitter = hitter && hitter !== 'All' ? hitter : '';
 
@@ -1541,6 +1982,69 @@ export default function HittingSuite() {
     const splitColumn = leaderboardBaseColumns[0] ?? '';
     return sortTableRows(rows, sortCol, leaderboardSortDirection, splitColumn);
   }, [overview?.table_rows, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
+  const latestTeamByHitter = useMemo(() => {
+    const points = overview?.chart_points ?? [];
+    const latestTsByName: Record<string, number> = {};
+    const out: Record<string, string> = {};
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    points.forEach((point) => {
+      const name = String(point.batter ?? '').trim();
+      const team = String(point.batter_team_code ?? '').trim().toUpperCase();
+      if (!name || !team) return;
+      const ts = point.session_date ? Date.parse(point.session_date) : NaN;
+      const stamp = Number.isFinite(ts) ? ts : 0;
+      const keys = [name, formatNameFirstLast(name), norm(name), norm(formatNameFirstLast(name))].filter(Boolean);
+      const latestKnown = Math.max(...keys.map((k) => latestTsByName[k] ?? -1));
+      if (stamp >= latestKnown) {
+        keys.forEach((k) => {
+          latestTsByName[k] = stamp;
+          out[k] = team;
+        });
+      }
+    });
+    return out;
+  }, [overview?.chart_points]);
+  const filterTeamByHitter = useMemo(() => {
+    const out: Record<string, string> = {};
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const byTeam = filters?.hitters_by_team_code ?? {};
+    Object.entries(byTeam).forEach(([teamCodeRaw, names]) => {
+      const teamCode = String(teamCodeRaw ?? '').trim().toUpperCase();
+      if (!teamCode) return;
+      (names ?? []).forEach((nameRaw) => {
+        const name = String(nameRaw ?? '').trim();
+        if (!name) return;
+        const formatted = formatNameFirstLast(name);
+        [name, formatted, norm(name), norm(formatted)].forEach((k) => {
+          if (k) out[k] = teamCode;
+        });
+      });
+    });
+    return out;
+  }, [filters?.hitters_by_team_code]);
+  const summaryTeamLogoUrl = useMemo(() => {
+    if (!isPro || dashboardPage !== 'Summary') return '';
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    let teamCode = '';
+    if (selectedSingleHitter) {
+      const key = String(selectedSingleHitter ?? '').trim();
+      const formatted = formatNameFirstLast(key);
+      teamCode =
+        latestTeamByHitter[key] ??
+        latestTeamByHitter[formatted] ??
+        latestTeamByHitter[norm(key)] ??
+        latestTeamByHitter[norm(formatted)] ??
+        filterTeamByHitter[key] ??
+        filterTeamByHitter[formatted] ??
+        filterTeamByHitter[norm(key)] ??
+        filterTeamByHitter[norm(formatted)] ??
+        '';
+    }
+    if (!teamCode && teamType && teamType !== 'All') {
+      teamCode = inferProTeamCode(teamType);
+    }
+    return getProTeamLogoUrl(teamCode) || '';
+  }, [isPro, dashboardPage, selectedSingleHitter, latestTeamByHitter, filterTeamByHitter, teamType]);
   const availableCustomColumns = useMemo(
     () =>
       overview?.available_table_columns?.length
@@ -1567,17 +2071,28 @@ export default function HittingSuite() {
     () => [
       { value: 'Frequency', label: 'Frequency' },
       { value: 'Whiff Rate', label: 'Whiff Rate' },
+      { value: 'GB Rate', label: 'GB Rate' },
       { value: 'Contact Rate', label: 'Contact Rate' },
       { value: 'Swing Rate', label: 'Swing Rate' },
       { value: 'Exit Velocity', label: 'Exit Velocity' },
+      ...(isPro ? ([{ value: 'xWOBA', label: 'xWOBA' }] as OptionItem[]) : []),
       { value: 'Run Values', label: 'Run Values' },
     ],
-    []
+    [isPro]
+  );
+  const summaryLocationViewOptions = useMemo(
+    () => [{ value: 'Pitch', label: 'Pitch' }, ...heatmapStatOptions],
+    [heatmapStatOptions]
   );
   const heatmapDisplayView = useMemo(() => {
     if (heatmapChartType === 'Pitch') return 'Pitch';
     return heatmapStat;
   }, [heatmapChartType, heatmapStat]);
+  useEffect(() => {
+    if (heatmapStat === 'xBA') setHeatmapStat('xWOBA');
+    if (summaryRhpLocationView === 'xBA') setSummaryRhpLocationView('xWOBA');
+    if (summaryLhpLocationView === 'xBA') setSummaryLhpLocationView('xWOBA');
+  }, [heatmapStat, summaryRhpLocationView, summaryLhpLocationView]);
   const heatmapsPageSvg = useMemo(() => {
     const w = 560;
     const h = 460;
@@ -1614,7 +2129,7 @@ export default function HittingSuite() {
     const cells =
       heatmapDisplayView === 'Pitch'
         ? []
-        : buildHeatCells(points, heatmapDisplayView);
+        : buildHeatCells(points, heatmapDisplayView, isPro);
     const values = cells.map((c) => c.value).sort((a, b) => a - b);
     const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
     const minVal = values.length ? values[0] : 0;
@@ -1628,10 +2143,10 @@ export default function HittingSuite() {
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
           <filter id="hitting-heatmap-blur" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+            <feGaussianBlur stdDeviation="1.2" />
           </filter>
           <filter id="hitting-heatmap-blur-rv" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="1.25" />
+            <feGaussianBlur stdDeviation="0.75" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath="url(#hitting-heatmap-zoom-clip)">
@@ -1641,7 +2156,7 @@ export default function HittingSuite() {
                 {cells.map((c) => {
                   const cx = px(c.x + c.w / 2);
                   const cy = py(c.y + c.h / 2);
-                  const radius = Math.max(2.8, c.w * scale * 2.05);
+                  const radius = Math.max(2.0, c.w * scale * 1.45);
                   const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                   let fill = 'rgba(255,255,255,0.12)';
                   if (heatmapDisplayView === 'Frequency') fill = sequentialColor(c.value, minVal, maxVal);
@@ -1665,7 +2180,7 @@ export default function HittingSuite() {
               {cells.map((c) => {
                 const cx = px(c.x + c.w / 2);
                 const cy = py(c.y + c.h / 2);
-                const radius = Math.max(1.4, c.w * scale * 1.08);
+                const radius = Math.max(1.0, c.w * scale * 0.75);
                 const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                 let fill = 'rgba(255,255,255,0.12)';
                 if (heatmapDisplayView === 'Frequency') fill = sequentialColor(c.value, minVal, maxVal);
@@ -1691,7 +2206,7 @@ export default function HittingSuite() {
                     r={radius}
                     fill={fill}
                     opacity={Math.max(0.2, rvBoost * 0.72 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))}
-                    onMouseMove={(event) => setChartHover({ x: event.clientX, y: event.clientY, text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'Run Values' || heatmapDisplayView === 'Exit Velocity' ? 2 : 1)}` })}
+                    onMouseMove={(event) => setChartHover({ x: event.clientX, y: event.clientY, text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' ? 3 : (heatmapDisplayView === 'Run Values' || heatmapDisplayView === 'Exit Velocity' ? 2 : 1))}` })}
                     onMouseLeave={() => setChartHover(null)}
                   />
                 );
@@ -1992,6 +2507,17 @@ export default function HittingSuite() {
                       placeholder="All"
                     />
                   </label>
+                  {isPro ? (
+                    <label>
+                      Level
+                      <SearchableSingleSelect
+                        options={toOptions(filters.level_options ?? ['All', 'MLB', 'AAA'])}
+                        value={level}
+                        onChange={setLevel}
+                        placeholder="MLB"
+                      />
+                    </label>
+                  ) : null}
                   <label>
                     Opponent Pitchers
                     <SearchableMultiSelect options={oppPitcherOptions} values={oppPitcher === 'All' ? ['All'] : [oppPitcher]} onChange={(next) => setOppPitcher(next[0] ?? 'All')} />
@@ -2156,6 +2682,19 @@ export default function HittingSuite() {
                   ))}
                 </div>
               </div>
+              {dashboardPage === 'Summary' || dashboardPage === 'Leaderboard' ? (
+                <div className="dashboard-panel">
+                  <h4 style={{ margin: '0 0 10px 0', textAlign: 'center' }}>Spray Results</h4>
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {SPRAY_RESULT_ORDER.map((result) => (
+                      <div key={result} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ width: 12, height: 12, borderRadius: '999px', background: SPRAY_RESULT_COLORS[result], display: 'inline-block' }} />
+                        <span>{SPRAY_RESULT_LABELS[result]}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </article>
         ) : null}
@@ -2210,7 +2749,16 @@ export default function HittingSuite() {
             {dashboardPage === 'Summary' || dashboardPage === 'Leaderboard' ? (
               <>
             <div className="dashboard-panel" style={{ padding: 14 }}>
-              <h3 style={{ margin: 0 }}>{(hitter && hitter !== 'All') ? formatNameFirstLast(hitter) : 'All'} | {startDate === endDate ? formatDateMMDDYY(startDate || null) : `${formatDateMMDDYY(startDate || null)} - ${formatDateMMDDYY(endDate || null)}`}</h3>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <h3 style={{ margin: 0 }}>{(hitter && hitter !== 'All') ? formatNameFirstLast(hitter) : 'All'} | {startDate === endDate ? formatDateMMDDYY(startDate || null) : `${formatDateMMDDYY(startDate || null)} - ${formatDateMMDDYY(endDate || null)}`}</h3>
+                {summaryTeamLogoUrl ? (
+                  <img
+                    src={summaryTeamLogoUrl}
+                    alt="Team"
+                    style={{ width: 42, height: 42, objectFit: 'contain', flexShrink: 0 }}
+                  />
+                ) : null}
+              </div>
               <p className="portal-muted-text" style={{ margin: '6px 0 0 0' }}>
                 {overview ? `${overview.total_pitches.toLocaleString()} pitches` : 'Loading...'}
               </p>
@@ -2220,9 +2768,35 @@ export default function HittingSuite() {
 
             {!isLeaderboardPage ? (
               <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', minWidth: 0 }}>
-                <LocationChart title="vs. RHP" points={rhpPoints} onPointHover={setChartHover} onPointLeave={() => setChartHover(null)} />
-                <SprayChart points={points} onPointHover={setChartHover} onPointLeave={() => setChartHover(null)} />
-                <LocationChart title="vs. LHP" points={lhpPoints} onPointHover={setChartHover} onPointLeave={() => setChartHover(null)} />
+                <LocationChart
+                  title="vs. RHP"
+                  points={rhpPoints}
+                  displayView={summaryRhpLocationView}
+                  selectedPitchTypes={pitchTypes}
+                  strictRunValue={isPro}
+                  viewOptions={summaryLocationViewOptions}
+                  onViewChange={setSummaryRhpLocationView}
+                  onPointHover={setChartHover}
+                  onPointLeave={() => setChartHover(null)}
+                />
+                <SprayChart
+                  points={points}
+                  view={summarySprayView}
+                  onViewChange={setSummarySprayView}
+                  onPointHover={setChartHover}
+                  onPointLeave={() => setChartHover(null)}
+                />
+                <LocationChart
+                  title="vs. LHP"
+                  points={lhpPoints}
+                  displayView={summaryLhpLocationView}
+                  selectedPitchTypes={pitchTypes}
+                  strictRunValue={isPro}
+                  viewOptions={summaryLocationViewOptions}
+                  onViewChange={setSummaryLhpLocationView}
+                  onPointHover={setChartHover}
+                  onPointLeave={() => setChartHover(null)}
+                />
               </div>
             ) : null}
             {chartHover && !isLeaderboardPage ? (
@@ -2463,11 +3037,12 @@ export default function HittingSuite() {
           ) : null}
           {loadingOverview ? <p className="portal-muted-text">Loading summary table...</p> : null}
           {!loadingOverview && overview?.table_rows?.length ? (
+            <div className="portal-table-wrap" style={isLeaderboardPage ? { maxHeight: '68vh', overflowY: 'auto' } : undefined}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
               <thead>
                 <tr>
                   {isLeaderboardPage ? (
-                    <th style={{ textAlign: 'center', padding: '8px 6px', borderBottom: '1px solid rgba(255,255,255,0.18)', whiteSpace: 'nowrap' }}>Rank</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', borderBottom: '1px solid rgba(255,255,255,0.18)', whiteSpace: 'nowrap', position: isLeaderboardPage ? 'sticky' : undefined, top: isLeaderboardPage ? 0 : undefined, zIndex: isLeaderboardPage ? 3 : undefined, background: isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined }}>Rank</th>
                   ) : null}
                   {displayedTableColumns.map((col, colIndex) => {
                     const isSortable = true;
@@ -2476,7 +3051,7 @@ export default function HittingSuite() {
                     return (
                       <th
                         key={col}
-                        style={{ textAlign: 'center', padding: '8px 6px', borderBottom: '1px solid rgba(255,255,255,0.18)', whiteSpace: 'nowrap', cursor: isSortable ? 'pointer' : 'default' }}
+                        style={{ textAlign: 'center', padding: '8px 6px', borderBottom: '1px solid rgba(255,255,255,0.18)', whiteSpace: 'nowrap', cursor: isSortable ? 'pointer' : 'default', position: isLeaderboardPage ? 'sticky' : undefined, top: isLeaderboardPage ? 0 : undefined, zIndex: isLeaderboardPage ? 3 : undefined, background: isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined }}
                         onClick={
                           isSortable
                             ? () => {
@@ -2512,11 +3087,50 @@ export default function HittingSuite() {
                       const rawValue = row[col];
                       const displayValue =
                         isLeaderboardPage && colIndex === 0 && typeof rawValue === 'string'
-                          ? formatNameFirstLast(rawValue)
+                          ? (() => {
+                              const formatted = formatNameFirstLast(rawValue);
+                              if (leaderboardViewBy !== 'Player') return formatted;
+                              const key = String(rawValue).trim();
+                              const keyNorm = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+                              const formattedNorm = formatted.toLowerCase().replace(/[^a-z0-9]/g, '');
+                              const teamCode =
+                                latestTeamByHitter[key] ??
+                                latestTeamByHitter[keyNorm] ??
+                                latestTeamByHitter[formatted] ??
+                                latestTeamByHitter[formattedNorm] ??
+                                filterTeamByHitter[key] ??
+                                filterTeamByHitter[keyNorm] ??
+                                filterTeamByHitter[formatted] ??
+                                filterTeamByHitter[formattedNorm];
+                              if (!teamCode || key.toLowerCase() === 'all') return formatted;
+                              const logoUrl = isPro ? getProTeamLogoUrl(teamCode) : '';
+                              if (!logoUrl) return formatted;
+                              return (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                                  <img src={logoUrl} alt={teamCode} style={{ width: 16, height: 16, objectFit: 'contain', display: 'inline-block' }} />
+                                  <span>{formatted}</span>
+                                </span>
+                              );
+                            })()
                           : rawValue;
+                      const renderedValue =
+                        typeof displayValue === 'string' || typeof displayValue === 'number' || displayValue === null || displayValue === undefined
+                          ? formatTableDisplayValue(col, displayValue)
+                          : displayValue;
                       return (
-                        <td key={`${idx}-${col}`} style={{ textAlign: 'center', padding: '8px 6px', borderBottom: '1px solid rgba(255,255,255,0.1)', whiteSpace: 'nowrap' }}>
-                          {displayValue === null || displayValue === undefined ? '—' : formatTableDisplayValue(col, displayValue)}
+                        <td
+                          key={`${idx}-${col}`}
+                          style={{
+                            textAlign:
+                              isLeaderboardPage && leaderboardViewBy === 'Player' && colIndex === 0
+                                ? (isAllRow ? 'center' : 'left')
+                                : 'center',
+                            padding: '8px 6px',
+                            borderBottom: '1px solid rgba(255,255,255,0.1)',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {displayValue === null || displayValue === undefined ? '—' : renderedValue}
                         </td>
                       );
                     })}
@@ -2526,6 +3140,7 @@ export default function HittingSuite() {
                 })()}
               </tbody>
             </table>
+            </div>
           ) : !loadingOverview ? (
             <p className="portal-muted-text">No data found for current filters.</p>
           ) : null}
@@ -2549,7 +3164,7 @@ export default function HittingSuite() {
                   <div className="dashboard-panel" style={{ paddingTop: 12 }}>
                     {heatmapDisplayView !== 'Pitch' ? (
                       <div style={{ display: 'grid', gap: 4, justifyItems: 'center', marginBottom: 8 }}>
-                        <div style={{ width: 440, maxWidth: '85%', height: 26, background: 'linear-gradient(90deg, #e8eef7 0%, #8fb5d8 25%, #9bc1db 50%, #f0dfad 70%, #f39a66 85%, #eb3434 100%)', border: '1px solid rgba(255,255,255,0.22)' }} />
+                        <div style={{ width: 440, maxWidth: '85%', height: 26, background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(176,11,52) 100%)', border: '1px solid rgba(255,255,255,0.22)' }} />
                         <div style={{ width: 440, maxWidth: '85%', display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', fontWeight: 600 }}>
                           <span>Least</span>
                           <span>Most</span>

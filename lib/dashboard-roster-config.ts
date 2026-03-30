@@ -31,6 +31,7 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
     SEMO: `${bundledRoot}/dashboard_api/config/schools/SEMO/school_config.R`,
     CREIGHTON: `${bundledRoot}/dashboard_api/config/schools/CREIGHTON/school_config.R`,
     HARVARD: `${bundledRoot}/dashboard_api/config/schools/HARVARD/school_config.R`,
+    PRO: `${bundledRoot}/dashboard_api/config/schools/PRO/school_config.R`,
   };
   const configPath = envPath || defaultPathBySchool[upper] || '';
   if (!configPath || !fs.existsSync(configPath)) return null;

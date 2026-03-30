@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { getProTeamLogoUrl } from './pro-team-logos';
 
 type OptionItem = { value: string; label: string };
 type CatchingFiltersPayload = {
@@ -10,6 +11,7 @@ type CatchingFiltersPayload = {
   max_date: string | null;
   catchers: string[];
   team_types?: string[];
+  level_options?: string[];
   pitch_types: string[];
   hands: string[];
   batter_sides: string[];
@@ -28,6 +30,8 @@ type CatchingPoint = {
   catcher: string;
   pitcher: string;
   batter: string;
+  pitcher_team_code?: string;
+  batter_team_code?: string;
   pitcherthrows: string;
   batterside: string;
   pitch_type: string;
@@ -127,7 +131,7 @@ function parseNumber(v: unknown): number | null {
 }
 
 function toOptions(values: string[]): OptionItem[] {
-  return values.map((value) => ({ value, label: value }));
+  return values.map((value) => ({ value, label: value === 'Inning' ? 'Inning of Appearance' : value }));
 }
 
 function pickDefaultTeamType(teamTypes: string[] | undefined, schoolCode: string | undefined): string {
@@ -135,7 +139,7 @@ function pickDefaultTeamType(teamTypes: string[] | undefined, schoolCode: string
   const cleaned = teamTypes.map((value) => String(value ?? '').trim()).filter(Boolean);
   if (cleaned.length === 0) return 'All';
   const school = String(schoolCode ?? '').trim();
-  if (school.toUpperCase() === 'LEAGUE') return 'All';
+  if (school.toUpperCase() === 'LEAGUE' || school.toUpperCase() === 'PRO') return 'All';
   const schoolNorm = school.toUpperCase();
   const exactSchool = cleaned.find((value) => value === school);
   if (exactSchool) return exactSchool;
@@ -317,17 +321,17 @@ function pitchResultDetailLabel(p: CatchingPoint): string {
 }
 
 function markerShape(shape: string, x: number, y: number, color: string, key: string) {
-  if (shape === 'ring') return <circle key={key} cx={x} cy={y} r={6.2} fill="none" stroke={color} strokeWidth={2} />;
-  if (shape === 'triangle') return <polygon key={key} points={`${x},${y - 6.2} ${x - 5.2},${y + 4.4} ${x + 5.2},${y + 4.4}`} fill="none" stroke={color} strokeWidth={1.8} />;
-  if (shape === 'square') return <rect key={key} x={x - 4.4} y={y - 4.4} width={8.8} height={8.8} fill={color} stroke="rgba(255,255,255,0.45)" strokeWidth={0.7} />;
+  if (shape === 'ring') return <circle key={key} cx={x} cy={y} r={8.4} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.2} />;
+  if (shape === 'triangle') return <polygon key={key} points={`${x},${y - 8.4} ${x - 7.1},${y + 6.0} ${x + 7.1},${y + 6.0}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.1} />;
+  if (shape === 'square') return <rect key={key} x={x - 6.0} y={y - 6.0} width={12.0} height={12.0} fill={color} stroke="rgba(255,255,255,0.45)" strokeWidth={0.9} />;
   if (shape === 'star') {
     const pts = [
-      [x, y - 6.8], [x + 1.8, y - 1.8], [x + 6.6, y - 1.8], [x + 2.5, y + 1.1], [x + 4.2, y + 6.3],
-      [x, y + 3.0], [x - 4.2, y + 6.3], [x - 2.5, y + 1.1], [x - 6.6, y - 1.8], [x - 1.8, y - 1.8],
+      [x, y - 10.2], [x + 2.7, y - 2.7], [x + 9.9, y - 2.7], [x + 3.8, y + 1.7], [x + 6.3, y + 9.5],
+      [x, y + 4.5], [x - 6.3, y + 9.5], [x - 3.8, y + 1.7], [x - 9.9, y - 2.7], [x - 2.7, y - 2.7],
     ].map((p) => p.join(',')).join(' ');
     return <polygon key={key} points={pts} fill={color} />;
   }
-  return <circle key={key} cx={x} cy={y} r={5.2} fill={color} stroke="rgba(255,255,255,0.45)" strokeWidth={0.7} />;
+  return <circle key={key} cx={x} cy={y} r={7.1} fill={color} stroke="rgba(255,255,255,0.45)" strokeWidth={0.9} />;
 }
 
 function fmtNum(v: number | null | undefined, d = 1): string {
@@ -337,19 +341,10 @@ function fmtNum(v: number | null | undefined, d = 1): string {
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const rgb = (r: number, g: number, b: number) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
-const shinyHeatSequential = (tRaw: number): string => {
-  const t = Math.max(0, Math.min(1, tRaw));
-  if (t < 0.2) return rgb(lerp(232, 142, t / 0.2), lerp(238, 183, t / 0.2), lerp(247, 225, t / 0.2));
-  if (t < 0.45) return rgb(lerp(142, 170, (t - 0.2) / 0.25), lerp(183, 211, (t - 0.2) / 0.25), lerp(225, 235, (t - 0.2) / 0.25));
-  if (t < 0.7) return rgb(lerp(170, 240, (t - 0.45) / 0.25), lerp(211, 218, (t - 0.45) / 0.25), lerp(235, 154, (t - 0.45) / 0.25));
-  if (t < 0.88) return rgb(lerp(240, 235, (t - 0.7) / 0.18), lerp(218, 120, (t - 0.7) / 0.18), lerp(154, 82, (t - 0.7) / 0.18));
-  return rgb(lerp(235, 216, (t - 0.88) / 0.12), lerp(120, 43, (t - 0.88) / 0.12), lerp(82, 52, (t - 0.88) / 0.12));
-};
-
 const sequentialColor = (value: number, min: number, max: number): string => {
   if (!Number.isFinite(value)) return 'rgba(255,255,255,0.08)';
-  const t = Math.max(0, Math.min(1, (value - min) / Math.max(1e-9, max - min)));
-  return shinyHeatSequential(t);
+  const mid = min + (max - min) * 0.5;
+  return divergingColor(value, min, mid, max);
 };
 
 const divergingColor = (value: number, min: number, mid: number, max: number): string => {
@@ -381,6 +376,7 @@ export default function CatchingSuite() {
   const [isMobileView, setIsMobileView] = useState(false);
 
   const [sessionType, setSessionType] = useState('All');
+  const [level, setLevel] = useState('MLB');
   const [teamType, setTeamType] = useState('All');
   const [catcher, setCatcher] = useState('All');
   const [hand, setHand] = useState('All');
@@ -420,6 +416,7 @@ export default function CatchingSuite() {
   const isLeaderboardPage = page === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Catcher') : splitBy;
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
+  const isPro = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
   useEffect(() => {
     if (!isLeague && leaderboardViewBy !== 'Player') {
       setLeaderboardViewBy('Player');
@@ -444,7 +441,9 @@ export default function CatchingSuite() {
     let active = true;
     const controller = new AbortController();
     setLoadingFilters(true);
-    fetch('/api/dashboard/catching/filters', { signal: controller.signal })
+    const params = new URLSearchParams();
+    if (level) params.set('level', level);
+    fetch(`/api/dashboard/catching/filters?${params.toString()}`, { signal: controller.signal, cache: 'no-store' })
       .then(async (res) => {
         const payload = (await res.json().catch(() => ({}))) as CatchingFiltersPayload & { error?: string };
         if (!res.ok) {
@@ -473,7 +472,12 @@ export default function CatchingSuite() {
       active = false;
       controller.abort();
     };
-  }, []);
+  }, [level]);
+
+  useEffect(() => {
+    if (!isPro) return;
+    if (!level) setLevel('MLB');
+  }, [isPro, level]);
 
   useEffect(() => {
     if (!dateStart && !dateEnd) return;
@@ -482,7 +486,8 @@ export default function CatchingSuite() {
     const params = new URLSearchParams();
     if (dateStart) params.set('start_date', dateStart);
     if (dateEnd) params.set('end_date', dateEnd);
-    if (sessionType && sessionType !== 'All') params.set('session_type', sessionType);
+    if (!isPro && sessionType && sessionType !== 'All') params.set('session_type', sessionType);
+    if (isPro && level && level !== 'All') params.set('level', level);
     fetch(`/api/dashboard/catching/filters?${params.toString()}`, { signal: controller.signal })
       .then(async (res) => {
         const payload = (await res.json().catch(() => ({}))) as CatchingFiltersPayload & { error?: string };
@@ -499,7 +504,7 @@ export default function CatchingSuite() {
       active = false;
       controller.abort();
     };
-  }, [dateStart, dateEnd, sessionType, catcher]);
+  }, [dateStart, dateEnd, sessionType, catcher, isPro, level]);
 
   useEffect(() => {
     let active = true;
@@ -507,7 +512,8 @@ export default function CatchingSuite() {
     const params = new URLSearchParams();
     if (dateStart) params.set('start_date', dateStart);
     if (dateEnd) params.set('end_date', dateEnd);
-    if (sessionType && sessionType !== 'All') params.set('session_type', sessionType);
+    if (!isPro && sessionType && sessionType !== 'All') params.set('session_type', sessionType);
+    if (isPro && level && level !== 'All') params.set('level', level);
     if (teamType && teamType !== 'All') params.set('team_type', teamType);
     if (catcher && catcher !== 'All') params.set('catcher', catcher);
     if (hand && hand !== 'All') params.set('hand', hand);
@@ -530,7 +536,7 @@ export default function CatchingSuite() {
     params.set('table_mode', tableMode);
     if (effectiveSplitBy) params.set('split_by', effectiveSplitBy);
     if (tableMode === 'Custom' && customCols.length) params.set('custom_columns', customCols.join(','));
-    params.set('include_chart_points', page === 'Leaderboard' ? '0' : '1');
+    params.set('include_chart_points', '1');
 
     setLoadingOverview(true);
     fetch(`/api/dashboard/catching/overview?${params.toString()}`, { signal: controller.signal })
@@ -558,7 +564,7 @@ export default function CatchingSuite() {
       active = false;
       controller.abort();
     };
-  }, [dateStart, dateEnd, sessionType, teamType, catcher, hand, batterSide, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols, page]);
+  }, [dateStart, dateEnd, sessionType, level, teamType, catcher, hand, batterSide, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols, page, isPro]);
 
   useEffect(() => {
     let active = true;
@@ -830,6 +836,8 @@ export default function CatchingSuite() {
         'After Count',
         'Zone Location',
         'Times Through Order',
+        'Inning',
+        'Pitch Count',
         'Velocity',
         'IVB',
         'HB',
@@ -870,6 +878,46 @@ export default function CatchingSuite() {
     const splitColumn = leaderboardBaseColumns[0] ?? '';
     return sortTableRows(rows, sortCol, leaderboardSortDirection, splitColumn);
   }, [overview?.table_rows, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
+  const latestTeamByCatcher = useMemo(() => {
+    const points = overview?.chart_points ?? [];
+    const latestTsByName: Record<string, number> = {};
+    const out: Record<string, string> = {};
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    points.forEach((point) => {
+      const name = String(point.catcher ?? '').trim();
+      const team = String(point.pitcher_team_code ?? '').trim().toUpperCase();
+      if (!name || !team) return;
+      const ts = point.session_date ? Date.parse(point.session_date) : NaN;
+      const stamp = Number.isFinite(ts) ? ts : 0;
+      const keys = [name, formatNameFirstLast(name), norm(name), norm(formatNameFirstLast(name))].filter(Boolean);
+      const latestKnown = Math.max(...keys.map((k) => latestTsByName[k] ?? -1));
+      if (stamp >= latestKnown) {
+        keys.forEach((k) => {
+          latestTsByName[k] = stamp;
+          out[k] = team;
+        });
+      }
+    });
+    return out;
+  }, [overview?.chart_points]);
+  const filterTeamByCatcher = useMemo(() => {
+    const out: Record<string, string> = {};
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const byTeam = filters?.catchers_by_team_code ?? {};
+    Object.entries(byTeam).forEach(([teamCodeRaw, names]) => {
+      const teamCode = String(teamCodeRaw ?? '').trim().toUpperCase();
+      if (!teamCode) return;
+      (names ?? []).forEach((nameRaw) => {
+        const name = String(nameRaw ?? '').trim();
+        if (!name) return;
+        const formatted = formatNameFirstLast(name);
+        [name, formatted, norm(name), norm(formatted)].forEach((k) => {
+          if (k) out[k] = teamCode;
+        });
+      });
+    });
+    return out;
+  }, [filters?.catchers_by_team_code]);
 
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
@@ -888,10 +936,22 @@ export default function CatchingSuite() {
                   End Date
                   <input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} />
                 </label>
-                <label>
-                  Session Type
-                  <SearchableSingleSelect options={toOptions(withAll(['Season', 'Bullpen', 'Live BP']))} value={sessionType} onChange={setSessionType} placeholder="All" />
-                </label>
+                {isPro ? (
+                  <label>
+                    Level
+                    <SearchableSingleSelect
+                      options={toOptions(filters?.level_options ?? ['All', 'MLB', 'AAA'])}
+                      value={level}
+                      onChange={setLevel}
+                      placeholder="MLB"
+                    />
+                  </label>
+                ) : (
+                  <label>
+                    Session Type
+                    <SearchableSingleSelect options={toOptions(withAll(['Season', 'Bullpen', 'Live BP']))} value={sessionType} onChange={setSessionType} placeholder="All" />
+                  </label>
+                )}
                 <label>
                   Team
                   <SearchableSingleSelect options={teamTypeOptions} value={teamType} onChange={setTeamType} placeholder="All" />
@@ -1141,11 +1201,11 @@ export default function CatchingSuite() {
                   </div>
                 ) : null}
 
-                <div className="portal-table-wrap">
+                <div className="portal-table-wrap" style={page === 'Leaderboard' ? { maxHeight: '68vh', overflowY: 'auto' } : undefined}>
                   <table className="portal-table">
                     <thead>
                       <tr>
-                        {page === 'Leaderboard' ? <th style={{ textAlign: 'center' }}>Rank</th> : null}
+                        {page === 'Leaderboard' ? <th style={{ textAlign: 'center', position: page === 'Leaderboard' ? 'sticky' : undefined, top: page === 'Leaderboard' ? 0 : undefined, zIndex: page === 'Leaderboard' ? 3 : undefined, background: page === 'Leaderboard' ? 'rgba(7,9,14,0.98)' : undefined }}>Rank</th> : null}
                         {(overview?.table_columns ?? []).map((c, colIndex) => {
                           const isSortable = true;
                           const activeSort = leaderboardSortColumn === c;
@@ -1153,7 +1213,7 @@ export default function CatchingSuite() {
                           return (
                             <th
                               key={c}
-                              style={{ textAlign: 'center', cursor: isSortable ? 'pointer' : 'default' }}
+                              style={{ textAlign: 'center', cursor: isSortable ? 'pointer' : 'default', position: page === 'Leaderboard' ? 'sticky' : undefined, top: page === 'Leaderboard' ? 0 : undefined, zIndex: page === 'Leaderboard' ? 3 : undefined, background: page === 'Leaderboard' ? 'rgba(7,9,14,0.98)' : undefined }}
                               onClick={
                                 isSortable
                                   ? () => {
@@ -1187,9 +1247,49 @@ export default function CatchingSuite() {
                             const val = row[c];
                             const displayVal =
                               page === 'Leaderboard' && colIndex === 0 && typeof val === 'string'
-                                ? formatNameFirstLast(val)
+                                ? (() => {
+                                    const formatted = formatNameFirstLast(val);
+                                    if (leaderboardViewBy !== 'Player') return formatted;
+                                    const key = String(val).trim();
+                                    const keyNorm = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+                                    const formattedNorm = formatted.toLowerCase().replace(/[^a-z0-9]/g, '');
+                                    const teamCode =
+                                      latestTeamByCatcher[key] ??
+                                      latestTeamByCatcher[keyNorm] ??
+                                      latestTeamByCatcher[formatted] ??
+                                      latestTeamByCatcher[formattedNorm] ??
+                                      filterTeamByCatcher[key] ??
+                                      filterTeamByCatcher[keyNorm] ??
+                                      filterTeamByCatcher[formatted] ??
+                                      filterTeamByCatcher[formattedNorm];
+                                    if (!teamCode || key.toLowerCase() === 'all') return formatted;
+                                    const logoUrl = isPro ? getProTeamLogoUrl(teamCode) : '';
+                                    if (!logoUrl) return formatted;
+                                    return (
+                                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                                        <img src={logoUrl} alt={teamCode} style={{ width: 16, height: 16, objectFit: 'contain', display: 'inline-block' }} />
+                                        <span>{formatted}</span>
+                                      </span>
+                                    );
+                                  })()
                                 : val;
-                            return <td key={`${idx}-${c}`} style={{ textAlign: 'center' }}>{displayVal === null || displayVal === undefined ? '-' : formatTableDisplayValue(c, displayVal)}</td>;
+                            const renderedValue =
+                              typeof displayVal === 'string' || typeof displayVal === 'number' || displayVal === null || displayVal === undefined
+                                ? formatTableDisplayValue(c, displayVal)
+                                : displayVal;
+                            return (
+                              <td
+                                key={`${idx}-${c}`}
+                                style={{
+                                  textAlign:
+                                    page === 'Leaderboard' && leaderboardViewBy === 'Player' && colIndex === 0
+                                      ? (isAllRow ? 'center' : 'left')
+                                      : 'center',
+                                }}
+                              >
+                                {displayVal === null || displayVal === undefined ? '-' : renderedValue}
+                              </td>
+                            );
                           })}
                         </tr>
                       );
@@ -1271,7 +1371,7 @@ export default function CatchingSuite() {
                           width: 260,
                           height: 20,
                           border: '1px solid rgba(255,255,255,0.25)',
-                          background: 'linear-gradient(90deg, #e8eef7 0%, #8eb7e1 20%, #aad3ea 40%, #f0e2aa 62%, #eb7852 82%, #d82f31 100%)',
+                          background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(176,11,52) 100%)',
                         }}
                       />
                       <div style={{ width: 260, display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'rgba(255,255,255,0.92)' }}>
