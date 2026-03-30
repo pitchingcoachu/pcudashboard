@@ -136,6 +136,9 @@ type OverviewLitePayload = {
     game_id?: string | null;
     game_uid?: string | null;
     game_foreign_id?: string | null;
+    pitch_number?: number | null;
+    pitch_no?: number | null;
+    pitch_event_id?: number | null;
     pitch_call?: string | null;
     play_result?: string | null;
     tagged_hit_type?: string | null;
