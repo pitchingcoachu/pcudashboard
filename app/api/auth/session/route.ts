@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { resolveAllowedDashboardSchoolCodes } from '../../../../lib/dashboard-access';
 import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
 
 export async function GET() {
@@ -13,20 +12,17 @@ export async function GET() {
   }
 
   const role = session.role === 'player' ? 'player' : session.role === 'coach' ? 'coach' : 'admin';
-  const allowedDashboardSchoolCodes =
-    role === 'admin'
-      ? resolveAllowedDashboardSchoolCodes()
-      : await resolveSessionDashboardSchoolOptions({
-          userId: session.userId ?? 0,
-          email: session.email,
-          name: session.name,
-          role,
-          organizationId: session.organizationId ?? 0,
-          playerId: session.playerId ?? null,
-          dashboardSchoolCode: session.dashboardSchoolCode ?? null,
-          appUrl: session.appUrl,
-          apps: session.apps,
-        });
+  const allowedDashboardSchoolCodes = await resolveSessionDashboardSchoolOptions({
+    userId: session.userId ?? 0,
+    email: session.email,
+    name: session.name,
+    role,
+    organizationId: session.organizationId ?? 0,
+    playerId: session.playerId ?? null,
+    dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+    appUrl: session.appUrl,
+    apps: session.apps,
+  });
 
   return NextResponse.json({
     authenticated: true,

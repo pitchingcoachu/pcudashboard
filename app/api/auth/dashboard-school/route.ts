@@ -8,7 +8,6 @@ import {
   getSessionFromCookies,
   SESSION_COOKIE_NAME,
 } from '../../../../lib/auth';
-import { resolveAllowedDashboardSchoolCodes } from '../../../../lib/dashboard-access';
 import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
 
 export async function POST(request: Request) {
@@ -19,20 +18,17 @@ export async function POST(request: Request) {
 
   const body = (await request.json().catch(() => ({}))) as { schoolCode?: string | null };
   const requested = String(body.schoolCode ?? '').trim().toUpperCase();
-  const allowed =
-    session.role === 'admin'
-      ? resolveAllowedDashboardSchoolCodes()
-      : await resolveSessionDashboardSchoolOptions({
-          userId: session.userId ?? 0,
-          email: session.email,
-          name: session.name,
-          role: 'coach',
-          organizationId: session.organizationId ?? 0,
-          playerId: session.playerId ?? null,
-          dashboardSchoolCode: session.dashboardSchoolCode ?? null,
-          appUrl: session.appUrl,
-          apps: session.apps,
-        });
+  const allowed = await resolveSessionDashboardSchoolOptions({
+    userId: session.userId ?? 0,
+    email: session.email,
+    name: session.name,
+    role: session.role === 'admin' ? 'admin' : 'coach',
+    organizationId: session.organizationId ?? 0,
+    playerId: session.playerId ?? null,
+    dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+    appUrl: session.appUrl,
+    apps: session.apps,
+  });
   const nextSchoolCode = requested && allowed.includes(requested) ? requested : null;
 
   const token = createSessionToken({
