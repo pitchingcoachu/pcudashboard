@@ -8,9 +8,11 @@ import os
 import re
 import time
 import uuid
+import urllib.parse
+import urllib.request
 from functools import lru_cache
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -1314,6 +1316,9 @@ ALL_TABLE_COLUMNS: List[str] = [
     "HBP",
     "K",
     "Whiffs",
+    "ERA",
+    "FIP",
+    "xFIP",
     "0-0",
     "Behind",
     "Even",
@@ -1510,7 +1515,12 @@ def _build_dynamic_table(
         bb_n = sum(1 for r in grp if str(r.get("korbb") or "") == "Walk")
         k_n = sum(1 for r in grp if str(r.get("korbb") or "") == "Strikeout")
         hbp_n = sum(1 for r in grp if str(r.get("pitch_call") or "") == "HitByPitch" or str(r.get("play_result") or "") == "HitByPitch")
-        gb_n = sum(1 for r in grp if str(r.get("tagged_hit_type") or "") == "GroundBall")
+        gb_n = sum(
+            1
+            for r in grp
+            if str(r.get("pitch_call") or "") == "InPlay"
+            and "ground" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " ")
+        )
         in_play_n = sum(1 for r in grp if str(r.get("pitch_call") or "") == "InPlay")
         in_play_live_n = sum(1 for r in live_rows if str(r.get("pitch_call") or "") == "InPlay")
         csw_n = called_strike_n + whiff_n
@@ -1560,16 +1570,32 @@ def _build_dynamic_table(
         )
         outs_n = outs_on_play_n + max(0, k_n - k_with_out_recorded_n)
 
-        pa_keys = {
-            (
-                str(r.get("game_id") or "").strip()
-                or str(r.get("session_date") or "").strip()
-            )
-            + "|"
-            + str(r.get("play_id") or "").strip()
-            for r in grp
-            if str(r.get("play_id") or "").strip()
-        }
+        pa_keys: set[str] = set()
+        for r in grp:
+            # Non-PRO BF is based on PA starts (0-0 counts), not all pitch rows.
+            if not (r.get("balls_num") == 0 and r.get("strikes_num") == 0):
+                continue
+            game_key = str(
+                r.get("game_pk")
+                or r.get("game_id")
+                or r.get("game_uid")
+                or r.get("game_foreign_id")
+                or r.get("session_date")
+                or ""
+            ).strip()
+            ab_idx = str(r.get("at_bat_index") or "").strip()
+            play_id = str(r.get("play_id") or "").strip()
+            inning = str(r.get("inning") or "").strip()
+            batter_norm = _normalize_name_key(str(r.get("batter") or ""))
+            pa_key = ""
+            if game_key and ab_idx:
+                pa_key = f"{game_key}|ab|{ab_idx}"
+            elif game_key and play_id:
+                pa_key = f"{game_key}|play|{play_id}"
+            elif game_key and inning and batter_norm:
+                pa_key = f"{game_key}|inn|{inning}|bat|{batter_norm}"
+            if pa_key:
+                pa_keys.add(pa_key)
         bf_starts = len(pa_keys) if pa_keys else sum(
             1 for r in grp if r.get("balls_num") == 0 and r.get("strikes_num") == 0
         )
@@ -1714,6 +1740,61 @@ def _build_dynamic_table(
         ip_rem = outs_n % 3
         ip_display = f"{ip_whole}.{ip_rem}" if ip_rem else str(ip_whole)
         ip_num = (outs_n / 3.0) if outs_n else 0.0
+        # Advanced pitching metrics (ERA/FIP/xFIP) for custom-table use.
+        # Note: ERA here is an event-weight estimate because earned-runs is not tracked directly.
+        fip_const = 3.2
+        lg_hr_fb = 0.12
+        fip_val: Optional[float] = None
+        x_fip_val: Optional[float] = None
+        era_val: Optional[float] = None
+        # PRO-only: use official pitcher game line totals when available.
+        # (earned runs + outs recorded from StatsAPI boxscore)
+        if str((grp[0].get("school_code") if grp else "") or "").strip().upper() == "PRO":
+            official_keys: set[tuple[str, str]] = set()
+            official_er = 0.0
+            official_outs = 0
+            for r in grp:
+                game_key = str(r.get("game_pk") or r.get("game_id") or "").strip()
+                pitcher_key = _normalize_name_key(str(r.get("pitcher") or ""))
+                if not game_key or not pitcher_key:
+                    continue
+                key = (game_key, pitcher_key)
+                if key in official_keys:
+                    continue
+                official_keys.add(key)
+                er_v = r.get("official_earned_runs")
+                outs_v = r.get("official_outs_recorded")
+                if _is_num(er_v):
+                    official_er += float(er_v)
+                if _is_num(outs_v):
+                    official_outs += int(round(float(outs_v)))
+            if official_outs > 0:
+                official_ip = official_outs / 3.0
+                era_val = max(0.0, (9.0 * official_er) / official_ip)
+        if ip_num > 0:
+            fip_val = ((13.0 * hr) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + fip_const
+            fb_source = live_rows if live_rows else grp
+            fb_n = sum(
+                1
+                for r in fb_source
+                if (
+                    ("fly" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " "))
+                    or ("popup" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " "))
+                )
+            )
+            x_hr = fb_n * lg_hr_fb
+            x_fip_val = ((13.0 * x_hr) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + fip_const
+            if not _is_num(era_val):
+                # Non-PRO fallback: event-weight run estimate, converted to ERA scale.
+                er_est = (
+                    (0.47 * h1)
+                    + (0.78 * h2)
+                    + (1.09 * h3)
+                    + (1.40 * hr)
+                    + (0.33 * (bb_n + hbp_n))
+                    - (0.10 * k_n)
+                )
+                era_val = max(0.0, (9.0 * er_est) / ip_num)
 
         row_out: Dict[str, Any] = {
             split_col_name: key,
@@ -1775,6 +1856,9 @@ def _build_dynamic_table(
             "HBP": hbp_n,
             "K": k_n,
             "Whiffs": whiff_n,
+            "ERA": round(era_val, 2) if _is_num(era_val) else None,
+            "FIP": round(fip_val, 2) if _is_num(fip_val) else None,
+            "xFIP": round(x_fip_val, 2) if _is_num(x_fip_val) else None,
             "Swings": swings_count,
             "Takes": takes,
             "Called-S": called_strikes,
@@ -2095,7 +2179,26 @@ def _build_trend_rows(
             ab_idx = str(row.get("at_bat_index") or "").strip()
             pa_key = f"{game_pk}|ab|{ab_idx}" if ab_idx else f"{game_pk}|pitch|{row.get('id') or row.get('pitch_no') or row.get('pitch_number') or 'p'}"
         else:
-            pa_key = f"{row.get('game_id') or row.get('game_uid') or row.get('game_foreign_id') or 'g'}|{row.get('play_id') or row.get('id') or row.get('pitch_no') or row.get('pitch_number') or 'p'}"
+            game_key = str(
+                row.get("game_pk")
+                or row.get("game_id")
+                or row.get("game_uid")
+                or row.get("game_foreign_id")
+                or row.get("session_date")
+                or "g"
+            ).strip()
+            ab_idx = str(row.get("at_bat_index") or "").strip()
+            play_id = str(row.get("play_id") or "").strip()
+            inning = str(row.get("inning") or "").strip()
+            batter_norm = _normalize_name_key(str(row.get("batter") or ""))
+            if game_key and ab_idx:
+                pa_key = f"{game_key}|ab|{ab_idx}"
+            elif game_key and play_id:
+                pa_key = f"{game_key}|play|{play_id}"
+            elif game_key and inning and batter_norm:
+                pa_key = f"{game_key}|inn|{inning}|bat|{batter_norm}"
+            else:
+                pa_key = f"{game_key}|pitch|{row.get('id') or row.get('pitch_no') or row.get('pitch_number') or 'p'}"
 
         agg["pitches"] += 1
         if _is_num(row.get("rel_speed")):
@@ -2250,7 +2353,12 @@ def _build_trend_rows(
                 row.get("outs_num"),
                 row.get("outs_on_play_num"),
             )
-        agg["bf_keys"].add(pa_key)
+        if is_pro_row:
+            agg["bf_keys"].add(pa_key)
+        else:
+            # Non-PRO BF uses only PA-start rows (0-0).
+            if balls == 0 and strikes == 0:
+                agg["bf_keys"].add(pa_key)
         if is_pro_row:
             if pr_norm in {"strikeout", "strikeout_double_play"}:
                 agg["k_keys"].add(pa_key)
@@ -4622,6 +4730,553 @@ def _pro_pitch_source_table() -> Optional[str]:
         return None
 
 
+PRO_STATSAPI_BASE = "https://statsapi.mlb.com/api/v1"
+PRO_STATSAPI_GAME_FEED_BASE = "https://statsapi.mlb.com/api/v1.1"
+_PRO_API_TIMEOUT_SECONDS = max(5, int(os.getenv("PRO_API_TIMEOUT_SECONDS", "20")))
+_PRO_API_LIVE_LOOKBACK_DAYS = max(1, int(os.getenv("PRO_API_LIVE_LOOKBACK_DAYS", "3")))
+_PRO_API_ROWS_CACHE_TTL_SECONDS = max(5, int(os.getenv("PRO_API_ROWS_CACHE_TTL_SECONDS", "30")))
+_PRO_ENABLE_AAA_API_FALLBACK = str(os.getenv("PRO_ENABLE_AAA_API_FALLBACK", "1")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+_PRO_TRACKED_AAA_PLAYERS_DEFAULT = (
+    "Jared Shuster,Justin Garza,Ryan Cusick,Brooks Kriske,Adrian Sampson,"
+    "Justin Bruihl,Jesse Hahn,Brooks Conley,Ryan Hawks,Tyler Zuber"
+)
+_PRO_API_ROWS_CACHE: Dict[str, tuple[float, List[Dict[str, Any]]]] = {}
+_PRO_API_ROWS_CACHE_LOCK = threading.Lock()
+
+
+def _pro_tracked_aaa_name_keys() -> Set[str]:
+    raw = str(os.getenv("PRO_TRACKED_AAA_PLAYERS", _PRO_TRACKED_AAA_PLAYERS_DEFAULT) or "")
+    names = [part.strip() for part in raw.split(",") if part.strip()]
+    return {_normalize_name_key(name) for name in names if _normalize_name_key(name)}
+
+
+def _pro_api_json_get(url: str) -> Dict[str, Any]:
+    req = urllib.request.Request(url, headers={"User-Agent": "pcu-dashboard-pro-fallback/1.0"})
+    with urllib.request.urlopen(req, timeout=_PRO_API_TIMEOUT_SECONDS) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _pro_api_fetch_game_pks(game_date: date, sport_ids: List[int]) -> List[int]:
+    params = urllib.parse.urlencode(
+        {
+            "sportId": ",".join(str(sid) for sid in sport_ids),
+            "date": game_date.isoformat(),
+        }
+    )
+    payload = _pro_api_json_get(f"{PRO_STATSAPI_BASE}/schedule?{params}")
+    out: List[int] = []
+    for day in payload.get("dates") or []:
+        for game in day.get("games") or []:
+            game_pk = game.get("gamePk")
+            if isinstance(game_pk, int):
+                out.append(game_pk)
+    return out
+
+
+def _pro_map_pitch_type(code: str, desc: str) -> str:
+    c = (code or "").strip().upper()
+    d = (desc or "").strip().lower()
+    mapping = {
+        "FF": "Fastball",
+        "FA": "Fastball",
+        "SI": "Sinker",
+        "FT": "Sinker",
+        "CH": "ChangeUp",
+        "ST": "Sweeper",
+        "SP": "Splitter",
+        "FS": "Splitter",
+        "CU": "Curveball",
+        "KC": "Curveball",
+        "FC": "Cutter",
+        "SL": "Slider",
+        "SV": "Curveball",  # treat slurve as curveball
+        "KN": "Knuckleball",
+    }
+    if c in mapping:
+        return mapping[c]
+    if "slurve" in d:
+        return "Curveball"
+    if "sweeper" in d:
+        return "Sweeper"
+    if "curve" in d:
+        return "Curveball"
+    if "slider" in d:
+        return "Slider"
+    if "change" in d:
+        return "ChangeUp"
+    if "split" in d:
+        return "Splitter"
+    if "cutter" in d:
+        return "Cutter"
+    if "sinker" in d or "two-seam" in d:
+        return "Sinker"
+    if "fastball" in d or "four-seam" in d:
+        return "Fastball"
+    return (desc or code or "Undefined").strip() or "Undefined"
+
+
+def _pro_safe_float(value: Any) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _pro_safe_int(value: Any) -> Optional[int]:
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def _pro_ip_string_to_outs(value: Any) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parts = text.split(".")
+        whole = int(parts[0]) if parts and parts[0] else 0
+        frac = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+        if frac not in {0, 1, 2}:
+            return None
+        return (whole * 3) + frac
+    except Exception:
+        return None
+
+
+def _pro_extract_pitcher_boxscore_stats(feed: Dict[str, Any]) -> tuple[Dict[int, Dict[str, int]], Dict[str, Dict[str, int]]]:
+    by_id: Dict[int, Dict[str, int]] = {}
+    by_name: Dict[str, Dict[str, int]] = {}
+    teams = (((feed.get("liveData") or {}).get("boxscore") or {}).get("teams") or {})
+    for side in ("home", "away"):
+        players = ((teams.get(side) or {}).get("players") or {})
+        if not isinstance(players, dict):
+            continue
+        for pobj in players.values():
+            if not isinstance(pobj, dict):
+                continue
+            person = pobj.get("person") or {}
+            pid = _pro_safe_int(person.get("id"))
+            pname = str(person.get("fullName") or "").strip()
+            stats = ((pobj.get("stats") or {}).get("pitching") or {})
+            if not isinstance(stats, dict):
+                continue
+            er = _pro_safe_int(stats.get("earnedRuns"))
+            outs_rec = _pro_safe_int(stats.get("outs"))
+            if outs_rec is None:
+                outs_rec = _pro_ip_string_to_outs(stats.get("inningsPitched"))
+            if er is None and outs_rec is None:
+                continue
+            payload = {
+                "earned_runs": int(er or 0),
+                "outs_recorded": int(outs_rec or 0),
+            }
+            if isinstance(pid, int):
+                by_id[pid] = payload
+            if pname:
+                by_name[_normalize_name_key(pname)] = payload
+    return by_id, by_name
+
+
+def _pro_api_fetch_game_rows(game_pk: int) -> List[Dict[str, Any]]:
+    try:
+        feed = _pro_api_json_get(f"{PRO_STATSAPI_GAME_FEED_BASE}/game/{game_pk}/feed/live")
+    except Exception:
+        feed = _pro_api_json_get(f"{PRO_STATSAPI_BASE}/game/{game_pk}/feed/live")
+    game_data = feed.get("gameData") or {}
+    game_dt = ((game_data.get("datetime") or {}).get("officialDate") or "")[:10]
+    try:
+        game_date_obj = date.fromisoformat(game_dt) if game_dt else None
+    except Exception:
+        game_date_obj = None
+    teams = game_data.get("teams") or {}
+    home_team = str((teams.get("home") or {}).get("abbreviation") or "").upper()
+    away_team = str((teams.get("away") or {}).get("abbreviation") or "").upper()
+    sport_id = int((game_data.get("sport") or {}).get("id") or 0)
+
+    stats_by_pitcher_id, stats_by_pitcher_name = _pro_extract_pitcher_boxscore_stats(feed)
+    plays = (((feed.get("liveData") or {}).get("plays") or {}).get("allPlays") or [])
+    out_rows: List[Dict[str, Any]] = []
+    next_id_seed = 900000000 + (game_pk % 1000000) * 10000
+    for play in plays:
+        ab_idx = int(play.get("atBatIndex") or 0)
+        about = play.get("about") or {}
+        half = str(about.get("halfInning") or "").lower()
+        inning_num = int(about.get("inning") or 0) if str(about.get("inning") or "").strip() else None
+        if half == "top":
+            pitcher_team = home_team
+            batter_team = away_team
+        elif half == "bottom":
+            pitcher_team = away_team
+            batter_team = home_team
+        else:
+            pitcher_team = ""
+            batter_team = ""
+        matchup = play.get("matchup") or {}
+        pitcher_name = str((matchup.get("pitcher") or {}).get("fullName") or "").strip()
+        pitcher_id = _pro_safe_int((matchup.get("pitcher") or {}).get("id"))
+        batter_name = str((matchup.get("batter") or {}).get("fullName") or "").strip()
+        pitch_hand = str(((matchup.get("pitchHand") or {}).get("code") or "")).strip()
+        bat_side = str(((matchup.get("batSide") or {}).get("code") or "")).strip()
+        play_events = play.get("playEvents") or []
+        pitch_indexes = [int(ev.get("index") or 0) for ev in play_events if bool(ev.get("isPitch"))]
+        terminal_pitch_index = max(pitch_indexes) if pitch_indexes else None
+        outs_before = _pro_safe_int(about.get("outs"))
+
+        for ev in play_events:
+            if not bool(ev.get("isPitch")):
+                continue
+            idx = int(ev.get("index") or 0)
+            details = ev.get("details") or {}
+            pitch_data = ev.get("pitchData") or {}
+            coords = pitch_data.get("coordinates") or {}
+            breaks = pitch_data.get("breaks") or {}
+            count = ev.get("count") or {}
+            hit_data = ev.get("hitData") or {}
+            event_result = play.get("result") or {}
+            event_name = str(event_result.get("event") or "").strip()
+            event_type = str(event_result.get("eventType") or "").strip()
+            bb_type = str(event_result.get("bbType") or "").strip()
+
+            if terminal_pitch_index is not None and idx != terminal_pitch_index:
+                event_name = ""
+                event_type = ""
+                bb_type = ""
+
+            pitch_code = str((details.get("type") or {}).get("code") or "").strip()
+            pitch_desc = str((details.get("type") or {}).get("description") or "").strip()
+            pitch_desc_long = str(details.get("description") or "").strip()
+            desc_for_norm = _pro_norm_token(pitch_desc_long or pitch_desc)
+            event_for_norm = _pro_norm_token(event_type or event_name)
+            bb_for_norm = _pro_norm_token(bb_type)
+
+            row_id = next_id_seed
+            next_id_seed += 1
+            row = {
+                "school_code": "PRO",
+                "id": row_id,
+                "game_pk": game_pk,
+                "sport_id": sport_id,
+                "session_date": game_date_obj,
+                "at_bat_index": ab_idx,
+                "event_index": idx,
+                "pitch_no": _pro_safe_int(ev.get("pitchNumber")),
+                "pitch_number": _pro_safe_int(ev.get("pitchNumber")),
+                "pitch_uid": "",
+                "play_id": "",
+                "game_id": str(game_pk),
+                "game_uid": "",
+                "game_foreign_id": "",
+                "inning": str(inning_num or ""),
+                "pitcher": pitcher_name or "Unknown Pitcher",
+                "batter": batter_name,
+                "catcher": "",
+                "pitcherthrows": pitch_hand,
+                "batterside": bat_side,
+                "pitcher_team_code": pitcher_team,
+                "batter_team_code": batter_team,
+                "pitcher_team_norm": pitcher_team,
+                "batter_team_norm_eff": batter_team,
+                "pitch_type": _pro_map_pitch_type(pitch_code, pitch_desc),
+                "session_type_norm": "Season",
+                "pitch_call": _pro_pitch_call_from_description(desc_for_norm),
+                "play_result": _pro_play_result_from_events(event_for_norm),
+                "korbb": _pro_korbb_from_events(event_for_norm),
+                "tagged_hit_type": _pro_tagged_hit_type_from_bb_type(bb_for_norm),
+                "balls_num": _pro_safe_int(count.get("balls")),
+                "strikes_num": _pro_safe_int(count.get("strikes")),
+                "zone_num": _pro_safe_int(coords.get("zone")),
+                "outs_num": _pro_safe_int(count.get("outs") if count.get("outs") is not None else outs_before),
+                "outs_on_play_num": _pro_safe_int(event_result.get("outs")),
+                "rel_side": _pro_safe_float(coords.get("x0")),
+                "rel_height": _pro_safe_float(coords.get("z0")),
+                "ext_value": _pro_safe_float(pitch_data.get("extension") if pitch_data.get("extension") is not None else breaks.get("extension")),
+                "hb": _pro_safe_float(breaks.get("breakHorizontal") if breaks.get("breakHorizontal") is not None else coords.get("pfxX")),
+                "ivb": _pro_safe_float(breaks.get("breakVerticalInduced") if breaks.get("breakVerticalInduced") is not None else coords.get("pfxZ")),
+                "plate_side": _pro_safe_float(coords.get("pX")),
+                "plate_height": _pro_safe_float(coords.get("pZ")),
+                "rel_speed": _pro_safe_float(pitch_data.get("startSpeed")),
+                "spin_rate": _pro_safe_float(breaks.get("spinRate")),
+                "release_tilt": "",
+                "delta_pitcher_run_exp": _pro_safe_float(details.get("deltaPitcherRunExp")),
+                "delta_run_exp": _pro_safe_float(details.get("deltaRunExp")),
+                "estimated_woba_using_speedangle": _pro_safe_float(details.get("estimatedWobaUsingSpeedangle")),
+                "estimated_ba_using_speedangle": _pro_safe_float(details.get("estimatedBaUsingSpeedangle")),
+                "woba_value": _pro_safe_float(details.get("wobaValue")),
+                "iso_value": _pro_safe_float(details.get("isoValue")),
+                "babip_value": _pro_safe_float(details.get("babipValue")),
+                "break_tilt": "",
+                "spin_eff": None,
+                "exit_speed": _pro_safe_float(hit_data.get("launchSpeed")),
+                "angle": _pro_safe_float(hit_data.get("launchAngle")),
+                "distance": _pro_safe_float(hit_data.get("totalDistance")),
+                "direction": _pro_safe_float(hit_data.get("launchDirection")),
+                "hc_x": _pro_safe_float(hit_data.get("coordinates", {}).get("coordX") if isinstance(hit_data.get("coordinates"), dict) else None),
+                "hc_y": _pro_safe_float(hit_data.get("coordinates", {}).get("coordY") if isinstance(hit_data.get("coordinates"), dict) else None),
+                "video_clip_1": "",
+                "video_clip_2": "",
+                "video_clip_3": "",
+                "is_lefty": str(pitch_hand or "").upper().startswith("L"),
+                "prev_balls": None,
+                "prev_strikes": None,
+                "description_raw": pitch_desc_long or pitch_desc,
+                "events_raw": event_type or event_name,
+                "bb_type_raw": bb_type,
+                "official_earned_runs": (
+                    (stats_by_pitcher_id.get(int(pitcher_id), {}) if pitcher_id is not None else {}).get("earned_runs")
+                    if pitcher_id is not None
+                    else stats_by_pitcher_name.get(_normalize_name_key(pitcher_name), {}).get("earned_runs")
+                ),
+                "official_outs_recorded": (
+                    (stats_by_pitcher_id.get(int(pitcher_id), {}) if pitcher_id is not None else {}).get("outs_recorded")
+                    if pitcher_id is not None
+                    else stats_by_pitcher_name.get(_normalize_name_key(pitcher_name), {}).get("outs_recorded")
+                ),
+            }
+            out_rows.append(row)
+    return out_rows
+
+
+def _pro_row_unique_key(row: Dict[str, Any]) -> tuple:
+    return (
+        str(row.get("session_date") or ""),
+        int(row.get("game_pk") or 0),
+        int(row.get("at_bat_index") or 0),
+        int(row.get("event_index") or 0),
+        int(row.get("pitch_number") or 0),
+        str(row.get("pitcher") or ""),
+        str(row.get("batter") or ""),
+    )
+
+
+def _pro_api_rows_cache_key(start_date: date, end_date: date, sport_ids: List[int], nontracked_aaa_only: bool) -> str:
+    sid = ",".join(str(s) for s in sorted(sport_ids))
+    return f"{start_date.isoformat()}|{end_date.isoformat()}|{sid}|{1 if nontracked_aaa_only else 0}"
+
+
+def _pro_api_rows_cache_get(key: str) -> Optional[List[Dict[str, Any]]]:
+    now = time.time()
+    with _PRO_API_ROWS_CACHE_LOCK:
+        hit = _PRO_API_ROWS_CACHE.get(key)
+        if not hit:
+            return None
+        ts, rows = hit
+        if now - ts > _PRO_API_ROWS_CACHE_TTL_SECONDS:
+            _PRO_API_ROWS_CACHE.pop(key, None)
+            return None
+        return rows
+
+
+def _pro_api_rows_cache_set(key: str, rows: List[Dict[str, Any]]) -> None:
+    with _PRO_API_ROWS_CACHE_LOCK:
+        _PRO_API_ROWS_CACHE[key] = (time.time(), rows)
+        if len(_PRO_API_ROWS_CACHE) > 64:
+            stale = sorted(_PRO_API_ROWS_CACHE.items(), key=lambda item: item[1][0])[: max(1, len(_PRO_API_ROWS_CACHE) - 64)]
+            for k, _ in stale:
+                _PRO_API_ROWS_CACHE.pop(k, None)
+
+
+def _pro_fetch_api_rows_window(
+    *,
+    start_date: date,
+    end_date: date,
+    sport_ids: List[int],
+    nontracked_aaa_only: bool,
+) -> List[Dict[str, Any]]:
+    cache_key = _pro_api_rows_cache_key(start_date, end_date, sport_ids, nontracked_aaa_only)
+    cached = _pro_api_rows_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    tracked_keys = _pro_tracked_aaa_name_keys()
+    out: List[Dict[str, Any]] = []
+    for days_off in range((end_date - start_date).days + 1):
+        day = start_date + timedelta(days=days_off)
+        try:
+            game_pks = _pro_api_fetch_game_pks(day, sport_ids)
+        except Exception:
+            continue
+        for game_pk in game_pks:
+            try:
+                rows = _pro_api_fetch_game_rows(game_pk)
+            except Exception:
+                continue
+            for row in rows:
+                if nontracked_aaa_only and int(row.get("sport_id") or 0) == 11:
+                    pitch_key = _normalize_name_key(str(row.get("pitcher") or ""))
+                    bat_key = _normalize_name_key(str(row.get("batter") or ""))
+                    if pitch_key in tracked_keys or bat_key in tracked_keys:
+                        continue
+                out.append(row)
+    dedup: Dict[tuple, Dict[str, Any]] = {}
+    for row in out:
+        dedup[_pro_row_unique_key(row)] = row
+    rows = list(dedup.values())
+    _pro_api_rows_cache_set(cache_key, rows)
+    return rows
+
+
+def _pro_live_tail_window(start_date: Optional[date], end_date: Optional[date]) -> Optional[tuple[date, date]]:
+    today = date.today()
+    recent_start = today - timedelta(days=_PRO_API_LIVE_LOOKBACK_DAYS)
+    req_start = start_date or recent_start
+    req_end = end_date or today
+    if req_start > req_end:
+        req_start, req_end = req_end, req_start
+    win_start = max(req_start, recent_start)
+    win_end = min(req_end, today)
+    if win_start > win_end:
+        return None
+    return win_start, win_end
+
+
+def _pro_fetch_api_live_tail_rows(
+    *,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    level_filter: Optional[str],
+) -> List[Dict[str, Any]]:
+    if not _PRO_ENABLE_AAA_API_FALLBACK:
+        return []
+    win = _pro_live_tail_window(start_date, end_date)
+    if not win:
+        return []
+    w0, w1 = win
+    level_norm = _pro_level_norm(level_filter)
+    if level_norm == "MLB":
+        sport_ids = [1]
+    elif level_norm == "AAA":
+        sport_ids = [11]
+    else:
+        sport_ids = [1, 11]
+    return _pro_fetch_api_rows_window(
+        start_date=w0,
+        end_date=w1,
+        sport_ids=sport_ids,
+        nontracked_aaa_only=False,
+    )
+
+
+def _pro_row_matches_level(row: Dict[str, Any], level_filter: Optional[str]) -> bool:
+    level_norm = _pro_level_norm(level_filter)
+    if level_norm == "All":
+        return True
+    sport_id = int(row.get("sport_id") or 0)
+    if level_norm == "MLB":
+        return sport_id == 1
+    if level_norm == "AAA":
+        return sport_id == 11
+    return True
+
+
+def _pro_row_matches_pitching_base_filters(
+    row: Dict[str, Any],
+    *,
+    level_filter: Optional[str],
+    selected_pitchers: List[str],
+    selected_pitcher_keys: List[str],
+    team_type: Optional[str],
+    selected_opp_hitters: List[str],
+    selected_opp_hitter_keys: List[str],
+    hand: Optional[str],
+    batter_side: Optional[str],
+    selected_pitch_types: List[str],
+) -> bool:
+    if not _pro_row_matches_level(row, level_filter):
+        return False
+    if selected_pitcher_keys:
+        pitcher_raw = str(row.get("pitcher") or "")
+        pitcher_norm = _normalize_name_key(pitcher_raw)
+        if (
+            pitcher_raw not in selected_pitchers
+            and pitcher_raw.lower() not in {v.strip().lower() for v in selected_pitchers}
+            and pitcher_norm not in set(selected_pitcher_keys)
+        ):
+            return False
+    if selected_opp_hitter_keys:
+        batter_raw = str(row.get("batter") or "")
+        batter_norm = _normalize_name_key(batter_raw)
+        if (
+            batter_raw not in selected_opp_hitters
+            and batter_raw.lower() not in {v.strip().lower() for v in selected_opp_hitters}
+            and batter_norm not in set(selected_opp_hitter_keys)
+        ):
+            return False
+    team_type_norm = _pro_team_code_from_value(team_type or "")
+    if team_type_norm and team_type_norm != "ALL":
+        if _normalize_team_code(str(row.get("pitcher_team_code") or "")) != _normalize_team_code(team_type_norm):
+            return False
+    if (hand or "").strip() and hand != "All":
+        if str(row.get("pitcherthrows") or "").strip() != str(hand).strip():
+            return False
+    if (batter_side or "").strip() and batter_side != "All":
+        if str(row.get("batterside") or "").strip() != str(batter_side).strip():
+            return False
+    if selected_pitch_types:
+        pt = str(row.get("pitch_type") or "")
+        if pt not in selected_pitch_types:
+            return False
+    return True
+
+
+def _pro_row_matches_hitting_base_filters(
+    row: Dict[str, Any],
+    *,
+    level_filter: Optional[str],
+    selected_hitter_values: List[str],
+    selected_hitter_keys: set[str],
+    team_type_value: str,
+    selected_opp_pitcher_values: List[str],
+    selected_opp_pitcher_keys: set[str],
+    hand: Optional[str],
+    batter_side: Optional[str],
+    selected_pitch_types: List[str],
+) -> bool:
+    if not _pro_row_matches_level(row, level_filter):
+        return False
+    if selected_hitter_keys:
+        batter_raw = str(row.get("batter") or "")
+        batter_norm = _normalize_name_key(batter_raw)
+        if (
+            batter_raw not in selected_hitter_values
+            and batter_raw.lower() not in {v.strip().lower() for v in selected_hitter_values}
+            and batter_norm not in selected_hitter_keys
+        ):
+            return False
+    if selected_opp_pitcher_keys:
+        pitcher_raw = str(row.get("pitcher") or "")
+        pitcher_norm = _normalize_name_key(pitcher_raw)
+        if (
+            pitcher_raw not in selected_opp_pitcher_values
+            and pitcher_raw.lower() not in {v.strip().lower() for v in selected_opp_pitcher_values}
+            and pitcher_norm not in selected_opp_pitcher_keys
+        ):
+            return False
+    team_type_norm = _pro_team_code_from_value(team_type_value or "")
+    if team_type_norm and team_type_norm != "ALL":
+        if _normalize_team_code(str(row.get("batter_team_code") or "")) != _normalize_team_code(team_type_norm):
+            return False
+    if (hand or "").strip() and hand != "All":
+        if str(row.get("pitcherthrows") or "").strip() != str(hand).strip():
+            return False
+    if (batter_side or "").strip() and batter_side != "All":
+        if str(row.get("batterside") or "").strip() != str(batter_side).strip():
+            return False
+    if selected_pitch_types:
+        pt = str(row.get("pitch_type") or "")
+        if pt not in selected_pitch_types:
+            return False
+    return True
+
+
 PRO_PITCH_TYPE_SQL = """
 CASE lower(COALESCE(NULLIF(TRIM(taggedpitchtype), ''), 'undefined'))
   WHEN 'slurve' THEN 'Curveball'
@@ -4802,8 +5457,11 @@ def _pro_level_norm(value: Optional[str]) -> str:
 
 
 def _pro_level_sport_ids(value: Optional[str]) -> Optional[List[int]]:
-    # PRO level selection is team-driven (MLB team codes vs non-MLB team codes),
-    # not sport_id-driven.
+    level_norm = _pro_level_norm(value)
+    if level_norm == "MLB":
+        return [1]
+    if level_norm == "AAA":
+        return [11]
     return None
 
 
@@ -4867,18 +5525,10 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
 
     try:
         level_team_clause = "TRUE"
-        if level_norm == "MLB":
-            level_team_clause = "UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) = ANY(%(mlb_team_codes)s::text[])"
-        elif level_norm == "AAA":
-            level_team_clause = (
-                "UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) <> '' "
-                "AND UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) <> ALL(%(mlb_team_codes)s::text[])"
-            )
         with get_conn() as conn, conn.cursor() as cur:
             sql_params = {
                 "sport_ids": level_sport_ids or [],
                 "sport_ids_count": len(level_sport_ids or []),
-                "mlb_team_codes": PRO_MLB_TEAM_CODES,
             }
             cur.execute(
                 """
@@ -5011,6 +5661,57 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
             }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"filters query failed: {exc}") from exc
+
+    # Phase 2 fallback: include non-tracked AAA rows directly from StatsAPI so
+    # filter options can surface names/teams without Neon persistence.
+    if level_norm in {"All", "AAA", "MLB"}:
+        try:
+            api_rows = _pro_fetch_api_live_tail_rows(start_date=None, end_date=None, level_filter=level_norm)
+            if api_rows:
+                api_rows = [r for r in api_rows if _pro_row_matches_level(r, level_norm)]
+                api_pitchers = sorted(
+                    {
+                        str(r.get("pitcher") or "").strip()
+                        for r in api_rows
+                        if str(r.get("pitcher") or "").strip()
+                    }
+                )
+                api_hitters = sorted(
+                    {
+                        str(r.get("batter") or "").strip()
+                        for r in api_rows
+                        if str(r.get("batter") or "").strip()
+                    }
+                )
+                pitchers = sorted(set(pitchers).union(api_pitchers))
+                opp_hitters = sorted(set(opp_hitters).union(api_hitters))
+                for r in api_rows:
+                    tc = _normalize_team_code(str(r.get("pitcher_team_code") or ""))
+                    if not tc:
+                        continue
+                    if tc not in team_codes:
+                        team_codes.append(tc)
+                    p_name = str(r.get("pitcher") or "").strip()
+                    if p_name:
+                        existing = pitchers_by_team_code.setdefault(tc, [])
+                        if p_name not in existing:
+                            existing.append(p_name)
+                    b_name = str(r.get("batter") or "").strip()
+                    if b_name:
+                        existing_h = opp_hitters_by_team_code.setdefault(tc, [])
+                        if b_name not in existing_h:
+                            existing_h.append(b_name)
+                team_codes = sorted({_normalize_team_code(code) for code in team_codes if _normalize_team_code(code)})
+                pitchers_by_team_code = {
+                    code: sorted({name for name in names if str(name).strip()})
+                    for code, names in pitchers_by_team_code.items()
+                }
+                opp_hitters_by_team_code = {
+                    code: sorted({name for name in names if str(name).strip()})
+                    for code, names in opp_hitters_by_team_code.items()
+                }
+        except Exception:
+            pass
 
     team_labels = [_pro_team_label(code, level_norm) for code in team_codes]
     return PitchingFiltersResponse(
@@ -5161,15 +5862,7 @@ def _pro_pitching_overview(
         "sport_ids": level_sport_ids or [],
         "sport_ids_count": len(level_sport_ids or []),
         "team_type_norm": _pro_team_code_from_value(team_type or ""),
-        "mlb_team_codes": PRO_MLB_TEAM_CODES,
     }
-    if _pro_level_norm(level_filter) == "MLB":
-        where.append("UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) = ANY(%(mlb_team_codes)s::text[])")
-    elif _pro_level_norm(level_filter) == "AAA":
-        where.append(
-            "UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) <> '' "
-            "AND UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) <> ALL(%(mlb_team_codes)s::text[])"
-        )
 
     team_type_norm = _pro_team_code_from_value(team_type or "")
     if team_type_norm and team_type_norm != "ALL":
@@ -5205,6 +5898,8 @@ def _pro_pitching_overview(
     hcx_select_expr = "NULL::double precision AS hc_x"
     hcy_select_expr = "NULL::double precision AS hc_y"
     xba_select_expr = "NULL::double precision AS estimated_ba_using_speedangle"
+    official_er_select_expr = "NULL::int AS official_earned_runs"
+    official_outs_select_expr = "NULL::int AS official_outs_recorded"
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -5213,7 +5908,7 @@ def _pro_pitching_overview(
                 FROM information_schema.columns
                 WHERE table_schema = 'public'
                   AND table_name = 'pro_pitch_events'
-                  AND column_name IN ('hit_distance_sc', 'spray_direction', 'hc_x', 'hc_y', 'estimated_ba_using_speedangle')
+                  AND column_name IN ('hit_distance_sc', 'spray_direction', 'hc_x', 'hc_y', 'estimated_ba_using_speedangle', 'official_earned_runs', 'official_outs_recorded')
                 """
             )
             cols = {str(r["column_name"]) for r in cur.fetchall()}
@@ -5227,6 +5922,10 @@ def _pro_pitching_overview(
                 hcy_select_expr = "hc_y"
             if "estimated_ba_using_speedangle" in cols:
                 xba_select_expr = "estimated_ba_using_speedangle"
+            if "official_earned_runs" in cols:
+                official_er_select_expr = "official_earned_runs"
+            if "official_outs_recorded" in cols:
+                official_outs_select_expr = "official_outs_recorded"
     except Exception:
         pass
 
@@ -5266,6 +5965,8 @@ def _pro_pitching_overview(
       """ + zone_select_expr + """,
       outs AS outs_num,
       outsonplay AS outs_on_play_num,
+      """ + official_er_select_expr + """,
+      """ + official_outs_select_expr + """,
       relside AS rel_side,
       relheight AS rel_height,
       extension AS ext_value,
@@ -5305,6 +6006,53 @@ def _pro_pitching_overview(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"overview query failed: {exc}") from exc
 
+    # Phase 2 fallback: non-tracked AAA is fetched live from StatsAPI and never
+    # required to persist in Neon.
+    if _pro_level_norm(level_filter) in {"All", "AAA", "MLB"}:
+        try:
+            api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter=level_filter)
+            if api_rows:
+                api_rows = [
+                    r
+                    for r in api_rows
+                    if _pro_row_matches_pitching_base_filters(
+                        r,
+                        level_filter=level_filter,
+                        selected_pitchers=selected_pitchers,
+                        selected_pitcher_keys=selected_pitcher_keys,
+                        team_type=team_type,
+                        selected_opp_hitters=selected_opp_hitters,
+                        selected_opp_hitter_keys=selected_opp_hitter_keys,
+                        hand=hand,
+                        batter_side=batter_side,
+                        selected_pitch_types=selected_pitch_types,
+                    )
+                ]
+                merged = {(
+                    str(r.get("session_date") or ""),
+                    int(r.get("game_pk") or 0),
+                    int(r.get("at_bat_index") or 0),
+                    int(r.get("event_index") or 0),
+                    int(r.get("pitch_number") or 0),
+                    str(r.get("pitcher") or ""),
+                    str(r.get("batter") or ""),
+                ): r for r in rows}
+                for r in api_rows:
+                    k = (
+                        str(r.get("session_date") or ""),
+                        int(r.get("game_pk") or 0),
+                        int(r.get("at_bat_index") or 0),
+                        int(r.get("event_index") or 0),
+                        int(r.get("pitch_number") or 0),
+                        str(r.get("pitcher") or ""),
+                        str(r.get("batter") or ""),
+                    )
+                    if k not in merged:
+                        merged[k] = r
+                rows = list(merged.values())
+        except Exception:
+            pass
+
     # Keep Stuff+ scale consistent between leaderboard and single-player views:
     # compute pitch-type Stuff baselines from the broader level/date slice, not the
     # currently selected pitcher/team subset.
@@ -5318,13 +6066,6 @@ def _pro_pitching_overview(
             "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
             "(%(pitch_types_count)s::int = 0 OR (" + PRO_PITCH_TYPE_SQL + ") = ANY(%(pitch_types)s::text[]))",
         ]
-        if _pro_level_norm(level_filter) == "MLB":
-            baseline_where.append("UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) = ANY(%(mlb_team_codes)s::text[])")
-        elif _pro_level_norm(level_filter) == "AAA":
-            baseline_where.append(
-                "UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) <> '' "
-                "AND UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) <> ALL(%(mlb_team_codes)s::text[])"
-            )
         baseline_params: Dict[str, Any] = {
             "start_date": start_date,
             "end_date": end_date,
@@ -5332,7 +6073,6 @@ def _pro_pitching_overview(
             "sport_ids_count": len(level_sport_ids or []),
             "pitch_types": selected_pitch_types,
             "pitch_types_count": len(selected_pitch_types),
-            "mlb_team_codes": PRO_MLB_TEAM_CODES,
         }
         if (hand or "").strip() and hand != "All":
             baseline_where.append("COALESCE(NULLIF(TRIM(pitcherthrows), ''), 'Unknown') = %(hand)s::text")
@@ -5879,13 +6619,82 @@ def _pro_pitching_overview(
         row_obj["1-1W%"] = f"{round(oneone_pct, 1)}%" if oneone_pct is not None else None
         # PRO site: RV/100 uses hitter-side delta_run_exp per pitch * 100.
         row_obj["RV/100"] = round(rv100_new, 1) if rv100_new is not None else None
-
-    for tr in table_rows:
-        key_val = str(tr.get(split_col_name) or "")
-        if key_val == "All":
-            _update_row_metrics(tr, rows)
+        # Advanced pitching metrics for custom-table use.
+        ip_raw = row_obj.get("IP")
+        ip_num_local = 0.0
+        if isinstance(ip_raw, str) and ip_raw:
+            parts = ip_raw.split(".")
+            try:
+                whole = int(parts[0]) if parts and parts[0] else 0
+                frac_outs = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+                ip_num_local = whole + (frac_outs / 3.0)
+            except Exception:
+                ip_num_local = 0.0
+        elif _is_num(ip_raw):
+            ip_num_local = float(ip_raw)
+        era_local: Optional[float] = None
+        official_keys_local: set[tuple[str, str]] = set()
+        official_er_local = 0.0
+        official_outs_local = 0
+        for r in group_rows:
+            game_key = str(r.get("game_pk") or r.get("game_id") or "").strip()
+            pitcher_key = _normalize_name_key(str(r.get("pitcher") or ""))
+            if not game_key or not pitcher_key:
+                continue
+            key = (game_key, pitcher_key)
+            if key in official_keys_local:
+                continue
+            official_keys_local.add(key)
+            er_v = r.get("official_earned_runs")
+            outs_v = r.get("official_outs_recorded")
+            if _is_num(er_v):
+                official_er_local += float(er_v)
+            if _is_num(outs_v):
+                official_outs_local += int(round(float(outs_v)))
+        if official_outs_local > 0:
+            official_ip_local = official_outs_local / 3.0
+            era_local = max(0.0, (9.0 * official_er_local) / official_ip_local)
+        if ip_num_local > 0:
+            hr_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "homerun")
+            fip_const_local = 3.2
+            lg_hr_fb_local = 0.12
+            fip_local = ((13.0 * hr_local) + (3.0 * (bb_val + hbp_val)) - (2.0 * k_val)) / ip_num_local + fip_const_local
+            fb_local = sum(
+                1
+                for r in group_rows
+                if ("fly" in _norm_desc(r.get("tagged_hit_type")) or "popup" in _norm_desc(r.get("tagged_hit_type")))
+            )
+            xhr_local = fb_local * lg_hr_fb_local
+            xfip_local = ((13.0 * xhr_local) + (3.0 * (bb_val + hbp_val)) - (2.0 * k_val)) / ip_num_local + fip_const_local
+            # Event-weight run estimate -> ERA scale.
+            h1_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "single")
+            h2_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "double")
+            h3_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "triple")
+            er_est_local = (
+                (0.47 * h1_local)
+                + (0.78 * h2_local)
+                + (1.09 * h3_local)
+                + (1.40 * hr_local)
+                + (0.33 * (bb_val + hbp_val))
+                - (0.10 * k_val)
+            )
+            if not _is_num(era_local):
+                era_local = max(0.0, (9.0 * er_est_local) / ip_num_local)
+            row_obj["FIP"] = round(fip_local, 2)
+            row_obj["xFIP"] = round(xfip_local, 2)
+            row_obj["ERA"] = round(era_local, 2)
         else:
-            _update_row_metrics(tr, grouped_for_pro.get(key_val, []))
+            row_obj["FIP"] = None
+            row_obj["xFIP"] = None
+            row_obj["ERA"] = None
+
+    if school_code == "PRO":
+        for tr in table_rows:
+            key_val = str(tr.get(split_col_name) or "")
+            if key_val == "All":
+                _update_row_metrics(tr, rows)
+            else:
+                _update_row_metrics(tr, grouped_for_pro.get(key_val, []))
 
     pitch_type_rows = [
         PitchTypeSummaryRow(
@@ -5994,18 +6803,10 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
         }
     try:
         level_team_clause = "TRUE"
-        if level_norm == "MLB":
-            level_team_clause = "UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) = ANY(%(mlb_team_codes)s::text[])"
-        elif level_norm == "AAA":
-            level_team_clause = (
-                "UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) <> '' "
-                "AND UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) <> ALL(%(mlb_team_codes)s::text[])"
-            )
         with get_conn() as conn, conn.cursor() as cur:
             sql_params = {
                 "sport_ids": level_sport_ids or [],
                 "sport_ids_count": len(level_sport_ids or []),
-                "mlb_team_codes": PRO_MLB_TEAM_CODES,
             }
             cur.execute(
                 """
@@ -6136,6 +6937,57 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
             }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"hitting filters query failed: {exc}") from exc
+
+    # Phase 2 fallback: include non-tracked AAA rows directly from StatsAPI so
+    # filter options can surface names/teams without Neon persistence.
+    if level_norm in {"All", "AAA", "MLB"}:
+        try:
+            api_rows = _pro_fetch_api_live_tail_rows(start_date=None, end_date=None, level_filter=level_norm)
+            if api_rows:
+                api_rows = [r for r in api_rows if _pro_row_matches_level(r, level_norm)]
+                api_hitters = sorted(
+                    {
+                        str(r.get("batter") or "").strip()
+                        for r in api_rows
+                        if str(r.get("batter") or "").strip()
+                    }
+                )
+                api_pitchers = sorted(
+                    {
+                        str(r.get("pitcher") or "").strip()
+                        for r in api_rows
+                        if str(r.get("pitcher") or "").strip()
+                    }
+                )
+                hitters = sorted(set(hitters).union(api_hitters))
+                opp_pitchers = sorted(set(opp_pitchers).union(api_pitchers))
+                for r in api_rows:
+                    tc = _normalize_team_code(str(r.get("batter_team_code") or ""))
+                    if not tc:
+                        continue
+                    if tc not in team_codes:
+                        team_codes.append(tc)
+                    h_name = str(r.get("batter") or "").strip()
+                    if h_name:
+                        existing = hitters_by_team_code.setdefault(tc, [])
+                        if h_name not in existing:
+                            existing.append(h_name)
+                    p_name = str(r.get("pitcher") or "").strip()
+                    if p_name:
+                        existing_p = opp_pitchers_by_team_code.setdefault(tc, [])
+                        if p_name not in existing_p:
+                            existing_p.append(p_name)
+                team_codes = sorted({_normalize_team_code(code) for code in team_codes if _normalize_team_code(code)})
+                hitters_by_team_code = {
+                    code: sorted({name for name in names if str(name).strip()})
+                    for code, names in hitters_by_team_code.items()
+                }
+                opp_pitchers_by_team_code = {
+                    code: sorted({name for name in names if str(name).strip()})
+                    for code, names in opp_pitchers_by_team_code.items()
+                }
+        except Exception:
+            pass
 
     team_labels = [_pro_team_label(code, level_norm) for code in team_codes]
     return {
@@ -6276,15 +7128,7 @@ def _pro_hitting_overview(
         "sport_ids": level_sport_ids or [],
         "sport_ids_count": len(level_sport_ids or []),
         "team_type_norm": _pro_team_code_from_value(team_type_value),
-        "mlb_team_codes": PRO_MLB_TEAM_CODES,
     }
-    if _pro_level_norm(level_filter) == "MLB":
-        where.append("UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) = ANY(%(mlb_team_codes)s::text[])")
-    elif _pro_level_norm(level_filter) == "AAA":
-        where.append(
-            "UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) <> '' "
-            "AND UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) <> ALL(%(mlb_team_codes)s::text[])"
-        )
     team_type_norm = _pro_team_code_from_value(team_type_value)
     if team_type_norm and team_type_norm != "ALL":
         where.append("UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) = %(team_type_norm)s::text")
@@ -6390,6 +7234,53 @@ def _pro_hitting_overview(
             rows = [dict(r) for r in cur.fetchall()]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"hitting overview query failed: {exc}") from exc
+
+    # Phase 2 fallback: non-tracked AAA is fetched live from StatsAPI and never
+    # required to persist in Neon.
+    if _pro_level_norm(level_filter) in {"All", "AAA", "MLB"}:
+        try:
+            api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter=level_filter)
+            if api_rows:
+                api_rows = [
+                    r
+                    for r in api_rows
+                    if _pro_row_matches_hitting_base_filters(
+                        r,
+                        level_filter=level_filter,
+                        selected_hitter_values=selected_hitter_values,
+                        selected_hitter_keys=selected_hitter_keys,
+                        team_type_value=team_type_value,
+                        selected_opp_pitcher_values=selected_opp_pitcher_values,
+                        selected_opp_pitcher_keys=selected_opp_pitcher_keys,
+                        hand=hand,
+                        batter_side=batter_side,
+                        selected_pitch_types=selected_pitch_types,
+                    )
+                ]
+                merged = {(
+                    str(r.get("session_date") or ""),
+                    int(r.get("game_pk") or 0),
+                    int(r.get("at_bat_index") or 0),
+                    int(r.get("event_index") or 0),
+                    int(r.get("pitch_number") or 0),
+                    str(r.get("pitcher") or ""),
+                    str(r.get("batter") or ""),
+                ): r for r in rows}
+                for r in api_rows:
+                    k = (
+                        str(r.get("session_date") or ""),
+                        int(r.get("game_pk") or 0),
+                        int(r.get("at_bat_index") or 0),
+                        int(r.get("event_index") or 0),
+                        int(r.get("pitch_number") or 0),
+                        str(r.get("pitcher") or ""),
+                        str(r.get("batter") or ""),
+                    )
+                    if k not in merged:
+                        merged[k] = r
+                rows = list(merged.values())
+        except Exception:
+            pass
 
     for row in rows:
         desc_norm = _pro_norm_token(row.get("description_raw"))
@@ -8199,6 +9090,53 @@ def pitching_ab_report(
                     rows = [dict(r) for r in cur.fetchall()]
             except Exception as exc:
                 raise HTTPException(status_code=500, detail=f"ab report query failed: {exc}") from exc
+        if (session_type_filter or "").strip() in {"", "All", "Season"}:
+            try:
+                api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter="All")
+                if api_rows:
+                    api_rows = [
+                        r
+                        for r in api_rows
+                        if _pro_row_matches_pitching_base_filters(
+                            r,
+                            level_filter="All",
+                            selected_pitchers=selected_pitchers,
+                            selected_pitcher_keys=selected_pitcher_keys,
+                            team_type="All",
+                            selected_opp_hitters=selected_opp_hitters,
+                            selected_opp_hitter_keys=selected_opp_hitter_keys,
+                            hand=hand,
+                            batter_side=batter_side,
+                            selected_pitch_types=selected_pitch_types,
+                        )
+                    ]
+                    merged = {
+                        (
+                            str(r.get("session_date") or ""),
+                            int(r.get("game_pk") or 0),
+                            int(r.get("at_bat_index") or 0),
+                            int(r.get("event_index") or 0),
+                            int(r.get("pitch_number") or 0),
+                            str(r.get("pitcher") or ""),
+                            str(r.get("batter") or ""),
+                        ): r
+                        for r in rows
+                    }
+                    for r in api_rows:
+                        k = (
+                            str(r.get("session_date") or ""),
+                            int(r.get("game_pk") or 0),
+                            int(r.get("at_bat_index") or 0),
+                            int(r.get("event_index") or 0),
+                            int(r.get("pitch_number") or 0),
+                            str(r.get("pitcher") or ""),
+                            str(r.get("batter") or ""),
+                        )
+                        if k not in merged:
+                            merged[k] = r
+                    rows = list(merged.values())
+            except Exception:
+                pass
     else:
         try:
             with get_conn() as conn, conn.cursor() as cur:
@@ -8494,10 +9432,163 @@ def hitting_ab_report(
         "end_date": end_date,
         "team_markers_norm": team_markers_norm,
     }
+    rows: List[Dict[str, Any]] = []
+    if school_code == "PRO":
+        source_table = _pro_pitch_source_table()
+        if not source_table:
+            rows = []
+        else:
+            pro_where = [
+                "school_code = 'PRO'",
+                "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
+                "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
+                """(
+                     %(hitters_count)s::int = 0
+                     OR COALESCE(NULLIF(TRIM(batter), ''), '') = ANY(%(hitters_exact)s::text[])
+                     OR lower(COALESCE(NULLIF(TRIM(batter), ''), '')) = ANY(%(hitters_lower)s::text[])
+                     OR lower(regexp_replace(COALESCE(NULLIF(TRIM(batter), ''), ''), '[^a-z0-9]', '', 'g')) = ANY(%(hitters_norm)s::text[])
+                   )""",
+                """(
+                     %(opp_pitchers_count)s::int = 0
+                     OR COALESCE(NULLIF(TRIM(pitcher), ''), '') = ANY(%(opp_pitchers_exact)s::text[])
+                     OR lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')) = ANY(%(opp_pitchers_lower)s::text[])
+                     OR lower(regexp_replace(COALESCE(NULLIF(TRIM(pitcher), ''), ''), '[^a-z0-9]', '', 'g')) = ANY(%(opp_pitchers_norm)s::text[])
+                   )""",
+                "(%(pitch_types_count)s::int = 0 OR (" + PRO_PITCH_TYPE_SQL + ") = ANY(%(pitch_types)s::text[]))",
+            ]
+            if (session_type_filter or "").strip() not in {"", "All", "Season"}:
+                pro_where.append("1=0")
+            if (hand or "").strip() and hand != "All":
+                pro_where.append("COALESCE(NULLIF(TRIM(pitcherthrows), ''), 'Unknown') = %(hand)s::text")
+            if (batter_side or "").strip() and batter_side != "All":
+                pro_where.append("COALESCE(NULLIF(TRIM(batterside), ''), 'Unknown') = %(batter_side)s::text")
 
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
+            pro_params: Dict[str, Any] = {
+                "start_date": start_date,
+                "end_date": end_date,
+                "hitters_exact": selected_hitters,
+                "hitters_lower": [str(v or "").strip().lower() for v in selected_hitters],
+                "hitters_norm": selected_hitter_keys,
+                "hitters_count": len(selected_hitter_keys),
+                "opp_pitchers_exact": selected_opp_pitchers,
+                "opp_pitchers_lower": [str(v or "").strip().lower() for v in selected_opp_pitchers],
+                "opp_pitchers_norm": selected_opp_pitcher_keys,
+                "opp_pitchers_count": len(selected_opp_pitcher_keys),
+                "pitch_types": selected_pitch_types,
+                "pitch_types_count": len(selected_pitch_types),
+                "hand": hand,
+                "batter_side": batter_side,
+            }
+            pro_sql = """
+            SELECT
+              school_code,
+              id,
+              session_date,
+              COALESCE(NULLIF(TRIM(pitcher), ''), 'Unknown Pitcher') AS pitcher,
+              COALESCE(NULLIF(TRIM(batter), ''), '') AS batter,
+              COALESCE(NULLIF(TRIM(catcher), ''), '') AS catcher,
+              COALESCE(NULLIF(TRIM(session_type), ''), 'Season') AS session_type_norm,
+              """ + PRO_PITCH_TYPE_SQL + """ AS pitch_type,
+              COALESCE(NULLIF(TRIM(pitchcall), ''), '') AS pitch_call,
+              COALESCE(NULLIF(TRIM(korbb), ''), '') AS korbb,
+              COALESCE(NULLIF(TRIM(playresult), ''), '') AS play_result,
+              COALESCE(NULLIF(TRIM(taggedhittype), ''), '') AS tagged_hit_type,
+              pitchid AS pitch_no,
+              COALESCE(NULLIF(TRIM(pitchuid), ''), '') AS pitch_uid,
+              COALESCE(NULLIF(TRIM(play_id), ''), '') AS play_id,
+              COALESCE(NULLIF(TRIM(gameid), ''), '') AS game_id,
+              ''::text AS game_uid,
+              ''::text AS game_foreign_id,
+              relspeed AS rel_speed,
+              spinrate AS spin_rate,
+              COALESCE(NULLIF(TRIM(releasetilt), ''), '') AS release_tilt,
+              COALESCE(NULLIF(TRIM(breaktilt), ''), '') AS break_tilt,
+              spinefficiency AS spin_eff,
+              exitspeed AS exit_speed,
+              angle,
+              hit_distance_sc AS distance,
+              inducedvertbreak AS ivb,
+              horzbreak AS hb,
+              relheight AS rel_height,
+              relside AS rel_side,
+              extension AS ext_value,
+              outsonplay AS outs_on_play_num,
+              outs AS outs_num,
+              platelocside AS plate_side,
+              platelocheight AS plate_height,
+              balls AS balls_num,
+              strikes AS strikes_num,
+              CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'L' THEN TRUE ELSE FALSE END AS is_lefty,
+              pitcherthrows,
+              batterside,
+              ''::text AS video_clip_1,
+              ''::text AS video_clip_2,
+              ''::text AS video_clip_3,
+              pitchid AS pitch_number,
+              game_pk,
+              at_bat_index,
+              event_index
+            FROM public.pro_pitch_events
+            WHERE """ + " AND ".join(pro_where) + """
+            ORDER BY session_date, game_pk, at_bat_index, event_index, id
+            """
+            try:
+                with get_conn() as conn, conn.cursor() as cur:
+                    cur.execute(pro_sql, pro_params)
+                    rows = [dict(r) for r in cur.fetchall()]
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"hitting ab report query failed: {exc}") from exc
+        if (session_type_filter or "").strip() in {"", "All", "Season"}:
+            try:
+                api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter="All")
+                if api_rows:
+                    api_rows = [
+                        r
+                        for r in api_rows
+                        if _pro_row_matches_hitting_base_filters(
+                            r,
+                            level_filter="All",
+                            selected_hitter_values=selected_hitters,
+                            selected_hitter_keys=set(selected_hitter_keys),
+                            team_type_value="All",
+                            selected_opp_pitcher_values=selected_opp_pitchers,
+                            selected_opp_pitcher_keys=set(selected_opp_pitcher_keys),
+                            hand=hand,
+                            batter_side=batter_side,
+                            selected_pitch_types=selected_pitch_types,
+                        )
+                    ]
+                    merged = {
+                        (
+                            str(r.get("session_date") or ""),
+                            int(r.get("game_pk") or 0),
+                            int(r.get("at_bat_index") or 0),
+                            int(r.get("event_index") or 0),
+                            int(r.get("pitch_number") or 0),
+                            str(r.get("pitcher") or ""),
+                            str(r.get("batter") or ""),
+                        ): r
+                        for r in rows
+                    }
+                    for r in api_rows:
+                        k = (
+                            str(r.get("session_date") or ""),
+                            int(r.get("game_pk") or 0),
+                            int(r.get("at_bat_index") or 0),
+                            int(r.get("event_index") or 0),
+                            int(r.get("pitch_number") or 0),
+                            str(r.get("pitcher") or ""),
+                            str(r.get("batter") or ""),
+                        )
+                        if k not in merged:
+                            merged[k] = r
+                    rows = list(merged.values())
+            except Exception:
+                pass
+    else:
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
                 """
                 WITH base AS (
                   SELECT
@@ -8614,9 +9705,9 @@ def hitting_ab_report(
                 """,
                 params,
             )
-            rows = cur.fetchall()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"hitting ab report query failed: {exc}") from exc
+                rows = [dict(r) for r in cur.fetchall()]
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"hitting ab report query failed: {exc}") from exc
 
     if not rows:
         return HittingAbReportResponse(
@@ -9952,19 +11043,11 @@ def catching_filters(
         ]
         if sport_ids is not None:
             where_clauses.append("sport_id = ANY(%(sport_ids)s::int[])")
-        if level_filter == "MLB":
-            where_clauses.append("UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) = ANY(%(mlb_team_codes)s::text[])")
-        elif level_filter == "AAA":
-            where_clauses.append(
-                "UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) <> '' "
-                "AND UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) <> ALL(%(mlb_team_codes)s::text[])"
-            )
         where_sql = " AND ".join(where_clauses)
         params: Dict[str, Any] = {
             "start_date": start_date,
             "end_date": end_date,
             "sport_ids": sport_ids or [],
-            "mlb_team_codes": PRO_MLB_TEAM_CODES,
         }
         try:
             with get_conn() as conn, conn.cursor() as cur:
@@ -10026,6 +11109,32 @@ def catching_filters(
                 team_types = ["All", *[_pro_team_label(code, level_filter) for code in team_codes]]
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"catching filters query failed: {exc}") from exc
+
+        if level_filter in {"All", "AAA", "MLB"}:
+            try:
+                api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter=level_filter)
+                if api_rows:
+                    api_rows = [r for r in api_rows if _pro_row_matches_level(r, level_filter)]
+                    api_pitch_types = sorted(
+                        {
+                            str(r.get("pitch_type") or "").strip()
+                            for r in api_rows
+                            if str(r.get("pitch_type") or "").strip() and str(r.get("pitch_type") or "").strip() != "Undefined"
+                        }
+                    )
+                    if api_pitch_types:
+                        pitch_types = sorted(
+                            set(pitch_types).union(api_pitch_types),
+                            key=lambda name: (_pitch_type_sort_rank(name), name),
+                        )
+                    for r in api_rows:
+                        code = _normalize_team_code(str(r.get("pitcher_team_code") or ""))
+                        if code and code not in team_codes:
+                            team_codes.append(code)
+                    team_codes = sorted({_normalize_team_code(code) for code in team_codes if _normalize_team_code(code)})
+                    team_types = ["All", *[_pro_team_label(code, level_filter) for code in team_codes]]
+            except Exception:
+                pass
         return {
             "school_code": school_code,
             "min_date": date_row.get("min_date"),
@@ -10296,13 +11405,6 @@ def catching_overview(
                 ]
                 if sport_ids is not None:
                     pro_where.append("sport_id = ANY(%(sport_ids)s::int[])")
-                if level_filter == "MLB":
-                    pro_where.append("UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) = ANY(%(mlb_team_codes)s::text[])")
-                elif level_filter == "AAA":
-                    pro_where.append(
-                        "UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) <> '' "
-                        "AND UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) <> ALL(%(mlb_team_codes)s::text[])"
-                    )
                 if selected_catcher_keys:
                     pro_where.append(
                         """
@@ -10386,7 +11488,6 @@ def catching_overview(
                             "start_date": start_date,
                             "end_date": end_date,
                             "sport_ids": sport_ids or [],
-                            "mlb_team_codes": PRO_MLB_TEAM_CODES,
                             "catchers_norm": sorted(selected_catcher_keys),
                             "hand_filter": hand,
                             "batter_side_filter": batter_side,
@@ -10394,6 +11495,52 @@ def catching_overview(
                         },
                     )
                     rows = [dict(row) for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
+                    if level_filter in {"All", "AAA", "MLB"}:
+                        try:
+                            api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter=level_filter)
+                            if api_rows:
+                                add_rows: List[Dict[str, Any]] = []
+                                catcher_keys = set(selected_catcher_keys)
+                                for r in api_rows:
+                                    if not _pro_row_matches_level(r, level_filter):
+                                        continue
+                                    if catcher_keys and _normalize_name_key(str(r.get("catcher") or "")) not in catcher_keys:
+                                        continue
+                                    if hand and hand != "All" and str(r.get("pitcherthrows") or "").strip() != str(hand).strip():
+                                        continue
+                                    if batter_side and batter_side != "All" and str(r.get("batterside") or "").strip() != str(batter_side).strip():
+                                        continue
+                                    if selected_pitch_types and str(r.get("pitch_type") or "") not in selected_pitch_types:
+                                        continue
+                                    add_rows.append(r)
+                                if add_rows:
+                                    merged = {
+                                        (
+                                            str(r.get("session_date") or ""),
+                                            int(r.get("game_pk") or 0),
+                                            int(r.get("at_bat_index") or 0),
+                                            int(r.get("event_index") or 0),
+                                            int(r.get("pitch_number") or 0),
+                                            str(r.get("pitcher") or ""),
+                                            str(r.get("batter") or ""),
+                                        ): r
+                                        for r in rows
+                                    }
+                                    for r in add_rows:
+                                        k = (
+                                            str(r.get("session_date") or ""),
+                                            int(r.get("game_pk") or 0),
+                                            int(r.get("at_bat_index") or 0),
+                                            int(r.get("event_index") or 0),
+                                            int(r.get("pitch_number") or 0),
+                                            str(r.get("pitcher") or ""),
+                                            str(r.get("batter") or ""),
+                                        )
+                                        if k not in merged:
+                                            merged[k] = r
+                                    rows = list(merged.values())
+                        except Exception:
+                            pass
                     _annotate_times_through_order(rows)
         else:
             with get_conn() as conn, conn.cursor() as cur:

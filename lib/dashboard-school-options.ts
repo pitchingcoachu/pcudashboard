@@ -84,6 +84,8 @@ export async function resolveSessionDashboardSchoolOptions(session: PortalSessio
 
   if (session.role === 'coach') {
     const codes = await resolveStaffSchoolCodes(session.email);
+    // Coaches created under PRO should only see PRO unless explicitly linked to other schools.
+    if (codes.length === 1 && codes[0] === 'PRO') return ['PRO'];
     const proAllowed = codes.includes('PRO');
     const merged = Array.from(new Set([...codes, selected, fallback, 'LEAGUE'].filter(Boolean))).filter(
       (code) => code !== 'PRO' || proAllowed

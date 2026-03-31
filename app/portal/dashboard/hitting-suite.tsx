@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
-import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
+import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
@@ -256,6 +256,9 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'HBP',
   'K',
   'Whiffs',
+  'ERA',
+  'FIP',
+  'xFIP',
   'Swings',
   'Takes',
   'Called-S',
@@ -1660,10 +1663,10 @@ export default function HittingSuite() {
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
   const isPro = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
   useEffect(() => {
-    if (!isLeague && leaderboardViewBy !== 'Player') {
+    if (!isLeague && !isPro && leaderboardViewBy !== 'Player') {
       setLeaderboardViewBy('Player');
     }
-  }, [isLeague, leaderboardViewBy]);
+  }, [isLeague, isPro, leaderboardViewBy]);
   const teamTypeOptions = useMemo(() => {
     const school = String(filters?.school_code ?? '').trim();
     const base = ['All', school || 'OSU', 'Opponents', 'Campers'];
@@ -2867,7 +2870,7 @@ export default function HittingSuite() {
                 placeholder={TABLE_MODE_DEFAULT}
               />
             </label>
-            {isLeaderboardPage && isLeague ? (
+            {isLeaderboardPage && (isLeague || isPro) ? (
               <label>
                 View By
                 <SearchableSingleSelect
@@ -3089,7 +3092,22 @@ export default function HittingSuite() {
                         isLeaderboardPage && colIndex === 0 && typeof rawValue === 'string'
                           ? (() => {
                               const formatted = formatNameFirstLast(rawValue);
-                              if (leaderboardViewBy !== 'Player') return formatted;
+                              if (leaderboardViewBy !== 'Player') {
+                                if (!isPro) return formatted;
+                                const teamCode = inferProTeamCode(rawValue);
+                                if (!teamCode || String(rawValue ?? '').trim().toLowerCase() === 'all') return formatted;
+                                const teamLogo = getProTeamLogoUrl(teamCode);
+                                const teamName = getProTeamDisplayName(rawValue, (level as 'MLB' | 'AAA' | 'All') || 'All');
+                                if (!teamLogo) return teamName;
+                                return (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                                    <span style={{ width: 16, minWidth: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                      <img src={teamLogo} alt={teamCode} style={{ width: 16, height: 16, objectFit: 'contain', display: 'inline-block' }} />
+                                    </span>
+                                    <span>{teamName}</span>
+                                  </span>
+                                );
+                              }
                               const key = String(rawValue).trim();
                               const keyNorm = key.toLowerCase().replace(/[^a-z0-9]/g, '');
                               const formattedNorm = formatted.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -3102,12 +3120,14 @@ export default function HittingSuite() {
                                 filterTeamByHitter[keyNorm] ??
                                 filterTeamByHitter[formatted] ??
                                 filterTeamByHitter[formattedNorm];
-                              if (!teamCode || key.toLowerCase() === 'all') return formatted;
+                              if (!teamCode || String(rawValue ?? '').trim().toLowerCase() === 'all') return formatted;
                               const logoUrl = isPro ? getProTeamLogoUrl(teamCode) : '';
                               if (!logoUrl) return formatted;
                               return (
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
-                                  <img src={logoUrl} alt={teamCode} style={{ width: 16, height: 16, objectFit: 'contain', display: 'inline-block' }} />
+                                  <span style={{ width: 16, minWidth: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <img src={logoUrl} alt={teamCode} style={{ width: 16, height: 16, objectFit: 'contain', display: 'inline-block' }} />
+                                  </span>
                                   <span>{formatted}</span>
                                 </span>
                               );
@@ -3122,7 +3142,7 @@ export default function HittingSuite() {
                           key={`${idx}-${col}`}
                           style={{
                             textAlign:
-                              isLeaderboardPage && leaderboardViewBy === 'Player' && colIndex === 0
+                              isLeaderboardPage && colIndex === 0 && (leaderboardViewBy === 'Player' || leaderboardViewBy === 'Team')
                                 ? (isAllRow ? 'center' : 'left')
                                 : 'center',
                             padding: '8px 6px',

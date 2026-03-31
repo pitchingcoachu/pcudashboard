@@ -79,6 +79,20 @@ class SavantRow:
     hc_x: Optional[float]
     hc_y: Optional[float]
     spray_direction: Optional[float]
+    bat_speed: Optional[float]
+    vertical_attack_angle: Optional[float]
+    horizontal_attack_angle: Optional[float]
+    contact_position_x: Optional[float]
+    contact_position_y: Optional[float]
+    contact_position_z: Optional[float]
+
+
+def _as_feet(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    v = float(value)
+    # Savant exports sometimes provide these in inches.
+    return v / 12.0 if abs(v) > 15 else v
 
 
 def _iter_savant_rows(path: str) -> Iterable[SavantRow]:
@@ -124,6 +138,47 @@ def _iter_savant_rows(path: str) -> Iterable[SavantRow]:
                 hc_x=_safe_float(row.get("hc_x")),
                 hc_y=_safe_float(row.get("hc_y")),
                 spray_direction=None,
+                bat_speed=_safe_float(_pick(row, "bat_speed", "batspeed")),
+                vertical_attack_angle=_safe_float(_pick(row, "attack_angle", "vertical_attack_angle", "verticalattackangle")),
+                horizontal_attack_angle=_safe_float(
+                    _pick(row, "attack_direction", "horizontal_attack_angle", "horizontalattackangle")
+                ),
+                contact_position_x=_as_feet(
+                    _safe_float(
+                        _pick(
+                            row,
+                            "contact_position_x",
+                            "contactpositionx",
+                            "contact_x",
+                            "intercept_ball_minus_batter_pos_x_inches",
+                            "intercept_ball_minus_batter_pos_x",
+                        )
+                    )
+                ),
+                contact_position_y=_as_feet(
+                    _safe_float(
+                        _pick(
+                            row,
+                            "contact_position_y",
+                            "contactpositiony",
+                            "contact_y",
+                            "intercept_ball_minus_batter_pos_y_inches",
+                            "intercept_ball_minus_batter_pos_y",
+                        )
+                    )
+                ),
+                contact_position_z=_as_feet(
+                    _safe_float(
+                        _pick(
+                            row,
+                            "contact_position_z",
+                            "contactpositionz",
+                            "contact_z",
+                            "intercept_ball_minus_batter_pos_z_inches",
+                            "intercept_ball_minus_batter_pos_z",
+                        )
+                    )
+                ),
             )
 
 
@@ -146,6 +201,18 @@ ALTER TABLE public.pro_pitch_events
   ADD COLUMN IF NOT EXISTS hc_y DOUBLE PRECISION;
 ALTER TABLE public.pro_pitch_events
   ADD COLUMN IF NOT EXISTS spray_direction DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS bat_speed DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS vertical_attack_angle DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS horizontal_attack_angle DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS contact_position_x DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS contact_position_y DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS contact_position_z DOUBLE PRECISION;
 """
 
 
@@ -161,6 +228,12 @@ SET
   hc_x = %(hc_x)s,
   hc_y = %(hc_y)s,
   spray_direction = %(spray_direction)s,
+  bat_speed = %(bat_speed)s,
+  vertical_attack_angle = %(vertical_attack_angle)s,
+  horizontal_attack_angle = %(horizontal_attack_angle)s,
+  contact_position_x = %(contact_position_x)s,
+  contact_position_y = %(contact_position_y)s,
+  contact_position_z = %(contact_position_z)s,
   updated_at = NOW()
 WHERE school_code = 'PRO'
   AND game_pk = %(game_pk)s
@@ -265,6 +338,12 @@ def main() -> int:
                             "hc_x": row.hc_x,
                             "hc_y": row.hc_y,
                             "spray_direction": None,
+                            "bat_speed": row.bat_speed,
+                            "vertical_attack_angle": row.vertical_attack_angle,
+                            "horizontal_attack_angle": row.horizontal_attack_angle,
+                            "contact_position_x": row.contact_position_x,
+                            "contact_position_y": row.contact_position_y,
+                            "contact_position_z": row.contact_position_z,
                         }
                         # Derive stable spray direction (degrees off center field line, 0=center).
                         # Uses Statcast hit coordinate frame when available.
@@ -285,6 +364,12 @@ def main() -> int:
                                 "iso_value",
                                 "babip_value",
                                 "delta_run_exp",
+                                "bat_speed",
+                                "vertical_attack_angle",
+                                "horizontal_attack_angle",
+                                "contact_position_x",
+                                "contact_position_y",
+                                "contact_position_z",
                             )
                         ):
                             total_non_null += 1

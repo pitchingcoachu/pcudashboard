@@ -5,6 +5,7 @@ export type SchoolBrand = {
   accent: string;
   accentSoft: string;
   accentRgb: string;
+  accentRgbSecondary?: string;
 };
 
 const DEFAULT_BRAND: SchoolBrand = {
@@ -14,6 +15,7 @@ const DEFAULT_BRAND: SchoolBrand = {
   accent: '#c8102e',
   accentSoft: '#8f0f24',
   accentRgb: '200, 16, 46',
+  accentRgbSecondary: '200, 16, 46',
 };
 
 const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
@@ -112,6 +114,7 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accent: '#041e42',
     accentSoft: '#02152f',
     accentRgb: '4, 30, 66',
+    accentRgbSecondary: '189, 0, 45',
   },
 };
 
@@ -128,5 +131,6 @@ export function schoolBrandCssVars(schoolCode: string | null | undefined): Recor
     '--accent': brand.accent,
     '--accent-soft': brand.accentSoft,
     '--portal-accent-rgb': brand.accentRgb,
+    '--portal-accent-rgb-secondary': brand.accentRgbSecondary ?? brand.accentRgb,
   } as Record<string, string>;
 }

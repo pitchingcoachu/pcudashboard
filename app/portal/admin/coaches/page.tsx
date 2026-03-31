@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requirePortalSession } from '../../../../lib/portal-session';
-import { listClientsByOrganization, listCoachesByOrganization } from '../../../../lib/training-db';
+import { listClientsByOrganization, listCoachesByOrganization, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 import {
   canUseClientManagement,
   resolveClientManagementOrganizationId,
@@ -25,8 +25,12 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
   const session = await requirePortalSession();
   if (session.role !== 'admin') notFound();
   const canAccessClientManagement = canUseClientManagement(session);
-  const clientManagementOrganizationId = resolveClientManagementOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
+  const clientManagementOrganizationId = await resolveOrganizationIdForSchool({
+    schoolCode: programmingSchoolCode,
+    fallbackOrganizationId: resolveClientManagementOrganizationId(session),
+    createIfMissing: false,
+  });
 
   const [coaches, clients, params] = await Promise.all([
     clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),

@@ -110,6 +110,13 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
+def _norm_name(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    return "".join(ch for ch in raw if ch.isalnum())
+
+
 @dataclass
 class PitchEventRow:
     school_code: str
@@ -170,7 +177,58 @@ class PitchEventRow:
     babip_value: Optional[float]
     hit_distance: Optional[float]
     outs_on_play: Optional[int]
+    official_earned_runs: Optional[int]
+    official_outs_recorded: Optional[int]
     raw_json: Dict[str, Any]
+
+
+def _ip_string_to_outs(value: Any) -> Optional[int]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parts = text.split(".")
+        whole = int(parts[0]) if parts and parts[0] else 0
+        frac = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+        if frac not in {0, 1, 2}:
+            return None
+        return (whole * 3) + frac
+    except Exception:
+        return None
+
+
+def _extract_pitcher_game_stats(feed: Dict[str, Any]) -> tuple[Dict[int, Dict[str, int]], Dict[str, Dict[str, int]]]:
+    by_id: Dict[int, Dict[str, int]] = {}
+    by_name: Dict[str, Dict[str, int]] = {}
+    teams = (((feed.get("liveData") or {}).get("boxscore") or {}).get("teams") or {})
+    for side in ("home", "away"):
+        players = ((teams.get(side) or {}).get("players") or {})
+        if not isinstance(players, dict):
+            continue
+        for pobj in players.values():
+            if not isinstance(pobj, dict):
+                continue
+            person = pobj.get("person") or {}
+            pid = _safe_int(person.get("id"))
+            pname = str(person.get("fullName") or "").strip()
+            stats = ((pobj.get("stats") or {}).get("pitching") or {})
+            if not isinstance(stats, dict):
+                continue
+            earned_runs = _safe_int(stats.get("earnedRuns"))
+            outs_recorded = _safe_int(stats.get("outs"))
+            if outs_recorded is None:
+                outs_recorded = _ip_string_to_outs(stats.get("inningsPitched"))
+            if earned_runs is None and outs_recorded is None:
+                continue
+            payload = {
+                "earned_runs": int(earned_runs or 0),
+                "outs_recorded": int(outs_recorded or 0),
+            }
+            if isinstance(pid, int):
+                by_id[pid] = payload
+            if pname:
+                by_name[_norm_name(pname)] = payload
+    return by_id, by_name
 
 
 def _fetch_game_pks(game_date: date, sport_ids: List[int]) -> List[int]:
@@ -219,6 +277,7 @@ def _fetch_game_pitches(game_pk: int) -> Tuple[Dict[str, Any], List[PitchEventRo
     home_team = home.get("abbreviation")
     away_team = away.get("abbreviation")
 
+    stats_by_pitcher_id, stats_by_pitcher_name = _extract_pitcher_game_stats(feed)
     plays = (((feed.get("liveData") or {}).get("plays") or {}).get("allPlays") or [])
     rows: List[PitchEventRow] = []
     for play in plays:
@@ -405,6 +464,16 @@ def _fetch_game_pitches(game_pk: int) -> Tuple[Dict[str, Any], List[PitchEventRo
                     )
                     else None
                 ),
+                official_earned_runs=(
+                    stats_by_pitcher_id.get(int(pitcher.get("id")) if isinstance(pitcher.get("id"), int) else -1, {}).get("earned_runs")
+                    if isinstance(pitcher.get("id"), int)
+                    else stats_by_pitcher_name.get(_norm_name(pitcher.get("fullName")), {}).get("earned_runs")
+                ),
+                official_outs_recorded=(
+                    stats_by_pitcher_id.get(int(pitcher.get("id")) if isinstance(pitcher.get("id"), int) else -1, {}).get("outs_recorded")
+                    if isinstance(pitcher.get("id"), int)
+                    else stats_by_pitcher_name.get(_norm_name(pitcher.get("fullName")), {}).get("outs_recorded")
+                ),
                 raw_json=event,
             )
             rows.append(row)
@@ -523,6 +592,8 @@ CREATE TABLE IF NOT EXISTS public.pro_pitch_events (
   zone INTEGER,
   outs INTEGER,
   outsonplay INTEGER,
+  official_earned_runs INTEGER,
+  official_outs_recorded INTEGER,
   relspeed DOUBLE PRECISION,
   spinrate DOUBLE PRECISION,
   releasetilt TEXT,
@@ -561,6 +632,8 @@ CREATE INDEX IF NOT EXISTS idx_pro_pitch_events_batterteam
 CREATE INDEX IF NOT EXISTS idx_pro_pitch_events_pitch_type
   ON public.pro_pitch_events (taggedpitchtype);
 ALTER TABLE public.pro_pitch_events ADD COLUMN IF NOT EXISTS delta_pitcher_run_exp DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events ADD COLUMN IF NOT EXISTS official_earned_runs INTEGER;
+ALTER TABLE public.pro_pitch_events ADD COLUMN IF NOT EXISTS official_outs_recorded INTEGER;
 ALTER TABLE public.pro_pitch_events ADD COLUMN IF NOT EXISTS inning INTEGER;
 ALTER TABLE public.pro_pitch_events ADD COLUMN IF NOT EXISTS zone INTEGER;
 ALTER TABLE public.pro_pitch_events ADD COLUMN IF NOT EXISTS estimated_woba_using_speedangle DOUBLE PRECISION;
@@ -655,7 +728,7 @@ INSERT INTO public.pro_pitch_events (
   inning, at_bat_index, play_id, event_index, pitchid, pitchuid, gameid,
   pitcher, batter, catcher, pitcherthrows, batterside, pitcherteam, batterteam,
   taggedpitchtype, pitchcall, playresult, korbb, taggedhittype,
-  balls, strikes, zone, outs, outsonplay, relspeed, spinrate, releasetilt, breaktilt, spinefficiency, delta_pitcher_run_exp,
+  balls, strikes, zone, outs, outsonplay, official_earned_runs, official_outs_recorded, relspeed, spinrate, releasetilt, breaktilt, spinefficiency, delta_pitcher_run_exp,
   inducedvertbreak, horzbreak, relheight, relside, extension, platelocside, platelocheight,
   exitspeed, angle, estimated_woba_using_speedangle, woba_value, iso_value, babip_value,
   hit_distance_sc, hc_x, hc_y, spray_direction,
@@ -666,7 +739,7 @@ VALUES (
   %(inning)s, %(at_bat_index)s, %(play_id)s, %(event_index)s, %(pitchid)s, %(pitchuid)s, %(gameid)s,
   %(pitcher)s, %(batter)s, %(catcher)s, %(pitcherthrows)s, %(batterside)s, %(pitcherteam)s, %(batterteam)s,
   %(taggedpitchtype)s, %(pitchcall)s, %(playresult)s, %(korbb)s, %(taggedhittype)s,
-  %(balls)s, %(strikes)s, %(zone)s, %(outs)s, %(outsonplay)s, %(relspeed)s, %(spinrate)s, %(releasetilt)s, %(breaktilt)s, %(spinefficiency)s, %(delta_pitcher_run_exp)s,
+  %(balls)s, %(strikes)s, %(zone)s, %(outs)s, %(outsonplay)s, %(official_earned_runs)s, %(official_outs_recorded)s, %(relspeed)s, %(spinrate)s, %(releasetilt)s, %(breaktilt)s, %(spinefficiency)s, %(delta_pitcher_run_exp)s,
   %(inducedvertbreak)s, %(horzbreak)s, %(relheight)s, %(relside)s, %(extension)s, %(platelocside)s, %(platelocheight)s,
   %(exitspeed)s, %(angle)s, %(estimated_woba_using_speedangle)s, %(woba_value)s, %(iso_value)s, %(babip_value)s,
   %(hit_distance_sc)s, %(hc_x)s, %(hc_y)s, %(spray_direction)s,
@@ -703,6 +776,8 @@ ON CONFLICT (game_pk, play_id, event_index) DO UPDATE SET
   zone = EXCLUDED.zone,
   outs = EXCLUDED.outs,
   outsonplay = EXCLUDED.outsonplay,
+  official_earned_runs = EXCLUDED.official_earned_runs,
+  official_outs_recorded = EXCLUDED.official_outs_recorded,
   relspeed = EXCLUDED.relspeed,
   spinrate = EXCLUDED.spinrate,
   releasetilt = EXCLUDED.releasetilt,
@@ -736,6 +811,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--start-date", required=True, help="YYYY-MM-DD")
     parser.add_argument("--end-date", required=True, help="YYYY-MM-DD")
     parser.add_argument("--sport-ids", default="1,11", help="Comma-separated MLB StatsAPI sportIds (default: 1,11)")
+    parser.add_argument(
+        "--aaa-tracked-players",
+        default="",
+        help="Comma-separated AAA player names to keep (matches pitcher OR batter). Empty keeps all AAA.",
+    )
     parser.add_argument("--sleep-ms", type=int, default=150, help="Sleep between game requests (default: 150)")
     return parser.parse_args()
 
@@ -757,6 +837,10 @@ def main() -> int:
     sport_ids = [int(token.strip()) for token in args.sport_ids.split(",") if token.strip().isdigit()]
     if not sport_ids:
         sport_ids = [1, 11]
+    tracked_aaa_names = [
+        token.strip() for token in str(args.aaa_tracked_players or "").split(",") if token.strip()
+    ]
+    tracked_aaa_norm = {_norm_name(name) for name in tracked_aaa_names if _norm_name(name)}
 
     db_url = _with_system_sslrootcert(_require_env("DASHBOARD_DATABASE_URL"))
 
@@ -784,6 +868,11 @@ def main() -> int:
                 for row in rows:
                     if not row.is_pitch:
                         continue
+                    if int(row.sport_id or 0) == 11 and tracked_aaa_norm:
+                        pitcher_norm = _norm_name(row.pitcher_name)
+                        batter_norm = _norm_name(row.batter_name)
+                        if pitcher_norm not in tracked_aaa_norm and batter_norm not in tracked_aaa_norm:
+                            continue
                     item = dict(row.__dict__)
                     if not item.get("game_date"):
                         item["game_date"] = day.isoformat()
@@ -824,6 +913,8 @@ def main() -> int:
                             "zone": item.get("zone"),
                             "outs": item.get("outs"),
                             "outsonplay": item.get("outs_on_play"),
+                            "official_earned_runs": item.get("official_earned_runs"),
+                            "official_outs_recorded": item.get("official_outs_recorded"),
                             "relspeed": item.get("start_speed"),
                             "spinrate": item.get("spin_rate"),
                             "releasetilt": item.get("spin_direction"),

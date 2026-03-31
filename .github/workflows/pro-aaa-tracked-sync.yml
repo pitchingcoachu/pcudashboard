@@ -1,0 +1,65 @@
+name: PRO AAA Sync
+
+on:
+  schedule:
+    # PT schedule requested (5:00, 9:00) represented in UTC.
+    # Note: GitHub cron is UTC and will shift by 1 hour across DST changes.
+    - cron: "0 12 * * *"
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "YYYY-MM-DD (optional)"
+        required: false
+      end_date:
+        description: "YYYY-MM-DD (optional)"
+        required: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DASHBOARD_DATABASE_URL: ${{ secrets.DASHBOARD_DATABASE_URL }}
+      PRO_SYNC_LOOKBACK_DAYS: "3"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r dashboard_api/requirements.txt
+
+      - name: Run MLB StatsAPI sync (AAA full)
+        shell: bash
+        run: |
+          END_DATE="${{ github.event.inputs.end_date }}"
+          START_DATE="${{ github.event.inputs.start_date }}"
+          if [[ -z "${END_DATE}" ]]; then
+            END_DATE="$(date -u +%F)"
+          fi
+          if [[ -z "${START_DATE}" ]]; then
+            START_DATE="$(date -u -d "${PRO_SYNC_LOOKBACK_DAYS} days ago" +%F)"
+          fi
+          echo "Syncing AAA full dataset from ${START_DATE} to ${END_DATE}"
+          python scripts/sync_pro_mlb_stats.py \
+            --start-date "${START_DATE}" \
+            --end-date "${END_DATE}" \
+            --sport-ids 11 \
+            --sleep-ms 120
+
+      - name: Enrich from Savant CSV (if files are present)
+        shell: bash
+        run: |
+          shopt -s nullglob
+          MLB_FILES=(data/pro_savant_raw/mlb/*.csv)
+          MILB_FILES=(data/pro_savant_raw/milb/*.csv)
+          if (( ${#MLB_FILES[@]} == 0 && ${#MILB_FILES[@]} == 0 )); then
+            echo "No Savant CSV files found. Skipping."
+            exit 0
+          fi
+          python scripts/sync_pro_savant_csv.py --paths "data/pro_savant_raw/mlb/*.csv" "data/pro_savant_raw/milb/*.csv"

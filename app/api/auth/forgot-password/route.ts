@@ -43,9 +43,9 @@ export async function POST(request: Request) {
       body: JSON.stringify({
         from: fromEmail,
         to: [tokenRecord.email],
-        subject: 'Reset your PCU Dashboard password',
+        subject: 'Reset your Dashboard password',
         text: `Use this link to reset your password: ${resetUrl}`,
-        html: `<p>Use this link to reset your PCU Dashboard password:</p><p><a href="${resetUrl}">${resetUrl}</a></p>`,
+        html: `<p>Use this link to reset your Dashboard password:</p><p><a href="${resetUrl}">${resetUrl}</a></p>`,
       }),
     });
 

@@ -116,6 +116,76 @@ const MLB_CODE_BY_FULL_NAME: Record<string, string> = {
   'washington nationals': 'WSH',
 };
 
+const MLB_FULL_NAME_BY_CODE: Record<string, string> = {
+  AZ: 'Arizona Diamondbacks',
+  ARI: 'Arizona Diamondbacks',
+  ATL: 'Atlanta Braves',
+  BAL: 'Baltimore Orioles',
+  BOS: 'Boston Red Sox',
+  CHC: 'Chicago Cubs',
+  CWS: 'Chicago White Sox',
+  CIN: 'Cincinnati Reds',
+  CLE: 'Cleveland Guardians',
+  COL: 'Colorado Rockies',
+  DET: 'Detroit Tigers',
+  HOU: 'Houston Astros',
+  KC: 'Kansas City Royals',
+  LAA: 'Los Angeles Angels',
+  LAD: 'Los Angeles Dodgers',
+  MIA: 'Miami Marlins',
+  MIL: 'Milwaukee Brewers',
+  MIN: 'Minnesota Twins',
+  NYM: 'New York Mets',
+  NYY: 'New York Yankees',
+  ATH: 'Athletics',
+  OAK: 'Athletics',
+  PHI: 'Philadelphia Phillies',
+  PIT: 'Pittsburgh Pirates',
+  SD: 'San Diego Padres',
+  SF: 'San Francisco Giants',
+  SEA: 'Seattle Mariners',
+  STL: 'St. Louis Cardinals',
+  TB: 'Tampa Bay Rays',
+  TEX: 'Texas Rangers',
+  TOR: 'Toronto Blue Jays',
+  WSH: 'Washington Nationals',
+};
+
+const AAA_FULL_NAME_BY_CODE: Record<string, string> = {
+  ABQ: 'Albuquerque Isotopes (COL)',
+  BUF: 'Buffalo Bisons (TOR)',
+  CHA: 'Charlotte Knights (CWS)',
+  CLT: 'Charlotte Knights (CWS)',
+  COL: 'Columbus Clippers (CLE)',
+  DUR: 'Durham Bulls (TB)',
+  ELP: 'El Paso Chihuahuas (SD)',
+  GWN: 'Gwinnett Stripers (ATL)',
+  IND: 'Indianapolis Indians (PIT)',
+  IOW: 'Iowa Cubs (CHC)',
+  JAX: 'Jacksonville Jumbo Shrimp (MIA)',
+  LAS: 'Las Vegas Aviators (ATH)',
+  LHV: 'Lehigh Valley IronPigs (PHI)',
+  LOU: 'Louisville Bats (CIN)',
+  MEM: 'Memphis Redbirds (STL)',
+  NAS: 'Nashville Sounds (MIL)',
+  NOR: 'Norfolk Tides (BAL)',
+  OKC: 'Oklahoma City Comets (LAD)',
+  OMA: 'Omaha Storm Chasers (KC)',
+  RNO: 'Reno Aces (AZ)',
+  ROC: 'Rochester Red Wings (WSH)',
+  RR: 'Round Rock Express (TEX)',
+  SAC: 'Sacramento River Cats (SF)',
+  SA: 'San Antonio Missions (SD)',
+  SLC: 'Salt Lake Bees (LAA)',
+  STP: 'St. Paul Saints (MIN)',
+  SUG: 'Sugar Land Space Cowboys (HOU)',
+  SWB: 'Scranton/Wilkes-Barre RailRiders (NYY)',
+  SYR: 'Syracuse Mets (NYM)',
+  TAC: 'Tacoma Rainiers (SEA)',
+  TOL: 'Toledo Mud Hens (DET)',
+  WOR: 'Worcester Red Sox (BOS)',
+};
+
 function normalizeCode(teamCode: string | null | undefined): string {
   const raw = String(teamCode ?? '').trim().toUpperCase();
   if (!raw) return '';
@@ -161,4 +231,22 @@ export function getProTeamLogoUrl(teamCode: string | null | undefined): string {
     return `https://www.mlbstatic.com/team-logos/team-cap-on-dark/${teamId}.svg`;
   }
   return `https://www.mlbstatic.com/team-logos/team-cap-on-light/${teamId}.svg`;
+}
+
+export function getProTeamDisplayName(
+  value: string | null | undefined,
+  preferredLevel: 'MLB' | 'AAA' | 'All' = 'All'
+): string {
+  const raw = String(value ?? '').trim();
+  if (!raw || raw.toLowerCase() === 'all') return raw || 'All';
+  const code = inferProTeamCode(raw);
+  if (!code) return raw;
+  const normalized = normalizeCode(code);
+  if (preferredLevel === 'MLB') {
+    return MLB_FULL_NAME_BY_CODE[normalized] ?? AAA_FULL_NAME_BY_CODE[normalized] ?? raw;
+  }
+  if (preferredLevel === 'AAA') {
+    return AAA_FULL_NAME_BY_CODE[normalized] ?? MLB_FULL_NAME_BY_CODE[normalized] ?? raw;
+  }
+  return MLB_FULL_NAME_BY_CODE[normalized] ?? AAA_FULL_NAME_BY_CODE[normalized] ?? raw;
 }

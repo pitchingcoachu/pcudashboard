@@ -62,7 +62,7 @@ export default async function PortalDashboardPage() {
                 ) : null
               )}
               <Link href="/portal/dashboard" className="portal-nav-link active">
-                PCU Dashboard
+                Dashboard
               </Link>
               {(session.role === 'admin' || session.role === 'coach') && (
                 <Link href="/tutorials" className="portal-nav-link">
@@ -79,7 +79,7 @@ export default async function PortalDashboardPage() {
               ...(session.role === 'player'
                 ? [...(canAccessProgramming ? [{ href: '/portal/player', label: 'Profile' }, { href: '/portal/player/program', label: 'Program' }] : [])]
                 : [...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : [])]),
-              { href: '/portal/dashboard', label: 'PCU Dashboard' },
+              { href: '/portal/dashboard', label: 'Dashboard' },
               ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/tutorials', label: 'Tutorials' }] : []),
             ]}
           />

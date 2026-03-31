@@ -107,7 +107,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
                 Program
               </Link>
               <Link href="/portal/dashboard" className="portal-nav-link">
-                PCU Dashboard
+                Dashboard
               </Link>
             </nav>
           </div>
@@ -139,7 +139,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           <div className="portal-header-center">
             <nav className="portal-nav" aria-label="Portal Navigation">
               <Link href="/portal/dashboard" className="portal-nav-link">
-                PCU Dashboard
+                Dashboard
               </Link>
               {(session.role === 'admin' || session.role === 'coach') && (
                 <Link href="/portal/admin" className="portal-nav-link">
@@ -157,7 +157,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
               currentHref="/portal/player/program"
               loggedInAs={session.name ?? session.email}
               items={[
-                { href: '/portal/dashboard', label: 'PCU Dashboard' },
+                { href: '/portal/dashboard', label: 'Dashboard' },
                 ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin' }] : []),
                 { href: '/portal/player', label: 'Profile' },
                 { href: '/portal/player/program', label: 'Program' },
@@ -240,7 +240,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
             </Link>
             {session.role === 'player' ? (
               <Link href="/portal/dashboard" className="portal-nav-link">
-                PCU Dashboard
+                Dashboard
               </Link>
             ) : (
               <Link href="/tutorials" className="portal-nav-link">
@@ -262,7 +262,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
               },
               { href: '/portal/player/program', label: 'Program' },
               ...(session.role === 'player'
-                ? [{ href: '/portal/dashboard', label: 'PCU Dashboard' }]
+                ? [{ href: '/portal/dashboard', label: 'Dashboard' }]
                 : [{ href: '/tutorials', label: 'Tutorials' }]),
             ]}
           />

@@ -162,10 +162,10 @@ export default async function AdminHomePage() {
         </>
       ) : null}
       <article className="portal-admin-card">
-        <h2>PCU Dashboard</h2>
+        <h2>Dashboard</h2>
         <p>Open the main dashboard view.</p>
         <Link href="/portal/dashboard" className="btn btn-primary as-link">
-          Open PCU Dashboard
+          Open Dashboard
         </Link>
       </article>
     </div>

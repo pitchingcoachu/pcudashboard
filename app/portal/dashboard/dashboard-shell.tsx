@@ -39,13 +39,15 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
   });
   const canAccessPlayerNotes = role === 'admin' || role === 'coach';
   const isLeague = String(selectedSchoolCode || '').toUpperCase() === 'LEAGUE';
+  const isPro = String(selectedSchoolCode || '').toUpperCase() === 'PRO';
   const suiteOptions: SuiteName[] = useMemo(() => {
-    const base: SuiteName[] = ['Pitching', 'Hitting', 'Catching', 'Custom Reports', 'Comparison Tool'];
+    const base: SuiteName[] = ['Pitching', 'Hitting', 'Custom Reports', 'Comparison Tool'];
+    if (!isPro) base.push('Catching');
     if (!isLeague) base.push('Player Plans');
     if (!isLeague && canAccessPlayerNotes) base.push('Player Notes');
     if (!isLeague) base.push('Stuff+ Calculator');
     return base;
-  }, [canAccessPlayerNotes, isLeague]);
+  }, [canAccessPlayerNotes, isLeague, isPro]);
 
   useEffect(() => {
     if (!suiteOptions.includes(suite)) {
@@ -97,7 +99,7 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
         </div>
       ) : null}
       {mountedSuites.Hitting ? <div style={{ display: showSuite('Hitting') ? 'block' : 'none' }}><HittingSuite /></div> : null}
-      {mountedSuites.Catching ? <div style={{ display: showSuite('Catching') ? 'block' : 'none' }}><CatchingSuite /></div> : null}
+      {!isPro && mountedSuites.Catching ? <div style={{ display: showSuite('Catching') ? 'block' : 'none' }}><CatchingSuite /></div> : null}
       {mountedSuites['Custom Reports'] ? (
         <div style={{ display: showSuite('Custom Reports') ? 'block' : 'none' }}>
           <CustomReportsSuite initialSchoolCode={selectedSchoolCode} />

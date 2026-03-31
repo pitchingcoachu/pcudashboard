@@ -619,6 +619,73 @@ export async function listOrganizationOptions(): Promise<OrganizationOptionRow[]
     });
 }
 
+function parseOrgSchoolMap(): Record<number, string> {
+  try {
+    const parsed = JSON.parse(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}') as Record<string, unknown>;
+    const out: Record<number, string> = {};
+    for (const [orgIdRaw, schoolRaw] of Object.entries(parsed)) {
+      const orgId = Number(orgIdRaw);
+      const school = typeof schoolRaw === 'string' ? schoolRaw.trim().toUpperCase() : '';
+      if (!Number.isFinite(orgId) || orgId <= 0 || !school) continue;
+      out[orgId] = school;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export async function resolveOrganizationIdForSchool(input: {
+  schoolCode: string;
+  fallbackOrganizationId?: number;
+  createIfMissing?: boolean;
+}): Promise<number> {
+  if (!isDatabaseConfigured()) return Number(input.fallbackOrganizationId ?? 0) || 0;
+  await ensureTrainingDbReady();
+  const schoolCode = String(input.schoolCode ?? '').trim().toUpperCase();
+  const fallbackOrganizationId = Number(input.fallbackOrganizationId ?? 0);
+  if (!schoolCode) return Number.isFinite(fallbackOrganizationId) && fallbackOrganizationId > 0 ? fallbackOrganizationId : 0;
+
+  const schoolByOrgId = parseOrgSchoolMap();
+  const mapped = Object.entries(schoolByOrgId).find(([, code]) => code === schoolCode);
+  if (mapped) {
+    const orgId = Number(mapped[0]);
+    if (Number.isFinite(orgId) && orgId > 0) return orgId;
+  }
+
+  const pool = getDbPool();
+  const byName = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM organizations
+      WHERE UPPER(TRIM(name)) = $1
+      ORDER BY id ASC
+      LIMIT 1
+    `,
+    [schoolCode]
+  );
+  if ((byName.rowCount ?? 0) > 0) {
+    const orgId = Number(byName.rows[0]?.id ?? 0);
+    if (Number.isFinite(orgId) && orgId > 0) return orgId;
+  }
+
+  if (input.createIfMissing) {
+    const created = await pool.query<{ id: number }>(
+      `
+        INSERT INTO organizations (name)
+        VALUES ($1)
+        ON CONFLICT (name) DO UPDATE SET updated_at = NOW()
+        RETURNING id
+      `,
+      [schoolCode]
+    );
+    const orgId = Number(created.rows[0]?.id ?? 0);
+    if (Number.isFinite(orgId) && orgId > 0) return orgId;
+  }
+
+  return Number.isFinite(fallbackOrganizationId) && fallbackOrganizationId > 0 ? fallbackOrganizationId : 0;
+}
+
 export async function isCoachAssignedToPlayer(input: {
   organizationId: number;
   coachUserId: number;

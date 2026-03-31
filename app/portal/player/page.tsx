@@ -98,7 +98,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
                 </Link>
               ) : null}
               <Link href="/portal/dashboard" className="portal-nav-link">
-                PCU Dashboard
+                Dashboard
               </Link>
             </nav>
           </div>
@@ -197,7 +197,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             ) : null}
             {session.role === 'player' ? (
               <Link href="/portal/dashboard" className="portal-nav-link">
-                PCU Dashboard
+                Dashboard
               </Link>
             ) : (
               <Link href="/tutorials" className="portal-nav-link">
@@ -213,7 +213,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
               { href: '/portal/player', label: 'Profile' },
               ...(canAccessProgramming ? [{ href: fullProgramHref, label: 'Program' }] : []),
               ...(session.role === 'player'
-                ? [{ href: '/portal/dashboard', label: 'PCU Dashboard' }]
+                ? [{ href: '/portal/dashboard', label: 'Dashboard' }]
                 : [{ href: '/tutorials', label: 'Tutorials' }]),
             ]}
           />

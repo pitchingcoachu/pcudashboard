@@ -10,6 +10,7 @@
   --accent: #c8102e;
   --accent-soft: #8f0f24;
   --portal-accent-rgb: 200, 16, 46;
+  --portal-accent-rgb-secondary: 200, 16, 46;
   --highlight: #ffffff;
 }
 
@@ -25,6 +26,7 @@ body {
   color: var(--text-main);
   font-family: Manrope, sans-serif;
   background: radial-gradient(circle at 10% 4%, rgba(var(--portal-accent-rgb, 200, 16, 46), 0.2), transparent 42%),
+    radial-gradient(circle at 84% 8%, rgba(var(--portal-accent-rgb-secondary, 200, 16, 46), 0.14), transparent 38%),
     radial-gradient(circle at 90% 0%, rgba(255, 255, 255, 0.1), transparent 36%),
     linear-gradient(128deg, #050505 0%, #0b0b0b 48%, #151515 100%);
 }
@@ -44,6 +46,7 @@ body::before {
 body:has(.portal-shell) {
   background:
     radial-gradient(circle at 8% 6%, rgba(var(--portal-accent-rgb, 200, 16, 46), 0.2), transparent 42%),
+    radial-gradient(circle at 86% 7%, rgba(var(--portal-accent-rgb-secondary, 200, 16, 46), 0.15), transparent 38%),
     linear-gradient(128deg, #050505 0%, #0b0b0b 48%, #151515 100%);
 }
 
@@ -262,13 +265,13 @@ body:has(.portal-shell)::before {
 }
 
 .portal-shell .social-link {
-  color: var(--accent);
-  background: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.1);
+  color: rgb(var(--portal-accent-rgb-secondary, 200, 16, 46));
+  background: rgba(var(--portal-accent-rgb-secondary, 200, 16, 46), 0.1);
 }
 
 .portal-shell .social-link:hover {
-  border-color: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.9);
-  background: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.16);
+  border-color: rgba(var(--portal-accent-rgb-secondary, 200, 16, 46), 0.9);
+  background: rgba(var(--portal-accent-rgb-secondary, 200, 16, 46), 0.16);
 }
 
 .btn-ghost {
@@ -1309,6 +1312,7 @@ main {
   isolation: isolate;
   background:
     radial-gradient(circle at 10% 4%, rgba(var(--portal-accent-rgb, 255, 255, 255), 0.22), transparent 44%),
+    radial-gradient(circle at 84% 4%, rgba(var(--portal-accent-rgb-secondary, 255, 255, 255), 0.16), transparent 40%),
     radial-gradient(circle at 92% 2%, rgba(255, 255, 255, 0.08), transparent 38%),
     linear-gradient(128deg, #050505 0%, #0b0b0b 48%, #151515 100%);
 }
@@ -1321,6 +1325,7 @@ main {
   pointer-events: none;
   background:
     radial-gradient(circle at 10% 4%, rgba(var(--portal-accent-rgb, 255, 255, 255), 0.22), transparent 44%),
+    radial-gradient(circle at 84% 4%, rgba(var(--portal-accent-rgb-secondary, 255, 255, 255), 0.16), transparent 40%),
     radial-gradient(circle at 92% 2%, rgba(255, 255, 255, 0.08), transparent 38%),
     linear-gradient(128deg, #050505 0%, #0b0b0b 48%, #151515 100%);
 }

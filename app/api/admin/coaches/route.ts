@@ -1,8 +1,8 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { resolveClientManagementOrganizationId } from '../../../../lib/programming-scope';
-import { createStaffUser } from '../../../../lib/training-db';
+import { resolveClientManagementOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
+import { createStaffUser, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -23,7 +23,13 @@ export async function POST(request: Request) {
 
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/coaches');
-    const organizationId = resolveClientManagementOrganizationId(session);
+    const scopedOrganizationId = resolveClientManagementOrganizationId(session);
+    const selectedSchoolCode = resolveProgrammingSchoolCode(session);
+    const organizationId = await resolveOrganizationIdForSchool({
+      schoolCode: selectedSchoolCode,
+      fallbackOrganizationId: scopedOrganizationId,
+      createIfMissing: session.role === 'admin' && selectedSchoolCode === 'PRO',
+    });
     if (organizationId <= 0) {
       return redirectWithMessage(request, redirectTo, 'error', 'Coach management is not enabled for this school.');
     }

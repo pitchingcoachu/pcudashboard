@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
-import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
+import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 
 type FiltersPayload = {
   school_code: string;
@@ -491,6 +491,9 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'HBP',
   'K',
   'Whiffs',
+  'ERA',
+  'FIP',
+  'xFIP',
   '0-0',
   'Behind',
   'Even',
@@ -1314,10 +1317,10 @@ export default function PitchingSuite({
     }
   }, [canShowLeagueHeavyPages, dashboardPage]);
   useEffect(() => {
-    if (!isLeague && leaderboardViewBy !== 'Player') {
+    if (!isLeague && !isPro && leaderboardViewBy !== 'Player') {
       setLeaderboardViewBy('Player');
     }
-  }, [isLeague, leaderboardViewBy]);
+  }, [isLeague, isPro, leaderboardViewBy]);
   useEffect(() => {
     if (!isLeague) return;
     const allowedTableModes = new Set(['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Raw Data', 'Batted Ball Data', 'Custom']);
@@ -4005,8 +4008,9 @@ export default function PitchingSuite({
                         : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                   const runValueBoost = locationView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                   const isSwingRateView = locationView === 'Swing Rate';
-                  if (locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-                  if (locationView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                  const isGbRateView = locationView === 'GB Rate';
+                  if (locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                  if (locationView !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                   if (locationView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                   return (
                     <circle
@@ -4054,8 +4058,9 @@ export default function PitchingSuite({
                       : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                 const runValueBoost = locationView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                 const isSwingRateView = locationView === 'Swing Rate';
-                if (locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-                if (locationView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                const isGbRateView = locationView === 'GB Rate';
+                if (locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                if (locationView !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                 if (locationView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                 return (
                   <circle
@@ -4324,8 +4329,9 @@ export default function PitchingSuite({
                           : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                   const runValueBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                   const isSwingRateView = heatmapDisplayView === 'Swing Rate';
-                  if (heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-                  if (heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && normalized < 0.06) return null;
+                  const isGbRateView = heatmapDisplayView === 'GB Rate';
+                  if (heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                  if (heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                   if (heatmapDisplayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                   return (
                     <circle
@@ -4377,8 +4383,9 @@ export default function PitchingSuite({
                         : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                 const runValueBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                 const isSwingRateView = heatmapDisplayView === 'Swing Rate';
-                if (heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-                if (heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && normalized < 0.06) return null;
+                const isGbRateView = heatmapDisplayView === 'GB Rate';
+                if (heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                if (heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                 if (heatmapDisplayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                 return (
                   <circle
@@ -5343,7 +5350,7 @@ export default function PitchingSuite({
                       placeholder="Stuff"
                     />
                   </label>
-                  {isLeaderboardPage && isLeague ? (
+                  {isLeaderboardPage && (isLeague || isPro) ? (
                     <label>
                       View By
                       <SearchableSingleSelect
@@ -5575,7 +5582,7 @@ export default function PitchingSuite({
                                 key={`${idx}-${column}`}
                                 style={{
                                   textAlign:
-                                    isLeaderboardPage && leaderboardViewBy === 'Player' && colIndex === 0
+                                    isLeaderboardPage && colIndex === 0 && (leaderboardViewBy === 'Player' || leaderboardViewBy === 'Team')
                                       ? (isAllRow ? 'center' : 'left')
                                       : 'center',
                                   cursor: column === '#' && rowPitches.length ? 'pointer' : undefined,
@@ -5590,7 +5597,22 @@ export default function PitchingSuite({
                                     isLeaderboardPage && column === displayedTableColumns[0] && typeof rawValue === 'string'
                                       ? (() => {
                                           const formatted = formatNameFirstLast(rawValue);
-                                          if (leaderboardViewBy !== 'Player') return formatted;
+                                          if (leaderboardViewBy !== 'Player') {
+                                            if (!isPro) return formatted;
+                                            const teamCode = inferProTeamCode(rawValue);
+                                            if (!teamCode || String(rawValue ?? '').trim().toLowerCase() === 'all') return formatted;
+                                            const teamLogo = getProTeamLogoUrl(teamCode);
+                                            const teamName = getProTeamDisplayName(rawValue, (level as 'MLB' | 'AAA' | 'All') || 'All');
+                                            if (!teamLogo) return teamName;
+                                            return (
+                                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
+                                                <span style={{ width: 16, minWidth: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                  <img src={teamLogo} alt={teamCode} style={{ width: 16, height: 16, objectFit: 'contain', display: 'inline-block' }} />
+                                                </span>
+                                                <span>{teamName}</span>
+                                              </span>
+                                            );
+                                          }
                                           const key = String(rawValue).trim();
                                           const keyNorm = key.toLowerCase().replace(/[^a-z0-9]/g, '');
                                           const formattedNorm = formatted.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -5603,12 +5625,14 @@ export default function PitchingSuite({
                                             filterTeamByPitcher[keyNorm] ??
                                             filterTeamByPitcher[formatted] ??
                                             filterTeamByPitcher[formattedNorm];
-                                          if (!teamCode || key.toLowerCase() === 'all') return formatted;
+                                          if (!teamCode || String(rawValue ?? '').trim().toLowerCase() === 'all') return formatted;
                                           const logoUrl = isPro ? getProTeamLogoUrl(teamCode) : '';
                                           if (!logoUrl) return formatted;
                                           return (
                                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, justifyContent: 'flex-start' }}>
-                                              <img src={logoUrl} alt={teamCode} style={{ width: 16, height: 16, objectFit: 'contain', display: 'inline-block' }} />
+                                              <span style={{ width: 16, minWidth: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                <img src={logoUrl} alt={teamCode} style={{ width: 16, height: 16, objectFit: 'contain', display: 'inline-block' }} />
+                                              </span>
                                               <span>{formatted}</span>
                                             </span>
                                           );

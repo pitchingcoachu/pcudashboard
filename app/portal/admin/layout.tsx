@@ -16,6 +16,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const brand = resolveSchoolBrand(selectedSchool);
   const canAccessProgramming = canUseProgrammingData(session);
   const canAccessClientManagement = canUseClientManagement(session);
+  const isProSchool = String(selectedSchool).trim().toUpperCase() === 'PRO';
+  const showCoachClientTabs = canAccessClientManagement && !(session.role === 'coach' && isProSchool);
 
   if (session.role === 'player') {
     redirect('/portal/player');
@@ -43,12 +45,12 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               <Link href="/portal/admin" className="portal-nav-link">
                 Home
               </Link>
-              {(session.role === 'admin' || session.role === 'coach') && canAccessClientManagement && (
+              {(session.role === 'admin' || session.role === 'coach') && showCoachClientTabs && (
                 <Link href="/portal/admin/clients" className="portal-nav-link">
                   Players
                 </Link>
               )}
-              {session.role === 'admin' && canAccessClientManagement && (
+              {session.role === 'admin' && showCoachClientTabs && (
                 <Link href="/portal/admin/coaches" className="portal-nav-link">
                   Coaches
                 </Link>
@@ -70,7 +72,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
                 </>
               ) : null}
               <Link href="/portal/dashboard" className="portal-nav-link">
-                PCU Dashboard
+                Dashboard
               </Link>
             </nav>
           </div>
@@ -79,9 +81,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             items={[
               { href: '/portal/admin', label: 'Home' },
               ...(session.role === 'admin' || session.role === 'coach'
-                ? [...(canAccessClientManagement ? [{ href: '/portal/admin/clients', label: 'Players' }] : [])]
+                ? [...(showCoachClientTabs ? [{ href: '/portal/admin/clients', label: 'Players' }] : [])]
                 : []),
-              ...(session.role === 'admin' && canAccessClientManagement ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
+              ...(session.role === 'admin' && showCoachClientTabs ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
               ...(canAccessProgramming
                 ? [
                     { href: '/portal/admin/exercises', label: 'Exercise Library' },
@@ -90,7 +92,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
                     { href: '/portal/admin/testing', label: 'Testing' },
                   ]
                 : []),
-              { href: '/portal/dashboard', label: 'PCU Dashboard' },
+              { href: '/portal/dashboard', label: 'Dashboard' },
             ]}
           />
         </div>

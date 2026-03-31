@@ -3401,8 +3401,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                               : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                                         const runValueBoost = valueLabel === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                                         const isSwingRateView = valueLabel === 'Swing Rate';
-                                        if (valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-                                        if (valueLabel !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                                        const isGbRateView = valueLabel === 'GB Rate';
+                                        if (valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                                        if (valueLabel !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                                         if (valueLabel === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0.15) return null;
                                         return (
                                           <circle
@@ -3449,8 +3450,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                             : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                                       const runValueBoost = valueLabel === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                                       const isSwingRateView = valueLabel === 'Swing Rate';
-                                      if (valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-                                      if (valueLabel !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                                      const isGbRateView = valueLabel === 'GB Rate';
+                                      if (valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                                      if (valueLabel !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                                       if (valueLabel === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0.15) return null;
                                       return (
                                         <circle

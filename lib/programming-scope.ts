@@ -80,6 +80,9 @@ function resolveScopedOrganizationIdBySelectedSchool(session: SessionLike): numb
   // Safety: prevent leaking one org's programming data into other selected schools.
   // Keep PCU fallback for the primary PCU org when map is incomplete.
   if (selectedSchool === 'PCU' && sessionOrgId > 0) return sessionOrgId;
+  // Global admins may be granted schools before env mapping is updated (for example PRO).
+  // Fall back to their session org so admin create flows don't hard-fail on org_id=0.
+  if (isGlobalAdminSession(session) && sessionOrgId > 0) return sessionOrgId;
   return 0;
 }
 
@@ -296,6 +299,8 @@ export function canUseProgrammingData(session: SessionLike): boolean {
 }
 
 export function canUseClientManagement(session: SessionLike): boolean {
+  const schoolCode = resolveProgrammingSchoolCode(session);
+  if (schoolCode === 'PRO') return isGlobalAdminSession(session);
   const access = resolveSchoolProductAccess(session);
   if (typeof access.clientManagement === 'boolean') return access.clientManagement;
   return true;
