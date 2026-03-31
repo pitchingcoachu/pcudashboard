@@ -1490,6 +1490,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       if (metric === 'Whiff%') return { poor: 21, avg: 26, great: 31 };
       if (metric === 'CSW%') return { poor: 26, avg: 29, great: 32 };
       if (metric === 'GB%') return { poor: 38, avg: 43, great: 48 };
+      if (metric === 'ERA') {
+        if (!isProSchool) return null;
+        return { poor: 5.2, avg: 4.2, great: 3.2 };
+      }
+      if (metric === 'FIP' || metric === 'xFIP') {
+        if (isProSchool) return { poor: 5.2, avg: 4.2, great: 3.2 };
+        return { poor: 5.9, avg: 4.9, great: 3.9 };
+      }
       if (metric === 'Barrel%') return { poor: 20, avg: 15, great: 10 };
       if (metric === 'EV') return { poor: 95, avg: 85, great: 75 };
       if (metric === 'Stuff+') return { poor: 90, avg: 100, great: 110 };
@@ -1498,7 +1506,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     })();
     if (!threshold) return null;
     const reverseScale =
-      ['EV', 'Barrel%', 'BB%'].includes(metric) ||
+      ['EV', 'Barrel%', 'BB%', 'ERA', 'FIP', 'xFIP'].includes(metric) ||
       (metric === 'RV/100' && reportType === 'Pitching');
     const { poor, avg, great } = threshold;
     const color = (() => {

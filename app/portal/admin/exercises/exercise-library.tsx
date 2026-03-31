@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { ExerciseRow } from '../../../../lib/training-db';
 
 type ExerciseLibraryProps = {
@@ -13,7 +14,10 @@ function normalized(value: string): string {
 }
 
 export default function ExerciseLibrary({ exercises }: ExerciseLibraryProps) {
+  const router = useRouter();
   const [query, setQuery] = useState('');
+  const [busyExerciseId, setBusyExerciseId] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const grouped = useMemo(() => {
     const q = normalized(query);
@@ -104,15 +108,36 @@ export default function ExerciseLibrary({ exercises }: ExerciseLibraryProps) {
                       <form
                         method="post"
                         action="/api/admin/exercises/delete"
-                        onSubmit={(event) => {
+                        onSubmit={async (event) => {
+                          event.preventDefault();
                           const ok = window.confirm(`Delete "${exercise.name}"? This cannot be undone.`);
                           if (!ok) event.preventDefault();
+                          if (!ok) return;
+                          setErrorMessage('');
+                          setBusyExerciseId(exercise.id);
+                          const form = event.currentTarget;
+                          const response = await fetch('/api/admin/exercises/delete', {
+                            method: 'POST',
+                            body: new FormData(form),
+                            headers: {
+                              Accept: 'application/json',
+                              'X-Requested-With': 'fetch',
+                            },
+                          });
+                          const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+                          if (!response.ok || payload.ok === false) {
+                            setBusyExerciseId(null);
+                            setErrorMessage(payload.error || 'Failed to delete exercise.');
+                            return;
+                          }
+                          setBusyExerciseId(null);
+                          router.refresh();
                         }}
                       >
                         <input type="hidden" name="exerciseId" value={String(exercise.id)} />
                         <input type="hidden" name="redirectTo" value="/portal/admin/exercises" />
-                        <button type="submit" className="btn btn-ghost">
-                          Delete
+                        <button type="submit" className="btn btn-ghost" disabled={busyExerciseId === exercise.id}>
+                          {busyExerciseId === exercise.id ? 'Deleting...' : 'Delete'}
                         </button>
                       </form>
                     </article>
@@ -123,6 +148,7 @@ export default function ExerciseLibrary({ exercises }: ExerciseLibraryProps) {
           ))}
         </div>
       )}
+      {errorMessage ? <p className="auth-error">{errorMessage}</p> : null}
     </div>
   );
 }

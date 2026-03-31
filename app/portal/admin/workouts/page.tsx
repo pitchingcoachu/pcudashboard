@@ -7,7 +7,7 @@ import {
 } from '../../../../lib/training-db';
 import { resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import DeleteWorkoutForm from './delete-workout-form';
-import WorkoutExerciseSelector from './exercise-selector';
+import { AsyncQuickExerciseForm, AsyncWorkoutCreateForm } from './async-forms';
 
 type WorkoutPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -48,88 +48,14 @@ export default async function AdminWorkoutsPage({ searchParams }: WorkoutPagePro
       {programmingOrganizationId > 0 ? (
       <article className="portal-admin-card">
         <h3>Create Workout</h3>
-        <form method="post" action="/api/admin/workouts" className="portal-form-grid">
-          <input type="hidden" name="redirectTo" value="/portal/admin/workouts" />
-          <label>
-            Workout Name
-            <input name="name" required />
-          </label>
-          <label>
-            Workout Category
-            <select name="category" defaultValue={categories[0]?.name ?? ''} required>
-              {categories.map((category) => (
-                <option key={category.id} value={category.name}>
-                  {category.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="portal-form-span-2">
-            Description
-            <textarea name="description" rows={2} />
-          </label>
-          <div className="portal-form-span-2">
-            <WorkoutExerciseSelector exercises={exercises} />
-          </div>
-          <button type="submit" className="btn btn-primary">
-            Save Workout
-          </button>
-        </form>
+        <AsyncWorkoutCreateForm categories={categories} exercises={exercises} />
       </article>
       ) : null}
 
       {programmingOrganizationId > 0 ? (
       <article className="portal-admin-card">
         <h3>Quick Add Exercise (from workout page)</h3>
-        <form method="post" action="/api/admin/exercises" className="portal-form-grid">
-          <input type="hidden" name="redirectTo" value="/portal/admin/workouts" />
-          <label>
-            Name
-            <input name="name" required />
-          </label>
-          <label>
-            Category
-            <select name="category" defaultValue={categories[0]?.name ?? ''} required>
-              {categories.map((category) => (
-                <option key={category.id} value={category.name}>
-                  {category.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Rep Type
-            <select name="repMeasure" defaultValue="reps">
-              <option value="reps">Reps</option>
-              <option value="seconds">Seconds</option>
-              <option value="distance">Distance</option>
-            </select>
-          </label>
-          <label>
-            Tracking Type
-            <select name="trackingType" defaultValue="lbs">
-              <option value="lbs">lbs</option>
-              <option value="seconds">seconds</option>
-              <option value="inches">inches</option>
-              <option value="body_weight">Body Weight</option>
-            </select>
-          </label>
-          <label className="portal-checkbox-label">
-            <input type="checkbox" name="repsPerSide" />
-            Use reps per side
-          </label>
-          <label>
-            Video URL
-            <input name="instructionVideoUrl" type="url" placeholder="https://..." />
-          </label>
-          <label className="portal-form-span-2">
-            Description
-            <textarea name="description" rows={2} />
-          </label>
-          <button type="submit" className="btn btn-ghost">
-            Save Exercise
-          </button>
-        </form>
+        <AsyncQuickExerciseForm categories={categories} />
       </article>
       ) : null}
 

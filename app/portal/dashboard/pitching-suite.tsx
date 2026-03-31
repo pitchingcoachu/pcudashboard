@@ -578,6 +578,9 @@ function normalizeColorColumnName(value: string): string {
   if (lower === 'k%') return 'K%';
   if (lower === 'bb%') return 'BB%';
   if (lower === 'gb%') return 'GB%';
+  if (lower === 'era') return 'ERA';
+  if (lower === 'fip') return 'FIP';
+  if (lower === 'xfip') return 'xFIP';
   if (lower === 'barrel%') return 'Barrel%';
   if (lower === 'rv/100') return 'RV/100';
   return String(value ?? '').trim();
@@ -640,6 +643,14 @@ function getProcessThresholds(
     if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 36, avg: 43, great: 50 };
     if (['changeup', 'splitter'].includes(pitchType)) return { poor: 35, avg: 47, great: 59 };
     if (pitchType === 'all') return { poor: 38, avg: 43, great: 48 };
+  }
+  if (metric === 'ERA') {
+    if (isPro) return { poor: 5.2, avg: 4.2, great: 3.2 };
+    return null;
+  }
+  if (metric === 'FIP' || metric === 'xFIP') {
+    if (isPro) return { poor: 5.2, avg: 4.2, great: 3.2 };
+    return { poor: 5.9, avg: 4.9, great: 3.9 };
   }
   if (metric === 'Barrel%') return { poor: 20, avg: 15, great: 10 };
   if (metric === 'EV') return { poor: 95, avg: 85, great: 75 };
@@ -705,7 +716,7 @@ function getCellColorScale(
   const thresholds = getProcessThresholds(metric, pitchType, schoolCode);
   if (!thresholds) return null;
   const { poor, avg, great } = thresholds;
-  const reverseScale = ['EV', 'Barrel%', 'BB%'].includes(metric) || metric === 'RV/100';
+  const reverseScale = ['EV', 'Barrel%', 'BB%', 'ERA', 'FIP', 'xFIP'].includes(metric) || metric === 'RV/100';
   if (reverseScale) {
     if (parsed >= poor) return { bg: '#0066CC', text: 'white' };
     if (parsed >= (poor + avg) / 2) return { bg: '#66B2FF', text: 'black' };

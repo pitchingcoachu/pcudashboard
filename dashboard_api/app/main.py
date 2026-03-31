@@ -1992,9 +1992,21 @@ def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str
     qp = _compute_qp_point(row)
     school_code = str(row.get("school_code") or "").strip().upper()
     if school_code == "PRO":
-        # PRO run value source is hitter-side Statcast delta_run_exp.
-        # Positive = good for hitter; negative = good for pitcher.
-        run_value = float(row.get("delta_run_exp")) if _is_num(row.get("delta_run_exp")) else 0.0
+        # PRO prefers hitter-side Statcast delta_run_exp when enriched rows exist.
+        # During live API fallback windows (before Savant enrichment), use
+        # legacy event-based run value so charts don't go blank.
+        if _is_num(row.get("delta_run_exp")):
+            run_value = float(row.get("delta_run_exp"))
+        else:
+            run_value = _calc_run_value(
+                row.get("pitch_call"),
+                row.get("play_result"),
+                row.get("korbb"),
+                row.get("balls_num"),
+                row.get("strikes_num"),
+                row.get("outs_num"),
+                row.get("outs_on_play_num"),
+            )
     else:
         run_value = _calc_run_value(
             row.get("pitch_call"),
@@ -6643,9 +6655,26 @@ def _pro_pitching_overview(
         ea_pct = ((early_pct or 0.0) + (ahead_pct or 0.0)) if bf_val > 0 else None
         oneone_pct = (100.0 * oneone_num / oneone_den) if oneone_den > 0 else None
 
-        # PRO RV/100 source is hitter-side Statcast delta_run_exp.
+        # PRO RV/100 prefers hitter-side Statcast delta_run_exp.
+        # During live API fallback windows (pre-enrichment), use legacy
+        # event-based RV/100 logic so values still populate.
         delta_vals = [float(r.get("delta_run_exp")) for r in group_rows if _is_num(r.get("delta_run_exp"))]
-        rv100_new = (sum(delta_vals) / total_pitches_val * 100.0) if (delta_vals and total_pitches_val > 0) else None
+        if delta_vals and total_pitches_val > 0:
+            rv100_new = (sum(delta_vals) / total_pitches_val) * 100.0
+        else:
+            rv_fallback_vals = [
+                _calc_run_value(
+                    r.get("pitch_call"),
+                    r.get("play_result"),
+                    r.get("korbb"),
+                    r.get("balls_num"),
+                    r.get("strikes_num"),
+                    r.get("outs_num"),
+                    r.get("outs_on_play_num"),
+                )
+                for r in group_rows
+            ]
+            rv100_new = (((sum(rv_fallback_vals) / len(rv_fallback_vals)) * 100.0) - 0.43) if rv_fallback_vals else None
 
         row_obj["BF"] = bf_val
         if "AB" in row_obj:
@@ -7570,7 +7599,15 @@ def _pro_hitting_overview(
                 "run_value": (
                     float(row.get("delta_run_exp"))
                     if _is_num(row.get("delta_run_exp"))
-                    else None
+                    else _calc_run_value(
+                        row.get("pitch_call"),
+                        row.get("play_result"),
+                        row.get("korbb"),
+                        row.get("balls_num"),
+                        row.get("strikes_num"),
+                        row.get("outs_num"),
+                        row.get("outs_on_play_num"),
+                    )
                 ),
                 "estimated_woba_using_speedangle": (
                     float(row.get("estimated_woba_using_speedangle"))

@@ -332,6 +332,14 @@ function getProcessThresholds(
     if (['changeup', 'splitter'].includes(pitchType)) return { poor: 35, avg: 47, great: 59 };
     if (pitchType === 'all') return { poor: 38, avg: 43, great: 48 };
   }
+  if (columnName === 'ERA') {
+    if (!isPro) return null;
+    return { poor: 5.2, avg: 4.2, great: 3.2 };
+  }
+  if (columnName === 'FIP' || columnName === 'xFIP') {
+    if (isPro) return { poor: 5.2, avg: 4.2, great: 3.2 };
+    return { poor: 5.9, avg: 4.9, great: 3.9 };
+  }
   if (columnName === 'Barrel%') return { poor: 20, avg: 15, great: 10 };
   if (columnName === 'EV') return { poor: 95, avg: 85, great: 75 };
   if (columnName === 'Stuff+') return { poor: 90, avg: 100, great: 110 };
@@ -361,7 +369,7 @@ function getCellColorScale(
   const { poor, avg, great } = thresholds;
   const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
   const reverseScale =
-    ['EV', 'Barrel%', 'BB%'].includes(columnName) ||
+    ['EV', 'Barrel%', 'BB%', 'ERA', 'FIP', 'xFIP'].includes(columnName) ||
     (columnName === 'RV/100' && (domain === 'Pitching' || !isPro));
   if (reverseScale) {
     if (parsed >= poor) return { bg: '#0066CC', text: 'white' };

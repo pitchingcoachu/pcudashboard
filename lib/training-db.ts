@@ -4,6 +4,7 @@ const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 declare global {
   var __pcuTrainingDbReady: boolean | undefined;
   var __pcuAuthUsersSequenceStructureReady: boolean | undefined;
+  var __pcuTrainingTrackingTypeReady: boolean | undefined;
 }
 
 export type ClientRow = {
@@ -293,12 +294,7 @@ async function syncAuthUsersIdSequence(db: Queryable): Promise<void> {
 
 export async function ensureTrainingDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
-  if (global.__pcuTrainingDbReady) {
-    const pool = getDbPool();
-    await pool.query(`ALTER TABLE exercise_library ADD COLUMN IF NOT EXISTS tracking_type TEXT NOT NULL DEFAULT 'lbs';`);
-    await pool.query(`UPDATE exercise_library SET tracking_type = 'lbs' WHERE tracking_type IS NULL OR LENGTH(TRIM(tracking_type)) = 0;`);
-    return;
-  }
+  if (global.__pcuTrainingDbReady) return;
   await ensureAuthDbReady();
   const pool = getDbPool();
   await ensureAuthUsersIdSequence(pool);
@@ -307,12 +303,22 @@ export async function ensureTrainingDbReady(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS height TEXT;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_weight_lbs DOUBLE PRECISION;`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_photo_data_url TEXT;`);
-  await pool.query(`ALTER TABLE exercise_library ADD COLUMN IF NOT EXISTS tracking_type TEXT NOT NULL DEFAULT 'lbs';`);
-  await pool.query(`UPDATE exercise_library SET tracking_type = 'lbs' WHERE tracking_type IS NULL OR LENGTH(TRIM(tracking_type)) = 0;`);
+  if (!global.__pcuTrainingTrackingTypeReady) {
+    await pool.query(`ALTER TABLE exercise_library ADD COLUMN IF NOT EXISTS tracking_type TEXT NOT NULL DEFAULT 'lbs';`);
+    await pool.query(`UPDATE exercise_library SET tracking_type = 'lbs' WHERE tracking_type IS NULL OR LENGTH(TRIM(tracking_type)) = 0;`);
+    global.__pcuTrainingTrackingTypeReady = true;
+  }
   await pool.query(
     `ALTER TABLE players ADD COLUMN IF NOT EXISTS assigned_coach_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL;`
   );
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_library_org_name ON exercise_library (organization_id, name);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_library_org_name ON workout_library (organization_id, name);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_exercises_workout_sort ON workout_exercises (workout_id, sort_order);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_programs_org ON programs (organization_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_days_program ON program_days (program_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_exercise ON program_day_items (exercise_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_workout ON program_day_items (workout_id);`);
   await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dashboard_custom_tables (
@@ -1890,6 +1896,10 @@ export async function createWorkout(input: {
         .filter((id) => Number.isFinite(id) && id > 0)
     )
   );
+  const validExerciseSet = new Set(uniqueExerciseIds);
+  const validItems = input.exerciseItems.filter(
+    (item) => Number.isFinite(item.exerciseId) && item.exerciseId > 0 && validExerciseSet.has(item.exerciseId)
+  );
   if (uniqueExerciseIds.length > 0) {
     const exerciseCheck = await pool.query<{ id: number }>(
       `
@@ -1929,29 +1939,61 @@ export async function createWorkout(input: {
       [input.organizationId, name, category, (input.description ?? '').trim() || null, input.userId]
     );
 
-    let sortOrder = 1;
-    for (const item of input.exerciseItems) {
-      const exerciseId = item.exerciseId;
-      if (!uniqueExerciseIds.includes(exerciseId)) continue;
+    if (validItems.length > 0) {
+      const workoutId = workout.rows[0].id;
+      const exerciseIds: number[] = [];
+      const prefixes: Array<string | null> = [];
+      const sortOrders: number[] = [];
+      const prescribedSets: Array<string | null> = [];
+      const prescribedReps: Array<string | null> = [];
+      const prescribedLoads: Array<string | null> = [];
+      const notes: Array<string | null> = [];
+
+      validItems.forEach((item, index) => {
+        exerciseIds.push(item.exerciseId);
+        prefixes.push((item.prefix ?? '').trim() || null);
+        sortOrders.push(index + 1);
+        prescribedSets.push((item.prescribedSets ?? '').trim() || null);
+        prescribedReps.push((item.prescribedReps ?? '').trim() || null);
+        prescribedLoads.push((item.prescribedLoad ?? '').trim() || null);
+        notes.push((item.notes ?? '').trim() || null);
+      });
+
       await client.query(
         `
           INSERT INTO workout_exercises (
             workout_id, exercise_id, exercise_prefix, sort_order, prescribed_sets, prescribed_reps, prescribed_load, notes
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          SELECT
+            $1::int,
+            payload.exercise_id,
+            payload.exercise_prefix,
+            payload.sort_order,
+            payload.prescribed_sets,
+            payload.prescribed_reps,
+            payload.prescribed_load,
+            payload.notes
+          FROM UNNEST(
+            $2::int[],
+            $3::text[],
+            $4::int[],
+            $5::text[],
+            $6::text[],
+            $7::text[],
+            $8::text[]
+          ) AS payload(
+            exercise_id,
+            exercise_prefix,
+            sort_order,
+            prescribed_sets,
+            prescribed_reps,
+            prescribed_load,
+            notes
+          )
+          ORDER BY payload.sort_order
         `,
-        [
-          workout.rows[0].id,
-          exerciseId,
-          (item.prefix ?? '').trim() || null,
-          sortOrder,
-          (item.prescribedSets ?? '').trim() || null,
-          (item.prescribedReps ?? '').trim() || null,
-          (item.prescribedLoad ?? '').trim() || null,
-          (item.notes ?? '').trim() || null,
-        ]
+        [workoutId, exerciseIds, prefixes, sortOrders, prescribedSets, prescribedReps, prescribedLoads, notes]
       );
-      sortOrder += 1;
     }
 
     await client.query('COMMIT');
@@ -1997,6 +2039,10 @@ export async function updateWorkout(input: {
         .map((item) => item.exerciseId)
         .filter((id) => Number.isFinite(id) && id > 0)
     )
+  );
+  const validExerciseSet = new Set(uniqueExerciseIds);
+  const validItems = input.exerciseItems.filter(
+    (item) => Number.isFinite(item.exerciseId) && item.exerciseId > 0 && validExerciseSet.has(item.exerciseId)
   );
   if (uniqueExerciseIds.length > 0) {
     const exerciseCheck = await pool.query<{ id: number }>(
@@ -2058,29 +2104,60 @@ export async function updateWorkout(input: {
 
     await client.query(`DELETE FROM workout_exercises WHERE workout_id = $1`, [input.workoutId]);
 
-    let sortOrder = 1;
-    for (const item of input.exerciseItems) {
-      const exerciseId = item.exerciseId;
-      if (!uniqueExerciseIds.includes(exerciseId)) continue;
+    if (validItems.length > 0) {
+      const exerciseIds: number[] = [];
+      const prefixes: Array<string | null> = [];
+      const sortOrders: number[] = [];
+      const prescribedSets: Array<string | null> = [];
+      const prescribedReps: Array<string | null> = [];
+      const prescribedLoads: Array<string | null> = [];
+      const notes: Array<string | null> = [];
+
+      validItems.forEach((item, index) => {
+        exerciseIds.push(item.exerciseId);
+        prefixes.push((item.prefix ?? '').trim() || null);
+        sortOrders.push(index + 1);
+        prescribedSets.push((item.prescribedSets ?? '').trim() || null);
+        prescribedReps.push((item.prescribedReps ?? '').trim() || null);
+        prescribedLoads.push((item.prescribedLoad ?? '').trim() || null);
+        notes.push((item.notes ?? '').trim() || null);
+      });
+
       await client.query(
         `
           INSERT INTO workout_exercises (
             workout_id, exercise_id, exercise_prefix, sort_order, prescribed_sets, prescribed_reps, prescribed_load, notes
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          SELECT
+            $1::int,
+            payload.exercise_id,
+            payload.exercise_prefix,
+            payload.sort_order,
+            payload.prescribed_sets,
+            payload.prescribed_reps,
+            payload.prescribed_load,
+            payload.notes
+          FROM UNNEST(
+            $2::int[],
+            $3::text[],
+            $4::int[],
+            $5::text[],
+            $6::text[],
+            $7::text[],
+            $8::text[]
+          ) AS payload(
+            exercise_id,
+            exercise_prefix,
+            sort_order,
+            prescribed_sets,
+            prescribed_reps,
+            prescribed_load,
+            notes
+          )
+          ORDER BY payload.sort_order
         `,
-        [
-          input.workoutId,
-          exerciseId,
-          (item.prefix ?? '').trim() || null,
-          sortOrder,
-          (item.prescribedSets ?? '').trim() || null,
-          (item.prescribedReps ?? '').trim() || null,
-          (item.prescribedLoad ?? '').trim() || null,
-          (item.notes ?? '').trim() || null,
-        ]
+        [input.workoutId, exerciseIds, prefixes, sortOrders, prescribedSets, prescribedReps, prescribedLoads, notes]
       );
-      sortOrder += 1;
     }
 
     await client.query('COMMIT');
