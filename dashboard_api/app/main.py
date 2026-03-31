@@ -2687,7 +2687,8 @@ def _filter_pitching_rows_by_team_type(
             and bool(pitcher_key)
             and pitcher_key in (team_pitcher_norm | campers_norm)
         )
-        is_team_pitching_row = (pitcher_is_marker and not batter_is_marker) or is_pcu_blank_team_row
+        # Treat intra-squad team-vs-team rows (both team codes match markers) as team rows.
+        is_team_pitching_row = pitcher_is_marker or is_pcu_blank_team_row
         is_opponent_pitching_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
 
         if team_type_value == "Opponents":
@@ -4667,6 +4668,11 @@ PITCHING_TEAM_MATCH_SQL = """
 )
 OR
 (
+  """ + PITCHER_TEAM_IS_MARKER_SQL + """
+  AND """ + BATTER_TEAM_IS_MARKER_SQL + """
+)
+OR
+(
   UPPER(COALESCE(%(school_code)s::text, '')) = 'PCU'
   AND """ + BLANK_TEAM_CODES_SQL + """
   AND (
@@ -4693,6 +4699,11 @@ HITTING_TEAM_MATCH_SQL = """
 (
   """ + BATTER_TEAM_IS_MARKER_SQL + """
   AND NOT (""" + PITCHER_TEAM_IS_MARKER_SQL + """)
+)
+OR
+(
+  """ + BATTER_TEAM_IS_MARKER_SQL + """
+  AND """ + PITCHER_TEAM_IS_MARKER_SQL + """
 )
 OR
 (
@@ -10999,7 +11010,8 @@ def hitting_overview(
                     and bool(batter_key)
                     and batter_key in (team_hitter_norm | campers_norm)
                 )
-                is_team_hitting_row = (batter_is_marker and not pitcher_is_marker) or is_pcu_blank_team_row
+                # Treat intra-squad team-vs-team rows (both team codes match markers) as team rows.
+                is_team_hitting_row = batter_is_marker or is_pcu_blank_team_row
                 is_opponent_hitting_row = pitcher_is_marker and bool(batter_team_code) and not batter_is_marker
 
                 if team_type_value == "Opponents":
@@ -11820,7 +11832,8 @@ def catching_overview(
                     and bool(catcher_key)
                     and catcher_key in (team_norm | campers_norm)
                 )
-                is_team_catching_row = (pitcher_is_marker and not batter_is_marker) or is_pcu_blank_team_row
+                # Treat intra-squad team-vs-team rows (both team codes match markers) as team rows.
+                is_team_catching_row = pitcher_is_marker or is_pcu_blank_team_row
                 is_opponent_catching_row = batter_is_marker and bool(pitcher_team_code) and not pitcher_is_marker
 
                 if team_type_value == "Opponents":
