@@ -3606,7 +3606,8 @@ export default function PitchingSuite({
     const xMin = -4;
     const xMax = 4;
     const yMin = 0;
-    const yMax = Math.max(6, ...summaryPoints.map((p) => p.release_height ?? 0)) + 0.2;
+    const maxReleaseHeight = Math.max(...summaryPoints.map((p) => p.release_height ?? 0), 0);
+    const yMax = Math.max(6, Math.ceil(maxReleaseHeight));
     const plotW = w - pad * 2;
     const plotH = h - pad * 2;
     const xRange = xMax - xMin;
@@ -3627,7 +3628,7 @@ export default function PitchingSuite({
     const rubberTop = py(0.9);
     const rubberBottom = py(0.76);
     const xTicks = [-4, -2, 0, 2, 4];
-    const yTicks = [0, 1, 2, 3, 4, 5, 6];
+    const yTicks = Array.from({ length: Math.max(1, Math.floor(yMax - yMin) + 1) }, (_, i) => yMin + i);
     return (
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setReleaseHover(null)}>
         {xTicks.map((tick) => (

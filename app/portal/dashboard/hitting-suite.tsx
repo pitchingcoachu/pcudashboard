@@ -1669,11 +1669,14 @@ export default function HittingSuite() {
   }, [isLeague, isPro, leaderboardViewBy]);
   const teamTypeOptions = useMemo(() => {
     const school = String(filters?.school_code ?? '').trim();
-    const base = ['All', school || 'OSU', 'Opponents', 'Campers'];
-    const combined = [...base, ...((filters?.team_types ?? []).map((value) => String(value ?? '').trim()))];
-    const unique = Array.from(new Set(combined.filter(Boolean)));
+    const fromFilters = (filters?.team_types ?? []).map((value) => String(value ?? '').trim()).filter(Boolean);
+    const base = isPro ? ['All'] : ['All', school || 'OSU', 'Opponents', 'Campers'];
+    const combined = [...base, ...fromFilters];
+    const unique = Array.from(new Set(combined)).filter((value) =>
+      isPro ? !['PRO', 'Opponents', 'Campers'].includes(value) : true
+    );
     return toOptions(unique);
-  }, [filters?.school_code, filters?.team_types]);
+  }, [filters?.school_code, filters?.team_types, isPro]);
   const hitterOptions = useMemo(() => {
     if (!filters) return [{ value: 'All', label: 'All' }];
     const values = !isLeague || teamType === 'All' ? (filters.hitters ?? []) : (filters.hitters_by_team_code?.[teamType] ?? []);

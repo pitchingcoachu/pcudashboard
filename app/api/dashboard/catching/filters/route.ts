@@ -11,7 +11,7 @@ const RESPONSE_CACHE_HEADERS = {
 } as const;
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
-  return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 60000 : 15000;
+  return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 60000 : 30000;
 }
 
 export async function GET(request: Request) {

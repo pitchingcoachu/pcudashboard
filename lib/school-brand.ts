@@ -114,7 +114,7 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accent: '#041e42',
     accentSoft: '#02152f',
     accentRgb: '4, 30, 66',
-    accentRgbSecondary: '189, 0, 45',
+    accentRgbSecondary: '4, 30, 66',
   },
 };
 

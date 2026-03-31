@@ -291,6 +291,18 @@ def _latest_rows_for_chart_points(rows: List[Dict[str, Any]], max_points: int) -
     return ordered[-max_points:]
 
 
+def _dynamic_chart_points_limit(
+    *,
+    team_type_value: Optional[str],
+    primary_selected_count: int,
+    secondary_selected_count: int = 0,
+) -> int:
+    team_val = str(team_type_value or "").strip().lower()
+    all_all = team_val in {"", "all"} and primary_selected_count == 0 and secondary_selected_count == 0
+    base_limit = 1000 if all_all else 4000
+    return max(100, min(base_limit, _CHART_POINTS_MAX))
+
+
 def _is_num(value: Any) -> bool:
     if value is None:
         return False
@@ -1736,10 +1748,6 @@ def _build_dynamic_table(
         xwoba = round(xwoba_num / bf_live, 3) if bf_live > 0 else None
         xiso = round((h2 + 2 * h3 + 3 * hr) / ab, 3) if ab > 0 else None
 
-        ip_whole = outs_n // 3
-        ip_rem = outs_n % 3
-        ip_display = f"{ip_whole}.{ip_rem}" if ip_rem else str(ip_whole)
-        ip_num = (outs_n / 3.0) if outs_n else 0.0
         # Advanced pitching metrics (ERA/FIP/xFIP) for custom-table use.
         # Note: ERA here is an event-weight estimate because earned-runs is not tracked directly.
         fip_const = 3.2
@@ -1747,23 +1755,32 @@ def _build_dynamic_table(
         fip_val: Optional[float] = None
         x_fip_val: Optional[float] = None
         era_val: Optional[float] = None
+        official_er = 0.0
+        official_outs = 0
         # PRO-only: use official pitcher game line totals when available.
         # (earned runs + outs recorded from StatsAPI boxscore)
         if str((grp[0].get("school_code") if grp else "") or "").strip().upper() == "PRO":
-            official_keys: set[tuple[str, str]] = set()
-            official_er = 0.0
-            official_outs = 0
+            # Collect per-game official totals robustly (some rows may have null
+            # official_* while other rows for the same game/pitcher have values).
+            per_game_official: dict[tuple[str, str], tuple[Optional[float], Optional[int]]] = {}
             for r in grp:
                 game_key = str(r.get("game_pk") or r.get("game_id") or "").strip()
                 pitcher_key = _normalize_name_key(str(r.get("pitcher") or ""))
                 if not game_key or not pitcher_key:
                     continue
-                key = (game_key, pitcher_key)
-                if key in official_keys:
-                    continue
-                official_keys.add(key)
+                official_key = (game_key, pitcher_key)
                 er_v = r.get("official_earned_runs")
                 outs_v = r.get("official_outs_recorded")
+                prev_er, prev_outs = per_game_official.get(official_key, (None, None))
+                next_er = float(er_v) if _is_num(er_v) else prev_er
+                next_outs = int(round(float(outs_v))) if _is_num(outs_v) else prev_outs
+                # Prefer maximum non-null values if rows disagree.
+                if prev_er is not None and next_er is not None:
+                    next_er = max(prev_er, next_er)
+                if prev_outs is not None and next_outs is not None:
+                    next_outs = max(prev_outs, next_outs)
+                per_game_official[official_key] = (next_er, next_outs)
+            for er_v, outs_v in per_game_official.values():
                 if _is_num(er_v):
                     official_er += float(er_v)
                 if _is_num(outs_v):
@@ -1771,6 +1788,11 @@ def _build_dynamic_table(
             if official_outs > 0:
                 official_ip = official_outs / 3.0
                 era_val = max(0.0, (9.0 * official_er) / official_ip)
+        outs_for_ip = official_outs if (is_pro_group and official_outs > 0) else outs_n
+        ip_whole = outs_for_ip // 3
+        ip_rem = outs_for_ip % 3
+        ip_display = f"{ip_whole}.{ip_rem}" if ip_rem else str(ip_whole)
+        ip_num = (outs_for_ip / 3.0) if outs_for_ip else 0.0
         if ip_num > 0:
             fip_val = ((13.0 * hr) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + fip_const
             fb_source = live_rows if live_rows else grp
@@ -1845,7 +1867,7 @@ def _build_dynamic_table(
             "QP+": round((qp_mean * 200.0), 1) if _is_num(qp_mean) else None,
             "Pitching+": None,
             "RV/100": round(rv100, 1) if _is_num(rv100) else None,
-            "IP": ip_display if outs_n else None,
+            "IP": ip_display if outs_for_ip else None,
             "P": n,
             "P/IP": round(float(n) / ip_num, 2) if ip_num > 0 else None,
             "P/BF": round(float(n) / bf_starts, 2) if bf_starts else None,
@@ -4733,7 +4755,7 @@ def _pro_pitch_source_table() -> Optional[str]:
 PRO_STATSAPI_BASE = "https://statsapi.mlb.com/api/v1"
 PRO_STATSAPI_GAME_FEED_BASE = "https://statsapi.mlb.com/api/v1.1"
 _PRO_API_TIMEOUT_SECONDS = max(5, int(os.getenv("PRO_API_TIMEOUT_SECONDS", "20")))
-_PRO_API_LIVE_LOOKBACK_DAYS = max(1, int(os.getenv("PRO_API_LIVE_LOOKBACK_DAYS", "3")))
+_PRO_API_LIVE_LOOKBACK_DAYS = max(1, int(os.getenv("PRO_API_LIVE_LOOKBACK_DAYS", "1")))
 _PRO_API_ROWS_CACHE_TTL_SECONDS = max(5, int(os.getenv("PRO_API_ROWS_CACHE_TTL_SECONDS", "30")))
 _PRO_ENABLE_AAA_API_FALLBACK = str(os.getenv("PRO_ENABLE_AAA_API_FALLBACK", "1")).strip().lower() not in {
     "0",
@@ -5169,11 +5191,26 @@ def _pro_row_matches_level(row: Dict[str, Any], level_filter: Optional[str]) -> 
     level_norm = _pro_level_norm(level_filter)
     if level_norm == "All":
         return True
-    sport_id = int(row.get("sport_id") or 0)
+    team_code = _normalize_team_code(
+        str(
+            row.get("pitcher_team_code")
+            or row.get("pitcherteam")
+            or row.get("batter_team_code")
+            or row.get("batterteam")
+            or ""
+        )
+    )
+    if team_code in PRO_AAA_TEAM_CODES:
+        row_level = "AAA"
+    elif team_code in PRO_MLB_TEAM_CODES:
+        row_level = "MLB"
+    else:
+        sport_id = int(row.get("sport_id") or 0)
+        row_level = "AAA" if sport_id == 11 else ("MLB" if sport_id == 1 else "All")
     if level_norm == "MLB":
-        return sport_id == 1
+        return row_level == "MLB"
     if level_norm == "AAA":
-        return sport_id == 11
+        return row_level == "AAA"
     return True
 
 
@@ -5446,6 +5483,11 @@ PRO_MLB_TEAM_CODES: List[str] = sorted(
         "OAK",
     }
 )
+PRO_AAA_TEAM_CODES: List[str] = sorted(
+    {
+        *[str(code).strip().upper() for code in PRO_AAA_TEAM_NAME_BY_CODE.keys()],
+    }
+)
 PRO_LEVEL_OPTIONS = ["All", "MLB", "AAA"]
 
 
@@ -5457,12 +5499,30 @@ def _pro_level_norm(value: Optional[str]) -> str:
 
 
 def _pro_level_sport_ids(value: Optional[str]) -> Optional[List[int]]:
-    level_norm = _pro_level_norm(value)
-    if level_norm == "MLB":
-        return [1]
-    if level_norm == "AAA":
-        return [11]
+    # Level filtering is handled by team-code classification because sport_id can
+    # be inconsistent/missing across mixed ingest sources.
     return None
+
+
+def _pro_level_sql_clause(level_filter: Optional[str], pitcher_col: str = "pitcherteam", batter_col: str = "batterteam") -> str:
+    level_norm = _pro_level_norm(level_filter)
+    if level_norm == "MLB":
+        return (
+            "UPPER(COALESCE(NULLIF(TRIM("
+            + pitcher_col
+            + "), ''), NULLIF(TRIM("
+            + batter_col
+            + "), ''), '')) = ANY(%(mlb_team_codes)s::text[])"
+        )
+    if level_norm == "AAA":
+        return (
+            "UPPER(COALESCE(NULLIF(TRIM("
+            + pitcher_col
+            + "), ''), NULLIF(TRIM("
+            + batter_col
+            + "), ''), '')) = ANY(%(aaa_team_codes)s::text[])"
+        )
+    return "TRUE"
 
 
 def _pro_team_label(team_code: str, level: Optional[str] = None) -> str:
@@ -5524,11 +5584,13 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
         )
 
     try:
-        level_team_clause = "TRUE"
+        level_team_clause = _pro_level_sql_clause(level_norm, "pitcherteam", "batterteam")
         with get_conn() as conn, conn.cursor() as cur:
             sql_params = {
                 "sport_ids": level_sport_ids or [],
                 "sport_ids_count": len(level_sport_ids or []),
+                "mlb_team_codes": PRO_MLB_TEAM_CODES,
+                "aaa_team_codes": PRO_AAA_TEAM_CODES,
             }
             cur.execute(
                 """
@@ -5701,7 +5763,14 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
                         existing_h = opp_hitters_by_team_code.setdefault(tc, [])
                         if b_name not in existing_h:
                             existing_h.append(b_name)
-                team_codes = sorted({_normalize_team_code(code) for code in team_codes if _normalize_team_code(code)})
+                team_codes = sorted(
+                    {
+                        _normalize_team_code(code)
+                        for code in team_codes
+                        if _normalize_team_code(code)
+                        and _normalize_team_code(code) not in {"PRO", "OPPONENTS", "CAMPERS", "ALL"}
+                    }
+                )
                 pitchers_by_team_code = {
                     code: sorted({name for name in names if str(name).strip()})
                     for code, names in pitchers_by_team_code.items()
@@ -5830,6 +5899,7 @@ def _pro_pitching_overview(
     where = [
         "school_code = 'PRO'",
         "(%(sport_ids_count)s::int = 0 OR sport_id = ANY(%(sport_ids)s::int[]))",
+        _pro_level_sql_clause(level_filter, "pitcherteam", "batterteam"),
         "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
         "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
         """(
@@ -5861,6 +5931,8 @@ def _pro_pitching_overview(
         "pitch_types_count": len(selected_pitch_types),
         "sport_ids": level_sport_ids or [],
         "sport_ids_count": len(level_sport_ids or []),
+        "mlb_team_codes": PRO_MLB_TEAM_CODES,
+        "aaa_team_codes": PRO_AAA_TEAM_CODES,
         "team_type_norm": _pro_team_code_from_value(team_type or ""),
     }
 
@@ -6633,20 +6705,26 @@ def _pro_pitching_overview(
         elif _is_num(ip_raw):
             ip_num_local = float(ip_raw)
         era_local: Optional[float] = None
-        official_keys_local: set[tuple[str, str]] = set()
         official_er_local = 0.0
         official_outs_local = 0
+        per_game_official_local: dict[tuple[str, str], tuple[Optional[float], Optional[int]]] = {}
         for r in group_rows:
             game_key = str(r.get("game_pk") or r.get("game_id") or "").strip()
             pitcher_key = _normalize_name_key(str(r.get("pitcher") or ""))
             if not game_key or not pitcher_key:
                 continue
             key = (game_key, pitcher_key)
-            if key in official_keys_local:
-                continue
-            official_keys_local.add(key)
             er_v = r.get("official_earned_runs")
             outs_v = r.get("official_outs_recorded")
+            prev_er, prev_outs = per_game_official_local.get(key, (None, None))
+            next_er = float(er_v) if _is_num(er_v) else prev_er
+            next_outs = int(round(float(outs_v))) if _is_num(outs_v) else prev_outs
+            if prev_er is not None and next_er is not None:
+                next_er = max(prev_er, next_er)
+            if prev_outs is not None and next_outs is not None:
+                next_outs = max(prev_outs, next_outs)
+            per_game_official_local[key] = (next_er, next_outs)
+        for er_v, outs_v in per_game_official_local.values():
             if _is_num(er_v):
                 official_er_local += float(er_v)
             if _is_num(outs_v):
@@ -6654,6 +6732,12 @@ def _pro_pitching_overview(
         if official_outs_local > 0:
             official_ip_local = official_outs_local / 3.0
             era_local = max(0.0, (9.0 * official_er_local) / official_ip_local)
+            ip_whole_local = official_outs_local // 3
+            ip_rem_local = official_outs_local % 3
+            row_obj["IP"] = f"{ip_whole_local}.{ip_rem_local}" if ip_rem_local else str(ip_whole_local)
+            ip_num_local = official_ip_local
+            if total_pitches_val > 0:
+                row_obj["P/IP"] = round(float(total_pitches_val) / ip_num_local, 2)
         if ip_num_local > 0:
             hr_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "homerun")
             fip_const_local = 3.2
@@ -6802,11 +6886,13 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
             ],
         }
     try:
-        level_team_clause = "TRUE"
+        level_team_clause = _pro_level_sql_clause(level_norm, "pitcherteam", "batterteam")
         with get_conn() as conn, conn.cursor() as cur:
             sql_params = {
                 "sport_ids": level_sport_ids or [],
                 "sport_ids_count": len(level_sport_ids or []),
+                "mlb_team_codes": PRO_MLB_TEAM_CODES,
+                "aaa_team_codes": PRO_AAA_TEAM_CODES,
             }
             cur.execute(
                 """
@@ -7096,6 +7182,7 @@ def _pro_hitting_overview(
     where = [
         "school_code = 'PRO'",
         "(%(sport_ids_count)s::int = 0 OR sport_id = ANY(%(sport_ids)s::int[]))",
+        _pro_level_sql_clause(level_filter, "batterteam", "pitcherteam"),
         "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
         "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
         """(
@@ -7127,6 +7214,8 @@ def _pro_hitting_overview(
         "pitch_types_count": len(selected_pitch_types),
         "sport_ids": level_sport_ids or [],
         "sport_ids_count": len(level_sport_ids or []),
+        "mlb_team_codes": PRO_MLB_TEAM_CODES,
+        "aaa_team_codes": PRO_AAA_TEAM_CODES,
         "team_type_norm": _pro_team_code_from_value(team_type_value),
     }
     team_type_norm = _pro_team_code_from_value(team_type_value)
@@ -7454,6 +7543,11 @@ def _pro_hitting_overview(
             return float(row.get("direction"))
         return None
 
+    chart_points_limit = _dynamic_chart_points_limit(
+        team_type_value=team_type_value,
+        primary_selected_count=len(selected_hitter_keys),
+        secondary_selected_count=len(selected_opp_pitcher_keys),
+    )
     chart_points = (
         [
             {
@@ -7905,7 +7999,17 @@ def pitching_overview(
     parsed_pc_min = _parse_optional_int(pc_min, "pc_min")
     parsed_pc_max = _parse_optional_int(pc_max, "pc_max")
     parsed_chart_points_limit = (
-        max(100, min(int(chart_points_limit), 6000)) if chart_points_limit is not None else None
+        max(100, min(int(chart_points_limit), 6000))
+        if chart_points_limit is not None
+        else (
+            _dynamic_chart_points_limit(
+                team_type_value=team_type,
+                primary_selected_count=len(selected_pitcher_keys),
+                secondary_selected_count=len(selected_opp_hitter_keys),
+            )
+            if school_code == "PRO"
+            else None
+        )
     )
 
     if start_date and end_date and start_date > end_date:
@@ -8859,7 +8963,7 @@ def pitching_overview(
                 _build_chart_points(
                     (
                         _latest_rows_for_chart_points(table_source_rows, parsed_chart_points_limit)
-                        if (school_code == "LEAGUE" and parsed_chart_points_limit is not None)
+                        if parsed_chart_points_limit is not None
                         else _downsample_rows_for_chart_points(table_source_rows)
                     ),
                     avg_stuff_by_pitch_type,
@@ -11929,7 +12033,18 @@ def catching_overview(
                 "base_z": row.get("base_z"),
                 "pitch_number": row.get("pitch_number"),
             }
-            for row in _downsample_rows_for_chart_points(filtered)
+            for row in (
+                _downsample_rows_for_chart_points(
+                    filtered,
+                    _dynamic_chart_points_limit(
+                        team_type_value=team_type_value,
+                        primary_selected_count=len(selected_catcher_keys),
+                        secondary_selected_count=0,
+                    ),
+                )
+                if school_code == "PRO"
+                else _downsample_rows_for_chart_points(filtered)
+            )
         ]
         if include_chart_points
         else []

@@ -1460,6 +1460,7 @@ main {
   background: rgba(255, 255, 255, 0.04);
 }
 
+
 .portal-nav-mobile-wrap {
   display: none;
 }
@@ -1480,6 +1481,7 @@ main {
 .portal-dashboard-suite-tabs .btn {
   white-space: nowrap;
 }
+
 
 .portal-mobile-control-row {
   display: grid;
@@ -1502,6 +1504,7 @@ main {
   text-transform: none;
   letter-spacing: normal;
 }
+
 
 .dashboard-main,
 .dashboard-panel {
@@ -1668,6 +1671,7 @@ main {
   background: rgba(10, 10, 10, 0.92);
 }
 
+
 .portal-mobile-account-row {
   margin-top: 0.15rem;
   display: grid;
@@ -1783,6 +1787,17 @@ main {
   font: 700 0.8rem/1 Manrope, sans-serif;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+}
+
+.portal-shell--pro .social-link {
+  color: #bd002d;
+  border-color: rgba(189, 0, 45, 0.5);
+  background: rgba(189, 0, 45, 0.12);
+}
+
+.portal-shell--pro .social-link:hover {
+  border-color: rgba(189, 0, 45, 0.85);
+  background: rgba(189, 0, 45, 0.2);
 }
 
 .portal-nav-link:hover {

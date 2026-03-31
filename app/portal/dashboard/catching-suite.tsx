@@ -789,8 +789,13 @@ export default function CatchingSuite() {
   }, [filters?.catchers, filters?.catchers_by_team_code, isLeague, teamType]);
   const teamTypeOptions = useMemo(() => {
     const school = String(filters?.school_code ?? '').trim();
-    const base = ['All', school || 'OSU', 'Opponents', 'Campers'];
-    return toOptions(withAll(filters?.team_types ?? base));
+    const isPro = String(filters?.school_code ?? '').trim().toUpperCase() === 'PRO';
+    const fromFilters = (filters?.team_types ?? []).map((value) => String(value ?? '').trim()).filter(Boolean);
+    const base = isPro ? ['All'] : ['All', school || 'OSU', 'Opponents', 'Campers'];
+    const values = Array.from(new Set([...base, ...fromFilters])).filter((value) =>
+      isPro ? !['PRO', 'Opponents', 'Campers'].includes(value) : true
+    );
+    return toOptions(values);
   }, [filters?.school_code, filters?.team_types]);
   useEffect(() => {
     const allowed = new Set(catcherOptions.map((option) => option.value));

@@ -17,8 +17,10 @@ export default async function PortalDashboardPage() {
   const canAccessDashboard = canUseDashboardData(session);
   const canAccessProgramming = canUseProgrammingData(session);
 
+  const isProSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'PRO';
+
   return (
-    <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
+    <div className={`portal-shell${isProSchool ? ' portal-shell--pro' : ''}`} style={schoolBrandCssVars(selectedSchool)}>
       <header className="portal-header">
         <div className="portal-header-left">
           {session.role === 'admin' || session.role === 'coach' ? (

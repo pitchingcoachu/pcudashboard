@@ -14,6 +14,12 @@ const THREE_DECIMAL_STAT_COLUMNS = new Set([
   'BABIP',
 ]);
 
+const TWO_DECIMAL_STAT_COLUMNS = new Set([
+  'ERA',
+  'FIP',
+  'XFIP',
+]);
+
 export function parseSortableNumber(value: unknown): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -55,7 +61,13 @@ export function sortTableRows<T extends SortableRow>(
 
 export function formatTableDisplayValue(column: string, value: unknown): string {
   if (value === null || value === undefined || value === '') return '-';
-  if (!THREE_DECIMAL_STAT_COLUMNS.has(column.trim().toUpperCase())) {
+  const upper = column.trim().toUpperCase();
+  if (TWO_DECIMAL_STAT_COLUMNS.has(upper)) {
+    const numericValue = parseSortableNumber(value);
+    if (numericValue === null) return String(value);
+    return numericValue.toFixed(2);
+  }
+  if (!THREE_DECIMAL_STAT_COLUMNS.has(upper)) {
     return String(value);
   }
   const numericValue = parseSortableNumber(value);
