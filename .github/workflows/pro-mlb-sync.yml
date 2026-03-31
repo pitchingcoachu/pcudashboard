@@ -15,6 +15,10 @@ on:
         description: "YYYY-MM-DD (optional)"
         required: false
 
+concurrency:
+  group: pro-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -52,14 +56,5 @@ jobs:
             --sport-ids 1 \
             --sleep-ms 120
 
-      - name: Enrich from Savant CSV (if files are present)
-        shell: bash
-        run: |
-          shopt -s nullglob
-          MLB_FILES=(data/pro_savant_raw/mlb/*.csv)
-          MILB_FILES=(data/pro_savant_raw/milb/*.csv)
-          if (( ${#MLB_FILES[@]} == 0 && ${#MILB_FILES[@]} == 0 )); then
-            echo "No Savant CSV files found. Skipping."
-            exit 0
-          fi
-          python scripts/sync_pro_savant_csv.py --paths "data/pro_savant_raw/mlb/*.csv" "data/pro_savant_raw/milb/*.csv"
+      # Savant enrichment is intentionally run in PRO AAA Sync only.
+      # Keeping it in one workflow avoids cross-workflow deadlocks on pro_pitch_events.

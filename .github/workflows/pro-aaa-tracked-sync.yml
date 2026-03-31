@@ -15,6 +15,10 @@ on:
         description: "YYYY-MM-DD (optional)"
         required: false
 
+concurrency:
+  group: pro-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest

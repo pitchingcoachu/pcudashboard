@@ -7,6 +7,8 @@ import glob
 import math
 import os
 import re
+import random
+import time
 import urllib.parse
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -242,6 +244,25 @@ WHERE school_code = 'PRO'
 """
 
 
+def _execute_with_retry(cur: psycopg.Cursor, sql: str, params: dict, *, max_attempts: int = 8) -> int:
+    attempt = 0
+    while True:
+        try:
+            cur.execute(sql, params)
+            return max(cur.rowcount or 0, 0)
+        except (
+            psycopg.errors.DeadlockDetected,
+            psycopg.errors.LockNotAvailable,
+            psycopg.errors.SerializationFailure,
+        ):
+            attempt += 1
+            if attempt >= max_attempts:
+                raise
+            # Exponential backoff + jitter to avoid lockstep retries across jobs.
+            sleep_s = min(2.5, 0.12 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.2)
+            time.sleep(sleep_s)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Enrich PRO rows from Savant CSV columns")
     parser.add_argument(
@@ -375,8 +396,7 @@ def main() -> int:
                             total_non_null += 1
                         # Exact key match only:
                         # game_pk + at_bat_number(+game_offset) + pitch_number
-                        cur.execute(UPDATE_SQL, payload)
-                        updated = max(cur.rowcount or 0, 0)
+                        updated = _execute_with_retry(cur, UPDATE_SQL, payload)
                         if updated == 0:
                             unmatched += 1
                         file_updates += updated
