@@ -7,6 +7,24 @@ type SessionLike = {
   name?: string;
 };
 
+type PlayerNameCacheEntry = {
+  expiresAt: number;
+  fullName: string | null;
+};
+
+const PLAYER_NAME_CACHE_TTL_MS = 60_000;
+const PLAYER_NAME_CACHE_KEY = '__pcu_dashboard_player_name_cache_v1__';
+
+function getPlayerNameCache(): Map<string, PlayerNameCacheEntry> {
+  const globalRef = globalThis as typeof globalThis & {
+    [PLAYER_NAME_CACHE_KEY]?: Map<string, PlayerNameCacheEntry>;
+  };
+  if (!globalRef[PLAYER_NAME_CACHE_KEY]) {
+    globalRef[PLAYER_NAME_CACHE_KEY] = new Map<string, PlayerNameCacheEntry>();
+  }
+  return globalRef[PLAYER_NAME_CACHE_KEY]!;
+}
+
 export type DashboardDomain = 'Pitching' | 'Hitting' | 'Catching';
 
 export type DashboardPlayerIdentity = {
@@ -56,8 +74,23 @@ export async function resolveDashboardPlayerIdentity(session: SessionLike): Prom
   const userId = session.userId ?? 0;
   if (organizationId <= 0 || userId <= 0) return null;
 
-  const own = await getPlayerForUser({ organizationId, userId });
-  const seed = unique([own?.fullName ?? '', session.name ?? '']);
+  const cacheKey = `${organizationId}:${userId}`;
+  const now = Date.now();
+  const cache = getPlayerNameCache();
+  let ownFullName: string | null = null;
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    ownFullName = cached.fullName;
+  } else {
+    const own = await getPlayerForUser({ organizationId, userId });
+    ownFullName = own?.fullName ?? null;
+    cache.set(cacheKey, {
+      expiresAt: now + PLAYER_NAME_CACHE_TTL_MS,
+      fullName: ownFullName,
+    });
+  }
+
+  const seed = unique([ownFullName ?? '', session.name ?? '']);
   if (seed.length === 0) return null;
 
   const names = unique(
