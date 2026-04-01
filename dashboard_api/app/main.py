@@ -2244,6 +2244,11 @@ def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str
             if _is_num(row.get("estimated_ba_using_speedangle"))
             else None
         ),
+        "iso_value": (
+            float(row.get("iso_value"))
+            if _is_num(row.get("iso_value"))
+            else None
+        ),
         "stuff_plus": avg_stuff_by_pitch_type.get(str(row.get("pitch_type") or "")),
         "qp_plus": (round(float(qp) * 200.0, 1) if _is_num(qp) else None),
         "video_clip_1": str(row.get("video_clip_1") or ""),
@@ -4204,6 +4209,7 @@ def _try_pitching_overview_daily_rollup(
             row_pitches_by_key={},
             pitch_types=[],
             chart_points=[],
+            heatmap_points=[],
             trend_rows=[],
         )
 
@@ -4416,6 +4422,7 @@ def _try_pitching_overview_daily_rollup(
     table_rows.append(all_row)
 
     chart_points: List[Dict[str, Any]] = []
+    heatmap_points: List[Dict[str, Any]] = []
     if include_chart_points:
         limit = max(100, min(int(chart_points_limit or 2000), 6000))
         chart_params: Dict[str, Any] = {
@@ -4518,8 +4525,10 @@ def _try_pitching_overview_daily_rollup(
                 chart_rows = [dict(r) for r in cur.fetchall()]
                 chart_rows.reverse()
                 chart_points = _build_chart_points(chart_rows, {}, max_points=limit)
+                heatmap_points = _build_chart_points(chart_rows, {}, max_points=max(1, len(chart_rows)))
         except Exception:
             chart_points = []
+            heatmap_points = []
 
     mode_columns_map: Dict[str, List[str]] = {
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
@@ -4566,6 +4575,7 @@ def _try_pitching_overview_daily_rollup(
         row_pitches_by_key={},
         pitch_types=pitch_type_rows,
         chart_points=chart_points,
+        heatmap_points=(heatmap_points if heatmap_points else chart_points),
         trend_rows=[],
     )
 
@@ -6158,6 +6168,7 @@ def _pro_pitching_overview(
             row_pitches_by_key={},
             pitch_types=[],
             chart_points=[],
+            heatmap_points=[],
             trend_rows=[],
         )
 
@@ -7214,10 +7225,17 @@ def _pro_pitching_overview(
     ]
     chart_points = (
         _build_chart_points(
-            _latest_rows_for_chart_points(rows, parsed_chart_points_limit)
-            if parsed_chart_points_limit is not None
-            else _downsample_rows_for_chart_points(rows),
+            _downsample_rows_for_chart_points(rows),
             avg_stuff_by_pitch_type,
+        )
+        if include_chart_points
+        else []
+    )
+    heatmap_points = (
+        _build_chart_points(
+            rows,
+            avg_stuff_by_pitch_type,
+            max_points=max(1, len(rows)),
         )
         if include_chart_points
         else []
@@ -7264,6 +7282,7 @@ def _pro_pitching_overview(
         row_pitches_by_key=row_pitches_by_key,
         pitch_types=pitch_type_rows,
         chart_points=chart_points,
+        heatmap_points=heatmap_points,
         trend_rows=trend_rows,
     )
 
@@ -7966,6 +7985,15 @@ def _pro_hitting_overview(
         primary_selected_count=len(selected_hitter_keys),
         secondary_selected_count=len(selected_opp_pitcher_keys),
     )
+    chart_source_rows = _latest_rows_for_chart_points(out_rows, chart_points_limit)
+    heatmap_source_rows = out_rows
+    chart_points_limit = _dynamic_chart_points_limit(
+        team_type_value=team_type_value,
+        primary_selected_count=len(selected_hitter_keys),
+        secondary_selected_count=len(selected_opp_pitcher_keys),
+    )
+    chart_source_rows = _latest_rows_for_chart_points(out_rows, chart_points_limit)
+    heatmap_source_rows = out_rows
     chart_points = (
         [
             {
@@ -8008,6 +8036,11 @@ def _pro_hitting_overview(
                     if _is_num(row.get("estimated_ba_using_speedangle"))
                     else None
                 ),
+                "iso_value": (
+                    float(row.get("iso_value"))
+                    if _is_num(row.get("iso_value"))
+                    else None
+                ),
                 "distance": _pro_spray_distance(row),
                 "direction": _pro_spray_direction(row),
                 "hc_x": row.get("hc_x"),
@@ -8022,7 +8055,73 @@ def _pro_hitting_overview(
                 "bat_speed": None,
                 "pitch_number": row.get("pitch_number"),
             }
-            for row in _downsample_rows_for_chart_points(out_rows)
+            for row in chart_source_rows
+        ]
+        if include_chart_points
+        else []
+    )
+    heatmap_points = (
+        [
+            {
+                "pitch_event_id": row.get("pitch_event_id"),
+                "session_date": row.get("session_date").isoformat() if row.get("session_date") else None,
+                "pitcher": str(row.get("pitcher") or ""),
+                "batter": str(row.get("batter") or ""),
+                "pitcher_team_code": str(row.get("pitcher_team_code") or ""),
+                "batter_team_code": str(row.get("batter_team_code") or ""),
+                "pitcherthrows": str(row.get("pitcherthrows") or ""),
+                "batterside": str(row.get("batterside") or ""),
+                "pitch_type": str(row.get("pitch_type") or "Undefined"),
+                "pitch_call": str(row.get("pitch_call") or ""),
+                "play_result": str(row.get("play_result") or ""),
+                "result_label": str(row.get("result_label") or ""),
+                "session_type": str(row.get("session_type_norm") or ""),
+                "rel_speed": row.get("rel_speed"),
+                "exit_speed": row.get("exit_speed"),
+                "angle": row.get("angle"),
+                "run_value": (
+                    float(row.get("delta_run_exp"))
+                    if _is_num(row.get("delta_run_exp"))
+                    else _calc_run_value(
+                        row.get("pitch_call"),
+                        row.get("play_result"),
+                        row.get("korbb"),
+                        row.get("balls_num"),
+                        row.get("strikes_num"),
+                        row.get("outs_num"),
+                        row.get("outs_on_play_num"),
+                    )
+                ),
+                "estimated_woba_using_speedangle": (
+                    float(row.get("estimated_woba_using_speedangle"))
+                    if _is_num(row.get("estimated_woba_using_speedangle"))
+                    else None
+                ),
+                "estimated_ba_using_speedangle": (
+                    float(row.get("estimated_ba_using_speedangle"))
+                    if _is_num(row.get("estimated_ba_using_speedangle"))
+                    else None
+                ),
+                "iso_value": (
+                    float(row.get("iso_value"))
+                    if _is_num(row.get("iso_value"))
+                    else None
+                ),
+                "distance": _pro_spray_distance(row),
+                "direction": _pro_spray_direction(row),
+                "hc_x": row.get("hc_x"),
+                "hc_y": row.get("hc_y"),
+                "plate_side": row.get("plate_side"),
+                "plate_height": row.get("plate_height"),
+                "contact_position_x": None,
+                "contact_position_y": None,
+                "contact_position_z": None,
+                "vertical_attack_angle": None,
+                "horizontal_attack_angle": None,
+                "bat_speed": None,
+                "pitch_number": row.get("pitch_number"),
+            }
+            for row in heatmap_source_rows
         ]
         if include_chart_points
         else []
@@ -8050,6 +8149,7 @@ def _pro_hitting_overview(
         "available_table_columns": available_columns,
         "table_rows": table_rows,
         "chart_points": chart_points,
+        "heatmap_points": heatmap_points,
     }
 
 
@@ -9397,6 +9497,15 @@ def pitching_overview(
                 if include_chart_points
                 else []
             )
+            heatmap_points = (
+                _build_chart_points(
+                    table_source_rows,
+                    avg_stuff_by_pitch_type,
+                    max_points=max(1, len(table_source_rows)),
+                )
+                if include_chart_points
+                else []
+            )
             row_pitches_by_key = (
                 _build_row_pitch_map(table_source_rows, split_by, avg_stuff_by_pitch_type)
                 if include_row_pitches
@@ -9451,6 +9560,7 @@ def pitching_overview(
             row_pitches_by_key=row_pitches_by_key,
             pitch_types=pitch_type_rows,
             chart_points=chart_points,
+            heatmap_points=heatmap_points,
             trend_rows=trend_rows,
         )
         _overview_cache_set(overview_cache_key, response_payload)
@@ -11473,6 +11583,7 @@ def hitting_overview(
                 "plate_height": row.get("plate_height"),
                 "estimated_woba_using_speedangle": row.get("estimated_woba_using_speedangle"),
                 "estimated_ba_using_speedangle": row.get("estimated_ba_using_speedangle"),
+                "iso_value": row.get("iso_value"),
                 "contact_position_x": row.get("contact_position_x"),
                 "contact_position_y": row.get("contact_position_y"),
                 "contact_position_z": row.get("contact_position_z"),
@@ -11481,7 +11592,49 @@ def hitting_overview(
                 "bat_speed": row.get("bat_speed"),
                 "pitch_number": row.get("pitch_number"),
             }
-            for row in _downsample_rows_for_chart_points(out_rows)
+            for row in chart_source_rows
+        ]
+        if include_chart_points
+        else []
+    )
+
+    heatmap_points = (
+        [
+            {
+                "pitch_event_id": row.get("pitch_event_id"),
+                "session_date": row.get("session_date").isoformat() if row.get("session_date") else None,
+                "pitcher": str(row.get("pitcher") or ""),
+                "batter": str(row.get("batter") or ""),
+                "pitcher_team_code": str(row.get("pitcher_team_code") or ""),
+                "batter_team_code": str(row.get("batter_team_code") or ""),
+                "pitcherthrows": str(row.get("pitcherthrows") or ""),
+                "batterside": str(row.get("batterside") or ""),
+                "pitch_type": str(row.get("pitch_type") or "Undefined"),
+                "pitch_call": str(row.get("pitch_call") or ""),
+                "play_result": str(row.get("play_result") or ""),
+                "result_label": str(row.get("result_label") or ""),
+                "session_type": str(row.get("session_type_norm") or ""),
+                "rel_speed": row.get("rel_speed"),
+                "exit_speed": row.get("exit_speed"),
+                "angle": row.get("angle"),
+                "distance": row.get("distance"),
+                "direction": row.get("direction"),
+                "hc_x": row.get("hc_x"),
+                "hc_y": row.get("hc_y"),
+                "plate_side": row.get("plate_side"),
+                "plate_height": row.get("plate_height"),
+                "estimated_woba_using_speedangle": row.get("estimated_woba_using_speedangle"),
+                "estimated_ba_using_speedangle": row.get("estimated_ba_using_speedangle"),
+                "iso_value": row.get("iso_value"),
+                "contact_position_x": row.get("contact_position_x"),
+                "contact_position_y": row.get("contact_position_y"),
+                "contact_position_z": row.get("contact_position_z"),
+                "vertical_attack_angle": row.get("vertical_attack_angle"),
+                "horizontal_attack_angle": row.get("horizontal_attack_angle"),
+                "bat_speed": row.get("bat_speed"),
+                "pitch_number": row.get("pitch_number"),
+            }
+            for row in heatmap_source_rows
         ]
         if include_chart_points
         else []
@@ -11509,6 +11662,7 @@ def hitting_overview(
         "available_table_columns": available_columns,
         "table_rows": table_rows,
         "chart_points": chart_points,
+        "heatmap_points": heatmap_points,
     }
     _overview_cache_set(overview_cache_key, response_payload)
     return response_payload

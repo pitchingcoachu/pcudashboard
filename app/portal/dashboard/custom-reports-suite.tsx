@@ -144,6 +144,9 @@ type OverviewLitePayload = {
     tagged_hit_type?: string | null;
     qp_plus?: number | null;
     run_value?: number | null;
+    estimated_woba_using_speedangle?: number | null;
+    estimated_ba_using_speedangle?: number | null;
+    iso_value?: number | null;
     korbb?: string | null;
     catcher?: string | null;
     throw_speed?: number | null;
@@ -161,6 +164,9 @@ type OverviewLitePayload = {
     tagged_hit_type?: string | null;
     exit_speed?: number | null;
     run_value?: number | null;
+    estimated_woba_using_speedangle?: number | null;
+    estimated_ba_using_speedangle?: number | null;
+    iso_value?: number | null;
     result_label?: string | null;
   }>;
 };
@@ -317,7 +323,7 @@ const PITCHING_TABLES = ['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usag
 const HITTING_TABLES = ['Results', 'Swing Decisions'];
 const CATCHING_TABLES = ['Catching Data', 'Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Raw Data', 'Batted Ball Data', 'Swing Decisions'];
 const CATCHING_SPLIT_BY = UNIVERSAL_SPLIT_BY;
-const HEATMAP_STATS = ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'Exit Velocity', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Run Values'];
+const HEATMAP_STATS = ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'Exit Velocity', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Run Values', 'xWOBA', 'xISO'];
 const VELOCITY_CHART_OPTIONS = ['Velocity Chart (Game/Inning)', 'Average Velocity by Game', 'Average Velocity by Inning'];
 const RELEASE_VIEW_OPTIONS = ['Averages Only', 'Averages and Pitches', 'Pitches'];
 const MOVEMENT_VIEW_OPTIONS = ['Averages Only', 'Averages and Pitches'];
@@ -963,6 +969,8 @@ const heatmapScaleFromMetricAndPitchTypes = (
     .filter((value) => value && value !== 'all');
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
+  if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
+  if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
 
   if (metric === 'Whiff Rate') {
     if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
@@ -1274,8 +1282,16 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
   const globalInPlayCount = valid.filter((row) => isInPlayCall(row.point)).length;
   const globalGbCount = valid.filter((row) => isInPlayCall(row.point) && isGroundBall(row.point)).length;
   const globalEvRows = valid.filter((row) => isInPlayCall(row.point) && typeof row.point.exit_speed === 'number');
+  const globalXwobaRows = valid.filter(
+    (row) => typeof row.point.estimated_woba_using_speedangle === 'number' && Number.isFinite(row.point.estimated_woba_using_speedangle)
+  );
+  const globalXisoRows = valid.filter(
+    (row) => typeof row.point.iso_value === 'number' && Number.isFinite(row.point.iso_value)
+  );
   const globalTakeRows = valid.filter((row) => ['StrikeCalled', 'BallCalled', 'BallinDirt'].includes(row.point.pitch_call || ''));
   const globalEvAvg = globalEvRows.length > 0 ? globalEvRows.reduce((sum, row) => sum + Number(row.point.exit_speed || 0), 0) / globalEvRows.length : 0;
+  const globalXwobaAvg = globalXwobaRows.length > 0 ? globalXwobaRows.reduce((sum, row) => sum + Number(row.point.estimated_woba_using_speedangle || 0), 0) / globalXwobaRows.length : 0.35;
+  const globalXisoAvg = globalXisoRows.length > 0 ? globalXisoRows.reduce((sum, row) => sum + Number(row.point.iso_value || 0), 0) / globalXisoRows.length : 0.17;
   const globalRvAvg = valid.length > 0 ? valid.reduce((sum, row) => sum + runValue(row.point), 0) / valid.length : 0;
   const globalCsRate = globalTakeRows.length > 0 ? globalTakeRows.filter((row) => row.point.pitch_call === 'StrikeCalled').length / globalTakeRows.length : 0;
   const globalSwingRate = valid.length > 0 ? globalSwingCount / valid.length : 0;
@@ -1300,6 +1316,10 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
       let evWSum = 0;
       let evW = 0;
       let rvWSum = 0;
+      let xwobaWSum = 0;
+      let xwobaW = 0;
+      let xisoWSum = 0;
+      let xisoW = 0;
       for (const rowPoint of valid) {
         const dx = (cx - rowPoint.x) / sigmaX;
         const dy = (cy - rowPoint.y) / sigmaY;
@@ -1324,6 +1344,14 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
           evW += weight;
         }
         rvWSum += weight * runValue(rowPoint.point);
+        if (typeof rowPoint.point.estimated_woba_using_speedangle === 'number' && Number.isFinite(rowPoint.point.estimated_woba_using_speedangle)) {
+          xwobaWSum += weight * rowPoint.point.estimated_woba_using_speedangle;
+          xwobaW += weight;
+        }
+        if (typeof rowPoint.point.iso_value === 'number' && Number.isFinite(rowPoint.point.iso_value)) {
+          xisoWSum += weight * rowPoint.point.iso_value;
+          xisoW += weight;
+        }
       }
       let value = sumW;
       if (metric === 'Called Strike Rate') value = 100 * ((csW + shrinkStrength * globalCsRate) / Math.max(eps, takeW + shrinkStrength));
@@ -1333,6 +1361,8 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
       if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
       if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
       if (metric === 'Run Values') value = ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
+      if (metric === 'xWOBA') value = (xwobaWSum + shrinkStrength * globalXwobaAvg) / Math.max(eps, xwobaW + shrinkStrength);
+      if (metric === 'xISO') value = (xisoWSum + shrinkStrength * globalXisoAvg) / Math.max(eps, xisoW + shrinkStrength);
       cells.push({ x: xMin + col * cellW, y: yMin + row * cellH, w: cellW, h: cellH, value, density: sumW });
     }
   }
@@ -2914,7 +2944,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           <>
                             <label>Heatmap Type</label>
                             <SearchableSingleSelect
-                              options={HEATMAP_STATS.map((entry) => ({ value: entry, label: entry }))}
+                              options={HEATMAP_STATS
+                                .filter((entry) => ((entry === 'xWOBA' || entry === 'xISO') ? isProSchool : true))
+                                .map((entry) => ({ value: entry, label: entry }))}
                               value={config.heatStat || 'Frequency'}
                               onChange={(next) =>
                                 setCellConfigs((current) => ({
@@ -3479,7 +3511,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                             setChartHover({
                                               x: event.clientX,
                                               y: event.clientY,
-                                              text: `${valueLabel}: ${c.value.toFixed(valueLabel === 'Exit Velocity' || valueLabel === 'Run Values' ? 2 : 1)}`,
+                                              text: `${valueLabel}: ${c.value.toFixed(valueLabel === 'xWOBA' || valueLabel === 'xISO' ? 3 : (valueLabel === 'Exit Velocity' || valueLabel === 'Run Values' ? 2 : 1))}`,
                                             })
                                           }
                                           onMouseLeave={() => setChartHover(null)}

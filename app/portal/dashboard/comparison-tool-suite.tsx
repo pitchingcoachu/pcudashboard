@@ -16,7 +16,8 @@ type HeatMetric =
   | 'Swing Rate'
   | 'Run Values'
   | 'xWOBA'
-  | 'xBA';
+  | 'xBA'
+  | 'xISO';
 type VelocityMode = 'Velocity Chart (Game/Inning)' | 'Average Velocity by Game' | 'Average Velocity by Inning';
 type ReleaseView = 'Averages Only' | 'Averages and Pitches' | 'Pitches';
 type MovementView = 'Averages Only' | 'Averages and Pitches';
@@ -60,6 +61,7 @@ type ChartPoint = {
   qp_plus?: number | null;
   estimated_woba_using_speedangle?: number | null;
   estimated_ba_using_speedangle?: number | null;
+  iso_value?: number | null;
   exit_speed?: number | null;
   angle?: number | null;
   rel_speed?: number | null;
@@ -159,8 +161,8 @@ const DOMAIN_SPLIT_BY: Record<Domain, string[]> = {
 };
 const CHART_OPTIONS: ChartType[] = ['Heatmap', 'Pitch Chart', 'Velocity Chart', 'Movement Plot', 'Release Plot'];
 const HEAT_METRICS_BY_DOMAIN: Record<Domain, HeatMetric[]> = {
-  Pitching: ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Exit Velocity', 'Run Values', 'xWOBA', 'xBA'],
-  Hitting: ['Frequency', 'Whiff Rate', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Exit Velocity', 'Run Values', 'xWOBA'],
+  Pitching: ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Exit Velocity', 'Run Values', 'xWOBA', 'xBA', 'xISO'],
+  Hitting: ['Frequency', 'Whiff Rate', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Exit Velocity', 'Run Values', 'xWOBA', 'xISO'],
   Catching: ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Exit Velocity', 'Run Values'],
 };
 const VELOCITY_MODES: VelocityMode[] = ['Velocity Chart (Game/Inning)', 'Average Velocity by Game', 'Average Velocity by Inning'];
@@ -548,6 +550,7 @@ function getHeatmapFixedScale(metricRaw: HeatMetric, selectedPitchTypesRaw: stri
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
   if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
   if (metric === 'xBA') return { min: 0.2, mid: 0.27, max: 0.34 };
+  if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
   if (metric === 'Whiff Rate') {
     if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
     const pt = selectedPitchTypes[0];
@@ -663,9 +666,11 @@ function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain
   const globalEvRows = valid.filter((entry) => isInPlayCall(entry.point) && typeof entry.point.exit_speed === 'number');
   const globalXwobaRows = valid.filter((entry) => typeof entry.point.estimated_woba_using_speedangle === 'number' && Number.isFinite(entry.point.estimated_woba_using_speedangle));
   const globalXbaRows = valid.filter((entry) => typeof entry.point.estimated_ba_using_speedangle === 'number' && Number.isFinite(entry.point.estimated_ba_using_speedangle));
+  const globalXisoRows = valid.filter((entry) => typeof entry.point.iso_value === 'number' && Number.isFinite(entry.point.iso_value));
   const globalEvAvg = globalEvRows.length ? globalEvRows.reduce((sum, entry) => sum + Number(entry.point.exit_speed || 0), 0) / globalEvRows.length : 0;
   const globalXwobaAvg = globalXwobaRows.length ? globalXwobaRows.reduce((sum, entry) => sum + Number(entry.point.estimated_woba_using_speedangle || 0), 0) / globalXwobaRows.length : 0.35;
   const globalXbaAvg = globalXbaRows.length ? globalXbaRows.reduce((sum, entry) => sum + Number(entry.point.estimated_ba_using_speedangle || 0), 0) / globalXbaRows.length : 0.3;
+  const globalXisoAvg = globalXisoRows.length ? globalXisoRows.reduce((sum, entry) => sum + Number(entry.point.iso_value || 0), 0) / globalXisoRows.length : 0.17;
   const rvRows = valid
     .map((entry) => runValue(entry.point))
     .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
@@ -698,6 +703,8 @@ function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain
       let xwobaW = 0;
       let xbaWSum = 0;
       let xbaW = 0;
+      let xisoWSum = 0;
+      let xisoW = 0;
       for (const entry of valid) {
         const dx = (cx - entry.x) / sigmaX;
         const dy = (cy - entry.y) / sigmaY;
@@ -729,6 +736,10 @@ function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain
           xbaWSum += w * entry.point.estimated_ba_using_speedangle;
           xbaW += w;
         }
+        if (typeof entry.point.iso_value === 'number' && Number.isFinite(entry.point.iso_value)) {
+          xisoWSum += w * entry.point.iso_value;
+          xisoW += w;
+        }
       }
       let value = sumW;
       if (metric === 'Called Strike Rate') value = 100 * ((calledStrikeW + shrinkStrength * globalCalledStrikeRate) / Math.max(eps, sumW + shrinkStrength));
@@ -745,6 +756,7 @@ function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain
       }
       if (metric === 'xWOBA') value = (xwobaWSum + xMetricShrinkStrength * globalXwobaAvg) / Math.max(eps, xwobaW + xMetricShrinkStrength);
       if (metric === 'xBA') value = (xbaWSum + xMetricShrinkStrength * globalXbaAvg) / Math.max(eps, xbaW + xMetricShrinkStrength);
+      if (metric === 'xISO') value = (xisoWSum + xMetricShrinkStrength * globalXisoAvg) / Math.max(eps, xisoW + xMetricShrinkStrength);
       cells.push({ x: xMin + col * cellW, y: yMin + row * cellH, w: cellW, h: cellH, value, density: sumW });
     }
   }
@@ -879,10 +891,12 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     const values = Array.from(new Set([...DOMAIN_SPLIT_BY[state.domain], ...fromFilters]));
     return values.map((value) => ({ value, label: splitByLabel(value) }));
   }, [filters?.split_by_options, state.domain]);
-  const heatMetricOptions = useMemo(
-    () => HEAT_METRICS_BY_DOMAIN[state.domain].map((value) => ({ value, label: value })),
-    [state.domain]
-  );
+  const heatMetricOptions = useMemo(() => {
+    const isProSchool = String(filters?.school_code ?? '').trim().toUpperCase() === 'PRO';
+    return HEAT_METRICS_BY_DOMAIN[state.domain]
+      .filter((value) => (value === 'xWOBA' || value === 'xBA' || value === 'xISO' ? isProSchool : true))
+      .map((value) => ({ value, label: value }));
+  }, [state.domain, filters?.school_code]);
 
   const points = overview?.chart_points ?? [];
   const heatmapPoints = overview?.heatmap_points ?? points;

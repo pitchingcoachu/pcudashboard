@@ -82,6 +82,7 @@ class PitchingOverviewResponse(BaseModel):
     row_pitches_by_key: Dict[str, List[Dict[str, Any]]]
     pitch_types: List[PitchTypeSummaryRow]
     chart_points: List[Dict[str, Any]]
+    heatmap_points: List[Dict[str, Any]] = []
     trend_rows: List[Dict[str, Any]] = []
 
 class PitchingAbReportResponse(BaseModel):

@@ -113,6 +113,7 @@ type OverviewPayload = {
     angle: number | null;
     estimated_woba_using_speedangle?: number | null;
     estimated_ba_using_speedangle?: number | null;
+    iso_value?: number | null;
     stuff_plus: number | null;
     qp_plus: number | null;
     video_clip_1: string;
@@ -166,12 +167,14 @@ type OverviewPayload = {
     angle: number | null;
     estimated_woba_using_speedangle?: number | null;
     estimated_ba_using_speedangle?: number | null;
+    iso_value?: number | null;
     stuff_plus: number | null;
     qp_plus: number | null;
     video_clip_1: string;
     video_clip_2: string;
     video_clip_3: string;
   }[];
+  heatmap_points?: Array<Record<string, unknown>>;
   trend_rows?: Array<{
     session_bucket: 'Bullpen' | 'Live BP' | 'Season';
     date: string;
@@ -703,8 +706,8 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
     .filter((value) => value && value !== 'all');
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
-  if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
-  if (metric === 'xBA') return { min: 0.2, mid: 0.27, max: 0.34 };
+  if (metric === 'xWOBA') return { min: 0.25, mid: 0.325, max: 0.4 };
+  if (metric === 'xISO') return { min: 0.1, mid: 0.2, max: 0.3 };
 
   if (metric === 'Whiff Rate' || metric === 'Whiff%') {
     if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
@@ -2680,6 +2683,10 @@ export default function PitchingSuite({
   );
 
   const summaryPoints = useMemo(() => overview?.chart_points ?? [], [overview]);
+  const summaryHeatmapPoints = useMemo(
+    () => ((overview?.heatmap_points as PitchActionPoint[] | undefined) ?? summaryPoints),
+    [overview?.heatmap_points, summaryPoints]
+  );
   const activeSummaryPitchTypes = useMemo(
     () =>
       [...new Set(summaryPoints.map((point) => String(point.pitch_type || '').trim()).filter((value) => value && value !== 'Undefined'))].sort((a, b) => {
@@ -3431,10 +3438,10 @@ export default function PitchingSuite({
         typeof rowPoint.p.estimated_woba_using_speedangle === 'number' &&
         Number.isFinite(rowPoint.p.estimated_woba_using_speedangle)
     );
-    const globalXbaRows = valid.filter(
+    const globalXisoRows = valid.filter(
       (rowPoint) =>
-        typeof rowPoint.p.estimated_ba_using_speedangle === 'number' &&
-        Number.isFinite(rowPoint.p.estimated_ba_using_speedangle)
+        typeof rowPoint.p.iso_value === 'number' &&
+        Number.isFinite(rowPoint.p.iso_value)
     );
 
     const globalSwingCount = valid.filter((rowPoint) => isSwingCall(rowPoint.p)).length;
@@ -3459,10 +3466,10 @@ export default function PitchingSuite({
       globalXwobaRows.length > 0
         ? globalXwobaRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.estimated_woba_using_speedangle || 0), 0) / globalXwobaRows.length
         : 0.35;
-    const globalXbaAvg =
-      globalXbaRows.length > 0
-        ? globalXbaRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.estimated_ba_using_speedangle || 0), 0) / globalXbaRows.length
-        : 0.3;
+    const globalXisoAvg =
+      globalXisoRows.length > 0
+        ? globalXisoRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.iso_value || 0), 0) / globalXisoRows.length
+        : 0.17;
 
     const globalSwingRate = valid.length > 0 ? globalSwingCount / valid.length : 0;
     const globalWhiffRate = globalSwingCount > 0 ? globalWhiffCount / globalSwingCount : 0;
@@ -3490,8 +3497,8 @@ export default function PitchingSuite({
         let rvW = 0;
         let xwobaWSum = 0;
         let xwobaW = 0;
-        let xbaWSum = 0;
-        let xbaW = 0;
+        let xisoWSum = 0;
+        let xisoW = 0;
 
         for (const rowPoint of valid) {
           const dx = (cx - rowPoint.x) / sigmaX;
@@ -3524,9 +3531,9 @@ export default function PitchingSuite({
             xwobaWSum += w * rowPoint.p.estimated_woba_using_speedangle;
             xwobaW += w;
           }
-          if (typeof rowPoint.p.estimated_ba_using_speedangle === 'number' && Number.isFinite(rowPoint.p.estimated_ba_using_speedangle)) {
-            xbaWSum += w * rowPoint.p.estimated_ba_using_speedangle;
-            xbaW += w;
+          if (typeof rowPoint.p.iso_value === 'number' && Number.isFinite(rowPoint.p.iso_value)) {
+            xisoWSum += w * rowPoint.p.iso_value;
+            xisoW += w;
           }
         }
 
@@ -3544,7 +3551,7 @@ export default function PitchingSuite({
               : Number.NaN;
         }
         if (metric === 'xWOBA') value = (xwobaWSum + xMetricShrinkStrength * globalXwobaAvg) / Math.max(eps, xwobaW + xMetricShrinkStrength);
-        if (metric === 'xBA') value = (xbaWSum + xMetricShrinkStrength * globalXbaAvg) / Math.max(eps, xbaW + xMetricShrinkStrength);
+        if (metric === 'xISO') value = (xisoWSum + xMetricShrinkStrength * globalXisoAvg) / Math.max(eps, xisoW + xMetricShrinkStrength);
         cells.push({ x: xMin + col * cellW, y: yMin + row * cellH, w: cellW, h: cellH, value, density: sumW });
       }
     }
@@ -3958,7 +3965,7 @@ export default function PitchingSuite({
     const compRight = strikeCenterX + compRadiusFt;
     const zoom = locationView === 'Pitch' ? 1 : 1.2;
     const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
-    const cells = locationView === 'Pitch' ? [] : buildHeatCells(summaryPoints, 'plate_side', 'plate_height', locationView);
+    const cells = locationView === 'Pitch' ? [] : buildHeatCells(summaryHeatmapPoints, 'plate_side', 'plate_height', locationView);
     const values = cells.map((c) => c.value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
     const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
     const dynamicMinVal = values.length ? values[0] : 0;
@@ -4113,7 +4120,7 @@ export default function PitchingSuite({
                       setLocationHover({
                         x: event.clientX,
                         y: event.clientY,
-                        text: `${locationView}: ${c.value.toFixed(locationView === 'xWOBA' || locationView === 'xBA' ? 3 : (locationView === 'Run Values' || locationView === 'Exit Velocity' ? 2 : 1))}`,
+                        text: `${locationView}: ${c.value.toFixed(locationView === 'xWOBA' || locationView === 'xISO' ? 3 : (locationView === 'Run Values' || locationView === 'Exit Velocity' ? 2 : 1))}`,
                       })
                     }
                     onMouseLeave={() => setLocationHover(null)}
@@ -4152,7 +4159,7 @@ export default function PitchingSuite({
         </g>
       </svg>
     );
-  }, [summaryPoints, locationView, isPro, selectedPitchTypes]);
+  }, [summaryPoints, summaryHeatmapPoints, locationView, isPro, selectedPitchTypes]);
 
   const heatmapStatOptions = useMemo(
     () => [
@@ -4162,12 +4169,20 @@ export default function PitchingSuite({
       { value: 'Contact Rate', label: 'Contact Rate' },
       { value: 'Swing Rate', label: 'Swing Rate' },
       { value: 'Exit Velocity', label: 'Exit Velocity' },
-      ...(isPro ? ([{ value: 'xWOBA', label: 'xWOBA' }, { value: 'xBA', label: 'xBA' }] as OptionItem[]) : []),
+      ...(isPro ? ([{ value: 'xWOBA', label: 'xWOBA' }, { value: 'xISO', label: 'xISO' }] as OptionItem[]) : []),
       { value: 'Run Values', label: 'Run Values' },
       { value: 'QP+', label: 'QP+' },
     ],
     [isPro]
   );
+  const summaryHeatmapOptions = useMemo(
+    () => [{ value: 'Pitch', label: 'Pitch' }, ...heatmapStatOptions.filter((option) => option.value !== 'QP+')],
+    [heatmapStatOptions]
+  );
+  useEffect(() => {
+    if (heatmapStat === 'xBA') setHeatmapStat('xWOBA');
+    if (locationView === 'xBA') setLocationView('xWOBA');
+  }, [heatmapStat, locationView]);
   const heatmapDisplayView = useMemo(() => {
     if (heatmapChartType === 'Pitch') return 'Pitch';
     if (heatmapChartType === 'QP+') return 'QP+';
@@ -4276,7 +4291,7 @@ export default function PitchingSuite({
         ? []
         : heatmapDisplayView === 'QP+'
           ? buildQpPresetCells(qpSelectedPitchType, qpSelectedHand, qpSelectedCountBucket)
-          : buildHeatCells(summaryPoints, 'plate_side', 'plate_height', heatmapDisplayView);
+          : buildHeatCells(summaryHeatmapPoints, 'plate_side', 'plate_height', heatmapDisplayView);
     const values = cells.map((c) => c.value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
     const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
     const dynamicMinVal = values.length ? values[0] : 0;
@@ -4438,7 +4453,7 @@ export default function PitchingSuite({
                       setLocationHover({
                         x: event.clientX,
                         y: event.clientY,
-                        text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xBA' ? 3 : (heatmapDisplayView === 'Run Values' || heatmapDisplayView === 'Exit Velocity' || heatmapDisplayView === 'QP+' ? 2 : 1))}`,
+                        text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO' ? 3 : (heatmapDisplayView === 'Run Values' || heatmapDisplayView === 'Exit Velocity' || heatmapDisplayView === 'QP+' ? 2 : 1))}`,
                       })
                     }
                     onMouseLeave={() => setLocationHover(null)}
@@ -4484,7 +4499,7 @@ export default function PitchingSuite({
         </g>
       </svg>
     );
-  }, [summaryPoints, heatmapDisplayView, canRenderQpHeatmap, qpSelectedPitchType, qpSelectedCountBucket, qpSelectedHand, isPro, selectedPitchTypes]);
+  }, [summaryPoints, summaryHeatmapPoints, heatmapDisplayView, canRenderQpHeatmap, qpSelectedPitchType, qpSelectedCountBucket, qpSelectedHand, isPro, selectedPitchTypes]);
 
   const tableColorMode = useMemo(() => {
     if (!tableMode) return '';
@@ -5254,16 +5269,7 @@ export default function PitchingSuite({
                   <h4 style={{ margin: '0 0 0.45rem 0', textAlign: 'center' }}>HeatMaps</h4>
                   <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'center', minHeight: 40, marginBottom: 8 }}>
                     <SearchableSingleSelect
-                      options={[
-                        { value: 'Pitch', label: 'Pitch' },
-                        { value: 'Frequency', label: 'Frequency' },
-                        { value: 'Whiff Rate', label: 'Whiff Rate' },
-                        { value: 'GB Rate', label: 'GB Rate' },
-                        { value: 'Contact Rate', label: 'Contact Rate' },
-                        { value: 'Swing Rate', label: 'Swing Rate' },
-                        { value: 'Exit Velocity', label: 'Exit Velocity' },
-                        { value: 'Run Values', label: 'Run Values' },
-                      ]}
+                      options={summaryHeatmapOptions}
                       value={locationView}
                       onChange={setLocationView}
                       placeholder="Pitch"

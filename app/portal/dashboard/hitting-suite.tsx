@@ -50,6 +50,7 @@ type ChartPoint = {
   run_value?: number | null;
   estimated_woba_using_speedangle?: number | null;
   estimated_ba_using_speedangle?: number | null;
+  iso_value?: number | null;
   distance: number | null;
   direction: number | null;
   hc_x?: number | null;
@@ -86,6 +87,7 @@ type HittingOverviewPayload = {
   available_table_columns?: string[];
   table_rows: Record<string, string | number | null>[];
   chart_points: ChartPoint[];
+  heatmap_points?: ChartPoint[];
 };
 
 type AbReportPayload = {
@@ -510,6 +512,7 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
   if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
+  if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
   if (metric === 'Whiff Rate') {
     if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
     const pt = selectedPitchTypes[0];
@@ -699,6 +702,7 @@ async function ensurePlotlyLoaded(): Promise<void> {
 function LocationChart({
   title,
   points,
+  heatmapPoints,
   displayView,
   selectedPitchTypes,
   strictRunValue,
@@ -709,6 +713,7 @@ function LocationChart({
 }: {
   title: string;
   points: ChartPoint[];
+  heatmapPoints: ChartPoint[];
   displayView: string;
   selectedPitchTypes: string[];
   strictRunValue: boolean;
@@ -741,8 +746,9 @@ function LocationChart({
   const compRight = midX + compRadiusFt;
   const greenHalf = 7 / 12;
 
-  const inZone = points.filter((p) => parseNumber(p.plate_side) !== null && parseNumber(p.plate_height) !== null);
-  const cells = displayView === 'Pitch' ? [] : buildHeatCells(inZone, displayView, strictRunValue);
+  const plottedInZone = points.filter((p) => parseNumber(p.plate_side) !== null && parseNumber(p.plate_height) !== null);
+  const heatmapInZone = heatmapPoints.filter((p) => parseNumber(p.plate_side) !== null && parseNumber(p.plate_height) !== null);
+  const cells = displayView === 'Pitch' ? [] : buildHeatCells(heatmapInZone, displayView, strictRunValue);
   const values = cells.map((cell) => cell.value).sort((a, b) => a - b);
   const densityMax = Math.max(1e-9, ...cells.map((cell) => cell.density));
   const dynamicMinVal = values.length ? values[0] : 0;
@@ -871,7 +877,7 @@ function LocationChart({
                     onPointHover({
                       x: event.clientX,
                       y: event.clientY,
-                      text: `${displayView}: ${cell.value.toFixed(displayView === 'xWOBA' ? 3 : (displayView === 'Run Values' || displayView === 'Exit Velocity' ? 2 : 1))}`,
+                      text: `${displayView}: ${cell.value.toFixed(displayView === 'xWOBA' || displayView === 'xISO' ? 3 : (displayView === 'Run Values' || displayView === 'Exit Velocity' ? 2 : 1))}`,
                     })
                   }
                   onMouseLeave={onPointLeave}
@@ -900,7 +906,7 @@ function LocationChart({
         <line x1={xScale(midX)} y1={yScale(compBottom)} x2={xScale(midX)} y2={yScale(zoneBottom)} stroke="rgba(255,255,255,0.58)" strokeWidth="1" />
         <line x1={xScale(midX)} y1={yScale(zoneTop)} x2={xScale(midX)} y2={yScale(compTop)} stroke="rgba(255,255,255,0.58)" strokeWidth="1" />
         {displayView === 'Pitch'
-          ? inZone.map((point, idx) => {
+          ? plottedInZone.map((point, idx) => {
               const ps = parseNumber(point.plate_side);
               const ph = parseNumber(point.plate_height);
               if (ps === null || ph === null) return null;
@@ -1470,6 +1476,11 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
       typeof row.p.estimated_ba_using_speedangle === 'number' &&
       Number.isFinite(row.p.estimated_ba_using_speedangle)
   );
+  const xisoRows = valid.filter(
+    (row) =>
+      typeof row.p.iso_value === 'number' &&
+      Number.isFinite(row.p.iso_value)
+  );
   const runValue = (point: ChartPoint): number | null => {
     if (typeof point.run_value === 'number' && Number.isFinite(point.run_value)) return point.run_value;
     if (strictRunValue) return null;
@@ -1506,6 +1517,10 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
     xbaRows.length > 0
       ? xbaRows.reduce((sum, row) => sum + Number(row.p.estimated_ba_using_speedangle || 0), 0) / xbaRows.length
       : 0.3;
+  const globalXisoAvg =
+    xisoRows.length > 0
+      ? xisoRows.reduce((sum, row) => sum + Number(row.p.iso_value || 0), 0) / xisoRows.length
+      : 0.17;
   const globalSwingRate = valid.length ? globalSwingCount / valid.length : 0;
   const globalWhiffRate = globalSwingCount ? globalWhiffCount / globalSwingCount : 0;
   const globalGbRate = globalInPlayCount ? globalGbCount / globalInPlayCount : 0;
@@ -1532,6 +1547,8 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
       let xwobaW = 0;
       let xbaWSum = 0;
       let xbaW = 0;
+      let xisoWSum = 0;
+      let xisoW = 0;
       for (const rowPoint of valid) {
         const dx = (cx - rowPoint.x) / sigmaX;
         const dy = (cy - rowPoint.y) / sigmaY;
@@ -1563,6 +1580,10 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
           xbaWSum += w * rowPoint.p.estimated_ba_using_speedangle;
           xbaW += w;
         }
+        if (typeof rowPoint.p.iso_value === 'number' && Number.isFinite(rowPoint.p.iso_value)) {
+          xisoWSum += w * rowPoint.p.iso_value;
+          xisoW += w;
+        }
       }
 
       let value = sumW;
@@ -1587,6 +1608,12 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
         value =
           xbaW > eps
             ? (xbaWSum + xMetricShrinkStrength * globalXbaAvg) / Math.max(eps, xbaW + xMetricShrinkStrength)
+            : Number.NaN;
+      }
+      if (metric === 'xISO') {
+        value =
+          xisoW > eps
+            ? (xisoWSum + xMetricShrinkStrength * globalXisoAvg) / Math.max(eps, xisoW + xMetricShrinkStrength)
             : Number.NaN;
       }
 
@@ -1977,8 +2004,20 @@ export default function HittingSuite() {
   }, [dashboardPage, selectedSingleHitter, abGameKey, startDate, endDate, teamType, oppPitcher, hand, batterSide, pitchTypes]);
 
   const points = overview?.chart_points ?? [];
+  const heatmapPoints = useMemo(() => {
+    const source = overview?.heatmap_points;
+    return source && source.length ? source : points;
+  }, [overview?.heatmap_points, points]);
   const rhpPoints = useMemo(() => points.filter((p) => normalizedThrowHand(p.pitcherthrows) === 'R'), [points]);
   const lhpPoints = useMemo(() => points.filter((p) => normalizedThrowHand(p.pitcherthrows) === 'L'), [points]);
+  const rhpHeatmapPoints = useMemo(
+    () => heatmapPoints.filter((p) => normalizedThrowHand(p.pitcherthrows) === 'R'),
+    [heatmapPoints]
+  );
+  const lhpHeatmapPoints = useMemo(
+    () => heatmapPoints.filter((p) => normalizedThrowHand(p.pitcherthrows) === 'L'),
+    [heatmapPoints]
+  );
   const tableModeOptions = useMemo(
     () => [
       { value: 'Results', label: 'Results' },
@@ -2157,7 +2196,7 @@ export default function HittingSuite() {
       { value: 'Contact Rate', label: 'Contact Rate' },
       { value: 'Swing Rate', label: 'Swing Rate' },
       { value: 'Exit Velocity', label: 'Exit Velocity' },
-      ...(isPro ? ([{ value: 'xWOBA', label: 'xWOBA' }] as OptionItem[]) : []),
+      ...(isPro ? ([{ value: 'xWOBA', label: 'xWOBA' }, { value: 'xISO', label: 'xISO' }] as OptionItem[]) : []),
       { value: 'Run Values', label: 'Run Values' },
     ],
     [isPro]
@@ -2211,7 +2250,7 @@ export default function HittingSuite() {
     const cells =
       heatmapDisplayView === 'Pitch'
         ? []
-        : buildHeatCells(points, heatmapDisplayView, isPro);
+        : buildHeatCells(heatmapPoints, heatmapDisplayView, isPro);
     const values = cells.map((c) => c.value).sort((a, b) => a - b);
     const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
     const minVal = values.length ? values[0] : 0;
@@ -2288,7 +2327,7 @@ export default function HittingSuite() {
                     r={radius}
                     fill={fill}
                     opacity={Math.max(0.2, rvBoost * 0.72 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))}
-                    onMouseMove={(event) => setChartHover({ x: event.clientX, y: event.clientY, text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' ? 3 : (heatmapDisplayView === 'Run Values' || heatmapDisplayView === 'Exit Velocity' ? 2 : 1))}` })}
+                    onMouseMove={(event) => setChartHover({ x: event.clientX, y: event.clientY, text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO' ? 3 : (heatmapDisplayView === 'Run Values' || heatmapDisplayView === 'Exit Velocity' ? 2 : 1))}` })}
                     onMouseLeave={() => setChartHover(null)}
                   />
                 );
@@ -2335,7 +2374,7 @@ export default function HittingSuite() {
         </g>
       </svg>
     );
-  }, [heatmapDisplayView, heatmapStat, points]);
+  }, [heatmapDisplayView, heatmapStat, points, heatmapPoints]);
   const swingContactPoints = useMemo(
     () =>
       points.filter(
@@ -2853,6 +2892,7 @@ export default function HittingSuite() {
                 <LocationChart
                   title="vs. RHP"
                   points={rhpPoints}
+                  heatmapPoints={rhpHeatmapPoints}
                   displayView={summaryRhpLocationView}
                   selectedPitchTypes={pitchTypes}
                   strictRunValue={isPro}
@@ -2871,6 +2911,7 @@ export default function HittingSuite() {
                 <LocationChart
                   title="vs. LHP"
                   points={lhpPoints}
+                  heatmapPoints={lhpHeatmapPoints}
                   displayView={summaryLhpLocationView}
                   selectedPitchTypes={pitchTypes}
                   strictRunValue={isPro}
