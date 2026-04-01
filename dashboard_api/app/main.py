@@ -7987,13 +7987,6 @@ def _pro_hitting_overview(
     )
     chart_source_rows = _latest_rows_for_chart_points(out_rows, chart_points_limit)
     heatmap_source_rows = out_rows
-    chart_points_limit = _dynamic_chart_points_limit(
-        team_type_value=team_type_value,
-        primary_selected_count=len(selected_hitter_keys),
-        secondary_selected_count=len(selected_opp_pitcher_keys),
-    )
-    chart_source_rows = _latest_rows_for_chart_points(out_rows, chart_points_limit)
-    heatmap_source_rows = out_rows
     chart_points = (
         [
             {

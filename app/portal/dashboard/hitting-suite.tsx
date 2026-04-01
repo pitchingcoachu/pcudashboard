@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
+import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
@@ -1438,6 +1439,9 @@ function SprayChart({
 }
 
 function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = false): HeatCell[] {
+  if (metric === 'xWOBA' || metric === 'xISO') {
+    return buildSharedXMetricHeatCells(points, metric);
+  }
   const xMin = -2.5;
   const xMax = 2.5;
   const yMin = 0;
@@ -1921,6 +1925,7 @@ export default function HittingSuite() {
     if (pcMin.trim()) params.set('pc_min', pcMin.trim());
     if (pcMax.trim()) params.set('pc_max', pcMax.trim());
     params.set('include_chart_points', '1');
+    params.set('chart_points_limit', '1000');
 
     fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { signal: controller.signal })
       .then((r) => r.json())

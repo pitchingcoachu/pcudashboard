@@ -60,6 +60,7 @@ export async function GET(request: Request) {
   const pcMin = inputUrl.searchParams.get('pc_min')?.trim() ?? '';
   const pcMax = inputUrl.searchParams.get('pc_max')?.trim() ?? '';
   const includeChartPoints = inputUrl.searchParams.get('include_chart_points')?.trim() ?? '';
+  const chartPointsLimit = inputUrl.searchParams.get('chart_points_limit')?.trim() ?? '';
   const includeRowPitches = inputUrl.searchParams.get('include_row_pitches')?.trim() ?? '';
   const includeTrendRows = inputUrl.searchParams.get('include_trend_rows')?.trim() ?? '';
   const playerIdentity = await resolveDashboardPlayerIdentity({
@@ -128,11 +129,12 @@ export async function GET(request: Request) {
   const forceLeagueLight = isLeague && daySpan >= 14;
 
   if (includeChartPoints) url.searchParams.set('include_chart_points', includeChartPoints);
+  if (chartPointsLimit) url.searchParams.set('chart_points_limit', chartPointsLimit);
   if (includeRowPitches) url.searchParams.set('include_row_pitches', includeRowPitches);
   if (includeTrendRows) url.searchParams.set('include_trend_rows', includeTrendRows);
   if (forceLeagueLight) {
     url.searchParams.set('include_chart_points', '1');
-    url.searchParams.set('chart_points_limit', '2000');
+    url.searchParams.set('chart_points_limit', '1000');
     url.searchParams.set('include_row_pitches', '0');
     url.searchParams.set('include_trend_rows', '0');
   } else if (isLeague && !includeRowPitches) {

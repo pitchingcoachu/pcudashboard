@@ -71,6 +71,7 @@ export async function GET(request: Request) {
     'pc_min',
     'pc_max',
     'include_chart_points',
+    'chart_points_limit',
   ] as const;
 
   const apiBase = resolveDashboardApiBaseUrl();

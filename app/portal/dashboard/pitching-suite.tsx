@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
+import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 
 type FiltersPayload = {
   school_code: string;
@@ -706,8 +707,8 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
     .filter((value) => value && value !== 'all');
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
-  if (metric === 'xWOBA') return { min: 0.25, mid: 0.325, max: 0.4 };
-  if (metric === 'xISO') return { min: 0.1, mid: 0.2, max: 0.3 };
+  if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
+  if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
 
   if (metric === 'Whiff Rate' || metric === 'Whiff%') {
     if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
@@ -1698,7 +1699,7 @@ export default function PitchingSuite({
       !isLeague || (!hideLeagueSummaryCharts && !shouldForceLeagueFastTable && leagueWindowDays <= 14);
     if (isLeaderboard) {
       params.set('include_chart_points', '1');
-      if (isLeague) params.set('chart_points_limit', '2000');
+      params.set('chart_points_limit', '1000');
       params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
       params.set('include_trend_rows', '0');
     } else if (hideLeagueSummaryCharts || shouldForceLeagueFastTable) {
@@ -1707,7 +1708,7 @@ export default function PitchingSuite({
       params.set('include_trend_rows', '0');
     } else {
       params.set('include_chart_points', shouldLoadLeagueCharts ? '1' : (isLeague ? '0' : '1'));
-      if (shouldLoadLeagueCharts) params.set('chart_points_limit', '2000');
+      if (shouldLoadLeagueCharts || !isLeague) params.set('chart_points_limit', '1000');
       params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
       params.set('include_trend_rows', isLeague ? '0' : (isTrendPage ? '1' : '0'));
     }
@@ -3351,6 +3352,27 @@ export default function PitchingSuite({
     yKey: 'plate_height',
     metric: string
   ): HeatCell[] => {
+    if (metric === 'xWOBA' || metric === 'xISO') {
+      const normalizedPoints = points.map((point) => {
+        const rawX = point[xKey];
+        const rawY = point[yKey];
+        const x = typeof rawX === 'number' && Number.isFinite(rawX) ? orientX(rawX) : null;
+        const y = typeof rawY === 'number' && Number.isFinite(rawY) ? rawY : null;
+        return {
+          plate_side: x,
+          plate_height: y,
+          estimated_woba_using_speedangle:
+            typeof point.estimated_woba_using_speedangle === 'number' && Number.isFinite(point.estimated_woba_using_speedangle)
+              ? point.estimated_woba_using_speedangle
+              : null,
+          iso_value:
+            typeof point.iso_value === 'number' && Number.isFinite(point.iso_value)
+              ? point.iso_value
+              : null,
+        };
+      });
+      return buildSharedXMetricHeatCells(normalizedPoints, metric);
+    }
     const xMin = -2.5;
     const xMax = 2.5;
     const yMin = 0;
@@ -3477,7 +3499,7 @@ export default function PitchingSuite({
     const globalContactRate = globalSwingCount > 0 ? (globalSwingCount - globalWhiffCount) / globalSwingCount : 0;
     const shrinkStrength = 8;
     const runValueShrinkStrength = 0.5;
-    const xMetricShrinkStrength = 0.4;
+    const xMetricShrinkStrength = 0;
 
     const cells: HeatCell[] = [];
     for (let row = 0; row < rows; row += 1) {
@@ -3550,8 +3572,18 @@ export default function PitchingSuite({
               ? ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, rvW + runValueShrinkStrength)) * 100
               : Number.NaN;
         }
-        if (metric === 'xWOBA') value = (xwobaWSum + xMetricShrinkStrength * globalXwobaAvg) / Math.max(eps, xwobaW + xMetricShrinkStrength);
-        if (metric === 'xISO') value = (xisoWSum + xMetricShrinkStrength * globalXisoAvg) / Math.max(eps, xisoW + xMetricShrinkStrength);
+        if (metric === 'xWOBA') {
+          value =
+            xwobaW > eps
+              ? (xwobaWSum + xMetricShrinkStrength * globalXwobaAvg) / Math.max(eps, xwobaW + xMetricShrinkStrength)
+              : globalXwobaAvg;
+        }
+        if (metric === 'xISO') {
+          value =
+            xisoW > eps
+              ? (xisoWSum + xMetricShrinkStrength * globalXisoAvg) / Math.max(eps, xisoW + xMetricShrinkStrength)
+              : globalXisoAvg;
+        }
         cells.push({ x: xMin + col * cellW, y: yMin + row * cellH, w: cellW, h: cellH, value, density: sumW });
       }
     }

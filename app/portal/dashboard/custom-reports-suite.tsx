@@ -6,6 +6,7 @@ import { jsPDF } from 'jspdf';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
+import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching';
@@ -1192,6 +1193,9 @@ function strikeZoneOverlay() {
 }
 
 function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>, metric: string, isProSchool = false) {
+  if (metric === 'xWOBA' || metric === 'xISO') {
+    return buildSharedXMetricHeatCells(points, metric);
+  }
   const xMin = -2.5;
   const xMax = 2.5;
   const yMin = 0;
@@ -1300,6 +1304,7 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
   const globalContactRate = globalSwingCount > 0 ? (globalSwingCount - globalWhiffCount) / globalSwingCount : 0;
   const shrinkStrength = 8;
   const runValueShrinkStrength = 0.5;
+  const xMetricShrinkStrength = 0;
 
   const cells: Array<{ x: number; y: number; w: number; h: number; value: number; density: number }> = [];
   for (let row = 0; row < rows; row += 1) {
@@ -1361,8 +1366,18 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
       if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
       if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
       if (metric === 'Run Values') value = ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
-      if (metric === 'xWOBA') value = (xwobaWSum + shrinkStrength * globalXwobaAvg) / Math.max(eps, xwobaW + shrinkStrength);
-      if (metric === 'xISO') value = (xisoWSum + shrinkStrength * globalXisoAvg) / Math.max(eps, xisoW + shrinkStrength);
+      if (metric === 'xWOBA') {
+        value =
+          xwobaW > eps
+            ? (xwobaWSum + xMetricShrinkStrength * globalXwobaAvg) / Math.max(eps, xwobaW + xMetricShrinkStrength)
+            : globalXwobaAvg;
+      }
+      if (metric === 'xISO') {
+        value =
+          xisoW > eps
+            ? (xisoWSum + xMetricShrinkStrength * globalXisoAvg) / Math.max(eps, xisoW + xMetricShrinkStrength)
+            : globalXisoAvg;
+      }
       cells.push({ x: xMin + col * cellW, y: yMin + row * cellH, w: cellW, h: cellH, value, density: sumW });
     }
   }
@@ -1851,6 +1866,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const isProSchool = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
           if (startDate) params.set('start_date', startDate);
           if (endDate) params.set('end_date', endDate);
+          params.set('include_chart_points', '1');
+          params.set('chart_points_limit', '1000');
           params.set('split_by', config.splitBy || 'Pitch Types');
           params.set('table_mode', config.tableMode || defaultTableModeForReportType(reportType));
           if (cellFilters.includes('Session Type')) {

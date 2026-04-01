@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching';
 type ChartType = 'Heatmap' | 'Pitch Chart' | 'Velocity Chart' | 'Movement Plot' | 'Release Plot';
@@ -579,12 +580,15 @@ function getHeatmapFixedScale(metricRaw: HeatMetric, selectedPitchTypesRaw: stri
 }
 
 function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain, isProSchool = false): HeatCell[] {
+  if (metric === 'xWOBA' || metric === 'xISO') {
+    return buildSharedXMetricHeatCells(points, metric);
+  }
   const xMin = -2.5;
   const xMax = 2.5;
   const yMin = 0;
   const yMax = 4.5;
-  const cols = isProSchool ? 44 : 40;
-  const rows = isProSchool ? 44 : 40;
+  const cols = 40;
+  const rows = 40;
   const cellW = (xMax - xMin) / cols;
   const cellH = (yMax - yMin) / rows;
   const sigmaX = isProSchool ? 0.22 : 0.36;
@@ -682,7 +686,7 @@ function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain
   const globalCalledStrikeRate = valid.length ? globalCalledStrikeCount / valid.length : 0;
   const shrinkStrength = 8;
   const runValueShrinkStrength = 0.5;
-  const xMetricShrinkStrength = 0.4;
+  const xMetricShrinkStrength = 0;
 
   const cells: HeatCell[] = [];
   for (let row = 0; row < rows; row += 1) {
@@ -699,12 +703,8 @@ function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain
       let evW = 0;
       let rvWSum = 0;
       let rvW = 0;
-      let xwobaWSum = 0;
-      let xwobaW = 0;
       let xbaWSum = 0;
       let xbaW = 0;
-      let xisoWSum = 0;
-      let xisoW = 0;
       for (const entry of valid) {
         const dx = (cx - entry.x) / sigmaX;
         const dy = (cy - entry.y) / sigmaY;
@@ -728,17 +728,9 @@ function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain
           rvWSum += w * rv;
           rvW += w;
         }
-        if (typeof entry.point.estimated_woba_using_speedangle === 'number' && Number.isFinite(entry.point.estimated_woba_using_speedangle)) {
-          xwobaWSum += w * entry.point.estimated_woba_using_speedangle;
-          xwobaW += w;
-        }
         if (typeof entry.point.estimated_ba_using_speedangle === 'number' && Number.isFinite(entry.point.estimated_ba_using_speedangle)) {
           xbaWSum += w * entry.point.estimated_ba_using_speedangle;
           xbaW += w;
-        }
-        if (typeof entry.point.iso_value === 'number' && Number.isFinite(entry.point.iso_value)) {
-          xisoWSum += w * entry.point.iso_value;
-          xisoW += w;
         }
       }
       let value = sumW;
@@ -754,9 +746,7 @@ function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain
         const domainAdjustedRv = domain === 'Pitching' ? -rv : rv;
         value = isProSchool ? domainAdjustedRv * 100 : domainAdjustedRv;
       }
-      if (metric === 'xWOBA') value = (xwobaWSum + xMetricShrinkStrength * globalXwobaAvg) / Math.max(eps, xwobaW + xMetricShrinkStrength);
       if (metric === 'xBA') value = (xbaWSum + xMetricShrinkStrength * globalXbaAvg) / Math.max(eps, xbaW + xMetricShrinkStrength);
-      if (metric === 'xISO') value = (xisoWSum + xMetricShrinkStrength * globalXisoAvg) / Math.max(eps, xisoW + xMetricShrinkStrength);
       cells.push({ x: xMin + col * cellW, y: yMin + row * cellH, w: cellW, h: cellH, value, density: sumW });
     }
   }
@@ -842,6 +832,8 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     if (state.batterHand !== 'All') params.set('batter_side', state.batterHand);
     params.set('table_mode', state.tableMode);
     params.set('split_by', state.splitBy);
+    params.set('include_chart_points', '1');
+    params.set('chart_points_limit', '1000');
     setLoading(true);
     setError('');
     fetch(`${domainOverviewEndpoint(state.domain)}?${params.toString()}`, { cache: 'no-store' })
