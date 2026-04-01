@@ -56,7 +56,23 @@ jobs:
             --sport-ids 11 \
             --sleep-ms 120
 
-      - name: Enrich from Savant CSV (if files are present)
+      - name: Download Savant CSV (MLB + MiLB)
+        shell: bash
+        run: |
+          END_DATE="${{ github.event.inputs.end_date }}"
+          START_DATE="${{ github.event.inputs.start_date }}"
+          if [[ -z "${END_DATE}" ]]; then
+            END_DATE="$(date -u +%F)"
+          fi
+          if [[ -z "${START_DATE}" ]]; then
+            START_DATE="$(date -u -d "${PRO_SYNC_LOOKBACK_DAYS} days ago" +%F)"
+          fi
+          echo "Downloading Savant CSVs from ${START_DATE} to ${END_DATE}"
+          python scripts/download_pro_savant_csv.py \
+            --start-date "${START_DATE}" \
+            --end-date "${END_DATE}"
+
+      - name: Enrich from Savant CSV
         shell: bash
         run: |
           shopt -s nullglob

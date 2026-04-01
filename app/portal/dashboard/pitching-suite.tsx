@@ -620,7 +620,8 @@ function getProcessThresholds(
 ): { poor: number; avg: number; great: number } | null {
   const metric = normalizeColorColumnName(columnName);
   const pitchType = normalizePitchTypeName(pitchTypeRaw);
-  const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
+  const schoolCodeNorm = String(schoolCode ?? '').trim().toUpperCase();
+  const isPro = schoolCodeNorm === 'PRO' || schoolCodeNorm === 'MLB';
   if (metric === 'InZone%') {
     if (['fastball', 'sinker'].includes(pitchType)) return isPro ? { poor: 48, avg: 55, great: 62 } : { poor: 43, avg: 50, great: 57 };
     if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 37, avg: 43, great: 49 };
@@ -4650,11 +4651,12 @@ export default function PitchingSuite({
   }, [isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn]);
   const leaderboardRows = useMemo(() => {
     const rows = overview?.table_rows ?? [];
+    if (!isLeaderboardPage) return rows;
     const firstCol = leaderboardBaseColumns[0] ?? '';
     const sortCol =
       leaderboardSortColumn && leaderboardBaseColumns.includes(leaderboardSortColumn)
         ? leaderboardSortColumn
-        : (isLeaderboardPage ? (leaderboardBaseColumns[1] ?? firstCol) : '');
+        : (leaderboardBaseColumns[1] ?? firstCol);
     if (!sortCol) return rows;
     const splitColumn = leaderboardBaseColumns[0] ?? '';
     return sortTableRows(rows, sortCol, leaderboardSortDirection, splitColumn);
@@ -4793,7 +4795,8 @@ export default function PitchingSuite({
     if (!shouldColorTable) return null;
     const normalizedColumn = normalizeColorColumnName(column);
     if (!tableColorColumnSet.has(normalizedColumn)) return null;
-    const colors = getCellColorScale(row[column], normalizedColumn, thresholdPitchType, selectedSchoolCode);
+    const effectiveSchoolCode = String(overview?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+    const colors = getCellColorScale(row[column], normalizedColumn, thresholdPitchType, effectiveSchoolCode);
     if (!colors) return null;
     return { backgroundColor: colors.bg, color: colors.text };
   };

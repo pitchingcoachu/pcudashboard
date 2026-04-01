@@ -77,6 +77,7 @@ type ChartPoint = {
 };
 
 type OverviewPayload = {
+  school_code?: string;
   table_columns?: string[];
   table_rows?: Array<Record<string, string | number | null>>;
   chart_points?: ChartPoint[];
@@ -281,7 +282,8 @@ function getProcessThresholds(
   schoolCode?: string
 ): { poor: number; avg: number; great: number } | null {
   const pitchType = normalizePitchTypeName(pitchTypeRaw);
-  const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
+  const schoolCodeNorm = String(schoolCode ?? '').trim().toUpperCase();
+  const isPro = schoolCodeNorm === 'PRO' || schoolCodeNorm === 'MLB';
   if (columnName === 'InZone%') {
     if (['fastball', 'sinker'].includes(pitchType)) return isPro ? { poor: 48, avg: 55, great: 62 } : { poor: 43, avg: 50, great: 57 };
     if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 37, avg: 43, great: 49 };
@@ -959,7 +961,8 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     }
     if (!shouldColorTable) return null;
     if (!tableColorColumns.includes(column)) return null;
-    const colors = getCellColorScale(row[column], column, pitchTypeForRow(row), state.domain, filters?.school_code);
+    const effectiveSchoolCode = (overview?.school_code ?? filters?.school_code ?? '').trim();
+    const colors = getCellColorScale(row[column], column, pitchTypeForRow(row), state.domain, effectiveSchoolCode);
     if (!colors) return null;
     return { backgroundColor: colors.bg, color: colors.text };
   };

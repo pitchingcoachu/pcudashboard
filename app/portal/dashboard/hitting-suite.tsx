@@ -2012,10 +2012,11 @@ export default function HittingSuite() {
   }, [isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn]);
   const leaderboardRows = useMemo(() => {
     const rows = overview?.table_rows ?? [];
+    if (!isLeaderboardPage) return rows;
     const firstCol = leaderboardBaseColumns[0] ?? '';
     const sortCol = leaderboardSortColumn && leaderboardBaseColumns.includes(leaderboardSortColumn)
       ? leaderboardSortColumn
-      : (isLeaderboardPage ? (leaderboardBaseColumns[1] ?? firstCol) : '');
+      : (leaderboardBaseColumns[1] ?? firstCol);
     if (!sortCol) return rows;
     const splitColumn = leaderboardBaseColumns[0] ?? '';
     return sortTableRows(rows, sortCol, leaderboardSortDirection, splitColumn);

@@ -1467,7 +1467,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const metric = column.trim();
     const pitchType = String(pitchTypeRaw || 'All').trim().toLowerCase().replace(/\s+/g, '');
     const threshold = (() => {
-      const isProSchool = String(schoolCode || '').trim().toUpperCase() === 'PRO';
+      const schoolCodeNorm = String(schoolCode || '').trim().toUpperCase();
+      const isProSchool = schoolCodeNorm === 'PRO' || schoolCodeNorm === 'MLB';
       if (metric === 'InZone%') {
         if (['fastball', 'sinker'].includes(pitchType)) return isProSchool ? { poor: 48, avg: 55, great: 62 } : { poor: 43, avg: 50, great: 57 };
         if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 37, avg: 43, great: 49 };

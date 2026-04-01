@@ -1323,6 +1323,10 @@ ALL_TABLE_COLUMNS: List[str] = [
     "P/IP",
     "P/BF",
     "H",
+    "1B",
+    "2B",
+    "3B",
+    "HR",
     "XBH",
     "Barrels",
     "BB",
@@ -1374,9 +1378,25 @@ def _derive_pro_fip_context(rows: List[Dict[str, Any]]) -> tuple[float, float]:
     if not pro_rows:
         return 3.2, 0.12
 
+    def _norm_desc_local(value: Any) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+        if normalized == "swinging_strike_blocked":
+            return "swinging_strike"
+        return normalized
+
     # League totals for FIP/xFIP components.
-    k_total = sum(1 for r in pro_rows if str(r.get("korbb") or "").strip() == "Strikeout")
-    bb_total = sum(1 for r in pro_rows if str(r.get("korbb") or "").strip() == "Walk")
+    k_total = sum(
+        1
+        for r in pro_rows
+        if str(r.get("korbb") or "").strip() == "Strikeout"
+        or _norm_desc_local(r.get("play_result")) in {"strikeout", "strikeoutdoubleplay", "strikeout_double_play"}
+    )
+    bb_total = sum(
+        1
+        for r in pro_rows
+        if str(r.get("korbb") or "").strip() == "Walk"
+        or _canonical_play_result(r.get("play_result")) in {"Walk", "IntentionalWalk"}
+    )
     hbp_total = sum(
         1
         for r in pro_rows
@@ -1613,21 +1633,59 @@ def _build_dynamic_table(
         strike_n = sum(1 for r in grp if str(r.get("pitch_call") or "") in strike_calls)
         called_strike_n = sum(1 for r in grp if str(r.get("pitch_call") or "") == "StrikeCalled")
         swing_n = sum(1 for r in grp if str(r.get("pitch_call") or "") in swing_calls)
-        whiff_n = sum(1 for r in grp if str(r.get("pitch_call") or "") == "StrikeSwinging")
-        bb_n = sum(1 for r in grp if str(r.get("korbb") or "") == "Walk")
-        k_n = sum(1 for r in grp if str(r.get("korbb") or "") == "Strikeout")
-        hbp_n = sum(1 for r in grp if str(r.get("pitch_call") or "") == "HitByPitch" or str(r.get("play_result") or "") == "HitByPitch")
+        whiff_n = sum(
+            1
+            for r in grp
+            if (
+                str(r.get("pitch_call") or "") == "StrikeSwinging"
+                or _pro_pitch_call_from_description(_pro_norm_token(r.get("description"))) == "StrikeSwinging"
+            )
+        )
+        bb_n = sum(
+            1
+            for r in grp
+            if str(r.get("korbb") or "") == "Walk"
+            or _canonical_play_result(r.get("play_result")) in {"Walk", "IntentionalWalk"}
+        )
+        k_n = sum(
+            1
+            for r in grp
+            if str(r.get("korbb") or "") == "Strikeout"
+            or _pro_norm_token(r.get("play_result")) in {"strikeout", "strikeoutdoubleplay", "strikeout_double_play"}
+        )
+        hbp_n = sum(
+            1
+            for r in grp
+            if str(r.get("pitch_call") or "") == "HitByPitch"
+            or _canonical_play_result(r.get("play_result")) == "HitByPitch"
+        )
         gb_n = sum(
             1
             for r in grp
-            if str(r.get("pitch_call") or "") == "InPlay"
+            if (
+                str(r.get("pitch_call") or "") == "InPlay"
+                or _pro_norm_token(r.get("description")) in {"in_play", "inplay"}
+                or _pro_norm_token(r.get("description")).startswith("hit_into_play")
+            )
             and "ground" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " ")
         )
-        in_play_n = sum(1 for r in grp if str(r.get("pitch_call") or "") == "InPlay")
-        in_play_live_n = sum(1 for r in live_rows if str(r.get("pitch_call") or "") == "InPlay")
+        in_play_n = sum(
+            1
+            for r in grp
+            if str(r.get("pitch_call") or "") == "InPlay"
+            or _pro_norm_token(r.get("description")) in {"in_play", "inplay"}
+            or _pro_norm_token(r.get("description")).startswith("hit_into_play")
+        )
+        in_play_live_n = sum(
+            1
+            for r in live_rows
+            if str(r.get("pitch_call") or "") == "InPlay"
+            or _pro_norm_token(r.get("description")) in {"in_play", "inplay"}
+            or _pro_norm_token(r.get("description")).startswith("hit_into_play")
+        )
         csw_n = called_strike_n + whiff_n
-        hit_n = sum(1 for r in grp if str(r.get("play_result") or "") in {"Single", "Double", "Triple", "HomeRun"})
-        xbh_n = sum(1 for r in grp if str(r.get("play_result") or "") in {"Double", "Triple", "HomeRun"})
+        hit_n = sum(1 for r in grp if _canonical_play_result(r.get("play_result")) in {"Single", "Double", "Triple", "HomeRun"})
+        xbh_n = sum(1 for r in grp if _canonical_play_result(r.get("play_result")) in {"Double", "Triple", "HomeRun"})
         barrel_n_all = 0
         for r in grp:
             ev = r.get("exit_speed")
@@ -1813,7 +1871,6 @@ def _build_dynamic_table(
         ibb = sum(1 for pr in terminal_pr if pr == "IntentionalWalk")
         hbp_term = sum(1 for pr in terminal_pr if pr == "HitByPitch")
         sf = sum(1 for pr in terminal_pr if pr == "Sacrifice")
-        inplay_term = sum(1 for r in terminal_rows if str(r.get("pitch_call") or "") == "InPlay")
         ab = pa_ct - (bb_term + hbp_term + sf)
         h = h1 + h2 + h3 + hr
         tb = h1 + 2 * h2 + 3 * h3 + 4 * hr
@@ -1826,7 +1883,9 @@ def _build_dynamic_table(
         woba_den = ab + bb_term - ibb + sf + hbp_term
         woba = round(woba_num / woba_den, 3) if woba_den > 0 else None
         iso = round((slg - avg), 3) if (slg is not None and avg is not None) else None
-        babip = round(h / inplay_term, 3) if inplay_term > 0 else None
+        # User-defined BABIP: (1B + 2B + 3B + HR) / total balls in play.
+        # Denominator uses in-play rows (school: pitch_call=InPlay, pro: description=hit_into_play).
+        babip = round(h / in_play_n, 3) if in_play_n > 0 else None
         bf_live = sum(1 for r in live_rows if r.get("balls_num") == 0 and r.get("strikes_num") == 0)
         xwoba_num = (
             0.69 * sum(1 for r in live_rows if str(r.get("korbb") or "") == "Walk")
@@ -1836,7 +1895,25 @@ def _build_dynamic_table(
             + 1.95 * sum(1 for pr in live_pr if pr == "HomeRun")
         )
         xwoba = round(xwoba_num / bf_live, 3) if bf_live > 0 else None
-        xiso = round((h2 + 2 * h3 + 3 * hr) / ab, 3) if ab > 0 else None
+        # xISO model (all schools): -0.358973*GB - 0.108255*EV + 0.00066305*EV^2 + 4.66285
+        # GB is ground-ball rate as fraction (0-1), EV is average exit velocity.
+        xiso = None
+        if in_play_n > 0 and ev_vals:
+            gb_rate = float(gb_n) / float(in_play_n)
+            ev_avg = sum(float(v) for v in ev_vals) / len(ev_vals)
+            xiso_calc = (-0.358973 * gb_rate) - (0.108255 * ev_avg) + (0.00066305 * (ev_avg ** 2)) + 4.66285
+            xiso = round(xiso_calc, 3)
+
+        # PRO override: wOBA/xWOBA are straight averages from enriched Savant fields when present.
+        if is_pro_group:
+            woba_vals = [float(r.get("woba_value")) for r in grp if _is_num(r.get("woba_value"))]
+            xwoba_vals = [
+                float(r.get("estimated_woba_using_speedangle"))
+                for r in grp
+                if _is_num(r.get("estimated_woba_using_speedangle"))
+            ]
+            woba = round(sum(woba_vals) / len(woba_vals), 3) if woba_vals else None
+            xwoba = round(sum(xwoba_vals) / len(xwoba_vals), 3) if xwoba_vals else None
 
         # Advanced pitching metrics (ERA/FIP/xFIP) for custom-table use.
         # Note: ERA here is an event-weight estimate because earned-runs is not tracked directly.
@@ -1963,6 +2040,10 @@ def _build_dynamic_table(
             "P/IP": round(float(n) / ip_num, 2) if ip_num > 0 else None,
             "P/BF": round(float(n) / bf_starts, 2) if bf_starts else None,
             "H": hit_n,
+            "1B": h1,
+            "2B": h2,
+            "3B": h3,
+            "HR": hr,
             "XBH": xbh_n,
             "Barrels": barrel_n_live if in_play_live_n else barrel_n_all,
             "BB": bb_n,
@@ -2066,7 +2147,7 @@ def _build_dynamic_table(
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
-        "Raw Data": [split_col_name, "IP", "P", "BF", "P/IP", "P/BF", "H", "XBH", "Barrels", "BB", "HBP", "K", "Whiffs"],
+        "Raw Data": [split_col_name, "IP", "P", "BF", "P/IP", "P/BF", "H", "1B", "2B", "3B", "HR", "XBH", "Barrels", "BB", "HBP", "K", "Whiffs"],
         "Batted Ball Data": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Barrel%"],
         "Swing Decisions": [split_col_name, "Swing%", "FPS%", "Called-S%", "Take%", "Chase%", "GoZoneSw%", "IZswing%", "EdgeSwing%", "PosSD%"],
         "Custom": [split_col_name],
@@ -4869,7 +4950,7 @@ def _pro_pitch_source_table() -> Optional[str]:
 PRO_STATSAPI_BASE = "https://statsapi.mlb.com/api/v1"
 PRO_STATSAPI_GAME_FEED_BASE = "https://statsapi.mlb.com/api/v1.1"
 _PRO_API_TIMEOUT_SECONDS = max(5, int(os.getenv("PRO_API_TIMEOUT_SECONDS", "20")))
-_PRO_API_LIVE_LOOKBACK_DAYS = max(1, int(os.getenv("PRO_API_LIVE_LOOKBACK_DAYS", "1")))
+_PRO_API_LIVE_LOOKBACK_DAYS = max(0, int(os.getenv("PRO_API_LIVE_LOOKBACK_DAYS", "1")))
 _PRO_API_ROWS_CACHE_TTL_SECONDS = max(5, int(os.getenv("PRO_API_ROWS_CACHE_TTL_SECONDS", "30")))
 _PRO_ENABLE_AAA_API_FALLBACK = str(os.getenv("PRO_ENABLE_AAA_API_FALLBACK", "1")).strip().lower() not in {
     "0",
@@ -5279,6 +5360,7 @@ def _pro_fetch_api_live_tail_rows(
     start_date: Optional[date],
     end_date: Optional[date],
     level_filter: Optional[str],
+    min_date_exclusive: Optional[date] = None,
 ) -> List[Dict[str, Any]]:
     if not _PRO_ENABLE_AAA_API_FALLBACK:
         return []
@@ -5286,6 +5368,17 @@ def _pro_fetch_api_live_tail_rows(
     if not win:
         return []
     w0, w1 = win
+    if isinstance(min_date_exclusive, date):
+        # If DB already has partial rows for today, still allow today's API rows
+        # so live view doesn't go blank.
+        if min_date_exclusive >= date.today():
+            next_day = date.today()
+        else:
+            next_day = min_date_exclusive + timedelta(days=1)
+        if next_day > w0:
+            w0 = next_day
+        if w0 > w1:
+            return []
     level_norm = _pro_level_norm(level_filter)
     if level_norm == "MLB":
         sport_ids = [1]
@@ -5298,6 +5391,56 @@ def _pro_fetch_api_live_tail_rows(
         end_date=w1,
         sport_ids=sport_ids,
         nontracked_aaa_only=False,
+    )
+
+
+def _pro_latest_synced_date() -> Optional[date]:
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT MAX(session_date)::date AS max_date
+                FROM public.pro_pitch_events
+                WHERE school_code = 'PRO'
+                """
+            )
+            row = cur.fetchone() or {}
+            max_date_val = row.get("max_date")
+            if isinstance(max_date_val, date):
+                return max_date_val
+            if isinstance(max_date_val, str) and max_date_val:
+                try:
+                    return date.fromisoformat(max_date_val[:10])
+                except Exception:
+                    return None
+    except Exception:
+        return None
+    return None
+
+
+def _pro_max_session_date_in_rows(rows: List[Dict[str, Any]]) -> Optional[date]:
+    max_dt: Optional[date] = None
+    for r in rows or []:
+        raw = r.get("session_date")
+        dt: Optional[date] = None
+        if isinstance(raw, date):
+            dt = raw
+        elif isinstance(raw, str) and raw:
+            try:
+                dt = date.fromisoformat(raw[:10])
+            except Exception:
+                dt = None
+        if dt is not None and (max_dt is None or dt > max_dt):
+            max_dt = dt
+    return max_dt
+
+
+def _pro_merge_pitch_key(row: Dict[str, Any]) -> tuple[str, int, int, int]:
+    return (
+        str(row.get("session_date") or ""),
+        int(row.get("game_pk") or 0),
+        int(row.get("at_bat_index") or 0),
+        int(row.get("event_index") or 0),
     )
 
 
@@ -5447,11 +5590,15 @@ def _pro_pitch_call_from_description(description_norm: str) -> str:
     d = description_norm
     if not d:
         return ""
+    if d in {"automatic_strike", "auto_strike"}:
+        return "StrikeCalled"
+    if d in {"automatic_ball", "auto_ball"}:
+        return "BallCalled"
     if d in {"called_strike", "strikecalled"}:
         return "StrikeCalled"
     if d in {"hit_by_pitch", "hitbypitch"}:
         return "HitByPitch"
-    if d.startswith("foul") or d in {"foultip", "foul_tip", "foulball", "foulballfieldable", "foulballnotfieldable"}:
+    if d.startswith("foul") or d in {"foultip", "foul_tip", "foulball", "foulballfieldable", "foulballnotfieldable", "bunt_foul_tip"}:
         return "FoulBall"
     if d in {"swinging_strike", "swinging_strike_pitchout", "missed_bunt", "strikeswinging"}:
         return "StrikeSwinging"
@@ -5480,10 +5627,12 @@ def _pro_play_result_from_events(events_norm: str) -> str:
         return "Sacrifice"
     if e in {"fielders_choice", "fielderschoice"}:
         return "FieldersChoice"
-    if e in {"walk", "intent_walk", "intentionalwalk"}:
+    if e in {"walk", "intent_walk", "intentionalwalk", "intentional_walk"}:
         return "Walk"
     if e == "hit_by_pitch":
         return "HitByPitch"
+    if e in {"catcher_interf", "catcherinterf"}:
+        return "Error"
     if e.startswith("strikeout"):
         return "Out"
     return "Out"
@@ -5494,7 +5643,7 @@ def _pro_korbb_from_events(events_norm: str) -> str:
         return ""
     if events_norm.startswith("strikeout"):
         return "Strikeout"
-    if events_norm in {"walk", "intent_walk"}:
+    if events_norm in {"walk", "intent_walk", "intentional_walk"}:
         return "Walk"
     return ""
 
@@ -6199,7 +6348,13 @@ def _pro_pitching_overview(
     # required to persist in Neon.
     if _pro_level_norm(level_filter) in {"All", "AAA", "MLB"}:
         try:
-            api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter=level_filter)
+            latest_synced_date = _pro_max_session_date_in_rows(rows)
+            api_rows = _pro_fetch_api_live_tail_rows(
+                start_date=start_date,
+                end_date=end_date,
+                level_filter=level_filter,
+                min_date_exclusive=latest_synced_date,
+            )
             if api_rows:
                 api_rows = [
                     r
@@ -6217,25 +6372,9 @@ def _pro_pitching_overview(
                         selected_pitch_types=selected_pitch_types,
                     )
                 ]
-                merged = {(
-                    str(r.get("session_date") or ""),
-                    int(r.get("game_pk") or 0),
-                    int(r.get("at_bat_index") or 0),
-                    int(r.get("event_index") or 0),
-                    int(r.get("pitch_number") or 0),
-                    str(r.get("pitcher") or ""),
-                    str(r.get("batter") or ""),
-                ): r for r in rows}
+                merged = {_pro_merge_pitch_key(r): r for r in rows}
                 for r in api_rows:
-                    k = (
-                        str(r.get("session_date") or ""),
-                        int(r.get("game_pk") or 0),
-                        int(r.get("at_bat_index") or 0),
-                        int(r.get("event_index") or 0),
-                        int(r.get("pitch_number") or 0),
-                        str(r.get("pitcher") or ""),
-                        str(r.get("batter") or ""),
-                    )
+                    k = _pro_merge_pitch_key(r)
                     if k not in merged:
                         merged[k] = r
                 rows = list(merged.values())
@@ -6615,14 +6754,25 @@ def _pro_pitching_overview(
     # FPS%: count(0-1 rows) / BF.
     split_col_name = table_columns[0] if table_columns else "Pitch"
 
+    def _safe_int(value: Any, default: int = 0) -> int:
+        try:
+            if value is None:
+                return default
+            txt = str(value).strip()
+            if txt == "":
+                return default
+            return int(float(txt))
+        except Exception:
+            return default
+
     def _row_order_key(row: Dict[str, Any]) -> tuple:
         return (
             str(row.get("session_date") or ""),
-            int(row.get("game_pk") or 0),
-            int(row.get("at_bat_index") or 0),
-            int(row.get("event_index") or 0),
-            int(row.get("pitch_number") or 0),
-            int(row.get("id") or 0),
+            _safe_int(row.get("game_pk")),
+            _safe_int(row.get("at_bat_index")),
+            _safe_int(row.get("event_index")),
+            _safe_int(row.get("pitch_number")),
+            _safe_int(row.get("id")),
         )
 
     def _pro_bf_count(group_rows: List[Dict[str, Any]]) -> int:
@@ -6657,23 +6807,121 @@ def _pro_pitching_overview(
             return normalized
 
         def _desc_norm_for_row(r: Dict[str, Any]) -> str:
+            # Prefer Savant/raw description tokens (called_strike, hit_into_play, etc.)
+            # so live API fallback and CSV-enriched rows evaluate the same.
             return _norm_desc(
-                r.get("pitch_call")
-                or r.get("description_raw")
+                r.get("description_raw")
                 or r.get("pro_desc_norm")
+                or r.get("pitch_call")
                 or ""
             )
 
+        ball_tokens = {
+            "ball",
+            "blocked_ball",
+            "ball_in_dirt",
+            "ball_pitchout",
+            "intentional_ball",
+            "automatic_ball",
+            "auto_ball",
+            "ballcalled",
+            "ballindirt",
+            "ballintentional",
+        }
+        hbp_tokens = {"hit_by_pitch", "hitbypitch"}
+        called_strike_tokens = {"called_strike", "automatic_strike", "auto_strike", "strikecalled"}
+        whiff_tokens = {"swinging_strike", "swinging_strike_pitchout", "missed_bunt", "strikeswinging"}
+        foul_tokens = {
+            "foul",
+            "foul_tip",
+            "bunt_foul_tip",
+            "foultip",
+            "foul_bunt",
+            "foul_pitchout",
+            "foulball",
+            "foulballfieldable",
+            "foulballnotfieldable",
+        }
+
+        def _is_in_play_desc(d: str) -> bool:
+            return d.startswith("in_play") or d.startswith("hit_into_play") or d == "inplay"
+
+        def _is_swing_desc(d: str) -> bool:
+            return (d in whiff_tokens) or (d in foul_tokens) or _is_in_play_desc(d)
+
         def _pre_count_pair(r: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
-            pb = r.get("prev_balls")
-            ps = r.get("prev_strikes")
-            if _is_num(pb) and _is_num(ps):
-                return (int(float(pb)), int(float(ps)))
+            # PRO rows should key count-based metrics off the row's displayed
+            # count first (balls_num/strikes_num). Fall back to prev_* only
+            # when current counts are missing.
             b = r.get("balls_num")
             s = r.get("strikes_num")
             if _is_num(b) and _is_num(s):
                 return (int(float(b)), int(float(s)))
+            pb = r.get("prev_balls")
+            ps = r.get("prev_strikes")
+            if _is_num(pb) and _is_num(ps):
+                return (int(float(pb)), int(float(ps)))
             return (None, None)
+
+        def _is_ground_ball_row(r: Dict[str, Any]) -> bool:
+            tagged_norm = _norm_desc(r.get("tagged_hit_type"))
+            if "ground_ball" in tagged_norm or "groundball" in tagged_norm:
+                return True
+            bb_norm = _norm_desc(r.get("bb_type_raw"))
+            if "ground_ball" in bb_norm or "groundball" in bb_norm:
+                return True
+            ev_norm = _norm_desc(r.get("events_raw") or r.get("play_result"))
+            if ev_norm in {"groundout", "grounded_into_double_play", "grounded_into_triple_play"}:
+                return True
+            return False
+
+        def _pa_key_for_row(r: Dict[str, Any]) -> tuple[str, str]:
+            return (str(r.get("game_pk") or ""), str(r.get("at_bat_index") or ""))
+
+        # Derive robust pre-pitch counts from pitch sequence for live API rows.
+        # This keeps FPS/Ahead stable even when source count fields are post-pitch.
+        pre_counts_by_row_id: Dict[int, tuple[int, int]] = {}
+        rows_sorted = sorted(group_rows, key=_row_order_key)
+        last_pa: Optional[tuple[str, str]] = None
+        b_state = 0
+        s_state = 0
+        for r in rows_sorted:
+            pa_key_local = _pa_key_for_row(r)
+            if pa_key_local != last_pa:
+                b_state = 0
+                s_state = 0
+                last_pa = pa_key_local
+            pre_counts_by_row_id[id(r)] = (b_state, s_state)
+            d_local = _desc_norm_for_row(r)
+            ev_local = _norm_desc(r.get("events_raw") or r.get("play_result"))
+            is_ball = d_local in ball_tokens
+            is_hbp = d_local in hbp_tokens or ev_local == "hit_by_pitch"
+            is_called_or_whiff = d_local in called_strike_tokens or d_local in whiff_tokens
+            is_foul = d_local in foul_tokens
+            is_in_play = _is_in_play_desc(d_local) or (str(r.get("pitch_call") or "").strip() == "InPlay")
+            is_terminal = ev_local in {
+                "single",
+                "double",
+                "triple",
+                "home_run",
+                "walk",
+                "intent_walk",
+                "intentional_walk",
+                "hit_by_pitch",
+                "strikeout",
+                "strikeout_double_play",
+                "strikeoutdoubleplay",
+            }
+            if is_in_play or is_terminal or is_hbp:
+                continue
+            if is_ball:
+                b_state = min(3, b_state + 1)
+                continue
+            if is_called_or_whiff:
+                s_state = min(2, s_state + 1)
+                continue
+            if is_foul and s_state < 2:
+                s_state += 1
 
         pa_keys: set[str] = set()
         for r in group_rows:
@@ -6691,36 +6939,33 @@ def _pro_pitching_overview(
         k_val = sum(
             1
             for r in group_rows
-            if str(r.get("play_result") or "").strip().lower() in {"strikeout", "strikeout_double_play"}
+            if str(r.get("korbb") or "").strip() == "Strikeout"
+            or _norm_desc(r.get("play_result")) in {"strikeout", "strikeoutdoubleplay", "strikeout_double_play"}
         )
-        bb_val = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "walk")
+        bb_val = sum(
+            1
+            for r in group_rows
+            if str(r.get("korbb") or "").strip() == "Walk"
+            or _canonical_play_result(r.get("play_result")) in {"Walk", "IntentionalWalk"}
+        )
         hbp_val = sum(
             1
             for r in group_rows
             if _norm_desc(r.get("pitch_call")) == "hit_by_pitch"
-            or str(r.get("play_result") or "").strip().lower().replace(" ", "_") in {"hit_by_pitch", "hitbypitch"}
+            or _canonical_play_result(r.get("play_result")) == "HitByPitch"
         )
         first_pitch_den = 0
         first_pitch_strike_num = 0
-        for r in group_rows:
-            b0, s0 = _pre_count_pair(r)
-            if b0 == 0 and s0 == 0:
-                first_pitch_den += 1
-                d0 = _desc_norm_for_row(r)
-                if d0 and d0 not in {"ball", "hit_by_pitch", "blocked_ball"}:
-                    first_pitch_strike_num += 1
-        if first_pitch_den == 0:
-            # StatsAPI fallback rows can carry post-pitch count; use first pitch per PA.
-            seen_pa: set[tuple[str, str]] = set()
-            for r in sorted(group_rows, key=_row_order_key):
-                pa_key = (str(r.get("game_pk") or ""), str(r.get("at_bat_index") or ""))
-                if pa_key in seen_pa:
-                    continue
-                seen_pa.add(pa_key)
-                d0 = _desc_norm_for_row(r)
-                first_pitch_den += 1
-                if d0 and d0 not in {"ball", "hit_by_pitch", "blocked_ball"}:
-                    first_pitch_strike_num += 1
+        seen_pa: set[tuple[str, str]] = set()
+        for r in rows_sorted:
+            pa_key = _pa_key_for_row(r)
+            if pa_key in seen_pa:
+                continue
+            seen_pa.add(pa_key)
+            first_pitch_den += 1
+            d0 = _desc_norm_for_row(r)
+            if d0 and d0 not in ball_tokens and d0 not in hbp_tokens:
+                first_pitch_strike_num += 1
         total_pitches_val = len(group_rows)
 
         strike_num = 0
@@ -6736,29 +6981,16 @@ def _pro_pitching_overview(
         gb_num = 0
         for r in group_rows:
             d = _desc_norm_for_row(r)
-            c = _pre_count_pair(r)
-            if d and d not in {"ball", "hit_by_pitch", "blocked_ball"}:
+            c = pre_counts_by_row_id.get(id(r), _pre_count_pair(r))
+            if d and d not in ball_tokens and d not in hbp_tokens:
                 strike_num += 1
-            is_in_play_desc = d.startswith("in_play") or d.startswith("hit_into_play") or d == "inplay"
-            is_swing_desc = (
-                d in {
-                    "swinging_strike",
-                    "swinging_strike_blocked",
-                    "swinging_strike_pitchout",
-                    "foul",
-                    "foul_tip",
-                    "foul_bunt",
-                    "foul_pitchout",
-                    "missed_bunt",
-                }
-                or d.startswith("foul")
-                or is_in_play_desc
-            )
+            is_in_play_desc = _is_in_play_desc(d) or (str(r.get("pitch_call") or "").strip() == "InPlay")
+            is_swing_desc = _is_swing_desc(d)
             if is_swing_desc:
                 swing_num += 1
-            if d in {"swinging_strike", "swinging_strike_blocked", "foul_tip"}:
+            if d in whiff_tokens or d in {"foul_tip", "foultip"}:
                 whiff_num += 1
-            if d in {"called_strike", "swinging_strike", "swinging_strike_blocked", "foul_tip"}:
+            if d in called_strike_tokens or d in whiff_tokens or d in {"foul_tip", "foultip"}:
                 csw_num += 1
             if is_in_play_desc:
                 in_play_num += 1
@@ -6766,18 +6998,17 @@ def _pro_pitching_overview(
                 la = float(r.get("angle")) if _is_num(r.get("angle")) else None
                 if ev is not None and la is not None and ev >= 95.0 and 10.0 <= la <= 35.0:
                     barrel_num += 1
-                hit_type_norm = _norm_desc(r.get("tagged_hit_type"))
-                if "ground_ball" in hit_type_norm:
+                if _is_ground_ball_row(r):
                     gb_num += 1
             if c in {(0, 0), (1, 0), (1, 1), (0, 1)} and (
                 is_in_play_desc
             ):
                 early_num += 1
-            if c in {(0, 1), (1, 1)} and d in {"swinging_strike", "foul", "foul_tip", "called_strike"}:
+            if c in {(0, 1), (1, 1)} and (d in whiff_tokens or d in foul_tokens or d in called_strike_tokens):
                 ahead_num += 1
             if c == (1, 1):
                 oneone_den += 1
-                if d and d not in {"ball", "hit_by_pitch", "blocked_ball"}:
+                if d and d not in ball_tokens and d not in hbp_tokens:
                     oneone_num += 1
 
         early_pct = (100.0 * early_num / bf_val) if bf_val > 0 else None
@@ -6842,16 +7073,37 @@ def _pro_pitching_overview(
             if _is_num(r.get("estimated_woba_using_speedangle"))
         ]
         woba_vals = [float(r.get("woba_value")) for r in group_rows if _is_num(r.get("woba_value"))]
-        iso_vals = [float(r.get("iso_value")) for r in group_rows if _is_num(r.get("iso_value"))]
-        babip_vals = [float(r.get("babip_value")) for r in group_rows if _is_num(r.get("babip_value"))]
-        if xwoba_vals:
-            row_obj["xWOBA"] = round(sum(xwoba_vals) / len(xwoba_vals), 3)
-        if woba_vals:
-            row_obj["wOBA"] = round(sum(woba_vals) / len(woba_vals), 3)
-        if iso_vals:
-            row_obj["ISO"] = round(sum(iso_vals) / len(iso_vals), 3)
-        if babip_vals:
-            row_obj["BABIP"] = round(sum(babip_vals) / len(babip_vals), 3)
+        row_obj["xWOBA"] = round(sum(xwoba_vals) / len(xwoba_vals), 3) if xwoba_vals else None
+        row_obj["wOBA"] = round(sum(woba_vals) / len(woba_vals), 3) if woba_vals else None
+        avg_raw = row_obj.get("AVG")
+        slg_raw = row_obj.get("SLG")
+        avg_val = float(avg_raw) if _is_num(avg_raw) else None
+        slg_val = float(slg_raw) if _is_num(slg_raw) else None
+        if avg_val is not None and slg_val is not None:
+            row_obj["ISO"] = round(slg_val - avg_val, 3)
+        else:
+            row_obj["ISO"] = None
+        # xISO model (all schools, including PRO):
+        # -0.358973*GB - 0.108255*EV + 0.00066305*EV^2 + 4.66285
+        # GB is fraction (0-1), EV is avg exit velo on in-play rows with EV.
+        in_play_ev_vals = [
+            float(r.get("exit_speed"))
+            for r in group_rows
+            if (_is_num(r.get("exit_speed")) and (_is_in_play_desc(_desc_norm_for_row(r)) or str(r.get("pitch_call") or "").strip() == "InPlay"))
+        ]
+        if in_play_num > 0 and in_play_ev_vals:
+            gb_rate = float(gb_num) / float(in_play_num)
+            ev_avg = sum(in_play_ev_vals) / len(in_play_ev_vals)
+            xiso_calc = (-0.358973 * gb_rate) - (0.108255 * ev_avg) + (0.00066305 * (ev_avg ** 2)) + 4.66285
+            row_obj["xISO"] = round(xiso_calc, 3)
+        else:
+            row_obj["xISO"] = None
+        hit_total = sum(
+            1
+            for r in group_rows
+            if _canonical_play_result(r.get("play_result")) in {"Single", "Double", "Triple", "HomeRun"}
+        )
+        row_obj["BABIP"] = round(hit_total / in_play_num, 3) if in_play_num > 0 else None
         row_obj["Early%"] = f"{round(early_pct, 1)}%" if early_pct is not None else None
         row_obj["Ahead%"] = f"{round(ahead_pct, 1)}%" if ahead_pct is not None else None
         row_obj["E+A%"] = f"{round(ea_pct, 1)}%" if ea_pct is not None else None
@@ -6905,10 +7157,12 @@ def _pro_pitching_overview(
             ip_num_local = official_ip_local
             if total_pitches_val > 0:
                 row_obj["P/IP"] = round(float(total_pitches_val) / ip_num_local, 2)
-        hr_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "homerun")
+        hr_local = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "HomeRun")
         if ip_num_local > 0:
-            fip_const_local = pro_fip_const
-            lg_hr_fb_local = pro_lg_hr_fb
+            # Use stable league baselines for PRO custom-table FIP/xFIP so they
+            # don't collapse toward ERA when user-level filters are narrow.
+            fip_const_local = 3.20
+            lg_hr_fb_local = 0.12
             fip_local = ((13.0 * hr_local) + (3.0 * (bb_val + hbp_val)) - (2.0 * k_val)) / ip_num_local + fip_const_local
             fb_local = sum(
                 1
@@ -6918,9 +7172,9 @@ def _pro_pitching_overview(
             xhr_local = fb_local * lg_hr_fb_local
             xfip_local = ((13.0 * xhr_local) + (3.0 * (bb_val + hbp_val)) - (2.0 * k_val)) / ip_num_local + fip_const_local
             # Event-weight run estimate -> ERA scale.
-            h1_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "single")
-            h2_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "double")
-            h3_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "triple")
+            h1_local = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "Single")
+            h2_local = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "Double")
+            h3_local = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "Triple")
             er_est_local = (
                 (0.47 * h1_local)
                 + (0.78 * h2_local)
@@ -7502,7 +7756,13 @@ def _pro_hitting_overview(
     # required to persist in Neon.
     if _pro_level_norm(level_filter) in {"All", "AAA", "MLB"}:
         try:
-            api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter=level_filter)
+            latest_synced_date = _pro_max_session_date_in_rows(rows)
+            api_rows = _pro_fetch_api_live_tail_rows(
+                start_date=start_date,
+                end_date=end_date,
+                level_filter=level_filter,
+                min_date_exclusive=latest_synced_date,
+            )
             if api_rows:
                 api_rows = [
                     r
@@ -7520,25 +7780,9 @@ def _pro_hitting_overview(
                         selected_pitch_types=selected_pitch_types,
                     )
                 ]
-                merged = {(
-                    str(r.get("session_date") or ""),
-                    int(r.get("game_pk") or 0),
-                    int(r.get("at_bat_index") or 0),
-                    int(r.get("event_index") or 0),
-                    int(r.get("pitch_number") or 0),
-                    str(r.get("pitcher") or ""),
-                    str(r.get("batter") or ""),
-                ): r for r in rows}
+                merged = {_pro_merge_pitch_key(r): r for r in rows}
                 for r in api_rows:
-                    k = (
-                        str(r.get("session_date") or ""),
-                        int(r.get("game_pk") or 0),
-                        int(r.get("at_bat_index") or 0),
-                        int(r.get("event_index") or 0),
-                        int(r.get("pitch_number") or 0),
-                        str(r.get("pitcher") or ""),
-                        str(r.get("batter") or ""),
-                    )
+                    k = _pro_merge_pitch_key(r)
                     if k not in merged:
                         merged[k] = r
                 rows = list(merged.values())
@@ -9378,7 +9622,12 @@ def pitching_ab_report(
                 raise HTTPException(status_code=500, detail=f"ab report query failed: {exc}") from exc
         if (session_type_filter or "").strip() in {"", "All", "Season"}:
             try:
-                api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter="All")
+                api_rows = _pro_fetch_api_live_tail_rows(
+                    start_date=start_date,
+                    end_date=end_date,
+                    level_filter="All",
+                    min_date_exclusive=_pro_max_session_date_in_rows(rows),
+                )
                 if api_rows:
                     api_rows = [
                         r
@@ -9396,28 +9645,9 @@ def pitching_ab_report(
                             selected_pitch_types=selected_pitch_types,
                         )
                     ]
-                    merged = {
-                        (
-                            str(r.get("session_date") or ""),
-                            int(r.get("game_pk") or 0),
-                            int(r.get("at_bat_index") or 0),
-                            int(r.get("event_index") or 0),
-                            int(r.get("pitch_number") or 0),
-                            str(r.get("pitcher") or ""),
-                            str(r.get("batter") or ""),
-                        ): r
-                        for r in rows
-                    }
+                    merged = {_pro_merge_pitch_key(r): r for r in rows}
                     for r in api_rows:
-                        k = (
-                            str(r.get("session_date") or ""),
-                            int(r.get("game_pk") or 0),
-                            int(r.get("at_bat_index") or 0),
-                            int(r.get("event_index") or 0),
-                            int(r.get("pitch_number") or 0),
-                            str(r.get("pitcher") or ""),
-                            str(r.get("batter") or ""),
-                        )
+                        k = _pro_merge_pitch_key(r)
                         if k not in merged:
                             merged[k] = r
                     rows = list(merged.values())
@@ -9826,7 +10056,12 @@ def hitting_ab_report(
                 raise HTTPException(status_code=500, detail=f"hitting ab report query failed: {exc}") from exc
         if (session_type_filter or "").strip() in {"", "All", "Season"}:
             try:
-                api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter="All")
+                api_rows = _pro_fetch_api_live_tail_rows(
+                    start_date=start_date,
+                    end_date=end_date,
+                    level_filter="All",
+                    min_date_exclusive=_pro_max_session_date_in_rows(rows),
+                )
                 if api_rows:
                     api_rows = [
                         r
@@ -9844,28 +10079,9 @@ def hitting_ab_report(
                             selected_pitch_types=selected_pitch_types,
                         )
                     ]
-                    merged = {
-                        (
-                            str(r.get("session_date") or ""),
-                            int(r.get("game_pk") or 0),
-                            int(r.get("at_bat_index") or 0),
-                            int(r.get("event_index") or 0),
-                            int(r.get("pitch_number") or 0),
-                            str(r.get("pitcher") or ""),
-                            str(r.get("batter") or ""),
-                        ): r
-                        for r in rows
-                    }
+                    merged = {_pro_merge_pitch_key(r): r for r in rows}
                     for r in api_rows:
-                        k = (
-                            str(r.get("session_date") or ""),
-                            int(r.get("game_pk") or 0),
-                            int(r.get("at_bat_index") or 0),
-                            int(r.get("event_index") or 0),
-                            int(r.get("pitch_number") or 0),
-                            str(r.get("pitcher") or ""),
-                            str(r.get("batter") or ""),
-                        )
+                        k = _pro_merge_pitch_key(r)
                         if k not in merged:
                             merged[k] = r
                     rows = list(merged.values())
@@ -10570,8 +10786,14 @@ def _canonical_play_result(play_result: Any) -> str:
         "sacrifice": "Sacrifice",
         "error": "Error",
         "walk": "Walk",
+        "intentwalk": "IntentionalWalk",
         "intentionalwalk": "IntentionalWalk",
         "hitbypitch": "HitByPitch",
+        "catcherinterf": "Error",
+        "fielderschoiceout": "Out",
+        "groundedintodoubleplay": "Out",
+        "doubleplay": "Out",
+        "strikeoutdoubleplay": "Out",
         "undefined": "Undefined",
     }
     return aliases.get(compact, raw)
@@ -11784,7 +12006,12 @@ def catching_overview(
                     rows = [dict(row) for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
                     if level_filter in {"All", "AAA", "MLB"}:
                         try:
-                            api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter=level_filter)
+                            api_rows = _pro_fetch_api_live_tail_rows(
+                                start_date=start_date,
+                                end_date=end_date,
+                                level_filter=level_filter,
+                                min_date_exclusive=_pro_max_session_date_in_rows(rows),
+                            )
                             if api_rows:
                                 add_rows: List[Dict[str, Any]] = []
                                 catcher_keys = set(selected_catcher_keys)
@@ -11801,28 +12028,9 @@ def catching_overview(
                                         continue
                                     add_rows.append(r)
                                 if add_rows:
-                                    merged = {
-                                        (
-                                            str(r.get("session_date") or ""),
-                                            int(r.get("game_pk") or 0),
-                                            int(r.get("at_bat_index") or 0),
-                                            int(r.get("event_index") or 0),
-                                            int(r.get("pitch_number") or 0),
-                                            str(r.get("pitcher") or ""),
-                                            str(r.get("batter") or ""),
-                                        ): r
-                                        for r in rows
-                                    }
+                                    merged = {_pro_merge_pitch_key(r): r for r in rows}
                                     for r in add_rows:
-                                        k = (
-                                            str(r.get("session_date") or ""),
-                                            int(r.get("game_pk") or 0),
-                                            int(r.get("at_bat_index") or 0),
-                                            int(r.get("event_index") or 0),
-                                            int(r.get("pitch_number") or 0),
-                                            str(r.get("pitcher") or ""),
-                                            str(r.get("batter") or ""),
-                                        )
+                                        k = _pro_merge_pitch_key(r)
                                         if k not in merged:
                                             merged[k] = r
                                     rows = list(merged.values())
@@ -12392,3 +12600,5 @@ def pitching_pitch_edit_count(school_code: str = Query(..., min_length=2, max_le
         raise HTTPException(status_code=500, detail=f"pitch edit count failed: {exc}") from exc
 
     return PitchEditCountResponse(school_code=school_code, edit_count=edit_count)
+    if e in {"truncated_pa", "truncatedpa"}:
+        return ""
