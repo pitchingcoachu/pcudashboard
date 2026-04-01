@@ -1307,6 +1307,7 @@ ALL_TABLE_COLUMNS: List[str] = [
     "Whiff%",
     "K%",
     "BB%",
+    "HR%",
     "GB%",
     "Barrel%",
     "CSW%",
@@ -1367,6 +1368,94 @@ ALL_TABLE_COLUMNS: List[str] = [
 ]
 
 
+def _derive_pro_fip_context(rows: List[Dict[str, Any]]) -> tuple[float, float]:
+    """Return (FIP constant, league HR/FB) derived from current PRO row set."""
+    pro_rows = [r for r in rows if str(r.get("school_code") or "").strip().upper() == "PRO"]
+    if not pro_rows:
+        return 3.2, 0.12
+
+    # League totals for FIP/xFIP components.
+    k_total = sum(1 for r in pro_rows if str(r.get("korbb") or "").strip() == "Strikeout")
+    bb_total = sum(1 for r in pro_rows if str(r.get("korbb") or "").strip() == "Walk")
+    hbp_total = sum(
+        1
+        for r in pro_rows
+        if str(r.get("pitch_call") or "").strip() == "HitByPitch"
+        or _canonical_play_result(r.get("play_result")) == "HitByPitch"
+    )
+    hr_total = sum(1 for r in pro_rows if _canonical_play_result(r.get("play_result")) == "HomeRun")
+
+    fb_total = sum(
+        1
+        for r in pro_rows
+        if (
+            ("fly" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " "))
+            or ("popup" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " "))
+        )
+    )
+    lg_hr_fb = (float(hr_total) / float(fb_total)) if fb_total > 0 else 0.12
+
+    # Prefer official boxscore totals for league ERA/IP.
+    official_er = 0.0
+    official_outs = 0
+    per_game_pitcher: Dict[tuple[str, str], tuple[Optional[float], Optional[int]]] = {}
+    for r in pro_rows:
+        game_key = str(r.get("game_pk") or r.get("game_id") or "").strip()
+        pitcher_key = _normalize_name_key(str(r.get("pitcher") or ""))
+        if not game_key or not pitcher_key:
+            continue
+        key = (game_key, pitcher_key)
+        er_v = r.get("official_earned_runs")
+        outs_v = r.get("official_outs_recorded")
+        prev_er, prev_outs = per_game_pitcher.get(key, (None, None))
+        next_er = float(er_v) if _is_num(er_v) else prev_er
+        next_outs = int(round(float(outs_v))) if _is_num(outs_v) else prev_outs
+        if prev_er is not None and next_er is not None:
+            next_er = max(prev_er, next_er)
+        if prev_outs is not None and next_outs is not None:
+            next_outs = max(prev_outs, next_outs)
+        per_game_pitcher[key] = (next_er, next_outs)
+    for er_v, outs_v in per_game_pitcher.values():
+        if _is_num(er_v):
+            official_er += float(er_v)
+        if _is_num(outs_v):
+            official_outs += int(round(float(outs_v)))
+
+    if official_outs > 0:
+        lg_ip = official_outs / 3.0
+        lg_era = (9.0 * official_er) / lg_ip if lg_ip > 0 else 0.0
+    else:
+        # Fallback when official lines are unavailable.
+        outs_on_play = sum(int(r.get("outs_on_play_num") or 0) for r in pro_rows if r.get("outs_on_play_num") is not None)
+        k_with_out = sum(
+            1
+            for r in pro_rows
+            if str(r.get("korbb") or "").strip() == "Strikeout" and int(r.get("outs_on_play_num") or 0) > 0
+        )
+        lg_outs = outs_on_play + max(0, k_total - k_with_out)
+        lg_ip = lg_outs / 3.0 if lg_outs > 0 else 0.0
+        h1_total = sum(1 for r in pro_rows if _canonical_play_result(r.get("play_result")) == "Single")
+        h2_total = sum(1 for r in pro_rows if _canonical_play_result(r.get("play_result")) == "Double")
+        h3_total = sum(1 for r in pro_rows if _canonical_play_result(r.get("play_result")) == "Triple")
+        er_est = (
+            (0.47 * h1_total)
+            + (0.78 * h2_total)
+            + (1.09 * h3_total)
+            + (1.40 * hr_total)
+            + (0.33 * (bb_total + hbp_total))
+            - (0.10 * k_total)
+        )
+        lg_era = (9.0 * er_est / lg_ip) if lg_ip > 0 else 0.0
+
+    if lg_ip <= 0:
+        return 3.2, lg_hr_fb
+    lg_fip_component = ((13.0 * hr_total) + (3.0 * (bb_total + hbp_total)) - (2.0 * k_total)) / lg_ip
+    fip_const = lg_era - lg_fip_component
+    if not isfinite(fip_const):
+        fip_const = 3.2
+    return float(fip_const), float(lg_hr_fb)
+
+
 def _normalize_custom_columns(custom_columns: Optional[List[str]]) -> List[str]:
     if not custom_columns:
         return []
@@ -1421,6 +1510,7 @@ def _build_dynamic_table(
 
     out_rows: List[Dict[str, Any]] = []
     total = sum(len(v) for v in groups.values()) or 1
+    pro_fip_const, pro_lg_hr_fb = _derive_pro_fip_context(rows)
 
     def _row_for_group(key: str, grp: List[Dict[str, Any]]) -> Dict[str, Any]:
         n = len(grp)
@@ -1750,8 +1840,8 @@ def _build_dynamic_table(
 
         # Advanced pitching metrics (ERA/FIP/xFIP) for custom-table use.
         # Note: ERA here is an event-weight estimate because earned-runs is not tracked directly.
-        fip_const = 3.2
-        lg_hr_fb = 0.12
+        fip_const = pro_fip_const if is_pro_group else 3.2
+        lg_hr_fb = pro_lg_hr_fb if is_pro_group else 0.12
         fip_val: Optional[float] = None
         x_fip_val: Optional[float] = None
         era_val: Optional[float] = None
@@ -1857,6 +1947,7 @@ def _build_dynamic_table(
             "Whiff%": f"{round(100.0 * whiff_n / swing_n, 1)}%" if swing_n else None,
             "K%": f"{round(100.0 * k_n / bf_starts, 1)}%" if bf_starts else None,
             "BB%": f"{round(100.0 * bb_n / bf_starts, 1)}%" if bf_starts else None,
+            "HR%": f"{round(100.0 * hr / bf_starts, 1)}%" if bf_starts else None,
             "GB%": f"{round(100.0 * gb_n / in_play_n, 1)}%" if in_play_n else None,
             "Barrel%": f"{round(100.0 * barrel_n_live / in_play_live_n, 1)}%" if in_play_live_n else (f"{round(100.0 * barrel_n_all / in_play_n, 1)}%" if in_play_n else None),
             "CSW%": f"{round(100.0 * csw_n / n, 1)}%" if n else None,
@@ -1969,11 +2060,11 @@ def _build_dynamic_table(
 
     column_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
-        "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+"],
-        "Results": [split_col_name, "#", "BF", "K%", "BB%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
+        "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
+        "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
         "Hitting Results": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Swing%", "Whiff%", "GB%", "K%", "BB%", "Barrel%", "EV", "LA"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
-        "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
+        "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
         "Raw Data": [split_col_name, "IP", "P", "BF", "P/IP", "P/BF", "H", "XBH", "Barrels", "BB", "HBP", "K", "Whiffs"],
         "Batted Ball Data": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Barrel%"],
@@ -3988,9 +4079,9 @@ def _try_pitching_overview_daily_rollup(
 
     if not grouped_rows:
         mode_columns_map: Dict[str, List[str]] = {
-            "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
-            "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+"],
-            "Results": [split_col_name, "#", "BF", "K%", "BB%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
+            "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
+            "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
+            "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
             "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
         }
         return PitchingOverviewResponse(
@@ -4350,9 +4441,9 @@ def _try_pitching_overview_daily_rollup(
             chart_points = []
 
     mode_columns_map: Dict[str, List[str]] = {
-        "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
-        "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+"],
-        "Results": [split_col_name, "#", "BF", "K%", "BB%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
+        "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
+        "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
+        "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
     }
     return PitchingOverviewResponse(
@@ -5806,10 +5897,13 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
             pass
 
     team_labels = [_pro_team_label(code, level_norm) for code in team_codes]
+    today_iso = date.today().isoformat()
+    max_date_raw = str(date_row.get("max_date") or "").strip()
+    max_date_out = max(max_date_raw, today_iso) if max_date_raw else today_iso
     return PitchingFiltersResponse(
         school_code=school_code,
         min_date=date_row.get("min_date"),
-        max_date=date_row.get("max_date"),
+        max_date=max_date_out,
         pitchers=pitchers,
         team_types=["All", *team_labels],
         opp_hitters=opp_hitters,
@@ -6553,6 +6647,7 @@ def _pro_pitching_overview(
     grouped_for_pro: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         grouped_for_pro.setdefault(_split_key_from_row(r, split_by), []).append(r)
+    pro_fip_const, pro_lg_hr_fb = _derive_pro_fip_context(rows)
 
     def _update_row_metrics(row_obj: Dict[str, Any], group_rows: List[Dict[str, Any]]) -> None:
         def _norm_desc(value: Any) -> str:
@@ -6560,6 +6655,25 @@ def _pro_pitching_overview(
             if normalized == "swinging_strike_blocked":
                 return "swinging_strike"
             return normalized
+
+        def _desc_norm_for_row(r: Dict[str, Any]) -> str:
+            return _norm_desc(
+                r.get("pitch_call")
+                or r.get("description_raw")
+                or r.get("pro_desc_norm")
+                or ""
+            )
+
+        def _pre_count_pair(r: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
+            pb = r.get("prev_balls")
+            ps = r.get("prev_strikes")
+            if _is_num(pb) and _is_num(ps):
+                return (int(float(pb)), int(float(ps)))
+            b = r.get("balls_num")
+            s = r.get("strikes_num")
+            if _is_num(b) and _is_num(s):
+                return (int(float(b)), int(float(s)))
+            return (None, None)
 
         pa_keys: set[str] = set()
         for r in group_rows:
@@ -6589,20 +6703,25 @@ def _pro_pitching_overview(
         first_pitch_den = 0
         first_pitch_strike_num = 0
         for r in group_rows:
-            if r.get("balls_num") == 0 and r.get("strikes_num") == 0:
+            b0, s0 = _pre_count_pair(r)
+            if b0 == 0 and s0 == 0:
                 first_pitch_den += 1
-                d0 = _norm_desc(r.get("pitch_call"))
+                d0 = _desc_norm_for_row(r)
+                if d0 and d0 not in {"ball", "hit_by_pitch", "blocked_ball"}:
+                    first_pitch_strike_num += 1
+        if first_pitch_den == 0:
+            # StatsAPI fallback rows can carry post-pitch count; use first pitch per PA.
+            seen_pa: set[tuple[str, str]] = set()
+            for r in sorted(group_rows, key=_row_order_key):
+                pa_key = (str(r.get("game_pk") or ""), str(r.get("at_bat_index") or ""))
+                if pa_key in seen_pa:
+                    continue
+                seen_pa.add(pa_key)
+                d0 = _desc_norm_for_row(r)
+                first_pitch_den += 1
                 if d0 and d0 not in {"ball", "hit_by_pitch", "blocked_ball"}:
                     first_pitch_strike_num += 1
         total_pitches_val = len(group_rows)
-
-        def _count_pair(r: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
-            b = r.get("balls_num")
-            s = r.get("strikes_num")
-            try:
-                return (int(b) if b is not None else None, int(s) if s is not None else None)
-            except Exception:
-                return (None, None)
 
         strike_num = 0
         swing_num = 0
@@ -6616,11 +6735,11 @@ def _pro_pitching_overview(
         barrel_num = 0
         gb_num = 0
         for r in group_rows:
-            d = _norm_desc(r.get("pitch_call"))
-            c = _count_pair(r)
+            d = _desc_norm_for_row(r)
+            c = _pre_count_pair(r)
             if d and d not in {"ball", "hit_by_pitch", "blocked_ball"}:
                 strike_num += 1
-            is_in_play_desc = d.startswith("in_play") or d.startswith("hit_into_play")
+            is_in_play_desc = d.startswith("in_play") or d.startswith("hit_into_play") or d == "inplay"
             is_swing_desc = (
                 d in {
                     "swinging_strike",
@@ -6699,7 +6818,15 @@ def _pro_pitching_overview(
         in_zone_count = sum(
             1
             for r in group_rows
-            if (_is_num(r.get("zone_num")) and 1 <= int(float(r.get("zone_num"))) <= 9)
+            if (
+                (_is_num(r.get("zone_num")) and 1 <= int(float(r.get("zone_num"))) <= 9)
+                or (
+                    _is_num(r.get("plate_side"))
+                    and _is_num(r.get("plate_height"))
+                    and (ZONE_LEFT <= float(r.get("plate_side")) <= ZONE_RIGHT)
+                    and (ZONE_BOTTOM <= float(r.get("plate_height")) <= ZONE_TOP)
+                )
+            )
         )
         row_obj["InZone%"] = f"{round((100.0 * in_zone_count) / total_pitches_val, 1)}%" if total_pitches_val > 0 else None
         row_obj["Swing%"] = f"{round((100.0 * swing_num) / total_pitches_val, 1)}%" if total_pitches_val > 0 else None
@@ -6778,10 +6905,10 @@ def _pro_pitching_overview(
             ip_num_local = official_ip_local
             if total_pitches_val > 0:
                 row_obj["P/IP"] = round(float(total_pitches_val) / ip_num_local, 2)
+        hr_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "homerun")
         if ip_num_local > 0:
-            hr_local = sum(1 for r in group_rows if str(r.get("play_result") or "").strip().lower() == "homerun")
-            fip_const_local = 3.2
-            lg_hr_fb_local = 0.12
+            fip_const_local = pro_fip_const
+            lg_hr_fb_local = pro_lg_hr_fb
             fip_local = ((13.0 * hr_local) + (3.0 * (bb_val + hbp_val)) - (2.0 * k_val)) / ip_num_local + fip_const_local
             fb_local = sum(
                 1
@@ -6811,6 +6938,7 @@ def _pro_pitching_overview(
             row_obj["FIP"] = None
             row_obj["xFIP"] = None
             row_obj["ERA"] = None
+        row_obj["HR%"] = f"{round((100.0 * hr_local) / bf_val, 1)}%" if bf_val > 0 else None
 
     if school_code == "PRO":
         for tr in table_rows:
@@ -6818,7 +6946,10 @@ def _pro_pitching_overview(
             if key_val == "All":
                 _update_row_metrics(tr, rows)
             else:
-                _update_row_metrics(tr, grouped_for_pro.get(key_val, []))
+                grp_rows = grouped_for_pro.get(key_val, [])
+                if not grp_rows:
+                    grp_rows = [r for r in rows if _split_key_from_row(r, split_by) == key_val]
+                _update_row_metrics(tr, grp_rows)
 
     pitch_type_rows = [
         PitchTypeSummaryRow(
@@ -7116,10 +7247,13 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
             pass
 
     team_labels = [_pro_team_label(code, level_norm) for code in team_codes]
+    today_iso = date.today().isoformat()
+    max_date_raw = str(date_row.get("max_date") or "").strip()
+    max_date_out = max(max_date_raw, today_iso) if max_date_raw else today_iso
     return {
         "school_code": school_code,
         "min_date": date_row.get("min_date"),
-        "max_date": date_row.get("max_date"),
+        "max_date": max_date_out,
         "hitters": hitters,
         "opp_pitchers": opp_pitchers,
         "team_types": ["All", *team_labels],

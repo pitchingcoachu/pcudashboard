@@ -178,6 +178,7 @@ const RESULT_LABELS: Record<string, string> = {
   'In Play (Hit)': 'In Play (Hit)',
   Error: 'Error',
 };
+const PRO_SEASON_START = '2026-03-25';
 const SPRAY_RESULT_ORDER = ['Single', 'Double', 'Triple', 'HomeRun', 'Out', 'Error'] as const;
 const SPRAY_RESULT_LABELS: Record<(typeof SPRAY_RESULT_ORDER)[number], string> = {
   Single: 'Single',
@@ -330,6 +331,37 @@ function formatDateMMDDYY(value: string | null): string {
   const dt = new Date(`${value}T00:00:00`);
   if (Number.isNaN(dt.getTime())) return value;
   return `${dt.getMonth() + 1}/${dt.getDate()}/${String(dt.getFullYear()).slice(-2)}`;
+}
+
+function toYmdNow(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function isFullMonthRange(startDate: string, endDate: string): boolean {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
+  if (start.getFullYear() !== end.getFullYear() || start.getMonth() !== end.getMonth()) return false;
+  const firstDay = new Date(start.getFullYear(), start.getMonth(), 1);
+  const lastDay = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  return start.getDate() === firstDay.getDate() && end.getDate() === lastDay.getDate();
+}
+
+function formatDashboardDateLabel(startDate: string, endDate: string, isProSchool: boolean): string {
+  if (!startDate || !endDate) return 'All Dates';
+  const today = toYmdNow();
+  if (isProSchool && startDate === PRO_SEASON_START && endDate === today) return '2026 Season';
+  if (isFullMonthRange(startDate, endDate)) {
+    const monthDate = new Date(`${startDate}T00:00:00`);
+    const monthName = monthDate.toLocaleString('en-US', { month: 'long' });
+    return `${monthName} ${monthDate.getFullYear()}`;
+  }
+  if (startDate === endDate) return formatDateMMDDYY(startDate || null);
+  return `${formatDateMMDDYY(startDate || null)} - ${formatDateMMDDYY(endDate || null)}`;
 }
 
 function formatShortDate(value: string): string {
@@ -1988,6 +2020,49 @@ export default function HittingSuite() {
     const splitColumn = leaderboardBaseColumns[0] ?? '';
     return sortTableRows(rows, sortCol, leaderboardSortDirection, splitColumn);
   }, [overview?.table_rows, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
+  const overviewHeaderLabel = useMemo(() => {
+    const hitterLabel = selectedSingleHitter ? formatNameFirstLast(selectedSingleHitter) : 'All';
+    const dateLabel = formatDashboardDateLabel(startDate, endDate, isPro);
+    return `${hitterLabel} | ${dateLabel}`;
+  }, [selectedSingleHitter, startDate, endDate, isPro]);
+  const applyLeaderboardDrilldown = useCallback((rawValue: unknown, viewBy: 'Player' | 'Team') => {
+    if (!isLeaderboardPage) return;
+    const raw = String(rawValue ?? '').trim();
+    if (!raw || raw.toLowerCase() === 'all') return;
+
+    if (viewBy === 'Player') {
+      setHitter(raw);
+      setOppPitcher('All');
+    } else {
+      if (isPro) {
+        const teamCode = inferProTeamCode(raw);
+        const matchedOption = teamTypeOptions.find((option) => {
+          const optionValue = String(option.value ?? '').trim();
+          const optionLabel = String(option.label ?? '').trim();
+          if (!optionValue && !optionLabel) return false;
+          const valueCode = inferProTeamCode(optionValue);
+          const labelCode = inferProTeamCode(optionLabel);
+          return (
+            (!!teamCode && (valueCode === teamCode || labelCode === teamCode)) ||
+            optionValue.toLowerCase() === raw.toLowerCase() ||
+            optionLabel.toLowerCase() === raw.toLowerCase()
+          );
+        });
+        setTeamType((matchedOption?.value as string) || raw);
+      } else {
+        setTeamType(raw);
+      }
+      setHitter('All');
+      setOppPitcher('All');
+    }
+
+    if (isPro) {
+      setStartDate(PRO_SEASON_START);
+      setEndDate(toYmdNow());
+    }
+    setDashboardPage('Summary');
+    setAppliedFilterVersion((current) => current + 1);
+  }, [isLeaderboardPage, isPro, teamTypeOptions]);
   const latestTeamByHitter = useMemo(() => {
     const points = overview?.chart_points ?? [];
     const latestTsByName: Record<string, number> = {};
@@ -2756,7 +2831,7 @@ export default function HittingSuite() {
               <>
             <div className="dashboard-panel" style={{ padding: 14 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <h3 style={{ margin: 0 }}>{(hitter && hitter !== 'All') ? formatNameFirstLast(hitter) : 'All'} | {startDate === endDate ? formatDateMMDDYY(startDate || null) : `${formatDateMMDDYY(startDate || null)} - ${formatDateMMDDYY(endDate || null)}`}</h3>
+                <h3 style={{ margin: 0 }}>{overviewHeaderLabel}</h3>
                 {summaryTeamLogoUrl ? (
                   <img
                     src={summaryTeamLogoUrl}
@@ -3151,7 +3226,14 @@ export default function HittingSuite() {
                             padding: '8px 6px',
                             borderBottom: '1px solid rgba(255,255,255,0.1)',
                             whiteSpace: 'nowrap',
+                            cursor: isLeaderboardPage && colIndex === 0 && !isAllRow ? 'pointer' : undefined,
+                            textDecoration: isLeaderboardPage && colIndex === 0 && !isAllRow ? 'underline' : undefined,
                           }}
+                          onClick={
+                            isLeaderboardPage && colIndex === 0 && !isAllRow
+                              ? () => applyLeaderboardDrilldown(row[col], leaderboardViewBy)
+                              : undefined
+                          }
                         >
                           {displayValue === null || displayValue === undefined ? '—' : renderedValue}
                         </td>
@@ -3173,7 +3255,7 @@ export default function HittingSuite() {
               <>
                 <div className="dashboard-panel" style={{ padding: 14 }}>
                   <h3 style={{ margin: 0 }}>
-                    {(hitter && hitter !== 'All') ? formatNameFirstLast(hitter) : 'All'} | {startDate === endDate ? formatDateMMDDYY(startDate || null) : `${formatDateMMDDYY(startDate || null)} - ${formatDateMMDDYY(endDate || null)}`}
+                    {overviewHeaderLabel}
                   </h3>
                   <p className="portal-muted-text" style={{ margin: '6px 0 0 0' }}>
                     {overview ? `${overview.total_pitches.toLocaleString()} pitches` : 'Loading...'}
@@ -3224,7 +3306,7 @@ export default function HittingSuite() {
               <>
                 <div className="dashboard-panel" style={{ padding: 14 }}>
                   <h3 style={{ margin: 0 }}>
-                    {(hitter && hitter !== 'All') ? formatNameFirstLast(hitter) : 'All'} | {startDate === endDate ? formatDateMMDDYY(startDate || null) : `${formatDateMMDDYY(startDate || null)} - ${formatDateMMDDYY(endDate || null)}`}
+                    {overviewHeaderLabel}
                   </h3>
                 </div>
                 <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>

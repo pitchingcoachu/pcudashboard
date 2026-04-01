@@ -241,6 +241,7 @@ const PITCH_TYPE_DISPLAY_ORDER = [
   'Undefined',
 ] as const;
 const LEAGUE_SEASON_START = '2026-02-13';
+const PRO_SEASON_START = '2026-03-25';
 
 
 function fmtNum(value: number | null | undefined, digits = 1): string {
@@ -276,6 +277,32 @@ function formatShortDate(value: string): string {
   const day = Number(parts[2]);
   if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return trimmed;
   return `${month}/${day}/${String(year).slice(-2)}`;
+}
+
+function toYmdNow(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function isFullMonthRange(startDate: string, endDate: string): boolean {
+  if (!startDate || !endDate) return false;
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false;
+  if (start.getFullYear() !== end.getFullYear() || start.getMonth() !== end.getMonth()) return false;
+  if (start.getDate() !== 1) return false;
+  const lastDay = new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate();
+  return end.getDate() === lastDay;
+}
+
+function formatDashboardDateLabel(startDate: string, endDate: string, isProSchool: boolean): string {
+  if (!startDate || !endDate) return '-';
+  const today = toYmdNow();
+  if (isProSchool && startDate === PRO_SEASON_START && endDate === today) return '2026 Season';
+  if (isFullMonthRange(startDate, endDate)) {
+    const dt = new Date(`${startDate}T00:00:00`);
+    return dt.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  }
+  return startDate === endDate ? formatShortDate(startDate) : `${formatShortDate(startDate)} - ${formatShortDate(endDate)}`;
 }
 
 function parseVelocityBatch(value: string): number[] {
@@ -1523,14 +1550,9 @@ export default function PitchingSuite({
   const overviewHeaderLabel = useMemo(() => {
     const selected = selectedPitchers.filter((value) => value !== 'All');
     const playerLabel = selected.length === 1 ? formatNameFirstLast(selected[0]) : 'All';
-    const dateLabel =
-      startDate && endDate
-        ? startDate === endDate
-          ? formatShortDate(startDate)
-          : `${formatShortDate(startDate)} - ${formatShortDate(endDate)}`
-        : '-';
+    const dateLabel = formatDashboardDateLabel(startDate, endDate, isPro);
     return `${playerLabel} | ${dateLabel}`;
-  }, [selectedPitchers, startDate, endDate]);
+  }, [selectedPitchers, startDate, endDate, isPro]);
   const selectedSinglePitcher = useMemo(() => {
     const selected = selectedPitchers.filter((value) => value !== 'All');
     return selected.length === 1 ? selected[0] : '';
@@ -4475,9 +4497,9 @@ export default function PitchingSuite({
   );
 
   const colorColumnsByMode: Record<string, string[]> = {
-    Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100'],
-    Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'Whiff%'],
-    Results: ['Whiff%', 'K%', 'BB%', 'CSW%', 'GB%', 'Barrel%', 'EV'],
+    Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100', 'ERA', 'FIP', 'xFIP'],
+    Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'Whiff%', 'ERA', 'FIP', 'xFIP'],
+    Results: ['Whiff%', 'K%', 'BB%', 'CSW%', 'GB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP'],
     Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
     Custom: [
       'InZone%',
@@ -4502,6 +4524,9 @@ export default function PitchingSuite({
       'GB%',
       'Barrel%',
       'EV',
+      'ERA',
+      'FIP',
+      'xFIP',
     ],
   };
 
@@ -4511,6 +4536,31 @@ export default function PitchingSuite({
     [tableColorColumns]
   );
   const splitColName = overview?.table_columns?.[0] ?? '';
+  const leaderboardPrimaryColumn = splitColName;
+  const applyLeaderboardDrilldown = useCallback((rawValue: unknown, viewBy: 'Player' | 'Team') => {
+    const rawText = String(rawValue ?? '').trim();
+    if (!rawText || rawText.toLowerCase() === 'all') return;
+    const todayYmd = toYmdNow();
+    if (viewBy === 'Player') {
+      setSelectedPitchers([rawText]);
+      setSelectedHitters(['All']);
+    } else {
+      let nextTeam = rawText;
+      if (isPro) {
+        const display = getProTeamDisplayName(rawText, (level as 'MLB' | 'AAA' | 'All') || 'All');
+        if (display) nextTeam = display;
+      }
+      setTeamType(nextTeam);
+      setSelectedPitchers(['All']);
+      setSelectedHitters(['All']);
+    }
+    if (isPro) {
+      setStartDate(PRO_SEASON_START);
+      setEndDate(todayYmd);
+    }
+    setDashboardPage('Summary');
+    setAppliedFilterVersion((current) => current + 1);
+  }, [isPro, level]);
   const tableModeOptions = useMemo(
     () =>
       (isLeague
@@ -5597,10 +5647,24 @@ export default function PitchingSuite({
                                     isLeaderboardPage && colIndex === 0 && (leaderboardViewBy === 'Player' || leaderboardViewBy === 'Team')
                                       ? (isAllRow ? 'center' : 'left')
                                       : 'center',
-                                  cursor: column === '#' && rowPitches.length ? 'pointer' : undefined,
-                                  textDecoration: column === '#' && rowPitches.length ? 'underline' : undefined,
+                                  cursor:
+                                    (column === '#' && rowPitches.length)
+                                    || (isLeaderboardPage && column === leaderboardPrimaryColumn && !isAllRow)
+                                      ? 'pointer'
+                                      : undefined,
+                                  textDecoration:
+                                    (column === '#' && rowPitches.length)
+                                    || (isLeaderboardPage && column === leaderboardPrimaryColumn && !isAllRow)
+                                      ? 'underline'
+                                      : undefined,
                                 }}
-                                onClick={column === '#' && rowPitches.length ? () => openActionModal(rowPitches) : undefined}
+                                onClick={
+                                  column === '#' && rowPitches.length
+                                    ? () => openActionModal(rowPitches)
+                                    : (isLeaderboardPage && column === leaderboardPrimaryColumn && !isAllRow)
+                                      ? () => applyLeaderboardDrilldown(row[column], leaderboardViewBy)
+                                      : undefined
+                                }
                               >
                                 {(() => {
                                   const cellStyle = getTableCellStyle(row, column);
