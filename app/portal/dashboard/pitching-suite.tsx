@@ -707,7 +707,7 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
     .filter((value) => value && value !== 'all');
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
-  if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
+  if (metric === 'xWOBA') return { min: 0.27, mid: 0.32, max: 0.37 };
   if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
 
   if (metric === 'Whiff Rate' || metric === 'Whiff%') {
@@ -3356,7 +3356,7 @@ export default function PitchingSuite({
       const normalizedPoints = points.map((point) => {
         const rawX = point[xKey];
         const rawY = point[yKey];
-        const x = typeof rawX === 'number' && Number.isFinite(rawX) ? orientX(rawX) : null;
+        const x = typeof rawX === 'number' && Number.isFinite(rawX) ? rawX : null;
         const y = typeof rawY === 'number' && Number.isFinite(rawY) ? rawY : null;
         return {
           plate_side: x,
@@ -4083,8 +4083,9 @@ export default function PitchingSuite({
                   const runValueBoost = locationView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                   const isSwingRateView = locationView === 'Swing Rate';
                   const isGbRateView = locationView === 'GB Rate';
-                  if (locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                  if (locationView !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
+                  const isXMetricView = locationView === 'xWOBA' || locationView === 'xISO';
+                  if (!isXMetricView && locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                  if (!isXMetricView && locationView !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                   if (locationView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                   return (
                     <circle
@@ -4133,8 +4134,9 @@ export default function PitchingSuite({
                 const runValueBoost = locationView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                 const isSwingRateView = locationView === 'Swing Rate';
                 const isGbRateView = locationView === 'GB Rate';
-                if (locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                if (locationView !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
+                const isXMetricView = locationView === 'xWOBA' || locationView === 'xISO';
+                if (!isXMetricView && locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                if (!isXMetricView && locationView !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                 if (locationView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                 return (
                   <circle
@@ -4412,8 +4414,9 @@ export default function PitchingSuite({
                   const runValueBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                   const isSwingRateView = heatmapDisplayView === 'Swing Rate';
                   const isGbRateView = heatmapDisplayView === 'GB Rate';
-                  if (heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                  if (heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
+                  const isXMetricView = heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO';
+                  if (!isXMetricView && heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                  if (!isXMetricView && heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                   if (heatmapDisplayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                   return (
                     <circle
@@ -4466,8 +4469,9 @@ export default function PitchingSuite({
                 const runValueBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                 const isSwingRateView = heatmapDisplayView === 'Swing Rate';
                 const isGbRateView = heatmapDisplayView === 'GB Rate';
-                if (heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                if (heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
+                const isXMetricView = heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO';
+                if (!isXMetricView && heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                if (!isXMetricView && heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                 if (heatmapDisplayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
                 return (
                   <circle

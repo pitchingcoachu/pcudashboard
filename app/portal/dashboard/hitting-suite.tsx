@@ -512,7 +512,7 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
     .filter((value) => value && value !== 'all');
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
-  if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
+  if (metric === 'xWOBA') return { min: 0.27, mid: 0.32, max: 0.37 };
   if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
   if (metric === 'Whiff Rate') {
     if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
@@ -815,8 +815,9 @@ function LocationChart({
                       : Math.max(0, Math.min(1, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                 const runValueBoost = displayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                 const isSwingRateView = displayView === 'Swing Rate';
-                if (displayView !== 'Frequency' && displayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-                if (displayView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                const isXMetricView = displayView === 'xWOBA' || displayView === 'xISO';
+                if (!isXMetricView && displayView !== 'Frequency' && displayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+                if (!isXMetricView && displayView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
                 if (displayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) < 0.15) return null;
                 return (
                   <circle
@@ -859,8 +860,9 @@ function LocationChart({
                     : Math.max(0, Math.min(1, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal)));
               const runValueBoost = displayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
               const isSwingRateView = displayView === 'Swing Rate';
-              if (displayView !== 'Frequency' && displayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-              if (displayView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+              const isXMetricView = displayView === 'xWOBA' || displayView === 'xISO';
+              if (!isXMetricView && displayView !== 'Frequency' && displayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+              if (!isXMetricView && displayView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
               if (displayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) < 0.15) return null;
               return (
                 <circle
@@ -2298,8 +2300,9 @@ export default function HittingSuite() {
                       ? Math.abs(c.value) / maxAbs
                       : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
                   const rvBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                  if (heatmapDisplayView !== 'Frequency' && densityNorm < 0.16) return null;
-                  if (heatmapDisplayView !== 'Run Values' && normalized < 0.06) return null;
+                  const isXMetricView = heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO';
+                  if (!isXMetricView && heatmapDisplayView !== 'Frequency' && densityNorm < 0.16) return null;
+                  if (!isXMetricView && heatmapDisplayView !== 'Run Values' && normalized < 0.06) return null;
                   return <circle key={`h-heat-blur-${c.x}-${c.y}`} cx={cx} cy={cy} r={radius} fill={fill} opacity={Math.max(0.3, rvBoost * 1.25 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))} />;
                 })}
               </g>
@@ -2322,8 +2325,9 @@ export default function HittingSuite() {
                     ? Math.abs(c.value) / maxAbs
                     : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
                 const rvBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                if (heatmapDisplayView !== 'Frequency' && densityNorm < 0.16) return null;
-                if (heatmapDisplayView !== 'Run Values' && normalized < 0.06) return null;
+                const isXMetricView = heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO';
+                if (!isXMetricView && heatmapDisplayView !== 'Frequency' && densityNorm < 0.16) return null;
+                if (!isXMetricView && heatmapDisplayView !== 'Run Values' && normalized < 0.06) return null;
                 return (
                   <circle
                     key={`h-heat-core-${c.x}-${c.y}`}

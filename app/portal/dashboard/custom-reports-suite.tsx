@@ -970,7 +970,7 @@ const heatmapScaleFromMetricAndPitchTypes = (
     .filter((value) => value && value !== 'all');
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
-  if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
+  if (metric === 'xWOBA') return { min: 0.27, mid: 0.32, max: 0.37 };
   if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
 
   if (metric === 'Whiff Rate') {
@@ -3460,8 +3460,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                         const runValueBoost = valueLabel === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                                         const isSwingRateView = valueLabel === 'Swing Rate';
                                         const isGbRateView = valueLabel === 'GB Rate';
-                                        if (valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                                        if (valueLabel !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
+                                        const isXMetricView = valueLabel === 'xWOBA' || valueLabel === 'xISO';
+                                        if (!isXMetricView && valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                                        if (!isXMetricView && valueLabel !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                                         if (valueLabel === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0.15) return null;
                                         return (
                                           <circle
@@ -3509,8 +3510,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       const runValueBoost = valueLabel === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                                       const isSwingRateView = valueLabel === 'Swing Rate';
                                       const isGbRateView = valueLabel === 'GB Rate';
-                                      if (valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                                      if (valueLabel !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
+                                      const isXMetricView = valueLabel === 'xWOBA' || valueLabel === 'xISO';
+                                      if (!isXMetricView && valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
+                                      if (!isXMetricView && valueLabel !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
                                       if (valueLabel === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0.15) return null;
                                       return (
                                         <circle

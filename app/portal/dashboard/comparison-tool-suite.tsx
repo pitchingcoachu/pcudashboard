@@ -549,7 +549,7 @@ function getHeatmapFixedScale(metricRaw: HeatMetric, selectedPitchTypesRaw: stri
     .filter((value) => value && value !== 'all');
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
-  if (metric === 'xWOBA') return { min: 0.25, mid: 0.33, max: 0.41 };
+  if (metric === 'xWOBA') return { min: 0.27, mid: 0.32, max: 0.37 };
   if (metric === 'xBA') return { min: 0.2, mid: 0.27, max: 0.34 };
   if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
   if (metric === 'Whiff Rate') {
@@ -1057,8 +1057,9 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
                     : Math.max(0, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal));
                 const runValueBoost = state.heatMetric === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
                 const isSwingRateView = state.heatMetric === 'Swing Rate';
-                if (state.heatMetric !== 'Frequency' && state.heatMetric !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-                if (state.heatMetric !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+                const isXMetricView = state.heatMetric === 'xWOBA' || state.heatMetric === 'xISO';
+                if (!isXMetricView && state.heatMetric !== 'Frequency' && state.heatMetric !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+                if (!isXMetricView && state.heatMetric !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
                 if (state.heatMetric === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) < 0.15) return null;
                 return <circle key={`cmp-blur-${cell.x}-${cell.y}`} cx={cx} cy={cy} r={radius} fill={fill} opacity={Math.max(0.3, runValueBoost * 1.25 * (state.heatMetric === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))} />;
               })}
@@ -1086,8 +1087,9 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
                   : Math.max(0, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal));
               const runValueBoost = state.heatMetric === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
               const isSwingRateView = state.heatMetric === 'Swing Rate';
-              if (state.heatMetric !== 'Frequency' && state.heatMetric !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-              if (state.heatMetric !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
+              const isXMetricView = state.heatMetric === 'xWOBA' || state.heatMetric === 'xISO';
+              if (!isXMetricView && state.heatMetric !== 'Frequency' && state.heatMetric !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
+              if (!isXMetricView && state.heatMetric !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
               if (state.heatMetric === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) < 0.15) return null;
               return <circle key={`cmp-core-${cell.x}-${cell.y}`} cx={cx} cy={cy} r={radius} fill={fill} opacity={Math.max(0.2, runValueBoost * 0.72 * (state.heatMetric === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))} />;
             })}

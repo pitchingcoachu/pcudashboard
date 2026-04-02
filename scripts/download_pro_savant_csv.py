@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import io
 import os
 import pathlib
 import time
@@ -24,11 +25,15 @@ def _daterange(start: dt.date, end: dt.date) -> Iterable[dt.date]:
 
 
 def _build_url(base: str, day: dt.date) -> str:
+    # Savant endpoints can intermittently return empty CSVs for exact-day bounds.
+    # Request a small date window and filter to the target day locally.
+    day_start = day - dt.timedelta(days=1)
+    day_end = day + dt.timedelta(days=1)
     params = {
         "all": "true",
         "type": "details",
-        "game_date_gt": day.isoformat(),
-        "game_date_lt": day.isoformat(),
+        "game_date_gt": day_start.isoformat(),
+        "game_date_lt": day_end.isoformat(),
     }
     return f"{base}?{urllib.parse.urlencode(params)}"
 
@@ -62,6 +67,46 @@ def _row_count(csv_bytes: bytes) -> int:
     return max(0, len(rows) - 1)
 
 
+def _norm_header(name: str) -> str:
+    return (name or "").strip().lower().replace(" ", "_")
+
+
+def _extract_game_date(row: dict) -> str:
+    for key in ("game_date", "game_date_utc", "gamedate"):
+        val = row.get(key)
+        if val is None:
+            continue
+        s = str(val).strip()
+        if not s:
+            continue
+        # Handles "YYYY-MM-DD" and datetime-like strings.
+        return s[:10]
+    return ""
+
+
+def _filter_csv_to_day(csv_bytes: bytes, day: dt.date) -> bytes:
+    text = csv_bytes.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return csv_bytes
+
+    normalized_fieldnames = [_norm_header(name) for name in reader.fieldnames]
+    rows = []
+    target = day.isoformat()
+    for raw in reader:
+        row = {}
+        for src_key, dst_key in zip(reader.fieldnames, normalized_fieldnames):
+            row[dst_key] = raw.get(src_key)
+        if _extract_game_date(row) == target:
+            rows.append(raw)
+
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=reader.fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue().encode("utf-8")
+
+
 def _write(path: pathlib.Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
@@ -79,6 +124,7 @@ def _download_day(
 ) -> Tuple[pathlib.Path, int]:
     url = _build_url(base_url, day)
     payload = _fetch_bytes(url, timeout=timeout, retries=retries, sleep_s=sleep_s)
+    payload = _filter_csv_to_day(payload, day)
     out_path = out_dir / f"{file_prefix}_{day.isoformat()}.csv"
     _write(out_path, payload)
     rows = _row_count(payload)
