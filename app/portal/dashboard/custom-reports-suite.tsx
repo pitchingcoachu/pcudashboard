@@ -7,10 +7,11 @@ import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
+import { calcPitchValue } from './pitch-value';
 
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching';
-type ReportScope = 'Single Player' | 'Multi-Player';
+type ReportScope = 'Single Player' | 'Multi-Player' | 'Team';
 type SprayViewMode = 'Batted Balls' | 'Bins';
 type PanelType =
   | ''
@@ -172,6 +173,14 @@ type OverviewLitePayload = {
   }>;
 };
 
+type ExternalPlayerMeta = {
+  headshotUrl: string;
+  pitchHand: '' | 'R' | 'L';
+  batSide: '' | 'R' | 'L';
+  mlbamId: number;
+  canonicalName: string;
+};
+
 type SavedReportItem = {
   id: number;
   name: string;
@@ -244,6 +253,41 @@ type ReportPayload = {
   rowNotes: string[];
   rowNoteSpans: number[];
   cells: Record<string, CellConfig>;
+};
+
+const MAX_REPORT_ROWS = 120;
+
+const PRO_FILTER_TEAM_CODE_BY_LABEL: Record<string, string> = {
+  'Arizona Diamondbacks': 'AZ',
+  Athletics: 'ATH',
+  'Atlanta Braves': 'ATL',
+  'Baltimore Orioles': 'BAL',
+  'Boston Red Sox': 'BOS',
+  'Chicago Cubs': 'CHC',
+  'Cincinnati Reds': 'CIN',
+  'Cleveland Guardians': 'CLE',
+  'Colorado Rockies': 'COL',
+  'Chicago White Sox': 'CWS',
+  'Detroit Tigers': 'DET',
+  'Houston Astros': 'HOU',
+  'Kansas City Royals': 'KC',
+  'Los Angeles Angels': 'LAA',
+  'Los Angeles Dodgers': 'LAD',
+  'Miami Marlins': 'MIA',
+  'Milwaukee Brewers': 'MIL',
+  'Minnesota Twins': 'MIN',
+  'New York Mets': 'NYM',
+  'New York Yankees': 'NYY',
+  'Philadelphia Phillies': 'PHI',
+  'Pittsburgh Pirates': 'PIT',
+  'San Diego Padres': 'SD',
+  'Seattle Mariners': 'SEA',
+  'San Francisco Giants': 'SF',
+  'St. Louis Cardinals': 'STL',
+  'Tampa Bay Rays': 'TB',
+  'Texas Rangers': 'TEX',
+  'Toronto Blue Jays': 'TOR',
+  'Washington Nationals': 'WSH',
 };
 
 const PITCHING_PANEL_TYPES: PanelType[] = [
@@ -324,7 +368,7 @@ const PITCHING_TABLES = ['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usag
 const HITTING_TABLES = ['Results', 'Swing Decisions'];
 const CATCHING_TABLES = ['Catching Data', 'Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Raw Data', 'Batted Ball Data', 'Swing Decisions'];
 const CATCHING_SPLIT_BY = UNIVERSAL_SPLIT_BY;
-const HEATMAP_STATS = ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'Exit Velocity', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Run Values', 'xWOBA', 'xISO'];
+const HEATMAP_STATS = ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'SwStrk%', 'Exit Velocity', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Run Values', 'PV/100', 'xWOBA', 'xISO'];
 const VELOCITY_CHART_OPTIONS = ['Velocity Chart (Game/Inning)', 'Average Velocity by Game', 'Average Velocity by Inning'];
 const RELEASE_VIEW_OPTIONS = ['Averages Only', 'Averages and Pitches', 'Pitches'];
 const MOVEMENT_VIEW_OPTIONS = ['Averages Only', 'Averages and Pitches'];
@@ -487,6 +531,41 @@ function buildPlayerTeamMap(byTeamCode: Record<string, string[]> | undefined): R
       });
     });
   });
+  return out;
+}
+
+function normalizeTeamTypeOptions(teamTypes: string[] | undefined, byTeamCode: Record<string, string[]> | undefined): string[] {
+  const fromTypes = Array.from(new Set((teamTypes ?? []).map((entry) => String(entry ?? '').trim()).filter(Boolean)));
+  if (fromTypes.length) return ['All', ...fromTypes];
+  const fromCodes = Array.from(new Set(Object.keys(byTeamCode ?? {}).map((entry) => String(entry ?? '').trim()).filter(Boolean)));
+  if (fromCodes.length) return ['All', ...fromCodes];
+  return ['All'];
+}
+
+function buildPlayersBySelectedTeamMap(
+  byTeamCode: Record<string, string[]> | undefined,
+  isProSchool: boolean
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  const assign = (keyRaw: string, namesRaw: string[]) => {
+    const key = String(keyRaw ?? '').trim();
+    if (!key) return;
+    const names = Array.from(new Set((namesRaw ?? []).map((entry) => String(entry ?? '').trim()).filter(Boolean)));
+    out[key] = names;
+    out[key.toUpperCase()] = names;
+    const codeGuess = (() => {
+      if (/^[A-Z0-9]{2,5}$/.test(key)) return key.toUpperCase();
+      const parenCode = key.match(/\(([A-Z0-9]{2,5})\)\s*$/i)?.[1];
+      if (parenCode) return parenCode.toUpperCase();
+      if (isProSchool) {
+        const inferred = inferProTeamCode(key);
+        if (inferred) return inferred.toUpperCase();
+      }
+      return '';
+    })();
+    if (codeGuess) out[codeGuess] = names;
+  };
+  Object.entries(byTeamCode ?? {}).forEach(([teamKey, names]) => assign(teamKey, names ?? []));
   return out;
 }
 
@@ -970,6 +1049,7 @@ const heatmapScaleFromMetricAndPitchTypes = (
     .filter((value) => value && value !== 'all');
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
+  if (metric === 'PV/100') return { min: -2, mid: 0, max: 2 };
   if (metric === 'xWOBA') return { min: 0.27, mid: 0.32, max: 0.37 };
   if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
 
@@ -979,6 +1059,17 @@ const heatmapScaleFromMetricAndPitchTypes = (
     if (pt === 'fastball') return { min: 10, mid: 20, max: 30 };
     if (pt === 'sinker') return { min: 5, mid: 12.5, max: 20 };
     return { min: 20, mid: 32.5, max: 45 };
+  }
+  if (metric === 'SwStrk%') {
+    if (selectedPitchTypes.length !== 1) return { min: 6, mid: 10, max: 14 };
+    const pt = selectedPitchTypes[0];
+    if (pt === 'fastball') return { min: 4, mid: 8, max: 12 };
+    if (pt === 'sinker') return { min: 2, mid: 6, max: 10 };
+    if (pt === 'cutter') return { min: 6, mid: 10, max: 14 };
+    if (pt === 'slider' || pt === 'sweeper') return { min: 10, mid: 15, max: 20 };
+    if (pt === 'curveball') return { min: 8, mid: 12, max: 16 };
+    if (pt === 'changeup' || pt === 'splitter' || pt === 'forkball') return { min: 10, mid: 14, max: 18 };
+    return { min: 6, mid: 10, max: 14 };
   }
   if (metric === 'Swing Rate') return { min: 20, mid: 50, max: 80 };
   if (metric === 'GB Rate') return { min: 38, mid: 43, max: 48 };
@@ -1194,7 +1285,12 @@ function strikeZoneOverlay() {
 
 function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>, metric: string, isProSchool = false) {
   if (metric === 'xWOBA' || metric === 'xISO') {
-    return buildSharedXMetricHeatCells(points, metric);
+    const orientedPoints = points.map((point) => {
+      const rawX = point.plate_side;
+      const adjustedX = typeof rawX === 'number' ? (isProSchool ? -rawX : rawX) : rawX;
+      return { ...point, plate_side: adjustedX };
+    });
+    return buildSharedXMetricHeatCells(orientedPoints, metric);
   }
   const xMin = -2.5;
   const xMax = 2.5;
@@ -1204,8 +1300,8 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
   const rows = isProSchool ? 44 : 40;
   const cellW = (xMax - xMin) / cols;
   const cellH = (yMax - yMin) / rows;
-  const sigmaX = isProSchool ? 0.22 : 0.36;
-  const sigmaY = isProSchool ? 0.22 : 0.36;
+  const sigmaX = isProSchool ? 0.15 : 0.21;
+  const sigmaY = isProSchool ? 0.15 : 0.21;
   const eps = 1e-9;
   const normDesc = (value: unknown): string =>
     String(value ?? '')
@@ -1280,6 +1376,7 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
     }
     return 0;
   };
+  const pitchValue = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => calcPitchValue(point);
 
   const globalSwingCount = valid.filter((row) => isSwingCall(row.point)).length;
   const globalWhiffCount = valid.filter((row) => isWhiffCall(row.point)).length;
@@ -1297,9 +1394,11 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
   const globalXwobaAvg = globalXwobaRows.length > 0 ? globalXwobaRows.reduce((sum, row) => sum + Number(row.point.estimated_woba_using_speedangle || 0), 0) / globalXwobaRows.length : 0.35;
   const globalXisoAvg = globalXisoRows.length > 0 ? globalXisoRows.reduce((sum, row) => sum + Number(row.point.iso_value || 0), 0) / globalXisoRows.length : 0.17;
   const globalRvAvg = valid.length > 0 ? valid.reduce((sum, row) => sum + runValue(row.point), 0) / valid.length : 0;
+  const globalPvAvg = valid.length > 0 ? valid.reduce((sum, row) => sum + pitchValue(row.point), 0) / valid.length : 0;
   const globalCsRate = globalTakeRows.length > 0 ? globalTakeRows.filter((row) => row.point.pitch_call === 'StrikeCalled').length / globalTakeRows.length : 0;
   const globalSwingRate = valid.length > 0 ? globalSwingCount / valid.length : 0;
   const globalWhiffRate = globalSwingCount > 0 ? globalWhiffCount / globalSwingCount : 0;
+  const globalSwStrkRate = valid.length > 0 ? globalWhiffCount / valid.length : 0;
   const globalGbRate = globalInPlayCount > 0 ? globalGbCount / globalInPlayCount : 0;
   const globalContactRate = globalSwingCount > 0 ? (globalSwingCount - globalWhiffCount) / globalSwingCount : 0;
   const shrinkStrength = 8;
@@ -1321,6 +1420,8 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
       let evWSum = 0;
       let evW = 0;
       let rvWSum = 0;
+      let pvWSum = 0;
+      let pvW = 0;
       let xwobaWSum = 0;
       let xwobaW = 0;
       let xisoWSum = 0;
@@ -1349,6 +1450,11 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
           evW += weight;
         }
         rvWSum += weight * runValue(rowPoint.point);
+        const pv = pitchValue(rowPoint.point);
+        if (Number.isFinite(pv)) {
+          pvWSum += weight * pv;
+          pvW += weight;
+        }
         if (typeof rowPoint.point.estimated_woba_using_speedangle === 'number' && Number.isFinite(rowPoint.point.estimated_woba_using_speedangle)) {
           xwobaWSum += weight * rowPoint.point.estimated_woba_using_speedangle;
           xwobaW += weight;
@@ -1361,11 +1467,16 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
       let value = sumW;
       if (metric === 'Called Strike Rate') value = 100 * ((csW + shrinkStrength * globalCsRate) / Math.max(eps, takeW + shrinkStrength));
       if (metric === 'Whiff Rate') value = 100 * ((whiffW + shrinkStrength * globalWhiffRate) / Math.max(eps, swingW + shrinkStrength));
+      if (metric === 'SwStrk%') value = 100 * ((whiffW + shrinkStrength * globalSwStrkRate) / Math.max(eps, sumW + shrinkStrength));
       if (metric === 'GB Rate') value = 100 * ((gbW + shrinkStrength * globalGbRate) / Math.max(eps, inPlayW + shrinkStrength));
       if (metric === 'Contact Rate') value = 100 * (((swingW - whiffW) + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
       if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
       if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
       if (metric === 'Run Values') value = ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
+      if (metric === 'PV/100') {
+        const localPv = (pvWSum + runValueShrinkStrength * globalPvAvg) / Math.max(eps, pvW + runValueShrinkStrength);
+        value = (localPv - globalPvAvg) * 100;
+      }
       if (metric === 'xWOBA') {
         value =
           xwobaW > eps
@@ -1415,10 +1526,33 @@ function effectiveCellConfigForScope(
   scope: ReportScope,
   map: Record<string, CellConfig>
 ): CellConfig {
-  if (scope !== 'Multi-Player') return normalizeCellConfig(map[cellId]);
+  if (scope === 'Single Player') return normalizeCellConfig(map[cellId]);
   const { row } = rowColFromCellId(cellId);
   if (row <= 1) return normalizeCellConfig(map[cellId]);
   return normalizeCellConfig(map[templateCellIdForRow(cellId)]);
+}
+
+function sourceCellIdForTeamScope(cellId: string, rowsPerPlayer: number): string {
+  const { row, col } = rowColFromCellId(cellId);
+  const safeRows = Math.max(1, rowsPerPlayer);
+  const sourceRow = ((Math.max(1, row) - 1) % safeRows) + 1;
+  return `r${sourceRow}c${col}`;
+}
+
+function normalizeHandValue(value: unknown): 'R' | 'L' | '' {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return '';
+  if (raw.startsWith('r')) return 'R';
+  if (raw.startsWith('l')) return 'L';
+  return '';
+}
+
+function initialsFromName(name: string): string {
+  const cleaned = String(name ?? '').trim();
+  if (!cleaned) return '?';
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] ?? ''}${parts[parts.length - 1][0] ?? ''}`.toUpperCase();
 }
 
 type CustomReportsSuiteProps = {
@@ -1451,9 +1585,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [enableTableColors, setEnableTableColors] = useState(true);
   const [globalStartDate, setGlobalStartDate] = useState('');
   const [globalEndDate, setGlobalEndDate] = useState('');
-  const [rowPlayers, setRowPlayers] = useState<string[]>(Array.from({ length: 15 }, () => 'All'));
-  const [rowNotes, setRowNotes] = useState<string[]>(Array.from({ length: 15 }, () => ''));
-  const [rowNoteSpans, setRowNoteSpans] = useState<number[]>(Array.from({ length: 15 }, () => 1));
+  const [rowPlayers, setRowPlayers] = useState<string[]>(Array.from({ length: MAX_REPORT_ROWS }, () => 'All'));
+  const [rowNotes, setRowNotes] = useState<string[]>(Array.from({ length: MAX_REPORT_ROWS }, () => ''));
+  const [rowNoteSpans, setRowNoteSpans] = useState<number[]>(Array.from({ length: MAX_REPORT_ROWS }, () => 1));
   const [cellConfigs, setCellConfigs] = useState<Record<string, CellConfig>>({ r1c1: emptyCell() });
   const [colSpanInputs, setColSpanInputs] = useState<Record<string, string>>({});
   const [savedReports, setSavedReports] = useState<SavedReportItem[]>([]);
@@ -1461,6 +1595,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [saveScope, setSaveScope] = useState<'Current School' | 'All Schools'>('Current School');
   const [userRole, setUserRole] = useState<'admin' | 'coach' | 'player'>('coach');
   const [playersByTeam, setPlayersByTeam] = useState<string[]>([]);
+  const [playersBySelectedTeam, setPlayersBySelectedTeam] = useState<Record<string, string[]>>({});
+  const [teamScopeSelectedPlayers, setTeamScopeSelectedPlayers] = useState<string[]>([]);
+  const [draggingTeamPlayer, setDraggingTeamPlayer] = useState<string | null>(null);
+  const [dragOverTeamPlayer, setDragOverTeamPlayer] = useState<string | null>(null);
+  const [teamScopeExternalMeta, setTeamScopeExternalMeta] = useState<Record<string, ExternalPlayerMeta>>({});
   const [playerTeamCodeByName, setPlayerTeamCodeByName] = useState<Record<string, string>>({});
   const [teamTypeOptions, setTeamTypeOptions] = useState<string[]>(['All']);
   const [sessionTypeOptions, setSessionTypeOptions] = useState<string[]>(['All']);
@@ -1582,14 +1721,27 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       textAlign: 'center',
     };
   };
+  const teamScopePlayers = useMemo(
+    () => Array.from(new Set(teamScopeSelectedPlayers.map((entry) => String(entry ?? '').trim()).filter((entry) => entry && entry !== 'All'))),
+    [teamScopeSelectedPlayers]
+  );
+  const effectiveReportRows = useMemo(() => {
+    if (reportScope !== 'Team') return reportRows;
+    const playerCount = Math.max(1, teamScopePlayers.length);
+    return Math.max(1, Math.min(MAX_REPORT_ROWS, reportRows * playerCount));
+  }, [reportScope, reportRows, teamScopePlayers.length]);
+
   const cellSlots = useMemo(() => {
     const out: Array<{ cellId: string; colSpan: number }> = [];
     const occupied = new Set<string>();
-    for (let r = 1; r <= reportRows; r += 1) {
+    for (let r = 1; r <= effectiveReportRows; r += 1) {
       for (let c = 1; c <= reportCols; c += 1) {
         const key = `r${r}c${c}`;
         if (occupied.has(key)) continue;
-        const cfg = effectiveCellConfigForScope(key, reportScope, cellConfigs);
+        const cfg =
+          reportScope === 'Team'
+            ? normalizeCellConfig(cellConfigs[sourceCellIdForTeamScope(key, reportRows)])
+            : effectiveCellConfigForScope(key, reportScope, cellConfigs);
         const colSpan = Math.max(1, Math.min(reportCols - c + 1, Number(cfg.colSpan) || 1));
         for (let cc = c + 1; cc <= c + colSpan - 1; cc += 1) {
           occupied.add(`r${r}c${cc}`);
@@ -1598,7 +1750,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       }
     }
     return out;
-  }, [reportRows, reportCols, reportScope, cellConfigs]);
+  }, [effectiveReportRows, reportRows, reportCols, reportScope, cellConfigs]);
 
   const visibleCellKeys = useMemo(() => cellSlots.map((entry) => entry.cellId), [cellSlots]);
 
@@ -1618,11 +1770,102 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     return normalized;
   }, [teamTypeOptions]);
 
+  const selectedTeamRoster = useMemo(() => {
+    if (reportScope !== 'Team') return [] as string[];
+    if (reportTeam === 'All') return playersByTeam;
+    const isProSchool = String(schoolCode || initialSchoolCode || '').trim().toUpperCase() === 'PRO';
+    const normalizedTeam = String(reportTeam ?? '').trim();
+    const inferTeamCode = () => {
+      if (!normalizedTeam || normalizedTeam === 'All') return '';
+      if (/^[A-Z0-9]{2,5}$/.test(normalizedTeam)) return normalizedTeam.toUpperCase();
+      const parenCode = normalizedTeam.match(/\(([A-Z0-9]{2,5})\)\s*$/i)?.[1];
+      if (parenCode) return parenCode.toUpperCase();
+      if (isProSchool) {
+        const mapped = PRO_FILTER_TEAM_CODE_BY_LABEL[normalizedTeam];
+        if (mapped) return mapped.toUpperCase();
+        return inferProTeamCode(normalizedTeam).toUpperCase();
+      }
+      return normalizedTeam.toUpperCase();
+    };
+    const wantedCode = inferTeamCode();
+    const direct =
+      playersBySelectedTeam[normalizedTeam] ??
+      playersBySelectedTeam[normalizedTeam.toUpperCase()] ??
+      (wantedCode ? playersBySelectedTeam[wantedCode] : undefined) ??
+      [];
+    if (direct.length) return Array.from(new Set(direct.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
+    if (!wantedCode) return playersByTeam;
+    const resolvePlayerCode = (nameRaw: string) => {
+      const name = String(nameRaw ?? '').trim();
+      if (!name) return '';
+      const formatted = toFirstLast(name);
+      return (
+        playerTeamCodeByName[name] ??
+        playerTeamCodeByName[formatted] ??
+        playerTeamCodeByName[normalizeNameKey(name)] ??
+        playerTeamCodeByName[normalizeNameKey(formatted)] ??
+        ''
+      ).toUpperCase();
+    };
+    return playersByTeam.filter((player) => resolvePlayerCode(player) === wantedCode);
+  }, [reportScope, reportTeam, playersByTeam, playersBySelectedTeam, playerTeamCodeByName, schoolCode, initialSchoolCode]);
+
+  const removeTeamScopePlayer = (name: string) => {
+    setTeamScopeSelectedPlayers((current) => current.filter((entry) => entry !== name));
+  };
+
+  const moveTeamScopePlayerTo = (sourceName: string, targetName: string) => {
+    if (!sourceName || !targetName || sourceName === targetName) return;
+    setTeamScopeSelectedPlayers((current) => {
+      const active = Array.from(new Set(current.map((entry) => String(entry ?? '').trim()).filter((entry) => entry && entry !== 'All')));
+      const fromIndex = active.indexOf(sourceName);
+      const toIndex = active.indexOf(targetName);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return current;
+      const next = [...active];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  };
+
   useEffect(() => {
     if (!teamOptions.some((entry) => entry.value === reportTeam)) {
       setReportTeam('All');
     }
   }, [teamOptions, reportTeam]);
+
+  useEffect(() => {
+    if (reportScope !== 'Team') return;
+    const deduped = Array.from(new Set(selectedTeamRoster.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
+    const limited = deduped.slice(0, MAX_REPORT_ROWS);
+    setTeamScopeSelectedPlayers((current) => {
+      if (!current.length) return limited;
+      const keep = current.filter((player) => limited.includes(player));
+      const add = limited.filter((player) => !keep.includes(player));
+      const next = [...keep, ...add];
+      return next.length ? next : limited;
+    });
+  }, [reportScope, selectedTeamRoster]);
+
+  useEffect(() => {
+    if (reportScope !== 'Team') return;
+    const names = teamScopePlayers.map((entry) => String(entry ?? '').trim()).filter(Boolean);
+    if (!names.length) {
+      setTeamScopeExternalMeta({});
+      return;
+    }
+    const controller = new AbortController();
+    const params = new URLSearchParams();
+    params.set('names', names.join(';'));
+    fetch(`/api/dashboard/player-meta?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { items?: Record<string, ExternalPlayerMeta> };
+        if (!response.ok) return;
+        setTeamScopeExternalMeta(payload.items ?? {});
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [reportScope, teamScopePlayers]);
 
   const reportOptions = useMemo<OptionItem[]>(
     () =>
@@ -1647,6 +1890,51 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     () => ['Single', 'Double', 'Triple', 'HomeRun', 'Out', 'Error', 'FieldersChoice', 'Sacrifice', 'Foul Ball'],
     []
   );
+
+  const teamScopePlayerMeta = useMemo(() => {
+    const out: Record<string, { hand: 'R' | 'L' | ''; headshotUrl: string }> = {};
+    if (reportScope !== 'Team') return out;
+    const rowsPerPlayer = Math.max(1, reportRows);
+    const pickHeadshot = (point: Record<string, unknown>): string => {
+      const candidates = [
+        point.headshot_url,
+        point.player_headshot_url,
+        point.headshot,
+        point.photo_url,
+        point.image_url,
+        point.portrait_url,
+      ];
+      const found = candidates.find((entry) => typeof entry === 'string' && /^https?:\/\//i.test(String(entry).trim()));
+      return typeof found === 'string' ? found.trim() : '';
+    };
+    const counts: Record<string, { r: number; l: number; headshotUrl: string }> = {};
+    for (const [cellId, payload] of Object.entries(cellsData)) {
+      const rowNum = Number(cellId.match(/^r(\d+)c/)?.[1] ?? '1');
+      const playerIdx = Math.floor((Math.max(1, rowNum) - 1) / rowsPerPlayer);
+      const player = teamScopePlayers[playerIdx] ?? '';
+      if (!player) continue;
+      const bucket = counts[player] ?? { r: 0, l: 0, headshotUrl: '' };
+      const points = payload.chart_points ?? [];
+      for (const pointRaw of points as unknown as Array<Record<string, unknown>>) {
+        const handRaw = reportType === 'Pitching' ? pointRaw.pitcherthrows : reportType === 'Hitting' ? pointRaw.batterside : '';
+        const hand = normalizeHandValue(handRaw);
+        if (hand === 'R') bucket.r += 1;
+        if (hand === 'L') bucket.l += 1;
+        if (!bucket.headshotUrl) {
+          const maybeHeadshot = pickHeadshot(pointRaw);
+          if (maybeHeadshot) bucket.headshotUrl = maybeHeadshot;
+        }
+      }
+      counts[player] = bucket;
+    }
+    for (const [player, bucket] of Object.entries(counts)) {
+      out[player] = {
+        hand: bucket.r === bucket.l ? '' : bucket.r > bucket.l ? 'R' : 'L',
+        headshotUrl: bucket.headshotUrl,
+      };
+    }
+    return out;
+  }, [cellsData, reportRows, reportScope, reportType, teamScopePlayers]);
 
   useEffect(() => {
     setCellConfigs((current) => ensureCellConfigMap(current, reportRows, reportCols));
@@ -1715,9 +2003,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const typed = payload as unknown as PitchingFiltersPayload;
           const pitchers = Array.from(new Set((typed.pitchers ?? []).filter((entry) => entry && entry.trim())));
           setPlayersByTeam(pitchers);
+          setPlayersBySelectedTeam(buildPlayersBySelectedTeamMap(typed.pitchers_by_team_code, true));
           setPlayerTeamCodeByName(buildPlayerTeamMap(typed.pitchers_by_team_code));
           setSchoolCode(typed.school_code ?? '');
-          setTeamTypeOptions(['All', ...Array.from(new Set((typed.team_types ?? []).filter(Boolean)))]);
+          setTeamTypeOptions(normalizeTeamTypeOptions(typed.team_types, typed.pitchers_by_team_code));
           setSessionTypeOptions(['All', ...Array.from(new Set((typed.session_types ?? []).filter(Boolean)))]);
           setLevelOptions(['All', ...Array.from(new Set((typed.level_options ?? ['MLB', 'AAA']).filter(Boolean)))]);
           setPitchTypeOptions(['All', ...Array.from(new Set((typed.pitch_types ?? []).filter(Boolean)))]);
@@ -1737,9 +2026,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const typed = payload as unknown as HittingFiltersPayload;
           const hitters = Array.from(new Set((typed.hitters ?? []).filter((entry) => entry && entry.trim())));
           setPlayersByTeam(hitters);
+          setPlayersBySelectedTeam(buildPlayersBySelectedTeamMap(typed.hitters_by_team_code, true));
           setPlayerTeamCodeByName(buildPlayerTeamMap(typed.hitters_by_team_code));
           setSchoolCode(typed.school_code ?? '');
-          setTeamTypeOptions(['All', ...Array.from(new Set((typed.team_types ?? []).filter(Boolean)))]);
+          setTeamTypeOptions(normalizeTeamTypeOptions(typed.team_types, typed.hitters_by_team_code));
           setSessionTypeOptions(['All', ...Array.from(new Set((typed.session_types ?? ['Bullpen', 'Live BP', 'Season']).filter(Boolean)))]);
           setLevelOptions(['All', ...Array.from(new Set((typed.level_options ?? ['MLB', 'AAA']).filter(Boolean)))]);
           setPitchTypeOptions(['All', ...Array.from(new Set((typed.pitch_types ?? []).filter(Boolean)))]);
@@ -1759,9 +2049,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const typed = payload as unknown as CatchingFiltersPayload;
           const catchers = Array.from(new Set((typed.catchers ?? []).filter((entry) => entry && entry.trim())));
           setPlayersByTeam(catchers);
+          setPlayersBySelectedTeam(buildPlayersBySelectedTeamMap(typed.catchers_by_team_code, true));
           setPlayerTeamCodeByName(buildPlayerTeamMap(typed.catchers_by_team_code));
           setSchoolCode(typed.school_code ?? '');
-          setTeamTypeOptions(['All', ...Array.from(new Set((typed.team_types ?? []).filter(Boolean)))]);
+          setTeamTypeOptions(normalizeTeamTypeOptions(typed.team_types, typed.catchers_by_team_code));
           setSessionTypeOptions(['All', ...Array.from(new Set((['Season', 'Bullpen', 'Live BP'] as const).filter(Boolean)))]);
           setLevelOptions(['All', ...Array.from(new Set((typed.level_options ?? ['MLB', 'AAA']).filter(Boolean)))]);
           setPitchTypeOptions(['All', ...Array.from(new Set((typed.pitch_types ?? []).filter(Boolean)))]);
@@ -1844,9 +2135,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const CACHE_TTL_MS = 20_000;
     async function loadCellsData() {
       const requests = visibleCellKeys
-        .map((cellId) => ({ cellId, config: effectiveCellConfigForScope(cellId, reportScope, cellConfigs) }))
+        .map((cellId) => {
+          const config =
+            reportScope === 'Team'
+              ? normalizeCellConfig(cellConfigs[sourceCellIdForTeamScope(cellId, reportRows)])
+              : effectiveCellConfigForScope(cellId, reportScope, cellConfigs);
+          return { cellId, config };
+        })
         .filter(({ config }) => config && config.panelType !== 'Note Section')
-        .slice(0, 24);
+        .slice(0, 400);
       if (!requests.length) {
         setCellsData({});
         return;
@@ -1857,7 +2154,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const rowNum = Number(cellId.match(/^r(\d+)c/)?.[1] ?? '1');
           const singleScopePlayer =
             config.player && config.player !== 'All' ? config.player : reportPlayers[0] || 'All';
-          const scopePlayer = reportScope === 'Multi-Player' ? rowPlayers[rowNum - 1] ?? 'All' : singleScopePlayer;
+          const scopePlayer =
+            reportScope === 'Single Player'
+              ? singleScopePlayer
+              : reportScope === 'Team'
+                ? teamScopePlayers[Math.floor((rowNum - 1) / Math.max(1, reportRows))] ?? 'All'
+                : rowPlayers[rowNum - 1] ?? 'All';
           const normalizedPlayer = normalizeNameForApi(scopePlayer);
           const startDate = useGlobalDates ? globalStartDate : config.dateStart || globalStartDate;
           const endDate = useGlobalDates ? globalEndDate : config.dateEnd || globalEndDate;
@@ -1923,12 +2225,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           }
           if (reportType === 'Pitching') {
             if (normalizedPlayer) params.set('pitcher', normalizedPlayer);
-            if (reportTeam && reportTeam !== 'All') params.set('team_type', reportTeam);
+            if (reportScope !== 'Team' && reportTeam && reportTeam !== 'All') params.set('team_type', reportTeam);
           } else if (reportType === 'Hitting') {
             if (normalizedPlayer) params.set('hitter', normalizedPlayer);
           } else {
             if (normalizedPlayer) params.set('catcher', normalizedPlayer);
-            if (reportTeam && reportTeam !== 'All') params.set('team_type', reportTeam);
+            if (reportScope !== 'Team' && reportTeam && reportTeam !== 'All') params.set('team_type', reportTeam);
           }
           const endpoint =
             reportType === 'Pitching'
@@ -1981,9 +2283,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   }, [
     visibleCellKeys,
     cellConfigs,
+    effectiveReportRows,
     reportType,
     reportScope,
+    reportRows,
     rowPlayers,
+    teamScopePlayers,
     reportPlayers,
     useGlobalDates,
     globalStartDate,
@@ -2000,7 +2305,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setReportTeam(normalizedTeam || 'All');
     setReportScope((payload.scope as ReportScope) || 'Single Player');
     setReportPlayers(payload.players?.length ? payload.players : ['All']);
-    setReportRows(Math.max(1, Math.min(15, Number(payload.rows) || 1)));
+    setReportRows(Math.max(1, Math.min(MAX_REPORT_ROWS, Number(payload.rows) || 1)));
     setReportCols(Math.max(1, Math.min(5, Number(payload.cols) || 1)));
     setUseGlobalDates(Boolean(payload.useGlobalDates));
     setShowPitchTypeKey(payload.showPitchTypeKey !== false);
@@ -2010,10 +2315,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setEnableTableColors(payload.enableTableColors !== false);
     setGlobalStartDate(payload.globalStartDate || '');
     setGlobalEndDate(payload.globalEndDate || '');
-    setRowPlayers(Array.from({ length: 15 }, (_, idx) => payload.rowPlayers?.[idx] ?? 'All'));
-    setRowNotes(Array.from({ length: 15 }, (_, idx) => payload.rowNotes?.[idx] ?? ''));
-    setRowNoteSpans(Array.from({ length: 15 }, (_, idx) => Math.max(1, Number(payload.rowNoteSpans?.[idx]) || 1)));
-    setCellConfigs(ensureCellConfigMap(payload.cells ?? {}, Math.max(1, Math.min(15, Number(payload.rows) || 1)), Math.max(1, Math.min(5, Number(payload.cols) || 1))));
+    setRowPlayers(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => payload.rowPlayers?.[idx] ?? 'All'));
+    setRowNotes(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => payload.rowNotes?.[idx] ?? ''));
+    setRowNoteSpans(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => Math.max(1, Number(payload.rowNoteSpans?.[idx]) || 1)));
+    setCellConfigs(ensureCellConfigMap(payload.cells ?? {}, Math.max(1, Math.min(MAX_REPORT_ROWS, Number(payload.rows) || 1)), Math.max(1, Math.min(5, Number(payload.cols) || 1))));
   };
 
   const currentPayload = (): ReportPayload => ({
@@ -2095,9 +2400,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setReportCols(1);
     setUseGlobalDates(false);
     setShowPitchTypeKey(true);
-    setRowPlayers(Array.from({ length: 15 }, () => 'All'));
-    setRowNotes(Array.from({ length: 15 }, () => ''));
-    setRowNoteSpans(Array.from({ length: 15 }, () => 1));
+    setRowPlayers(Array.from({ length: MAX_REPORT_ROWS }, () => 'All'));
+    setRowNotes(Array.from({ length: MAX_REPORT_ROWS }, () => ''));
+    setRowNoteSpans(Array.from({ length: MAX_REPORT_ROWS }, () => 1));
     setCellConfigs({ r1c1: emptyCell() });
     setSelectedReportId(null);
     setSaveScope('Current School');
@@ -2105,7 +2410,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
 
   const applyReportRowsInput = () => {
     const parsed = Number(reportRowsInput);
-    const normalized = Number.isFinite(parsed) ? Math.max(1, Math.min(15, Math.trunc(parsed))) : reportRows;
+    const normalized = Number.isFinite(parsed) ? Math.max(1, Math.min(MAX_REPORT_ROWS, Math.trunc(parsed))) : reportRows;
     setReportRows(normalized);
     setReportRowsInput(String(normalized));
   };
@@ -2206,10 +2511,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const isProSchool = String(activeSchoolCode || '').trim().toUpperCase() === 'PRO';
   const reportHeaderPlayer = useMemo(() => {
     if (reportScope === 'Multi-Player') return 'Multi-Player';
+    if (reportScope === 'Team') return reportTeam && reportTeam !== 'All' ? `Team: ${reportTeam}` : 'Team';
     const chosen = selectedValues(reportPlayers);
     if (!chosen.length) return 'All';
     return chosen.map((name) => toFirstLast(name) || name).join(', ');
-  }, [reportScope, reportPlayers]);
+  }, [reportScope, reportPlayers, reportTeam]);
   const customReportRightLogoSrc = useMemo(() => {
     if (!isProSchool) return schoolBrand.logoSrc ?? '/pitching-coach-u-logo.png';
     const chosen = reportScope === 'Single Player' ? selectedValues(reportPlayers) : [];
@@ -2290,7 +2596,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 />
               </label>
               <label>
-                Team
+                {reportScope === 'Team' ? 'Team (Roster Source)' : 'Team'}
                 <SearchableSingleSelect options={teamOptions} value={reportTeam} onChange={setReportTeam} />
               </label>
               <label>
@@ -2299,6 +2605,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   options={[
                     { value: 'Single Player', label: 'Single Player' },
                     { value: 'Multi-Player', label: 'Multi-Player' },
+                    { value: 'Team', label: 'Team' },
                   ]}
                   value={reportScope}
                   onChange={(next) => setReportScope((next as ReportScope) || 'Single Player')}
@@ -2309,10 +2616,21 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   {`${playerLabel}s`}
                   <SearchableMultiSelect options={playerOptions} values={reportPlayers} onChange={setReportPlayers} />
                 </label>
+              ) : reportScope === 'Team' ? (
+                <label>
+                  {`Team ${playerLabel}s`}
+                  <SearchableMultiSelect
+                    options={selectedTeamRoster.map((entry) => ({ value: entry, label: toFirstLast(entry) || entry }))}
+                    values={teamScopePlayers}
+                    onChange={(next) => setTeamScopeSelectedPlayers(next.length ? next : selectedTeamRoster)}
+                  />
+                </label>
               ) : (
                 <label>
                   Multi-Player
-                  <div className="portal-muted-text">Each row = 1 player</div>
+                  <div className="portal-muted-text">
+                    Each row = 1 player
+                  </div>
                 </label>
               )}
               <label>
@@ -2320,7 +2638,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 <input
                   type="number"
                   min={1}
-                  max={15}
+                  max={MAX_REPORT_ROWS}
                   value={reportRowsInput}
                   onChange={(event) => setReportRowsInput(event.target.value)}
                   onBlur={applyReportRowsInput}
@@ -2446,6 +2764,51 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 ))}
               </div>
             ) : null}
+            {reportScope === 'Team' ? (
+              <div className="portal-custom-reports-row-players">
+                {teamScopePlayers.map((player, index) => (
+                  <div
+                    key={`team-row-${player}-${index}`}
+                    className={`portal-custom-reports-row-player-item portal-custom-reports-team-player-drag-item${
+                      draggingTeamPlayer === player ? ' portal-custom-reports-team-player-drag-item--dragging' : ''
+                    }${dragOverTeamPlayer === player ? ' portal-custom-reports-team-player-drag-item--over' : ''}`}
+                    draggable
+                    onDragStart={(event) => {
+                      setDraggingTeamPlayer(player);
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('text/plain', player);
+                    }}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      if (dragOverTeamPlayer !== player) setDragOverTeamPlayer(player);
+                      event.dataTransfer.dropEffect = 'move';
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const source = (event.dataTransfer.getData('text/plain') || draggingTeamPlayer || '').trim();
+                      moveTeamScopePlayerTo(source, player);
+                      setDraggingTeamPlayer(null);
+                      setDragOverTeamPlayer(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggingTeamPlayer(null);
+                      setDragOverTeamPlayer(null);
+                    }}
+                  >
+                    <label>{`Row ${index + 1} ${playerLabel}`}</label>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 8, alignItems: 'center' }}>
+                      <div className="portal-muted-text" style={{ fontSize: '1.05rem', cursor: 'grab' }} aria-hidden>
+                        ::
+                      </div>
+                      <div className="portal-muted-text" style={{ color: 'var(--text-main)' }}>{toFirstLast(player) || player}</div>
+                      <button type="button" className="btn btn-ghost" onClick={() => removeTeamScopePlayer(player)}>
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div className="portal-custom-reports-actions">
               <button type="button" className="btn btn-ghost" onClick={resetReport}>
                 New Report
@@ -2484,7 +2847,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               <div className="portal-custom-reports-grid" style={{ gridTemplateColumns: `repeat(${reportCols}, minmax(0, 1fr))` }}>
                 {cellSlots.map(({ cellId, colSpan }) => {
                   const rawConfig = normalizeCellConfig(cellConfigs[cellId]);
-                  const config = effectiveCellConfigForScope(cellId, reportScope, cellConfigs);
+                  const sourceCellId = reportScope === 'Team' ? sourceCellIdForTeamScope(cellId, reportRows) : cellId;
+                  const config =
+                    reportScope === 'Team'
+                      ? normalizeCellConfig(cellConfigs[sourceCellId])
+                      : effectiveCellConfigForScope(cellId, reportScope, cellConfigs);
                   const payload = cellsData[cellId] ?? {};
                   const tableColumns = payload.table_columns ?? [];
                   const tableRows = payload.table_rows ?? [];
@@ -2504,13 +2871,46 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const chartPoints = payload.chart_points ?? [];
                   const heatmapPoints = payload.heatmap_points ?? chartPoints;
                   const { row: rowNumber, col: colNumber } = rowColFromCellId(cellId);
-                  const isTemplateDrivenCell = reportScope === 'Multi-Player' && rowNumber > 1;
-                  const inheritedPlayer =
+                  const teamPlayerIndex = reportScope === 'Team' ? Math.floor((rowNumber - 1) / Math.max(1, reportRows)) : -1;
+                  const rowWithinTeamPlayer = reportScope === 'Team' ? ((rowNumber - 1) % Math.max(1, reportRows)) + 1 : rowNumber;
+                  const isTemplateDrivenCell =
                     reportScope === 'Multi-Player'
+                      ? rowNumber > 1
+                      : reportScope === 'Team'
+                        ? teamPlayerIndex > 0
+                        : false;
+                  const inheritedPlayer =
+                    reportScope === 'Team'
+                      ? teamScopePlayers[teamPlayerIndex] ?? 'All'
+                      : reportScope !== 'Single Player'
                       ? rowPlayers[rowNumber - 1] ?? 'All'
                       : config.player && config.player !== 'All'
                         ? config.player
                         : reportPlayers[0] || 'All';
+                  const derivedMeta = reportScope === 'Team' ? teamScopePlayerMeta[inheritedPlayer] : undefined;
+                  const externalMeta = reportScope === 'Team' ? teamScopeExternalMeta[inheritedPlayer] : undefined;
+                  const effectiveHand =
+                    reportType === 'Pitching'
+                      ? (externalMeta?.pitchHand || derivedMeta?.hand || '')
+                      : reportType === 'Hitting'
+                        ? (externalMeta?.batSide || derivedMeta?.hand || '')
+                        : (derivedMeta?.hand || '');
+                  const effectiveHeadshotUrl = externalMeta?.headshotUrl || derivedMeta?.headshotUrl || '';
+                  const handedLabel =
+                    reportType === 'Pitching'
+                      ? effectiveHand === 'R'
+                        ? 'RHP'
+                        : effectiveHand === 'L'
+                          ? 'LHP'
+                          : ''
+                      : reportType === 'Hitting'
+                        ? effectiveHand === 'R'
+                          ? '(R)'
+                          : effectiveHand === 'L'
+                            ? '(L)'
+                            : ''
+                        : '';
+                  const isLeftHandedText = reportType !== 'Catching' && effectiveHand === 'L';
                   const tableModeOptions = availableTableModes.map((entry) => ({
                     value: entry,
                     label: entry,
@@ -2541,12 +2941,38 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   return (
                     <article
                       key={cellId}
-                      className={`portal-custom-reports-cell${!(config.showControls ?? true) ? ' portal-custom-reports-cell--collapsed' : ''}`}
+                      className={`portal-custom-reports-cell${!(config.showControls ?? true) ? ' portal-custom-reports-cell--collapsed' : ''}${
+                        reportScope === 'Team' && rowWithinTeamPlayer === 1 ? ' portal-custom-reports-cell--team-player-start' : ''
+                      }`}
                       style={{ gridColumn: `span ${colSpan}` }}
                     >
-                      {reportScope === 'Multi-Player' && colNumber === 1 ? (
+                      {reportScope !== 'Single Player' && colNumber === 1 && (reportScope !== 'Team' || rowWithinTeamPlayer === 1) ? (
                         <div className="portal-custom-reports-row-player-label">
-                          {toFirstLast(inheritedPlayer) || 'All'}
+                          {reportScope === 'Team' ? (
+                            <div className="portal-custom-reports-row-player-identity">
+                              {effectiveHeadshotUrl ? (
+                                <img
+                                  src={effectiveHeadshotUrl}
+                                  alt={toFirstLast(inheritedPlayer) || inheritedPlayer}
+                                  className="portal-custom-reports-row-player-headshot"
+                                />
+                              ) : (
+                                <div className="portal-custom-reports-row-player-headshot-fallback">
+                                  {initialsFromName(toFirstLast(inheritedPlayer) || inheritedPlayer)}
+                                </div>
+                              )}
+                              <span style={{ color: isLeftHandedText ? '#ef4444' : undefined }}>
+                                {toFirstLast(inheritedPlayer) || 'All'}
+                              </span>
+                              {handedLabel ? (
+                                <span style={{ color: isLeftHandedText ? '#ef4444' : 'rgba(255,255,255,0.8)' }}>
+                                  {handedLabel}
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : (
+                            toFirstLast(inheritedPlayer) || 'All'
+                          )}
                         </div>
                       ) : null}
                       <div className="portal-custom-reports-cell-controls">
@@ -2562,7 +2988,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 :
                               setCellConfigs((current) => ({
                                 ...current,
-                                [cellId]: { ...(current[cellId] ?? emptyCell()), showControls: !(current[cellId]?.showControls ?? true) },
+                                [sourceCellId]: { ...(current[sourceCellId] ?? emptyCell()), showControls: !(current[sourceCellId]?.showControls ?? true) },
                               }))
                             }
                           >
@@ -3395,6 +3821,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const px = (x: number) => (x - xMin) * scale;
                               const py = (y: number) => (yMax - y) * scale;
                               const valueLabel = config.heatStat || 'Frequency';
+                              const isPvMetric = valueLabel === 'PV/100';
+                              const heatMetricLabel = valueLabel;
+                              const isRunValuesMetric = heatMetricLabel === 'Run Values' || heatMetricLabel === 'PV/100';
                               const strikeBottom = 1.5;
                               const strikeTop = 3.6;
                               const strikeLeft = -0.88;
@@ -3409,14 +3838,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
                               const dynamicMidVal = values.length ? values[Math.floor(values.length / 2)] : 0;
                               const selectedHeatPitchTypes = (config.pitchTypes ?? []).filter((value) => value && value !== 'All');
-                              const fixedScale = heatmapScaleFromMetricAndPitchTypes(valueLabel, selectedHeatPitchTypes);
-                              const contactVisibilityScale = valueLabel === 'Contact Rate' ? heatmapScaleFromMetricAndPitchTypes('Whiff Rate', selectedHeatPitchTypes) : null;
+                              const fixedScale = heatmapScaleFromMetricAndPitchTypes(heatMetricLabel, selectedHeatPitchTypes);
+                              const contactVisibilityScale = heatMetricLabel === 'Contact Rate' ? heatmapScaleFromMetricAndPitchTypes('Whiff Rate', selectedHeatPitchTypes) : null;
                               const minVal = fixedScale?.min ?? dynamicMinVal;
                               const maxVal = fixedScale?.max ?? dynamicMaxVal;
                               const midVal = fixedScale?.mid ?? dynamicMidVal;
                               const maxAbs = Math.max(1e-9, ...heatCells.map((c) => Math.abs(c.value)));
-                              const rvMin = isProSchool ? -5 : -2;
-                              const rvMax = isProSchool ? 5 : 2;
+                              const rvMin = isPvMetric ? -2 : (isProSchool ? -5 : -2);
+                              const rvMax = isPvMetric ? 2 : (isProSchool ? 5 : 2);
                               const densityMax = Math.max(1e-9, ...heatCells.map((c) => c.density));
                               return (
                                 <>
@@ -3425,7 +3854,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       <rect x={0} y={0} width={w} height={h} />
                                     </clipPath>
                                     <filter id={`custom-heat-blur-${cellId}`} x="-20%" y="-20%" width="140%" height="140%">
-                                      <feGaussianBlur stdDeviation={isProSchool ? (valueLabel === 'Run Values' ? 0.75 : 1.2) : (valueLabel === 'Run Values' ? 1.25 : 2.1)} />
+                                      <feGaussianBlur stdDeviation={isProSchool ? 1.2 : 2.1} />
                                     </filter>
                                   </defs>
                                   <g transform={`translate(${w / 2} ${h / 2}) scale(1.0) translate(${-w / 2} ${-h / 2})`} clipPath={`url(#custom-heat-clip-${cellId})`}>
@@ -3438,14 +3867,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                         let fill = 'rgba(255,255,255,0.12)';
                                         if (valueLabel === 'Frequency') {
                                           fill = sequentialColor(c.value, minVal, maxVal);
-                                        } else if (valueLabel === 'Run Values') {
+                                        } else if (isRunValuesMetric) {
                                           const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
                                           fill = divergingColor(rvClamped, rvMin, 0, rvMax);
                                         } else {
                                           fill = divergingColor(c.value, minVal, midVal, maxVal);
                                         }
                                         const normalized =
-                                          valueLabel === 'Run Values'
+                                          isRunValuesMetric
                                             ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
                                             : valueLabel === 'Contact Rate' && contactVisibilityScale
                                               ? Math.max(
@@ -3457,13 +3886,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                                   )
                                                 )
                                               : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
-                                        const runValueBoost = valueLabel === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                                        const isSwingRateView = valueLabel === 'Swing Rate';
-                                        const isGbRateView = valueLabel === 'GB Rate';
-                                        const isXMetricView = valueLabel === 'xWOBA' || valueLabel === 'xISO';
-                                        if (!isXMetricView && valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                                        if (!isXMetricView && valueLabel !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
-                                        if (valueLabel === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0.15) return null;
+                                        const runValueBoost = normalized;
+                                        const isSwingRateView = heatMetricLabel === 'Swing Rate';
+                                        const isGbRateView = heatMetricLabel === 'GB Rate';
+                                        const isXMetricView = heatMetricLabel === 'xWOBA' || heatMetricLabel === 'xISO';
+                                        if (densityNorm < 0.16) return null;
                                         return (
                                           <circle
                                             key={`${cellId}-heat-blur-${c.x}-${c.y}`}
@@ -3472,9 +3899,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                             r={radius}
                                             fill={fill}
                                             opacity={
-                                              valueLabel === 'Run Values'
-                                                ? Math.max(0.06, runValueBoost * 1.15 * Math.max(0.45, densityNorm))
-                                                : Math.max(0.3, runValueBoost * 1.25 * (valueLabel === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                                              Math.max(0.3, runValueBoost * 1.25 * (heatMetricLabel === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
                                             }
                                           />
                                         );
@@ -3488,14 +3913,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       let fill = 'rgba(255,255,255,0.12)';
                                       if (valueLabel === 'Frequency') {
                                         fill = sequentialColor(c.value, minVal, maxVal);
-                                      } else if (valueLabel === 'Run Values') {
+                                      } else if (isRunValuesMetric) {
                                         const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
                                         fill = divergingColor(rvClamped, rvMin, 0, rvMax);
                                       } else {
                                         fill = divergingColor(c.value, minVal, midVal, maxVal);
                                       }
                                       const normalized =
-                                        valueLabel === 'Run Values'
+                                        isRunValuesMetric
                                           ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
                                           : valueLabel === 'Contact Rate' && contactVisibilityScale
                                             ? Math.max(
@@ -3507,30 +3932,23 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                                 )
                                               )
                                             : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
-                                      const runValueBoost = valueLabel === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                                      const isSwingRateView = valueLabel === 'Swing Rate';
-                                      const isGbRateView = valueLabel === 'GB Rate';
-                                      const isXMetricView = valueLabel === 'xWOBA' || valueLabel === 'xISO';
-                                      if (!isXMetricView && valueLabel !== 'Frequency' && valueLabel !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                                      if (!isXMetricView && valueLabel !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
-                                      if (valueLabel === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0.15) return null;
+                                      const runValueBoost = normalized;
+                                      const isSwingRateView = heatMetricLabel === 'Swing Rate';
+                                      const isGbRateView = heatMetricLabel === 'GB Rate';
+                                      const isXMetricView = heatMetricLabel === 'xWOBA' || heatMetricLabel === 'xISO';
+                                      if (densityNorm < 0.16) return null;
                                       return (
                                         <circle
                                           key={`${cellId}-heat-core-${c.x}-${c.y}`}
                                           cx={cx}
                                           cy={cy}
                                           r={radius}
-                                          fill={fill}
-                                          opacity={
-                                            valueLabel === 'Run Values'
-                                              ? Math.max(0.04, runValueBoost * 0.7 * Math.max(0.45, densityNorm))
-                                              : Math.max(0.2, runValueBoost * 0.72 * (valueLabel === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
-                                          }
+                                          fill="rgba(0,0,0,0.001)"
                                           onMouseMove={(event) =>
                                             setChartHover({
                                               x: event.clientX,
                                               y: event.clientY,
-                                              text: `${valueLabel}: ${c.value.toFixed(valueLabel === 'xWOBA' || valueLabel === 'xISO' ? 3 : (valueLabel === 'Exit Velocity' || valueLabel === 'Run Values' ? 2 : 1))}`,
+                                              text: `${valueLabel}: ${c.value.toFixed(valueLabel === 'xWOBA' || valueLabel === 'xISO' ? 3 : (isRunValuesMetric || valueLabel === 'Exit Velocity' ? 2 : 1))}`,
                                             })
                                           }
                                           onMouseLeave={() => setChartHover(null)}

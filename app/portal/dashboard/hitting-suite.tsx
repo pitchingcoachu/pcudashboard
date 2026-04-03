@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
+import { calcPitchValue } from './pitch-value';
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
@@ -49,6 +50,7 @@ type ChartPoint = {
   exit_speed: number | null;
   angle: number | null;
   run_value?: number | null;
+  pitch_value?: number | null;
   estimated_woba_using_speedangle?: number | null;
   estimated_ba_using_speedangle?: number | null;
   iso_value?: number | null;
@@ -249,6 +251,7 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'QP+',
   'Pitching+',
   'RV/100',
+  'PV/100',
   'IP',
   'P',
   'P/IP',
@@ -342,6 +345,13 @@ function toYmdNow(): string {
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function clampYmdToToday(value: string): string {
+  const v = (value || '').trim();
+  if (!v) return v;
+  const today = toYmdNow();
+  return v > today ? today : v;
 }
 
 function isFullMonthRange(startDate: string, endDate: string): boolean {
@@ -512,6 +522,7 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
     .filter((value) => value && value !== 'all');
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
+  if (metric === 'PV/100') return { min: -2, mid: 0, max: 2 };
   if (metric === 'xWOBA') return { min: 0.27, mid: 0.32, max: 0.37 };
   if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
   if (metric === 'Whiff Rate') {
@@ -520,6 +531,17 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
     if (pt === 'fastball') return { min: 10, mid: 20, max: 30 };
     if (pt === 'sinker') return { min: 5, mid: 12.5, max: 20 };
     return { min: 20, mid: 32.5, max: 45 };
+  }
+  if (metric === 'SwStrk%') {
+    if (selectedPitchTypes.length !== 1) return { min: 6, mid: 10, max: 14 };
+    const pt = selectedPitchTypes[0];
+    if (pt === 'fastball') return { min: 4, mid: 8, max: 12 };
+    if (pt === 'sinker') return { min: 2, mid: 6, max: 10 };
+    if (pt === 'cutter') return { min: 6, mid: 10, max: 14 };
+    if (pt === 'slider' || pt === 'sweeper') return { min: 10, mid: 15, max: 20 };
+    if (pt === 'curveball') return { min: 8, mid: 12, max: 16 };
+    if (pt === 'changeup' || pt === 'splitter' || pt === 'forkball') return { min: 10, mid: 14, max: 18 };
+    return { min: 6, mid: 10, max: 14 };
   }
   if (metric === 'Swing Rate') return { min: 20, mid: 50, max: 80 };
   if (metric === 'GB Rate') {
@@ -749,7 +771,9 @@ function LocationChart({
 
   const plottedInZone = points.filter((p) => parseNumber(p.plate_side) !== null && parseNumber(p.plate_height) !== null);
   const heatmapInZone = heatmapPoints.filter((p) => parseNumber(p.plate_side) !== null && parseNumber(p.plate_height) !== null);
-  const cells = displayView === 'Pitch' ? [] : buildHeatCells(heatmapInZone, displayView, strictRunValue);
+  const heatMetricView = displayView;
+  const isRvLikeMetric = heatMetricView === 'Run Values' || heatMetricView === 'PV/100';
+  const cells = displayView === 'Pitch' ? [] : buildHeatCells(heatmapInZone, heatMetricView, strictRunValue);
   const values = cells.map((cell) => cell.value).sort((a, b) => a - b);
   const densityMax = Math.max(1e-9, ...cells.map((cell) => cell.density));
   const dynamicMinVal = values.length ? values[0] : 0;
@@ -760,8 +784,8 @@ function LocationChart({
   const minVal = fixedScale?.min ?? dynamicMinVal;
   const maxVal = fixedScale?.max ?? dynamicMaxVal;
   const midVal = fixedScale?.mid ?? dynamicMidVal;
-  const rvMin = -5;
-  const rvMax = 5;
+  const rvMin = displayView === 'PV/100' ? -2 : -5;
+  const rvMax = displayView === 'PV/100' ? 2 : 5;
   const zoom = displayView === 'Pitch' ? 1 : 1.2;
   const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
   const idBase = title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -780,16 +804,16 @@ function LocationChart({
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
           <filter id={`hitting-loc-heat-blur-${idBase}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="1.2" />
+            <feGaussianBlur stdDeviation="2.1" />
           </filter>
           <filter id={`hitting-loc-heat-blur-rv-${idBase}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="0.75" />
+            <feGaussianBlur stdDeviation="2.1" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath={`url(#hitting-loc-zoom-clip-${idBase})`}>
         {displayView !== 'Pitch' ? (
           <>
-            <g filter={displayView === 'Run Values' ? `url(#hitting-loc-heat-blur-rv-${idBase})` : `url(#hitting-loc-heat-blur-${idBase})`}>
+            <g filter={isRvLikeMetric ? `url(#hitting-loc-heat-blur-rv-${idBase})` : `url(#hitting-loc-heat-blur-${idBase})`}>
               {cells.map((cell) => {
                 if (!Number.isFinite(cell.value)) return null;
                 const cx = xScale(cell.x + cell.w / 2);
@@ -798,10 +822,10 @@ function LocationChart({
                 const densityNorm = Math.max(0, Math.min(1, cell.density / densityMax));
                 let fill = 'rgba(255,255,255,0.12)';
                 if (displayView === 'Frequency') fill = sequentialColor(cell.value, minVal, maxVal);
-                else if (displayView === 'Run Values') fill = divergingColor(Math.max(rvMin, Math.min(rvMax, cell.value)), rvMin, 0, rvMax);
+                else if (isRvLikeMetric) fill = divergingColor(Math.max(rvMin, Math.min(rvMax, cell.value)), rvMin, 0, rvMax);
                 else fill = divergingColor(cell.value, minVal, midVal, maxVal);
                 const normalized =
-                  displayView === 'Run Values'
+                  isRvLikeMetric
                     ? Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) / rvMax
                     : displayView === 'Contact Rate' && contactVisibilityScale
                       ? Math.max(
@@ -813,12 +837,10 @@ function LocationChart({
                           )
                         )
                       : Math.max(0, Math.min(1, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal)));
-                const runValueBoost = displayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                const isSwingRateView = displayView === 'Swing Rate';
-                const isXMetricView = displayView === 'xWOBA' || displayView === 'xISO';
-                if (!isXMetricView && displayView !== 'Frequency' && displayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-                if (!isXMetricView && displayView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
-                if (displayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) < 0.15) return null;
+                const runValueBoost = normalized;
+                const isSwingRateView = heatMetricView === 'Swing Rate';
+                const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
+                if (densityNorm < 0.16) return null;
                 return (
                   <circle
                     key={`loc-heat-${cell.x}-${cell.y}`}
@@ -826,11 +848,7 @@ function LocationChart({
                     cy={cy}
                     r={radius}
                     fill={fill}
-                    opacity={
-                      displayView === 'Run Values'
-                        ? Math.max(0.06, runValueBoost * 1.15 * Math.max(0.45, densityNorm))
-                        : Math.max(0.3, runValueBoost * 1.25 * (displayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
-                    }
+                    opacity={Math.max(0.3, runValueBoost * 1.25 * (displayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))}
                   />
                 );
               })}
@@ -839,14 +857,14 @@ function LocationChart({
               if (!Number.isFinite(cell.value)) return null;
               const cx = xScale(cell.x + cell.w / 2);
               const cy = yScale(cell.y + cell.h / 2);
-              const radius = Math.max(1.0, cell.w * ((w - pad * 2) / (xMax - xMin)) * 0.75);
+              const radius = Math.max(0.38, cell.w * ((w - pad * 2) / (xMax - xMin)) * 0.32);
               const densityNorm = Math.max(0, Math.min(1, cell.density / densityMax));
               let fill = 'rgba(255,255,255,0.12)';
               if (displayView === 'Frequency') fill = sequentialColor(cell.value, minVal, maxVal);
-              else if (displayView === 'Run Values') fill = divergingColor(Math.max(rvMin, Math.min(rvMax, cell.value)), rvMin, 0, rvMax);
+              else if (isRvLikeMetric) fill = divergingColor(Math.max(rvMin, Math.min(rvMax, cell.value)), rvMin, 0, rvMax);
               else fill = divergingColor(cell.value, minVal, midVal, maxVal);
               const normalized =
-                displayView === 'Run Values'
+                isRvLikeMetric
                   ? Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) / rvMax
                   : displayView === 'Contact Rate' && contactVisibilityScale
                     ? Math.max(
@@ -858,29 +876,22 @@ function LocationChart({
                         )
                       )
                     : Math.max(0, Math.min(1, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal)));
-              const runValueBoost = displayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-              const isSwingRateView = displayView === 'Swing Rate';
-              const isXMetricView = displayView === 'xWOBA' || displayView === 'xISO';
-              if (!isXMetricView && displayView !== 'Frequency' && displayView !== 'Run Values' && densityNorm < (isSwingRateView ? 0.06 : 0.16)) return null;
-              if (!isXMetricView && displayView !== 'Run Values' && !isSwingRateView && normalized < 0.06) return null;
-              if (displayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) < 0.15) return null;
+              const runValueBoost = normalized;
+              const isSwingRateView = heatMetricView === 'Swing Rate';
+              const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
+              if (densityNorm < 0.16) return null;
               return (
                 <circle
                   key={`loc-heat-core-${cell.x}-${cell.y}`}
                   cx={cx}
                   cy={cy}
                   r={radius}
-                  fill={fill}
-                  opacity={
-                    displayView === 'Run Values'
-                      ? Math.max(0.04, runValueBoost * 0.7 * Math.max(0.45, densityNorm))
-                      : Math.max(0.2, runValueBoost * 0.72 * (displayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
-                  }
+                  fill="rgba(0,0,0,0.001)"
                   onMouseMove={(event) =>
                     onPointHover({
                       x: event.clientX,
                       y: event.clientY,
-                      text: `${displayView}: ${cell.value.toFixed(displayView === 'xWOBA' || displayView === 'xISO' ? 3 : (displayView === 'Run Values' || displayView === 'Exit Velocity' ? 2 : 1))}`,
+                      text: `${displayView}: ${cell.value.toFixed(displayView === 'xWOBA' || displayView === 'xISO' ? 3 : (isRvLikeMetric || displayView === 'Exit Velocity' ? 2 : 1))}`,
                     })
                   }
                   onMouseLeave={onPointLeave}
@@ -892,11 +903,11 @@ function LocationChart({
         {displayView === 'Pitch' ? (
           <rect x={xScale(midX - greenHalf)} y={yScale(midY + greenHalf)} width={xScale(midX + greenHalf) - xScale(midX - greenHalf)} height={yScale(midY - greenHalf) - yScale(midY + greenHalf)} fill="rgba(80,220,120,0.16)" />
         ) : null}
-        <rect x={xScale(zoneLeft)} y={yScale(zoneTop)} width={xScale(zoneRight) - xScale(zoneLeft)} height={yScale(zoneBottom) - yScale(zoneTop)} fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth="1.2" />
-        <line x1={xScale(zoneLeft + (zoneRight - zoneLeft) / 3)} y1={yScale(zoneBottom)} x2={xScale(zoneLeft + (zoneRight - zoneLeft) / 3)} y2={yScale(zoneTop)} stroke="rgba(255,255,255,0.4)" strokeWidth="0.8" />
-        <line x1={xScale(zoneLeft + (zoneRight - zoneLeft) * 2 / 3)} y1={yScale(zoneBottom)} x2={xScale(zoneLeft + (zoneRight - zoneLeft) * 2 / 3)} y2={yScale(zoneTop)} stroke="rgba(255,255,255,0.4)" strokeWidth="0.8" />
-        <line x1={xScale(zoneLeft)} y1={yScale(zoneBottom - (zoneBottom - zoneTop) / 3)} x2={xScale(zoneRight)} y2={yScale(zoneBottom - (zoneBottom - zoneTop) / 3)} stroke="rgba(255,255,255,0.4)" strokeWidth="0.8" />
-        <line x1={xScale(zoneLeft)} y1={yScale(zoneBottom - (zoneBottom - zoneTop) * 2 / 3)} x2={xScale(zoneRight)} y2={yScale(zoneBottom - (zoneBottom - zoneTop) * 2 / 3)} stroke="rgba(255,255,255,0.4)" strokeWidth="0.8" />
+        <rect x={xScale(zoneLeft)} y={yScale(zoneTop)} width={xScale(zoneRight) - xScale(zoneLeft)} height={yScale(zoneBottom) - yScale(zoneTop)} fill="none" stroke="rgba(255,255,255,0.95)" strokeWidth="1.2" />
+        <line x1={xScale(zoneLeft + (zoneRight - zoneLeft) / 3)} y1={yScale(zoneBottom)} x2={xScale(zoneLeft + (zoneRight - zoneLeft) / 3)} y2={yScale(zoneTop)} stroke="rgba(255,255,255,0.45)" strokeWidth="0.8" />
+        <line x1={xScale(zoneLeft + (zoneRight - zoneLeft) * 2 / 3)} y1={yScale(zoneBottom)} x2={xScale(zoneLeft + (zoneRight - zoneLeft) * 2 / 3)} y2={yScale(zoneTop)} stroke="rgba(255,255,255,0.45)" strokeWidth="0.8" />
+        <line x1={xScale(zoneLeft)} y1={yScale(zoneBottom - (zoneBottom - zoneTop) / 3)} x2={xScale(zoneRight)} y2={yScale(zoneBottom - (zoneBottom - zoneTop) / 3)} stroke="rgba(255,255,255,0.45)" strokeWidth="0.8" />
+        <line x1={xScale(zoneLeft)} y1={yScale(zoneBottom - (zoneBottom - zoneTop) * 2 / 3)} x2={xScale(zoneRight)} y2={yScale(zoneBottom - (zoneBottom - zoneTop) * 2 / 3)} stroke="rgba(255,255,255,0.45)" strokeWidth="0.8" />
         <polygon
           points={`${xScale(zoneLeft)},${yScale(0.2)} ${xScale(zoneRight)},${yScale(0.2)} ${xScale(zoneRight)},${yScale(0.35)} ${xScale(midX)},${yScale(0.44)} ${xScale(zoneLeft)},${yScale(0.35)}`}
           fill="none"
@@ -1452,18 +1463,45 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
   const rows = 40;
   const cellW = (xMax - xMin) / cols;
   const cellH = (yMax - yMin) / rows;
-  const sigmaX = 0.22;
-  const sigmaY = 0.22;
+  const sigmaX = 0.15;
+  const sigmaY = 0.15;
   const eps = 1e-9;
   const valid = points
     .map((p) => ({ p, x: p.plate_side, y: p.plate_height }))
     .filter((row): row is { p: ChartPoint; x: number; y: number } => row.x !== null && row.y !== null);
   if (!valid.length) return [];
 
-  const isSwing = (call: string) =>
-    call === 'StrikeSwinging' || call === 'FoulBall' || call === 'FoulBallFieldable' || call === 'FoulBallNotFieldable' || call === 'InPlay';
-  const isWhiff = (call: string) => call === 'StrikeSwinging';
-  const isContact = (call: string) => call === 'InPlay';
+  const normDesc = (value: string): string =>
+    String(value ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  const isInPlayCall = (call: string): boolean => {
+    if (!strictRunValue) return call === 'InPlay';
+    const d = normDesc(call);
+    return d.startsWith('in_play') || d.startsWith('hit_into_play');
+  };
+  const isSwing = (call: string): boolean => {
+    if (!strictRunValue) {
+      return call === 'StrikeSwinging' || call === 'FoulBall' || call === 'FoulBallFieldable' || call === 'FoulBallNotFieldable' || call === 'InPlay';
+    }
+    const d = normDesc(call);
+    return (
+      isInPlayCall(call) ||
+      d === 'swinging_strike' ||
+      d === 'swinging_strike_blocked' ||
+      d === 'swinging_strike_pitchout' ||
+      d === 'missed_bunt' ||
+      d.includes('foul')
+    );
+  };
+  const isWhiff = (call: string): boolean => {
+    if (!strictRunValue) return call === 'StrikeSwinging';
+    const d = normDesc(call);
+    return d === 'swinging_strike' || d === 'swinging_strike_blocked' || d === 'swinging_strike_pitchout' || d === 'missed_bunt';
+  };
+  const isContact = (call: string): boolean => isInPlayCall(call);
   const isGroundBall = (point: ChartPoint) => {
     const tagged = String((point as ChartPoint & { tagged_hit_type?: string | null }).tagged_hit_type ?? '')
       .trim()
@@ -1504,6 +1542,7 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
     }
     return 0;
   };
+  const pitchValue = (point: ChartPoint): number => calcPitchValue(point);
 
   const globalSwingCount = valid.filter((row) => isSwing(row.p.pitch_call || '')).length;
   const globalWhiffCount = valid.filter((row) => isWhiff(row.p.pitch_call || '')).length;
@@ -1514,6 +1553,8 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
     .map((row) => runValue(row.p))
     .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
   const globalRvAvg = rvRows.length ? rvRows.reduce((sum, value) => sum + value, 0) / rvRows.length : 0;
+  const pvRows = valid.map((row) => pitchValue(row.p)).filter((value) => Number.isFinite(value));
+  const globalPvAvg = pvRows.length ? pvRows.reduce((sum, value) => sum + value, 0) / pvRows.length : 0;
   const globalEvAvg = globalEvRows.length ? globalEvRows.reduce((sum, row) => sum + Number(row.p.exit_speed || 0), 0) / globalEvRows.length : 0;
   const globalXwobaAvg =
     xwobaRows.length > 0
@@ -1529,6 +1570,7 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
       : 0.17;
   const globalSwingRate = valid.length ? globalSwingCount / valid.length : 0;
   const globalWhiffRate = globalSwingCount ? globalWhiffCount / globalSwingCount : 0;
+  const globalSwStrkRate = valid.length ? globalWhiffCount / valid.length : 0;
   const globalGbRate = globalInPlayCount ? globalGbCount / globalInPlayCount : 0;
   const globalContactRate = globalSwingCount ? (globalSwingCount - globalWhiffCount) / globalSwingCount : 0;
   const shrinkStrength = 8;
@@ -1549,6 +1591,8 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
       let evW = 0;
       let rvWSum = 0;
       let rvW = 0;
+      let pvWSum = 0;
+      let pvW = 0;
       let xwobaWSum = 0;
       let xwobaW = 0;
       let xbaWSum = 0;
@@ -1578,6 +1622,11 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
           rvWSum += w * rv;
           rvW += w;
         }
+        const pv = pitchValue(rowPoint.p);
+        if (Number.isFinite(pv)) {
+          pvWSum += w * pv;
+          pvW += w;
+        }
         if (typeof rowPoint.p.estimated_woba_using_speedangle === 'number' && Number.isFinite(rowPoint.p.estimated_woba_using_speedangle)) {
           xwobaWSum += w * rowPoint.p.estimated_woba_using_speedangle;
           xwobaW += w;
@@ -1594,15 +1643,18 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
 
       let value = sumW;
       if (metric === 'Whiff Rate') value = 100 * ((whiffW + shrinkStrength * globalWhiffRate) / Math.max(eps, swingW + shrinkStrength));
+      if (metric === 'SwStrk%') value = 100 * ((whiffW + shrinkStrength * globalSwStrkRate) / Math.max(eps, sumW + shrinkStrength));
       if (metric === 'GB Rate') value = 100 * ((gbW + shrinkStrength * globalGbRate) / Math.max(eps, inPlayW + shrinkStrength));
       if (metric === 'Contact Rate') value = 100 * (((swingW - whiffW) + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
       if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
       if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
       if (metric === 'Run Values') {
         value =
-          rvW > eps
-            ? ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, rvW + runValueShrinkStrength)) * 100
-            : Number.NaN;
+          ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
+      }
+      if (metric === 'PV/100') {
+        const localPv = (pvWSum + runValueShrinkStrength * globalPvAvg) / Math.max(eps, pvW + runValueShrinkStrength);
+        value = (localPv - globalPvAvg) * 100;
       }
       if (metric === 'xWOBA') {
         value =
@@ -1780,8 +1832,9 @@ export default function HittingSuite() {
         autoFallbackAppliedRef.current = false;
         setFilters(payload);
         setTeamType(pickDefaultTeamType(payload.team_types, payload.school_code));
-        setStartDate(payload.max_date ?? '');
-        setEndDate(payload.max_date ?? '');
+        const latestDate = clampYmdToToday(payload.max_date ?? '');
+        setStartDate(latestDate);
+        setEndDate(latestDate);
         setPitchTypes([]);
         setZoneLocations([]);
         setPitchResults([]);
@@ -2174,10 +2227,10 @@ export default function HittingSuite() {
     return getProTeamLogoUrl(teamCode) || '';
   }, [isPro, dashboardPage, selectedSingleHitter, latestTeamByHitter, filterTeamByHitter, teamType]);
   const availableCustomColumns = useMemo(
-    () =>
-      overview?.available_table_columns?.length
-        ? overview.available_table_columns
-        : FALLBACK_AVAILABLE_CUSTOM_COLUMNS,
+    () => {
+      const base = overview?.available_table_columns?.length ? overview.available_table_columns : FALLBACK_AVAILABLE_CUSTOM_COLUMNS;
+      return base.includes('PV/100') ? base : [...base, 'PV/100'];
+    },
     [overview?.available_table_columns]
   );
   const remainingCustomColumns = useMemo(
@@ -2199,12 +2252,14 @@ export default function HittingSuite() {
     () => [
       { value: 'Frequency', label: 'Frequency' },
       { value: 'Whiff Rate', label: 'Whiff Rate' },
+      { value: 'SwStrk%', label: 'SwStrk%' },
       { value: 'GB Rate', label: 'GB Rate' },
       { value: 'Contact Rate', label: 'Contact Rate' },
       { value: 'Swing Rate', label: 'Swing Rate' },
       { value: 'Exit Velocity', label: 'Exit Velocity' },
       ...(isPro ? ([{ value: 'xWOBA', label: 'xWOBA' }, { value: 'xISO', label: 'xISO' }] as OptionItem[]) : []),
       { value: 'Run Values', label: 'Run Values' },
+      { value: 'PV/100', label: 'PV/100' },
     ],
     [isPro]
   );
@@ -2254,15 +2309,20 @@ export default function HittingSuite() {
     const zoom = heatmapDisplayView === 'Pitch' ? 1 : 1.2;
     const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
 
+    const heatMetricView = heatmapDisplayView;
     const cells =
       heatmapDisplayView === 'Pitch'
         ? []
-        : buildHeatCells(heatmapPoints, heatmapDisplayView, isPro);
+        : buildHeatCells(heatmapPoints, heatMetricView, isPro);
     const values = cells.map((c) => c.value).sort((a, b) => a - b);
     const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
     const minVal = values.length ? values[0] : 0;
     const maxVal = values.length ? values[values.length - 1] : 1;
     const midVal = values.length ? values[Math.floor(values.length / 2)] : 0;
+    const isPvMetric = heatmapDisplayView === 'PV/100';
+    const isRunValuesMetric = heatMetricView === 'Run Values' || heatMetricView === 'PV/100';
+    const rvMin = isPvMetric ? -2 : (isPro ? -5 : -2);
+    const rvMax = isPvMetric ? 2 : (isPro ? 5 : 2);
     const maxAbs = Math.max(1, ...cells.map((c) => Math.abs(c.value)));
     return (
       <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 460, border: '1px solid rgba(255,255,255,0.16)', borderRadius: 10 }} onMouseLeave={() => setChartHover(null)}>
@@ -2271,16 +2331,16 @@ export default function HittingSuite() {
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
           <filter id="hitting-heatmap-blur" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="1.2" />
+            <feGaussianBlur stdDeviation="2.1" />
           </filter>
           <filter id="hitting-heatmap-blur-rv" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="0.75" />
+            <feGaussianBlur stdDeviation="2.1" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath="url(#hitting-heatmap-zoom-clip)">
           {heatmapDisplayView !== 'Pitch' ? (
             <>
-              <g filter={heatmapDisplayView === 'Run Values' ? 'url(#hitting-heatmap-blur-rv)' : 'url(#hitting-heatmap-blur)'}>
+              <g filter={isRunValuesMetric ? 'url(#hitting-heatmap-blur-rv)' : 'url(#hitting-heatmap-blur)'}>
                 {cells.map((c) => {
                   const cx = px(c.x + c.w / 2);
                   const cy = py(c.y + c.h / 2);
@@ -2288,22 +2348,24 @@ export default function HittingSuite() {
                   const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                   let fill = 'rgba(255,255,255,0.12)';
                   if (heatmapDisplayView === 'Frequency') fill = sequentialColor(c.value, minVal, maxVal);
-                  else if (heatmapDisplayView === 'Run Values') {
-                    const ratio = c.value / maxAbs;
-                    if (ratio >= 0) fill = `rgba(255,48,48,${0.24 + Math.abs(ratio) * 0.76})`;
-                    else fill = `rgba(54,129,255,${0.24 + Math.abs(ratio) * 0.76})`;
+                  else if (isRunValuesMetric) {
+                    if (isPvMetric || isPro) fill = divergingColor(Math.max(rvMin, Math.min(rvMax, c.value)), rvMin, 0, rvMax);
+                    else {
+                      const ratio = c.value / maxAbs;
+                      if (ratio >= 0) fill = `rgba(255,48,48,${0.24 + Math.abs(ratio) * 0.76})`;
+                      else fill = `rgba(54,129,255,${0.24 + Math.abs(ratio) * 0.76})`;
+                    }
                   } else {
                     fill = divergingColor(c.value, minVal, midVal, maxVal);
                   }
                   const normalized =
-                    heatmapDisplayView === 'Run Values'
-                      ? Math.abs(c.value) / maxAbs
+                    isRunValuesMetric
+                      ? (isPvMetric || isPro ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax : Math.abs(c.value) / maxAbs)
                       : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
-                  const rvBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                  const isXMetricView = heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO';
-                  if (!isXMetricView && heatmapDisplayView !== 'Frequency' && densityNorm < 0.16) return null;
-                  if (!isXMetricView && heatmapDisplayView !== 'Run Values' && normalized < 0.06) return null;
-                  return <circle key={`h-heat-blur-${c.x}-${c.y}`} cx={cx} cy={cy} r={radius} fill={fill} opacity={Math.max(0.3, rvBoost * 1.25 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))} />;
+                  const rvBoost = isRunValuesMetric ? normalized : normalized;
+                  const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
+                  if (densityNorm < 0.16) return null;
+                  return <circle key={`h-heat-blur-${c.x}-${c.y}`} cx={cx} cy={cy} r={radius} fill={fill} opacity={Math.max(0.3, rvBoost * 1.25 * (heatMetricView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))} />;
                 })}
               </g>
               {cells.map((c) => {
@@ -2313,30 +2375,31 @@ export default function HittingSuite() {
                 const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                 let fill = 'rgba(255,255,255,0.12)';
                 if (heatmapDisplayView === 'Frequency') fill = sequentialColor(c.value, minVal, maxVal);
-                else if (heatmapDisplayView === 'Run Values') {
-                  const ratio = c.value / maxAbs;
-                  if (ratio >= 0) fill = `rgba(255,48,48,${0.2 + Math.abs(ratio) * 0.8})`;
-                  else fill = `rgba(54,129,255,${0.2 + Math.abs(ratio) * 0.8})`;
+                else if (isRunValuesMetric) {
+                  if (isPvMetric || isPro) fill = divergingColor(Math.max(rvMin, Math.min(rvMax, c.value)), rvMin, 0, rvMax);
+                  else {
+                    const ratio = c.value / maxAbs;
+                    if (ratio >= 0) fill = `rgba(255,48,48,${0.2 + Math.abs(ratio) * 0.8})`;
+                    else fill = `rgba(54,129,255,${0.2 + Math.abs(ratio) * 0.8})`;
+                  }
                 } else {
                   fill = divergingColor(c.value, minVal, midVal, maxVal);
                 }
                 const normalized =
-                  heatmapDisplayView === 'Run Values'
-                    ? Math.abs(c.value) / maxAbs
+                  isRunValuesMetric
+                    ? (isPvMetric || isPro ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax : Math.abs(c.value) / maxAbs)
                     : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
-                const rvBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                const isXMetricView = heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO';
-                if (!isXMetricView && heatmapDisplayView !== 'Frequency' && densityNorm < 0.16) return null;
-                if (!isXMetricView && heatmapDisplayView !== 'Run Values' && normalized < 0.06) return null;
+                const rvBoost = isRunValuesMetric ? normalized : normalized;
+                const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
+                if (densityNorm < 0.16) return null;
                 return (
                   <circle
                     key={`h-heat-core-${c.x}-${c.y}`}
                     cx={cx}
                     cy={cy}
                     r={radius}
-                    fill={fill}
-                    opacity={Math.max(0.2, rvBoost * 0.72 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))}
-                    onMouseMove={(event) => setChartHover({ x: event.clientX, y: event.clientY, text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO' ? 3 : (heatmapDisplayView === 'Run Values' || heatmapDisplayView === 'Exit Velocity' ? 2 : 1))}` })}
+                    fill="rgba(0,0,0,0.001)"
+                    onMouseMove={(event) => setChartHover({ x: event.clientX, y: event.clientY, text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO' ? 3 : (isRunValuesMetric || heatmapDisplayView === 'Exit Velocity' ? 2 : 1))}` })}
                     onMouseLeave={() => setChartHover(null)}
                   />
                 );

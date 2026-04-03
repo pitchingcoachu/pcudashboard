@@ -49,6 +49,7 @@ const ALLOWED_CUSTOM_COLUMNS = new Set([
   'QP+',
   'Pitching+',
   'RV/100',
+  'PV/100',
   'ERA',
   'FIP',
   'xFIP',
@@ -131,6 +132,23 @@ async function getSession(): Promise<PortalSession | null> {
   };
 }
 
+function resolveCustomTableOrganizationId(session: PortalSession, schoolCode: string): number {
+  const selectedSchool = String(schoolCode ?? '').trim().toUpperCase();
+  const sessionOrgId = Number(session.organizationId ?? 0);
+  const scopedOrganizationIdResolved = resolveSchoolScopedOrganizationId(session);
+  const scopedOrganizationId =
+    Number.isFinite(scopedOrganizationIdResolved) && scopedOrganizationIdResolved > 0
+      ? scopedOrganizationIdResolved
+      : sessionOrgId;
+
+  // Keep PRO custom tables anchored to the signed-in org for admin users.
+  // This prevents "missing table" behavior when school->org mapping changes.
+  if (selectedSchool === 'PRO' && session.role === 'admin' && Number.isFinite(sessionOrgId) && sessionOrgId > 0) {
+    return sessionOrgId;
+  }
+  return scopedOrganizationId;
+}
+
 async function ensureDashboardCustomTableSchema(pool: Pool): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dashboard_custom_tables (
@@ -157,11 +175,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationIdResolved = resolveSchoolScopedOrganizationId(session);
-  const scopedOrganizationId =
-    Number.isFinite(scopedOrganizationIdResolved) && scopedOrganizationIdResolved > 0
-      ? scopedOrganizationIdResolved
-      : Number(session.organizationId ?? 0);
+  const scopedOrganizationId = resolveCustomTableOrganizationId(session, schoolCode);
   if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
@@ -205,11 +219,7 @@ export async function POST(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationIdResolved = resolveSchoolScopedOrganizationId(session);
-  const scopedOrganizationId =
-    Number.isFinite(scopedOrganizationIdResolved) && scopedOrganizationIdResolved > 0
-      ? scopedOrganizationIdResolved
-      : Number(session.organizationId ?? 0);
+  const scopedOrganizationId = resolveCustomTableOrganizationId(session, schoolCode);
   if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
@@ -315,11 +325,7 @@ export async function DELETE(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationIdResolved = resolveSchoolScopedOrganizationId(session);
-  const scopedOrganizationId =
-    Number.isFinite(scopedOrganizationIdResolved) && scopedOrganizationIdResolved > 0
-      ? scopedOrganizationIdResolved
-      : Number(session.organizationId ?? 0);
+  const scopedOrganizationId = resolveCustomTableOrganizationId(session, schoolCode);
   if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }

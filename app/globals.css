@@ -1473,12 +1473,23 @@ main {
 .portal-dashboard-suite-tabs {
   display: flex;
   flex-wrap: nowrap;
+  align-items: center;
   gap: 0.45rem;
   overflow-x: auto;
+  overflow-y: hidden;
+  min-height: 44px;
+  max-height: 44px;
   padding-bottom: 0.08rem;
 }
 
 .portal-dashboard-suite-tabs .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  height: 40px;
+  padding: 0 1.05rem;
+  line-height: 1;
   white-space: nowrap;
 }
 
@@ -2185,6 +2196,22 @@ main {
   gap: 0.2rem;
 }
 
+.portal-custom-reports-team-player-drag-item {
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.38rem 0.45rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.portal-custom-reports-team-player-drag-item--dragging {
+  opacity: 0.55;
+}
+
+.portal-custom-reports-team-player-drag-item--over {
+  border-color: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.85);
+  background: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.12);
+}
+
 .portal-custom-reports-canvas {
   display: grid;
   gap: 0.8rem;
@@ -2275,6 +2302,43 @@ main {
   letter-spacing: 0.01em;
   color: rgba(255, 255, 255, 0.96);
   pointer-events: none;
+}
+
+.portal-custom-reports-cell--team-player-start {
+  margin-top: 2.25rem;
+  padding-top: 0.9rem;
+}
+
+.portal-custom-reports-cell--team-player-start .portal-custom-reports-row-player-label {
+  top: -3.1rem;
+}
+
+.portal-custom-reports-row-player-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 0.15rem 0;
+}
+
+.portal-custom-reports-row-player-headshot {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.portal-custom-reports-row-player-headshot-fallback {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .portal-custom-reports-cell--collapsed {

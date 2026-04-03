@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
+import { calcPitchValue } from './pitch-value';
 
 type FiltersPayload = {
   school_code: string;
@@ -98,6 +99,7 @@ type OverviewPayload = {
     outs_num: number | null;
     outs_on_play_num: number | null;
     run_value: number | null;
+    pitch_value?: number | null;
     release_side: number | null;
     release_height: number | null;
     extension: number | null;
@@ -284,7 +286,18 @@ function formatShortDate(value: string): string {
 }
 
 function toYmdNow(): string {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function clampYmdToToday(value: string): string {
+  const v = (value || '').trim();
+  if (!v) return v;
+  const today = toYmdNow();
+  return v > today ? today : v;
 }
 
 function isFullMonthRange(startDate: string, endDate: string): boolean {
@@ -511,6 +524,7 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'QP+',
   'Pitching+',
   'RV/100',
+  'PV/100',
   'IP',
   'P',
   'P/IP',
@@ -571,6 +585,7 @@ const TREND_METRIC_OPTIONS: OptionItem[] = [
   { value: 'Exit Velocity', label: 'Exit Velocity' },
   { value: 'Launch Angle', label: 'Launch Angle' },
   { value: 'RV/100', label: 'RV/100' },
+  { value: 'PV/100', label: 'PV/100' },
   { value: 'P', label: 'P' },
   { value: 'BF', label: 'BF' },
   { value: 'Whiffs', label: 'Whiffs' },
@@ -614,6 +629,7 @@ function normalizeColorColumnName(value: string): string {
   if (lower === 'xfip') return 'xFIP';
   if (lower === 'barrel%') return 'Barrel%';
   if (lower === 'rv/100') return 'RV/100';
+  if (lower === 'pv/100') return 'PV/100';
   return String(value ?? '').trim();
 }
 
@@ -697,6 +713,16 @@ function getProcessThresholds(
     if (pitchType === 'splitter') return { poor: 0, avg: -1.4, great: -2.8 };
     return { poor: 0.7, avg: 0, great: -0.7 };
   }
+  if (metric === 'PV/100') {
+    if (pitchType === 'fastball') return { poor: 1.5, avg: 0.7, great: -0.1 };
+    if (pitchType === 'sinker') return { poor: 2.3, avg: 0.9, great: -0.5 };
+    if (pitchType === 'cutter') return { poor: 0.9, avg: -0.2, great: -1.3 };
+    if (pitchType === 'slider') return { poor: -0.4, avg: -1.1, great: -1.8 };
+    if (pitchType === 'curveball') return { poor: -0.1, avg: -1.3, great: -2.5 };
+    if (pitchType === 'changeup') return { poor: 0.7, avg: -0.5, great: -1.7 };
+    if (pitchType === 'splitter') return { poor: 0, avg: -1.4, great: -2.8 };
+    return { poor: 0.7, avg: 0, great: -0.7 };
+  }
   return null;
 }
 
@@ -707,6 +733,7 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
     .filter((value) => value && value !== 'all');
 
   if (metric === 'Exit Velocity') return { min: 80, mid: 90, max: 100 };
+  if (metric === 'PV/100') return { min: -2, mid: 0, max: 2 };
   if (metric === 'xWOBA') return { min: 0.27, mid: 0.32, max: 0.37 };
   if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
 
@@ -716,6 +743,17 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
     if (pt === 'fastball') return { min: 10, mid: 20, max: 30 };
     if (pt === 'sinker') return { min: 5, mid: 12.5, max: 20 };
     return { min: 20, mid: 32.5, max: 45 };
+  }
+  if (metric === 'SwStrk%') {
+    if (selectedPitchTypes.length !== 1) return { min: 6, mid: 10, max: 14 };
+    const pt = selectedPitchTypes[0];
+    if (pt === 'fastball') return { min: 4, mid: 8, max: 12 };
+    if (pt === 'sinker') return { min: 2, mid: 6, max: 10 };
+    if (pt === 'cutter') return { min: 6, mid: 10, max: 14 };
+    if (pt === 'slider' || pt === 'sweeper') return { min: 10, mid: 15, max: 20 };
+    if (pt === 'curveball') return { min: 8, mid: 12, max: 16 };
+    if (pt === 'changeup' || pt === 'splitter' || pt === 'forkball') return { min: 10, mid: 14, max: 18 };
+    return { min: 6, mid: 10, max: 14 };
   }
 
   const pitchTypeForThreshold = selectedPitchTypes.length === 1 ? selectedPitchTypes[0] : 'all';
@@ -748,7 +786,7 @@ function getCellColorScale(
   const thresholds = getProcessThresholds(metric, pitchType, schoolCode);
   if (!thresholds) return null;
   const { poor, avg, great } = thresholds;
-  const reverseScale = ['EV', 'Barrel%', 'BB%', 'ERA', 'FIP', 'xFIP'].includes(metric) || metric === 'RV/100';
+  const reverseScale = ['EV', 'Barrel%', 'BB%', 'ERA', 'FIP', 'xFIP'].includes(metric) || metric === 'RV/100' || metric === 'PV/100';
   if (reverseScale) {
     if (parsed >= poor) return { bg: '#0066CC', text: 'white' };
     if (parsed >= (poor + avg) / 2) return { bg: '#66B2FF', text: 'black' };
@@ -1290,7 +1328,9 @@ export default function PitchingSuite({
     String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
   const isPro =
     String(selectedSchoolCode ?? '').toUpperCase() === 'PRO' ||
-    String(filters?.school_code ?? '').toUpperCase() === 'PRO';
+    String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
+    String(filters?.school_code ?? '').toUpperCase() === 'PRO' ||
+    String(filters?.school_code ?? '').toUpperCase() === 'MLB';
   const orientX = (x: number): number => (isPro ? -x : x);
   const canShowLeagueHeavyPages = !isLeague;
   const canShowVeloManualEntry = !isLeague;
@@ -1488,7 +1528,7 @@ export default function PitchingSuite({
         autoFallbackAppliedRef.current = false;
         setFilters(payload);
         setTeamType(pickDefaultTeamType(payload.team_types ?? [], payload.school_code ?? ''));
-        const latestDate = payload.max_date ?? '';
+        const latestDate = clampYmdToToday(payload.max_date ?? '');
         const minDate = payload.min_date ?? '';
         const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
         if (isLeagueSchool) {
@@ -1516,7 +1556,7 @@ export default function PitchingSuite({
   }, [level]);
 
   useEffect(() => {
-    if (!manualDate) setManualDate(new Date().toISOString().slice(0, 10));
+    if (!manualDate) setManualDate(toYmdNow());
   }, [manualDate]);
 
   useEffect(() => {
@@ -2712,20 +2752,23 @@ export default function PitchingSuite({
     return 'Right';
   }, [summaryPoints]);
   const velocityMainData = useMemo(() => {
-    const points = [...summaryPoints]
-      .filter((p) => typeof p.velo === 'number' && Number.isFinite(p.velo))
-      .sort((a, b) => {
-        const da = Date.parse(a.session_date ?? '');
-        const db = Date.parse(b.session_date ?? '');
-        const dCmp = (Number.isFinite(da) ? da : 0) - (Number.isFinite(db) ? db : 0);
-        if (dCmp !== 0) return dCmp;
-        const pnCmp = (a.pitch_number ?? 0) - (b.pitch_number ?? 0);
-        if (pnCmp !== 0) return pnCmp;
-        const pnoCmp = (a.pitch_no ?? 0) - (b.pitch_no ?? 0);
-        if (pnoCmp !== 0) return pnoCmp;
-        return (a.pitch_event_id ?? 0) - (b.pitch_event_id ?? 0);
-      })
-      .map((p, idx) => ({ ...p, pitch_count: idx + 1 }));
+    const veloPoints = [...summaryPoints].filter((p) => typeof p.velo === 'number' && Number.isFinite(p.velo));
+    const ordered = isPro
+      // PRO rows already arrive in game sequence from API/backend (game/AB/event order).
+      // Preserve that order for inning-edge separators.
+      ? veloPoints
+      : [...veloPoints].sort((a, b) => {
+          const da = Date.parse(a.session_date ?? '');
+          const db = Date.parse(b.session_date ?? '');
+          const dCmp = (Number.isFinite(da) ? da : 0) - (Number.isFinite(db) ? db : 0);
+          if (dCmp !== 0) return dCmp;
+          const pnCmp = (a.pitch_number ?? 0) - (b.pitch_number ?? 0);
+          if (pnCmp !== 0) return pnCmp;
+          const pnoCmp = (a.pitch_no ?? 0) - (b.pitch_no ?? 0);
+          if (pnoCmp !== 0) return pnoCmp;
+          return (a.pitch_event_id ?? 0) - (b.pitch_event_id ?? 0);
+        });
+    const points = ordered.map((p, idx) => ({ ...p, pitch_count: idx + 1 }));
 
     const byType = new Map<string, { sum: number; n: number }>();
     for (const p of points) {
@@ -2761,15 +2804,27 @@ export default function PitchingSuite({
     };
     const inningBoundaries: number[] = [];
     if (showInningBoundaries) {
-      for (let i = 1; i < points.length; i += 1) {
-        const prev = inningToKey(points[i - 1].inning);
-        const cur = inningToKey(points[i].inning);
-        if (prev && cur && prev !== cur) inningBoundaries.push(points[i].pitch_count);
+      if (isPro) {
+        // PRO: draw one separator per inning at the first pitch of that inning.
+        const firstPitchByInning = new Map<string, number>();
+        for (const point of points) {
+          const key = inningToKey(point.inning);
+          if (!key) continue;
+          if (!firstPitchByInning.has(key)) firstPitchByInning.set(key, point.pitch_count);
+        }
+        const orderedFirstPitches = Array.from(firstPitchByInning.values()).sort((a, b) => a - b);
+        inningBoundaries.push(...orderedFirstPitches.slice(1).map((value) => Math.max(0.5, value - 0.5)));
+      } else {
+        for (let i = 1; i < points.length; i += 1) {
+          const prev = inningToKey(points[i - 1].inning);
+          const cur = inningToKey(points[i].inning);
+          if (prev && cur && prev !== cur) inningBoundaries.push(Math.max(0.5, points[i].pitch_count - 0.5));
+        }
       }
     }
 
     return { points, avgByType, inningBoundaries, showInningBoundaries };
-  }, [summaryPoints, selectedPitchers]);
+  }, [summaryPoints, selectedPitchers, isPro]);
 
   const velocityByGameData = useMemo(() => {
     const grouped = new Map<string, { date: string; pitch_type: string; session_type: string; sumV: number; sumIvb: number; ivbN: number; sumHb: number; hbN: number; n: number }>();
@@ -2968,6 +3023,7 @@ export default function PitchingSuite({
       laSum: number;
       laN: number;
       rvSum: number;
+      pvSum: number;
       whiffs: number;
       bfKeys: Set<string>;
       kKeys: Set<string>;
@@ -3029,6 +3085,7 @@ export default function PitchingSuite({
       }
       return 0;
     };
+    const parsePitchValue = (point: PitchActionPoint): number => calcPitchValue(point);
 
     const buildEmptyAgg = (date: string): TrendAgg => ({
       date,
@@ -3072,6 +3129,7 @@ export default function PitchingSuite({
       laSum: 0,
       laN: 0,
       rvSum: 0,
+      pvSum: 0,
       whiffs: 0,
       bfKeys: new Set<string>(),
       kKeys: new Set<string>(),
@@ -3110,6 +3168,7 @@ export default function PitchingSuite({
         'Exit Velocity': agg.evN > 0 ? agg.evSum / agg.evN : null,
         'Launch Angle': agg.laN > 0 ? agg.laSum / agg.laN : null,
         'RV/100': agg.pitches > 0 ? (agg.rvSum / agg.pitches) * 100 : null,
+        'PV/100': agg.pitches > 0 ? (agg.pvSum / agg.pitches) * 100 : null,
         P: agg.pitches,
         BF: bf,
         Whiffs: agg.whiffs,
@@ -3274,6 +3333,7 @@ export default function PitchingSuite({
       }
 
       agg.rvSum += parseRunValue(point);
+      agg.pvSum += parsePitchValue(point);
       agg.bfKeys.add(paKey);
       if (point.korbb === 'Strikeout') agg.kKeys.add(paKey);
       if (point.korbb === 'Walk') agg.bbKeys.add(paKey);
@@ -3356,7 +3416,7 @@ export default function PitchingSuite({
       const normalizedPoints = points.map((point) => {
         const rawX = point[xKey];
         const rawY = point[yKey];
-        const x = typeof rawX === 'number' && Number.isFinite(rawX) ? rawX : null;
+        const x = typeof rawX === 'number' && Number.isFinite(rawX) ? orientX(rawX) : null;
         const y = typeof rawY === 'number' && Number.isFinite(rawY) ? rawY : null;
         return {
           plate_side: x,
@@ -3381,8 +3441,8 @@ export default function PitchingSuite({
     const rows = 40;
     const cellW = (xMax - xMin) / cols;
     const cellH = (yMax - yMin) / rows;
-    const sigmaX = 0.22;
-    const sigmaY = 0.22;
+    const sigmaX = 0.15;
+    const sigmaY = 0.15;
     const eps = 1e-9;
     const normDesc = (value: unknown): string =>
       String(value ?? '')
@@ -3446,6 +3506,7 @@ export default function PitchingSuite({
       }
       return 0;
     };
+    const pitchValue = (pitch: OverviewPayload['chart_points'][number]): number => calcPitchValue(pitch);
     const valid = points
       .map((p) => {
         const rawX = p[xKey];
@@ -3484,6 +3545,8 @@ export default function PitchingSuite({
       .map((rowPoint) => runValue(rowPoint.p))
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
     const globalRvAvg = rvRows.length > 0 ? rvRows.reduce((sum, value) => sum + value, 0) / rvRows.length : 0;
+    const pvRows = valid.map((rowPoint) => pitchValue(rowPoint.p)).filter((value) => Number.isFinite(value));
+    const globalPvAvg = pvRows.length > 0 ? pvRows.reduce((sum, value) => sum + value, 0) / pvRows.length : 0;
     const globalXwobaAvg =
       globalXwobaRows.length > 0
         ? globalXwobaRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.estimated_woba_using_speedangle || 0), 0) / globalXwobaRows.length
@@ -3495,6 +3558,7 @@ export default function PitchingSuite({
 
     const globalSwingRate = valid.length > 0 ? globalSwingCount / valid.length : 0;
     const globalWhiffRate = globalSwingCount > 0 ? globalWhiffCount / globalSwingCount : 0;
+    const globalSwStrkRate = valid.length > 0 ? globalWhiffCount / valid.length : 0;
     const globalGbRate = globalInPlayCount > 0 ? globalGbCount / globalInPlayCount : 0;
     const globalContactRate = globalSwingCount > 0 ? (globalSwingCount - globalWhiffCount) / globalSwingCount : 0;
     const shrinkStrength = 8;
@@ -3517,6 +3581,8 @@ export default function PitchingSuite({
         let qpW = 0;
         let rvWSum = 0;
         let rvW = 0;
+        let pvWSum = 0;
+        let pvW = 0;
         let xwobaWSum = 0;
         let xwobaW = 0;
         let xisoWSum = 0;
@@ -3549,6 +3615,11 @@ export default function PitchingSuite({
             rvWSum += w * rv;
             rvW += w;
           }
+          const pv = pitchValue(rowPoint.p);
+          if (Number.isFinite(pv)) {
+            pvWSum += w * pv;
+            pvW += w;
+          }
           if (typeof rowPoint.p.estimated_woba_using_speedangle === 'number' && Number.isFinite(rowPoint.p.estimated_woba_using_speedangle)) {
             xwobaWSum += w * rowPoint.p.estimated_woba_using_speedangle;
             xwobaW += w;
@@ -3561,16 +3632,18 @@ export default function PitchingSuite({
 
         let value = sumW;
         if (metric === 'Whiff Rate') value = 100 * ((whiffW + shrinkStrength * globalWhiffRate) / Math.max(eps, swingW + shrinkStrength));
+        if (metric === 'SwStrk%') value = 100 * ((whiffW + shrinkStrength * globalSwStrkRate) / Math.max(eps, sumW + shrinkStrength));
         if (metric === 'GB Rate') value = 100 * ((gbW + shrinkStrength * globalGbRate) / Math.max(eps, inPlayW + shrinkStrength));
         if (metric === 'Contact Rate') value = 100 * (((swingW - whiffW) + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
         if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
         if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
         if (metric === 'QP+') value = (qpWSum + shrinkStrength * globalQpAvg) / Math.max(eps, qpW + shrinkStrength);
         if (metric === 'Run Values') {
-          value =
-            rvW > eps
-              ? ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, rvW + runValueShrinkStrength)) * 100
-              : Number.NaN;
+          value = ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
+        }
+        if (metric === 'PV/100') {
+          const localPv = (pvWSum + runValueShrinkStrength * globalPvAvg) / Math.max(eps, pvW + runValueShrinkStrength);
+          value = (localPv - globalPvAvg) * 100;
         }
         if (metric === 'xWOBA') {
           value =
@@ -3997,20 +4070,23 @@ export default function PitchingSuite({
     const compRight = strikeCenterX + compRadiusFt;
     const zoom = locationView === 'Pitch' ? 1 : 1.2;
     const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
-    const cells = locationView === 'Pitch' ? [] : buildHeatCells(summaryHeatmapPoints, 'plate_side', 'plate_height', locationView);
+    const isPvMetric = locationView === 'PV/100';
+    const heatMetricView = locationView;
+    const isRvLikeMetric = heatMetricView === 'Run Values' || heatMetricView === 'PV/100';
+    const cells = locationView === 'Pitch' ? [] : buildHeatCells(summaryHeatmapPoints, 'plate_side', 'plate_height', heatMetricView);
     const values = cells.map((c) => c.value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
     const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
     const dynamicMinVal = values.length ? values[0] : 0;
     const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
     const dynamicMidVal = values.length ? values[Math.floor(values.length / 2)] : 0;
-    const fixedScale = getHeatmapFixedScale(locationView, selectedPitchTypes);
-    const contactVisibilityScale = locationView === 'Contact Rate' ? getHeatmapFixedScale('Whiff Rate', selectedPitchTypes) : null;
+    const fixedScale = getHeatmapFixedScale(heatMetricView, selectedPitchTypes);
+    const contactVisibilityScale = heatMetricView === 'Contact Rate' ? getHeatmapFixedScale('Whiff Rate', selectedPitchTypes) : null;
     const minVal = fixedScale?.min ?? dynamicMinVal;
     const maxVal = fixedScale?.max ?? dynamicMaxVal;
     const midVal = fixedScale?.mid ?? dynamicMidVal;
     const maxAbs = Math.max(1e-9, ...cells.map((c) => (Number.isFinite(c.value) ? Math.abs(c.value) : 0)));
-    const rvMin = -5;
-    const rvMax = 5;
+    const rvMin = isPvMetric ? -2 : -5;
+    const rvMax = isPvMetric ? 2 : 5;
     const glyph = (
       result: string,
       x: number,
@@ -4041,17 +4117,17 @@ export default function PitchingSuite({
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
           <filter id="location-heat-blur" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="1.2" />
+            <feGaussianBlur stdDeviation="2.1" />
           </filter>
           <filter id="location-heat-blur-rv" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="0.75" />
+            <feGaussianBlur stdDeviation="2.1" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath="url(#location-zoom-clip)">
         {locationView !== 'Pitch'
           ? (
             <>
-              <g filter={locationView === 'Run Values' ? 'url(#location-heat-blur-rv)' : 'url(#location-heat-blur)'}>
+              <g filter={isRvLikeMetric ? 'url(#location-heat-blur-rv)' : 'url(#location-heat-blur)'}>
                 {cells.map((c) => {
                   if (!Number.isFinite(c.value)) return null;
                   const cx = px(c.x + c.w / 2);
@@ -4061,16 +4137,16 @@ export default function PitchingSuite({
                   let fill = 'rgba(255,255,255,0.12)';
                   if (locationView === 'Frequency') {
                     fill = sequentialColor(c.value, minVal, maxVal);
-                  } else if (locationView === 'Run Values') {
+                  } else if (isRvLikeMetric) {
                     const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
-                    fill = divergingColor(-rvClamped, rvMin, 0, rvMax);
+                    fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
                   } else {
                     fill = divergingColor(c.value, minVal, midVal, maxVal);
                   }
                   const normalized =
-                    locationView === 'Run Values'
+                    isRvLikeMetric
                       ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
-                      : locationView === 'Contact Rate' && contactVisibilityScale
+                      : heatMetricView === 'Contact Rate' && contactVisibilityScale
                         ? Math.max(
                             0,
                             Math.min(
@@ -4080,13 +4156,11 @@ export default function PitchingSuite({
                             )
                           )
                         : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
-                  const runValueBoost = locationView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                  const isSwingRateView = locationView === 'Swing Rate';
-                  const isGbRateView = locationView === 'GB Rate';
-                  const isXMetricView = locationView === 'xWOBA' || locationView === 'xISO';
-                  if (!isXMetricView && locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                  if (!isXMetricView && locationView !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
-                  if (locationView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
+                  const runValueBoost = normalized;
+                  const isSwingRateView = heatMetricView === 'Swing Rate';
+                  const isGbRateView = heatMetricView === 'GB Rate';
+                  const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
+                  if (densityNorm < 0.16) return null;
                   return (
                     <circle
                       key={`blur-${c.x}-${c.y}`}
@@ -4095,9 +4169,7 @@ export default function PitchingSuite({
                       r={radius}
                       fill={fill}
                       opacity={
-                        locationView === 'Run Values'
-                          ? Math.max(0.45, runValueBoost * 1.1 * Math.max(0.65, densityNorm))
-                          : Math.max(0.3, runValueBoost * 1.25 * (locationView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                        Math.max(0.3, runValueBoost * 1.25 * (heatMetricView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
                       }
                     />
                   );
@@ -4112,16 +4184,16 @@ export default function PitchingSuite({
                 let fill = 'rgba(255,255,255,0.12)';
                 if (locationView === 'Frequency') {
                   fill = sequentialColor(c.value, minVal, maxVal);
-                } else if (locationView === 'Run Values') {
+                } else if (isRvLikeMetric) {
                   const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
-                  fill = divergingColor(-rvClamped, rvMin, 0, rvMax);
+                  fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
                 } else {
                   fill = divergingColor(c.value, minVal, midVal, maxVal);
                 }
                 const normalized =
-                  locationView === 'Run Values'
+                  isRvLikeMetric
                     ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
-                    : locationView === 'Contact Rate' && contactVisibilityScale
+                    : heatMetricView === 'Contact Rate' && contactVisibilityScale
                       ? Math.max(
                           0,
                           Math.min(
@@ -4131,30 +4203,23 @@ export default function PitchingSuite({
                           )
                         )
                       : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
-                const runValueBoost = locationView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                const isSwingRateView = locationView === 'Swing Rate';
-                const isGbRateView = locationView === 'GB Rate';
-                const isXMetricView = locationView === 'xWOBA' || locationView === 'xISO';
-                if (!isXMetricView && locationView !== 'Frequency' && locationView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                if (!isXMetricView && locationView !== 'Run Values' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
-                if (locationView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
+                const runValueBoost = normalized;
+                const isSwingRateView = heatMetricView === 'Swing Rate';
+                const isGbRateView = heatMetricView === 'GB Rate';
+                const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
+                if (densityNorm < 0.16) return null;
                 return (
                   <circle
                     key={`core-${c.x}-${c.y}`}
                     cx={cx}
                     cy={cy}
                     r={radius}
-                    fill={fill}
-                    opacity={
-                      locationView === 'Run Values'
-                        ? Math.max(0.3, runValueBoost * 0.85 * Math.max(0.6, densityNorm))
-                        : Math.max(0.2, runValueBoost * 0.72 * (locationView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
-                    }
+                    fill="rgba(0,0,0,0.001)"
                     onMouseMove={(event) =>
                       setLocationHover({
                         x: event.clientX,
                         y: event.clientY,
-                        text: `${locationView}: ${c.value.toFixed(locationView === 'xWOBA' || locationView === 'xISO' ? 3 : (locationView === 'Run Values' || locationView === 'Exit Velocity' ? 2 : 1))}`,
+                        text: `${locationView}: ${c.value.toFixed(locationView === 'xWOBA' || locationView === 'xISO' ? 3 : (isRvLikeMetric || locationView === 'Exit Velocity' ? 2 : 1))}`,
                       })
                     }
                     onMouseLeave={() => setLocationHover(null)}
@@ -4199,12 +4264,14 @@ export default function PitchingSuite({
     () => [
       { value: 'Frequency', label: 'Frequency' },
       { value: 'Whiff Rate', label: 'Whiff Rate' },
+      { value: 'SwStrk%', label: 'SwStrk%' },
       { value: 'GB Rate', label: 'GB Rate' },
       { value: 'Contact Rate', label: 'Contact Rate' },
       { value: 'Swing Rate', label: 'Swing Rate' },
       { value: 'Exit Velocity', label: 'Exit Velocity' },
       ...(isPro ? ([{ value: 'xWOBA', label: 'xWOBA' }, { value: 'xISO', label: 'xISO' }] as OptionItem[]) : []),
       { value: 'Run Values', label: 'Run Values' },
+      { value: 'PV/100', label: 'PV/100' },
       { value: 'QP+', label: 'QP+' },
     ],
     [isPro]
@@ -4319,26 +4386,29 @@ export default function PitchingSuite({
     const compRight = strikeCenterX + compRadiusFt;
     const zoom = heatmapDisplayView === 'Pitch' ? 1 : 1.2;
     const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
+    const isPvMetric = heatmapDisplayView === 'PV/100';
+    const heatMetricView = heatmapDisplayView;
+    const isRvLikeMetric = heatMetricView === 'Run Values' || heatMetricView === 'PV/100';
     const allowHeatCells = heatmapDisplayView !== 'Pitch' && (heatmapDisplayView !== 'QP+' || canRenderQpHeatmap);
     const cells =
       !allowHeatCells
         ? []
         : heatmapDisplayView === 'QP+'
           ? buildQpPresetCells(qpSelectedPitchType, qpSelectedHand, qpSelectedCountBucket)
-          : buildHeatCells(summaryHeatmapPoints, 'plate_side', 'plate_height', heatmapDisplayView);
+          : buildHeatCells(summaryHeatmapPoints, 'plate_side', 'plate_height', heatMetricView);
     const values = cells.map((c) => c.value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
     const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
     const dynamicMinVal = values.length ? values[0] : 0;
     const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
     const dynamicMidVal = values.length ? values[Math.floor(values.length / 2)] : 0;
-    const fixedScale = getHeatmapFixedScale(heatmapDisplayView, selectedPitchTypes);
-    const contactVisibilityScale = heatmapDisplayView === 'Contact Rate' ? getHeatmapFixedScale('Whiff Rate', selectedPitchTypes) : null;
+    const fixedScale = getHeatmapFixedScale(heatMetricView, selectedPitchTypes);
+    const contactVisibilityScale = heatMetricView === 'Contact Rate' ? getHeatmapFixedScale('Whiff Rate', selectedPitchTypes) : null;
     const minVal = fixedScale?.min ?? dynamicMinVal;
     const maxVal = fixedScale?.max ?? dynamicMaxVal;
     const midVal = fixedScale?.mid ?? dynamicMidVal;
     const maxAbs = Math.max(1e-9, ...cells.map((c) => (Number.isFinite(c.value) ? Math.abs(c.value) : 0)));
-    const rvMin = -5;
-    const rvMax = 5;
+    const rvMin = isPvMetric ? -2 : -5;
+    const rvMax = isPvMetric ? 2 : 5;
     const glyph = (
       result: string,
       x: number,
@@ -4369,16 +4439,16 @@ export default function PitchingSuite({
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
           <filter id="location-heat-blur-heatmaps-page" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="1.2" />
+            <feGaussianBlur stdDeviation="2.1" />
           </filter>
           <filter id="location-heat-blur-rv-heatmaps-page" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="0.75" />
+            <feGaussianBlur stdDeviation="2.1" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath="url(#location-zoom-clip-heatmaps-page)">
           {heatmapDisplayView !== 'Pitch' ? (
             <>
-              <g filter={heatmapDisplayView === 'Run Values' ? 'url(#location-heat-blur-rv-heatmaps-page)' : 'url(#location-heat-blur-heatmaps-page)'}>
+              <g filter={isRvLikeMetric ? 'url(#location-heat-blur-rv-heatmaps-page)' : 'url(#location-heat-blur-heatmaps-page)'}>
                 {cells.map((c) => {
                   if (!Number.isFinite(c.value)) return null;
                   const cx = px(c.x + c.w / 2);
@@ -4390,18 +4460,18 @@ export default function PitchingSuite({
                     fill = sequentialColor(c.value, minVal, maxVal);
                   } else if (heatmapDisplayView === 'QP+') {
                     fill = divergingColor(c.value, 0, 100, 200);
-                  } else if (heatmapDisplayView === 'Run Values') {
+                  } else if (isRvLikeMetric) {
                     const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
-                    fill = divergingColor(-rvClamped, rvMin, 0, rvMax);
+                    fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
                   } else {
                     fill = divergingColor(c.value, minVal, midVal, maxVal);
                   }
                   const normalized =
                     heatmapDisplayView === 'QP+'
                       ? Math.abs(c.value - 100) / 100
-                      : heatmapDisplayView === 'Run Values'
+                      : isRvLikeMetric
                         ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
-                        : heatmapDisplayView === 'Contact Rate' && contactVisibilityScale
+                        : heatMetricView === 'Contact Rate' && contactVisibilityScale
                           ? Math.max(
                               0,
                               Math.min(
@@ -4411,13 +4481,11 @@ export default function PitchingSuite({
                               )
                             )
                           : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
-                  const runValueBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                  const isSwingRateView = heatmapDisplayView === 'Swing Rate';
-                  const isGbRateView = heatmapDisplayView === 'GB Rate';
-                  const isXMetricView = heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO';
-                  if (!isXMetricView && heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                  if (!isXMetricView && heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
-                  if (heatmapDisplayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
+                  const runValueBoost = normalized;
+                  const isSwingRateView = heatMetricView === 'Swing Rate';
+                  const isGbRateView = heatMetricView === 'GB Rate';
+                  const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
+                  if (densityNorm < 0.16) return null;
                   return (
                     <circle
                       key={`hp-blur-${c.x}-${c.y}`}
@@ -4426,9 +4494,7 @@ export default function PitchingSuite({
                       r={radius}
                       fill={fill}
                       opacity={
-                        heatmapDisplayView === 'Run Values'
-                          ? Math.max(0.45, runValueBoost * 1.1 * Math.max(0.65, densityNorm))
-                          : Math.max(0.3, runValueBoost * 1.25 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
+                        Math.max(0.3, runValueBoost * 1.25 * (heatMetricView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
                       }
                     />
                   );
@@ -4445,18 +4511,18 @@ export default function PitchingSuite({
                   fill = sequentialColor(c.value, minVal, maxVal);
                 } else if (heatmapDisplayView === 'QP+') {
                   fill = divergingColor(c.value, 0, 100, 200);
-                } else if (heatmapDisplayView === 'Run Values') {
+                } else if (isRvLikeMetric) {
                   const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
-                  fill = divergingColor(-rvClamped, rvMin, 0, rvMax);
+                  fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
                 } else {
                   fill = divergingColor(c.value, minVal, midVal, maxVal);
                 }
                 const normalized =
                   heatmapDisplayView === 'QP+'
                     ? Math.abs(c.value - 100) / 100
-                    : heatmapDisplayView === 'Run Values'
+                    : isRvLikeMetric
                       ? Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) / rvMax
-                      : heatmapDisplayView === 'Contact Rate' && contactVisibilityScale
+                      : heatMetricView === 'Contact Rate' && contactVisibilityScale
                         ? Math.max(
                             0,
                             Math.min(
@@ -4466,30 +4532,23 @@ export default function PitchingSuite({
                             )
                           )
                         : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
-                const runValueBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                const isSwingRateView = heatmapDisplayView === 'Swing Rate';
-                const isGbRateView = heatmapDisplayView === 'GB Rate';
-                const isXMetricView = heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO';
-                if (!isXMetricView && heatmapDisplayView !== 'Frequency' && heatmapDisplayView !== 'QP+' && heatmapDisplayView !== 'Run Values' && densityNorm < (isSwingRateView || isGbRateView ? 0.06 : 0.16)) return null;
-                if (!isXMetricView && heatmapDisplayView !== 'Run Values' && heatmapDisplayView !== 'QP+' && !isSwingRateView && !isGbRateView && normalized < 0.06) return null;
-                if (heatmapDisplayView === 'Run Values' && Math.abs(Math.max(rvMin, Math.min(rvMax, c.value))) < 0) return null;
+                const runValueBoost = normalized;
+                const isSwingRateView = heatMetricView === 'Swing Rate';
+                const isGbRateView = heatMetricView === 'GB Rate';
+                const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
+                if (densityNorm < 0.16) return null;
                 return (
                   <circle
                     key={`hp-core-${c.x}-${c.y}`}
                     cx={cx}
                     cy={cy}
                     r={radius}
-                    fill={fill}
-                    opacity={
-                      heatmapDisplayView === 'Run Values'
-                        ? Math.max(0.3, runValueBoost * 0.85 * Math.max(0.6, densityNorm))
-                        : Math.max(0.2, runValueBoost * 0.72 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))
-                    }
+                    fill="rgba(0,0,0,0.001)"
                     onMouseMove={(event) =>
                       setLocationHover({
                         x: event.clientX,
                         y: event.clientY,
-                        text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO' ? 3 : (heatmapDisplayView === 'Run Values' || heatmapDisplayView === 'Exit Velocity' || heatmapDisplayView === 'QP+' ? 2 : 1))}`,
+                        text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO' ? 3 : (isRvLikeMetric || heatmapDisplayView === 'Exit Velocity' || heatmapDisplayView === 'QP+' ? 2 : 1))}`,
                       })
                     }
                     onMouseLeave={() => setLocationHover(null)}
@@ -4549,7 +4608,7 @@ export default function PitchingSuite({
   );
 
   const colorColumnsByMode: Record<string, string[]> = {
-    Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100', 'ERA', 'FIP', 'xFIP'],
+    Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP'],
     Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'Whiff%', 'ERA', 'FIP', 'xFIP'],
     Results: ['Whiff%', 'K%', 'BB%', 'CSW%', 'GB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP'],
     Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
@@ -4569,6 +4628,7 @@ export default function PitchingSuite({
       'Stuff+',
       'Pitching+',
       'RV/100',
+      'PV/100',
       'K%',
       'BB%',
       'Whiff%',
@@ -4700,8 +4760,34 @@ export default function PitchingSuite({
       setLeaderboardSortDirection('desc');
     }
   }, [isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn]);
-  const leaderboardRows = useMemo(() => {
+  const tableRowsWithPv = useMemo(() => {
     const rows = overview?.table_rows ?? [];
+    const rowPitchesByKey = overview?.row_pitches_by_key ?? {};
+    const fallbackAllPitches = summaryPoints ?? [];
+    if (!rows.length) return rows;
+    return rows.map((row) => {
+      const currentPv = row['PV/100'];
+      if (currentPv !== null && currentPv !== undefined && currentPv !== '') return row;
+      const splitKey = String(row[splitColName] ?? '').trim();
+      if (!splitKey) return row;
+      const rowPitches =
+        rowPitchesByKey[splitKey] ??
+        (splitKey.toLowerCase() === 'all' ? fallbackAllPitches : []);
+      if (!rowPitches.length) return row;
+      let pvSum = 0;
+      let pvN = 0;
+      for (const pitch of rowPitches) {
+        const pv = calcPitchValue(pitch as Parameters<typeof calcPitchValue>[0]);
+        if (!Number.isFinite(pv)) continue;
+        pvSum += pv;
+        pvN += 1;
+      }
+      if (pvN <= 0) return row;
+      return { ...row, 'PV/100': Number(((pvSum / pvN) * 100).toFixed(1)) };
+    });
+  }, [overview?.table_rows, overview?.row_pitches_by_key, splitColName, summaryPoints]);
+  const leaderboardRows = useMemo(() => {
+    const rows = tableRowsWithPv;
     if (!isLeaderboardPage) return rows;
     const firstCol = leaderboardBaseColumns[0] ?? '';
     const sortCol =
@@ -4711,7 +4797,7 @@ export default function PitchingSuite({
     if (!sortCol) return rows;
     const splitColumn = leaderboardBaseColumns[0] ?? '';
     return sortTableRows(rows, sortCol, leaderboardSortDirection, splitColumn);
-  }, [overview?.table_rows, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
+  }, [tableRowsWithPv, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
   const latestTeamByPitcher = useMemo(() => {
     const points = overview?.chart_points ?? [];
     const latestTsByName: Record<string, number> = {};
@@ -4812,9 +4898,10 @@ export default function PitchingSuite({
   );
   const availableCustomColumns = useMemo(
     () =>
-      overview?.available_table_columns?.length
-        ? overview.available_table_columns
-        : FALLBACK_AVAILABLE_CUSTOM_COLUMNS,
+      (() => {
+        const base = overview?.available_table_columns?.length ? overview.available_table_columns : FALLBACK_AVAILABLE_CUSTOM_COLUMNS;
+        return base.includes('PV/100') ? base : [...base, 'PV/100'];
+      })(),
     [overview?.available_table_columns]
   );
   const remainingCustomColumns = useMemo(

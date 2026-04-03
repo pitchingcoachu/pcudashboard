@@ -817,6 +817,81 @@ def _calc_run_value(
     return 0.0
 
 
+def _pv_count_adjust(balls: Any, strikes: Any) -> float:
+    b = int(float(balls)) if _is_num(balls) else 0
+    s = int(float(strikes)) if _is_num(strikes) else 0
+    b = min(max(b, 0), 3)
+    s = min(max(s, 0), 2)
+    return max(-0.08, min(0.08, (float(b - s) * 0.02)))
+
+
+def _calc_pitch_value(
+    pitch_call: Any,
+    play_result: Any,
+    korbb: Any,
+    balls: Any = None,
+    strikes: Any = None,
+    outs: Any = None,
+    outs_on_play: Any = None,
+) -> float:
+    # Positive value favors hitter; negative favors pitcher.
+    raw_pitch_call = str(pitch_call or "")
+    desc_norm = _pro_norm_token(raw_pitch_call)
+    pitch_call_norm = _pro_pitch_call_from_description(desc_norm) if desc_norm else raw_pitch_call
+    pc = str(pitch_call_norm or raw_pitch_call or "")
+    pr = _canonical_play_result(play_result)
+    kb = str(korbb or "")
+    count_adj = _pv_count_adjust(balls, strikes)
+
+    # Terminal outcomes.
+    if kb == "Strikeout" or _pro_norm_token(play_result) in {"strikeout", "strikeoutdoubleplay", "strikeout_double_play"}:
+        return -0.18 + (0.35 * count_adj)
+    if kb == "Walk" or pr in {"Walk", "IntentionalWalk"}:
+        return 0.36 + (0.35 * count_adj)
+    if pc == "HitByPitch" or pr == "HitByPitch":
+        return 0.34 + (0.35 * count_adj)
+
+    if pc == "InPlay" or pr in {
+        "Single",
+        "Double",
+        "Triple",
+        "HomeRun",
+        "Error",
+        "Out",
+        "FieldersChoice",
+        "Sacrifice",
+        "DoublePlay",
+        "TriplePlay",
+    }:
+        if pr == "Single":
+            return 0.48
+        if pr == "Double":
+            return 0.78
+        if pr == "Triple":
+            return 1.09
+        if pr == "HomeRun":
+            return 1.40
+        if pr == "Error":
+            return 0.33
+        outs_on_play_i = int(float(outs_on_play)) if _is_num(outs_on_play) else 0
+        if outs_on_play_i > 0 or pr in {"Out", "FieldersChoice", "Sacrifice", "DoublePlay", "TriplePlay"}:
+            return -0.10
+        return -0.10
+
+    # Non-terminal pitch outcomes with count leverage.
+    if pc in {"BallCalled", "BallIntentional", "BallinDirt"}:
+        return 0.02 + (0.35 * count_adj)
+    if pc == "StrikeCalled":
+        return -0.03 + (0.35 * count_adj)
+    if pc == "StrikeSwinging":
+        return -0.05 + (0.35 * count_adj)
+    if pc in {"FoulBall", "FoulBallFieldable", "FoulBallNotFieldable"}:
+        s = int(float(strikes)) if _is_num(strikes) else 0
+        base = -0.005 if s >= 2 else -0.02
+        return base + (0.3 * count_adj)
+    return 0.0
+
+
 COMP_LEFT = -1.5
 COMP_RIGHT = 1.5
 COMP_BOTTOM = ((ZONE_BOTTOM + ZONE_TOP) / 2.0) - 1.5
@@ -1318,6 +1393,7 @@ ALL_TABLE_COLUMNS: List[str] = [
     "QP+",
     "Pitching+",
     "RV/100",
+    "PV/100",
     "IP",
     "P",
     "P/IP",
@@ -1842,6 +1918,19 @@ def _build_dynamic_table(
             for r in rv_rows
         ]
         rv100 = (((sum(rv_vals) / len(rv_vals)) * 100.0) - 0.43) if rv_vals else None
+        pv_vals = [
+            _calc_pitch_value(
+                r.get("pitch_call"),
+                r.get("play_result"),
+                r.get("korbb"),
+                r.get("balls_num"),
+                r.get("strikes_num"),
+                r.get("outs_num"),
+                r.get("outs_on_play_num"),
+            )
+            for r in grp
+        ]
+        pv100 = ((sum(pv_vals) / len(pv_vals)) * 100.0) if pv_vals else None
 
         terminal_rows = [
             r
@@ -2035,6 +2124,7 @@ def _build_dynamic_table(
             "QP+": round((qp_mean * 200.0), 1) if _is_num(qp_mean) else None,
             "Pitching+": None,
             "RV/100": round(rv100, 1) if _is_num(rv100) else None,
+            "PV/100": round(pv100, 1) if _is_num(pv100) else None,
             "IP": ip_display if outs_for_ip else None,
             "P": n,
             "P/IP": round(float(n) / ip_num, 2) if ip_num > 0 else None,
@@ -2141,7 +2231,7 @@ def _build_dynamic_table(
 
     column_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
-        "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
+        "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
         "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
         "Hitting Results": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Swing%", "Whiff%", "GB%", "K%", "BB%", "Barrel%", "EV", "LA"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
@@ -2189,6 +2279,15 @@ def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str
             row.get("outs_num"),
             row.get("outs_on_play_num"),
         )
+    pitch_value = _calc_pitch_value(
+        row.get("pitch_call"),
+        row.get("play_result"),
+        row.get("korbb"),
+        row.get("balls_num"),
+        row.get("strikes_num"),
+        row.get("outs_num"),
+        row.get("outs_on_play_num"),
+    )
     return {
         "pitch_event_id": row.get("id"),
         "pitch_uid": str(row.get("pitch_uid") or ""),
@@ -2220,6 +2319,7 @@ def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str
         "outs_num": row.get("outs_num"),
         "outs_on_play_num": row.get("outs_on_play_num"),
         "run_value": run_value,
+        "pitch_value": pitch_value,
         "release_side": row.get("rel_side"),
         "release_height": row.get("rel_height"),
         "extension": row.get("ext_value"),
@@ -2371,6 +2471,7 @@ def _build_trend_rows(
                 "la_sum": 0.0,
                 "la_n": 0,
                 "rv_sum": 0.0,
+                "pv_sum": 0.0,
                 "whiffs": 0,
                 "bf_keys": set(),
                 "k_keys": set(),
@@ -2564,6 +2665,15 @@ def _build_trend_rows(
                 row.get("outs_num"),
                 row.get("outs_on_play_num"),
             )
+        agg["pv_sum"] += _calc_pitch_value(
+            pitch_call,
+            play_result,
+            korbb,
+            balls,
+            strikes,
+            row.get("outs_num"),
+            row.get("outs_on_play_num"),
+        )
         if is_pro_row:
             agg["bf_keys"].add(pa_key)
         else:
@@ -2684,6 +2794,7 @@ def _build_trend_rows(
                     "Exit Velocity": (agg["ev_sum"] / agg["ev_n"]) if agg["ev_n"] else None,
                     "Launch Angle": (agg["la_sum"] / agg["la_n"]) if agg["la_n"] else None,
                     "RV/100": ((agg["rv_sum"] / pitches) * 100.0) if pitches else None,
+                    "PV/100": ((agg["pv_sum"] / pitches) * 100.0) if pitches else None,
                     "P": pitches,
                     "BF": bf,
                     "Whiffs": int(agg["whiffs"]),
@@ -4166,7 +4277,7 @@ def _try_pitching_overview_daily_rollup(
     if not grouped_rows:
         mode_columns_map: Dict[str, List[str]] = {
             "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
-            "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
+            "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
             "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
             "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
         }
@@ -4374,6 +4485,7 @@ def _try_pitching_overview_daily_rollup(
             "QP+": None,
             "Pitching+": None,
             "RV/100": None,
+            "PV/100": None,
         }
         table_rows.append(common)
 
@@ -4418,6 +4530,7 @@ def _try_pitching_overview_daily_rollup(
         "QP+": None,
         "Pitching+": None,
         "RV/100": None,
+        "PV/100": None,
     }
     table_rows.append(all_row)
 
@@ -4532,7 +4645,7 @@ def _try_pitching_overview_daily_rollup(
 
     mode_columns_map: Dict[str, List[str]] = {
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
-        "Process": [split_col_name, "#", "BF", "RV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
+        "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
         "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
     }
@@ -5467,12 +5580,20 @@ def _pro_row_matches_level(row: Dict[str, Any], level_filter: Optional[str]) -> 
             or ""
         )
     )
-    if team_code in PRO_AAA_TEAM_CODES:
+    sport_id = int(row.get("sport_id") or 0)
+    if team_code in PRO_TEAM_CODE_OVERLAP:
+        if sport_id == 11:
+            row_level = "AAA"
+        elif sport_id == 1:
+            row_level = "MLB"
+        else:
+            # Fall back to MLB for ambiguous historical rows missing sport_id.
+            row_level = "MLB"
+    elif team_code in PRO_AAA_ONLY_TEAM_CODES:
         row_level = "AAA"
-    elif team_code in PRO_MLB_TEAM_CODES:
+    elif team_code in PRO_MLB_ONLY_TEAM_CODES:
         row_level = "MLB"
     else:
-        sport_id = int(row.get("sport_id") or 0)
         row_level = "AAA" if sport_id == 11 else ("MLB" if sport_id == 1 else "All")
     if level_norm == "MLB":
         return row_level == "MLB"
@@ -5761,6 +5882,9 @@ PRO_AAA_TEAM_CODES: List[str] = sorted(
         *[str(code).strip().upper() for code in PRO_AAA_TEAM_NAME_BY_CODE.keys()],
     }
 )
+PRO_TEAM_CODE_OVERLAP: List[str] = sorted(set(PRO_MLB_TEAM_CODES).intersection(set(PRO_AAA_TEAM_CODES)))
+PRO_MLB_ONLY_TEAM_CODES: List[str] = sorted(set(PRO_MLB_TEAM_CODES) - set(PRO_TEAM_CODE_OVERLAP))
+PRO_AAA_ONLY_TEAM_CODES: List[str] = sorted(set(PRO_AAA_TEAM_CODES) - set(PRO_TEAM_CODE_OVERLAP))
 PRO_LEVEL_OPTIONS = ["All", "MLB", "AAA"]
 
 
@@ -5777,23 +5901,43 @@ def _pro_level_sport_ids(value: Optional[str]) -> Optional[List[int]]:
     return None
 
 
-def _pro_level_sql_clause(level_filter: Optional[str], pitcher_col: str = "pitcherteam", batter_col: str = "batterteam") -> str:
+def _pro_level_sql_clause(
+    level_filter: Optional[str],
+    pitcher_col: str = "pitcherteam",
+    batter_col: str = "batterteam",
+    sport_col: str = "sport_id",
+) -> str:
     level_norm = _pro_level_norm(level_filter)
+    team_code_expr = (
+        "UPPER(COALESCE(NULLIF(TRIM("
+        + pitcher_col
+        + "), ''), NULLIF(TRIM("
+        + batter_col
+        + "), ''), ''))"
+    )
     if level_norm == "MLB":
         return (
-            "UPPER(COALESCE(NULLIF(TRIM("
-            + pitcher_col
-            + "), ''), NULLIF(TRIM("
-            + batter_col
-            + "), ''), '')) = ANY(%(mlb_team_codes)s::text[])"
+            "("
+            + team_code_expr
+            + " = ANY(%(mlb_only_team_codes)s::text[])"
+            + " OR ("
+            + team_code_expr
+            + " = ANY(%(overlap_team_codes)s::text[]) AND COALESCE("
+            + sport_col
+            + ", 0) = 1)"
+            + ")"
         )
     if level_norm == "AAA":
         return (
-            "UPPER(COALESCE(NULLIF(TRIM("
-            + pitcher_col
-            + "), ''), NULLIF(TRIM("
-            + batter_col
-            + "), ''), '')) = ANY(%(aaa_team_codes)s::text[])"
+            "("
+            + team_code_expr
+            + " = ANY(%(aaa_only_team_codes)s::text[])"
+            + " OR ("
+            + team_code_expr
+            + " = ANY(%(overlap_team_codes)s::text[]) AND COALESCE("
+            + sport_col
+            + ", 0) = 11)"
+            + ")"
         )
     return "TRUE"
 
@@ -5864,6 +6008,9 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
                 "sport_ids_count": len(level_sport_ids or []),
                 "mlb_team_codes": PRO_MLB_TEAM_CODES,
                 "aaa_team_codes": PRO_AAA_TEAM_CODES,
+                "mlb_only_team_codes": PRO_MLB_ONLY_TEAM_CODES,
+                "aaa_only_team_codes": PRO_AAA_ONLY_TEAM_CODES,
+                "overlap_team_codes": PRO_TEAM_CODE_OVERLAP,
             }
             cur.execute(
                 """
@@ -6056,6 +6203,20 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
             pass
 
     team_labels = [_pro_team_label(code, level_norm) for code in team_codes]
+    if pitchers_by_team_code:
+        labeled_pitchers_by_team: Dict[str, List[str]] = {}
+        for code, names in pitchers_by_team_code.items():
+            label = _pro_team_label(code, level_norm)
+            labeled_pitchers_by_team[code] = names
+            labeled_pitchers_by_team[label] = names
+        pitchers_by_team_code = labeled_pitchers_by_team
+    if opp_hitters_by_team_code:
+        labeled_opp_hitters_by_team: Dict[str, List[str]] = {}
+        for code, names in opp_hitters_by_team_code.items():
+            label = _pro_team_label(code, level_norm)
+            labeled_opp_hitters_by_team[code] = names
+            labeled_opp_hitters_by_team[label] = names
+        opp_hitters_by_team_code = labeled_opp_hitters_by_team
     today_iso = date.today().isoformat()
     max_date_raw = str(date_row.get("max_date") or "").strip()
     max_date_out = max(max_date_raw, today_iso) if max_date_raw else today_iso
@@ -6210,6 +6371,9 @@ def _pro_pitching_overview(
         "sport_ids_count": len(level_sport_ids or []),
         "mlb_team_codes": PRO_MLB_TEAM_CODES,
         "aaa_team_codes": PRO_AAA_TEAM_CODES,
+        "mlb_only_team_codes": PRO_MLB_ONLY_TEAM_CODES,
+        "aaa_only_team_codes": PRO_AAA_ONLY_TEAM_CODES,
+        "overlap_team_codes": PRO_TEAM_CODE_OVERLAP,
         "team_type_norm": _pro_team_code_from_value(team_type or ""),
     }
 
@@ -7047,6 +7211,19 @@ def _pro_pitching_overview(
                 for r in group_rows
             ]
             rv100_new = (((sum(rv_fallback_vals) / len(rv_fallback_vals)) * 100.0) - 0.43) if rv_fallback_vals else None
+        pv_vals_new = [
+            _calc_pitch_value(
+                r.get("pitch_call"),
+                r.get("play_result"),
+                r.get("korbb"),
+                r.get("balls_num"),
+                r.get("strikes_num"),
+                r.get("outs_num"),
+                r.get("outs_on_play_num"),
+            )
+            for r in group_rows
+        ]
+        pv100_new = ((sum(pv_vals_new) / len(pv_vals_new)) * 100.0) if pv_vals_new else None
 
         row_obj["BF"] = bf_val
         if "AB" in row_obj:
@@ -7119,8 +7296,9 @@ def _pro_pitching_overview(
         row_obj["Ahead%"] = f"{round(ahead_pct, 1)}%" if ahead_pct is not None else None
         row_obj["E+A%"] = f"{round(ea_pct, 1)}%" if ea_pct is not None else None
         row_obj["1-1W%"] = f"{round(oneone_pct, 1)}%" if oneone_pct is not None else None
-        # PRO site: RV/100 uses hitter-side delta_run_exp per pitch * 100.
+        # PRO site: RV/100 uses delta_run_exp when available; PV/100 uses pitch-value model.
         row_obj["RV/100"] = round(rv100_new, 1) if rv100_new is not None else None
+        row_obj["PV/100"] = round(pv100_new, 1) if pv100_new is not None else None
         # Advanced pitching metrics for custom-table use.
         ip_raw = row_obj.get("IP")
         ip_num_local = 0.0
@@ -7337,6 +7515,9 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
                 "sport_ids_count": len(level_sport_ids or []),
                 "mlb_team_codes": PRO_MLB_TEAM_CODES,
                 "aaa_team_codes": PRO_AAA_TEAM_CODES,
+                "mlb_only_team_codes": PRO_MLB_ONLY_TEAM_CODES,
+                "aaa_only_team_codes": PRO_AAA_ONLY_TEAM_CODES,
+                "overlap_team_codes": PRO_TEAM_CODE_OVERLAP,
             }
             cur.execute(
                 """
@@ -7520,6 +7701,20 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
             pass
 
     team_labels = [_pro_team_label(code, level_norm) for code in team_codes]
+    if hitters_by_team_code:
+        labeled_hitters_by_team: Dict[str, List[str]] = {}
+        for code, names in hitters_by_team_code.items():
+            label = _pro_team_label(code, level_norm)
+            labeled_hitters_by_team[code] = names
+            labeled_hitters_by_team[label] = names
+        hitters_by_team_code = labeled_hitters_by_team
+    if opp_pitchers_by_team_code:
+        labeled_opp_pitchers_by_team: Dict[str, List[str]] = {}
+        for code, names in opp_pitchers_by_team_code.items():
+            label = _pro_team_label(code, level_norm)
+            labeled_opp_pitchers_by_team[code] = names
+            labeled_opp_pitchers_by_team[label] = names
+        opp_pitchers_by_team_code = labeled_opp_pitchers_by_team
     today_iso = date.today().isoformat()
     max_date_raw = str(date_row.get("max_date") or "").strip()
     max_date_out = max(max_date_raw, today_iso) if max_date_raw else today_iso
@@ -7663,6 +7858,9 @@ def _pro_hitting_overview(
         "sport_ids_count": len(level_sport_ids or []),
         "mlb_team_codes": PRO_MLB_TEAM_CODES,
         "aaa_team_codes": PRO_AAA_TEAM_CODES,
+        "mlb_only_team_codes": PRO_MLB_ONLY_TEAM_CODES,
+        "aaa_only_team_codes": PRO_AAA_ONLY_TEAM_CODES,
+        "overlap_team_codes": PRO_TEAM_CODE_OVERLAP,
         "team_type_norm": _pro_team_code_from_value(team_type_value),
     }
     team_type_norm = _pro_team_code_from_value(team_type_value)
@@ -8003,6 +8201,10 @@ def _pro_hitting_overview(
                 "play_result": str(row.get("play_result") or ""),
                 "result_label": str(row.get("result_label") or ""),
                 "session_type": str(row.get("session_type_norm") or ""),
+                "balls_num": row.get("balls_num"),
+                "strikes_num": row.get("strikes_num"),
+                "outs_num": row.get("outs_num"),
+                "outs_on_play_num": row.get("outs_on_play_num"),
                 "rel_speed": row.get("rel_speed"),
                 "exit_speed": row.get("exit_speed"),
                 "angle": row.get("angle"),
@@ -8018,6 +8220,15 @@ def _pro_hitting_overview(
                         row.get("outs_num"),
                         row.get("outs_on_play_num"),
                     )
+                ),
+                "pitch_value": _calc_pitch_value(
+                    row.get("pitch_call"),
+                    row.get("play_result"),
+                    row.get("korbb"),
+                    row.get("balls_num"),
+                    row.get("strikes_num"),
+                    row.get("outs_num"),
+                    row.get("outs_on_play_num"),
                 ),
                 "estimated_woba_using_speedangle": (
                     float(row.get("estimated_woba_using_speedangle"))
@@ -8069,6 +8280,10 @@ def _pro_hitting_overview(
                 "play_result": str(row.get("play_result") or ""),
                 "result_label": str(row.get("result_label") or ""),
                 "session_type": str(row.get("session_type_norm") or ""),
+                "balls_num": row.get("balls_num"),
+                "strikes_num": row.get("strikes_num"),
+                "outs_num": row.get("outs_num"),
+                "outs_on_play_num": row.get("outs_on_play_num"),
                 "rel_speed": row.get("rel_speed"),
                 "exit_speed": row.get("exit_speed"),
                 "angle": row.get("angle"),
@@ -8084,6 +8299,15 @@ def _pro_hitting_overview(
                         row.get("outs_num"),
                         row.get("outs_on_play_num"),
                     )
+                ),
+                "pitch_value": _calc_pitch_value(
+                    row.get("pitch_call"),
+                    row.get("play_result"),
+                    row.get("korbb"),
+                    row.get("balls_num"),
+                    row.get("strikes_num"),
+                    row.get("outs_num"),
+                    row.get("outs_on_play_num"),
                 ),
                 "estimated_woba_using_speedangle": (
                     float(row.get("estimated_woba_using_speedangle"))
@@ -11565,9 +11789,31 @@ def hitting_overview(
                 "play_result": str(row.get("play_result") or ""),
                 "result_label": str(row.get("result_label") or ""),
                 "session_type": str(row.get("session_type_norm") or ""),
+                "balls_num": row.get("balls_num"),
+                "strikes_num": row.get("strikes_num"),
+                "outs_num": row.get("outs_num"),
+                "outs_on_play_num": row.get("outs_on_play_num"),
                 "rel_speed": row.get("rel_speed"),
                 "exit_speed": row.get("exit_speed"),
                 "angle": row.get("angle"),
+                "run_value": _calc_run_value(
+                    row.get("pitch_call"),
+                    row.get("play_result"),
+                    row.get("korbb"),
+                    row.get("balls_num"),
+                    row.get("strikes_num"),
+                    row.get("outs_num"),
+                    row.get("outs_on_play_num"),
+                ),
+                "pitch_value": _calc_pitch_value(
+                    row.get("pitch_call"),
+                    row.get("play_result"),
+                    row.get("korbb"),
+                    row.get("balls_num"),
+                    row.get("strikes_num"),
+                    row.get("outs_num"),
+                    row.get("outs_on_play_num"),
+                ),
                 "distance": row.get("distance"),
                 "direction": row.get("direction"),
                 "hc_x": row.get("hc_x"),
@@ -11607,9 +11853,31 @@ def hitting_overview(
                 "play_result": str(row.get("play_result") or ""),
                 "result_label": str(row.get("result_label") or ""),
                 "session_type": str(row.get("session_type_norm") or ""),
+                "balls_num": row.get("balls_num"),
+                "strikes_num": row.get("strikes_num"),
+                "outs_num": row.get("outs_num"),
+                "outs_on_play_num": row.get("outs_on_play_num"),
                 "rel_speed": row.get("rel_speed"),
                 "exit_speed": row.get("exit_speed"),
                 "angle": row.get("angle"),
+                "run_value": _calc_run_value(
+                    row.get("pitch_call"),
+                    row.get("play_result"),
+                    row.get("korbb"),
+                    row.get("balls_num"),
+                    row.get("strikes_num"),
+                    row.get("outs_num"),
+                    row.get("outs_on_play_num"),
+                ),
+                "pitch_value": _calc_pitch_value(
+                    row.get("pitch_call"),
+                    row.get("play_result"),
+                    row.get("korbb"),
+                    row.get("balls_num"),
+                    row.get("strikes_num"),
+                    row.get("outs_num"),
+                    row.get("outs_on_play_num"),
+                ),
                 "distance": row.get("distance"),
                 "direction": row.get("direction"),
                 "hc_x": row.get("hc_x"),
@@ -12638,21 +12906,38 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
     try:
         with get_conn() as conn, conn.cursor() as cur:
             _ensure_pitch_event_edits_table(cur)
-            cur.execute(
-                """
-                UPDATE public.pitch_events
-                   SET taggedpitchtype = %(pitch_type)s,
-                       pitcher = %(pitcher)s
-                 WHERE id = ANY(%(pitch_event_ids)s::int[])
-                   AND school_code = %(school_code)s
-                """,
-                {
-                    "pitch_type": pitch_type,
-                    "pitcher": pitcher,
-                    "pitch_event_ids": pitch_ids,
-                    "school_code": school_code,
-                },
-            )
+            if school_code == "PRO":
+                cur.execute(
+                    """
+                    UPDATE public.pro_pitch_events
+                       SET taggedpitchtype = %(pitch_type)s,
+                           pitcher = %(pitcher)s
+                     WHERE id = ANY(%(pitch_event_ids)s::int[])
+                       AND school_code = %(school_code)s
+                    """,
+                    {
+                        "pitch_type": pitch_type,
+                        "pitcher": pitcher,
+                        "pitch_event_ids": pitch_ids,
+                        "school_code": school_code,
+                    },
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE public.pitch_events
+                       SET taggedpitchtype = %(pitch_type)s,
+                           pitcher = %(pitcher)s
+                     WHERE id = ANY(%(pitch_event_ids)s::int[])
+                       AND school_code = %(school_code)s
+                    """,
+                    {
+                        "pitch_type": pitch_type,
+                        "pitcher": pitcher,
+                        "pitch_event_ids": pitch_ids,
+                        "school_code": school_code,
+                    },
+                )
             if cur.rowcount <= 0:
                 raise HTTPException(status_code=404, detail="Pitch event not found for this school_code.")
             cur.execute(
