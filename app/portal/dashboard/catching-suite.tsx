@@ -1421,9 +1421,12 @@ export default function CatchingSuite() {
                       const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
                       const values = heatCells.map((c) => c.value).sort((a, b) => a - b);
                       const densityMax = Math.max(1e-9, ...heatCells.map((c) => c.density));
-                      const minVal = values.length ? values[0] : 0;
-                      const maxVal = values.length ? values[values.length - 1] : 1;
-                      const midVal = values.length ? values[Math.floor(values.length / 2)] : 0;
+                      const dynamicMinVal = values.length ? values[0] : 0;
+                      const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
+                      const dynamicMidVal = values.length ? values[Math.floor(values.length / 2)] : 0;
+                      const minVal = heatmapDisplayView === 'Whiff Rate' ? 0 : dynamicMinVal;
+                      const maxVal = heatmapDisplayView === 'Whiff Rate' ? 50 : dynamicMaxVal;
+                      const midVal = heatmapDisplayView === 'Whiff Rate' ? 25 : dynamicMidVal;
                       const maxAbs = Math.max(1, ...heatCells.map((c) => Math.abs(c.value)));
 
                       return (

@@ -85,6 +85,12 @@ export async function GET(request: Request) {
     const value = inputUrl.searchParams.get(key)?.trim() ?? '';
     if (value) url.searchParams.set(key, value);
   }
+  if (session.role === 'player') {
+    const requestedLimit = Number(url.searchParams.get('chart_points_limit') ?? '0');
+    const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 400) : 400;
+    url.searchParams.set('include_chart_points', '1');
+    url.searchParams.set('chart_points_limit', String(cappedLimit));
+  }
 
   try {
     const result = await fetchDashboardJsonWithCache({

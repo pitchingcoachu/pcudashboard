@@ -141,6 +141,13 @@ export async function GET(request: Request) {
     // Default League calls to lighter payload unless explicitly requested for short windows.
     url.searchParams.set('include_row_pitches', '0');
   }
+  if (session.role === 'player') {
+    const requestedLimit = Number(url.searchParams.get('chart_points_limit') ?? '0');
+    const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 400) : 400;
+    url.searchParams.set('include_chart_points', '1');
+    url.searchParams.set('chart_points_limit', String(cappedLimit));
+    url.searchParams.set('include_row_pitches', '0');
+  }
 
   try {
     const result = await fetchDashboardJsonWithCache({

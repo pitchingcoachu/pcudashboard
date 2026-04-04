@@ -2109,9 +2109,12 @@ export default function PlayerPlansSuite() {
       };
 
       const cells = goal.chartType === 'HeatMaps' ? buildGoalHeatCells(points, selectedHeatmapView) : [];
-      const minVal = cells.length ? Math.min(...cells.map((c) => c.value)) : 0;
-      const maxVal = cells.length ? Math.max(...cells.map((c) => c.value)) : 1;
-      const midVal = cells.length ? cells.map((c) => c.value).sort((a, b) => a - b)[Math.floor(cells.length / 2)] : 0;
+      const dynamicMinVal = cells.length ? Math.min(...cells.map((c) => c.value)) : 0;
+      const dynamicMaxVal = cells.length ? Math.max(...cells.map((c) => c.value)) : 1;
+      const dynamicMidVal = cells.length ? cells.map((c) => c.value).sort((a, b) => a - b)[Math.floor(cells.length / 2)] : 0;
+      const minVal = selectedHeatmapView === 'Whiff Rate' ? 0 : dynamicMinVal;
+      const maxVal = selectedHeatmapView === 'Whiff Rate' ? 50 : dynamicMaxVal;
+      const midVal = selectedHeatmapView === 'Whiff Rate' ? 25 : dynamicMidVal;
       const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
       const maxAbs = Math.max(1, ...cells.map((c) => Math.abs(c.value)));
 

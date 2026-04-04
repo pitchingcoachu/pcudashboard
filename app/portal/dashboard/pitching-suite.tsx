@@ -737,24 +737,8 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
   if (metric === 'xWOBA') return { min: 0.27, mid: 0.32, max: 0.37 };
   if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
 
-  if (metric === 'Whiff Rate' || metric === 'Whiff%') {
-    if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
-    const pt = selectedPitchTypes[0];
-    if (pt === 'fastball') return { min: 10, mid: 20, max: 30 };
-    if (pt === 'sinker') return { min: 5, mid: 12.5, max: 20 };
-    return { min: 20, mid: 32.5, max: 45 };
-  }
-  if (metric === 'SwStrk%') {
-    if (selectedPitchTypes.length !== 1) return { min: 6, mid: 10, max: 14 };
-    const pt = selectedPitchTypes[0];
-    if (pt === 'fastball') return { min: 4, mid: 8, max: 12 };
-    if (pt === 'sinker') return { min: 2, mid: 6, max: 10 };
-    if (pt === 'cutter') return { min: 6, mid: 10, max: 14 };
-    if (pt === 'slider' || pt === 'sweeper') return { min: 10, mid: 15, max: 20 };
-    if (pt === 'curveball') return { min: 8, mid: 12, max: 16 };
-    if (pt === 'changeup' || pt === 'splitter' || pt === 'forkball') return { min: 10, mid: 14, max: 18 };
-    return { min: 6, mid: 10, max: 14 };
-  }
+  if (metric === 'Whiff Rate' || metric === 'Whiff%') return { min: 0, mid: 25, max: 50 };
+  if (metric === 'SwStrk%') return { min: 0, mid: 12.5, max: 25 };
 
   const pitchTypeForThreshold = selectedPitchTypes.length === 1 ? selectedPitchTypes[0] : 'all';
   if (metric === 'Swing Rate' || metric === 'Swing%') {
@@ -1178,6 +1162,7 @@ export default function PitchingSuite({
   selectedSchoolCode?: string;
 }) {
   const canUsePitchEdits = role === 'admin' || role === 'coach';
+  const isPlayerRole = role === 'player';
   const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
@@ -1737,7 +1722,12 @@ export default function PitchingSuite({
     const shouldLoadLeagueCharts = isLeague && !isLeagueAllSelection && !shouldForceLeagueFastTable;
     const shouldIncludeRowPitches =
       !isLeague || (!hideLeagueSummaryCharts && !shouldForceLeagueFastTable && leagueWindowDays <= 14);
-    if (isLeaderboard) {
+    if (isPlayerRole) {
+      params.set('include_chart_points', '1');
+      params.set('chart_points_limit', '400');
+      params.set('include_row_pitches', '0');
+      params.set('include_trend_rows', isTrendPage ? '1' : '0');
+    } else if (isLeaderboard) {
       params.set('include_chart_points', '1');
       params.set('chart_points_limit', '1000');
       params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
@@ -1811,6 +1801,7 @@ export default function PitchingSuite({
     stuffLevel,
     stuffBase,
     dashboardPage,
+    isPlayerRole,
     veloMax,
     veloMin,
     withVideo,

@@ -369,6 +369,12 @@ const HITTING_TABLES = ['Results', 'Swing Decisions'];
 const CATCHING_TABLES = ['Catching Data', 'Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Raw Data', 'Batted Ball Data', 'Swing Decisions'];
 const CATCHING_SPLIT_BY = UNIVERSAL_SPLIT_BY;
 const HEATMAP_STATS = ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'SwStrk%', 'Exit Velocity', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Run Values', 'PV/100', 'xWOBA', 'xISO'];
+const HITTING_HEATMAP_STATS = ['Frequency', 'Whiff Rate', 'SwStrk%', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Exit Velocity', 'Run Values', 'PV/100', 'xWOBA', 'xISO'] as const;
+
+function heatmapStatsForReportType(reportType: ReportType): string[] {
+  if (reportType === 'Hitting') return [...HITTING_HEATMAP_STATS];
+  return HEATMAP_STATS;
+}
 const VELOCITY_CHART_OPTIONS = ['Velocity Chart (Game/Inning)', 'Average Velocity by Game', 'Average Velocity by Inning'];
 const RELEASE_VIEW_OPTIONS = ['Averages Only', 'Averages and Pitches', 'Pitches'];
 const MOVEMENT_VIEW_OPTIONS = ['Averages Only', 'Averages and Pitches'];
@@ -1053,24 +1059,8 @@ const heatmapScaleFromMetricAndPitchTypes = (
   if (metric === 'xWOBA') return { min: 0.27, mid: 0.32, max: 0.37 };
   if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
 
-  if (metric === 'Whiff Rate') {
-    if (selectedPitchTypes.length !== 1) return { min: 10, mid: 25, max: 40 };
-    const pt = selectedPitchTypes[0];
-    if (pt === 'fastball') return { min: 10, mid: 20, max: 30 };
-    if (pt === 'sinker') return { min: 5, mid: 12.5, max: 20 };
-    return { min: 20, mid: 32.5, max: 45 };
-  }
-  if (metric === 'SwStrk%') {
-    if (selectedPitchTypes.length !== 1) return { min: 6, mid: 10, max: 14 };
-    const pt = selectedPitchTypes[0];
-    if (pt === 'fastball') return { min: 4, mid: 8, max: 12 };
-    if (pt === 'sinker') return { min: 2, mid: 6, max: 10 };
-    if (pt === 'cutter') return { min: 6, mid: 10, max: 14 };
-    if (pt === 'slider' || pt === 'sweeper') return { min: 10, mid: 15, max: 20 };
-    if (pt === 'curveball') return { min: 8, mid: 12, max: 16 };
-    if (pt === 'changeup' || pt === 'splitter' || pt === 'forkball') return { min: 10, mid: 14, max: 18 };
-    return { min: 6, mid: 10, max: 14 };
-  }
+  if (metric === 'Whiff Rate') return { min: 0, mid: 25, max: 50 };
+  if (metric === 'SwStrk%') return { min: 0, mid: 12.5, max: 25 };
   if (metric === 'Swing Rate') return { min: 20, mid: 50, max: 80 };
   if (metric === 'GB Rate') return { min: 38, mid: 43, max: 48 };
   if (metric === 'Contact Rate') {
@@ -2169,7 +2159,6 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           if (startDate) params.set('start_date', startDate);
           if (endDate) params.set('end_date', endDate);
           params.set('include_chart_points', '1');
-          params.set('chart_points_limit', '1000');
           params.set('split_by', config.splitBy || 'Pitch Types');
           params.set('table_mode', config.tableMode || defaultTableModeForReportType(reportType));
           if (cellFilters.includes('Session Type')) {
@@ -2936,7 +2925,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const totalPitchCount = chartPoints.length || 1;
                   const pieTotal = pitchTypeCountList.reduce((sum, entry) => sum + entry[1], 0) || 1;
                   const isProSchool = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
-                  const heatCells = isHeatMap ? buildHeatCells(heatmapPoints, config.heatStat || 'Frequency', isProSchool) : [];
+                  const availableHeatStats = heatmapStatsForReportType(reportType);
+                  const selectedHeatStat =
+                    availableHeatStats.includes(config.heatStat || '') ? (config.heatStat || 'Frequency') : 'Frequency';
+                  const heatCells = isHeatMap ? buildHeatCells(heatmapPoints, selectedHeatStat, isProSchool) : [];
 
                   return (
                     <article
@@ -3387,10 +3379,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           <>
                             <label>Heatmap Type</label>
                             <SearchableSingleSelect
-                              options={HEATMAP_STATS
+                              options={availableHeatStats
                                 .filter((entry) => ((entry === 'xWOBA' || entry === 'xISO') ? isProSchool : true))
                                 .map((entry) => ({ value: entry, label: entry }))}
-                              value={config.heatStat || 'Frequency'}
+                              value={selectedHeatStat}
                               onChange={(next) =>
                                 setCellConfigs((current) => ({
                                   ...current,
@@ -3820,7 +3812,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const scale = w / (xMax - xMin);
                               const px = (x: number) => (x - xMin) * scale;
                               const py = (y: number) => (yMax - y) * scale;
-                              const valueLabel = config.heatStat || 'Frequency';
+                              const valueLabel = selectedHeatStat;
                               const isPvMetric = valueLabel === 'PV/100';
                               const heatMetricLabel = valueLabel;
                               const isRunValuesMetric = heatMetricLabel === 'Run Values' || heatMetricLabel === 'PV/100';
@@ -3838,8 +3830,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
                               const dynamicMidVal = values.length ? values[Math.floor(values.length / 2)] : 0;
                               const selectedHeatPitchTypes = (config.pitchTypes ?? []).filter((value) => value && value !== 'All');
-                              const fixedScale = heatmapScaleFromMetricAndPitchTypes(heatMetricLabel, selectedHeatPitchTypes);
-                              const contactVisibilityScale = heatMetricLabel === 'Contact Rate' ? heatmapScaleFromMetricAndPitchTypes('Whiff Rate', selectedHeatPitchTypes) : null;
+                              const useFixedScale = reportType === 'Pitching';
+                              const fixedScale = useFixedScale ? heatmapScaleFromMetricAndPitchTypes(heatMetricLabel, selectedHeatPitchTypes) : null;
+                              const contactVisibilityScale =
+                                useFixedScale && heatMetricLabel === 'Contact Rate'
+                                  ? heatmapScaleFromMetricAndPitchTypes('Whiff Rate', selectedHeatPitchTypes)
+                                  : null;
                               const minVal = fixedScale?.min ?? dynamicMinVal;
                               const maxVal = fixedScale?.max ?? dynamicMaxVal;
                               const midVal = fixedScale?.mid ?? dynamicMidVal;

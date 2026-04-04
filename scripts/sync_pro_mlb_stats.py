@@ -231,25 +231,30 @@ def _extract_pitcher_game_stats(feed: Dict[str, Any]) -> tuple[Dict[int, Dict[st
     return by_id, by_name
 
 
-def _fetch_game_pks(game_date: date, sport_ids: List[int]) -> List[int]:
-    params = urllib.parse.urlencode(
-        {
-            "sportId": ",".join(str(s) for s in sport_ids),
-            "date": game_date.isoformat(),
-            "hydrate": "team,probablePitcher",
-        }
-    )
-    payload = _json_get(f"{API_BASE}/schedule?{params}")
-    out: List[int] = []
-    for day in payload.get("dates") or []:
-        for game in day.get("games") or []:
-            gpk = game.get("gamePk")
-            if isinstance(gpk, int):
-                out.append(gpk)
+def _fetch_game_pks(game_date: date, sport_ids: List[int]) -> List[Tuple[int, int]]:
+    out: List[Tuple[int, int]] = []
+    seen: set[Tuple[int, int]] = set()
+    for sport_id in sport_ids:
+        params = urllib.parse.urlencode(
+            {
+                "sportId": str(sport_id),
+                "date": game_date.isoformat(),
+                "hydrate": "team,probablePitcher",
+            }
+        )
+        payload = _json_get(f"{API_BASE}/schedule?{params}")
+        for day in payload.get("dates") or []:
+            for game in day.get("games") or []:
+                gpk = game.get("gamePk")
+                if isinstance(gpk, int):
+                    item = (gpk, int(sport_id))
+                    if item not in seen:
+                        seen.add(item)
+                        out.append(item)
     return out
 
 
-def _fetch_game_pitches(game_pk: int) -> Tuple[Dict[str, Any], List[PitchEventRow]]:
+def _fetch_game_pitches(game_pk: int, fallback_sport_id: int) -> Tuple[Dict[str, Any], List[PitchEventRow]]:
     try:
         feed = _json_get(f"{API_BASE_GAME_FEED}/game/{game_pk}/feed/live")
     except Exception:
@@ -271,7 +276,9 @@ def _fetch_game_pitches(game_pk: int) -> Tuple[Dict[str, Any], List[PitchEventRo
     )
     game_type = str(game.get("type") or "")
     season = str(game.get("season") or "")
-    sport_id = int(sport.get("id") or 1)
+    sport_id = _safe_int(sport.get("id"))
+    if sport_id is None:
+        sport_id = int(fallback_sport_id or 1)
     home_team_id = home.get("id")
     away_team_id = away.get("id")
     home_team = home.get("abbreviation")
@@ -852,14 +859,14 @@ def main() -> int:
             conn.commit()
 
         for day in _daterange(start, end):
-            game_pks = _fetch_game_pks(day, sport_ids)
-            if not game_pks:
+            game_refs = _fetch_game_pks(day, sport_ids)
+            if not game_refs:
                 print(f"{day.isoformat()}: no games")
                 continue
-            print(f"{day.isoformat()}: {len(game_pks)} games")
-            for game_pk in game_pks:
+            print(f"{day.isoformat()}: {len(game_refs)} games")
+            for game_pk, fallback_sport_id in game_refs:
                 try:
-                    _, rows = _fetch_game_pitches(game_pk)
+                    _, rows = _fetch_game_pitches(game_pk, fallback_sport_id=fallback_sport_id)
                 except Exception as exc:
                     print(f"  game {game_pk}: fetch failed: {exc}", file=sys.stderr)
                     continue
