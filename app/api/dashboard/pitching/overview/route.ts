@@ -15,6 +15,13 @@ function resolveOverviewTimeoutMs(schoolCode: string): number {
   return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 300000 : 120000;
 }
 
+function resolveOverviewCachePolicy(schoolCode: string): { ttlMs: number; staleTtlMs: number } {
+  const upper = String(schoolCode ?? '').trim().toUpperCase();
+  if (upper === 'PRO') return { ttlMs: 90000, staleTtlMs: 600000 };
+  if (upper === 'LEAGUE') return { ttlMs: 30000, staleTtlMs: 120000 };
+  return { ttlMs: 45000, staleTtlMs: 180000 };
+}
+
 function parseIsoDate(value: string): Date | null {
   if (!value) return null;
   const d = new Date(value);
@@ -61,6 +68,7 @@ export async function GET(request: Request) {
   const pcMax = inputUrl.searchParams.get('pc_max')?.trim() ?? '';
   const includeChartPoints = inputUrl.searchParams.get('include_chart_points')?.trim() ?? '';
   const chartPointsLimit = inputUrl.searchParams.get('chart_points_limit')?.trim() ?? '';
+  const chartOnly = inputUrl.searchParams.get('chart_only')?.trim() ?? '';
   const includeRowPitches = inputUrl.searchParams.get('include_row_pitches')?.trim() ?? '';
   const includeTrendRows = inputUrl.searchParams.get('include_trend_rows')?.trim() ?? '';
   const playerIdentity = await resolveDashboardPlayerIdentity({
@@ -130,6 +138,7 @@ export async function GET(request: Request) {
 
   if (includeChartPoints) url.searchParams.set('include_chart_points', includeChartPoints);
   if (chartPointsLimit) url.searchParams.set('chart_points_limit', chartPointsLimit);
+  if (chartOnly) url.searchParams.set('chart_only', chartOnly);
   if (includeRowPitches) url.searchParams.set('include_row_pitches', includeRowPitches);
   if (includeTrendRows) url.searchParams.set('include_trend_rows', includeTrendRows);
   if (forceLeagueLight) {
@@ -148,12 +157,13 @@ export async function GET(request: Request) {
     url.searchParams.set('chart_points_limit', String(cappedLimit));
     url.searchParams.set('include_row_pitches', '0');
   }
+  const cachePolicy = resolveOverviewCachePolicy(schoolCode);
 
   try {
     const result = await fetchDashboardJsonWithCache({
       cacheKey: `pitching:overview:${url.toString()}`,
-      ttlMs: 30000,
-      staleTtlMs: 120000,
+      ttlMs: cachePolicy.ttlMs,
+      staleTtlMs: cachePolicy.staleTtlMs,
       timeoutMs: resolveOverviewTimeoutMs(schoolCode),
       retries: 0,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),

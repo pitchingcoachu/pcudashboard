@@ -1216,6 +1216,10 @@ export default function PitchingSuite({
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const autoFallbackAppliedRef = useRef(false);
+  const filtersCacheRef = useRef(new Map<string, { at: number; payload: FiltersPayload }>());
+  const filtersInflightRef = useRef(new Map<string, Promise<FiltersPayload>>());
+  const overviewCacheRef = useRef(new Map<string, { at: number; payload: OverviewPayload }>());
+  const overviewInflightRef = useRef(new Map<string, Promise<OverviewPayload>>());
   const [abSortColumn, setAbSortColumn] = useState('Pitch #');
   const [abSortDirection, setAbSortDirection] = useState<SortDirection>('asc');
   const [manualEntriesSortColumn, setManualEntriesSortColumn] = useState('Date');
@@ -1505,25 +1509,48 @@ export default function PitchingSuite({
     setError('');
     const filterParams = new URLSearchParams();
     if (level) filterParams.set('level', level);
-    fetch(`/api/dashboard/pitching/filters?${filterParams.toString()}`, { signal: controller.signal, cache: 'no-store' })
-      .then(async (response) => {
+    const filterKey = `/api/dashboard/pitching/filters?${filterParams.toString()}`;
+    const filterTtlMs = 120000;
+    const applyFiltersPayload = (payload: FiltersPayload) => {
+      autoFallbackAppliedRef.current = false;
+      setFilters(payload);
+      setTeamType(pickDefaultTeamType(payload.team_types ?? [], payload.school_code ?? ''));
+      const latestDate = clampYmdToToday(payload.max_date ?? '');
+      const minDate = payload.min_date ?? '';
+      const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
+      if (isLeagueSchool) {
+        const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
+        setStartDate(leagueStart);
+        setEndDate(latestDate || leagueStart);
+      } else {
+        setStartDate(latestDate);
+        setEndDate(latestDate);
+      }
+    };
+    const cached = filtersCacheRef.current.get(filterKey);
+    if (cached && Date.now() - cached.at < filterTtlMs) {
+      applyFiltersPayload(cached.payload);
+      setLoadingFilters(false);
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }
+    const inflight = filtersInflightRef.current.get(filterKey);
+    const requestPromise =
+      inflight ??
+      (async () => {
+        const response = await fetch(filterKey, { signal: controller.signal, cache: 'no-store' });
         const payload = (await response.json().catch(() => ({}))) as FiltersPayload & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load dashboard filters.');
+        return payload;
+      })();
+    if (!inflight) filtersInflightRef.current.set(filterKey, requestPromise);
+    requestPromise
+      .then((payload) => {
         if (!active) return;
-        autoFallbackAppliedRef.current = false;
-        setFilters(payload);
-        setTeamType(pickDefaultTeamType(payload.team_types ?? [], payload.school_code ?? ''));
-        const latestDate = clampYmdToToday(payload.max_date ?? '');
-        const minDate = payload.min_date ?? '';
-        const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
-        if (isLeagueSchool) {
-          const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
-          setStartDate(leagueStart);
-          setEndDate(latestDate || leagueStart);
-        } else {
-          setStartDate(latestDate);
-          setEndDate(latestDate);
-        }
+        filtersCacheRef.current.set(filterKey, { at: Date.now(), payload });
+        applyFiltersPayload(payload);
       })
       .catch((requestError) => {
         if (!active) return;
@@ -1531,6 +1558,7 @@ export default function PitchingSuite({
         setError(requestError instanceof Error ? requestError.message : 'Failed to load dashboard filters.');
       })
       .finally(() => {
+        filtersInflightRef.current.delete(filterKey);
         if (active) setLoadingFilters(false);
       });
 
@@ -1719,17 +1747,23 @@ export default function PitchingSuite({
     if (pcMax) params.set('pc_max', pcMax);
     const isTrendPage = dashboardPage === 'Trend';
     const isLeaderboard = dashboardPage === 'Leaderboard';
+    const isSummaryPage = dashboardPage === 'Summary';
     const shouldLoadLeagueCharts = isLeague && !isLeagueAllSelection && !shouldForceLeagueFastTable;
     const shouldIncludeRowPitches =
-      !isLeague || (!hideLeagueSummaryCharts && !shouldForceLeagueFastTable && leagueWindowDays <= 14);
-    if (isPlayerRole) {
+      (!isLeague && !isPro) || (isLeague && !hideLeagueSummaryCharts && !shouldForceLeagueFastTable && leagueWindowDays <= 14);
+    const shouldForceProFastSummary = isPro && isSummaryPage;
+    if (shouldForceProFastSummary) {
+      params.set('include_chart_points', '0');
+      params.set('include_row_pitches', '0');
+      params.set('include_trend_rows', '0');
+    } else if (isPlayerRole) {
       params.set('include_chart_points', '1');
-      params.set('chart_points_limit', '400');
+      params.set('chart_points_limit', '300');
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', isTrendPage ? '1' : '0');
     } else if (isLeaderboard) {
       params.set('include_chart_points', '1');
-      params.set('chart_points_limit', '1000');
+      params.set('chart_points_limit', isPro ? '400' : '1000');
       params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
       params.set('include_trend_rows', '0');
     } else if (hideLeagueSummaryCharts || shouldForceLeagueFastTable) {
@@ -1738,19 +1772,95 @@ export default function PitchingSuite({
       params.set('include_trend_rows', '0');
     } else {
       params.set('include_chart_points', shouldLoadLeagueCharts ? '1' : (isLeague ? '0' : '1'));
-      if (shouldLoadLeagueCharts || !isLeague) params.set('chart_points_limit', '1000');
+      if (shouldLoadLeagueCharts || !isLeague) params.set('chart_points_limit', isPro ? '500' : '1000');
       params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
       params.set('include_trend_rows', isLeague ? '0' : (isTrendPage ? '1' : '0'));
     }
-
-    fetch(`/api/dashboard/pitching/overview?${params.toString()}`, { signal: controller.signal })
-      .then(async (response) => {
+    const requestKey = `/api/dashboard/pitching/overview?${params.toString()}`;
+    const chartRequestKey = shouldForceProFastSummary
+      ? (() => {
+          const chartParams = new URLSearchParams(params);
+          chartParams.set('include_chart_points', '1');
+          chartParams.set('chart_points_limit', '350');
+          chartParams.set('chart_only', '1');
+          chartParams.set('include_row_pitches', '0');
+          chartParams.set('include_trend_rows', '0');
+          return `/api/dashboard/pitching/overview?${chartParams.toString()}`;
+        })()
+      : null;
+    const overviewTtlMs = isPro ? 90000 : 30000;
+    const applyOverviewPayload = (payload: OverviewPayload) => {
+      const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
+      if (noRows && !autoFallbackAppliedRef.current) autoFallbackAppliedRef.current = true;
+      setOverview(payload);
+    };
+    const applyChartPayload = (payload: OverviewPayload) => {
+      setOverview((previous) => {
+        if (!previous) return payload;
+        return {
+          ...previous,
+          chart_points: payload.chart_points ?? [],
+          heatmap_points: payload.heatmap_points ?? [],
+          trend_rows: payload.trend_rows ?? [],
+        };
+      });
+    };
+    const cachedOverview = overviewCacheRef.current.get(requestKey);
+    if (cachedOverview && Date.now() - cachedOverview.at < overviewTtlMs) {
+      applyOverviewPayload(cachedOverview.payload);
+      setLoadingOverview(false);
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }
+    const inflightOverview = overviewInflightRef.current.get(requestKey);
+    const overviewPromise =
+      inflightOverview ??
+      (async () => {
+        const response = await fetch(requestKey, { signal: controller.signal });
         const payload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load pitching overview.');
+        return payload;
+      })();
+    if (!inflightOverview) overviewInflightRef.current.set(requestKey, overviewPromise);
+    overviewPromise
+      .then((payload) => {
         if (!active) return;
-        const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
-        if (noRows && !autoFallbackAppliedRef.current) autoFallbackAppliedRef.current = true;
-        setOverview(payload);
+        overviewCacheRef.current.set(requestKey, { at: Date.now(), payload });
+        applyOverviewPayload(payload);
+        if (!chartRequestKey) return;
+
+        const cachedChart = overviewCacheRef.current.get(chartRequestKey);
+        if (cachedChart && Date.now() - cachedChart.at < overviewTtlMs) {
+          applyChartPayload(cachedChart.payload);
+          return;
+        }
+
+        const inflightChart = overviewInflightRef.current.get(chartRequestKey);
+        const chartPromise =
+          inflightChart ??
+          (async () => {
+            const response = await fetch(chartRequestKey, { signal: controller.signal });
+            const chartPayload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
+            if (!response.ok) throw new Error(chartPayload.error ?? 'Failed to load pitching chart data.');
+            return chartPayload;
+          })();
+        if (!inflightChart) overviewInflightRef.current.set(chartRequestKey, chartPromise);
+
+        chartPromise
+          .then((chartPayload) => {
+            if (!active) return;
+            overviewCacheRef.current.set(chartRequestKey, { at: Date.now(), payload: chartPayload });
+            applyChartPayload(chartPayload);
+          })
+          .catch((chartError) => {
+            if (!active) return;
+            if (chartError instanceof DOMException && chartError.name === 'AbortError') return;
+          })
+          .finally(() => {
+            overviewInflightRef.current.delete(chartRequestKey);
+          });
       })
       .catch((requestError) => {
         if (!active) return;
@@ -1758,6 +1868,7 @@ export default function PitchingSuite({
         setError(requestError instanceof Error ? requestError.message : 'Failed to load pitching overview.');
       })
       .finally(() => {
+        overviewInflightRef.current.delete(requestKey);
         if (active) setLoadingOverview(false);
       });
 
@@ -5270,7 +5381,7 @@ export default function PitchingSuite({
           {dashboardPage === 'Summary' || dashboardPage === 'Leaderboard' ? (
             <>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <h3 style={{ margin: 0 }}>{overviewHeaderLabel}</h3>
+              <h3 style={{ margin: 0 }}>{overviewHeaderLabel}</h3>
                 {summaryTeamLogoUrl ? (
                   <img
                     src={summaryTeamLogoUrl}

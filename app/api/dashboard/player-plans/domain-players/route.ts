@@ -47,11 +47,15 @@ export async function GET(request: Request) {
   }
 
   try {
-    if (domain === 'Hitting') {
-      const filtersUrl = new URL(`${apiBase}/v1/hitting/filters`);
+    if (domain === 'Hitting' || domain === 'Pitching' || domain === 'Catching') {
+      const filtersUrl = new URL(`${apiBase}/v1/${domain.toLowerCase()}/filters`);
       filtersUrl.searchParams.set('school_code', schoolCode);
+      if (String(schoolCode ?? '').trim().toUpperCase() === 'PRO') {
+        const level = String(inputUrl.searchParams.get('level') ?? '').trim();
+        if (level && level !== 'All') filtersUrl.searchParams.set('level', level);
+      }
       const result = await fetchDashboardJsonWithCache({
-        cacheKey: `player-plans:hitting:filters:${filtersUrl.toString()}`,
+        cacheKey: `player-plans:${domain.toLowerCase()}:filters:${filtersUrl.toString()}`,
         ttlMs: 120000,
         staleTtlMs: 300000,
         timeoutMs: 10000,
@@ -61,12 +65,17 @@ export async function GET(request: Request) {
       if (result.status < 200 || result.status >= 300) {
         return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
       }
-      const hitterPool = uniqueNames(Array.isArray(result.payload.hitters) ? result.payload.hitters : []);
-      const hitters = hitterPool;
-      if (!playerIdentity) return NextResponse.json({ players: hitters }, { headers: RESPONSE_CACHE_HEADERS });
-      const scoped = selectScopedPlayerName(hitters, playerIdentity);
+      const poolRaw =
+        domain === 'Hitting'
+          ? result.payload.hitters
+          : domain === 'Pitching'
+            ? result.payload.pitchers
+            : result.payload.catchers;
+      const playerPool = uniqueNames(Array.isArray(poolRaw) ? poolRaw : []);
+      if (!playerIdentity) return NextResponse.json({ players: playerPool }, { headers: RESPONSE_CACHE_HEADERS });
+      const scoped = selectScopedPlayerName(playerPool, playerIdentity);
       if (scoped) return NextResponse.json({ players: [scoped] }, { headers: RESPONSE_CACHE_HEADERS });
-      const fallback = scopedPlayerQueryName(playerIdentity, 'Hitting');
+      const fallback = scopedPlayerQueryName(playerIdentity, domain);
       return NextResponse.json({ players: fallback ? [fallback] : [] }, { headers: RESPONSE_CACHE_HEADERS });
     }
 

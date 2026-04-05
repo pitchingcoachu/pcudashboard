@@ -2278,7 +2278,67 @@ main {
   display: grid;
   gap: 1rem;
   margin-top: 0.8rem;
+  align-items: stretch;
+}
+
+.portal-custom-reports-grid-shell {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.portal-custom-reports-grid-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
   align-items: start;
+}
+
+.portal-custom-reports-col-label-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.portal-custom-reports-col-label {
+  text-align: center;
+  font: 700 0.82rem/1.2 Manrope, sans-serif;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.93);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  background: rgba(8, 12, 20, 0.72);
+  padding: 0.28rem 0.45rem;
+  min-height: 32px;
+  display: grid;
+  place-items: center;
+}
+
+.portal-custom-reports-row-label-grid {
+  display: grid;
+  grid-auto-flow: row;
+  gap: 1rem;
+  width: 3.1rem;
+  margin-top: 0.8rem;
+  align-self: stretch;
+}
+
+.portal-custom-reports-row-label-vertical {
+  writing-mode: horizontal-tb;
+  text-orientation: upright;
+  white-space: pre-line;
+  font: 800 1rem/1.05 Manrope, sans-serif;
+  letter-spacing: 0.04em;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.93);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  background: rgba(8, 12, 20, 0.72);
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  justify-self: stretch;
+  min-height: 0;
+  padding: 0.12rem 0.08rem;
+  box-sizing: border-box;
 }
 
 .portal-custom-reports-cell {
@@ -4195,6 +4255,18 @@ main {
 
   .portal-custom-reports-cell {
     min-height: 320px;
+  }
+
+  .portal-custom-reports-grid-row {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-custom-reports-col-label-grid {
+    margin-left: 0 !important;
+  }
+
+  .portal-custom-reports-row-label-grid {
+    display: none;
   }
 
   .portal-custom-reports-heatmap,

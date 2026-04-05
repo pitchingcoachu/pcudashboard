@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 import hashlib
 import json
+import logging
 from math import isfinite, isnan
 import os
 import re
@@ -37,6 +38,7 @@ from .schemas import (
 
 app = FastAPI(title="PCU Dashboard API", version="0.1.0")
 settings = get_settings()
+logger = logging.getLogger("dashboard_api")
 
 app.add_middleware(
     CORSMiddleware,
@@ -147,10 +149,33 @@ _OVERVIEW_CACHE_MAX_ENTRIES = max(64, int(os.getenv("DASHBOARD_OVERVIEW_CACHE_MA
 _CHART_POINTS_MAX = max(1000, int(os.getenv("DASHBOARD_CHART_POINTS_MAX", "6000")))
 _OVERVIEW_CACHE: Dict[str, tuple[float, Any]] = {}
 _OVERVIEW_CACHE_LOCK = threading.Lock()
+_PRO_CHART_CACHE_TTL_SECONDS = max(0, int(os.getenv("DASHBOARD_PRO_CHART_CACHE_TTL_SECONDS", "900")))
+_PRO_CHART_CACHE_MAX_ENTRIES = max(128, int(os.getenv("DASHBOARD_PRO_CHART_CACHE_MAX_ENTRIES", "1024")))
+_PRO_CHART_CACHE: Dict[str, tuple[float, Any]] = {}
+_PRO_CHART_CACHE_LOCK = threading.Lock()
 _FILTERS_CACHE_TTL_SECONDS = max(0, int(os.getenv("DASHBOARD_FILTERS_CACHE_TTL_SECONDS", "120")))
 _FILTERS_CACHE_MAX_ENTRIES = max(32, int(os.getenv("DASHBOARD_FILTERS_CACHE_MAX_ENTRIES", "128")))
 _FILTERS_CACHE: Dict[str, tuple[float, Any]] = {}
 _FILTERS_CACHE_LOCK = threading.Lock()
+_PERF_LOG_ENABLED = str(os.getenv("DASHBOARD_PERF_LOG_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _perf_log(route: str, school_code: str, path: str, started_at: float, **extra: Any) -> None:
+    if not _PERF_LOG_ENABLED:
+        return
+    payload: Dict[str, Any] = {
+        "kind": "perf",
+        "route": route,
+        "school_code": school_code,
+        "path": path,
+        "elapsed_ms": round((time.perf_counter() - started_at) * 1000.0, 1),
+    }
+    if extra:
+        payload.update(extra)
+    try:
+        logger.info("dashboard_perf %s", json.dumps(payload, separators=(",", ":"), default=str))
+    except Exception:
+        pass
 
 
 def _json_stable(value: Any) -> Any:
@@ -208,6 +233,38 @@ def _overview_cache_invalidate_school(school_code: str) -> None:
         keys = [key for key in _OVERVIEW_CACHE.keys() if token in key]
         for key in keys:
             _OVERVIEW_CACHE.pop(key, None)
+    with _PRO_CHART_CACHE_LOCK:
+        keys = [key for key in _PRO_CHART_CACHE.keys() if token in key]
+        for key in keys:
+            _PRO_CHART_CACHE.pop(key, None)
+
+
+def _pro_chart_cache_get(key: str) -> Any:
+    if _PRO_CHART_CACHE_TTL_SECONDS <= 0:
+        return None
+    now = time.time()
+    with _PRO_CHART_CACHE_LOCK:
+        hit = _PRO_CHART_CACHE.get(key)
+        if not hit:
+            return None
+        ts, value = hit
+        if now - ts > _PRO_CHART_CACHE_TTL_SECONDS:
+            _PRO_CHART_CACHE.pop(key, None)
+            return None
+        return value
+
+
+def _pro_chart_cache_set(key: str, value: Any) -> None:
+    if _PRO_CHART_CACHE_TTL_SECONDS <= 0:
+        return
+    now = time.time()
+    with _PRO_CHART_CACHE_LOCK:
+        _PRO_CHART_CACHE[key] = (now, value)
+        if len(_PRO_CHART_CACHE) > _PRO_CHART_CACHE_MAX_ENTRIES:
+            for stale_key, _ in sorted(_PRO_CHART_CACHE.items(), key=lambda item: item[1][0])[
+                : max(1, len(_PRO_CHART_CACHE) - _PRO_CHART_CACHE_MAX_ENTRIES)
+            ]:
+                _PRO_CHART_CACHE.pop(stale_key, None)
 
 
 def _filters_cache_key(endpoint: str, school_code: str) -> str:
@@ -3104,12 +3161,21 @@ _MOD_SYNC_REFRESH_LOCK = threading.Lock()
 _MOD_SYNC_REFRESH_RUNNING: set[str] = set()
 _PERF_INDEX_SYNC_INTERVAL_SECONDS = 3600.0
 _PERF_INDEX_LAST_AT: float = 0.0
+_PRO_PE_COLUMNS_CACHE: set[str] = set()
+_PRO_PE_COLUMNS_LAST_AT: float = 0.0
+_PRO_PE_COLUMNS_TTL_SECONDS: float = 900.0
 _LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS = max(
     60.0, float(os.getenv("DASHBOARD_LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS", "300"))
 )
 _LEAGUE_DAILY_ROLLUP_LAST_AT: float = 0.0
 _LEAGUE_DAILY_ROLLUP_REFRESH_LOCK = threading.Lock()
 _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING = False
+_PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS = max(
+    60.0, float(os.getenv("DASHBOARD_PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS", "180"))
+)
+_PRO_DAILY_ROLLUP_LAST_AT: float = 0.0
+_PRO_DAILY_ROLLUP_REFRESH_LOCK = threading.Lock()
+_PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
 
 
 def _ensure_pitch_event_edits_table(cur: Any) -> None:
@@ -3445,6 +3511,165 @@ def _ensure_performance_indexes() -> None:
         CREATE INDEX IF NOT EXISTS idx_rollup_league_split_school_date_team
         ON public.pitch_events_daily_rollup_league_split (school_code, session_date, split_group, pitcher_team_norm)
         """,
+        """
+        CREATE TABLE IF NOT EXISTS public.pro_pitch_events_daily_rollup (
+          school_code TEXT NOT NULL,
+          session_date DATE NOT NULL,
+          sport_id INT NOT NULL,
+          level_bucket TEXT NOT NULL,
+          pitch_type TEXT NOT NULL,
+          pitcher_name TEXT NOT NULL,
+          batter_name TEXT NOT NULL,
+          catcher_name TEXT NOT NULL,
+          pitcher_norm TEXT NOT NULL,
+          batter_norm TEXT NOT NULL,
+          catcher_norm TEXT NOT NULL,
+          pitcher_team_code TEXT NOT NULL,
+          batter_team_code TEXT NOT NULL,
+          pitcherthrows_norm TEXT NOT NULL,
+          batterside_norm TEXT NOT NULL,
+          balls_num INT NOT NULL,
+          strikes_num INT NOT NULL,
+          pitches INT NOT NULL,
+          velo_sum DOUBLE PRECISION NOT NULL,
+          velo_n INT NOT NULL,
+          velo_max DOUBLE PRECISION NULL,
+          spin_sum DOUBLE PRECISION NOT NULL,
+          spin_n INT NOT NULL,
+          ivb_sum DOUBLE PRECISION NOT NULL,
+          ivb_n INT NOT NULL,
+          hb_sum DOUBLE PRECISION NOT NULL,
+          hb_n INT NOT NULL,
+          in_zone_n INT NOT NULL,
+          loc_n INT NOT NULL,
+          strike_n INT NOT NULL,
+          swing_n INT NOT NULL,
+          whiff_n INT NOT NULL,
+          csw_n INT NOT NULL,
+          comp_n INT NOT NULL,
+          fps_num INT NOT NULL,
+          fps_den INT NOT NULL,
+          early_num INT NOT NULL,
+          early_den INT NOT NULL,
+          ahead_num INT NOT NULL,
+          ahead_den INT NOT NULL,
+          oneone_num INT NOT NULL,
+          oneone_den INT NOT NULL,
+          ea_num INT NOT NULL,
+          ea_den INT NOT NULL,
+          in_play_n INT NOT NULL,
+          gb_n INT NOT NULL,
+          barrel_n INT NOT NULL,
+          ev_sum DOUBLE PRECISION NOT NULL,
+          ev_n INT NOT NULL,
+          la_sum DOUBLE PRECISION NOT NULL,
+          la_n INT NOT NULL,
+          bf_n INT NOT NULL,
+          k_n INT NOT NULL,
+          bb_n INT NOT NULL,
+          hbp_n INT NOT NULL,
+          hr_n INT NOT NULL,
+          single_n INT NOT NULL,
+          double_n INT NOT NULL,
+          triple_n INT NOT NULL,
+          xwoba_sum DOUBLE PRECISION NOT NULL,
+          xwoba_n INT NOT NULL,
+          woba_sum DOUBLE PRECISION NOT NULL,
+          woba_n INT NOT NULL,
+          PRIMARY KEY (
+            school_code, session_date, sport_id, level_bucket, pitch_type,
+            pitcher_norm, batter_norm, catcher_norm, pitcher_team_code, batter_team_code,
+            pitcherthrows_norm, batterside_norm, balls_num, strikes_num
+          )
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_rollup_date_level
+        ON public.pro_pitch_events_daily_rollup (school_code, session_date, level_bucket)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_rollup_date_pitcher
+        ON public.pro_pitch_events_daily_rollup (school_code, session_date, pitcher_norm)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_rollup_date_batter
+        ON public.pro_pitch_events_daily_rollup (school_code, session_date, batter_norm)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_rollup_date_team_pitch_type
+        ON public.pro_pitch_events_daily_rollup (school_code, session_date, pitcher_team_code, pitch_type)
+        """,
+        # PRO query-path indexes (partial to keep index size/write cost lower).
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_pe_session_date_brin
+        ON public.pro_pitch_events
+        USING BRIN (session_date)
+        WITH (pages_per_range = 64)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_pe_date_order
+        ON public.pro_pitch_events (session_date, game_pk, at_bat_index, event_index, id)
+        WHERE school_code = 'PRO'
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_pe_date_sport
+        ON public.pro_pitch_events (session_date, sport_id)
+        WHERE school_code = 'PRO'
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_pe_date_batterteam
+        ON public.pro_pitch_events (session_date, (UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), ''))))
+        WHERE school_code = 'PRO'
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_pe_date_pitcherteam
+        ON public.pro_pitch_events (session_date, (UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), ''))))
+        WHERE school_code = 'PRO'
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_pe_date_pitcherthrows
+        ON public.pro_pitch_events (session_date, (COALESCE(NULLIF(TRIM(pitcherthrows), ''), '')))
+        WHERE school_code = 'PRO'
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_pe_date_batterside
+        ON public.pro_pitch_events (session_date, (COALESCE(NULLIF(TRIM(batterside), ''), '')))
+        WHERE school_code = 'PRO'
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_pe_date_pitcher_norm
+        ON public.pro_pitch_events
+        (session_date, (lower(regexp_replace(COALESCE(NULLIF(TRIM(pitcher), ''), ''), '[^a-z0-9]', '', 'g'))))
+        WHERE school_code = 'PRO'
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_pe_date_batter_norm
+        ON public.pro_pitch_events
+        (session_date, (lower(regexp_replace(COALESCE(NULLIF(TRIM(batter), ''), ''), '[^a-z0-9]', '', 'g'))))
+        WHERE school_code = 'PRO'
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_pe_date_pitch_type_norm
+        ON public.pro_pitch_events
+        (session_date, (
+          CASE
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Four-Seam' THEN 'Fastball'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Two-Seam' THEN 'Sinker'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Changeup' THEN 'ChangeUp'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Knuckleball' THEN 'Knuckleball'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Splitter' THEN 'Splitter'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Knuckle-Curve' THEN 'Curveball'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Slider' THEN 'Slider'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Curveball' THEN 'Curveball'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Sweeper' THEN 'Sweeper'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Sinker' THEN 'Sinker'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Cutter' THEN 'Cutter'
+            WHEN COALESCE(NULLIF(TRIM(taggedpitchtype), ''), '') = 'Fastball' THEN 'Fastball'
+            ELSE 'Undefined'
+          END
+        ))
+        WHERE school_code = 'PRO'
+        """,
     ]
 
     try:
@@ -3460,6 +3685,30 @@ def _ensure_performance_indexes() -> None:
     except Exception:
         # Keep API serving even if index create fails due permissions/locks.
         return
+
+
+def _pro_pitch_events_columns() -> set[str]:
+    global _PRO_PE_COLUMNS_CACHE, _PRO_PE_COLUMNS_LAST_AT
+    now = time.monotonic()
+    if _PRO_PE_COLUMNS_CACHE and (now - _PRO_PE_COLUMNS_LAST_AT) < _PRO_PE_COLUMNS_TTL_SECONDS:
+        return _PRO_PE_COLUMNS_CACHE
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'pro_pitch_events'
+                """
+            )
+            cols = {str(r["column_name"]) for r in cur.fetchall()}
+            if cols:
+                _PRO_PE_COLUMNS_CACHE = cols
+                _PRO_PE_COLUMNS_LAST_AT = now
+    except Exception:
+        pass
+    return _PRO_PE_COLUMNS_CACHE
 
 
 def _refresh_league_daily_rollup(force: bool = False) -> None:
@@ -4693,6 +4942,807 @@ def _try_pitching_overview_daily_rollup(
     )
 
 
+def _refresh_pro_daily_rollup(force: bool = False) -> None:
+    global _PRO_DAILY_ROLLUP_LAST_AT
+    now = time.monotonic()
+    if (not force) and ((now - _PRO_DAILY_ROLLUP_LAST_AT) < _PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS):
+        return
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout = '2s'")
+            cur.execute("SET LOCAL statement_timeout = '300s'")
+            cur.execute(
+                """
+                SELECT
+                  MIN(session_date)::date AS min_date,
+                  MAX(session_date)::date AS max_date
+                FROM public.pro_pitch_events
+                WHERE school_code = 'PRO'
+                  AND session_date IS NOT NULL
+                """
+            )
+            bounds = cur.fetchone() or {}
+            min_date = bounds.get("min_date")
+            max_date = bounds.get("max_date")
+            if not min_date or not max_date:
+                _PRO_DAILY_ROLLUP_LAST_AT = now
+                return
+            cur.execute(
+                """
+                SELECT MAX(session_date)::date AS max_rollup_date
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO'
+                """
+            )
+            max_rollup = (cur.fetchone() or {}).get("max_rollup_date")
+            if max_rollup:
+                refresh_start = max(min_date, max_rollup - timedelta(days=7))
+            else:
+                refresh_start = min_date
+
+            cur.execute(
+                """
+                DELETE FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO'
+                  AND session_date >= %(refresh_start)s::date
+                """,
+                {"refresh_start": refresh_start},
+            )
+            cur.execute(
+                """
+                WITH base AS (
+                  SELECT
+                    'PRO'::text AS school_code,
+                    pe.session_date::date AS session_date,
+                    COALESCE(pe.sport_id, 0)::int AS sport_id,
+                    UPPER(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), '')) AS pitcher_team_code,
+                    UPPER(COALESCE(NULLIF(TRIM(pe.batterteam), ''), '')) AS batter_team_code,
+                    COALESCE(NULLIF(TRIM(pe.pitcher), ''), 'Unknown Pitcher') AS pitcher_name,
+                    COALESCE(NULLIF(TRIM(pe.batter), ''), 'Unknown Batter') AS batter_name,
+                    COALESCE(NULLIF(TRIM(pe.catcher), ''), 'Unknown Catcher') AS catcher_name,
+                    lower(regexp_replace(COALESCE(NULLIF(TRIM(pe.pitcher), ''), ''), '[^a-z0-9]', '', 'g')) AS pitcher_norm,
+                    lower(regexp_replace(COALESCE(NULLIF(TRIM(pe.batter), ''), ''), '[^a-z0-9]', '', 'g')) AS batter_norm,
+                    lower(regexp_replace(COALESCE(NULLIF(TRIM(pe.catcher), ''), ''), '[^a-z0-9]', '', 'g')) AS catcher_norm,
+                    CASE
+                      WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.pitcherthrows), ''), ''), 1)) = 'L' THEN 'Left'
+                      WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.pitcherthrows), ''), ''), 1)) = 'R' THEN 'Right'
+                      ELSE 'Unknown'
+                    END AS pitcherthrows_norm,
+                    CASE
+                      WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.batterside), ''), ''), 1)) = 'L' THEN 'Left'
+                      WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.batterside), ''), ''), 1)) = 'R' THEN 'Right'
+                      ELSE 'Unknown'
+                    END AS batterside_norm,
+                    """ + PRO_PITCH_TYPE_SQL + """ AS pitch_type,
+                    COALESCE(pe.balls, -1)::int AS balls_num,
+                    COALESCE(pe.strikes, -1)::int AS strikes_num,
+                    relspeed AS rel_speed,
+                    spinrate AS spin_rate,
+                    inducedvertbreak AS ivb,
+                    horzbreak AS hb,
+                    platelocside AS plate_side,
+                    platelocheight AS plate_height,
+                    exitspeed AS exit_speed,
+                    angle,
+                    lower(regexp_replace(COALESCE(NULLIF(TRIM(pe.pitchcall), ''), ''), '[^a-z0-9]+', '_', 'g')) AS pitch_call_norm,
+                    lower(regexp_replace(COALESCE(NULLIF(TRIM(pe.playresult), ''), ''), '[^a-z0-9]+', '_', 'g')) AS play_result_norm,
+                    lower(regexp_replace(COALESCE(NULLIF(TRIM(pe.korbb), ''), ''), '[^a-z0-9]+', '_', 'g')) AS korbb_norm,
+                    lower(regexp_replace(COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), ''), '[^a-z0-9]+', '_', 'g')) AS tagged_hit_type_norm,
+                    estimated_woba_using_speedangle,
+                    woba_value
+                  FROM public.pro_pitch_events pe
+                  WHERE pe.school_code = 'PRO'
+                    AND pe.session_date >= %(refresh_start)s::date
+                    AND pe.session_date <= %(max_date)s::date
+                ),
+                staged AS (
+                  SELECT
+                    b.*,
+                    CASE
+                      WHEN b.pitcher_team_code = ANY(%(overlap_team_codes)s::text[]) THEN
+                        CASE WHEN b.sport_id = 11 THEN 'AAA' ELSE 'MLB' END
+                      WHEN b.pitcher_team_code = ANY(%(aaa_only_team_codes)s::text[]) THEN 'AAA'
+                      WHEN b.pitcher_team_code = ANY(%(mlb_only_team_codes)s::text[]) THEN 'MLB'
+                      ELSE CASE WHEN b.sport_id = 11 THEN 'AAA' WHEN b.sport_id = 1 THEN 'MLB' ELSE 'All' END
+                    END AS level_bucket
+                  FROM base b
+                )
+                INSERT INTO public.pro_pitch_events_daily_rollup (
+                  school_code, session_date, sport_id, level_bucket, pitch_type,
+                  pitcher_name, batter_name, catcher_name, pitcher_norm, batter_norm, catcher_norm,
+                  pitcher_team_code, batter_team_code, pitcherthrows_norm, batterside_norm,
+                  balls_num, strikes_num,
+                  pitches, velo_sum, velo_n, velo_max, spin_sum, spin_n, ivb_sum, ivb_n, hb_sum, hb_n,
+                  in_zone_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_den,
+                  early_num, early_den, ahead_num, ahead_den, oneone_num, oneone_den, ea_num, ea_den,
+                  in_play_n, gb_n, barrel_n, ev_sum, ev_n, la_sum, la_n,
+                  bf_n, k_n, bb_n, hbp_n, hr_n, single_n, double_n, triple_n, xwoba_sum, xwoba_n, woba_sum, woba_n
+                )
+                SELECT
+                  school_code, session_date, sport_id, level_bucket, pitch_type,
+                  MIN(pitcher_name), MIN(batter_name), MIN(catcher_name), pitcher_norm, batter_norm, catcher_norm,
+                  pitcher_team_code, batter_team_code, pitcherthrows_norm, batterside_norm,
+                  balls_num, strikes_num,
+                  COUNT(*)::int AS pitches,
+                  COALESCE(SUM(rel_speed), 0.0)::double precision AS velo_sum,
+                  COUNT(rel_speed)::int AS velo_n,
+                  MAX(rel_speed)::double precision AS velo_max,
+                  COALESCE(SUM(spin_rate), 0.0)::double precision AS spin_sum,
+                  COUNT(spin_rate)::int AS spin_n,
+                  COALESCE(SUM(ivb), 0.0)::double precision AS ivb_sum,
+                  COUNT(ivb)::int AS ivb_n,
+                  COALESCE(SUM(hb), 0.0)::double precision AS hb_sum,
+                  COUNT(hb)::int AS hb_n,
+                  SUM(CASE WHEN plate_side BETWEEN %(zone_left)s::double precision AND %(zone_right)s::double precision
+                             AND plate_height BETWEEN %(zone_bottom)s::double precision AND %(zone_top)s::double precision
+                           THEN 1 ELSE 0 END)::int AS in_zone_n,
+                  SUM(CASE WHEN plate_side IS NOT NULL AND plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
+                  SUM(CASE WHEN pitch_call_norm IN ('strikecalled','called_strike','strikeswinging','swinging_strike','foulball','foul','foul_tip','foulballfieldable','foulballnotfieldable','inplay','in_play')
+                             OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%'
+                           THEN 1 ELSE 0 END)::int AS strike_n,
+                  SUM(CASE WHEN pitch_call_norm IN ('strikeswinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','foulball','foul','foul_tip','foulballfieldable','foulballnotfieldable','inplay','in_play')
+                             OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%'
+                           THEN 1 ELSE 0 END)::int AS swing_n,
+                  SUM(CASE WHEN pitch_call_norm IN ('strikeswinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout') THEN 1 ELSE 0 END)::int AS whiff_n,
+                  SUM(CASE WHEN pitch_call_norm IN ('strikecalled','called_strike','strikeswinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout') THEN 1 ELSE 0 END)::int AS csw_n,
+                  SUM(CASE WHEN plate_side BETWEEN -1.5::double precision AND 1.5::double precision
+                             AND plate_height BETWEEN 1.17::double precision AND 3.93::double precision
+                           THEN 1 ELSE 0 END)::int AS comp_n,
+                  SUM(CASE WHEN balls_num = 0 AND strikes_num = 0
+                             AND (pitch_call_norm IN ('strikecalled','called_strike','strikeswinging','swinging_strike','foulball','foul','foul_tip','foulballfieldable','foulballnotfieldable','inplay')
+                                  OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
+                           THEN 1 ELSE 0 END)::int AS fps_num,
+                  SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS fps_den,
+                  SUM(CASE WHEN (balls_num + strikes_num) <= 1
+                             AND (pitch_call_norm IN ('strikecalled','called_strike','strikeswinging','swinging_strike','foulball','foul','foul_tip','foulballfieldable','foulballnotfieldable','inplay')
+                                  OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
+                           THEN 1 ELSE 0 END)::int AS early_num,
+                  SUM(CASE WHEN (balls_num + strikes_num) <= 1 THEN 1 ELSE 0 END)::int AS early_den,
+                  SUM(CASE WHEN strikes_num > balls_num
+                             AND (pitch_call_norm IN ('strikecalled','called_strike','strikeswinging','swinging_strike','foulball','foul','foul_tip','foulballfieldable','foulballnotfieldable','inplay')
+                                  OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
+                           THEN 1 ELSE 0 END)::int AS ahead_num,
+                  SUM(CASE WHEN strikes_num > balls_num THEN 1 ELSE 0 END)::int AS ahead_den,
+                  SUM(CASE WHEN balls_num = 1 AND strikes_num = 1
+                             AND (pitch_call_norm IN ('strikecalled','called_strike','strikeswinging','swinging_strike','foulball','foul','foul_tip','foulballfieldable','foulballnotfieldable','inplay')
+                                  OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
+                           THEN 1 ELSE 0 END)::int AS oneone_num,
+                  SUM(CASE WHEN balls_num = 1 AND strikes_num = 1 THEN 1 ELSE 0 END)::int AS oneone_den,
+                  SUM(CASE WHEN (
+                            (balls_num = 0 AND strikes_num = 0 AND (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%'))
+                            OR ((balls_num, strikes_num) IN ((0,1),(1,1)) AND (pitch_call_norm IN ('strikecalled','called_strike','strikeswinging','swinging_strike','foulball','foul','foul_tip','foulballfieldable','foulballnotfieldable','inplay')
+                                  OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%'))
+                            OR (balls_num = 1 AND strikes_num = 0 AND (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%'))
+                           ) THEN 1 ELSE 0 END)::int AS ea_num,
+                  SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS ea_den,
+                  SUM(CASE WHEN pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%' THEN 1 ELSE 0 END)::int AS in_play_n,
+                  SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
+                             AND tagged_hit_type_norm LIKE '%%ground%%'
+                           THEN 1 ELSE 0 END)::int AS gb_n,
+                  SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
+                             AND exit_speed IS NOT NULL AND angle IS NOT NULL AND exit_speed >= 95.0 AND angle BETWEEN 10.0 AND 35.0
+                           THEN 1 ELSE 0 END)::int AS barrel_n,
+                  SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND exit_speed IS NOT NULL THEN exit_speed ELSE 0.0 END)::double precision AS ev_sum,
+                  SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND exit_speed IS NOT NULL THEN 1 ELSE 0 END)::int AS ev_n,
+                  SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND angle IS NOT NULL THEN angle ELSE 0.0 END)::double precision AS la_sum,
+                  SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND angle IS NOT NULL THEN 1 ELSE 0 END)::int AS la_n,
+                  SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS bf_n,
+                  SUM(CASE WHEN korbb_norm = 'strikeout' OR play_result_norm IN ('strikeout','strikeout_double_play','strikeoutdoubleplay') THEN 1 ELSE 0 END)::int AS k_n,
+                  SUM(CASE WHEN korbb_norm = 'walk' OR play_result_norm IN ('walk','intent_walk','intentional_walk','intentionalwalk') THEN 1 ELSE 0 END)::int AS bb_n,
+                  SUM(CASE WHEN pitch_call_norm IN ('hitbypitch','hit_by_pitch') OR play_result_norm IN ('hitbypitch','hit_by_pitch') THEN 1 ELSE 0 END)::int AS hbp_n,
+                  SUM(CASE WHEN play_result_norm IN ('homerun','home_run') THEN 1 ELSE 0 END)::int AS hr_n,
+                  SUM(CASE WHEN play_result_norm = 'single' THEN 1 ELSE 0 END)::int AS single_n,
+                  SUM(CASE WHEN play_result_norm = 'double' THEN 1 ELSE 0 END)::int AS double_n,
+                  SUM(CASE WHEN play_result_norm = 'triple' THEN 1 ELSE 0 END)::int AS triple_n,
+                  COALESCE(SUM(estimated_woba_using_speedangle), 0.0)::double precision AS xwoba_sum,
+                  COUNT(estimated_woba_using_speedangle)::int AS xwoba_n,
+                  COALESCE(SUM(woba_value), 0.0)::double precision AS woba_sum,
+                  COUNT(woba_value)::int AS woba_n
+                FROM staged
+                GROUP BY
+                  school_code, session_date, sport_id, level_bucket, pitch_type,
+                  pitcher_norm, batter_norm, catcher_norm, pitcher_team_code, batter_team_code,
+                  pitcherthrows_norm, batterside_norm, balls_num, strikes_num
+                """,
+                {
+                    "refresh_start": refresh_start,
+                    "max_date": max_date,
+                    "zone_left": ZONE_LEFT,
+                    "zone_right": ZONE_RIGHT,
+                    "zone_bottom": ZONE_BOTTOM,
+                    "zone_top": ZONE_TOP,
+                    "overlap_team_codes": PRO_TEAM_CODE_OVERLAP,
+                    "aaa_only_team_codes": PRO_AAA_ONLY_TEAM_CODES,
+                    "mlb_only_team_codes": PRO_MLB_ONLY_TEAM_CODES,
+                },
+            )
+        _PRO_DAILY_ROLLUP_LAST_AT = now
+    except Exception:
+        return
+
+
+def _kick_pro_rollup_refresh_background() -> None:
+    global _PRO_DAILY_ROLLUP_REFRESH_RUNNING
+    with _PRO_DAILY_ROLLUP_REFRESH_LOCK:
+        if _PRO_DAILY_ROLLUP_REFRESH_RUNNING:
+            return
+        _PRO_DAILY_ROLLUP_REFRESH_RUNNING = True
+
+    def _worker() -> None:
+        global _PRO_DAILY_ROLLUP_REFRESH_RUNNING
+        try:
+            _refresh_pro_daily_rollup(force=True)
+        finally:
+            with _PRO_DAILY_ROLLUP_REFRESH_LOCK:
+                _PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
+
+    try:
+        thread = threading.Thread(target=_worker, name="pro-rollup-refresh", daemon=True)
+        thread.start()
+    except Exception:
+        with _PRO_DAILY_ROLLUP_REFRESH_LOCK:
+            _PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
+
+
+def _try_pro_pitching_overview_rollup(
+    *,
+    school_code: str,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    level_filter: Optional[str],
+    selected_pitchers: List[str],
+    selected_pitcher_keys: List[str],
+    team_type: Optional[str],
+    selected_opp_hitters: List[str],
+    selected_opp_hitter_keys: List[str],
+    with_video: Optional[str],
+    hand: Optional[str],
+    batter_side: Optional[str],
+    table_mode: str,
+    split_by: str,
+    selected_in_zone: List[str],
+    qp_locations: Optional[str],
+    selected_pitch_types: List[str],
+    selected_zone_locations: List[str],
+    selected_pitch_results: List[str],
+    selected_count_filters: List[str],
+    selected_after_count_filters: List[str],
+    parsed_velo_min: Optional[float],
+    parsed_velo_max: Optional[float],
+    parsed_ivb_min: Optional[float],
+    parsed_ivb_max: Optional[float],
+    parsed_hb_min: Optional[float],
+    parsed_hb_max: Optional[float],
+    parsed_pc_min: Optional[int],
+    parsed_pc_max: Optional[int],
+    include_chart_points: bool,
+    include_row_pitches: bool,
+    include_trend_rows: bool,
+) -> Optional[PitchingOverviewResponse]:
+    if school_code != "PRO":
+        return None
+    if include_chart_points or include_row_pitches or include_trend_rows:
+        return None
+    if (with_video or "").strip() not in {"", "All"}:
+        return None
+    if selected_in_zone or qp_locations or selected_zone_locations or selected_pitch_results or selected_after_count_filters:
+        return None
+    if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max, parsed_pc_min, parsed_pc_max]):
+        return None
+    mode_clean = (table_mode or "Live").strip()
+    if mode_clean not in {"Live", "Process", "Results", "Usage"}:
+        return None
+    split_clean = (split_by or "Pitch Types").strip()
+    split_to_expr: Dict[str, tuple[str, str]] = {
+        "Pitch Types": ("pitch_type", "Pitch"),
+        "Pitcher": ("pitcher_name", "Pitcher"),
+        "Batter": ("batter_name", "Batter"),
+        "Catcher": ("catcher_name", "Catcher"),
+        "Pitcher Hand": ("pitcherthrows_norm", "Pitcher Hand"),
+        "Batter Hand": ("batterside_norm", "Batter Hand"),
+        "Team": ("pitcher_team_code", "Team"),
+        "Pitcher Team": ("pitcher_team_code", "Pitcher Team"),
+        "Count": ("CASE WHEN balls_num >= 0 AND strikes_num >= 0 THEN (balls_num::text || '-' || strikes_num::text) ELSE 'Unknown' END", "Count"),
+    }
+    split_conf = split_to_expr.get(split_clean)
+    if split_conf is None:
+        return None
+    if selected_count_filters and split_clean != "Count":
+        return None
+
+    _refresh_pro_daily_rollup(force=False)
+    split_expr, split_col_name = split_conf
+    where = [
+        "school_code = 'PRO'",
+        "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
+        "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
+        "(%(pitchers_count)s::int = 0 OR pitcher_norm = ANY(%(pitchers_norm)s::text[]))",
+        "(%(opp_hitters_count)s::int = 0 OR batter_norm = ANY(%(opp_hitters_norm)s::text[]))",
+        "(%(pitch_types_count)s::int = 0 OR pitch_type = ANY(%(pitch_types)s::text[]))",
+    ]
+    params: Dict[str, Any] = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "pitchers_norm": selected_pitcher_keys,
+        "pitchers_count": len(selected_pitcher_keys),
+        "opp_hitters_norm": selected_opp_hitter_keys,
+        "opp_hitters_count": len(selected_opp_hitter_keys),
+        "pitch_types": selected_pitch_types,
+        "pitch_types_count": len(selected_pitch_types),
+    }
+    level_norm = _pro_level_norm(level_filter)
+    if level_norm != "All":
+        where.append("level_bucket = %(level_bucket)s::text")
+        params["level_bucket"] = level_norm
+    team_type_norm = _pro_team_code_from_value(team_type or "")
+    if team_type_norm and team_type_norm != "ALL":
+        where.append("pitcher_team_code = %(team_type_norm)s::text")
+        params["team_type_norm"] = _normalize_team_code(team_type_norm)
+    if (hand or "").strip() and hand != "All":
+        where.append("pitcherthrows_norm = %(pitcherthrows_norm)s::text")
+        params["pitcherthrows_norm"] = hand
+    if (batter_side or "").strip() and batter_side != "All":
+        where.append("batterside_norm = %(batterside_norm)s::text")
+        params["batterside_norm"] = batter_side
+    if selected_count_filters:
+        where.append("(" + split_expr + ") = ANY(%(count_filters)s::text[])")
+        params["count_filters"] = selected_count_filters
+    where_sql = " AND ".join(where)
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                  {split_expr} AS split_value,
+                  pitch_type,
+                  SUM(pitches)::int AS pitches,
+                  SUM(velo_sum)::double precision AS velo_sum,
+                  SUM(velo_n)::int AS velo_n,
+                  MAX(velo_max)::double precision AS velo_max,
+                  SUM(spin_sum)::double precision AS spin_sum,
+                  SUM(spin_n)::int AS spin_n,
+                  SUM(ivb_sum)::double precision AS ivb_sum,
+                  SUM(ivb_n)::int AS ivb_n,
+                  SUM(hb_sum)::double precision AS hb_sum,
+                  SUM(hb_n)::int AS hb_n,
+                  SUM(in_zone_n)::int AS in_zone_n,
+                  SUM(loc_n)::int AS loc_n,
+                  SUM(strike_n)::int AS strike_n,
+                  SUM(swing_n)::int AS swing_n,
+                  SUM(whiff_n)::int AS whiff_n,
+                  SUM(csw_n)::int AS csw_n,
+                  SUM(comp_n)::int AS comp_n,
+                  SUM(fps_num)::int AS fps_num,
+                  SUM(fps_den)::int AS fps_den,
+                  SUM(early_num)::int AS early_num,
+                  SUM(early_den)::int AS early_den,
+                  SUM(ahead_num)::int AS ahead_num,
+                  SUM(ahead_den)::int AS ahead_den,
+                  SUM(oneone_num)::int AS oneone_num,
+                  SUM(oneone_den)::int AS oneone_den,
+                  SUM(ea_num)::int AS ea_num,
+                  SUM(ea_den)::int AS ea_den,
+                  SUM(in_play_n)::int AS in_play_n,
+                  SUM(gb_n)::int AS gb_n,
+                  SUM(barrel_n)::int AS barrel_n,
+                  SUM(ev_sum)::double precision AS ev_sum,
+                  SUM(ev_n)::int AS ev_n,
+                  SUM(la_sum)::double precision AS la_sum,
+                  SUM(la_n)::int AS la_n,
+                  SUM(bf_n)::int AS bf_n,
+                  SUM(k_n)::int AS k_n,
+                  SUM(bb_n)::int AS bb_n,
+                  SUM(hr_n)::int AS hr_n
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE {where_sql}
+                GROUP BY {split_expr}, pitch_type
+                """,
+                params,
+            )
+            grouped_rows = [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return None
+    if not grouped_rows:
+        _kick_pro_rollup_refresh_background()
+        return None
+
+    def _safe_pct(num: Any, den: Any) -> Optional[str]:
+        try:
+            n = float(num or 0.0)
+            d = float(den or 0.0)
+            if d <= 0:
+                return None
+            return f"{round((100.0 * n) / d, 1)}%"
+        except Exception:
+            return None
+
+    pitch_order = {"Fastball": 1, "Sinker": 2, "Cutter": 3, "Slider": 4, "Sweeper": 5, "Curveball": 6, "ChangeUp": 7, "Splitter": 8, "Knuckleball": 9, "Undefined": 10}
+    grouped_by_split: Dict[str, List[Dict[str, Any]]] = {}
+    for row in grouped_rows:
+        grouped_by_split.setdefault(str(row.get("split_value") or "Unknown"), []).append(row)
+    total_pitches = int(sum(int(r.get("pitches") or 0) for r in grouped_rows))
+    total_velo_n = int(sum(int(r.get("velo_n") or 0) for r in grouped_rows))
+    total_spin_n = int(sum(int(r.get("spin_n") or 0) for r in grouped_rows))
+    total_ivb_n = int(sum(int(r.get("ivb_n") or 0) for r in grouped_rows))
+    total_hb_n = int(sum(int(r.get("hb_n") or 0) for r in grouped_rows))
+    total_loc_n = int(sum(int(r.get("loc_n") or 0) for r in grouped_rows))
+    total_swing_n = int(sum(int(r.get("swing_n") or 0) for r in grouped_rows))
+    avg_velo = (sum(float(r.get("velo_sum") or 0.0) for r in grouped_rows) / total_velo_n) if total_velo_n else None
+    max_velo_vals = [float(r.get("velo_max")) for r in grouped_rows if _is_num(r.get("velo_max"))]
+    avg_spin = (sum(float(r.get("spin_sum") or 0.0) for r in grouped_rows) / total_spin_n) if total_spin_n else None
+    avg_ivb = (sum(float(r.get("ivb_sum") or 0.0) for r in grouped_rows) / total_ivb_n) if total_ivb_n else None
+    avg_hb = (sum(float(r.get("hb_sum") or 0.0) for r in grouped_rows) / total_hb_n) if total_hb_n else None
+    zone_pct = ((100.0 * sum(int(r.get("in_zone_n") or 0) for r in grouped_rows)) / total_loc_n) if total_loc_n else None
+    strike_pct = ((100.0 * sum(int(r.get("strike_n") or 0) for r in grouped_rows)) / total_pitches) if total_pitches else None
+    whiff_pct = ((100.0 * sum(int(r.get("whiff_n") or 0) for r in grouped_rows)) / total_swing_n) if total_swing_n else None
+
+    mode_columns_map: Dict[str, List[str]] = {
+        "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
+        "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
+        "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
+        "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
+    }
+    table_rows: List[Dict[str, Any]] = []
+    split_items = list(grouped_by_split.items())
+    if split_clean == "Pitch Types":
+        split_items.sort(key=lambda kv: (pitch_order.get(str(kv[0]), 99), str(kv[0])))
+    else:
+        split_items.sort(key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
+    for split_value, rows_for_split in split_items:
+        pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
+        bf = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
+        velo_n = int(sum(int(r.get("velo_n") or 0) for r in rows_for_split))
+        ivb_n = int(sum(int(r.get("ivb_n") or 0) for r in rows_for_split))
+        hb_n = int(sum(int(r.get("hb_n") or 0) for r in rows_for_split))
+        swing_n = int(sum(int(r.get("swing_n") or 0) for r in rows_for_split))
+        in_play_n = int(sum(int(r.get("in_play_n") or 0) for r in rows_for_split))
+        table_rows.append(
+            {
+                split_col_name: split_value,
+                "#": pitches,
+                "BF": bf,
+                "Velo": round(sum(float(r.get("velo_sum") or 0.0) for r in rows_for_split) / velo_n, 1) if velo_n else None,
+                "Max": round(max([float(r.get("velo_max")) for r in rows_for_split if _is_num(r.get("velo_max"))]), 1) if any(_is_num(r.get("velo_max")) for r in rows_for_split) else None,
+                "IVB": round(sum(float(r.get("ivb_sum") or 0.0) for r in rows_for_split) / ivb_n, 1) if ivb_n else None,
+                "HB": round(sum(float(r.get("hb_sum") or 0.0) for r in rows_for_split) / hb_n, 1) if hb_n else None,
+                "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+                "Early%": _safe_pct(sum(int(r.get("early_num") or 0) for r in rows_for_split), sum(int(r.get("early_den") or 0) for r in rows_for_split)),
+                "Ahead%": _safe_pct(sum(int(r.get("ahead_num") or 0) for r in rows_for_split), sum(int(r.get("ahead_den") or 0) for r in rows_for_split)),
+                "1-1W%": _safe_pct(sum(int(r.get("oneone_num") or 0) for r in rows_for_split), sum(int(r.get("oneone_den") or 0) for r in rows_for_split)),
+                "E+A%": _safe_pct(sum(int(r.get("ea_num") or 0) for r in rows_for_split), sum(int(r.get("ea_den") or 0) for r in rows_for_split)),
+                "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
+                "Comp%": _safe_pct(sum(int(r.get("comp_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
+                "Strike%": _safe_pct(sum(int(r.get("strike_n") or 0) for r in rows_for_split), pitches),
+                "Swing%": _safe_pct(swing_n, pitches),
+                "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), swing_n),
+                "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
+                "K%": _safe_pct(sum(int(r.get("k_n") or 0) for r in rows_for_split), bf),
+                "BB%": _safe_pct(sum(int(r.get("bb_n") or 0) for r in rows_for_split), bf),
+                "HR%": _safe_pct(sum(int(r.get("hr_n") or 0) for r in rows_for_split), bf),
+                "GB%": _safe_pct(sum(int(r.get("gb_n") or 0) for r in rows_for_split), in_play_n),
+                "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), in_play_n),
+                "EV": round(sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("ev_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("ev_n") or 0) for r in rows_for_split) > 0 else None,
+                "LA": round(sum(float(r.get("la_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("la_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("la_n") or 0) for r in rows_for_split) > 0 else None,
+                "Usage": _safe_pct(pitches, total_pitches),
+                "0-0": _safe_pct(sum(int(r.get("bf_n") or 0) for r in rows_for_split), pitches),
+                "Behind": None,
+                "Even": None,
+                "Ahead": None,
+                "<2K": None,
+                "2K": None,
+                "RV/100": None,
+                "PV/100": None,
+                "QP%": None,
+                "Ctrl+": None,
+                "QP+": None,
+                "Pitching+": None,
+            }
+        )
+    table_rows.append({split_col_name: "All", "#": total_pitches, "BF": sum(int(r.get("bf_n") or 0) for r in grouped_rows), "Velo": round(avg_velo, 1) if _is_num(avg_velo) else None})
+    pitch_summary: Dict[str, Dict[str, Any]] = {}
+    for row in grouped_rows:
+        pt = str(row.get("pitch_type") or "")
+        b = pitch_summary.setdefault(pt, {"pitch_type": pt, "pitches": 0, "velo_sum": 0.0, "velo_n": 0, "velo_max": None, "spin_sum": 0.0, "spin_n": 0, "ivb_sum": 0.0, "ivb_n": 0, "hb_sum": 0.0, "hb_n": 0})
+        b["pitches"] += int(row.get("pitches") or 0)
+        b["velo_sum"] += float(row.get("velo_sum") or 0.0)
+        b["velo_n"] += int(row.get("velo_n") or 0)
+        if _is_num(row.get("velo_max")):
+            b["velo_max"] = float(row.get("velo_max")) if b["velo_max"] is None else max(float(b["velo_max"]), float(row.get("velo_max")))
+        b["spin_sum"] += float(row.get("spin_sum") or 0.0)
+        b["spin_n"] += int(row.get("spin_n") or 0)
+        b["ivb_sum"] += float(row.get("ivb_sum") or 0.0)
+        b["ivb_n"] += int(row.get("ivb_n") or 0)
+        b["hb_sum"] += float(row.get("hb_sum") or 0.0)
+        b["hb_n"] += int(row.get("hb_n") or 0)
+    pitch_types_payload = [
+        PitchTypeSummaryRow(
+            pitch_type=pt,
+            pitches=int(v["pitches"]),
+            usage_pct=(100.0 * int(v["pitches"]) / total_pitches) if total_pitches else 0.0,
+            avg_velo=(float(v["velo_sum"]) / int(v["velo_n"])) if int(v["velo_n"]) else None,
+            max_velo=float(v["velo_max"]) if _is_num(v.get("velo_max")) else None,
+            avg_spin=(float(v["spin_sum"]) / int(v["spin_n"])) if int(v["spin_n"]) else None,
+            avg_ivb=(float(v["ivb_sum"]) / int(v["ivb_n"])) if int(v["ivb_n"]) else None,
+            avg_hb=(float(v["hb_sum"]) / int(v["hb_n"])) if int(v["hb_n"]) else None,
+            avg_stuff=None,
+        )
+        for pt, v in sorted(pitch_summary.items(), key=lambda kv: (pitch_order.get(str(kv[0]), 99), str(kv[0])))
+    ]
+    return PitchingOverviewResponse(
+        school_code=school_code,
+        pitcher=selected_pitchers[0] if len(selected_pitchers) == 1 else None,
+        team_type=team_type,
+        opp_hitter=selected_opp_hitters[0] if len(selected_opp_hitters) == 1 else None,
+        with_video=with_video,
+        break_lines=None,
+        stuff_level=None,
+        stuff_base=None,
+        hand=hand,
+        batter_side=batter_side,
+        in_zone=selected_in_zone[0] if len(selected_in_zone) == 1 else None,
+        qp_locations=qp_locations,
+        session_type="Season",
+        table_mode=table_mode,
+        split_by=split_by,
+        selected_zone_locations=selected_zone_locations,
+        selected_pitch_types=selected_pitch_types,
+        selected_pitch_results=selected_pitch_results,
+        selected_count_filters=selected_count_filters,
+        selected_after_count_filters=selected_after_count_filters,
+        start_date=start_date.isoformat() if start_date else None,
+        end_date=end_date.isoformat() if end_date else None,
+        total_pitches=total_pitches,
+        avg_velo=avg_velo,
+        max_velo=max(max_velo_vals) if max_velo_vals else None,
+        avg_spin=avg_spin,
+        avg_ivb=avg_ivb,
+        avg_hb=avg_hb,
+        avg_stuff=None,
+        zone_pct=zone_pct,
+        strike_pct=strike_pct,
+        whiff_pct=whiff_pct,
+        table_columns=mode_columns_map.get(mode_clean, mode_columns_map["Live"]),
+        available_table_columns=ALL_TABLE_COLUMNS,
+        table_rows=table_rows,
+        row_pitches_by_key={},
+        pitch_types=pitch_types_payload,
+        chart_points=[],
+        heatmap_points=[],
+        trend_rows=[],
+    )
+
+
+def _try_pro_hitting_overview_rollup(
+    *,
+    school_code: str,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    level_filter: Optional[str],
+    team_type_value: str,
+    selected_hitter_values: List[str],
+    selected_hitter_keys: set[str],
+    selected_opp_pitcher_values: List[str],
+    selected_opp_pitcher_keys: set[str],
+    hand: Optional[str],
+    batter_side: Optional[str],
+    mode_raw: str,
+    split_by: str,
+    selected_pitch_types: List[str],
+    selected_count_filters: List[str],
+    include_chart_points: bool,
+    selected_zone_locations: List[str],
+    selected_pitch_results: List[str],
+    selected_after_count_filters: List[str],
+    selected_bip_results: List[str],
+    selected_in_zone: List[str],
+    parsed_velo_min: Optional[float],
+    parsed_velo_max: Optional[float],
+    parsed_ivb_min: Optional[float],
+    parsed_ivb_max: Optional[float],
+    parsed_hb_min: Optional[float],
+    parsed_hb_max: Optional[float],
+    parsed_pc_min: Optional[int],
+    parsed_pc_max: Optional[int],
+    selected_custom_columns: List[str],
+) -> Optional[Dict[str, Any]]:
+    if school_code != "PRO":
+        return None
+    if include_chart_points:
+        return None
+    if selected_custom_columns:
+        return None
+    if mode_raw not in {"Results", "Swing Decisions", "Batted Ball Data"}:
+        return None
+    if selected_zone_locations or selected_pitch_results or selected_after_count_filters or selected_bip_results or selected_in_zone:
+        return None
+    if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max, parsed_pc_min, parsed_pc_max]):
+        return None
+    split_to_expr: Dict[str, str] = {
+        "Pitch Types": "pitch_type",
+        "Pitcher Hand": "pitcherthrows_norm",
+        "Pitcher": "pitcher_name",
+        "Catcher": "catcher_name",
+        "Count": "CASE WHEN balls_num >= 0 AND strikes_num >= 0 THEN (balls_num::text || '-' || strikes_num::text) ELSE 'Unknown' END",
+    }
+    split_expr = split_to_expr.get(split_by)
+    if not split_expr:
+        return None
+    if selected_count_filters and split_by != "Count":
+        return None
+
+    _refresh_pro_daily_rollup(force=False)
+    where = [
+        "school_code = 'PRO'",
+        "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
+        "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
+        "(%(hitters_count)s::int = 0 OR batter_norm = ANY(%(hitters_norm)s::text[]))",
+        "(%(opp_pitchers_count)s::int = 0 OR pitcher_norm = ANY(%(opp_pitchers_norm)s::text[]))",
+        "(%(pitch_types_count)s::int = 0 OR pitch_type = ANY(%(pitch_types)s::text[]))",
+    ]
+    params: Dict[str, Any] = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "hitters_norm": sorted(selected_hitter_keys),
+        "hitters_count": len(selected_hitter_keys),
+        "opp_pitchers_norm": sorted(selected_opp_pitcher_keys),
+        "opp_pitchers_count": len(selected_opp_pitcher_keys),
+        "pitch_types": selected_pitch_types,
+        "pitch_types_count": len(selected_pitch_types),
+    }
+    level_norm = _pro_level_norm(level_filter)
+    if level_norm != "All":
+        where.append("level_bucket = %(level_bucket)s::text")
+        params["level_bucket"] = level_norm
+    team_type_norm = _pro_team_code_from_value(team_type_value or "")
+    if team_type_norm and team_type_norm != "ALL":
+        where.append("batter_team_code = %(team_type_norm)s::text")
+        params["team_type_norm"] = _normalize_team_code(team_type_norm)
+    if (hand or "").strip() and hand != "All":
+        where.append("pitcherthrows_norm = %(pitcherthrows_norm)s::text")
+        params["pitcherthrows_norm"] = hand
+    if (batter_side or "").strip() and batter_side != "All":
+        where.append("batterside_norm = %(batterside_norm)s::text")
+        params["batterside_norm"] = batter_side
+    if selected_count_filters:
+        where.append("(" + split_expr + ") = ANY(%(count_filters)s::text[])")
+        params["count_filters"] = selected_count_filters
+    where_sql = " AND ".join(where)
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                  {split_expr} AS split_value,
+                  pitch_type,
+                  SUM(pitches)::int AS pitches,
+                  SUM(strike_n)::int AS strike_n,
+                  SUM(swing_n)::int AS swing_n,
+                  SUM(whiff_n)::int AS whiff_n,
+                  SUM(csw_n)::int AS csw_n,
+                  SUM(fps_num)::int AS fps_num,
+                  SUM(fps_den)::int AS fps_den,
+                  SUM(in_zone_n)::int AS in_zone_n,
+                  SUM(loc_n)::int AS loc_n,
+                  SUM(in_play_n)::int AS in_play_n,
+                  SUM(gb_n)::int AS gb_n,
+                  SUM(barrel_n)::int AS barrel_n,
+                  SUM(ev_sum)::double precision AS ev_sum,
+                  SUM(ev_n)::int AS ev_n,
+                  SUM(la_sum)::double precision AS la_sum,
+                  SUM(la_n)::int AS la_n,
+                  SUM(bf_n)::int AS bf_n,
+                  SUM(k_n)::int AS k_n,
+                  SUM(bb_n)::int AS bb_n,
+                  SUM(hbp_n)::int AS hbp_n,
+                  SUM(hr_n)::int AS hr_n,
+                  SUM(single_n)::int AS single_n,
+                  SUM(double_n)::int AS double_n,
+                  SUM(triple_n)::int AS triple_n,
+                  SUM(xwoba_sum)::double precision AS xwoba_sum,
+                  SUM(xwoba_n)::int AS xwoba_n,
+                  SUM(woba_sum)::double precision AS woba_sum,
+                  SUM(woba_n)::int AS woba_n
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE {where_sql}
+                GROUP BY {split_expr}, pitch_type
+                """,
+                params,
+            )
+            grouped_rows = [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return None
+    if not grouped_rows:
+        _kick_pro_rollup_refresh_background()
+        return None
+
+    def _safe_pct(num: Any, den: Any) -> Optional[str]:
+        try:
+            n = float(num or 0.0)
+            d = float(den or 0.0)
+            if d <= 0:
+                return None
+            return f"{round((100.0 * n) / d, 1)}%"
+        except Exception:
+            return None
+
+    grouped_by_split: Dict[str, List[Dict[str, Any]]] = {}
+    for row in grouped_rows:
+        grouped_by_split.setdefault(str(row.get("split_value") or "Unknown"), []).append(row)
+    total_pitches = int(sum(int(r.get("pitches") or 0) for r in grouped_rows))
+    table_rows: List[Dict[str, Any]] = []
+    for split_value, rows_for_split in sorted(grouped_by_split.items(), key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0]))):
+        pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
+        bf = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
+        bb = int(sum(int(r.get("bb_n") or 0) for r in rows_for_split))
+        hbp = int(sum(int(r.get("hbp_n") or 0) for r in rows_for_split))
+        k = int(sum(int(r.get("k_n") or 0) for r in rows_for_split))
+        one = int(sum(int(r.get("single_n") or 0) for r in rows_for_split))
+        two = int(sum(int(r.get("double_n") or 0) for r in rows_for_split))
+        three = int(sum(int(r.get("triple_n") or 0) for r in rows_for_split))
+        hr = int(sum(int(r.get("hr_n") or 0) for r in rows_for_split))
+        hits = one + two + three + hr
+        ab = max(0, bf - bb - hbp)
+        tb = one + (2 * two) + (3 * three) + (4 * hr)
+        obp_den = ab + bb + hbp
+        obp = ((hits + bb + hbp) / obp_den) if obp_den > 0 else None
+        avg = (hits / ab) if ab > 0 else None
+        slg = (tb / ab) if ab > 0 else None
+        table_rows.append(
+            {
+                split_by if split_by else "Pitch Types": split_value,
+                "#": pitches,
+                "PA": bf,
+                "AVG": round(avg, 3) if avg is not None else None,
+                "SLG": round(slg, 3) if slg is not None else None,
+                "OPS": round((obp or 0.0) + (slg or 0.0), 3) if obp is not None or slg is not None else None,
+                "K%": _safe_pct(k, bf),
+                "BB%": _safe_pct(bb, bf),
+                "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
+                "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), sum(int(r.get("swing_n") or 0) for r in rows_for_split)),
+                "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
+                "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+                "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
+                "GB%": _safe_pct(sum(int(r.get("gb_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
+                "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
+                "EV": round(sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("ev_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("ev_n") or 0) for r in rows_for_split) > 0 else None,
+                "LA": round(sum(float(r.get("la_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("la_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("la_n") or 0) for r in rows_for_split) > 0 else None,
+                "xWOBA": round(sum(float(r.get("xwoba_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("xwoba_n") or 0) for r in rows_for_split)), 3) if sum(int(r.get("xwoba_n") or 0) for r in rows_for_split) > 0 else None,
+                "wOBA": round(sum(float(r.get("woba_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("woba_n") or 0) for r in rows_for_split)), 3) if sum(int(r.get("woba_n") or 0) for r in rows_for_split) > 0 else None,
+            }
+        )
+    split_col_name = split_by if split_by else "Pitch Types"
+    table_columns = [split_col_name, "#", "PA", "AVG", "SLG", "OPS", "K%", "BB%", "Whiff%", "GB%", "Barrel%", "EV", "LA", "xWOBA", "wOBA"]
+    if mode_raw == "Swing Decisions":
+        table_columns = [split_col_name, "#", "Swing%", "Whiff%", "CSW%", "FPS%", "InZone%"]
+    elif mode_raw == "Batted Ball Data":
+        table_columns = [split_col_name, "#", "AVG", "SLG", "GB%", "Barrel%", "EV", "LA", "xWOBA", "wOBA"]
+    pitch_type_legend = sorted({str(r.get("pitch_type") or "Undefined") for r in grouped_rows}, key=lambda n: (_pitch_type_sort_rank(n), n))
+    return {
+        "school_code": school_code,
+        "hitter": selected_hitter_values[0] if len(selected_hitter_values) == 1 else None,
+        "opp_pitcher": selected_opp_pitcher_values[0] if len(selected_opp_pitcher_values) == 1 else None,
+        "hand": hand or None,
+        "batter_side": batter_side or None,
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
+        "total_pitches": total_pitches,
+        "selected_pitch_types": selected_pitch_types,
+        "selected_zone_locations": selected_zone_locations,
+        "selected_pitch_results": selected_pitch_results,
+        "selected_count_filters": selected_count_filters,
+        "selected_after_count_filters": selected_after_count_filters,
+        "selected_bip_results": selected_bip_results,
+        "table_mode": mode_raw,
+        "split_by": split_by,
+        "pitch_type_legend": pitch_type_legend,
+        "table_columns": table_columns,
+        "available_table_columns": ALL_TABLE_COLUMNS,
+        "table_rows": table_rows,
+        "chart_points": [],
+        "heatmap_points": [],
+    }
+
+
 def _mod_namespaces_for_school(school_code: str) -> List[str]:
     code = (school_code or "").strip().upper()
     base_map = {
@@ -5074,7 +6124,7 @@ PRO_STATSAPI_BASE = "https://statsapi.mlb.com/api/v1"
 PRO_STATSAPI_GAME_FEED_BASE = "https://statsapi.mlb.com/api/v1.1"
 _PRO_API_TIMEOUT_SECONDS = max(5, int(os.getenv("PRO_API_TIMEOUT_SECONDS", "20")))
 _PRO_API_LIVE_LOOKBACK_DAYS = max(0, int(os.getenv("PRO_API_LIVE_LOOKBACK_DAYS", "1")))
-_PRO_API_ROWS_CACHE_TTL_SECONDS = max(5, int(os.getenv("PRO_API_ROWS_CACHE_TTL_SECONDS", "30")))
+_PRO_API_ROWS_CACHE_TTL_SECONDS = max(5, int(os.getenv("PRO_API_ROWS_CACHE_TTL_SECONDS", "300")))
 _PRO_ENABLE_AAA_API_FALLBACK = str(os.getenv("PRO_ENABLE_AAA_API_FALLBACK", "1")).strip().lower() not in {
     "0",
     "false",
@@ -5087,6 +6137,10 @@ _PRO_TRACKED_AAA_PLAYERS_DEFAULT = (
 )
 _PRO_API_ROWS_CACHE: Dict[str, tuple[float, List[Dict[str, Any]]]] = {}
 _PRO_API_ROWS_CACHE_LOCK = threading.Lock()
+_PRO_API_ROWS_INFLIGHT: Dict[str, threading.Event] = {}
+_PRO_API_ROWS_INFLIGHT_LOCK = threading.Lock()
+_PRO_API_ROWS_BG_REFRESH_RUNNING: set[str] = set()
+_PRO_API_ROWS_BG_REFRESH_LOCK = threading.Lock()
 
 
 def _pro_tracked_aaa_name_keys() -> Set[str]:
@@ -5436,32 +6490,90 @@ def _pro_fetch_api_rows_window(
     cached = _pro_api_rows_cache_get(cache_key)
     if cached is not None:
         return cached
+    inflight_waiter: Optional[threading.Event] = None
+    am_leader = False
+    with _PRO_API_ROWS_INFLIGHT_LOCK:
+        cached = _pro_api_rows_cache_get(cache_key)
+        if cached is not None:
+            return cached
+        existing = _PRO_API_ROWS_INFLIGHT.get(cache_key)
+        if existing is not None:
+            inflight_waiter = existing
+        else:
+            inflight_waiter = threading.Event()
+            _PRO_API_ROWS_INFLIGHT[cache_key] = inflight_waiter
+            am_leader = True
+    if not am_leader and inflight_waiter is not None:
+        wait_seconds = min(1.0, max(0.25, float(_PRO_API_TIMEOUT_SECONDS) * 0.05))
+        inflight_waiter.wait(timeout=wait_seconds)
+        cached = _pro_api_rows_cache_get(cache_key)
+        if cached is not None:
+            return cached
+        # If leader failed or timed out, don't block page rendering on fallback.
+        return []
+
     tracked_keys = _pro_tracked_aaa_name_keys()
-    out: List[Dict[str, Any]] = []
-    for days_off in range((end_date - start_date).days + 1):
-        day = start_date + timedelta(days=days_off)
-        try:
-            game_pks = _pro_api_fetch_game_pks(day, sport_ids)
-        except Exception:
-            continue
-        for game_pk in game_pks:
+    try:
+        out: List[Dict[str, Any]] = []
+        for days_off in range((end_date - start_date).days + 1):
+            day = start_date + timedelta(days=days_off)
             try:
-                rows = _pro_api_fetch_game_rows(game_pk)
+                game_pks = _pro_api_fetch_game_pks(day, sport_ids)
             except Exception:
                 continue
-            for row in rows:
-                if nontracked_aaa_only and int(row.get("sport_id") or 0) == 11:
-                    pitch_key = _normalize_name_key(str(row.get("pitcher") or ""))
-                    bat_key = _normalize_name_key(str(row.get("batter") or ""))
-                    if pitch_key in tracked_keys or bat_key in tracked_keys:
-                        continue
-                out.append(row)
-    dedup: Dict[tuple, Dict[str, Any]] = {}
-    for row in out:
-        dedup[_pro_row_unique_key(row)] = row
-    rows = list(dedup.values())
-    _pro_api_rows_cache_set(cache_key, rows)
-    return rows
+            for game_pk in game_pks:
+                try:
+                    rows = _pro_api_fetch_game_rows(game_pk)
+                except Exception:
+                    continue
+                for row in rows:
+                    if nontracked_aaa_only and int(row.get("sport_id") or 0) == 11:
+                        pitch_key = _normalize_name_key(str(row.get("pitcher") or ""))
+                        bat_key = _normalize_name_key(str(row.get("batter") or ""))
+                        if pitch_key in tracked_keys or bat_key in tracked_keys:
+                            continue
+                    out.append(row)
+        dedup: Dict[tuple, Dict[str, Any]] = {}
+        for row in out:
+            dedup[_pro_row_unique_key(row)] = row
+        rows = list(dedup.values())
+        _pro_api_rows_cache_set(cache_key, rows)
+        return rows
+    finally:
+        with _PRO_API_ROWS_INFLIGHT_LOCK:
+            waiter = _PRO_API_ROWS_INFLIGHT.pop(cache_key, None)
+            if waiter is not None:
+                waiter.set()
+
+
+def _kick_pro_api_rows_window_refresh(
+    *,
+    start_date: date,
+    end_date: date,
+    sport_ids: List[int],
+    nontracked_aaa_only: bool,
+) -> None:
+    cache_key = _pro_api_rows_cache_key(start_date, end_date, sport_ids, nontracked_aaa_only)
+    with _PRO_API_ROWS_BG_REFRESH_LOCK:
+        if cache_key in _PRO_API_ROWS_BG_REFRESH_RUNNING:
+            return
+        _PRO_API_ROWS_BG_REFRESH_RUNNING.add(cache_key)
+
+    def _worker() -> None:
+        try:
+            _pro_fetch_api_rows_window(
+                start_date=start_date,
+                end_date=end_date,
+                sport_ids=sport_ids,
+                nontracked_aaa_only=nontracked_aaa_only,
+            )
+        except Exception:
+            pass
+        finally:
+            with _PRO_API_ROWS_BG_REFRESH_LOCK:
+                _PRO_API_ROWS_BG_REFRESH_RUNNING.discard(cache_key)
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 def _pro_live_tail_window(start_date: Optional[date], end_date: Optional[date]) -> Optional[tuple[date, date]]:
@@ -5484,6 +6596,7 @@ def _pro_fetch_api_live_tail_rows(
     end_date: Optional[date],
     level_filter: Optional[str],
     min_date_exclusive: Optional[date] = None,
+    prefer_cached: bool = False,
 ) -> List[Dict[str, Any]]:
     if not _PRO_ENABLE_AAA_API_FALLBACK:
         return []
@@ -5492,12 +6605,10 @@ def _pro_fetch_api_live_tail_rows(
         return []
     w0, w1 = win
     if isinstance(min_date_exclusive, date):
-        # If DB already has partial rows for today, still allow today's API rows
-        # so live view doesn't go blank.
         if min_date_exclusive >= date.today():
-            next_day = date.today()
-        else:
-            next_day = min_date_exclusive + timedelta(days=1)
+            # DB already has today's rows; avoid external fallback call on every request.
+            return []
+        next_day = min_date_exclusive + timedelta(days=1)
         if next_day > w0:
             w0 = next_day
         if w0 > w1:
@@ -5509,6 +6620,18 @@ def _pro_fetch_api_live_tail_rows(
         sport_ids = [11]
     else:
         sport_ids = [1, 11]
+    cache_key = _pro_api_rows_cache_key(w0, w1, sport_ids, False)
+    if prefer_cached:
+        cached = _pro_api_rows_cache_get(cache_key)
+        if cached is not None:
+            return cached
+        _kick_pro_api_rows_window_refresh(
+            start_date=w0,
+            end_date=w1,
+            sport_ids=sport_ids,
+            nontracked_aaa_only=False,
+        )
+        return []
     return _pro_fetch_api_rows_window(
         start_date=w0,
         end_date=w1,
@@ -6121,6 +7244,52 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
                 str(r["team_code"]): [str(name) for name in (r.get("names") or []) if str(name).strip()]
                 for r in cur.fetchall()
             }
+            # Current roster mapping: each pitcher assigned to latest observed team only.
+            cur.execute(
+                """
+                WITH latest_pitcher_team AS (
+                  SELECT DISTINCT ON (pitcher_key)
+                    pitcher_key,
+                    pitcher_name,
+                    team_code
+                  FROM (
+                    SELECT
+                      lower(regexp_replace(COALESCE(NULLIF(TRIM(pitcher), ''), ''), '[^a-z0-9]', '', 'g')) AS pitcher_key,
+                      NULLIF(TRIM(pitcher), '') AS pitcher_name,
+                      UPPER(NULLIF(TRIM(pitcherteam), '')) AS team_code,
+                      session_date,
+                      game_pk,
+                      at_bat_index,
+                      event_index,
+                      id
+                    FROM public.pro_pitch_events
+                    WHERE school_code = 'PRO'
+                      AND (%(sport_ids_count)s::int = 0 OR sport_id = ANY(%(sport_ids)s::int[]))
+                      AND """ + level_team_clause + """
+                      AND NULLIF(TRIM(pitcher), '') IS NOT NULL
+                      AND UPPER(NULLIF(TRIM(pitcherteam), '')) IS NOT NULL
+                  ) t
+                  ORDER BY
+                    pitcher_key,
+                    session_date DESC,
+                    game_pk DESC NULLS LAST,
+                    at_bat_index DESC NULLS LAST,
+                    event_index DESC NULLS LAST,
+                    id DESC NULLS LAST
+                )
+                SELECT team_code, array_agg(pitcher_name ORDER BY pitcher_name) AS names
+                FROM latest_pitcher_team
+                GROUP BY team_code
+                ORDER BY team_code
+                """,
+                sql_params,
+            )
+            current_pitchers_by_team_code = {
+                str(r["team_code"]): [str(name) for name in (r.get("names") or []) if str(name).strip()]
+                for r in cur.fetchall()
+            }
+            if current_pitchers_by_team_code:
+                pitchers_by_team_code = current_pitchers_by_team_code
 
             cur.execute(
                 """
@@ -6220,6 +7389,15 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
     today_iso = date.today().isoformat()
     max_date_raw = str(date_row.get("max_date") or "").strip()
     max_date_out = max(max_date_raw, today_iso) if max_date_raw else today_iso
+    try:
+        _pro_fetch_api_live_tail_rows(
+            start_date=None,
+            end_date=None,
+            level_filter=level_norm,
+            prefer_cached=True,
+        )
+    except Exception:
+        pass
     return PitchingFiltersResponse(
         school_code=school_code,
         min_date=date_row.get("min_date"),
@@ -6287,6 +7465,7 @@ def _pro_pitching_overview(
     parsed_chart_points_limit: Optional[int],
     include_row_pitches: bool,
     include_trend_rows: bool,
+    chart_only: bool = False,
 ) -> PitchingOverviewResponse:
     source_table = _pro_pitch_source_table()
     if not source_table:
@@ -6389,22 +7568,9 @@ def _pro_pitching_overview(
         where.append("COALESCE(NULLIF(TRIM(batterside), ''), 'Unknown') = %(batter_side)s::text")
 
     zone_select_expr = "NULL::int AS zone_num"
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'pro_pitch_events'
-                  AND column_name = 'zone'
-                LIMIT 1
-                """
-            )
-            if cur.fetchone():
-                zone_select_expr = "zone AS zone_num"
-    except Exception:
-        zone_select_expr = "NULL::int AS zone_num"
+    pro_cols = _pro_pitch_events_columns()
+    if "zone" in pro_cols:
+        zone_select_expr = "zone AS zone_num"
 
     distance_select_expr = "NULL::double precision AS distance"
     direction_select_expr = "NULL::double precision AS direction"
@@ -6413,36 +7579,30 @@ def _pro_pitching_overview(
     xba_select_expr = "NULL::double precision AS estimated_ba_using_speedangle"
     official_er_select_expr = "NULL::int AS official_earned_runs"
     official_outs_select_expr = "NULL::int AS official_outs_recorded"
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'pro_pitch_events'
-                  AND column_name IN ('hit_distance_sc', 'spray_direction', 'hc_x', 'hc_y', 'estimated_ba_using_speedangle', 'official_earned_runs', 'official_outs_recorded')
-                """
-            )
-            cols = {str(r["column_name"]) for r in cur.fetchall()}
-            if "hit_distance_sc" in cols:
-                distance_select_expr = "hit_distance_sc AS distance"
-            if "spray_direction" in cols:
-                direction_select_expr = "spray_direction AS direction"
-            if "hc_x" in cols:
-                hcx_select_expr = "hc_x"
-            if "hc_y" in cols:
-                hcy_select_expr = "hc_y"
-            if "estimated_ba_using_speedangle" in cols:
-                xba_select_expr = "estimated_ba_using_speedangle"
-            if "official_earned_runs" in cols:
-                official_er_select_expr = "official_earned_runs"
-            if "official_outs_recorded" in cols:
-                official_outs_select_expr = "official_outs_recorded"
-    except Exception:
-        pass
+    if "hit_distance_sc" in pro_cols:
+        distance_select_expr = "hit_distance_sc AS distance"
+    if "spray_direction" in pro_cols:
+        direction_select_expr = "spray_direction AS direction"
+    if "hc_x" in pro_cols:
+        hcx_select_expr = "hc_x"
+    if "hc_y" in pro_cols:
+        hcy_select_expr = "hc_y"
+    if "estimated_ba_using_speedangle" in pro_cols:
+        xba_select_expr = "estimated_ba_using_speedangle"
+    if "official_earned_runs" in pro_cols:
+        official_er_select_expr = "official_earned_runs"
+    if "official_outs_recorded" in pro_cols:
+        official_outs_select_expr = "official_outs_recorded"
 
-    sql = """
+    chart_source_scan_limit: Optional[int] = None
+    if chart_only and include_chart_points:
+        chart_source_scan_limit = max(2000, min(int((parsed_chart_points_limit or 350) * 35), 25000))
+        params["chart_source_scan_limit"] = chart_source_scan_limit
+    order_sql = "ORDER BY session_date, game_pk, at_bat_index, event_index"
+    if chart_source_scan_limit is not None:
+        order_sql = "ORDER BY session_date DESC, game_pk DESC, at_bat_index DESC, event_index DESC LIMIT %(chart_source_scan_limit)s::int"
+    sql = (
+        """
     SELECT
       school_code,
       id,
@@ -6508,9 +7668,12 @@ def _pro_pitching_overview(
       NULL::int AS prev_balls,
       NULL::int AS prev_strikes
     FROM public.pro_pitch_events
-    WHERE """ + " AND ".join(where) + """
-    ORDER BY session_date, game_pk, at_bat_index, event_index
+    WHERE """
+        + " AND ".join(where)
+        + """
     """
+        + order_sql
+    )
 
     try:
         with get_conn() as conn, conn.cursor() as cur:
@@ -6529,6 +7692,7 @@ def _pro_pitching_overview(
                 end_date=end_date,
                 level_filter=level_filter,
                 min_date_exclusive=latest_synced_date,
+                prefer_cached=True,
             )
             if api_rows:
                 api_rows = [
@@ -6561,7 +7725,7 @@ def _pro_pitching_overview(
     # currently selected pitcher/team subset.
     stuff_source_rows = rows
     need_broad_stuff_baseline = bool(selected_pitcher_keys) or bool(selected_opp_hitter_keys) or (team_type_norm not in {"", "ALL"})
-    if need_broad_stuff_baseline:
+    if need_broad_stuff_baseline and not chart_only:
         baseline_where = [
             "school_code = 'PRO'",
             "(%(sport_ids_count)s::int = 0 OR sport_id = ANY(%(sport_ids)s::int[]))",
@@ -6915,6 +8079,77 @@ def _pro_pitching_overview(
         for r in stuff_source_rows
     ]
     avg_stuff, avg_stuff_by_pitch_type = _compute_stuff_by_pitch_type(stuff_rows, stuff_base or "Fastball", stuff_level or "Pro")
+    chart_points_limit = max(100, min(int(parsed_chart_points_limit or 350), 1200))
+    if chart_only:
+        pitch_type_rows = [
+            PitchTypeSummaryRow(
+                **row,
+                avg_stuff=avg_stuff_by_pitch_type.get(str(row.get("pitch_type") or "")),
+            )
+            for row in raw_pitch_type_rows
+        ]
+        chart_source_rows = _latest_rows_for_chart_points(rows, chart_points_limit)
+        heatmap_source_rows = _latest_rows_for_chart_points(rows, max(chart_points_limit * 3, chart_points_limit))
+        chart_points = (
+            _build_chart_points(
+                chart_source_rows,
+                avg_stuff_by_pitch_type,
+                max_points=chart_points_limit,
+            )
+            if include_chart_points
+            else []
+        )
+        heatmap_points = (
+            _build_chart_points(
+                heatmap_source_rows,
+                avg_stuff_by_pitch_type,
+                max_points=max(chart_points_limit * 3, chart_points_limit),
+            )
+            if include_chart_points
+            else []
+        )
+        return PitchingOverviewResponse(
+            school_code=school_code,
+            pitcher=selected_pitchers[0] if len(selected_pitchers) == 1 else None,
+            team_type=team_type,
+            opp_hitter=selected_opp_hitters[0] if len(selected_opp_hitters) == 1 else None,
+            with_video=with_video,
+            break_lines=break_lines,
+            stuff_level=stuff_level,
+            stuff_base=stuff_base,
+            hand=hand,
+            batter_side=batter_side,
+            in_zone=selected_in_zone[0] if len(selected_in_zone) == 1 else None,
+            qp_locations=qp_locations,
+            session_type=session_type_filter,
+            table_mode=table_mode,
+            split_by=split_by,
+            selected_zone_locations=selected_zone_locations,
+            selected_pitch_types=selected_pitch_types,
+            selected_pitch_results=selected_pitch_results,
+            selected_count_filters=selected_count_filters,
+            selected_after_count_filters=selected_after_count_filters,
+            start_date=start_date.isoformat() if start_date else None,
+            end_date=end_date.isoformat() if end_date else None,
+            total_pitches=total_pitches,
+            avg_velo=(sum(velo_vals) / len(velo_vals)) if velo_vals else None,
+            max_velo=max(velo_vals) if velo_vals else None,
+            avg_spin=(sum(spin_vals) / len(spin_vals)) if spin_vals else None,
+            avg_ivb=(sum(ivb_vals) / len(ivb_vals)) if ivb_vals else None,
+            avg_hb=(sum(hb_vals) / len(hb_vals)) if hb_vals else None,
+            avg_stuff=avg_stuff,
+            zone_pct=((100.0 * in_zone_n / total_pitches) if total_pitches else None),
+            strike_pct=((100.0 * strike_n / total_pitches) if total_pitches else None),
+            whiff_pct=((100.0 * whiff_n / swing_n) if swing_n else None),
+            table_columns=[],
+            available_table_columns=ALL_TABLE_COLUMNS,
+            table_rows=[],
+            row_pitches_by_key={},
+            pitch_types=pitch_type_rows,
+            chart_points=chart_points,
+            heatmap_points=heatmap_points,
+            trend_rows=[],
+        )
     table_columns, table_rows, available_table_columns = _build_dynamic_table(
         rows,
         table_mode,
@@ -7626,6 +8861,52 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
                 str(r["team_code"]): [str(name) for name in (r.get("names") or []) if str(name).strip()]
                 for r in cur.fetchall()
             }
+            # Current roster mapping: each hitter assigned to latest observed team only.
+            cur.execute(
+                """
+                WITH latest_hitter_team AS (
+                  SELECT DISTINCT ON (hitter_key)
+                    hitter_key,
+                    hitter_name,
+                    team_code
+                  FROM (
+                    SELECT
+                      lower(regexp_replace(COALESCE(NULLIF(TRIM(batter), ''), ''), '[^a-z0-9]', '', 'g')) AS hitter_key,
+                      NULLIF(TRIM(batter), '') AS hitter_name,
+                      UPPER(NULLIF(TRIM(batterteam), '')) AS team_code,
+                      session_date,
+                      game_pk,
+                      at_bat_index,
+                      event_index,
+                      id
+                    FROM public.pro_pitch_events
+                    WHERE school_code = 'PRO'
+                      AND (%(sport_ids_count)s::int = 0 OR sport_id = ANY(%(sport_ids)s::int[]))
+                      AND """ + level_team_clause + """
+                      AND NULLIF(TRIM(batter), '') IS NOT NULL
+                      AND UPPER(NULLIF(TRIM(batterteam), '')) IS NOT NULL
+                  ) t
+                  ORDER BY
+                    hitter_key,
+                    session_date DESC,
+                    game_pk DESC NULLS LAST,
+                    at_bat_index DESC NULLS LAST,
+                    event_index DESC NULLS LAST,
+                    id DESC NULLS LAST
+                )
+                SELECT team_code, array_agg(hitter_name ORDER BY hitter_name) AS names
+                FROM latest_hitter_team
+                GROUP BY team_code
+                ORDER BY team_code
+                """,
+                sql_params,
+            )
+            current_hitters_by_team_code = {
+                str(r["team_code"]): [str(name) for name in (r.get("names") or []) if str(name).strip()]
+                for r in cur.fetchall()
+            }
+            if current_hitters_by_team_code:
+                hitters_by_team_code = current_hitters_by_team_code
 
             cur.execute(
                 """
@@ -7718,6 +8999,15 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
     today_iso = date.today().isoformat()
     max_date_raw = str(date_row.get("max_date") or "").strip()
     max_date_out = max(max_date_raw, today_iso) if max_date_raw else today_iso
+    try:
+        _pro_fetch_api_live_tail_rows(
+            start_date=None,
+            end_date=None,
+            level_filter=level_norm,
+            prefer_cached=True,
+        )
+    except Exception:
+        pass
     return {
         "school_code": school_code,
         "min_date": date_row.get("min_date"),
@@ -7791,6 +9081,11 @@ def _pro_hitting_overview(
     parsed_pc_min: Optional[int],
     parsed_pc_max: Optional[int],
     include_chart_points: bool,
+    parsed_chart_points_limit: Optional[int],
+    chart_only: bool,
+    recent_pa_mode: Optional[str],
+    recent_pa_count: Optional[int],
+    recent_pa_ignore_dates: bool,
 ) -> Dict[str, Any]:
     source_table = _pro_pitch_source_table()
     if not source_table:
@@ -7821,6 +9116,16 @@ def _pro_hitting_overview(
     # PRO is game-only; ignore session_type selection.
 
     level_sport_ids = _pro_level_sport_ids(level_filter)
+    normalized_recent_pa_mode = str(recent_pa_mode or "").strip().lower()
+    enable_recent_pa_window = normalized_recent_pa_mode in {"recent_pa", "recent_200", "most_recent_200_pa", "auto_200"}
+    recent_pa_n = max(50, min(int(recent_pa_count or 200), 1000))
+    is_explicit_historical_range = bool(
+        start_date and end_date and end_date.year < date.today().year
+    )
+    should_ignore_dates_for_recent_pa = enable_recent_pa_window and recent_pa_ignore_dates and not is_explicit_historical_range
+    effective_start_date = None if should_ignore_dates_for_recent_pa else start_date
+    effective_end_date = None if should_ignore_dates_for_recent_pa else end_date
+
     where = [
         "school_code = 'PRO'",
         "(%(sport_ids_count)s::int = 0 OR sport_id = ANY(%(sport_ids)s::int[]))",
@@ -7839,11 +9144,12 @@ def _pro_hitting_overview(
              OR lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')) = ANY(%(opp_pitchers_lower)s::text[])
              OR lower(regexp_replace(COALESCE(NULLIF(TRIM(pitcher), ''), ''), '[^a-z0-9]', '', 'g')) = ANY(%(opp_pitchers_norm)s::text[])
            )""",
-        "(%(pitch_types_count)s::int = 0 OR (" + PRO_PITCH_TYPE_SQL + ") = ANY(%(pitch_types)s::text[]))",
     ]
+    if not enable_recent_pa_window:
+        where.append("(%(pitch_types_count)s::int = 0 OR (" + PRO_PITCH_TYPE_SQL + ") = ANY(%(pitch_types)s::text[]))")
     params: Dict[str, Any] = {
-        "start_date": start_date,
-        "end_date": end_date,
+        "start_date": effective_start_date,
+        "end_date": effective_end_date,
         "hitters_exact": selected_hitter_values,
         "hitters_lower": [str(v or "").strip().lower() for v in selected_hitter_values],
         "hitters_norm": sorted(selected_hitter_keys),
@@ -7878,32 +9184,27 @@ def _pro_hitting_overview(
     hcx_select_expr = "NULL::double precision AS hc_x"
     hcy_select_expr = "NULL::double precision AS hc_y"
     xba_select_expr = "NULL::double precision AS estimated_ba_using_speedangle"
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'pro_pitch_events'
-                  AND column_name IN ('hit_distance_sc', 'spray_direction', 'hc_x', 'hc_y', 'estimated_ba_using_speedangle')
-                """
-            )
-            cols = {str(r["column_name"]) for r in cur.fetchall()}
-            if "hit_distance_sc" in cols:
-                distance_select_expr = "hit_distance_sc AS distance"
-            if "spray_direction" in cols:
-                direction_select_expr = "spray_direction AS direction"
-            if "hc_x" in cols:
-                hcx_select_expr = "hc_x"
-            if "hc_y" in cols:
-                hcy_select_expr = "hc_y"
-            if "estimated_ba_using_speedangle" in cols:
-                xba_select_expr = "estimated_ba_using_speedangle"
-    except Exception:
-        pass
+    pro_cols = _pro_pitch_events_columns()
+    if "hit_distance_sc" in pro_cols:
+        distance_select_expr = "hit_distance_sc AS distance"
+    if "spray_direction" in pro_cols:
+        direction_select_expr = "spray_direction AS direction"
+    if "hc_x" in pro_cols:
+        hcx_select_expr = "hc_x"
+    if "hc_y" in pro_cols:
+        hcy_select_expr = "hc_y"
+    if "estimated_ba_using_speedangle" in pro_cols:
+        xba_select_expr = "estimated_ba_using_speedangle"
 
-    sql = """
+    chart_source_scan_limit: Optional[int] = None
+    if chart_only and include_chart_points:
+        chart_source_scan_limit = max(2000, min(int((parsed_chart_points_limit or 350) * 35), 25000))
+        params["chart_source_scan_limit"] = chart_source_scan_limit
+    order_sql = "ORDER BY session_date, game_pk, at_bat_index, event_index, id"
+    if chart_source_scan_limit is not None:
+        order_sql = "ORDER BY session_date DESC, game_pk DESC, at_bat_index DESC, event_index DESC, id DESC LIMIT %(chart_source_scan_limit)s::int"
+    sql = (
+        """
     SELECT
       school_code,
       id AS pitch_event_id,
@@ -7959,9 +9260,12 @@ def _pro_hitting_overview(
       iso_value,
       babip_value
     FROM public.pro_pitch_events
-    WHERE """ + " AND ".join(where) + """
-    ORDER BY session_date, game_pk, at_bat_index, event_index, id
+    WHERE """
+        + " AND ".join(where)
+        + """
     """
+        + order_sql
+    )
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(sql, params)
@@ -7979,6 +9283,7 @@ def _pro_hitting_overview(
                 end_date=end_date,
                 level_filter=level_filter,
                 min_date_exclusive=latest_synced_date,
+                prefer_cached=True,
             )
             if api_rows:
                 api_rows = [
@@ -8033,6 +9338,47 @@ def _pro_hitting_overview(
         )
 
     rows.sort(key=_order_key)
+
+    def _pa_key_for_recent_window(r: Dict[str, Any]) -> str:
+        game_pk = str(r.get("game_pk") or "").strip()
+        at_bat_idx = str(r.get("at_bat_index") or "").strip()
+        if game_pk and at_bat_idx:
+            return f"{game_pk}|{at_bat_idx}"
+        pitch_event_id = str(r.get("pitch_event_id") or r.get("id") or "").strip()
+        return pitch_event_id
+
+    def _session_year(r: Dict[str, Any]) -> int:
+        session_value = r.get("session_date")
+        if hasattr(session_value, "year"):
+            try:
+                return int(session_value.year)
+            except Exception:
+                return 0
+        raw = str(session_value or "").strip()
+        if len(raw) >= 4 and raw[:4].isdigit():
+            return int(raw[:4])
+        return 0
+
+    if enable_recent_pa_window and rows:
+        current_season_year = max((_session_year(r) for r in rows), default=0)
+        current_season_pa_keys = {
+            _pa_key_for_recent_window(r)
+            for r in rows
+            if _session_year(r) == current_season_year and _pa_key_for_recent_window(r)
+        }
+        if len(current_season_pa_keys) >= recent_pa_n:
+            rows = [r for r in rows if _session_year(r) == current_season_year]
+        else:
+            keep_keys: set[str] = set()
+            for r in reversed(rows):
+                key = _pa_key_for_recent_window(r)
+                if not key:
+                    continue
+                keep_keys.add(key)
+                if len(keep_keys) >= recent_pa_n:
+                    break
+            rows = [r for r in rows if _pa_key_for_recent_window(r) in keep_keys]
+
     prev_by_pa: Dict[tuple[str, str], tuple[Optional[int], Optional[int]]] = {}
     for r in rows:
         pa_key = (str(r.get("game_pk") or ""), str(r.get("at_bat_index") or ""))
@@ -8087,8 +9433,204 @@ def _pro_hitting_overview(
         row["result_label"] = result_label
         out_rows.append(row)
 
+    chart_points_limit = max(
+        100,
+        min(
+            int(
+                parsed_chart_points_limit
+                if parsed_chart_points_limit is not None
+                else _dynamic_chart_points_limit(
+                    team_type_value=team_type_value,
+                    primary_selected_count=len(selected_hitter_keys),
+                    secondary_selected_count=len(selected_opp_pitcher_keys),
+                )
+            ),
+            1200,
+        ),
+    )
     _annotate_times_through_order(out_rows)
     _, avg_stuff_by_type = _compute_stuff_by_pitch_type(out_rows, "Fastball", "Pro")
+    if chart_only:
+        pitch_type_legend = sorted(
+            {str(row.get("pitch_type") or "Undefined") for row in out_rows},
+            key=lambda name: (_pitch_type_sort_rank(name), name),
+        )
+        chart_source_rows = _latest_rows_for_chart_points(out_rows, chart_points_limit)
+        heatmap_source_rows = _latest_rows_for_chart_points(out_rows, max(chart_points_limit * 3, chart_points_limit))
+        chart_points = (
+            [
+                {
+                    "pitch_event_id": row.get("pitch_event_id"),
+                    "session_date": row.get("session_date").isoformat() if row.get("session_date") else None,
+                    "pitcher": str(row.get("pitcher") or ""),
+                    "batter": str(row.get("batter") or ""),
+                    "pitcher_team_code": str(row.get("pitcher_team_code") or ""),
+                    "batter_team_code": str(row.get("batter_team_code") or ""),
+                    "pitcherthrows": str(row.get("pitcherthrows") or ""),
+                    "batterside": str(row.get("batterside") or ""),
+                    "pitch_type": str(row.get("pitch_type") or "Undefined"),
+                    "pitch_call": str(row.get("pitch_call") or ""),
+                    "play_result": str(row.get("play_result") or ""),
+                    "result_label": str(row.get("result_label") or ""),
+                    "session_type": str(row.get("session_type_norm") or ""),
+                    "balls_num": row.get("balls_num"),
+                    "strikes_num": row.get("strikes_num"),
+                    "outs_num": row.get("outs_num"),
+                    "outs_on_play_num": row.get("outs_on_play_num"),
+                    "rel_speed": row.get("rel_speed"),
+                    "exit_speed": row.get("exit_speed"),
+                    "angle": row.get("angle"),
+                    "run_value": (
+                        float(row.get("delta_run_exp"))
+                        if _is_num(row.get("delta_run_exp"))
+                        else _calc_run_value(
+                            row.get("pitch_call"),
+                            row.get("play_result"),
+                            row.get("korbb"),
+                            row.get("balls_num"),
+                            row.get("strikes_num"),
+                            row.get("outs_num"),
+                            row.get("outs_on_play_num"),
+                        )
+                    ),
+                    "pitch_value": _calc_pitch_value(
+                        row.get("pitch_call"),
+                        row.get("play_result"),
+                        row.get("korbb"),
+                        row.get("balls_num"),
+                        row.get("strikes_num"),
+                        row.get("outs_num"),
+                        row.get("outs_on_play_num"),
+                    ),
+                    "estimated_woba_using_speedangle": (
+                        float(row.get("estimated_woba_using_speedangle"))
+                        if _is_num(row.get("estimated_woba_using_speedangle"))
+                        else None
+                    ),
+                    "estimated_ba_using_speedangle": (
+                        float(row.get("estimated_ba_using_speedangle"))
+                        if _is_num(row.get("estimated_ba_using_speedangle"))
+                        else None
+                    ),
+                    "iso_value": float(row.get("iso_value")) if _is_num(row.get("iso_value")) else None,
+                    "distance": float(row.get("distance")) if _is_num(row.get("distance")) else None,
+                    "direction": float(row.get("direction")) if _is_num(row.get("direction")) else None,
+                    "hc_x": row.get("hc_x"),
+                    "hc_y": row.get("hc_y"),
+                    "plate_side": row.get("plate_side"),
+                    "plate_height": row.get("plate_height"),
+                    "contact_position_x": None,
+                    "contact_position_y": None,
+                    "contact_position_z": None,
+                    "vertical_attack_angle": None,
+                    "horizontal_attack_angle": None,
+                    "bat_speed": None,
+                    "pitch_number": row.get("pitch_number"),
+                }
+                for row in chart_source_rows
+            ]
+            if include_chart_points
+            else []
+        )
+        heatmap_points = (
+            [
+                {
+                    "pitch_event_id": row.get("pitch_event_id"),
+                    "session_date": row.get("session_date").isoformat() if row.get("session_date") else None,
+                    "pitcher": str(row.get("pitcher") or ""),
+                    "batter": str(row.get("batter") or ""),
+                    "pitcher_team_code": str(row.get("pitcher_team_code") or ""),
+                    "batter_team_code": str(row.get("batter_team_code") or ""),
+                    "pitcherthrows": str(row.get("pitcherthrows") or ""),
+                    "batterside": str(row.get("batterside") or ""),
+                    "pitch_type": str(row.get("pitch_type") or "Undefined"),
+                    "pitch_call": str(row.get("pitch_call") or ""),
+                    "play_result": str(row.get("play_result") or ""),
+                    "result_label": str(row.get("result_label") or ""),
+                    "session_type": str(row.get("session_type_norm") or ""),
+                    "balls_num": row.get("balls_num"),
+                    "strikes_num": row.get("strikes_num"),
+                    "outs_num": row.get("outs_num"),
+                    "outs_on_play_num": row.get("outs_on_play_num"),
+                    "rel_speed": row.get("rel_speed"),
+                    "exit_speed": row.get("exit_speed"),
+                    "angle": row.get("angle"),
+                    "run_value": (
+                        float(row.get("delta_run_exp"))
+                        if _is_num(row.get("delta_run_exp"))
+                        else _calc_run_value(
+                            row.get("pitch_call"),
+                            row.get("play_result"),
+                            row.get("korbb"),
+                            row.get("balls_num"),
+                            row.get("strikes_num"),
+                            row.get("outs_num"),
+                            row.get("outs_on_play_num"),
+                        )
+                    ),
+                    "pitch_value": _calc_pitch_value(
+                        row.get("pitch_call"),
+                        row.get("play_result"),
+                        row.get("korbb"),
+                        row.get("balls_num"),
+                        row.get("strikes_num"),
+                        row.get("outs_num"),
+                        row.get("outs_on_play_num"),
+                    ),
+                    "estimated_woba_using_speedangle": (
+                        float(row.get("estimated_woba_using_speedangle"))
+                        if _is_num(row.get("estimated_woba_using_speedangle"))
+                        else None
+                    ),
+                    "estimated_ba_using_speedangle": (
+                        float(row.get("estimated_ba_using_speedangle"))
+                        if _is_num(row.get("estimated_ba_using_speedangle"))
+                        else None
+                    ),
+                    "iso_value": float(row.get("iso_value")) if _is_num(row.get("iso_value")) else None,
+                    "distance": float(row.get("distance")) if _is_num(row.get("distance")) else None,
+                    "direction": float(row.get("direction")) if _is_num(row.get("direction")) else None,
+                    "hc_x": row.get("hc_x"),
+                    "hc_y": row.get("hc_y"),
+                    "plate_side": row.get("plate_side"),
+                    "plate_height": row.get("plate_height"),
+                    "contact_position_x": None,
+                    "contact_position_y": None,
+                    "contact_position_z": None,
+                    "vertical_attack_angle": None,
+                    "horizontal_attack_angle": None,
+                    "bat_speed": None,
+                    "pitch_number": row.get("pitch_number"),
+                }
+                for row in heatmap_source_rows
+            ]
+            if include_chart_points
+            else []
+        )
+        return {
+            "school_code": school_code,
+            "hitter": selected_hitter_values[0] if len(selected_hitter_values) == 1 else None,
+            "opp_pitcher": selected_opp_pitcher_values[0] if len(selected_opp_pitcher_values) == 1 else None,
+            "hand": hand or None,
+            "batter_side": batter_side or None,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+            "total_pitches": len(out_rows),
+            "selected_pitch_types": selected_pitch_types,
+            "selected_zone_locations": selected_zone_locations,
+            "selected_pitch_results": selected_pitch_results,
+            "selected_count_filters": selected_count_filters,
+            "selected_after_count_filters": selected_after_count_filters,
+            "selected_bip_results": selected_bip_results,
+            "table_mode": mode_raw,
+            "split_by": split_by,
+            "pitch_type_legend": pitch_type_legend,
+            "table_columns": [],
+            "available_table_columns": ALL_TABLE_COLUMNS,
+            "table_rows": [],
+            "chart_points": chart_points,
+            "heatmap_points": heatmap_points,
+        }
     table_columns, table_rows, available_columns = _build_dynamic_table(
         out_rows,
         table_mode_mapped,
@@ -8178,11 +9720,6 @@ def _pro_hitting_overview(
             return float(row.get("direction"))
         return None
 
-    chart_points_limit = _dynamic_chart_points_limit(
-        team_type_value=team_type_value,
-        primary_selected_count=len(selected_hitter_keys),
-        secondary_selected_count=len(selected_opp_pitcher_keys),
-    )
     chart_source_rows = _latest_rows_for_chart_points(out_rows, chart_points_limit)
     heatmap_source_rows = out_rows
     chart_points = (
@@ -8680,9 +10217,11 @@ def pitching_overview(
     pc_max: Optional[str] = Query(default=None),
     include_chart_points: bool = Query(default=True),
     chart_points_limit: Optional[int] = Query(default=None),
+    chart_only: bool = Query(default=False),
     include_row_pitches: bool = Query(default=True),
     include_trend_rows: bool = Query(default=True),
 ) -> PitchingOverviewResponse:
+    _perf_started = time.perf_counter()
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
     if school_code not in {"LEAGUE", "PRO"}:
@@ -8757,6 +10296,10 @@ def pitching_overview(
 
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
+    if chart_only:
+        include_chart_points = True
+        include_row_pitches = False
+        include_trend_rows = False
 
     if school_code == "LEAGUE":
         span_days: Optional[int] = None
@@ -8925,14 +10468,86 @@ def pitching_overview(
             "pc_max": parsed_pc_max,
             "include_chart_points": include_chart_points,
             "chart_points_limit": parsed_chart_points_limit,
+            "chart_only": chart_only,
             "include_row_pitches": include_row_pitches,
             "include_trend_rows": include_trend_rows,
         },
     )
+    use_pro_chart_cache = school_code == "PRO" and chart_only and include_chart_points
+    if use_pro_chart_cache:
+        cached_pro_chart = _pro_chart_cache_get(overview_cache_key)
+        if cached_pro_chart is not None:
+            _perf_log(
+                "pitching_overview",
+                school_code,
+                "pro_chart_cache_hit",
+                _perf_started,
+                cache_hit=True,
+                chart_only=chart_only,
+                include_chart_points=include_chart_points,
+            )
+            return cached_pro_chart
     cached_overview = _overview_cache_get(overview_cache_key)
     if cached_overview is not None:
+        _perf_log(
+            "pitching_overview",
+            school_code,
+            "cache_hit",
+            _perf_started,
+            cache_hit=True,
+            chart_only=chart_only,
+            include_chart_points=include_chart_points,
+        )
         return cached_overview
     if school_code == "PRO":
+        pro_rollup_fast = _try_pro_pitching_overview_rollup(
+            school_code=school_code,
+            start_date=start_date,
+            end_date=end_date,
+            level_filter=level_filter,
+            selected_pitchers=selected_pitchers,
+            selected_pitcher_keys=selected_pitcher_keys,
+            team_type=team_type,
+            selected_opp_hitters=selected_opp_hitters,
+            selected_opp_hitter_keys=selected_opp_hitter_keys,
+            with_video=with_video,
+            hand=hand,
+            batter_side=batter_side,
+            table_mode=table_mode,
+            split_by=split_by,
+            selected_in_zone=selected_in_zone,
+            qp_locations=qp_locations,
+            selected_pitch_types=selected_pitch_types,
+            selected_zone_locations=selected_zone_locations,
+            selected_pitch_results=selected_pitch_results,
+            selected_count_filters=selected_count_filters,
+            selected_after_count_filters=selected_after_count_filters,
+            parsed_velo_min=parsed_velo_min,
+            parsed_velo_max=parsed_velo_max,
+            parsed_ivb_min=parsed_ivb_min,
+            parsed_ivb_max=parsed_ivb_max,
+            parsed_hb_min=parsed_hb_min,
+            parsed_hb_max=parsed_hb_max,
+            parsed_pc_min=parsed_pc_min,
+            parsed_pc_max=parsed_pc_max,
+            include_chart_points=include_chart_points,
+            include_row_pitches=include_row_pitches,
+            include_trend_rows=include_trend_rows,
+        )
+        if pro_rollup_fast is not None:
+            _overview_cache_set(overview_cache_key, pro_rollup_fast)
+            if use_pro_chart_cache:
+                _pro_chart_cache_set(overview_cache_key, pro_rollup_fast)
+            _perf_log(
+                "pitching_overview",
+                school_code,
+                "pro_rollup_fast",
+                _perf_started,
+                cache_hit=False,
+                chart_only=chart_only,
+                include_chart_points=include_chart_points,
+            )
+            return pro_rollup_fast
         response_payload = _pro_pitching_overview(
             school_code=school_code,
             start_date=start_date,
@@ -8972,8 +10587,20 @@ def pitching_overview(
             parsed_chart_points_limit=parsed_chart_points_limit,
             include_row_pitches=include_row_pitches,
             include_trend_rows=include_trend_rows,
+            chart_only=chart_only,
         )
         _overview_cache_set(overview_cache_key, response_payload)
+        if use_pro_chart_cache:
+            _pro_chart_cache_set(overview_cache_key, response_payload)
+        _perf_log(
+            "pitching_overview",
+            school_code,
+            "pro_raw",
+            _perf_started,
+            cache_hit=False,
+            chart_only=chart_only,
+            include_chart_points=include_chart_points,
+        )
         return response_payload
     rollup_fast_response = _try_pitching_overview_daily_rollup(
         school_code=school_code,
@@ -9011,6 +10638,15 @@ def pitching_overview(
     )
     if rollup_fast_response is not None:
         _overview_cache_set(overview_cache_key, rollup_fast_response)
+        _perf_log(
+            "pitching_overview",
+            school_code,
+            "rollup_fast",
+            _perf_started,
+            cache_hit=False,
+            chart_only=chart_only,
+            include_chart_points=include_chart_points,
+        )
         return rollup_fast_response
     need_prev_counts = bool(selected_after_count_filters) or (split_by == "After Count")
     need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
@@ -9781,6 +11417,16 @@ def pitching_overview(
             trend_rows=trend_rows,
         )
         _overview_cache_set(overview_cache_key, response_payload)
+        _perf_log(
+            "pitching_overview",
+            school_code,
+            "sql_raw",
+            _perf_started,
+            cache_hit=False,
+            chart_only=chart_only,
+            include_chart_points=include_chart_points,
+            total_pitches=int(overview.get("total_pitches") or 0),
+        )
         return response_payload
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"overview query failed: {exc}") from exc
@@ -11371,7 +13017,13 @@ def hitting_overview(
     pc_min: Optional[str] = Query(default=None),
     pc_max: Optional[str] = Query(default=None),
     include_chart_points: bool = Query(default=True),
+    chart_points_limit: Optional[int] = Query(default=None),
+    chart_only: bool = Query(default=False),
+    recent_pa_mode: Optional[str] = Query(default=None),
+    recent_pa_count: Optional[int] = Query(default=None),
+    recent_pa_ignore_dates: bool = Query(default=False),
 ) -> Dict[str, Any]:
+    _perf_started = time.perf_counter()
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
     roster = _load_school_roster(school_code)
@@ -11381,6 +13033,8 @@ def hitting_overview(
     team_markers_norm = set(roster.get("team_markers_norm", []) or [])
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
+    if chart_only:
+        include_chart_points = True
 
     level_filter = _pro_level_norm(level)
     team_type_value = (team_type or "").strip() or "All"
@@ -11405,46 +13059,16 @@ def hitting_overview(
     parsed_hb_max = _parse_optional_float(hb_max, "hb_max")
     parsed_pc_min = _parse_optional_int(pc_min, "pc_min")
     parsed_pc_max = _parse_optional_int(pc_max, "pc_max")
+    parsed_chart_points_limit = (
+        max(100, min(int(chart_points_limit), 6000))
+        if chart_points_limit is not None
+        else None
+    )
 
     mode_raw = (table_mode or "Results").strip()
     mode_map = {"Results": "Hitting Results", "Swing Decisions": "Swing Decisions", "Batted Ball Data": "Batted Ball Data", "Custom": "Custom"}
     table_mode_mapped = mode_map.get(mode_raw, "Results")
     split_by = (split_by or "Pitch Types").strip() or "Pitch Types"
-    if school_code == "PRO":
-        return _pro_hitting_overview(
-            school_code=school_code,
-            start_date=start_date,
-            end_date=end_date,
-            level_filter=level_filter,
-            session_type_filter=session_type_filter,
-            team_type_value=team_type_value,
-            selected_hitter_values=_parse_name_list(hitter),
-            selected_hitter_keys=selected_hitter_keys,
-            selected_opp_pitcher_values=_parse_name_list(opp_pitcher),
-            selected_opp_pitcher_keys=selected_opp_pitcher_keys,
-            hand=hand,
-            batter_side=batter_side,
-            mode_raw=mode_raw,
-            table_mode_mapped=table_mode_mapped,
-            split_by=split_by,
-            selected_custom_columns=selected_custom_columns,
-            selected_in_zone=selected_in_zone,
-            selected_pitch_types=selected_pitch_types,
-            selected_zone_locations=selected_zone_locations,
-            selected_pitch_results=selected_pitch_results,
-            selected_count_filters=selected_count_filters,
-            selected_after_count_filters=selected_after_count_filters,
-            selected_bip_results=selected_bip_results,
-            parsed_velo_min=parsed_velo_min,
-            parsed_velo_max=parsed_velo_max,
-            parsed_ivb_min=parsed_ivb_min,
-            parsed_ivb_max=parsed_ivb_max,
-            parsed_hb_min=parsed_hb_min,
-            parsed_hb_max=parsed_hb_max,
-            parsed_pc_min=parsed_pc_min,
-            parsed_pc_max=parsed_pc_max,
-            include_chart_points=include_chart_points,
-        )
     overview_cache_key = _overview_cache_key(
         "hitting_overview",
         school_code,
@@ -11478,11 +13102,139 @@ def hitting_overview(
             "pc_min": parsed_pc_min,
             "pc_max": parsed_pc_max,
             "include_chart_points": include_chart_points,
+            "chart_points_limit": parsed_chart_points_limit,
+            "chart_only": chart_only,
+            "recent_pa_mode": recent_pa_mode,
+            "recent_pa_count": recent_pa_count,
+            "recent_pa_ignore_dates": recent_pa_ignore_dates,
         },
     )
+    use_pro_chart_cache = school_code == "PRO" and chart_only and include_chart_points
+    if use_pro_chart_cache:
+        cached_pro_chart = _pro_chart_cache_get(overview_cache_key)
+        if cached_pro_chart is not None:
+            _perf_log(
+                "hitting_overview",
+                school_code,
+                "pro_chart_cache_hit",
+                _perf_started,
+                cache_hit=True,
+                chart_only=chart_only,
+                include_chart_points=include_chart_points,
+            )
+            return cached_pro_chart
     cached_overview = _overview_cache_get(overview_cache_key)
     if cached_overview is not None:
+        _perf_log(
+            "hitting_overview",
+            school_code,
+            "cache_hit",
+            _perf_started,
+            cache_hit=True,
+            chart_only=chart_only,
+            include_chart_points=include_chart_points,
+        )
         return cached_overview
+    if school_code == "PRO":
+        rollup_payload = _try_pro_hitting_overview_rollup(
+            school_code=school_code,
+            start_date=start_date,
+            end_date=end_date,
+            level_filter=level_filter,
+            team_type_value=team_type_value,
+            selected_hitter_values=_parse_name_list(hitter),
+            selected_hitter_keys=selected_hitter_keys,
+            selected_opp_pitcher_values=_parse_name_list(opp_pitcher),
+            selected_opp_pitcher_keys=selected_opp_pitcher_keys,
+            hand=hand,
+            batter_side=batter_side,
+            mode_raw=mode_raw,
+            split_by=split_by,
+            selected_pitch_types=selected_pitch_types,
+            selected_count_filters=selected_count_filters,
+            include_chart_points=include_chart_points,
+            selected_zone_locations=selected_zone_locations,
+            selected_pitch_results=selected_pitch_results,
+            selected_after_count_filters=selected_after_count_filters,
+            selected_bip_results=selected_bip_results,
+            selected_in_zone=selected_in_zone,
+            parsed_velo_min=parsed_velo_min,
+            parsed_velo_max=parsed_velo_max,
+            parsed_ivb_min=parsed_ivb_min,
+            parsed_ivb_max=parsed_ivb_max,
+            parsed_hb_min=parsed_hb_min,
+            parsed_hb_max=parsed_hb_max,
+            parsed_pc_min=parsed_pc_min,
+            parsed_pc_max=parsed_pc_max,
+            selected_custom_columns=selected_custom_columns,
+        )
+        if rollup_payload is not None:
+            _overview_cache_set(overview_cache_key, rollup_payload)
+            if use_pro_chart_cache:
+                _pro_chart_cache_set(overview_cache_key, rollup_payload)
+            _perf_log(
+                "hitting_overview",
+                school_code,
+                "pro_rollup_fast",
+                _perf_started,
+                cache_hit=False,
+                chart_only=chart_only,
+                include_chart_points=include_chart_points,
+            )
+            return rollup_payload
+        response_payload = _pro_hitting_overview(
+            school_code=school_code,
+            start_date=start_date,
+            end_date=end_date,
+            level_filter=level_filter,
+            session_type_filter=session_type_filter,
+            team_type_value=team_type_value,
+            selected_hitter_values=_parse_name_list(hitter),
+            selected_hitter_keys=selected_hitter_keys,
+            selected_opp_pitcher_values=_parse_name_list(opp_pitcher),
+            selected_opp_pitcher_keys=selected_opp_pitcher_keys,
+            hand=hand,
+            batter_side=batter_side,
+            mode_raw=mode_raw,
+            table_mode_mapped=table_mode_mapped,
+            split_by=split_by,
+            selected_custom_columns=selected_custom_columns,
+            selected_in_zone=selected_in_zone,
+            selected_pitch_types=selected_pitch_types,
+            selected_zone_locations=selected_zone_locations,
+            selected_pitch_results=selected_pitch_results,
+            selected_count_filters=selected_count_filters,
+            selected_after_count_filters=selected_after_count_filters,
+            selected_bip_results=selected_bip_results,
+            parsed_velo_min=parsed_velo_min,
+            parsed_velo_max=parsed_velo_max,
+            parsed_ivb_min=parsed_ivb_min,
+            parsed_ivb_max=parsed_ivb_max,
+            parsed_hb_min=parsed_hb_min,
+            parsed_hb_max=parsed_hb_max,
+            parsed_pc_min=parsed_pc_min,
+            parsed_pc_max=parsed_pc_max,
+            include_chart_points=include_chart_points,
+            parsed_chart_points_limit=parsed_chart_points_limit,
+            chart_only=chart_only,
+            recent_pa_mode=recent_pa_mode,
+            recent_pa_count=recent_pa_count,
+            recent_pa_ignore_dates=recent_pa_ignore_dates,
+        )
+        _overview_cache_set(overview_cache_key, response_payload)
+        if use_pro_chart_cache:
+            _pro_chart_cache_set(overview_cache_key, response_payload)
+        _perf_log(
+            "hitting_overview",
+            school_code,
+            "pro_raw",
+            _perf_started,
+            cache_hit=False,
+            chart_only=chart_only,
+            include_chart_points=include_chart_points,
+            total_pitches=int(response_payload.get("total_pitches") or 0),
+        )
+        return response_payload
     need_prev_counts = bool(selected_after_count_filters) or (split_by == "After Count")
     need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
 
@@ -11926,6 +13678,16 @@ def hitting_overview(
         "heatmap_points": heatmap_points,
     }
     _overview_cache_set(overview_cache_key, response_payload)
+    _perf_log(
+        "hitting_overview",
+        school_code,
+        "sql_raw",
+        _perf_started,
+        cache_hit=False,
+        chart_only=chart_only,
+        include_chart_points=include_chart_points,
+        total_pitches=len(out_rows),
+    )
     return response_payload
 
 
@@ -12036,7 +13798,12 @@ def catching_filters(
 
         if level_filter in {"All", "AAA", "MLB"}:
             try:
-                api_rows = _pro_fetch_api_live_tail_rows(start_date=start_date, end_date=end_date, level_filter=level_filter)
+                api_rows = _pro_fetch_api_live_tail_rows(
+                    start_date=start_date,
+                    end_date=end_date,
+                    level_filter=level_filter,
+                    prefer_cached=True,
+                )
                 if api_rows:
                     api_rows = [r for r in api_rows if _pro_row_matches_level(r, level_filter)]
                     api_pitch_types = sorted(
@@ -12229,6 +13996,8 @@ def catching_overview(
     pc_min: Optional[str] = Query(default=None),
     pc_max: Optional[str] = Query(default=None),
     include_chart_points: bool = Query(default=True),
+    chart_points_limit: Optional[int] = Query(default=None),
+    chart_only: bool = Query(default=False),
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
@@ -12257,10 +14026,17 @@ def catching_overview(
     parsed_velo_max = _parse_optional_float(velo_max, "velo_max")
     parsed_pc_min = _parse_optional_int(pc_min, "pc_min")
     parsed_pc_max = _parse_optional_int(pc_max, "pc_max")
+    parsed_chart_points_limit = (
+        max(100, min(int(chart_points_limit), 6000))
+        if chart_points_limit is not None
+        else None
+    )
     mode_raw = (table_mode or "Catching Data").strip() or "Catching Data"
     if mode_raw == "Data":
         mode_raw = "Catching Data"
     split_by_raw = (split_by or "Pitch Types").strip() or "Pitch Types"
+    if chart_only:
+        include_chart_points = True
     overview_cache_key = _overview_cache_key(
         "catching_overview",
         school_code,
@@ -12289,8 +14065,15 @@ def catching_overview(
             "pc_min": parsed_pc_min,
             "pc_max": parsed_pc_max,
             "include_chart_points": include_chart_points,
+            "chart_points_limit": parsed_chart_points_limit,
+            "chart_only": chart_only,
         },
     )
+    use_pro_chart_cache = school_code == "PRO" and chart_only and include_chart_points
+    if use_pro_chart_cache:
+        cached_pro_chart = _pro_chart_cache_get(overview_cache_key)
+        if cached_pro_chart is not None:
+            return cached_pro_chart
     cached_overview = _overview_cache_get(overview_cache_key)
     if cached_overview is not None:
         return cached_overview
@@ -12343,6 +14126,15 @@ def catching_overview(
                     pro_where.append("COALESCE(NULLIF(TRIM(batterside), ''), 'Unknown') = %(batter_side_filter)s::text")
                 if selected_pitch_types:
                     pro_where.append("(" + PRO_PITCH_TYPE_SQL + ") = ANY(%(pitch_types)s::text[])")
+                chart_source_scan_limit: Optional[int] = None
+                if chart_only and include_chart_points:
+                    chart_source_scan_limit = max(2000, min(int((parsed_chart_points_limit or 350) * 35), 25000))
+                pro_order_sql = "ORDER BY session_date, game_pk, at_bat_index, event_index, id"
+                if chart_source_scan_limit is not None:
+                    pro_order_sql = (
+                        "ORDER BY session_date DESC, game_pk DESC, at_bat_index DESC, event_index DESC, id DESC "
+                        "LIMIT %(chart_source_scan_limit)s::int"
+                    )
                 pro_sql = (
                     """
                     SELECT
@@ -12401,9 +14193,8 @@ def catching_overview(
                     + """
                     WHERE """
                     + " AND ".join(pro_where)
-                    + """
-                    ORDER BY session_date, game_pk, at_bat_index, event_index, id
-                    """
+                    + "\n"
+                    + pro_order_sql
                 )
                 with get_conn() as conn, conn.cursor() as cur:
                     cur.execute(
@@ -12416,6 +14207,7 @@ def catching_overview(
                             "hand_filter": hand,
                             "batter_side_filter": batter_side,
                             "pitch_types": selected_pitch_types,
+                            "chart_source_scan_limit": chart_source_scan_limit,
                         },
                     )
                     rows = [dict(row) for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
@@ -12426,6 +14218,7 @@ def catching_overview(
                                 end_date=end_date,
                                 level_filter=level_filter,
                                 min_date_exclusive=_pro_max_session_date_in_rows(rows),
+                                prefer_cached=True,
                             )
                             if api_rows:
                                 add_rows: List[Dict[str, Any]] = []
@@ -12641,6 +14434,94 @@ def catching_overview(
         row["result_label"] = result_label
         filtered.append(row)
 
+    resolved_chart_points_limit = max(
+        100,
+        min(
+            int(
+                parsed_chart_points_limit
+                if parsed_chart_points_limit is not None
+                else _dynamic_chart_points_limit(
+                    team_type_value=team_type_value,
+                    primary_selected_count=len(selected_catcher_keys),
+                    secondary_selected_count=0,
+                )
+            ),
+            6000,
+        ),
+    )
+    if chart_only:
+        chart_source_rows = (
+            _latest_rows_for_chart_points(filtered, resolved_chart_points_limit)
+            if school_code == "PRO"
+            else _downsample_rows_for_chart_points(filtered, resolved_chart_points_limit)
+        )
+        chart_points = (
+            [
+                {
+                    "pitch_event_id": row.get("pitch_event_id"),
+                    "session_date": row.get("session_date").isoformat() if row.get("session_date") else None,
+                    "session_type": str(row.get("session_type_norm") or ""),
+                    "catcher": str(row.get("catcher") or ""),
+                    "pitcher": str(row.get("pitcher") or ""),
+                    "batter": str(row.get("batter") or ""),
+                    "pitcher_team_code": str(row.get("pitcher_team_code") or ""),
+                    "batter_team_code": str(row.get("batter_team_code") or ""),
+                    "pitcherthrows": str(row.get("pitcherthrows") or ""),
+                    "batterside": str(row.get("batterside") or ""),
+                    "pitch_type": str(row.get("pitch_type") or "Undefined"),
+                    "pitch_call": str(row.get("pitch_call") or ""),
+                    "play_result": str(row.get("play_result") or ""),
+                    "result_label": str(row.get("result_label") or ""),
+                    "rel_speed": row.get("rel_speed"),
+                    "plate_side": row.get("plate_side"),
+                    "plate_height": row.get("plate_height"),
+                    "throw_speed": row.get("throw_speed"),
+                    "exchange_time": row.get("exchange_time"),
+                    "pop_time": row.get("pop_time"),
+                    "target_base": row.get("target_base"),
+                    "base_x": row.get("base_x"),
+                    "base_y": row.get("base_y"),
+                    "base_z": row.get("base_z"),
+                    "pitch_number": row.get("pitch_number"),
+                }
+                for row in chart_source_rows
+            ]
+            if include_chart_points
+            else []
+        )
+        pitch_type_legend = sorted(
+            {str(row.get("pitch_type") or "Undefined") for row in filtered},
+            key=lambda name: (_pitch_type_sort_rank(name), name),
+        )
+        if selected_hm_results and "All" not in selected_hm_results:
+            hm_points = [p for p in chart_points if str(p.get("result_label") or "") in selected_hm_results]
+        else:
+            hm_points = chart_points
+        response_payload = {
+            "school_code": school_code,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+            "session_type": session_type or None,
+            "catcher": catcher or None,
+            "hand": hand or None,
+            "batter_side": batter_side or None,
+            "total_pitches": len(filtered),
+            "table_mode": mode_raw,
+            "split_by": split_by_raw,
+            "selected_count_filters": selected_count_filters,
+            "selected_after_count_filters": selected_after_count_filters,
+            "table_columns": [],
+            "available_table_columns": [],
+            "table_rows": [],
+            "pitch_type_legend": pitch_type_legend,
+            "chart_points": chart_points,
+            "heatmap_points": hm_points,
+        }
+        _overview_cache_set(overview_cache_key, response_payload)
+        if use_pro_chart_cache:
+            _pro_chart_cache_set(overview_cache_key, response_payload)
+        return response_payload
+
     takes = [r for r in filtered if str(r.get("pitch_call") or "") in {"StrikeCalled", "BallCalled", "BallinDirt"}]
     bucket_stats: Dict[str, Dict[str, float]] = {}
     for r in takes:
@@ -12841,16 +14722,9 @@ def catching_overview(
                 "pitch_number": row.get("pitch_number"),
             }
             for row in (
-                _downsample_rows_for_chart_points(
-                    filtered,
-                    _dynamic_chart_points_limit(
-                        team_type_value=team_type_value,
-                        primary_selected_count=len(selected_catcher_keys),
-                        secondary_selected_count=0,
-                    ),
-                )
+                _latest_rows_for_chart_points(filtered, resolved_chart_points_limit)
                 if school_code == "PRO"
-                else _downsample_rows_for_chart_points(filtered)
+                else _downsample_rows_for_chart_points(filtered, resolved_chart_points_limit)
             )
         ]
         if include_chart_points
@@ -12888,6 +14762,8 @@ def catching_overview(
         "heatmap_points": hm_points,
     }
     _overview_cache_set(overview_cache_key, response_payload)
+    if use_pro_chart_cache:
+        _pro_chart_cache_set(overview_cache_key, response_payload)
     return response_payload
 
 

@@ -6,12 +6,15 @@ import { resolveDashboardPlayerIdentity, selectScopedPlayerName } from '../../..
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 const RESPONSE_CACHE_HEADERS = {
-  'cache-control': 'private, no-store, max-age=0',
+  'cache-control': 'private, max-age=30, stale-while-revalidate=300',
   vary: 'Cookie',
 } as const;
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
-  return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 60000 : 30000;
+  const upper = String(schoolCode ?? '').trim().toUpperCase();
+  if (upper === 'LEAGUE') return 120000;
+  if (upper === 'PRO') return 120000;
+  return 45000;
 }
 
 export async function GET(request: Request) {

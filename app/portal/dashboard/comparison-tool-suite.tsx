@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
@@ -579,9 +579,14 @@ function getHeatmapFixedScale(metricRaw: HeatMetric, selectedPitchTypesRaw: stri
   return null;
 }
 
-function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain, isProSchool = false): HeatCell[] {
+function buildHeatCells(points: ChartPoint[], metric: HeatMetric, isProSchool = false): HeatCell[] {
   if (metric === 'xWOBA' || metric === 'xISO') {
-    return buildSharedXMetricHeatCells(points, metric);
+    const orientedPoints = points.map((point) => {
+      const rawX = toNum(point.plate_side);
+      const adjustedX = typeof rawX === 'number' ? (isProSchool ? -rawX : rawX) : rawX;
+      return { ...point, plate_side: adjustedX };
+    });
+    return buildSharedXMetricHeatCells(orientedPoints, metric);
   }
   const xMin = -2.5;
   const xMax = 2.5;
@@ -659,7 +664,10 @@ function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain
   };
   const pitchValue = (point: ChartPoint): number => calcPitchValue(point);
   const valid = points
-    .map((point) => ({ point, x: toNum(point.plate_side), y: toNum(point.plate_height) }))
+    .map((point) => {
+      const rawX = toNum(point.plate_side);
+      return { point, x: typeof rawX === 'number' ? (isProSchool ? -rawX : rawX) : rawX, y: toNum(point.plate_height) };
+    })
     .filter((entry): entry is { point: ChartPoint; x: number; y: number } => entry.x !== null && entry.y !== null);
   if (!valid.length) return [];
 
@@ -754,8 +762,7 @@ function buildHeatCells(points: ChartPoint[], metric: HeatMetric, domain: Domain
       if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
       if (metric === 'Run Values') {
         const rv = (rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength);
-        const domainAdjustedRv = domain === 'Pitching' ? -rv : rv;
-        value = isProSchool ? domainAdjustedRv * 100 : domainAdjustedRv;
+        value = rv * 100;
       }
       if (metric === 'PV/100') {
         const pv = (pvWSum + runValueShrinkStrength * globalPvAvg) / Math.max(eps, pvW + runValueShrinkStrength);
@@ -792,6 +799,8 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
   const [error, setError] = useState('');
   const [enableTableColors, setEnableTableColors] = useState(true);
   const [locationHover, setLocationHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
+  const overviewCacheRef = useRef(new Map<string, { at: number; payload: OverviewPayload }>());
+  const overviewInflightRef = useRef(new Map<string, Promise<OverviewPayload>>());
 
   useEffect(() => {
     let active = true;
@@ -847,19 +856,96 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     if (state.batterHand !== 'All') params.set('batter_side', state.batterHand);
     params.set('table_mode', state.tableMode);
     params.set('split_by', state.splitBy);
-    params.set('include_chart_points', '1');
-    params.set('chart_points_limit', '1000');
-    setLoading(true);
-    setError('');
-    fetch(`${domainOverviewEndpoint(state.domain)}?${params.toString()}`, { cache: 'no-store' })
-      .then(async (response) => {
+    const shouldForceProFastLoad = isProSchool;
+    params.set('include_chart_points', shouldForceProFastLoad ? '0' : '1');
+    if (!shouldForceProFastLoad) {
+      params.set('chart_points_limit', isProSchool ? '700' : '1000');
+    }
+    const requestKey = `${domainOverviewEndpoint(state.domain)}?${params.toString()}`;
+    const chartRequestKey = shouldForceProFastLoad
+      ? (() => {
+          const chartParams = new URLSearchParams(params);
+          chartParams.set('include_chart_points', '1');
+          chartParams.set('chart_points_limit', '350');
+          chartParams.set('chart_only', '1');
+          return `${domainOverviewEndpoint(state.domain)}?${chartParams.toString()}`;
+        })()
+      : null;
+    const overviewTtlMs = isProSchool ? 90000 : 30000;
+    const loadingTimer = window.setTimeout(() => {
+      if (!active) return;
+      setLoading(true);
+      setError('');
+    }, 0);
+    const applyOverviewPayload = (payload: OverviewPayload) => {
+      setOverview(payload);
+    };
+    const applyChartPayload = (payload: OverviewPayload) => {
+      setOverview((previous) => {
+        if (!previous) return payload;
+        return {
+          ...previous,
+          chart_points: payload.chart_points ?? [],
+          heatmap_points: payload.heatmap_points ?? payload.chart_points ?? [],
+        };
+      });
+    };
+    const cachedOverview = overviewCacheRef.current.get(requestKey);
+    if (cachedOverview && Date.now() - cachedOverview.at < overviewTtlMs) {
+      applyOverviewPayload(cachedOverview.payload);
+      window.clearTimeout(loadingTimer);
+      window.setTimeout(() => {
+        if (!active) return;
+        setLoading(false);
+      }, 0);
+      return () => {
+        window.clearTimeout(loadingTimer);
+        active = false;
+      };
+    }
+    const inflightOverview = overviewInflightRef.current.get(requestKey);
+    const overviewPromise =
+      inflightOverview ??
+      (async () => {
+        const response = await fetch(requestKey, { cache: 'no-store' });
         const payload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load data.');
         return payload;
-      })
+      })();
+    if (!inflightOverview) overviewInflightRef.current.set(requestKey, overviewPromise);
+    overviewPromise
       .then((payload) => {
         if (!active) return;
-        setOverview(payload);
+        overviewCacheRef.current.set(requestKey, { at: Date.now(), payload });
+        applyOverviewPayload(payload);
+        if (!chartRequestKey) return;
+        const cachedChart = overviewCacheRef.current.get(chartRequestKey);
+        if (cachedChart && Date.now() - cachedChart.at < overviewTtlMs) {
+          applyChartPayload(cachedChart.payload);
+          return;
+        }
+        const inflightChart = overviewInflightRef.current.get(chartRequestKey);
+        const chartPromise =
+          inflightChart ??
+          (async () => {
+            const response = await fetch(chartRequestKey, { cache: 'no-store' });
+            const chartPayload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
+            if (!response.ok) throw new Error(chartPayload.error ?? 'Failed to load chart data.');
+            return chartPayload;
+          })();
+        if (!inflightChart) overviewInflightRef.current.set(chartRequestKey, chartPromise);
+        chartPromise
+          .then((chartPayload) => {
+            if (!active) return;
+            overviewCacheRef.current.set(chartRequestKey, { at: Date.now(), payload: chartPayload });
+            applyChartPayload(chartPayload);
+          })
+          .catch(() => {
+            if (!active) return;
+          })
+          .finally(() => {
+            overviewInflightRef.current.delete(chartRequestKey);
+          });
       })
       .catch((requestError) => {
         if (!active) return;
@@ -867,9 +953,11 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         setOverview(null);
       })
       .finally(() => {
+        overviewInflightRef.current.delete(requestKey);
         if (active) setLoading(false);
       });
     return () => {
+      window.clearTimeout(loadingTimer);
       active = false;
     };
   }, [state.domain, state.startDate, state.endDate, state.player, state.sessionType, state.level, state.teamType, state.pitchType, state.pitchResult, state.countFilter, state.afterCountFilter, state.pitcherHand, state.batterHand, state.tableMode, state.splitBy, filters?.school_code]);
@@ -1027,14 +1115,13 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     const isRunValuesMetric = heatMetricView === 'Run Values' || heatMetricView === 'PV/100';
     const fixedScale = getHeatmapFixedScale(heatMetricView, selectedPitchTypes);
     const contactVisibilityScale = heatMetricView === 'Contact Rate' ? getHeatmapFixedScale('Whiff Rate', selectedPitchTypes) : null;
-    const cells = buildHeatCells(heatmapPoints, state.heatMetric, state.domain, isProSchool);
+    const cells = buildHeatCells(heatmapPoints, state.heatMetric, isProSchool);
     const values = cells.map((cell) => cell.value).sort((a, b) => a - b);
     const minVal = fixedScale?.min ?? (values.length ? values[0] : 0);
     const maxVal = fixedScale?.max ?? (values.length ? values[values.length - 1] : 1);
     const midVal = fixedScale?.mid ?? (values.length ? values[Math.floor(values.length / 2)] : 0);
     const rvMin = isPvMetric ? -2 : (isProSchool ? -5 : -2);
     const rvMax = isPvMetric ? 2 : (isProSchool ? 5 : 2);
-    const maxAbs = Math.max(1, ...cells.map((cell) => Math.abs(cell.value)));
     const densityMax = Math.max(1e-9, ...cells.map((cell) => cell.density));
     return (
       <div style={{ display: 'grid', gap: 8 }}>
@@ -1060,22 +1147,22 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
                 let fill = 'rgba(255,255,255,0.12)';
                 if (heatMetricView === 'Frequency') fill = sequentialColor(cell.value, minVal, maxVal);
                 else if (isRunValuesMetric) {
-                  if (isPvMetric || isProSchool) {
-                    const rvClamped = Math.max(rvMin, Math.min(rvMax, cell.value));
-                    fill = divergingColor(rvClamped, rvMin, 0, rvMax);
-                  } else {
-                    const ratio = cell.value / maxAbs;
-                    fill = ratio >= 0 ? `rgba(255,48,48,${0.24 + Math.abs(ratio) * 0.76})` : `rgba(54,129,255,${0.24 + Math.abs(ratio) * 0.76})`;
-                  }
+                  const rvClamped = Math.max(rvMin, Math.min(rvMax, cell.value));
+                  fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
                 } else fill = divergingColor(cell.value, minVal, midVal, maxVal);
                 const normalized = isRunValuesMetric
-                  ? (isPvMetric || isProSchool ? Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) / rvMax : Math.abs(cell.value) / maxAbs)
+                  ? Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) / rvMax
                   : heatMetricView === 'Contact Rate' && contactVisibilityScale
-                    ? Math.max(0, (cell.value - contactVisibilityScale.min) / Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min))
+                    ? Math.max(
+                        0,
+                        Math.min(
+                          1,
+                          ((100 - cell.value) - contactVisibilityScale.min) /
+                            Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min)
+                        )
+                      )
                     : Math.max(0, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal));
                 const runValueBoost = normalized;
-                const isSwingRateView = heatMetricView === 'Swing Rate';
-                const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
                 if (densityNorm < 0.16) return null;
                 return <circle key={`cmp-blur-${cell.x}-${cell.y}`} cx={cx} cy={cy} r={radius} fill={fill} opacity={Math.max(0.3, runValueBoost * 1.25 * (heatMetricView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))} />;
               })}
@@ -1088,22 +1175,22 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
               let fill = 'rgba(255,255,255,0.12)';
               if (heatMetricView === 'Frequency') fill = sequentialColor(cell.value, minVal, maxVal);
               else if (isRunValuesMetric) {
-                if (isPvMetric || isProSchool) {
-                  const rvClamped = Math.max(rvMin, Math.min(rvMax, cell.value));
-                  fill = divergingColor(rvClamped, rvMin, 0, rvMax);
-                } else {
-                  const ratio = cell.value / maxAbs;
-                  fill = ratio >= 0 ? `rgba(255,48,48,${0.2 + Math.abs(ratio) * 0.8})` : `rgba(54,129,255,${0.2 + Math.abs(ratio) * 0.8})`;
-                }
+                const rvClamped = Math.max(rvMin, Math.min(rvMax, cell.value));
+                fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
               } else fill = divergingColor(cell.value, minVal, midVal, maxVal);
               const normalized = isRunValuesMetric
-                ? (isPvMetric || isProSchool ? Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) / rvMax : Math.abs(cell.value) / maxAbs)
+                ? Math.abs(Math.max(rvMin, Math.min(rvMax, cell.value))) / rvMax
                 : heatMetricView === 'Contact Rate' && contactVisibilityScale
-                  ? Math.max(0, (cell.value - contactVisibilityScale.min) / Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min))
+                  ? Math.max(
+                      0,
+                      Math.min(
+                        1,
+                        ((100 - cell.value) - contactVisibilityScale.min) /
+                          Math.max(1e-9, contactVisibilityScale.max - contactVisibilityScale.min)
+                      )
+                    )
                   : Math.max(0, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal));
               const runValueBoost = normalized;
-              const isSwingRateView = heatMetricView === 'Swing Rate';
-              const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
               if (densityNorm < 0.16) return null;
               return <circle key={`cmp-core-${cell.x}-${cell.y}`} cx={cx} cy={cy} r={radius} fill="rgba(0,0,0,0.001)" />;
             })}

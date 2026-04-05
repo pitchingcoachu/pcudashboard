@@ -413,6 +413,8 @@ export default function CatchingSuite() {
   const [hmStat, setHmStat] = useState('Frequency');
   const [hmHover, setHmHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
   const autoFallbackAppliedRef = useRef(false);
+  const overviewCacheRef = useRef(new Map<string, { at: number; payload: CatchingOverviewPayload }>());
+  const overviewInflightRef = useRef(new Map<string, Promise<CatchingOverviewPayload>>());
   const isLeaderboardPage = page === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Catcher') : splitBy;
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
@@ -508,7 +510,6 @@ export default function CatchingSuite() {
 
   useEffect(() => {
     let active = true;
-    const controller = new AbortController();
     const params = new URLSearchParams();
     if (dateStart) params.set('start_date', dateStart);
     if (dateEnd) params.set('end_date', dateEnd);
@@ -536,21 +537,95 @@ export default function CatchingSuite() {
     params.set('table_mode', tableMode);
     if (effectiveSplitBy) params.set('split_by', effectiveSplitBy);
     if (tableMode === 'Custom' && customCols.length) params.set('custom_columns', customCols.join(','));
-    params.set('include_chart_points', '1');
+    const shouldForceProFastLoad = isPro;
+    params.set('include_chart_points', shouldForceProFastLoad ? '0' : '1');
+    if (!shouldForceProFastLoad) {
+      params.set('chart_points_limit', isPro ? '500' : '800');
+    }
 
+    const overviewUrl = `/api/dashboard/catching/overview?${params.toString()}`;
+    const chartUrl = shouldForceProFastLoad
+      ? (() => {
+          const chartParams = new URLSearchParams(params);
+          chartParams.set('include_chart_points', '1');
+          chartParams.set('chart_points_limit', '350');
+          chartParams.set('chart_only', '1');
+          return `/api/dashboard/catching/overview?${chartParams.toString()}`;
+        })()
+      : null;
+    const overviewTtlMs = isPro ? 90000 : 30000;
+    const cachedOverview = overviewCacheRef.current.get(overviewUrl);
+    const applyOverviewPayload = (payload: CatchingOverviewPayload) => {
+      const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
+      if (noRows && !autoFallbackAppliedRef.current) autoFallbackAppliedRef.current = true;
+      setOverview(payload);
+      setError(null);
+    };
+    const applyChartPayload = (payload: CatchingOverviewPayload) => {
+      setOverview((previous) => {
+        if (!previous) return payload;
+        return {
+          ...previous,
+          chart_points: payload.chart_points ?? [],
+          heatmap_points: payload.heatmap_points ?? payload.chart_points ?? [],
+          pitch_type_legend: payload.pitch_type_legend?.length ? payload.pitch_type_legend : previous.pitch_type_legend,
+        };
+      });
+    };
+    if (cachedOverview && Date.now() - cachedOverview.at < overviewTtlMs) {
+      applyOverviewPayload(cachedOverview.payload);
+      setLoadingOverview(false);
+      return () => {
+        active = false;
+      };
+    }
     setLoadingOverview(true);
-    fetch(`/api/dashboard/catching/overview?${params.toString()}`, { signal: controller.signal })
-      .then(async (res) => {
+    const inflightOverview = overviewInflightRef.current.get(overviewUrl);
+    const overviewPromise =
+      inflightOverview ??
+      (async () => {
+        const res = await fetch(overviewUrl, { cache: 'no-store' });
         const payload = (await res.json().catch(() => ({}))) as CatchingOverviewPayload & { error?: string };
         if (!res.ok) {
           if (res.status === 404) throw new Error('Catching API endpoint not loaded. Restart Python API server.');
           throw new Error(payload.error ?? 'Failed to load catching overview.');
         }
+        return payload;
+      })();
+    if (!inflightOverview) overviewInflightRef.current.set(overviewUrl, overviewPromise);
+    overviewPromise
+      .then((payload) => {
         if (!active) return;
-        const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
-        if (noRows && !autoFallbackAppliedRef.current) autoFallbackAppliedRef.current = true;
-        setOverview(payload);
-        setError(null);
+        overviewCacheRef.current.set(overviewUrl, { at: Date.now(), payload });
+        applyOverviewPayload(payload);
+        if (!chartUrl) return;
+        const cachedChart = overviewCacheRef.current.get(chartUrl);
+        if (cachedChart && Date.now() - cachedChart.at < overviewTtlMs) {
+          applyChartPayload(cachedChart.payload);
+          return;
+        }
+        const inflightChart = overviewInflightRef.current.get(chartUrl);
+        const chartPromise =
+          inflightChart ??
+          (async () => {
+            const chartRes = await fetch(chartUrl, { cache: 'no-store' });
+            const chartPayload = (await chartRes.json().catch(() => ({}))) as CatchingOverviewPayload & { error?: string };
+            if (!chartRes.ok) throw new Error(chartPayload.error ?? 'Failed to load chart data.');
+            return chartPayload;
+          })();
+        if (!inflightChart) overviewInflightRef.current.set(chartUrl, chartPromise);
+        chartPromise
+          .then((chartPayload) => {
+            if (!active) return;
+            overviewCacheRef.current.set(chartUrl, { at: Date.now(), payload: chartPayload });
+            applyChartPayload(chartPayload);
+          })
+          .catch(() => {
+            if (!active) return;
+          })
+          .finally(() => {
+            overviewInflightRef.current.delete(chartUrl);
+          });
       })
       .catch((err) => {
         if (!active) return;
@@ -558,11 +633,11 @@ export default function CatchingSuite() {
         setError(err instanceof Error ? err.message : 'Failed to load catching overview.');
       })
       .finally(() => {
+        overviewInflightRef.current.delete(overviewUrl);
         if (active) setLoadingOverview(false);
       });
     return () => {
       active = false;
-      controller.abort();
     };
   }, [dateStart, dateEnd, sessionType, level, teamType, catcher, hand, batterSide, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols, page, isPro]);
 

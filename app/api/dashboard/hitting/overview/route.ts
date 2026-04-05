@@ -15,6 +15,13 @@ function resolveOverviewTimeoutMs(schoolCode: string): number {
   return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 300000 : 120000;
 }
 
+function resolveOverviewCachePolicy(schoolCode: string): { ttlMs: number; staleTtlMs: number } {
+  const upper = String(schoolCode ?? '').trim().toUpperCase();
+  if (upper === 'PRO') return { ttlMs: 90000, staleTtlMs: 600000 };
+  if (upper === 'LEAGUE') return { ttlMs: 30000, staleTtlMs: 120000 };
+  return { ttlMs: 45000, staleTtlMs: 180000 };
+}
+
 export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -72,6 +79,10 @@ export async function GET(request: Request) {
     'pc_max',
     'include_chart_points',
     'chart_points_limit',
+    'chart_only',
+    'recent_pa_mode',
+    'recent_pa_count',
+    'recent_pa_ignore_dates',
   ] as const;
 
   const apiBase = resolveDashboardApiBaseUrl();
@@ -91,12 +102,13 @@ export async function GET(request: Request) {
     url.searchParams.set('include_chart_points', '1');
     url.searchParams.set('chart_points_limit', String(cappedLimit));
   }
+  const cachePolicy = resolveOverviewCachePolicy(schoolCode);
 
   try {
     const result = await fetchDashboardJsonWithCache({
       cacheKey: `hitting:overview:${url.toString()}`,
-      ttlMs: 30000,
-      staleTtlMs: 120000,
+      ttlMs: cachePolicy.ttlMs,
+      staleTtlMs: cachePolicy.staleTtlMs,
       timeoutMs: resolveOverviewTimeoutMs(schoolCode),
       retries: 0,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),

@@ -1752,6 +1752,10 @@ export default function HittingSuite({
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const autoFallbackAppliedRef = useRef(false);
+  const filtersCacheRef = useRef(new Map<string, { at: number; payload: HittingFiltersPayload }>());
+  const filtersInflightRef = useRef(new Map<string, Promise<HittingFiltersPayload>>());
+  const overviewCacheRef = useRef(new Map<string, { at: number; payload: HittingOverviewPayload }>());
+  const overviewInflightRef = useRef(new Map<string, Promise<HittingOverviewPayload>>());
   const [abSortColumn, setAbSortColumn] = useState('Pitch #');
   const [abSortDirection, setAbSortDirection] = useState<SortDirection>('asc');
   const isPlayerRole = role === 'player';
@@ -1832,27 +1836,47 @@ export default function HittingSuite({
     setLoadingFilters(true);
     const filterParams = new URLSearchParams();
     if (level) filterParams.set('level', level);
-    fetch(`/api/dashboard/hitting/filters?${filterParams.toString()}`, { signal: controller.signal, cache: 'no-store' })
-      .then((r) => r.json())
-      .then((payload: HittingFiltersPayload & { error?: string }) => {
+    const filterKey = `/api/dashboard/hitting/filters?${filterParams.toString()}`;
+    const filterTtlMs = 120000;
+    const applyFiltersPayload = (payload: HittingFiltersPayload) => {
+      autoFallbackAppliedRef.current = false;
+      setFilters(payload);
+      setTeamType(pickDefaultTeamType(payload.team_types, payload.school_code));
+      const latestDate = clampYmdToToday(payload.max_date ?? '');
+      setStartDate(latestDate);
+      setEndDate(latestDate);
+      setPitchTypes([]);
+      setZoneLocations([]);
+      setPitchResults([]);
+      setCountFilter([]);
+      setAfterCountFilter([]);
+      setBipResult([]);
+      setInZone([]);
+    };
+    const cached = filtersCacheRef.current.get(filterKey);
+    if (cached && Date.now() - cached.at < filterTtlMs) {
+      applyFiltersPayload(cached.payload);
+      setLoadingFilters(false);
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
+    }
+    const inflight = filtersInflightRef.current.get(filterKey);
+    const requestPromise =
+      inflight ??
+      (async () => {
+        const response = await fetch(filterKey, { signal: controller.signal, cache: 'no-store' });
+        const payload = (await response.json().catch(() => ({}))) as HittingFiltersPayload & { error?: string };
+        if (!response.ok || payload.error) throw new Error(payload.error ?? 'Dashboard API request failed.');
+        return payload;
+      })();
+    if (!inflight) filtersInflightRef.current.set(filterKey, requestPromise);
+    requestPromise
+      .then((payload) => {
         if (cancelled) return;
-        if ((payload as { error?: string }).error) {
-          setError((payload as { error?: string }).error ?? 'Dashboard API request failed.');
-          return;
-        }
-        autoFallbackAppliedRef.current = false;
-        setFilters(payload);
-        setTeamType(pickDefaultTeamType(payload.team_types, payload.school_code));
-        const latestDate = clampYmdToToday(payload.max_date ?? '');
-        setStartDate(latestDate);
-        setEndDate(latestDate);
-        setPitchTypes([]);
-        setZoneLocations([]);
-        setPitchResults([]);
-        setCountFilter([]);
-        setAfterCountFilter([]);
-        setBipResult([]);
-        setInZone([]);
+        filtersCacheRef.current.set(filterKey, { at: Date.now(), payload });
+        applyFiltersPayload(payload);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -1860,6 +1884,7 @@ export default function HittingSuite({
         setError(err instanceof Error ? err.message : 'Failed to load filters.');
       })
       .finally(() => {
+        filtersInflightRef.current.delete(filterKey);
         if (!cancelled) setLoadingFilters(false);
       });
     return () => {
@@ -1990,22 +2015,94 @@ export default function HittingSuite({
     if (hbMax.trim()) params.set('hb_max', hbMax.trim());
     if (pcMin.trim()) params.set('pc_min', pcMin.trim());
     if (pcMax.trim()) params.set('pc_max', pcMax.trim());
-    params.set('include_chart_points', '1');
-    params.set('chart_points_limit', isPlayerRole ? '400' : '1000');
-
-    fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { signal: controller.signal })
-      .then((r) => r.json())
-      .then((payload: HittingOverviewPayload & { error?: string }) => {
+    const isSummaryPage = dashboardPage === 'Summary';
+    const shouldForceProFastSummary = isPro && isSummaryPage;
+    const shouldIncludeCharts = dashboardPage !== 'Leaderboard' && !shouldForceProFastSummary;
+    params.set('include_chart_points', shouldIncludeCharts ? '1' : '0');
+    if (shouldIncludeCharts) {
+      params.set('chart_points_limit', isPlayerRole ? '250' : (isPro ? '450' : '700'));
+    }
+    const requestKey = `/api/dashboard/hitting/overview?${params.toString()}`;
+    const chartRequestKey = shouldForceProFastSummary
+      ? (() => {
+          const chartParams = new URLSearchParams(params);
+          chartParams.set('include_chart_points', '1');
+          chartParams.set('chart_points_limit', isPlayerRole ? '250' : '350');
+          chartParams.set('chart_only', '1');
+          return `/api/dashboard/hitting/overview?${chartParams.toString()}`;
+        })()
+      : null;
+    const overviewTtlMs = isPro ? 90000 : 30000;
+    const applyOverviewPayload = (payload: HittingOverviewPayload) => {
+      const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
+      if (noRows && !autoFallbackAppliedRef.current) {
+        autoFallbackAppliedRef.current = true;
+      }
+      setOverview(payload);
+    };
+    const applyChartPayload = (payload: HittingOverviewPayload) => {
+      setOverview((previous) => {
+        if (!previous) return payload;
+        return {
+          ...previous,
+          chart_points: payload.chart_points ?? [],
+          heatmap_points: payload.heatmap_points ?? [],
+        };
+      });
+    };
+    const cachedOverview = overviewCacheRef.current.get(requestKey);
+    if (cachedOverview && Date.now() - cachedOverview.at < overviewTtlMs) {
+      applyOverviewPayload(cachedOverview.payload);
+      setLoadingOverview(false);
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
+    }
+    const inflightOverview = overviewInflightRef.current.get(requestKey);
+    const overviewPromise =
+      inflightOverview ??
+      (async () => {
+        const response = await fetch(requestKey, { signal: controller.signal });
+        const payload = (await response.json().catch(() => ({}))) as HittingOverviewPayload & { error?: string };
+        if (!response.ok || payload.error) throw new Error(payload.error ?? 'Dashboard API request failed.');
+        return payload;
+      })();
+    if (!inflightOverview) overviewInflightRef.current.set(requestKey, overviewPromise);
+    overviewPromise
+      .then((payload) => {
         if (cancelled) return;
-        if ((payload as { error?: string }).error) {
-          setError((payload as { error?: string }).error ?? 'Dashboard API request failed.');
+        overviewCacheRef.current.set(requestKey, { at: Date.now(), payload });
+        applyOverviewPayload(payload);
+        if (!chartRequestKey) return;
+        const cachedChart = overviewCacheRef.current.get(chartRequestKey);
+        if (cachedChart && Date.now() - cachedChart.at < overviewTtlMs) {
+          applyChartPayload(cachedChart.payload);
           return;
         }
-        const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
-        if (noRows && !autoFallbackAppliedRef.current) {
-          autoFallbackAppliedRef.current = true;
-        }
-        setOverview(payload);
+        const inflightChart = overviewInflightRef.current.get(chartRequestKey);
+        const chartPromise =
+          inflightChart ??
+          (async () => {
+            const response = await fetch(chartRequestKey, { signal: controller.signal });
+            const chartPayload = (await response.json().catch(() => ({}))) as HittingOverviewPayload & { error?: string };
+            if (!response.ok || chartPayload.error) throw new Error(chartPayload.error ?? 'Chart request failed.');
+            return chartPayload;
+          })();
+        if (!inflightChart) overviewInflightRef.current.set(chartRequestKey, chartPromise);
+        chartPromise
+          .then((chartPayload) => {
+            if (cancelled) return;
+            overviewCacheRef.current.set(chartRequestKey, { at: Date.now(), payload: chartPayload });
+            applyChartPayload(chartPayload);
+          })
+          .catch((chartErr: unknown) => {
+            if (cancelled) return;
+            if (chartErr instanceof DOMException && chartErr.name === 'AbortError') return;
+          })
+          .finally(() => {
+            overviewInflightRef.current.delete(chartRequestKey);
+          });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -2013,6 +2110,7 @@ export default function HittingSuite({
         setError(err instanceof Error ? err.message : 'Failed to load hitting summary.');
       })
       .finally(() => {
+        overviewInflightRef.current.delete(requestKey);
         if (!cancelled) setLoadingOverview(false);
       });
 
