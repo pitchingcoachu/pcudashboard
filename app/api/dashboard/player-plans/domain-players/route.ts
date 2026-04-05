@@ -79,46 +79,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ players: fallback ? [fallback] : [] }, { headers: RESPONSE_CACHE_HEADERS });
     }
 
-    const overviewUrl = new URL(`${apiBase}/v1/${domain.toLowerCase()}/overview`);
-    overviewUrl.searchParams.set('school_code', schoolCode);
-    overviewUrl.searchParams.set('team_type', schoolCode);
-    overviewUrl.searchParams.set('split_by', domain === 'Pitching' ? 'Pitcher' : 'Catcher');
-
-    const result = await fetchDashboardJsonWithCache({
-      cacheKey: `player-plans:${domain.toLowerCase()}:overview:${overviewUrl.toString()}`,
-      ttlMs: 120000,
-      staleTtlMs: 300000,
-      timeoutMs: 10000,
-      retries: 1,
-      fetcher: () => fetch(overviewUrl.toString(), { cache: 'no-store' }),
-    });
-    if (result.status < 200 || result.status >= 300) {
-      return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
-    }
-
-    const splitNames = uniqueNames(
-      (Array.isArray(result.payload.table_rows) ? result.payload.table_rows : [])
-        .map((row: { Split?: unknown }) => String(row?.Split ?? '').trim())
-        .filter((name: string) => name && name !== 'All')
-    );
-    if (splitNames.length) {
-      if (!playerIdentity) return NextResponse.json({ players: splitNames }, { headers: RESPONSE_CACHE_HEADERS });
-      const scoped = selectScopedPlayerName(splitNames, playerIdentity);
-      if (scoped) return NextResponse.json({ players: [scoped] }, { headers: RESPONSE_CACHE_HEADERS });
-      const fallback = scopedPlayerQueryName(playerIdentity, domain);
-      return NextResponse.json({ players: fallback ? [fallback] : [] }, { headers: RESPONSE_CACHE_HEADERS });
-    }
-
-    const pointNames = uniqueNames(
-      (Array.isArray(result.payload.chart_points) ? result.payload.chart_points : []).map((row: { pitcher?: unknown; catcher?: unknown }) =>
-        domain === 'Pitching' ? String(row?.pitcher ?? '').trim() : String(row?.catcher ?? '').trim()
-      )
-    );
-    if (!playerIdentity) return NextResponse.json({ players: pointNames }, { headers: RESPONSE_CACHE_HEADERS });
-    const scoped = selectScopedPlayerName(pointNames, playerIdentity);
-    if (scoped) return NextResponse.json({ players: [scoped] }, { headers: RESPONSE_CACHE_HEADERS });
-    const fallback = scopedPlayerQueryName(playerIdentity, domain);
-    return NextResponse.json({ players: fallback ? [fallback] : [] }, { headers: RESPONSE_CACHE_HEADERS });
+    return NextResponse.json({ players: [] }, { headers: RESPONSE_CACHE_HEADERS });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to load player options.' }, { status: 502 });
   }
