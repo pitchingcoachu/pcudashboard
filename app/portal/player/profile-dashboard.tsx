@@ -1334,6 +1334,7 @@ export default function ProfileDashboard({
                   key={item.itemId}
                   type="button"
                   className="portal-schedule-item"
+                  title={item.itemName}
                   style={categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout')}
                   onClick={() => setSelectedItem(item)}
                 >

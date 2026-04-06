@@ -44,7 +44,7 @@ function parseKeys(input: unknown): string[] {
 
 async function fetchOverviewKey(baseUrl: string, cookieHeader: string, key: string): Promise<{ payload?: unknown; error?: string }> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeoutId = setTimeout(() => controller.abort(), 90000);
   try {
     const url = new URL(key, baseUrl);
     const response = await fetch(url.toString(), {
@@ -103,7 +103,7 @@ export async function POST(request: Request) {
   }
 
   let nextIndex = 0;
-  const workerCount = 3;
+  const workerCount = 1;
   const workers = Array.from({ length: Math.min(workerCount, unresolved.length) }, async () => {
     while (nextIndex < unresolved.length) {
       const current = unresolved[nextIndex];

@@ -1792,6 +1792,7 @@ export default function HittingSuite({
 
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Batter Team' : 'Batter') : splitBy;
+  const canLoadOverview = useMemo(() => !!filters && !!startDate && !!endDate, [filters, startDate, endDate]);
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
   const isPro = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
   useEffect(() => {
@@ -1833,6 +1834,11 @@ export default function HittingSuite({
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 60000);
     setLoadingFilters(true);
     const filterParams = new URLSearchParams();
     if (level) filterParams.set('level', level);
@@ -1842,9 +1848,10 @@ export default function HittingSuite({
       autoFallbackAppliedRef.current = false;
       setFilters(payload);
       setTeamType(pickDefaultTeamType(payload.team_types, payload.school_code));
-      const latestDate = clampYmdToToday(payload.max_date ?? '');
-      setStartDate(latestDate);
-      setEndDate(latestDate);
+      const latestDate = clampYmdToToday(payload.max_date ?? payload.min_date ?? '');
+      const nextDate = latestDate || toYmdNow();
+      setStartDate(nextDate);
+      setEndDate(nextDate);
       setPitchTypes([]);
       setZoneLocations([]);
       setPitchResults([]);
@@ -1880,15 +1887,20 @@ export default function HittingSuite({
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        if (err instanceof DOMException && err.name === 'AbortError') return;
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          if (timedOut) setError('Timed out loading hitting filters. Please retry.');
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Failed to load filters.');
       })
       .finally(() => {
+        window.clearTimeout(timeoutId);
         filtersInflightRef.current.delete(filterKey);
         if (!cancelled) setLoadingFilters(false);
       });
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
       controller.abort();
     };
   }, [level]);
@@ -1981,9 +1993,17 @@ export default function HittingSuite({
   };
 
   useEffect(() => {
-    if (!filters) return;
+    if (!canLoadOverview) {
+      setLoadingOverview(false);
+      return;
+    }
     let cancelled = false;
     const controller = new AbortController();
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, isPro ? 150000 : 90000);
     setLoadingOverview(true);
     setError(null);
     const params = new URLSearchParams();
@@ -2020,7 +2040,7 @@ export default function HittingSuite({
     const shouldIncludeCharts = dashboardPage !== 'Leaderboard' && !shouldForceProFastSummary;
     params.set('include_chart_points', shouldIncludeCharts ? '1' : '0');
     if (shouldIncludeCharts) {
-      params.set('chart_points_limit', isPlayerRole ? '250' : (isPro ? '450' : '700'));
+      params.set('chart_points_limit', isPlayerRole ? '250' : (isPro ? '450' : '350'));
     }
     const requestKey = `/api/dashboard/hitting/overview?${params.toString()}`;
     const chartRequestKey = shouldForceProFastSummary
@@ -2106,19 +2126,24 @@ export default function HittingSuite({
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        if (err instanceof DOMException && err.name === 'AbortError') return;
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          if (timedOut) setError('Timed out loading hitting summary data. Please retry.');
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Failed to load hitting summary.');
       })
       .finally(() => {
+        window.clearTimeout(timeoutId);
         overviewInflightRef.current.delete(requestKey);
         if (!cancelled) setLoadingOverview(false);
       });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [appliedFilterVersion, filters, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole]);
+  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole]);
 
   const selectedSingleHitter = hitter && hitter !== 'All' ? hitter : '';
 
@@ -2131,6 +2156,11 @@ export default function HittingSuite({
     }
     let cancelled = false;
     const controller = new AbortController();
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 90000);
     setLoadingAbReport(true);
     setAbError(null);
     const params = new URLSearchParams();
@@ -2159,15 +2189,20 @@ export default function HittingSuite({
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        if (err instanceof DOMException && err.name === 'AbortError') return;
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          if (timedOut) setAbError('Timed out loading AB report. Please retry.');
+          return;
+        }
         setAbError(err instanceof Error ? err.message : 'Failed to load hitting AB report.');
       })
       .finally(() => {
+        window.clearTimeout(timeoutId);
         if (!cancelled) setLoadingAbReport(false);
       });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
       controller.abort();
     };
   }, [dashboardPage, selectedSingleHitter, abGameKey, startDate, endDate, teamType, oppPitcher, hand, batterSide, pitchTypes]);
@@ -2794,6 +2829,7 @@ export default function HittingSuite({
               Hide Filters
             </button>
             {loadingFilters ? <p>Loading filters...</p> : null}
+            {!loadingFilters && !error && !filters ? <p>Initializing dashboard filters...</p> : null}
             {error ? <p className="auth-error">{error}</p> : null}
             {filters ? (
               <>

@@ -1515,16 +1515,17 @@ export default function PitchingSuite({
       autoFallbackAppliedRef.current = false;
       setFilters(payload);
       setTeamType(pickDefaultTeamType(payload.team_types ?? [], payload.school_code ?? ''));
-      const latestDate = clampYmdToToday(payload.max_date ?? '');
+      const latestDate = clampYmdToToday(payload.max_date ?? payload.min_date ?? '');
+      const nextDate = latestDate || toYmdNow();
       const minDate = payload.min_date ?? '';
       const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
       if (isLeagueSchool) {
         const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
         setStartDate(leagueStart);
-        setEndDate(latestDate || leagueStart);
+        setEndDate(nextDate || leagueStart);
       } else {
-        setStartDate(latestDate);
-        setEndDate(latestDate);
+        setStartDate(nextDate);
+        setEndDate(nextDate);
       }
     };
     const cached = filtersCacheRef.current.get(filterKey);
@@ -5061,6 +5062,7 @@ export default function PitchingSuite({
           </button>
 
           {loadingFilters ? <p>Loading filters...</p> : null}
+          {!loadingFilters && !error && !filters ? <p>Initializing dashboard filters...</p> : null}
           {error ? <p className="auth-error">{error}</p> : null}
 
           {filters ? (

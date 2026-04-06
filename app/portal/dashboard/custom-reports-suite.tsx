@@ -173,6 +173,11 @@ type OverviewLitePayload = {
   }>;
 };
 
+type CellLoadState = {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  message?: string;
+};
+
 type ExternalPlayerMeta = {
   headshotUrl: string;
   pitchHand: '' | 'R' | 'L';
@@ -1620,6 +1625,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [teamCurrentRosterNameKeys, setTeamCurrentRosterNameKeys] = useState<string[] | null>(null);
   const [schoolCode, setSchoolCode] = useState(initialSchoolCode);
   const [cellsData, setCellsData] = useState<Record<string, OverviewLitePayload>>({});
+  const [cellLoadStates, setCellLoadStates] = useState<Record<string, CellLoadState>>({});
   const [tableSorts, setTableSorts] = useState<Record<string, { column: string; direction: SortDirection }>>({});
   const cellsCacheRef = useRef<Map<string, { at: number; payload: OverviewLitePayload }>>(new Map());
   const inflightRef = useRef<Map<string, Promise<OverviewLitePayload>>>(new Map());
@@ -2326,6 +2332,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     async function loadCellsData() {
       if (reportScope === 'Team' && teamScopePlayers.length === 0) {
         setCellsData({});
+        setCellLoadStates({});
         return;
       }
       const requests = visibleCellKeys
@@ -2340,12 +2347,34 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         .slice(0, 400);
       if (!requests.length) {
         setCellsData({});
+        setCellLoadStates({});
         return;
       }
+      const requestCellIds = requests.map(({ cellId }) => cellId);
+      setCellLoadStates((current) => {
+        const next: Record<string, CellLoadState> = {};
+        for (const [key, value] of Object.entries(current)) {
+          if (requestCellIds.includes(key)) next[key] = value;
+        }
+        for (const cellId of requestCellIds) {
+          next[cellId] = { status: 'loading' };
+        }
+        return next;
+      });
       const out: Record<string, OverviewLitePayload> = {};
+      const nextCellStates: Record<string, CellLoadState> = Object.fromEntries(
+        requestCellIds.map((cellId) => [cellId, { status: 'loading' as const }])
+      );
       let nextRequestIndex = 0;
       const isProWorkload = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
-      const workerCount = isProWorkload ? (reportScope === 'Team' ? 1 : 2) : reportScope === 'Team' ? 2 : 5;
+      const workerCount = isProWorkload ? (reportScope === 'Team' ? 1 : 3) : reportScope === 'Team' ? 1 : 5;
+      const commitCellResult = (cellId: string, payload: OverviewLitePayload, state: CellLoadState) => {
+        out[cellId] = payload;
+        nextCellStates[cellId] = state;
+        if (!active) return;
+        setCellsData((current) => ({ ...current, [cellId]: payload }));
+        setCellLoadStates((current) => ({ ...current, [cellId]: state }));
+      };
       type BatchResolver = {
         resolve: (value: OverviewLitePayload) => void;
         reject: (reason?: unknown) => void;
@@ -2361,7 +2390,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           batchTimer = null;
         }
         const keys = Array.from(snapshot.keys());
-        const chunkSize = isProWorkload ? 24 : 60;
+        const chunkSize =
+          reportScope === 'Team'
+            ? (isProWorkload ? 6 : 10)
+            : (isProWorkload ? 24 : 48);
         for (let i = 0; i < keys.length; i += chunkSize) {
           const chunk = keys.slice(i, i + chunkSize);
           try {
@@ -2420,7 +2452,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 ? teamScopePlayers[Math.floor((rowNum - 1) / Math.max(1, reportRows))] ?? ''
                 : rowPlayers[rowNum - 1] ?? 'All';
           if (reportScope === 'Team' && !String(scopePlayer ?? '').trim()) {
-            out[cellId] = {};
+            commitCellResult(cellId, {}, { status: 'ready' });
             return;
           }
           const normalizedPlayer = normalizeNameForApi(scopePlayer);
@@ -2439,9 +2471,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           if (needsChartPoints) params.set('chart_only', '1');
           if (needsChartPoints) {
             if (isProSchool) {
-              params.set('chart_points_limit', reportScope === 'Team' ? '80' : (isHeatmapPanel ? '180' : '220'));
+              params.set('chart_points_limit', reportScope === 'Team' ? '60' : (isHeatmapPanel ? '180' : '220'));
             } else {
-              params.set('chart_points_limit', reportScope === 'Team' ? '160' : (isHeatmapPanel ? '400' : '600'));
+              params.set('chart_points_limit', reportScope === 'Team' ? '120' : (isHeatmapPanel ? '400' : '600'));
             }
           }
           params.set('include_row_pitches', '0');
@@ -2519,8 +2551,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             if (!normalizedPlayer && reportTeam && reportTeam !== 'All') params.set('team_type', reportTeam);
             if (useMostRecent200Pa) {
               params.set('recent_pa_mode', 'auto_200');
-              params.set('recent_pa_count', '200');
-              params.set('recent_pa_ignore_dates', '1');
+              params.set('recent_pa_count', reportScope === 'Team' ? '80' : '200');
+              params.set('recent_pa_ignore_dates', reportScope === 'Team' ? '0' : '1');
             }
           } else {
             if (normalizedPlayer) params.set('catcher', normalizedPlayer);
@@ -2538,12 +2570,13 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             const now = Date.now();
             const cached = cellsCacheRef.current.get(key);
             if (cached && now - cached.at < CACHE_TTL_MS) {
-              out[cellId] = cached.payload;
+              commitCellResult(cellId, cached.payload, { status: 'ready' });
               return;
             }
             const running = inflightRef.current.get(key);
             if (running) {
-              out[cellId] = await running;
+              const runningPayload = await running;
+              commitCellResult(cellId, runningPayload, { status: 'ready' });
               return;
             }
             const requestPromise = (async () => {
@@ -2553,12 +2586,16 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             })();
             inflightRef.current.set(key, requestPromise);
             try {
-              out[cellId] = await requestPromise;
+              const loadedPayload = await requestPromise;
+              commitCellResult(cellId, loadedPayload, { status: 'ready' });
             } finally {
               inflightRef.current.delete(key);
             }
-          } catch {
-            out[cellId] = {};
+          } catch (requestError) {
+            commitCellResult(cellId, {}, {
+              status: 'error',
+              message: requestError instanceof Error ? requestError.message : 'Failed to load panel data.',
+            });
           }
       };
       const workers = Array.from({ length: Math.min(workerCount, requests.length) }, async () => {
@@ -2577,7 +2614,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         await flushBatch();
       }
       if (!active) return;
-      setCellsData(out);
+      setCellsData((current) => ({ ...current, ...out }));
+      setCellLoadStates((current) => ({ ...current, ...nextCellStates }));
     }
     const timer = window.setTimeout(loadCellsData, 60);
     return () => {
@@ -3309,6 +3347,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       ? normalizeCellConfig(cellConfigs[sourceCellId])
                       : effectiveCellConfigForScope(cellId, reportScope, cellConfigs);
                   const payload = cellsData[cellId] ?? {};
+                  const panelLoadState = cellLoadStates[cellId]?.status ?? 'idle';
+                  const panelLoadMessage = cellLoadStates[cellId]?.message ?? '';
                   const tableColumns = payload.table_columns ?? [];
                   const tableRows = payload.table_rows ?? [];
                   const tableSort = tableSorts[cellId];
@@ -4007,6 +4047,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         ) : null}
                       </div>
                       {config.title ? <h4 className="portal-custom-reports-cell-title">{config.title}</h4> : null}
+                      {panelLoadState === 'loading' ? <p className="portal-muted-text">Loading panel data...</p> : null}
+                      {panelLoadState === 'error' ? <p className="portal-error-text">{panelLoadMessage || 'Panel failed to load.'}</p> : null}
                       {isNote ? (
                         <textarea
                           className="portal-custom-reports-notes"

@@ -6604,10 +6604,11 @@ def _pro_fetch_api_live_tail_rows(
     if not win:
         return []
     w0, w1 = win
+    today = date.today()
     if isinstance(min_date_exclusive, date):
-        if min_date_exclusive >= date.today():
-            # DB already has today's rows; avoid external fallback call on every request.
-            return []
+        if min_date_exclusive >= today:
+            # DB may contain partial same-day rows; still allow live API merge for today.
+            w0 = today
         next_day = min_date_exclusive + timedelta(days=1)
         if next_day > w0:
             w0 = next_day
@@ -6624,19 +6625,59 @@ def _pro_fetch_api_live_tail_rows(
     if prefer_cached:
         cached = _pro_api_rows_cache_get(cache_key)
         if cached is not None:
+            if w1 >= today:
+                has_today = False
+                for row in cached:
+                    sd = row.get("session_date")
+                    if isinstance(sd, date) and sd == today:
+                        has_today = True
+                        break
+                    if isinstance(sd, str):
+                        try:
+                            if date.fromisoformat(sd[:10]) == today:
+                                has_today = True
+                                break
+                        except Exception:
+                            pass
+                if not has_today:
+                    today_key = _pro_api_rows_cache_key(today, today, sport_ids, False)
+                    try:
+                        with _PRO_API_ROWS_CACHE_LOCK:
+                            _PRO_API_ROWS_CACHE.pop(today_key, None)
+                    except Exception:
+                        pass
+                    try:
+                        fresh_today = _pro_fetch_api_rows_window(
+                            start_date=today,
+                            end_date=today,
+                            sport_ids=sport_ids,
+                            nontracked_aaa_only=False,
+                        )
+                        if fresh_today:
+                            merged = {_pro_row_unique_key(r): r for r in cached}
+                            for r in fresh_today:
+                                merged[_pro_row_unique_key(r)] = r
+                            return list(merged.values())
+                    except Exception:
+                        pass
             return cached
         # Keep UI responsive with cache-first behavior, but never hide today's live data.
         # If the request window includes today and cache is cold, fetch just today's rows now,
         # and continue warming the broader window in background.
         today_rows: List[Dict[str, Any]] = []
-        if w1 >= date.today():
-            today_start = date.today()
-            today_end = date.today()
+        if w1 >= today:
+            today_start = today
+            today_end = today
             today_key = _pro_api_rows_cache_key(today_start, today_end, sport_ids, False)
             cached_today = _pro_api_rows_cache_get(today_key)
-            if cached_today is not None:
+            if cached_today is not None and len(cached_today) > 0:
                 today_rows = cached_today
             else:
+                try:
+                    with _PRO_API_ROWS_CACHE_LOCK:
+                        _PRO_API_ROWS_CACHE.pop(today_key, None)
+                except Exception:
+                    pass
                 try:
                     today_rows = _pro_fetch_api_rows_window(
                         start_date=today_start,
@@ -12899,16 +12940,10 @@ def hitting_filters(
                 WHERE school_code = %(school_code)s
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
                   AND COALESCE(TRIM(batter), '') <> ''
-                  AND (
-                    %(hitter_count)s::int = 0 OR
-                    regexp_replace(lower(COALESCE(TRIM(batter), '')), '[^a-z0-9]', '', 'g') = ANY(%(hitters_norm)s::text[])
-                  )
                 ORDER BY hitter ASC
                 """,
                 {
                     "school_code": school_code,
-                    "hitters_norm": team_hitter_norm,
-                    "hitter_count": len(team_hitter_norm),
                     "team_markers_norm": team_markers_norm,
                 },
             )
@@ -12969,6 +13004,10 @@ def hitting_filters(
                 team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"hitting filters query failed: {exc}") from exc
+
+    allowed_hitter_keys = set(team_hitter_norm)
+    if allowed_hitter_keys:
+        hitters = [name for name in hitters if _normalize_name_key(name) in allowed_hitter_keys]
 
     return {
         "school_code": school_code,
@@ -13545,6 +13584,9 @@ def hitting_overview(
         {str(row.get("pitch_type") or "Undefined") for row in out_rows},
         key=lambda name: (_pitch_type_sort_rank(name), name),
     )
+    resolved_chart_points_limit = max(100, min(int(parsed_chart_points_limit or 350), 1200))
+    chart_source_rows = _latest_rows_for_chart_points(out_rows, resolved_chart_points_limit)
+    heatmap_source_rows = out_rows
 
     chart_points = (
         [

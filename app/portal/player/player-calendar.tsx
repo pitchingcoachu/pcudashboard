@@ -234,9 +234,9 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
     return (
       <article
         key={dayDate}
-        className={`portal-schedule-day${compact ? ' is-compact' : ''}${isOutsideMonth ? ' is-outside' : ''}${today ? ' is-today' : ''}`}
+        className={`portal-schedule-day${compact ? ' is-compact' : ''}${view === 'week' ? ' is-week' : ''}${isOutsideMonth ? ' is-outside' : ''}${today ? ' is-today' : ''}`}
         style={{
-          minHeight: '220px',
+          minHeight: view === 'week' ? '128px' : '220px',
           borderRadius: 0,
           borderTop: 0,
           borderLeft: 0,
@@ -256,6 +256,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
               key={item.itemId}
               type="button"
               className="portal-schedule-item"
+              title={item.itemName}
               style={{
                 display: 'block',
                 width: 'calc(100% - 0.35rem)',
@@ -265,7 +266,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                 color: 'var(--text-main)',
                 border: '1px solid rgba(255,255,255,0.2)',
                 borderRadius: '6px',
-                padding: '0.35rem 0.45rem',
+                padding: '0.24rem 0.4rem',
                 ...categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout'),
               }}
               onClick={() => setSelectedItem(item)}
@@ -325,7 +326,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
         <h3 className="portal-schedule-period">{periodLabel}</h3>
         {view !== 'day' && view !== 'cycle' && (
           <div
-            className="portal-schedule-weekdays"
+            className={`portal-schedule-weekdays${view === 'week' ? ' is-week' : ''}`}
             style={{
               borderTop: '1px solid rgba(255,255,255,0.26)',
               borderLeft: '1px solid rgba(255,255,255,0.26)',
@@ -337,7 +338,8 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                 style={{
                   borderRight: '1px solid rgba(255,255,255,0.26)',
                   borderBottom: '1px solid rgba(255,255,255,0.26)',
-                  padding: '0.35rem 0.25rem',
+                  padding: view === 'week' ? '0.12rem 0.2rem' : '0.35rem 0.25rem',
+                  lineHeight: 1.05,
                 }}
               >
                 {label}
@@ -389,6 +391,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                         key={item.itemId}
                         type="button"
                         className="portal-schedule-item"
+                        title={item.itemName}
                         style={{
                           display: 'block',
                           width: '100%',
@@ -396,7 +399,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                           color: 'var(--text-main)',
                           border: '1px solid rgba(255,255,255,0.2)',
                           borderRadius: '6px',
-                          padding: '0.4rem 0.5rem',
+                          padding: '0.28rem 0.42rem',
                           ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
                         }}
                         onClick={() => setSelectedItem(item)}
