@@ -180,8 +180,8 @@ type CellLoadState = {
 
 type ExternalPlayerMeta = {
   headshotUrl: string;
-  pitchHand: '' | 'R' | 'L';
-  batSide: '' | 'R' | 'L';
+  pitchHand: '' | 'R' | 'L' | 'S';
+  batSide: '' | 'R' | 'L' | 'S';
   mlbamId: number;
   canonicalName: string;
 };
@@ -1542,12 +1542,26 @@ function sourceCellIdForTeamScope(cellId: string, rowsPerPlayer: number): string
   return `r${sourceRow}c${col}`;
 }
 
-function normalizeHandValue(value: unknown): 'R' | 'L' | '' {
+function normalizeHandValue(value: unknown): 'R' | 'L' | 'S' | '' {
   const raw = String(value ?? '').trim().toLowerCase();
   if (!raw) return '';
   if (raw.startsWith('r')) return 'R';
   if (raw.startsWith('l')) return 'L';
+  if (raw.startsWith('s')) return 'S';
   return '';
+}
+
+function expandExternalPlayerMetaMap(input: Record<string, ExternalPlayerMeta> | undefined): Record<string, ExternalPlayerMeta> {
+  const out: Record<string, ExternalPlayerMeta> = {};
+  Object.entries(input ?? {}).forEach(([nameRaw, meta]) => {
+    const name = String(nameRaw ?? '').trim();
+    if (!name || !meta) return;
+    const firstLast = toFirstLast(name);
+    [name, firstLast, normalizeNameKey(name), normalizeNameKey(firstLast)].forEach((key) => {
+      if (key) out[key] = meta;
+    });
+  });
+  return out;
 }
 
 function initialsFromName(name: string): string {
@@ -1556,6 +1570,74 @@ function initialsFromName(name: string): string {
   const parts = cleaned.split(/\s+/).filter(Boolean);
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return `${parts[0][0] ?? ''}${parts[parts.length - 1][0] ?? ''}`.toUpperCase();
+}
+
+async function svgToPngDataUrl(svg: SVGSVGElement): Promise<string | null> {
+  const rect = svg.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width));
+  const height = Math.max(1, Math.round(rect.height));
+  if (!width || !height) return null;
+
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  if (!clone.getAttribute('xmlns:xlink')) clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+  clone.setAttribute('width', String(width));
+  clone.setAttribute('height', String(height));
+  if (!clone.getAttribute('viewBox')) clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+  const serialized = new XMLSerializer().serializeToString(clone);
+  const blob = new Blob([serialized], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const next = new Image();
+      next.onload = () => resolve(next);
+      next.onerror = () => reject(new Error('Failed to load serialized SVG for export.'));
+      next.src = url;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, width, height);
+    return canvas.toDataURL('image/png');
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function rasterizeHeatmapsForExport(reportNode: HTMLElement): Promise<() => void> {
+  const targets = Array.from(reportNode.querySelectorAll('.portal-custom-reports-heatmap svg')) as SVGSVGElement[];
+  if (!targets.length) return () => undefined;
+  const restores: Array<() => void> = [];
+
+  for (const svg of targets) {
+    const dataUrl = await svgToPngDataUrl(svg);
+    if (!dataUrl) continue;
+    const rect = svg.getBoundingClientRect();
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    img.alt = 'Heatmap export';
+    img.style.display = 'block';
+    img.style.width = `${Math.max(1, Math.round(rect.width))}px`;
+    img.style.height = `${Math.max(1, Math.round(rect.height))}px`;
+    img.style.maxWidth = '100%';
+    img.style.objectFit = 'contain';
+    const parent = svg.parentNode;
+    if (!parent) continue;
+    parent.replaceChild(img, svg);
+    restores.push(() => {
+      if (!img.parentNode) return;
+      img.parentNode.replaceChild(svg, img);
+    });
+  }
+
+  return () => {
+    for (let i = restores.length - 1; i >= 0; i -= 1) restores[i]();
+  };
 }
 
 type CustomReportsSuiteProps = {
@@ -2045,8 +2127,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   }, [reportScope, selectedTeamRoster]);
 
   useEffect(() => {
-    if (reportScope !== 'Team') return;
-    const names = teamScopePlayers.map((entry) => String(entry ?? '').trim()).filter(Boolean);
+    const names = Array.from(
+      new Set(
+        [
+          ...teamScopePlayers,
+          ...reportPlayers,
+          ...rowPlayers.slice(0, Math.max(1, reportRows)),
+          ...Object.values(cellConfigs).map((config) => String(config?.player ?? '').trim()),
+        ]
+          .map((entry) => String(entry ?? '').trim())
+          .filter((entry) => entry && entry !== 'All')
+      )
+    );
     if (!names.length) {
       setTeamScopeExternalMeta({});
       return;
@@ -2058,11 +2150,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as { items?: Record<string, ExternalPlayerMeta> };
         if (!response.ok) return;
-        setTeamScopeExternalMeta(payload.items ?? {});
+        setTeamScopeExternalMeta(expandExternalPlayerMetaMap(payload.items));
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [reportScope, teamScopePlayers]);
+  }, [cellConfigs, reportPlayers, reportRows, rowPlayers, teamScopePlayers]);
 
   const reportOptions = useMemo<OptionItem[]>(
     () =>
@@ -2089,9 +2181,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   );
 
   const teamScopePlayerMeta = useMemo(() => {
-    const out: Record<string, { hand: 'R' | 'L' | ''; headshotUrl: string }> = {};
-    if (reportScope !== 'Team') return out;
-    const rowsPerPlayer = Math.max(1, reportRows);
+    const out: Record<string, { hand: 'R' | 'L' | 'S' | ''; headshotUrl: string }> = {};
     const pickHeadshot = (point: Record<string, unknown>): string => {
       const candidates = [
         point.headshot_url,
@@ -2104,19 +2194,31 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       const found = candidates.find((entry) => typeof entry === 'string' && /^https?:\/\//i.test(String(entry).trim()));
       return typeof found === 'string' ? found.trim() : '';
     };
-    const counts: Record<string, { r: number; l: number; headshotUrl: string }> = {};
+    const counts: Record<string, { r: number; l: number; s: number; headshotUrl: string }> = {};
     for (const [cellId, payload] of Object.entries(cellsData)) {
       const rowNum = Number(cellId.match(/^r(\d+)c/)?.[1] ?? '1');
-      const playerIdx = Math.floor((Math.max(1, rowNum) - 1) / rowsPerPlayer);
-      const player = teamScopePlayers[playerIdx] ?? '';
+      const config =
+        reportScope === 'Team'
+          ? normalizeCellConfig(cellConfigs[sourceCellIdForTeamScope(cellId, reportRows)])
+          : effectiveCellConfigForScope(cellId, reportScope, cellConfigs);
+      const player =
+        reportScope === 'Team'
+          ? teamScopePlayers[Math.floor((Math.max(1, rowNum) - 1) / Math.max(1, reportRows))] ?? ''
+          : reportScope === 'Multi-Player'
+            ? rowPlayers[rowNum - 1] ?? 'All'
+            : config.player && config.player !== 'All'
+              ? config.player
+              : reportPlayers[0] || 'All';
       if (!player) continue;
-      const bucket = counts[player] ?? { r: 0, l: 0, headshotUrl: '' };
+      if (player === 'All') continue;
+      const bucket = counts[player] ?? { r: 0, l: 0, s: 0, headshotUrl: '' };
       const points = payload.chart_points ?? [];
       for (const pointRaw of points as unknown as Array<Record<string, unknown>>) {
         const handRaw = reportType === 'Pitching' ? pointRaw.pitcherthrows : reportType === 'Hitting' ? pointRaw.batterside : '';
         const hand = normalizeHandValue(handRaw);
         if (hand === 'R') bucket.r += 1;
         if (hand === 'L') bucket.l += 1;
+        if (hand === 'S') bucket.s += 1;
         if (!bucket.headshotUrl) {
           const maybeHeadshot = pickHeadshot(pointRaw);
           if (maybeHeadshot) bucket.headshotUrl = maybeHeadshot;
@@ -2125,13 +2227,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       counts[player] = bucket;
     }
     for (const [player, bucket] of Object.entries(counts)) {
+      const top = Math.max(bucket.r, bucket.l, bucket.s);
+      const hand = top === 0 ? '' : bucket.s === top ? 'S' : bucket.r === top ? 'R' : 'L';
       out[player] = {
-        hand: bucket.r === bucket.l ? '' : bucket.r > bucket.l ? 'R' : 'L',
+        hand,
         headshotUrl: bucket.headshotUrl,
       };
     }
     return out;
-  }, [cellsData, reportRows, reportScope, reportType, teamScopePlayers]);
+  }, [cellConfigs, cellsData, reportPlayers, reportRows, reportScope, reportType, rowPlayers, teamScopePlayers]);
 
   useEffect(() => {
     setCellConfigs((current) => ensureCellConfigMap(current, reportRows, reportCols));
@@ -2837,8 +2941,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const downloadReportPdf = async () => {
     const reportNode = reportCanvasRef.current;
     if (!reportNode) return;
+    let restoreHeatmaps: (() => void) | null = null;
     try {
       setIsExportingPdf(true);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      restoreHeatmaps = await rasterizeHeatmapsForExport(reportNode);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const canvas = await html2canvas(reportNode, {
         backgroundColor: '#000000',
@@ -2900,6 +3007,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     } catch (err) {
       setError(err instanceof Error ? err.message : 'PDF export failed.');
     } finally {
+      restoreHeatmaps?.();
       setIsExportingPdf(false);
     }
   };
@@ -2908,13 +3016,56 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const activeSchoolCode = schoolCode || initialSchoolCode;
   const schoolBrand = useMemo(() => resolveSchoolBrand(activeSchoolCode), [activeSchoolCode]);
   const isProSchool = String(activeSchoolCode || '').trim().toUpperCase() === 'PRO';
+  const resolveExternalMetaForName = (nameRaw: string): ExternalPlayerMeta | undefined => {
+    const name = String(nameRaw ?? '').trim();
+    if (!name) return undefined;
+    const formatted = toFirstLast(name);
+    return (
+      teamScopeExternalMeta[name] ??
+      teamScopeExternalMeta[formatted] ??
+      teamScopeExternalMeta[normalizeNameKey(name)] ??
+      teamScopeExternalMeta[normalizeNameKey(formatted)]
+    );
+  };
+  const hitterNameColor = (hand: 'R' | 'L' | 'S' | ''): string | undefined => {
+    if (hand === 'L') return '#ef4444';
+    if (hand === 'S') return '#60a5fa';
+    return undefined;
+  };
+  const hitterHandSuffix = (hand: 'R' | 'L' | 'S' | ''): string => {
+    if (hand === 'R') return '(R)';
+    if (hand === 'L') return '(L)';
+    if (hand === 'S') return '(S)';
+    return '';
+  };
+  const hitterDisplay = (nameRaw: string): { label: string; hand: 'R' | 'L' | 'S' | ''; color?: string } => {
+    const label = toFirstLast(nameRaw) || String(nameRaw ?? '').trim() || 'All';
+    if (reportType !== 'Hitting' || !label || label === 'All') return { label, hand: '' };
+    const external = resolveExternalMetaForName(nameRaw);
+    const derived = teamScopePlayerMeta[nameRaw] ?? teamScopePlayerMeta[label];
+    const hand = (external?.batSide || derived?.hand || '') as 'R' | 'L' | 'S' | '';
+    return { label, hand, color: hitterNameColor(hand) };
+  };
   const reportHeaderPlayer = useMemo(() => {
     if (reportScope === 'Multi-Player') return 'Multi-Player';
     if (reportScope === 'Team') return reportTeam && reportTeam !== 'All' ? `Team: ${reportTeam}` : 'Team';
     const chosen = selectedValues(reportPlayers);
     if (!chosen.length) return 'All';
-    return chosen.map((name) => toFirstLast(name) || name).join(', ');
-  }, [reportScope, reportPlayers, reportTeam]);
+    return (
+      <>
+        {chosen.map((name, idx) => {
+          const display = hitterDisplay(name);
+          return (
+            <span key={`header-player-${name}-${idx}`} style={display.color ? { color: display.color } : undefined}>
+              {idx > 0 ? ', ' : ''}
+              {display.label}
+              {hitterHandSuffix(display.hand) ? ` ${hitterHandSuffix(display.hand)}` : ''}
+            </span>
+          );
+        })}
+      </>
+    );
+  }, [hitterDisplay, reportPlayers, reportScope, reportTeam, reportType, teamScopeExternalMeta, teamScopePlayerMeta]);
   const customReportRightLogoSrc = useMemo(() => {
     if (!isProSchool) return schoolBrand.logoSrc ?? '/pitching-coach-u-logo.png';
     const chosen = reportScope === 'Single Player' ? selectedValues(reportPlayers) : [];
@@ -3215,7 +3366,17 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       <div className="portal-muted-text" style={{ fontSize: '1.05rem', cursor: 'grab' }} aria-hidden>
                         ::
                       </div>
-                      <div className="portal-muted-text" style={{ color: 'var(--text-main)' }}>{toFirstLast(player) || player}</div>
+                      <div className="portal-muted-text" style={{ color: 'var(--text-main)' }}>
+                        {(() => {
+                          const display = hitterDisplay(player);
+                          return (
+                            <span style={display.color ? { color: display.color } : undefined}>
+                              {display.label}
+                              {hitterHandSuffix(display.hand) ? ` ${hitterHandSuffix(display.hand)}` : ''}
+                            </span>
+                          );
+                        })()}
+                      </div>
                       <button type="button" className="btn btn-ghost" onClick={() => removeTeamScopePlayer(player)}>
                         Remove
                       </button>
@@ -3415,8 +3576,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       : config.player && config.player !== 'All'
                         ? config.player
                         : reportPlayers[0] || 'All';
-                  const derivedMeta = reportScope === 'Team' ? teamScopePlayerMeta[inheritedPlayer] : undefined;
-                  const externalMeta = reportScope === 'Team' ? teamScopeExternalMeta[inheritedPlayer] : undefined;
+                  const resolvedInheritedName = toFirstLast(inheritedPlayer) || inheritedPlayer;
+                  const derivedMeta = teamScopePlayerMeta[inheritedPlayer] ?? teamScopePlayerMeta[resolvedInheritedName];
+                  const externalMeta = resolveExternalMetaForName(inheritedPlayer);
                   const effectiveHand =
                     reportType === 'Pitching'
                       ? (externalMeta?.pitchHand || derivedMeta?.hand || '')
@@ -3436,9 +3598,16 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           ? '(R)'
                           : effectiveHand === 'L'
                             ? '(L)'
+                            : effectiveHand === 'S'
+                              ? '(S)'
                             : ''
                         : '';
-                  const isLeftHandedText = reportType !== 'Catching' && effectiveHand === 'L';
+                  const nameAccentColor =
+                    reportType === 'Hitting'
+                      ? hitterNameColor(effectiveHand as 'R' | 'L' | 'S' | '')
+                      : reportType !== 'Catching' && effectiveHand === 'L'
+                        ? '#ef4444'
+                        : undefined;
                   const tableModeOptions = availableTableModes.map((entry) => ({
                     value: entry,
                     label: entry,
@@ -3498,17 +3667,20 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   {initialsFromName(toFirstLast(inheritedPlayer) || inheritedPlayer)}
                                 </div>
                               )}
-                              <span style={{ color: isLeftHandedText ? '#ef4444' : undefined }}>
-                                {toFirstLast(inheritedPlayer) || 'All'}
+                              <span style={{ color: nameAccentColor }}>
+                                {resolvedInheritedName || 'All'}
                               </span>
                               {handedLabel ? (
-                                <span style={{ color: isLeftHandedText ? '#ef4444' : 'rgba(255,255,255,0.8)' }}>
+                                <span style={{ color: nameAccentColor || 'rgba(255,255,255,0.8)' }}>
                                   {handedLabel}
                                 </span>
                               ) : null}
                             </div>
                           ) : (
-                            toFirstLast(inheritedPlayer) || 'All'
+                            <span style={{ color: nameAccentColor }}>
+                              {resolvedInheritedName || 'All'}
+                              {handedLabel ? ` ${handedLabel}` : ''}
+                            </span>
                           )}
                         </div>
                       ) : null}
@@ -3561,7 +3733,13 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             }
                           />
                         ) : (
-                          <div className="portal-muted-text">{`${playerLabel}: ${toFirstLast(inheritedPlayer) || 'All'}`}</div>
+                          <div className="portal-muted-text">
+                            {playerLabel}:{' '}
+                            <span style={{ color: nameAccentColor }}>
+                              {resolvedInheritedName || 'All'}
+                              {handedLabel ? ` ${handedLabel}` : ''}
+                            </span>
+                          </div>
                         )}
                         <input
                           placeholder="Panel title (optional)"

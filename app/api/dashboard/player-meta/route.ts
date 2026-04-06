@@ -4,8 +4,8 @@ import { getSessionFromCookies } from '../../../../lib/auth';
 
 type PlayerMeta = {
   headshotUrl: string;
-  pitchHand: '' | 'R' | 'L';
-  batSide: '' | 'R' | 'L';
+  pitchHand: '' | 'R' | 'L' | 'S';
+  batSide: '' | 'R' | 'L' | 'S';
   mlbamId: number;
   canonicalName: string;
 };
@@ -28,10 +28,11 @@ function normalizeKey(value: string): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
-function normHand(value: unknown): '' | 'R' | 'L' {
+function normHand(value: unknown): '' | 'R' | 'L' | 'S' {
   const v = String(value ?? '').trim().toUpperCase();
   if (v.startsWith('R')) return 'R';
   if (v.startsWith('L')) return 'L';
+  if (v.startsWith('S')) return 'S';
   return '';
 }
 
@@ -104,4 +105,3 @@ export async function GET(request: Request) {
     );
   }
 }
-
