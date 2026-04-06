@@ -3473,8 +3473,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     isSummaryTable &&
                     reportCols > colSpan &&
                     colSpan <= 2 &&
-                    tableColumns.length > 0 &&
-                    tableColumns.length <= 5;
+                    tableColumns.length > 0;
 
                   return (
                     <article

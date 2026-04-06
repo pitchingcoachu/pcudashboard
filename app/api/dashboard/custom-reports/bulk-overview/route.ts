@@ -2,6 +2,8 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 
+export const maxDuration = 300;
+
 const ALLOWED_PREFIXES = new Set([
   '/api/dashboard/pitching/overview',
   '/api/dashboard/hitting/overview',
@@ -103,17 +105,19 @@ export async function POST(request: Request) {
   }
 
   let nextIndex = 0;
-  const workerCount = 1;
+  const workerCount = Math.min(3, unresolved.length);
   const workers = Array.from({ length: Math.min(workerCount, unresolved.length) }, async () => {
     while (nextIndex < unresolved.length) {
       const current = unresolved[nextIndex];
       nextIndex += 1;
       const result = await fetchOverviewKey(baseUrl, cookieHeader, current);
       const scopedKey = `${userScope}:${current}`;
-      cache.set(scopedKey, { at: Date.now(), payload: result.payload, error: result.error });
       if (result.error) {
+        // Do not cache transient errors; otherwise one backend hiccup poisons the panel for the full TTL.
+        cache.delete(scopedKey);
         errors[current] = result.error;
       } else {
+        cache.set(scopedKey, { at: Date.now(), payload: result.payload });
         items[current] = result.payload ?? {};
       }
     }

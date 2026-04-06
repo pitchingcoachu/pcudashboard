@@ -111,7 +111,12 @@ export async function GET(request: Request) {
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {
-      return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
+      const routeError = result.payload.detail ?? result.payload.error;
+      const message =
+        typeof routeError === 'string' && routeError.trim().length
+          ? routeError
+          : `Dashboard API request failed (HTTP ${result.status}).`;
+      return NextResponse.json({ error: message }, { status: result.status });
     }
     return NextResponse.json(result.payload, {
       headers: {
