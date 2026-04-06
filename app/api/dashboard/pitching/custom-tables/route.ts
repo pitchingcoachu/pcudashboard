@@ -143,9 +143,9 @@ function resolveCustomTableOrganizationId(session: PortalSession, schoolCode: st
       ? scopedOrganizationIdResolved
       : sessionOrgId;
 
-  // Keep PRO custom tables anchored to the signed-in org for admin users.
+  // Keep PRO custom tables anchored to the signed-in org for all roles.
   // This prevents "missing table" behavior when school->org mapping changes.
-  if (selectedSchool === 'PRO' && session.role === 'admin' && Number.isFinite(sessionOrgId) && sessionOrgId > 0) {
+  if (selectedSchool === 'PRO' && Number.isFinite(sessionOrgId) && sessionOrgId > 0) {
     return sessionOrgId;
   }
   return scopedOrganizationId;

@@ -5271,17 +5271,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const byType = new Map<string, Array<{ xKey: string; x: number; y: number }>>();
                               const inningBoundaries: number[] = [];
                               if (mode === 'Velocity Chart (Game/Inning)') {
-                                const ordered = [...raw]
-                                  .sort((a, b) => {
-                                    const dCmp = a.date.localeCompare(b.date);
-                                    if (dCmp !== 0) return dCmp;
-                                    const pnCmp = (a.pitchNumber ?? 0) - (b.pitchNumber ?? 0);
-                                    if (pnCmp !== 0) return pnCmp;
-                                    const pnoCmp = (a.pitchNo ?? 0) - (b.pitchNo ?? 0);
-                                    if (pnoCmp !== 0) return pnoCmp;
-                                    return (a.pitchEventId ?? 0) - (b.pitchEventId ?? 0);
-                                  })
-                                  .map((row, idx) => ({ ...row, pitchCount: idx + 1 }));
+                                const orderedBase = isProSchool
+                                  ? raw
+                                  : [...raw].sort((a, b) => {
+                                      const dCmp = a.date.localeCompare(b.date);
+                                      if (dCmp !== 0) return dCmp;
+                                      const pnCmp = (a.pitchNumber ?? 0) - (b.pitchNumber ?? 0);
+                                      if (pnCmp !== 0) return pnCmp;
+                                      const pnoCmp = (a.pitchNo ?? 0) - (b.pitchNo ?? 0);
+                                      if (pnoCmp !== 0) return pnoCmp;
+                                      return (a.pitchEventId ?? 0) - (b.pitchEventId ?? 0);
+                                    });
+                                const ordered = orderedBase.map((row, idx) => ({ ...row, pitchCount: idx + 1 }));
                                 const dateSet = new Set(ordered.map((row) => row.date).filter(Boolean));
                                 const gameSet = new Set(ordered.map((row) => row.gameKey).filter(Boolean));
                                 const dataPitcherSet = new Set(ordered.map((row) => row.pitcher).filter(Boolean));
@@ -5298,10 +5299,21 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   return match ? match[0] : raw.toLowerCase();
                                 };
                                 if (showInningBoundaries) {
-                                  for (let i = 1; i < ordered.length; i += 1) {
-                                    const prev = inningToKey(ordered[i - 1].inningRaw);
-                                    const cur = inningToKey(ordered[i].inningRaw);
-                                    if (prev && cur && prev !== cur) inningBoundaries.push(ordered[i].pitchCount);
+                                  if (isProSchool) {
+                                    const firstPitchByInning = new Map<string, number>();
+                                    for (const row of ordered) {
+                                      const key = inningToKey(row.inningRaw || row.inning);
+                                      if (!key) continue;
+                                      if (!firstPitchByInning.has(key)) firstPitchByInning.set(key, row.pitchCount);
+                                    }
+                                    const orderedFirstPitches = Array.from(firstPitchByInning.values()).sort((a, b) => a - b);
+                                    inningBoundaries.push(...orderedFirstPitches.slice(1).map((value) => Math.max(0.5, value - 0.5)));
+                                  } else {
+                                    for (let i = 1; i < ordered.length; i += 1) {
+                                      const prev = inningToKey(ordered[i - 1].inningRaw || ordered[i - 1].inning);
+                                      const cur = inningToKey(ordered[i].inningRaw || ordered[i].inning);
+                                      if (prev && cur && prev !== cur) inningBoundaries.push(Math.max(0.5, ordered[i].pitchCount - 0.5));
+                                    }
                                   }
                                 }
                                 for (const row of ordered) {
