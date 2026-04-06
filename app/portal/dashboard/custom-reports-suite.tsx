@@ -330,6 +330,7 @@ const FILTER_TOKENS: FilterToken[] = [
 ];
 const splitByLabel = (value: string): string => (value === 'Inning' ? 'Inning of Appearance' : value);
 const UNIVERSAL_SPLIT_BY = [
+  'All',
   'Pitch Types',
   'Batter Side',
   'Pitcher Hand',

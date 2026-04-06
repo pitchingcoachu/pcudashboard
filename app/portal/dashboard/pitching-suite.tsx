@@ -1400,6 +1400,7 @@ export default function PitchingSuite({
       setTableMode('Live');
     }
     const allowedSplitBy = new Set([
+      'All',
       'Pitch Types',
       'Pitcher',
       'Pitcher Hand',
@@ -4806,6 +4807,7 @@ export default function PitchingSuite({
     () =>
       isLeague
         ? [
+            { value: 'All', label: 'All' },
             { value: 'Pitch Types', label: 'Pitch Types' },
             { value: 'Pitcher', label: 'Pitcher' },
             { value: 'Pitcher Hand', label: 'Pitcher Hand' },
@@ -4824,6 +4826,7 @@ export default function PitchingSuite({
             { value: 'Pitcher Team', label: 'Team' },
           ]
         : [
+            { value: 'All', label: 'All' },
             { value: 'Pitch Types', label: 'Pitch Types' },
             { value: 'Batter Hand', label: 'Batter Hand' },
             { value: 'Count', label: 'Count' },

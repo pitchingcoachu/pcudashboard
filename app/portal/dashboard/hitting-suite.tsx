@@ -2041,15 +2041,11 @@ export default function HittingSuite({
     const shouldForceProFastSummary = isPro && isSummaryPage;
     const shouldIncludeCharts = dashboardPage !== 'Leaderboard' && !shouldForceProFastSummary;
     params.set('include_chart_points', shouldIncludeCharts ? '1' : '0');
-    if (shouldIncludeCharts) {
-      params.set('chart_points_limit', isPlayerRole ? '250' : (isPro ? '450' : '350'));
-    }
     const requestKey = `/api/dashboard/hitting/overview?${params.toString()}`;
     const chartRequestKey = shouldForceProFastSummary
       ? (() => {
           const chartParams = new URLSearchParams(params);
           chartParams.set('include_chart_points', '1');
-          chartParams.set('chart_points_limit', isPlayerRole ? '250' : '350');
           chartParams.set('chart_only', '1');
           return `/api/dashboard/hitting/overview?${chartParams.toString()}`;
         })()

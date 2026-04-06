@@ -1065,6 +1065,8 @@ def _is_competitive_row(row: Dict[str, Any]) -> bool:
 
 def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
     split = (split_by or "Pitch Types").strip()
+    if split == "All":
+        return "All"
     if split == "Pitch Types":
         return str(row.get("pitch_type") or "Unknown")
     if split == "Pitcher Hand":
@@ -1654,6 +1656,7 @@ def _build_dynamic_table(
 ) -> tuple[List[str], List[Dict[str, Any]], List[str]]:
     mode_key = (mode or "Stuff").strip()
     split_col_map: Dict[str, str] = {
+        "All": "All",
         "Pitch Types": "Pitch",
         "Pitcher Hand": "Pitcher Hand",
         "Batter Hand": "Batter Hand",
@@ -2354,7 +2357,7 @@ def _build_dynamic_table(
 
     # Always add an All row at the bottom for split views.
     all_group = [r for group_rows in groups.values() for r in group_rows]
-    if all_group:
+    if all_group and split_clean != "All":
         out_rows.append(_row_for_group("All", all_group))
 
     column_map: Dict[str, List[str]] = {
@@ -4382,6 +4385,7 @@ def _try_pitching_overview_daily_rollup(
         return None
     split_clean = (split_by or "Pitch Types").strip()
     split_to_rollup_col: Dict[str, tuple[str, str]] = {
+        "All": ("pitch_type", "All"),
         "Pitch Types": ("pitch_type", "Pitch"),
         "Pitcher": ("pitcher_name", "Pitcher"),
         "Batter": ("batter_name", "Batter"),
@@ -4658,6 +4662,8 @@ def _try_pitching_overview_daily_rollup(
     for row in grouped_rows:
         split_val = str(row.get("split_value") or "Unknown")
         grouped_by_split.setdefault(split_val, []).append(row)
+    if split_clean == "All":
+        grouped_by_split = {"All": grouped_rows}
 
     total_pitches = int(sum(int(r.get("pitches") or 0) for r in grouped_rows))
     total_velo_n = int(sum(int(r.get("velo_n") or 0) for r in grouped_rows))
@@ -4852,7 +4858,8 @@ def _try_pitching_overview_daily_rollup(
         "RV/100": None,
         "PV/100": None,
     }
-    table_rows.append(all_row)
+    if split_clean != "All":
+        table_rows.append(all_row)
 
     chart_points: List[Dict[str, Any]] = []
     heatmap_points: List[Dict[str, Any]] = []
@@ -5305,6 +5312,7 @@ def _try_pro_pitching_overview_rollup(
         return None
     split_clean = (split_by or "Pitch Types").strip()
     split_to_expr: Dict[str, tuple[str, str]] = {
+        "All": ("pitch_type", "All"),
         "Pitch Types": ("pitch_type", "Pitch"),
         "Pitcher": ("pitcher_name", "Pitcher"),
         "Batter": ("batter_name", "Batter"),
@@ -5431,6 +5439,8 @@ def _try_pro_pitching_overview_rollup(
     grouped_by_split: Dict[str, List[Dict[str, Any]]] = {}
     for row in grouped_rows:
         grouped_by_split.setdefault(str(row.get("split_value") or "Unknown"), []).append(row)
+    if split_clean == "All":
+        grouped_by_split = {"All": grouped_rows}
     total_pitches = int(sum(int(r.get("pitches") or 0) for r in grouped_rows))
     total_velo_n = int(sum(int(r.get("velo_n") or 0) for r in grouped_rows))
     total_spin_n = int(sum(int(r.get("spin_n") or 0) for r in grouped_rows))
@@ -5509,7 +5519,8 @@ def _try_pro_pitching_overview_rollup(
                 "Pitching+": None,
             }
         )
-    table_rows.append({split_col_name: "All", "#": total_pitches, "BF": sum(int(r.get("bf_n") or 0) for r in grouped_rows), "Velo": round(avg_velo, 1) if _is_num(avg_velo) else None})
+    if split_clean != "All":
+        table_rows.append({split_col_name: "All", "#": total_pitches, "BF": sum(int(r.get("bf_n") or 0) for r in grouped_rows), "Velo": round(avg_velo, 1) if _is_num(avg_velo) else None})
     pitch_summary: Dict[str, Dict[str, Any]] = {}
     for row in grouped_rows:
         pt = str(row.get("pitch_type") or "")
@@ -8887,6 +8898,7 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
             "opp_pitchers_by_team_code": {},
             "table_modes": ["Results", "Swing Decisions", "Batted Ball Data", "Custom"],
             "split_by_options": [
+                "All",
                 "Pitch Types",
                 "Pitcher Hand",
                 "Count",
@@ -9190,6 +9202,7 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
         "opp_pitchers_by_team_code": opp_pitchers_by_team_code,
         "table_modes": ["Results", "Swing Decisions", "Batted Ball Data", "Custom"],
         "split_by_options": [
+            "All",
             "Pitch Types",
             "Pitcher Hand",
             "Count",
@@ -10521,6 +10534,7 @@ def pitching_overview(
         if table_mode not in {"Live", "Process", "Results", "Usage"}:
             table_mode = "Live"
         if split_by not in {
+            "All",
             "Pitch Types",
             "Pitcher",
             "Batter",
@@ -13142,6 +13156,7 @@ def hitting_filters(
         "opp_pitchers_by_team_code": opp_pitchers_by_team_code,
         "table_modes": ["Results", "Swing Decisions", "Batted Ball Data", "Custom"],
         "split_by_options": [
+            "All",
             "Pitch Types",
             "Pitcher Hand",
             "Count",
@@ -13697,7 +13712,7 @@ def hitting_overview(
         {str(row.get("pitch_type") or "Undefined") for row in out_rows},
         key=lambda name: (_pitch_type_sort_rank(name), name),
     )
-    resolved_chart_points_limit = max(100, min(int(parsed_chart_points_limit or 350), 1200))
+    resolved_chart_points_limit = max(100, min(int(parsed_chart_points_limit or 350), 6000))
     chart_source_rows = _latest_rows_for_chart_points(out_rows, resolved_chart_points_limit)
     heatmap_source_rows = out_rows
 

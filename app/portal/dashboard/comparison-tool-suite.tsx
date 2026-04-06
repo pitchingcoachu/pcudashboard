@@ -125,6 +125,7 @@ const DOMAIN_TABLES: Record<Domain, string[]> = {
 };
 const DOMAIN_SPLIT_BY: Record<Domain, string[]> = {
   Pitching: [
+    'All',
     'Pitch Types',
     'Pitcher Hand',
     'Batter Hand',
@@ -144,6 +145,7 @@ const DOMAIN_SPLIT_BY: Record<Domain, string[]> = {
     'Catcher',
   ],
   Hitting: [
+    'All',
     'Pitch Types',
     'Pitcher Hand',
     'Batter Hand',
