@@ -1429,6 +1429,8 @@ ALL_TABLE_COLUMNS: List[str] = [
     "Strike%",
     "Swing%",
     "FPS%",
+    "FPS(FB)%",
+    "FPS(OS)%",
     "Early%",
     "Ahead%",
     "E+A%",
@@ -1503,6 +1505,25 @@ ALL_TABLE_COLUMNS: List[str] = [
     "PosSD",
     "GoZoneSw",
 ]
+
+
+def _is_fastball_or_sinker_pitch_type(value: Any) -> bool:
+    token = re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+    return token in {
+        "fastball",
+        "fourseamfastball",
+        "4seamfastball",
+        "fourseam",
+        "ff",
+        "fa",
+        "sinker",
+        "oneseamfastball",
+        "twoseamfastball",
+        "twoseamfasball",
+        "twoseam",
+        "si",
+        "ft",
+    }
 
 
 def _derive_pro_fip_context(rows: List[Dict[str, Any]]) -> tuple[float, float]:
@@ -1705,6 +1726,10 @@ def _build_dynamic_table(
         takes = 0
         swings_count = 0
         fps_count = 0
+        fps_fb_opp = 0
+        fps_fb_yes = 0
+        fps_os_opp = 0
+        fps_os_yes = 0
         chase_den = 0
         chase_num = 0
         gozone_den = 0
@@ -1714,6 +1739,40 @@ def _build_dynamic_table(
         edge_den = 0
         edge_sw_num = 0
         possd_points = 0
+        def _row_is_swing_for_fps_metric(r: Dict[str, Any]) -> bool:
+            pitch_call = str(r.get("pitch_call") or "").strip()
+            if pitch_call in swing_calls:
+                return True
+            desc_norm = _pro_norm_token(
+                r.get("description_raw")
+                or r.get("description")
+                or r.get("pro_desc_norm")
+                or pitch_call
+            )
+            if not desc_norm:
+                return False
+            if desc_norm in {
+                "swinging_strike",
+                "swinging_strike_blocked",
+                "swinging_strike_pitchout",
+                "strikeswinging",
+                "missed_bunt",
+                "foul",
+                "foul_tip",
+                "foultip",
+                "foul_bunt",
+                "foul_pitchout",
+                "foulball",
+                "foulballfieldable",
+                "foulballnotfieldable",
+            }:
+                return True
+            return (
+                desc_norm.startswith("foul")
+                or desc_norm.startswith("in_play")
+                or desc_norm.startswith("hit_into_play")
+                or desc_norm == "inplay"
+            )
         for r in grp:
             pitch_call = str(r.get("pitch_call") or "")
             is_swing = pitch_call in swing_calls
@@ -1728,6 +1787,16 @@ def _build_dynamic_table(
                 and pitch_call in {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
             ):
                 fps_count += 1
+            if r.get("balls_num") == 0 and r.get("strikes_num") == 0:
+                is_fb_or_si = _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+                if is_fb_or_si:
+                    fps_fb_opp += 1
+                    if _row_is_swing_for_fps_metric(r):
+                        fps_fb_yes += 1
+                else:
+                    fps_os_opp += 1
+                    if _row_is_swing_for_fps_metric(r):
+                        fps_os_yes += 1
             if not (_is_num(r.get("plate_side")) and _is_num(r.get("plate_height"))):
                 continue
             ps = float(r.get("plate_side"))
@@ -2153,6 +2222,8 @@ def _build_dynamic_table(
             "Strike%": f"{round(100.0 * strike_n / n, 1)}%" if n else None,
             "Swing%": f"{round(100.0 * swing_n / n, 1)}%" if n else None,
             "FPS%": f"{round(100.0 * fps_yes / fps_opp, 1)}%" if fps_opp else None,
+            "FPS(FB)%": f"{round(100.0 * fps_fb_yes / fps_fb_opp, 1)}%" if fps_fb_opp else None,
+            "FPS(OS)%": f"{round(100.0 * fps_os_yes / fps_os_opp, 1)}%" if fps_os_opp else None,
             "Called-S%": f"{round(100.0 * called_strikes / n, 1)}%" if n else None,
             "Take%": f"{round(100.0 * takes / n, 1)}%" if n else None,
             "Chase%": f"{round(100.0 * chase_num / chase_den, 1)}%" if chase_den else None,
@@ -2290,13 +2361,13 @@ def _build_dynamic_table(
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
         "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
         "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
-        "Hitting Results": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Swing%", "Whiff%", "GB%", "K%", "BB%", "Barrel%", "EV", "LA"],
+        "Hitting Results": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Swing%", "FPS(FB)%", "FPS(OS)%", "Whiff%", "GB%", "K%", "BB%", "Barrel%", "EV", "LA"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
         "Raw Data": [split_col_name, "IP", "P", "BF", "P/IP", "P/BF", "H", "1B", "2B", "3B", "HR", "XBH", "Barrels", "BB", "HBP", "K", "Whiffs"],
-        "Batted Ball Data": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Barrel%"],
-        "Swing Decisions": [split_col_name, "Swing%", "FPS%", "Called-S%", "Take%", "Chase%", "GoZoneSw%", "IZswing%", "EdgeSwing%", "PosSD%"],
+        "Batted Ball Data": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "FPS(FB)%", "FPS(OS)%", "Barrel%"],
+        "Swing Decisions": [split_col_name, "Swing%", "FPS%", "FPS(FB)%", "FPS(OS)%", "Called-S%", "Take%", "Chase%", "GoZoneSw%", "IZswing%", "EdgeSwing%", "PosSD%"],
         "Custom": [split_col_name],
     }
     if mode_key == "Custom":
@@ -5551,6 +5622,11 @@ def _try_pro_hitting_overview_rollup(
         return None
     if selected_custom_columns:
         return None
+    # FPS(FB)% / FPS(OS)% require row-level 0-0 swing classification by pitch type.
+    # Rollup rows do not preserve enough sequence detail for exact parity, so use
+    # the full overview path for correctness.
+    if mode_raw in {"Results", "Swing Decisions", "Batted Ball Data"}:
+        return None
     if mode_raw not in {"Results", "Swing Decisions", "Batted Ball Data"}:
         return None
     if selected_zone_locations or selected_pitch_results or selected_after_count_filters or selected_bip_results or selected_in_zone:
@@ -5687,6 +5763,26 @@ def _try_pro_hitting_overview_rollup(
         obp = ((hits + bb + hbp) / obp_den) if obp_den > 0 else None
         avg = (hits / ab) if ab > 0 else None
         slg = (tb / ab) if ab > 0 else None
+        fps_fb_num = sum(
+            int(r.get("fps_num") or 0)
+            for r in rows_for_split
+            if _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_fb_den = sum(
+            int(r.get("fps_den") or 0)
+            for r in rows_for_split
+            if _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_os_num = sum(
+            int(r.get("fps_num") or 0)
+            for r in rows_for_split
+            if not _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_os_den = sum(
+            int(r.get("fps_den") or 0)
+            for r in rows_for_split
+            if not _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
         table_rows.append(
             {
                 split_by if split_by else "Pitch Types": split_value,
@@ -5701,6 +5797,8 @@ def _try_pro_hitting_overview_rollup(
                 "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), sum(int(r.get("swing_n") or 0) for r in rows_for_split)),
                 "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
                 "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+                "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
+                "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
                 "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
                 "GB%": _safe_pct(sum(int(r.get("gb_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
                 "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
@@ -5711,11 +5809,11 @@ def _try_pro_hitting_overview_rollup(
             }
         )
     split_col_name = split_by if split_by else "Pitch Types"
-    table_columns = [split_col_name, "#", "PA", "AVG", "SLG", "OPS", "K%", "BB%", "Whiff%", "GB%", "Barrel%", "EV", "LA", "xWOBA", "wOBA"]
+    table_columns = [split_col_name, "#", "PA", "AVG", "SLG", "OPS", "K%", "BB%", "FPS(FB)%", "FPS(OS)%", "Whiff%", "GB%", "Barrel%", "EV", "LA", "xWOBA", "wOBA"]
     if mode_raw == "Swing Decisions":
-        table_columns = [split_col_name, "#", "Swing%", "Whiff%", "CSW%", "FPS%", "InZone%"]
+        table_columns = [split_col_name, "#", "Swing%", "Whiff%", "CSW%", "FPS%", "FPS(FB)%", "FPS(OS)%", "InZone%"]
     elif mode_raw == "Batted Ball Data":
-        table_columns = [split_col_name, "#", "AVG", "SLG", "GB%", "Barrel%", "EV", "LA", "xWOBA", "wOBA"]
+        table_columns = [split_col_name, "#", "AVG", "SLG", "FPS(FB)%", "FPS(OS)%", "GB%", "Barrel%", "EV", "LA", "xWOBA", "wOBA"]
     pitch_type_legend = sorted({str(r.get("pitch_type") or "Undefined") for r in grouped_rows}, key=lambda n: (_pitch_type_sort_rank(n), n))
     return {
         "school_code": school_code,
@@ -8141,7 +8239,7 @@ def _pro_pitching_overview(
         for r in stuff_source_rows
     ]
     avg_stuff, avg_stuff_by_pitch_type = _compute_stuff_by_pitch_type(stuff_rows, stuff_base or "Fastball", stuff_level or "Pro")
-    chart_points_limit = max(100, min(int(parsed_chart_points_limit or 350), 1200))
+    chart_points_limit = max(100, min(int(parsed_chart_points_limit or 350), 6000))
     if chart_only:
         pitch_type_rows = [
             PitchTypeSummaryRow(
@@ -9507,7 +9605,7 @@ def _pro_hitting_overview(
                     secondary_selected_count=len(selected_opp_pitcher_keys),
                 )
             ),
-            1200,
+            6000,
         ),
     )
     _annotate_times_through_order(out_rows)
@@ -9753,14 +9851,29 @@ def _pro_hitting_overview(
             return
         first_pitch_den = 0
         first_pitch_swings = 0
+        first_pitch_fb_den = 0
+        first_pitch_fb_swings = 0
+        first_pitch_os_den = 0
+        first_pitch_os_swings = 0
 
         for r in grp:
             d = str(r.get("pro_desc_norm") or "")
             if r.get("balls_num") == 0 and r.get("strikes_num") == 0:
                 first_pitch_den += 1
+                is_fb_or_si = _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+                if is_fb_or_si:
+                    first_pitch_fb_den += 1
+                else:
+                    first_pitch_os_den += 1
                 if _is_swing_desc(d):
                     first_pitch_swings += 1
+                    if is_fb_or_si:
+                        first_pitch_fb_swings += 1
+                    else:
+                        first_pitch_os_swings += 1
         row_obj["FPS%"] = _pct(first_pitch_swings, first_pitch_den)
+        row_obj["FPS(FB)%"] = _pct(first_pitch_fb_swings, first_pitch_fb_den)
+        row_obj["FPS(OS)%"] = _pct(first_pitch_os_swings, first_pitch_os_den)
 
     for tr in table_rows:
         key_val = str(tr.get(split_col_name) or "")

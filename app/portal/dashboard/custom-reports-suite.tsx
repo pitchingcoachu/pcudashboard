@@ -1673,7 +1673,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       if (metric === 'Comp%') return { poor: 76, avg: 79, great: 82 };
       if (metric === 'Strike%') return isProSchool ? { poor: 59, avg: 64, great: 69 } : { poor: 57, avg: 62, great: 67 };
       if (metric === 'Swing%') return { poor: 40, avg: 45, great: 50 };
-      if (metric === 'FPS%') return isProSchool ? { poor: 57, avg: 62, great: 67 } : { poor: 55, avg: 60, great: 65 };
+      if (metric === 'FPS%' || metric === 'FPS(FB)%' || metric === 'FPS(OS)%') {
+        return isProSchool ? { poor: 57, avg: 62, great: 67 } : { poor: 55, avg: 60, great: 65 };
+      }
       if (metric === 'E+A%') return isProSchool ? { poor: 68, avg: 73, great: 78 } : { poor: 65, avg: 70, great: 75 };
       if (metric === '1-1W%') return { poor: 58, avg: 63, great: 68 };
       if (metric === 'Ahead%') return isProSchool ? { poor: 34, avg: 39, great: 44 } : { poor: 32, avg: 37, great: 42 };
@@ -2471,9 +2473,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           if (needsChartPoints) params.set('chart_only', '1');
           if (needsChartPoints) {
             if (isProSchool) {
-              params.set('chart_points_limit', reportScope === 'Team' ? '60' : (isHeatmapPanel ? '180' : '220'));
+              params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '60' : '220'));
             } else {
-              params.set('chart_points_limit', reportScope === 'Team' ? '120' : (isHeatmapPanel ? '400' : '600'));
+              params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '120' : '600'));
             }
           }
           params.set('include_row_pitches', '0');

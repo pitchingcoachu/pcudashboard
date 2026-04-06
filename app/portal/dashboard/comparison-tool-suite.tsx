@@ -311,7 +311,9 @@ function getProcessThresholds(
     if (['changeup', 'splitter'].includes(pitchType)) return { poor: 43, avg: 47, great: 51 };
     if (pitchType === 'all') return { poor: 40, avg: 45, great: 50 };
   }
-  if (columnName === 'FPS%') return isPro ? { poor: 57, avg: 62, great: 67 } : { poor: 55, avg: 60, great: 65 };
+  if (columnName === 'FPS%' || columnName === 'FPS(FB)%' || columnName === 'FPS(OS)%') {
+    return isPro ? { poor: 57, avg: 62, great: 67 } : { poor: 55, avg: 60, great: 65 };
+  }
   if (columnName === 'E+A%' && pitchType === 'all') return isPro ? { poor: 68, avg: 73, great: 78 } : { poor: 65, avg: 70, great: 75 };
   if (columnName === '1-1W%') return { poor: 58, avg: 63, great: 68 };
   if (columnName === 'Ahead%') return isPro ? { poor: 34, avg: 39, great: 44 } : { poor: 32, avg: 37, great: 42 };
@@ -1006,9 +1008,9 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     [enableTableColors, tableColorMode]
   );
   const colorColumnsByMode: Record<string, string[]> = {
-    Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100'],
-    Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'Whiff%'],
-    Results: ['Whiff%', 'K%', 'BB%', 'CSW%', 'GB%', 'Barrel%', 'EV'],
+    Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100'],
+    Live: ['InZone%', 'Strike%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'Whiff%'],
+    Results: ['FPS(FB)%', 'FPS(OS)%', 'Whiff%', 'K%', 'BB%', 'CSW%', 'GB%', 'Barrel%', 'EV'],
     Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
     Custom: [
       'InZone%',
@@ -1016,6 +1018,8 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       'Strike%',
       'Swing%',
       'FPS%',
+      'FPS(FB)%',
+      'FPS(OS)%',
       'Early%',
       'Ahead%',
       'E+A%',

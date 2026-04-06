@@ -227,6 +227,8 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'Strike%',
   'Swing%',
   'FPS%',
+  'FPS(FB)%',
+  'FPS(OS)%',
   'Called-S%',
   'Take%',
   'Chase%',
