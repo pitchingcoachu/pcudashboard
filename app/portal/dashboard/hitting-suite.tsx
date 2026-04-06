@@ -1755,7 +1755,6 @@ export default function HittingSuite({
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const autoFallbackAppliedRef = useRef(false);
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: HittingFiltersPayload }>());
-  const filtersInflightRef = useRef(new Map<string, Promise<HittingFiltersPayload>>());
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: HittingOverviewPayload }>());
   const overviewInflightRef = useRef(new Map<string, Promise<HittingOverviewPayload>>());
   const [abSortColumn, setAbSortColumn] = useState('Pitch #');
@@ -1842,6 +1841,7 @@ export default function HittingSuite({
       controller.abort();
     }, 60000);
     setLoadingFilters(true);
+    setError(null);
     const filterParams = new URLSearchParams();
     if (level) filterParams.set('level', level);
     const filterKey = `/api/dashboard/hitting/filters?${filterParams.toString()}`;
@@ -1871,16 +1871,12 @@ export default function HittingSuite({
         controller.abort();
       };
     }
-    const inflight = filtersInflightRef.current.get(filterKey);
-    const requestPromise =
-      inflight ??
-      (async () => {
-        const response = await fetch(filterKey, { signal: controller.signal, cache: 'no-store' });
-        const payload = (await response.json().catch(() => ({}))) as HittingFiltersPayload & { error?: string };
-        if (!response.ok || payload.error) throw new Error(payload.error ?? 'Dashboard API request failed.');
-        return payload;
-      })();
-    if (!inflight) filtersInflightRef.current.set(filterKey, requestPromise);
+    const requestPromise = (async () => {
+      const response = await fetch(filterKey, { signal: controller.signal, cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as HittingFiltersPayload & { error?: string };
+      if (!response.ok || payload.error) throw new Error(payload.error ?? 'Dashboard API request failed.');
+      return payload;
+    })();
     requestPromise
       .then((payload) => {
         if (cancelled) return;
@@ -1897,7 +1893,6 @@ export default function HittingSuite({
       })
       .finally(() => {
         window.clearTimeout(timeoutId);
-        filtersInflightRef.current.delete(filterKey);
         if (!cancelled) setLoadingFilters(false);
       });
     return () => {

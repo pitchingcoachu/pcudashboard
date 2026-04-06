@@ -29,6 +29,8 @@ const ALLOWED_CUSTOM_COLUMNS = new Set([
   'Strike%',
   'Swing%',
   'FPS%',
+  'FPS(FB)%',
+  'FPS(OS)%',
   'Early%',
   'Ahead%',
   'E+A%',

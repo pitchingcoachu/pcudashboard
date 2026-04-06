@@ -1804,10 +1804,6 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const hasRowLabels = rowLabelEntries.length > 0;
   const labelRowOffset = hasColumnLabels ? 1 : 0;
 
-  const playerOptions = useMemo<OptionItem[]>(() => {
-    const list = playersByTeam.length ? playersByTeam : [];
-    return [{ value: 'All', label: 'All' }, ...list.map((entry) => ({ value: entry, label: toFirstLast(entry) }))];
-  }, [playersByTeam]);
   const playerLabel = useMemo(() => subjectLabelForReportType(reportType), [reportType]);
   const availableTableModes = useMemo(() => {
     if (reportType === 'Hitting') {
@@ -1832,7 +1828,6 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   }, [teamTypeOptions]);
 
   const selectedTeamRosterRaw = useMemo(() => {
-    if (reportScope !== 'Team') return [] as string[];
     if (reportTeam === 'All') return playersByTeam;
     const rawTeam = String(reportTeam ?? '').trim();
     const normalizedTeam = normalizeTeamLookupKey(rawTeam);
@@ -1898,7 +1893,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       if (filtered.length) return Array.from(new Set(filtered.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
     }
     return [];
-  }, [reportScope, reportTeam, playersByTeam, playersBySelectedTeam, playerTeamCodeByName]);
+  }, [reportTeam, playersByTeam, playersBySelectedTeam, playerTeamCodeByName]);
 
   const selectedTeamRoster = useMemo(() => {
     if (!selectedTeamRosterRaw.length) return selectedTeamRosterRaw;
@@ -1937,13 +1932,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     return filtered;
   }, [selectedTeamRosterRaw, teamCurrentRosterNameKeys, teamCurrentRosterNames]);
 
+  const playerOptions = useMemo<OptionItem[]>(() => {
+    const list = reportTeam !== 'All' ? selectedTeamRoster : playersByTeam;
+    return [{ value: 'All', label: 'All' }, ...list.map((entry) => ({ value: entry, label: toFirstLast(entry) }))];
+  }, [playersByTeam, reportTeam, selectedTeamRoster]);
+
   const removeTeamScopePlayer = (name: string) => {
     setTeamScopeSelectedPlayers((current) => current.filter((entry) => entry !== name));
   };
 
   useEffect(() => {
     const isProSchool = String(schoolCode || initialSchoolCode || '').trim().toUpperCase() === 'PRO';
-    if (reportScope !== 'Team' || !isProSchool || reportTeam === 'All') {
+    if (!isProSchool || reportTeam === 'All') {
       setTeamCurrentRosterNames(null);
       setTeamCurrentRosterNameKeys(null);
       return;
@@ -1969,7 +1969,36 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       active = false;
       controller.abort();
     };
-  }, [initialSchoolCode, schoolCode, reportScope, reportTeam, reportType]);
+  }, [initialSchoolCode, schoolCode, reportTeam, reportType]);
+
+  useEffect(() => {
+    const validPlayers = new Set(playerOptions.map((entry) => entry.value));
+    setReportPlayers((current) => {
+      const next = current.filter((entry) => validPlayers.has(entry));
+      return next.length ? next : ['All'];
+    });
+    setRowPlayers((current) =>
+      current.map((entry) => {
+        const value = String(entry ?? '').trim() || 'All';
+        return validPlayers.has(value) ? value : 'All';
+      })
+    );
+    setCellConfigs((current) => {
+      let changed = false;
+      const next: Record<string, CellConfig> = {};
+      for (const [key, cfg] of Object.entries(current)) {
+        const normalized = normalizeCellConfig(cfg);
+        const player = String(normalized.player ?? 'All').trim() || 'All';
+        if (player !== 'All' && !validPlayers.has(player)) {
+          changed = true;
+          next[key] = { ...normalized, player: 'All' };
+        } else {
+          next[key] = normalized;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [playerOptions]);
 
   const moveTeamScopePlayerTo = (sourceName: string, targetName: string) => {
     if (!sourceName || !targetName || sourceName === targetName) return;
@@ -3440,6 +3469,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     availableHeatStats.includes(config.heatStat || '') ? (config.heatStat || 'Frequency') : 'Frequency';
                   const heatCells = isHeatMap ? buildHeatCells(heatmapPoints, selectedHeatStat, isProSchool) : [];
                   const gridColumnStart = hasRowLabels ? colNumber + 1 : colNumber;
+                  const useCompactSummaryTable =
+                    isSummaryTable &&
+                    reportCols > colSpan &&
+                    colSpan <= 2 &&
+                    tableColumns.length > 0 &&
+                    tableColumns.length <= 5;
 
                   return (
                     <article
@@ -5432,8 +5467,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           <p className="portal-muted-text">No data for selected velocity chart.</p>
                         </div>
                       ) : contentType === 'Summary Table' ? (
-                        <div className="portal-custom-reports-table-wrap">
-                          <table className="portal-table">
+                        <div className={`portal-custom-reports-table-wrap${useCompactSummaryTable ? ' portal-custom-reports-table-wrap--compact' : ''}`}>
+                          <table className={`portal-table${useCompactSummaryTable ? ' portal-table--compact' : ''}`}>
                             <thead>
                               <tr>
                                 {tableColumns.map((column, columnIndex) => {
@@ -5492,7 +5527,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                         const pitchStyle = !isAllRow && columnIndex === 0 ? pitchTypeCellStyle(val) : null;
                                         if (pitchStyle) return pitchStyle.label;
                                         if (!style) return val;
-                                        return <span style={style}>{val}</span>;
+                                        const compactStyle = useCompactSummaryTable
+                                          ? {
+                                              ...style,
+                                              minWidth: 'auto',
+                                              padding: '2px 3px',
+                                            }
+                                          : style;
+                                        return <span style={compactStyle}>{val}</span>;
                                       })()}
                                     </td>
                                   ))}

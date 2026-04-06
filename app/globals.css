@@ -2517,6 +2517,24 @@ main {
   text-align: center;
 }
 
+.portal-custom-reports-table-wrap--compact {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.portal-custom-reports-table-wrap--compact .portal-table--compact {
+  width: max-content;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.portal-custom-reports-table-wrap--compact .portal-table--compact th,
+.portal-custom-reports-table-wrap--compact .portal-table--compact td {
+  white-space: nowrap;
+  padding-inline: 0.3rem;
+}
+
 .portal-custom-reports-cell .portal-data-table th,
 .portal-custom-reports-cell .portal-data-table td {
   text-align: center;
