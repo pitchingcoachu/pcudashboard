@@ -6625,13 +6625,34 @@ def _pro_fetch_api_live_tail_rows(
         cached = _pro_api_rows_cache_get(cache_key)
         if cached is not None:
             return cached
+        # Keep UI responsive with cache-first behavior, but never hide today's live data.
+        # If the request window includes today and cache is cold, fetch just today's rows now,
+        # and continue warming the broader window in background.
+        today_rows: List[Dict[str, Any]] = []
+        if w1 >= date.today():
+            today_start = date.today()
+            today_end = date.today()
+            today_key = _pro_api_rows_cache_key(today_start, today_end, sport_ids, False)
+            cached_today = _pro_api_rows_cache_get(today_key)
+            if cached_today is not None:
+                today_rows = cached_today
+            else:
+                try:
+                    today_rows = _pro_fetch_api_rows_window(
+                        start_date=today_start,
+                        end_date=today_end,
+                        sport_ids=sport_ids,
+                        nontracked_aaa_only=False,
+                    )
+                except Exception:
+                    today_rows = []
         _kick_pro_api_rows_window_refresh(
             start_date=w0,
             end_date=w1,
             sport_ids=sport_ids,
             nontracked_aaa_only=False,
         )
-        return []
+        return today_rows
     return _pro_fetch_api_rows_window(
         start_date=w0,
         end_date=w1,
