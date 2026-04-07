@@ -105,7 +105,7 @@ export async function POST(request: Request) {
   }
 
   let nextIndex = 0;
-  const workerCount = Math.min(3, unresolved.length);
+  const workerCount = Math.min(2, unresolved.length);
   const workers = Array.from({ length: Math.min(workerCount, unresolved.length) }, async () => {
     while (nextIndex < unresolved.length) {
       const current = unresolved[nextIndex];

@@ -264,6 +264,7 @@ type ReportPayload = {
   globalStartDate: string;
   globalEndDate: string;
   useMostRecent200Pa?: boolean;
+  teamScopePlayers?: string[];
   rowPlayers: string[];
   rowNotes: string[];
   rowNoteSpans: number[];
@@ -1572,6 +1573,13 @@ function initialsFromName(name: string): string {
   return `${parts[0][0] ?? ''}${parts[parts.length - 1][0] ?? ''}`.toUpperCase();
 }
 
+function isAbortLikeError(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') return true;
+  if (error instanceof Error && error.name === 'AbortError') return true;
+  const message = String((error as { message?: unknown })?.message ?? error ?? '').toLowerCase();
+  return message.includes('aborted') || message.includes('aborterror');
+}
+
 async function svgToPngDataUrl(svg: SVGSVGElement, exportScale = 1): Promise<string | null> {
   const rect = svg.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width));
@@ -1810,7 +1818,19 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [tableSorts, setTableSorts] = useState<Record<string, { column: string; direction: SortDirection }>>({});
   const cellsCacheRef = useRef<Map<string, { at: number; payload: OverviewLitePayload }>>(new Map());
   const inflightRef = useRef<Map<string, Promise<OverviewLitePayload>>>(new Map());
+  const restoringSavedReportRef = useRef(false);
+  const restoringSavedReportTimerRef = useRef<number | null>(null);
   const isAdminUser = userRole === 'admin';
+  const beginSavedReportRestore = () => {
+    restoringSavedReportRef.current = true;
+    if (restoringSavedReportTimerRef.current !== null) {
+      window.clearTimeout(restoringSavedReportTimerRef.current);
+    }
+    restoringSavedReportTimerRef.current = window.setTimeout(() => {
+      restoringSavedReportRef.current = false;
+      restoringSavedReportTimerRef.current = null;
+    }, 2500);
+  };
   const hoverTextColor = (bg?: string) => {
     if (!bg) return '#ffffff';
     const color = bg.trim().toLowerCase();
@@ -2153,6 +2173,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
 
   useEffect(() => {
     const validPlayers = new Set(playerOptions.map((entry) => entry.value));
+    if (restoringSavedReportRef.current) return;
     setReportPlayers((current) => {
       const next = current.filter((entry) => validPlayers.has(entry));
       return next.length ? next : ['All'];
@@ -2195,6 +2216,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   };
 
   useEffect(() => {
+    if (restoringSavedReportRef.current) return;
     const isProSchool = String(schoolCode || initialSchoolCode || '').trim().toUpperCase() === 'PRO';
     const hasCurrent = teamOptions.some((entry) => entry.value === reportTeam);
     const preferredTeam = teamOptions.find((entry) => String(entry.value).trim().toLowerCase() === PRO_DEFAULT_TEAM.toLowerCase())?.value;
@@ -2212,6 +2234,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   }, [levelOptions, reportLevel]);
 
   useEffect(() => {
+    if (restoringSavedReportRef.current) return;
     if (reportScope !== 'Team') return;
     const deduped = Array.from(new Set(selectedTeamRoster.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
     const limited = deduped.slice(0, MAX_REPORT_ROWS);
@@ -2383,6 +2406,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   }, [reportType, initialSchoolCode, availableTableModes, defaultTableMode]);
 
   useEffect(() => {
+    if (restoringSavedReportRef.current) return;
     setTeamScopeSelectedPlayers([]);
   }, [reportType]);
 
@@ -2601,7 +2625,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       );
       let nextRequestIndex = 0;
       const isProWorkload = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
-      const workerCount = isProWorkload ? (reportScope === 'Team' ? 1 : 3) : reportScope === 'Team' ? 1 : 5;
+      const workerCount = isProWorkload ? (reportScope === 'Team' ? 1 : 2) : reportScope === 'Team' ? 1 : 5;
       const commitCellResult = (cellId: string, payload: OverviewLitePayload, state: CellLoadState) => {
         out[cellId] = payload;
         nextCellStates[cellId] = state;
@@ -2627,7 +2651,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         const chunkSize =
           reportScope === 'Team'
             ? (isProWorkload ? 6 : 10)
-            : (isProWorkload ? 24 : 48);
+            : (isProWorkload ? 12 : 48);
         for (let i = 0; i < keys.length; i += chunkSize) {
           const chunk = keys.slice(i, i + chunkSize);
           try {
@@ -2705,7 +2729,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           if (needsChartPoints) params.set('chart_only', '1');
           if (needsChartPoints) {
             if (isProSchool) {
-              params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '60' : '220'));
+              params.set('chart_points_limit', isHeatmapPanel ? '3500' : (reportScope === 'Team' ? '60' : '220'));
             } else {
               params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '120' : '600'));
             }
@@ -2824,6 +2848,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               inflightRef.current.delete(key);
             }
           } catch (requestError) {
+            if (isAbortLikeError(requestError)) return;
             commitCellResult(cellId, {}, {
               status: 'error',
               message: requestError instanceof Error ? requestError.message : 'Failed to load panel data.',
@@ -2876,6 +2901,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   ]);
 
   const applyPayload = (payload: ReportPayload) => {
+    beginSavedReportRestore();
     const isProContext = String(schoolCode || initialSchoolCode || '').trim().toUpperCase() === 'PRO';
     const reportName = String(payload.title ?? '').trim().toLowerCase();
     const isAdvanceVsRhp = reportName === 'advance report vs. rhp';
@@ -2885,7 +2911,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setReportLevel(String(payload.reportLevel ?? 'All').trim() || 'All');
     const rawTeam = String(payload.team ?? '').trim();
     const normalizedTeam = rawTeam.toUpperCase() === 'OSU' && schoolCode && schoolCode.toUpperCase() !== 'OSU' ? schoolCode : rawTeam;
-    if (isProContext && (normalizedTeam === 'All' || !normalizedTeam || (isAdvanceVsRhp && !normalizedTeam))) {
+    if (isProContext && (!normalizedTeam || (isAdvanceVsRhp && !normalizedTeam))) {
       setReportTeam(PRO_DEFAULT_TEAM);
     } else {
       setReportTeam(normalizedTeam || 'All');
@@ -2903,6 +2929,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setGlobalStartDate(payload.globalStartDate || '');
     setGlobalEndDate(payload.globalEndDate || '');
     setUseMostRecent200Pa(Boolean(payload.useMostRecent200Pa));
+    setTeamScopeSelectedPlayers(
+      Array.isArray(payload.teamScopePlayers)
+        ? Array.from(new Set(payload.teamScopePlayers.map((entry) => String(entry ?? '').trim()).filter((entry) => entry && entry !== 'All')))
+        : []
+    );
     setRowPlayers(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => payload.rowPlayers?.[idx] ?? 'All'));
     setRowNotes(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => payload.rowNotes?.[idx] ?? ''));
     setRowNoteSpans(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => Math.max(1, Number(payload.rowNoteSpans?.[idx]) || 1)));
@@ -2930,6 +2961,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     globalStartDate,
     globalEndDate,
     useMostRecent200Pa,
+    teamScopePlayers,
     rowPlayers,
     rowNotes,
     rowNoteSpans,
@@ -2996,6 +3028,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setReportCols(1);
     setUseGlobalDates(false);
     setUseMostRecent200Pa(false);
+    setTeamScopeSelectedPlayers([]);
     setShowPitchTypeKey(true);
     setRowPlayers(Array.from({ length: MAX_REPORT_ROWS }, () => 'All'));
     setRowNotes(Array.from({ length: MAX_REPORT_ROWS }, () => ''));
@@ -3185,6 +3218,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     if (!isMobileView) return;
     setSidebarVisible(false);
   }, [isMobileView]);
+
+  useEffect(
+    () => () => {
+      if (restoringSavedReportTimerRef.current !== null) {
+        window.clearTimeout(restoringSavedReportTimerRef.current);
+      }
+    },
+    []
+  );
 
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
