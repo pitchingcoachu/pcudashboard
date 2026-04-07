@@ -1667,6 +1667,43 @@ async function waitForReportImages(reportNode: HTMLElement): Promise<void> {
   );
 }
 
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => reject(new Error('Failed to convert blob to data URL.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function inlineBrandLogosForExport(reportNode: HTMLElement): Promise<() => void> {
+  const logos = Array.from(reportNode.querySelectorAll('.portal-custom-reports-brand-logo')) as HTMLImageElement[];
+  if (!logos.length) return () => undefined;
+  const restores: Array<() => void> = [];
+
+  for (const logo of logos) {
+    const originalSrc = logo.getAttribute('src') || logo.src;
+    if (!originalSrc) continue;
+    try {
+      const response = await fetch(originalSrc, { cache: 'force-cache' });
+      if (!response.ok) continue;
+      const blob = await response.blob();
+      const dataUrl = await blobToDataUrl(blob);
+      if (!dataUrl) continue;
+      logo.setAttribute('src', dataUrl);
+      restores.push(() => {
+        logo.setAttribute('src', originalSrc);
+      });
+    } catch {
+      // Ignore export inlining failures and keep original logo source.
+    }
+  }
+
+  return () => {
+    for (let i = restores.length - 1; i >= 0; i -= 1) restores[i]();
+  };
+}
+
 type CustomReportsSuiteProps = {
   initialSchoolCode?: string;
 };
@@ -2969,21 +3006,23 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const reportNode = reportCanvasRef.current;
     if (!reportNode) return;
     let restoreHeatmaps: (() => void) | null = null;
+    let restoreLogos: (() => void) | null = null;
     try {
       setIsExportingPdf(true);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       restoreHeatmaps = await rasterizeHeatmapsForExport(reportNode);
+      restoreLogos = await inlineBrandLogosForExport(reportNode);
       await waitForReportImages(reportNode);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const canvas = await html2canvas(reportNode, {
         backgroundColor: '#000000',
-        scale: 2,
+        scale: Math.max(2, typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2),
         useCORS: true,
         logging: false,
         ignoreElements: (element) => element.getAttribute?.('data-export-ignore') === 'true',
       });
       const margin = 18;
-      const maxPageWidth = 1400;
+      const maxPageWidth = 2400;
       const rawW = Math.max(1, canvas.width);
       const rawH = Math.max(1, canvas.height);
       const scale = Math.min(1, (maxPageWidth - margin * 2) / rawW);
@@ -3006,14 +3045,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         bgCtx.fillStyle = '#040507';
         bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
       }
-      pdf.addImage(bgCanvas.toDataURL('image/png'), 'PNG', 0, 0, pageWidth, pageHeight, undefined, 'FAST');
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, drawW, drawH, undefined, 'FAST');
+      pdf.addImage(bgCanvas.toDataURL('image/png'), 'PNG', 0, 0, pageWidth, pageHeight, undefined, 'NONE');
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, drawW, drawH, undefined, 'NONE');
 
       const safeName = (reportHeaderTitle || 'custom-report').replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-');
       pdf.save(`${safeName}.pdf`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'PDF export failed.');
     } finally {
+      restoreLogos?.();
       restoreHeatmaps?.();
       setIsExportingPdf(false);
     }
