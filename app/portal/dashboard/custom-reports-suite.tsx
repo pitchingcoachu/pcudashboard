@@ -1572,11 +1572,12 @@ function initialsFromName(name: string): string {
   return `${parts[0][0] ?? ''}${parts[parts.length - 1][0] ?? ''}`.toUpperCase();
 }
 
-async function svgToPngDataUrl(svg: SVGSVGElement): Promise<string | null> {
+async function svgToPngDataUrl(svg: SVGSVGElement, exportScale = 1): Promise<string | null> {
   const rect = svg.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width));
   const height = Math.max(1, Math.round(rect.height));
   if (!width || !height) return null;
+  const safeScale = Number.isFinite(exportScale) ? Math.max(1, exportScale) : 1;
 
   const clone = svg.cloneNode(true) as SVGSVGElement;
   if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
@@ -1596,10 +1597,11 @@ async function svgToPngDataUrl(svg: SVGSVGElement): Promise<string | null> {
       next.src = url;
     });
     const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = Math.max(1, Math.round(width * safeScale));
+    canvas.height = Math.max(1, Math.round(height * safeScale));
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
+    ctx.setTransform(safeScale, 0, 0, safeScale, 0, 0);
     ctx.drawImage(img, 0, 0, width, height);
     return canvas.toDataURL('image/png');
   } catch {
@@ -1613,9 +1615,11 @@ async function rasterizeHeatmapsForExport(reportNode: HTMLElement): Promise<() =
   const targets = Array.from(reportNode.querySelectorAll('.portal-custom-reports-heatmap svg')) as SVGSVGElement[];
   if (!targets.length) return () => undefined;
   const restores: Array<() => void> = [];
+  const deviceScale = typeof window !== 'undefined' ? Math.max(1, window.devicePixelRatio || 1) : 1;
+  const exportScale = Math.max(2, Math.round(deviceScale * 2));
 
   for (const svg of targets) {
-    const dataUrl = await svgToPngDataUrl(svg);
+    const dataUrl = await svgToPngDataUrl(svg, exportScale);
     if (!dataUrl) continue;
     const rect = svg.getBoundingClientRect();
     const img = document.createElement('img');
@@ -1638,6 +1642,29 @@ async function rasterizeHeatmapsForExport(reportNode: HTMLElement): Promise<() =
   return () => {
     for (let i = restores.length - 1; i >= 0; i -= 1) restores[i]();
   };
+}
+
+async function waitForReportImages(reportNode: HTMLElement): Promise<void> {
+  const images = Array.from(reportNode.querySelectorAll('img')) as HTMLImageElement[];
+  if (!images.length) return;
+  await Promise.all(
+    images.map(
+      (img) =>
+        new Promise<void>((resolve) => {
+          if (img.complete) {
+            resolve();
+            return;
+          }
+          const done = () => {
+            img.removeEventListener('load', done);
+            img.removeEventListener('error', done);
+            resolve();
+          };
+          img.addEventListener('load', done);
+          img.addEventListener('error', done);
+        })
+    )
+  );
 }
 
 type CustomReportsSuiteProps = {
@@ -2946,6 +2973,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       setIsExportingPdf(true);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       restoreHeatmaps = await rasterizeHeatmapsForExport(reportNode);
+      await waitForReportImages(reportNode);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const canvas = await html2canvas(reportNode, {
         backgroundColor: '#000000',
@@ -2976,27 +3004,6 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       const bgCtx = bgCanvas.getContext('2d');
       if (bgCtx) {
         bgCtx.fillStyle = '#040507';
-        bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
-
-        const topLinear = bgCtx.createLinearGradient(0, 0, 0, bgCanvas.height);
-        topLinear.addColorStop(0, 'rgba(200,16,46,0.28)');
-        topLinear.addColorStop(0.38, 'rgba(200,16,46,0.08)');
-        topLinear.addColorStop(1, 'rgba(0,0,0,0)');
-        bgCtx.fillStyle = topLinear;
-        bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
-
-        const glow = bgCtx.createRadialGradient(
-          bgCanvas.width * 0.5,
-          bgCanvas.height * 0.12,
-          0,
-          bgCanvas.width * 0.5,
-          bgCanvas.height * 0.12,
-          bgCanvas.width * 0.95
-        );
-        glow.addColorStop(0, 'rgba(200,16,46,0.52)');
-        glow.addColorStop(0.42, 'rgba(200,16,46,0.22)');
-        glow.addColorStop(1, 'rgba(200,16,46,0)');
-        bgCtx.fillStyle = glow;
         bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
       }
       pdf.addImage(bgCanvas.toDataURL('image/png'), 'PNG', 0, 0, pageWidth, pageHeight, undefined, 'FAST');
@@ -3084,7 +3091,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       teamCode = inferProTeamCode(reportTeam);
     }
     if (!teamCode) return '/mlb-logo.png';
-    return getProTeamLogoUrl(teamCode) || '/mlb-logo.png';
+    const remoteLogoUrl = getProTeamLogoUrl(teamCode);
+    if (!remoteLogoUrl) return '/mlb-logo.png';
+    return `/api/dashboard/image-proxy?url=${encodeURIComponent(remoteLogoUrl)}`;
   }, [isProSchool, schoolBrand.logoSrc, reportScope, reportPlayers, playerTeamCodeByName, reportTeam]);
   const customReportRightLogoAlt = useMemo(() => {
     if (!isProSchool) return schoolBrand.logoSrc ? schoolBrand.logoAlt : schoolCode || 'School';
