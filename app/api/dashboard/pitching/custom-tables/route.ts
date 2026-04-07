@@ -122,6 +122,10 @@ function normalizedTableNameKey(name: string): string {
     .toLowerCase();
 }
 
+declare global {
+  var __dashboardCustomTablesSchemaReady: boolean | undefined;
+}
+
 async function getSession(): Promise<PortalSession | null> {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -159,24 +163,40 @@ function resolveCustomTableOrganizationId(session: PortalSession, schoolCode: st
 }
 
 async function ensureDashboardCustomTableSchema(pool: Pool): Promise<void> {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dashboard_custom_tables (
-      id BIGSERIAL PRIMARY KEY,
-      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-      school_code TEXT NOT NULL,
-      name TEXT NOT NULL,
-      columns_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  if (global.__dashboardCustomTablesSchemaReady) return;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL lock_timeout = '3s';`);
+    await client.query(`SET LOCAL statement_timeout = '30s';`);
+    // Prevent concurrent schema/index creation races across requests.
+    await client.query(`SELECT pg_advisory_xact_lock(77431102512032);`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS dashboard_custom_tables (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        school_code TEXT NOT NULL,
+        name TEXT NOT NULL,
+        columns_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_name ON dashboard_custom_tables (organization_id, school_code, lower(name));`
     );
-  `);
-  await pool.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_name ON dashboard_custom_tables (organization_id, school_code, lower(name));`
-  );
-  await pool.query(
-    `CREATE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_updated ON dashboard_custom_tables (organization_id, school_code, updated_at DESC);`
-  );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_updated ON dashboard_custom_tables (organization_id, school_code, updated_at DESC);`
+    );
+    await client.query('COMMIT');
+    global.__dashboardCustomTablesSchemaReady = true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function GET() {
@@ -196,21 +216,51 @@ export async function GET() {
     const result = await pool.query<{
       id: number;
       name: string;
+      school_code: string;
       columns_json: unknown;
       created_at: string;
       updated_at: string;
     }>(
       `
-      SELECT id, name, columns_json, created_at, updated_at
+      SELECT id, name, school_code, columns_json, created_at, updated_at
       FROM dashboard_custom_tables
       WHERE (organization_id = $1 OR ($3::boolean AND created_by_user_id = $4))
-        AND school_code = $2
+        AND (
+          school_code = $2
+          OR created_by_user_id = $4
+        )
       ORDER BY updated_at DESC, id DESC
       `,
       [scopedOrganizationId, schoolCode, hasUserScope, userId]
     );
+    const deduped = new Map<string, (typeof result.rows)[number]>();
+    for (const row of result.rows) {
+      const key = normalizedTableNameKey(row.name);
+      const current = deduped.get(key);
+      if (!current) {
+        deduped.set(key, row);
+        continue;
+      }
+      const rowIsSelectedSchool = String(row.school_code || '').toUpperCase() === schoolCode;
+      const currentIsSelectedSchool = String(current.school_code || '').toUpperCase() === schoolCode;
+      if (rowIsSelectedSchool && !currentIsSelectedSchool) {
+        deduped.set(key, row);
+        continue;
+      }
+      if (rowIsSelectedSchool === currentIsSelectedSchool) {
+        if (new Date(row.updated_at).getTime() > new Date(current.updated_at).getTime()) {
+          deduped.set(key, row);
+        }
+      }
+    }
+    const rows = Array.from(deduped.values()).sort((a, b) => {
+      const aTime = new Date(a.updated_at).getTime();
+      const bTime = new Date(b.updated_at).getTime();
+      if (aTime !== bTime) return bTime - aTime;
+      return Number(b.id) - Number(a.id);
+    });
     return NextResponse.json({
-      items: result.rows.map((row) => ({
+      items: rows.map((row) => ({
         id: Number(row.id),
         name: row.name,
         columns: normalizeColumns(row.columns_json),
@@ -267,7 +317,6 @@ export async function POST(request: Request) {
                updated_at = NOW()
          WHERE id = $3
            AND (organization_id = $1 OR ($6::boolean AND created_by_user_id = $7))
-           AND school_code = $2
          RETURNING id, name, columns_json, created_at, updated_at
         `,
         [scopedOrganizationId, schoolCode, id, name, payload, hasUserScope, userId]
@@ -359,7 +408,6 @@ export async function DELETE(request: Request) {
       FROM dashboard_custom_tables
       WHERE id = $1
         AND (organization_id = $2 OR ($4::boolean AND created_by_user_id = $5))
-        AND school_code = $3
       LIMIT 1
       `,
       [id, scopedOrganizationId, schoolCode, hasUserScope, userId]
@@ -373,7 +421,6 @@ export async function DELETE(request: Request) {
       DELETE FROM dashboard_custom_tables
       WHERE id = $1
         AND (organization_id = $2 OR ($4::boolean AND created_by_user_id = $5))
-        AND school_code = $3
       `,
       [id, scopedOrganizationId, schoolCode, hasUserScope, userId]
     );

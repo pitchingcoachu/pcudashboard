@@ -1688,31 +1688,27 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-async function imageUrlToPngDataUrl(src: string, width: number, height: number): Promise<string | null> {
+async function imageBlobToPngDataUrl(blob: Blob, width: number, height: number): Promise<string | null> {
+  const objectUrl = URL.createObjectURL(blob);
   try {
-    const response = await fetch(src, { cache: 'force-cache' });
-    if (!response.ok) return null;
-    const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    try {
-      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const next = new Image();
-        next.onload = () => resolve(next);
-        next.onerror = () => reject(new Error('Failed to load image for export.'));
-        next.src = objectUrl;
-      });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(width));
-      canvas.height = Math.max(1, Math.round(height));
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return null;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL('image/png');
-    } finally {
-      URL.revokeObjectURL(objectUrl);
-    }
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const next = new Image();
+      next.onload = () => resolve(next);
+      next.onerror = () => reject(new Error('Failed to decode image blob for export.'));
+      next.src = objectUrl;
+    });
+    const exportScale = 4;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(width * exportScale));
+    canvas.height = Math.max(1, Math.round(height * exportScale));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/png');
   } catch {
     return null;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
   }
 }
 
@@ -1728,13 +1724,10 @@ async function inlineBrandLogosForExport(reportNode: HTMLElement): Promise<() =>
     const width = Math.max(1, rect.width || logo.naturalWidth || 64);
     const height = Math.max(1, rect.height || logo.naturalHeight || 64);
     try {
-      let dataUrl = await imageUrlToPngDataUrl(originalSrc, width, height);
-      if (!dataUrl) {
-        const response = await fetch(originalSrc, { cache: 'force-cache' });
-        if (!response.ok) continue;
-        const blob = await response.blob();
-        dataUrl = await blobToDataUrl(blob);
-      }
+      const response = await fetch(originalSrc, { cache: 'force-cache' });
+      if (!response.ok) continue;
+      const blob = await response.blob();
+      const dataUrl = (await imageBlobToPngDataUrl(blob, width, height)) || (await blobToDataUrl(blob));
       if (!dataUrl) continue;
       logo.setAttribute('src', dataUrl);
       restores.push(() => {
@@ -2449,7 +2442,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         setCustomTables(Array.isArray(payload.items) ? payload.items : []);
       } catch {
         if (!active) return;
-        setCustomTables([]);
+        // Preserve the previous list on transient failures so options do not disappear mid-session.
       }
     }
     loadCustomTables();
@@ -2747,6 +2740,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const isProSchool = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
           const normalizedPanelType = normalizePanelType(config.panelType);
           const isHeatmapPanel = normalizedPanelType === 'Heatmap';
+          const isVelocityPanel =
+            normalizedPanelType === 'Velocity Chart' ||
+            normalizedPanelType === 'Velocity Bar Chart' ||
+            normalizedPanelType === 'Velocity Distribution';
           const needsChartPoints = normalizedPanelType !== '' && normalizedPanelType !== 'Summary Table' && normalizedPanelType !== 'Note Section';
           if (!ignoreDateWindow && startDate) params.set('start_date', startDate);
           if (!ignoreDateWindow && endDate) params.set('end_date', endDate);
@@ -2754,9 +2751,17 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           if (needsChartPoints) params.set('chart_only', '1');
           if (needsChartPoints) {
             if (isProSchool) {
-              params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '60' : '220'));
+              if (reportScope === 'Single Player' && isVelocityPanel) {
+                params.set('chart_points_limit', '6000');
+              } else {
+                params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '60' : '220'));
+              }
             } else {
-              params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '120' : '600'));
+              if (reportScope === 'Single Player' && isVelocityPanel) {
+                params.set('chart_points_limit', '6000');
+              } else {
+                params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '120' : '600'));
+              }
             }
           }
           params.set('include_row_pitches', '0');
@@ -3109,39 +3114,108 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       restoreLogos = await inlineBrandLogosForExport(reportNode);
       await waitForReportImages(reportNode);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const captureScale = Math.min(2, Math.max(1.5, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
       const canvas = await html2canvas(reportNode, {
         backgroundColor: '#000000',
-        scale: Math.max(2, typeof window !== 'undefined' ? window.devicePixelRatio || 2 : 2),
+        scale: captureScale,
         useCORS: true,
         logging: false,
         ignoreElements: (element) => element.getAttribute?.('data-export-ignore') === 'true',
       });
       const margin = 18;
-      const maxPageWidth = 2400;
       const rawW = Math.max(1, canvas.width);
       const rawH = Math.max(1, canvas.height);
-      const scale = Math.min(1, (maxPageWidth - margin * 2) / rawW);
-      const drawW = rawW * scale;
-      const drawH = rawH * scale;
-      const pageWidth = drawW + margin * 2;
-      const pageHeight = drawH + margin * 2;
-      const orientation: 'portrait' | 'landscape' = pageWidth > pageHeight ? 'landscape' : 'portrait';
+      const orientation: 'portrait' | 'landscape' = rawW >= rawH ? 'landscape' : 'portrait';
 
       const pdf = new jsPDF({
         orientation,
         unit: 'pt',
-        format: [pageWidth, pageHeight],
+        format: 'letter',
       });
-      const bgCanvas = document.createElement('canvas');
-      bgCanvas.width = Math.max(1, Math.round(pageWidth));
-      bgCanvas.height = Math.max(1, Math.round(pageHeight));
-      const bgCtx = bgCanvas.getContext('2d');
-      if (bgCtx) {
-        bgCtx.fillStyle = '#040507';
-        bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const contentWidth = Math.max(1, pageWidth - margin * 2);
+      const contentHeight = Math.max(1, pageHeight - margin * 2);
+      const scale = contentWidth / rawW;
+      const pageSourceHeight = Math.max(1, Math.floor(contentHeight / Math.max(scale, 1e-6)));
+      const reportRect = reportNode.getBoundingClientRect();
+      const panelBounds = Array.from(reportNode.querySelectorAll('.portal-custom-reports-cell'))
+        .map((node) => {
+          const rect = node.getBoundingClientRect();
+          const labelNode = node.querySelector('.portal-custom-reports-row-player-label') as HTMLElement | null;
+          const labelRect = labelNode?.getBoundingClientRect();
+          const visualTop = labelRect ? Math.min(rect.top, labelRect.top) : rect.top;
+          const top = Math.max(0, Math.round((visualTop - reportRect.top) * captureScale));
+          const bottom = Math.min(rawH, Math.round((rect.bottom - reportRect.top) * captureScale));
+          return { top, bottom, height: Math.max(0, bottom - top) };
+        })
+        .filter((entry) => entry.height > 0)
+        .sort((a, b) => a.top - b.top);
+      const playerLabelBounds = Array.from(reportNode.querySelectorAll('.portal-custom-reports-row-player-label'))
+        .map((node) => {
+          const rect = node.getBoundingClientRect();
+          const top = Math.max(0, Math.round((rect.top - reportRect.top) * captureScale));
+          const bottom = Math.min(rawH, Math.round((rect.bottom - reportRect.top) * captureScale));
+          return { top, bottom, height: Math.max(0, bottom - top) };
+        })
+        .filter((entry) => entry.height > 0)
+        .sort((a, b) => a.top - b.top);
+      const minPageSourceHeight = Math.max(1, Math.floor(pageSourceHeight * 0.55));
+      const pageSlices: Array<{ start: number; end: number }> = [];
+      let sourceY = 0;
+      while (sourceY < rawH) {
+        const proposedEnd = Math.min(rawH, sourceY + pageSourceHeight);
+        let end = proposedEnd;
+        if (proposedEnd < rawH && panelBounds.length) {
+          const overlappingPanels = panelBounds.filter(
+            (entry) =>
+              entry.top < proposedEnd &&
+              entry.bottom > proposedEnd &&
+              entry.height < Math.floor(pageSourceHeight * 0.98)
+          );
+          if (overlappingPanels.length) {
+            const candidateBreaks = overlappingPanels
+              .map((entry) => entry.top)
+              .filter((top) => top > sourceY && top - sourceY >= minPageSourceHeight);
+            const bestBreak = candidateBreaks.length ? Math.min(...candidateBreaks) : null;
+            if (bestBreak && bestBreak > sourceY) end = Math.min(rawH, bestBreak);
+          }
+        }
+        if (end < rawH && playerLabelBounds.length) {
+          const keepLabelWithPanelPx = Math.max(32, Math.floor(pageSourceHeight * 0.12));
+          const labelsNearBottom = playerLabelBounds.filter(
+            (entry) => entry.top >= end - keepLabelWithPanelPx && entry.top < end
+          );
+          if (labelsNearBottom.length) {
+            const earliestLabelTop = Math.min(...labelsNearBottom.map((entry) => entry.top));
+            if (earliestLabelTop > sourceY) {
+              end = Math.min(end, earliestLabelTop);
+            }
+          }
+        }
+        if (end <= sourceY) {
+          end = Math.min(rawH, sourceY + pageSourceHeight);
+        }
+        pageSlices.push({ start: sourceY, end });
+        sourceY = end;
       }
-      pdf.addImage(bgCanvas.toDataURL('image/png'), 'PNG', 0, 0, pageWidth, pageHeight, undefined, 'NONE');
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, margin, drawW, drawH, undefined, 'NONE');
+
+      for (let pageIndex = 0; pageIndex < pageSlices.length; pageIndex += 1) {
+        if (pageIndex > 0) pdf.addPage('letter', orientation);
+        pdf.setFillColor(4, 5, 7);
+        pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+
+        const slice = pageSlices[pageIndex];
+        const sourceHeight = Math.max(1, slice.end - slice.start);
+        const sliceCanvas = document.createElement('canvas');
+        sliceCanvas.width = rawW;
+        sliceCanvas.height = sourceHeight;
+        const sliceCtx = sliceCanvas.getContext('2d');
+        if (!sliceCtx) continue;
+        sliceCtx.drawImage(canvas, 0, slice.start, rawW, sourceHeight, 0, 0, rawW, sourceHeight);
+        const drawHeight = sourceHeight * scale;
+        pdf.addImage(sliceCanvas.toDataURL('image/jpeg', 0.82), 'JPEG', margin, margin, contentWidth, drawHeight, undefined, 'FAST');
+      }
 
       const safeName = (reportHeaderTitle || 'custom-report').replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-');
       pdf.save(`${safeName}.pdf`);
