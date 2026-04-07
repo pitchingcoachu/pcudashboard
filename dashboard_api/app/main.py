@@ -6218,6 +6218,11 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/")
+def root() -> Dict[str, str]:
+    return {"status": "ok"}
+
+
 def _pro_pitch_source_table() -> Optional[str]:
     try:
         with get_conn() as conn, conn.cursor() as cur:
