@@ -7574,7 +7574,9 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
         opp_hitters_by_team_code = labeled_opp_hitters_by_team
     today_iso = date.today().isoformat()
     max_date_raw = str(date_row.get("max_date") or "").strip()
-    max_date_out = max(max_date_raw, today_iso) if max_date_raw else today_iso
+    # Do not force PRO defaults to "today" when no data exists for today.
+    # Use latest actual data date when available to avoid empty default dashboards.
+    max_date_out = max_date_raw or today_iso
     try:
         _pro_fetch_api_live_tail_rows(
             start_date=None,
@@ -9185,7 +9187,9 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
         opp_pitchers_by_team_code = labeled_opp_pitchers_by_team
     today_iso = date.today().isoformat()
     max_date_raw = str(date_row.get("max_date") or "").strip()
-    max_date_out = max(max_date_raw, today_iso) if max_date_raw else today_iso
+    # Do not force PRO defaults to "today" when no data exists for today.
+    # Use latest actual data date when available to avoid empty default dashboards.
+    max_date_out = max_date_raw or today_iso
     try:
         _pro_fetch_api_live_tail_rows(
             start_date=None,

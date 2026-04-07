@@ -46,6 +46,23 @@ async function getSession(): Promise<PortalSession | null> {
   };
 }
 
+function resolveCustomReportOrganizationId(session: PortalSession, schoolCode: string): number {
+  const selectedSchool = String(schoolCode ?? '').trim().toUpperCase();
+  const sessionOrgId = Number(session.organizationId ?? 0);
+  const scopedOrganizationIdResolved = resolveSchoolScopedOrganizationId(session);
+  const scopedOrganizationId =
+    Number.isFinite(scopedOrganizationIdResolved) && scopedOrganizationIdResolved > 0
+      ? scopedOrganizationIdResolved
+      : sessionOrgId;
+
+  // Keep PRO custom reports anchored to the signed-in org for all roles.
+  // This prevents reports from disappearing when selected-school mapping changes.
+  if (selectedSchool === 'PRO' && Number.isFinite(sessionOrgId) && sessionOrgId > 0) {
+    return sessionOrgId;
+  }
+  return scopedOrganizationId;
+}
+
 async function ensureDashboardCustomReportsSchema(pool: Pool): Promise<void> {
   if (global.__dashboardCustomReportsSchemaReady) return;
   const client = await pool.connect();
@@ -92,8 +109,12 @@ export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
-  const broadenSchoolScope = session.role === 'admin' || session.role === 'coach';
+  const scopedOrganizationId = resolveCustomReportOrganizationId(session, schoolCode);
+  const userId = Number(session.userId ?? 0);
+  const hasUserScope = Number.isFinite(userId) && userId > 0;
+  if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
+    return NextResponse.json({ error: 'No valid organization scope for custom reports.' }, { status: 400 });
+  }
   const pool = getDbPool();
   try {
     await ensureDashboardCustomReportsSchema(pool);
@@ -109,14 +130,17 @@ export async function GET() {
       `
       SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
       FROM dashboard_custom_reports
-      WHERE ((school_code = $2) AND ($3::boolean OR organization_id = $1))
-         OR (applies_to_all_schools = TRUE AND ($3::boolean OR organization_id = $1))
+      WHERE (organization_id = $1 OR ($3::boolean AND created_by_user_id = $4))
+        AND (
+          school_code = $2
+          OR applies_to_all_schools = TRUE
+        )
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrganizationId, schoolCode, broadenSchoolScope]
+      [scopedOrganizationId, schoolCode, hasUserScope, userId]
     );
     let rows = result.rows;
-    if (!rows.length && broadenSchoolScope) {
+    if (!rows.length) {
       const fallback = await pool.query<{
         id: number;
         name: string;
@@ -129,12 +153,10 @@ export async function GET() {
         `
         SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
         FROM dashboard_custom_reports
-        WHERE school_code = $1
-           OR applies_to_all_schools = TRUE
-           OR organization_id = $2
+        WHERE organization_id = $1 OR ($2::boolean AND created_by_user_id = $3)
         ORDER BY updated_at DESC, id DESC
         `,
-        [schoolCode, scopedOrganizationId]
+        [scopedOrganizationId, hasUserScope, userId]
       );
       rows = fallback.rows;
     }
@@ -188,8 +210,12 @@ export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
-  const broadenSchoolScope = session.role === 'admin' || session.role === 'coach';
+  const scopedOrganizationId = resolveCustomReportOrganizationId(session, schoolCode);
+  const userId = Number(session.userId ?? 0);
+  const hasUserScope = Number.isFinite(userId) && userId > 0;
+  if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
+    return NextResponse.json({ error: 'No valid organization scope for custom reports.' }, { status: 400 });
+  }
   const pool = getDbPool();
   try {
     await ensureDashboardCustomReportsSchema(pool);
@@ -217,10 +243,10 @@ export async function POST(request: Request) {
                payload_json = $4::jsonb,
                updated_at = NOW()
          WHERE id = $2
-           AND (organization_id = $1 OR ($6::boolean AND school_code = $7))
+           AND (organization_id = $1 OR ($6::boolean AND created_by_user_id = $7))
          RETURNING id, name, applies_to_all_schools, payload_json, created_at, updated_at
         `,
-        [scopedOrganizationId, id, name, JSON.stringify(payload), applyToAllSchools, broadenSchoolScope, schoolCode]
+        [scopedOrganizationId, id, name, JSON.stringify(payload), applyToAllSchools, hasUserScope, userId]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });
@@ -238,7 +264,7 @@ export async function POST(request: Request) {
         WITH existing AS (
           SELECT id
           FROM dashboard_custom_reports
-          WHERE organization_id = $1
+          WHERE (organization_id = $1 OR ($7::boolean AND created_by_user_id = $8))
             AND school_code = $2
             AND applies_to_all_schools = $6
             AND lower(name) = lower($3)
@@ -266,7 +292,7 @@ export async function POST(request: Request) {
         SELECT * FROM inserted
         LIMIT 1
         `,
-        [scopedOrganizationId, schoolCode, name, JSON.stringify(payload), session.userId ?? null, applyToAllSchools]
+        [scopedOrganizationId, schoolCode, name, JSON.stringify(payload), session.userId ?? null, applyToAllSchools, hasUserScope, userId]
       );
     }
 
@@ -293,8 +319,12 @@ export async function DELETE(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationId = resolveSchoolScopedOrganizationId(session);
-  const broadenSchoolScope = session.role === 'admin' || session.role === 'coach';
+  const scopedOrganizationId = resolveCustomReportOrganizationId(session, schoolCode);
+  const userId = Number(session.userId ?? 0);
+  const hasUserScope = Number.isFinite(userId) && userId > 0;
+  if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
+    return NextResponse.json({ error: 'No valid organization scope for custom reports.' }, { status: 400 });
+  }
   const id = Number(new URL(request.url).searchParams.get('id'));
   if (!Number.isFinite(id) || id <= 0) {
     return NextResponse.json({ error: 'Report id is required.' }, { status: 400 });
@@ -303,13 +333,27 @@ export async function DELETE(request: Request) {
   try {
     const pool = getDbPool();
     await ensureDashboardCustomReportsSchema(pool);
+    const protectedCheck = await pool.query<{ name: string }>(
+      `
+      SELECT name
+      FROM dashboard_custom_reports
+      WHERE id = $1
+        AND (organization_id = $2 OR ($3::boolean AND created_by_user_id = $4))
+      LIMIT 1
+      `,
+      [id, scopedOrganizationId, hasUserScope, userId]
+    );
+    const existingName = String(protectedCheck.rows[0]?.name ?? '').trim();
+    if (normalizedReportNameKey(existingName) === normalizedReportNameKey("Jared's Dashboard")) {
+      return NextResponse.json({ error: "Jared's Dashboard is protected and cannot be deleted." }, { status: 400 });
+    }
     const deleted = await pool.query(
       `
       DELETE FROM dashboard_custom_reports
       WHERE id = $1
-        AND (organization_id = $2 OR ($3::boolean AND school_code = $4))
+        AND (organization_id = $2 OR ($3::boolean AND created_by_user_id = $4))
       `,
-      [id, scopedOrganizationId, broadenSchoolScope, schoolCode]
+      [id, scopedOrganizationId, hasUserScope, userId]
     );
     if (!deleted.rowCount) {
       return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });

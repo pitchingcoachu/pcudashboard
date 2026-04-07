@@ -1676,6 +1676,34 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+async function imageUrlToPngDataUrl(src: string, width: number, height: number): Promise<string | null> {
+  try {
+    const response = await fetch(src, { cache: 'force-cache' });
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const next = new Image();
+        next.onload = () => resolve(next);
+        next.onerror = () => reject(new Error('Failed to load image for export.'));
+        next.src = objectUrl;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(width));
+      canvas.height = Math.max(1, Math.round(height));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/png');
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  } catch {
+    return null;
+  }
+}
+
 async function inlineBrandLogosForExport(reportNode: HTMLElement): Promise<() => void> {
   const logos = Array.from(reportNode.querySelectorAll('.portal-custom-reports-brand-logo')) as HTMLImageElement[];
   if (!logos.length) return () => undefined;
@@ -1684,11 +1712,17 @@ async function inlineBrandLogosForExport(reportNode: HTMLElement): Promise<() =>
   for (const logo of logos) {
     const originalSrc = logo.getAttribute('src') || logo.src;
     if (!originalSrc) continue;
+    const rect = logo.getBoundingClientRect();
+    const width = Math.max(1, rect.width || logo.naturalWidth || 64);
+    const height = Math.max(1, rect.height || logo.naturalHeight || 64);
     try {
-      const response = await fetch(originalSrc, { cache: 'force-cache' });
-      if (!response.ok) continue;
-      const blob = await response.blob();
-      const dataUrl = await blobToDataUrl(blob);
+      let dataUrl = await imageUrlToPngDataUrl(originalSrc, width, height);
+      if (!dataUrl) {
+        const response = await fetch(originalSrc, { cache: 'force-cache' });
+        if (!response.ok) continue;
+        const blob = await response.blob();
+        dataUrl = await blobToDataUrl(blob);
+      }
       if (!dataUrl) continue;
       logo.setAttribute('src', dataUrl);
       restores.push(() => {
@@ -1952,12 +1986,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
 
   const playerLabel = useMemo(() => subjectLabelForReportType(reportType), [reportType]);
   const availableTableModes = useMemo(() => {
-    if (reportType === 'Hitting') {
-      const base = hittingTableModes.length ? hittingTableModes : HITTING_TABLES;
-      const customNames = customTables.map((item) => String(item.name ?? '').trim()).filter(Boolean);
-      return Array.from(new Set([...base, ...customNames]));
-    }
-    return tableOptionsForReportType(reportType);
+    const base =
+      reportType === 'Hitting'
+        ? (hittingTableModes.length ? hittingTableModes : HITTING_TABLES)
+        : tableOptionsForReportType(reportType);
+    const customNames = customTables.map((item) => String(item.name ?? '').trim()).filter(Boolean);
+    return Array.from(new Set([...base, ...customNames]));
   }, [customTables, hittingTableModes, reportType]);
   const defaultTableMode = useMemo(
     () => availableTableModes[0] ?? defaultTableModeForReportType(reportType),
@@ -2680,9 +2714,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           params.set('include_trend_rows', '0');
           params.set('split_by', config.splitBy || 'Pitch Types');
           const selectedTableMode = config.tableMode || defaultTableMode;
-          const matchedCustomTable = reportType === 'Hitting'
-            ? customTables.find((entry) => String(entry.name ?? '').trim() === selectedTableMode)
-            : undefined;
+          const matchedCustomTable = customTables.find((entry) => String(entry.name ?? '').trim() === selectedTableMode);
           if (matchedCustomTable) {
             params.set('table_mode', 'Custom');
             if ((matchedCustomTable.columns ?? []).length) {
