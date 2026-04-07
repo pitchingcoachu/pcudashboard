@@ -15,7 +15,7 @@ from functools import lru_cache
 import threading
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
@@ -6218,9 +6218,19 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+@app.head("/health")
+def health_head() -> Response:
+    return Response(status_code=200)
+
+
 @app.get("/")
 def root() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.head("/")
+def root_head() -> Response:
+    return Response(status_code=200)
 
 
 def _pro_pitch_source_table() -> Optional[str]:
