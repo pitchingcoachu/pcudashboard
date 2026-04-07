@@ -1580,6 +1580,10 @@ function isAbortLikeError(error: unknown): boolean {
   return message.includes('aborted') || message.includes('aborterror');
 }
 
+function customTableModeValue(id: number): string {
+  return `custom_saved:${id}`;
+}
+
 async function svgToPngDataUrl(svg: SVGSVGElement, exportScale = 1): Promise<string | null> {
   const rect = svg.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width));
@@ -2010,8 +2014,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       reportType === 'Hitting'
         ? (hittingTableModes.length ? hittingTableModes : HITTING_TABLES)
         : tableOptionsForReportType(reportType);
+    const customModes = customTables
+      .map((item) => Number(item.id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+      .map((id) => customTableModeValue(id));
     const customNames = customTables.map((item) => String(item.name ?? '').trim()).filter(Boolean);
-    return Array.from(new Set([...base, ...customNames]));
+    return Array.from(new Set([...base, ...customModes, ...customNames]));
   }, [customTables, hittingTableModes, reportType]);
   const defaultTableMode = useMemo(
     () => availableTableModes[0] ?? defaultTableModeForReportType(reportType),
@@ -2390,6 +2398,23 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       const validSplitBy = new Set(splitByOptionsForReportType(reportType));
       for (const key of Object.keys(next)) {
         const normalized = normalizeCellConfig(next[key]);
+        if (String(normalized.tableMode || '').startsWith('custom_saved:')) {
+          const id = Number(String(normalized.tableMode).replace('custom_saved:', ''));
+          const exists = customTables.some((entry) => Number(entry.id) === id);
+          if (!exists) {
+            const fallbackByName = customTables.find(
+              (entry) => String(entry.name ?? '').trim() === String(normalized.tableMode).trim()
+            );
+            normalized.tableMode = fallbackByName ? customTableModeValue(Number(fallbackByName.id)) : normalized.tableMode;
+          }
+        } else {
+          const fallbackByName = customTables.find(
+            (entry) => String(entry.name ?? '').trim() === String(normalized.tableMode).trim()
+          );
+          if (fallbackByName) {
+            normalized.tableMode = customTableModeValue(Number(fallbackByName.id));
+          }
+        }
         if (!validTables.has(normalized.tableMode)) {
           normalized.tableMode = fallback;
         }
@@ -2403,7 +2428,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       }
       return next;
     });
-  }, [reportType, initialSchoolCode, availableTableModes, defaultTableMode]);
+  }, [reportType, initialSchoolCode, availableTableModes, defaultTableMode, customTables]);
 
   useEffect(() => {
     if (restoringSavedReportRef.current) return;
@@ -2625,7 +2650,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       );
       let nextRequestIndex = 0;
       const isProWorkload = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
-      const workerCount = isProWorkload ? (reportScope === 'Team' ? 1 : 2) : reportScope === 'Team' ? 1 : 5;
+      const workerCount = isProWorkload ? (reportScope === 'Team' ? 1 : 3) : reportScope === 'Team' ? 1 : 5;
       const commitCellResult = (cellId: string, payload: OverviewLitePayload, state: CellLoadState) => {
         out[cellId] = payload;
         nextCellStates[cellId] = state;
@@ -2651,7 +2676,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         const chunkSize =
           reportScope === 'Team'
             ? (isProWorkload ? 6 : 10)
-            : (isProWorkload ? 12 : 48);
+            : (isProWorkload ? 24 : 48);
         for (let i = 0; i < keys.length; i += chunkSize) {
           const chunk = keys.slice(i, i + chunkSize);
           try {
@@ -2729,7 +2754,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           if (needsChartPoints) params.set('chart_only', '1');
           if (needsChartPoints) {
             if (isProSchool) {
-              params.set('chart_points_limit', isHeatmapPanel ? '3500' : (reportScope === 'Team' ? '60' : '220'));
+              params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '60' : '220'));
             } else {
               params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '120' : '600'));
             }
@@ -2738,7 +2763,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           params.set('include_trend_rows', '0');
           params.set('split_by', config.splitBy || 'Pitch Types');
           const selectedTableMode = config.tableMode || defaultTableMode;
-          const matchedCustomTable = customTables.find((entry) => String(entry.name ?? '').trim() === selectedTableMode);
+          const matchedCustomTable = String(selectedTableMode).startsWith('custom_saved:')
+            ? (() => {
+                const id = Number(String(selectedTableMode).replace('custom_saved:', ''));
+                return customTables.find((entry) => Number(entry.id) === id);
+              })()
+            : customTables.find((entry) => String(entry.name ?? '').trim() === selectedTableMode);
           if (matchedCustomTable) {
             params.set('table_mode', 'Custom');
             if ((matchedCustomTable.columns ?? []).length) {
@@ -3731,10 +3761,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       : reportType !== 'Catching' && effectiveHand === 'L'
                         ? '#ef4444'
                         : undefined;
-                  const tableModeOptions = availableTableModes.map((entry) => ({
-                    value: entry,
-                    label: entry,
-                  }));
+                  const tableModeOptions = availableTableModes.map((entry) => {
+                    if (String(entry).startsWith('custom_saved:')) {
+                      const id = Number(String(entry).replace('custom_saved:', ''));
+                      const found = customTables.find((item) => Number(item.id) === id);
+                      return { value: entry, label: found?.name || String(entry) };
+                    }
+                    return { value: entry, label: entry };
+                  });
                   const panelTypeOptions = availablePanelTypes.map((entry) => ({
                     value: entry,
                     label: entry || 'Select',
