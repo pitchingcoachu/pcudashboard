@@ -626,7 +626,7 @@ CREATE TABLE IF NOT EXISTS public.pro_pitch_events (
   session_type TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (game_pk, play_id, event_index)
+  UNIQUE (game_pk, play_id, event_index, session_date)
 );
 CREATE INDEX IF NOT EXISTS idx_pro_pitch_events_session_date
   ON public.pro_pitch_events (session_date);
@@ -752,7 +752,7 @@ VALUES (
   %(hit_distance_sc)s, %(hc_x)s, %(hc_y)s, %(spray_direction)s,
   %(session_type)s, NOW()
 )
-ON CONFLICT (game_pk, play_id, event_index) DO UPDATE SET
+ON CONFLICT (game_pk, play_id, event_index, session_date) DO UPDATE SET
   school_code = EXCLUDED.school_code,
   sport_id = EXCLUDED.sport_id,
   game_date = EXCLUDED.game_date,
@@ -810,6 +810,97 @@ ON CONFLICT (game_pk, play_id, event_index) DO UPDATE SET
   spray_direction = EXCLUDED.spray_direction,
   session_type = EXCLUDED.session_type,
   updated_at = NOW();
+"""
+
+UPDATE_NORM_NO_CONFLICT = """
+UPDATE public.pro_pitch_events SET
+  school_code = %(school_code)s,
+  sport_id = %(sport_id)s,
+  game_date = %(game_date)s,
+  session_date = %(session_date)s,
+  game_type = %(game_type)s,
+  season = %(season)s,
+  home_team = %(home_team)s,
+  away_team = %(away_team)s,
+  inning = %(inning)s,
+  at_bat_index = %(at_bat_index)s,
+  pitchid = %(pitchid)s,
+  pitchuid = %(pitchuid)s,
+  gameid = %(gameid)s,
+  pitcher = %(pitcher)s,
+  batter = %(batter)s,
+  catcher = %(catcher)s,
+  pitcherthrows = %(pitcherthrows)s,
+  batterside = %(batterside)s,
+  pitcherteam = %(pitcherteam)s,
+  batterteam = %(batterteam)s,
+  taggedpitchtype = %(taggedpitchtype)s,
+  pitchcall = %(pitchcall)s,
+  playresult = %(playresult)s,
+  korbb = %(korbb)s,
+  taggedhittype = %(taggedhittype)s,
+  balls = %(balls)s,
+  strikes = %(strikes)s,
+  zone = %(zone)s,
+  outs = %(outs)s,
+  outsonplay = %(outsonplay)s,
+  official_earned_runs = %(official_earned_runs)s,
+  official_outs_recorded = %(official_outs_recorded)s,
+  relspeed = %(relspeed)s,
+  spinrate = %(spinrate)s,
+  releasetilt = %(releasetilt)s,
+  breaktilt = %(breaktilt)s,
+  spinefficiency = %(spinefficiency)s,
+  delta_pitcher_run_exp = %(delta_pitcher_run_exp)s,
+  inducedvertbreak = %(inducedvertbreak)s,
+  horzbreak = %(horzbreak)s,
+  relheight = %(relheight)s,
+  relside = %(relside)s,
+  extension = %(extension)s,
+  platelocside = %(platelocside)s,
+  platelocheight = %(platelocheight)s,
+  exitspeed = %(exitspeed)s,
+  angle = %(angle)s,
+  estimated_woba_using_speedangle = %(estimated_woba_using_speedangle)s,
+  woba_value = %(woba_value)s,
+  iso_value = %(iso_value)s,
+  babip_value = %(babip_value)s,
+  hit_distance_sc = %(hit_distance_sc)s,
+  hc_x = %(hc_x)s,
+  hc_y = %(hc_y)s,
+  spray_direction = %(spray_direction)s,
+  session_type = %(session_type)s,
+  updated_at = NOW()
+WHERE game_pk = %(game_pk)s
+  AND play_id = %(play_id)s
+  AND event_index = %(event_index)s
+  AND session_date = %(session_date)s
+"""
+
+INSERT_NORM_IF_MISSING = """
+INSERT INTO public.pro_pitch_events (
+  school_code, sport_id, game_pk, game_date, session_date, game_type, season, home_team, away_team,
+  inning, at_bat_index, play_id, event_index, pitchid, pitchuid, gameid,
+  pitcher, batter, catcher, pitcherthrows, batterside, pitcherteam, batterteam,
+  taggedpitchtype, pitchcall, playresult, korbb, taggedhittype,
+  balls, strikes, zone, outs, outsonplay, official_earned_runs, official_outs_recorded, relspeed, spinrate, releasetilt, breaktilt, spinefficiency, delta_pitcher_run_exp,
+  inducedvertbreak, horzbreak, relheight, relside, extension, platelocside, platelocheight,
+  exitspeed, angle, estimated_woba_using_speedangle, woba_value, iso_value, babip_value,
+  hit_distance_sc, hc_x, hc_y, spray_direction,
+  session_type, updated_at
+)
+VALUES (
+  %(school_code)s, %(sport_id)s, %(game_pk)s, %(game_date)s, %(session_date)s, %(game_type)s, %(season)s, %(home_team)s, %(away_team)s,
+  %(inning)s, %(at_bat_index)s, %(play_id)s, %(event_index)s, %(pitchid)s, %(pitchuid)s, %(gameid)s,
+  %(pitcher)s, %(batter)s, %(catcher)s, %(pitcherthrows)s, %(batterside)s, %(pitcherteam)s, %(batterteam)s,
+  %(taggedpitchtype)s, %(pitchcall)s, %(playresult)s, %(korbb)s, %(taggedhittype)s,
+  %(balls)s, %(strikes)s, %(zone)s, %(outs)s, %(outsonplay)s, %(official_earned_runs)s, %(official_outs_recorded)s, %(relspeed)s, %(spinrate)s, %(releasetilt)s, %(breaktilt)s, %(spinefficiency)s, %(delta_pitcher_run_exp)s,
+  %(inducedvertbreak)s, %(horzbreak)s, %(relheight)s, %(relside)s, %(extension)s, %(platelocside)s, %(platelocheight)s,
+  %(exitspeed)s, %(angle)s, %(estimated_woba_using_speedangle)s, %(woba_value)s, %(iso_value)s, %(babip_value)s,
+  %(hit_distance_sc)s, %(hc_x)s, %(hc_y)s, %(spray_direction)s,
+  %(session_type)s, NOW()
+)
+ON CONFLICT DO NOTHING
 """
 
 
@@ -951,8 +1042,20 @@ def main() -> int:
                 if payloads:
                     with conn.cursor() as cur:
                         cur.executemany(UPSERT, payloads)
-                        cur.executemany(UPSERT_NORM, norm_payloads)
                     conn.commit()
+                    try:
+                        with conn.cursor() as cur:
+                            cur.executemany(UPSERT_NORM, norm_payloads)
+                        conn.commit()
+                    except psycopg.errors.InvalidColumnReference:
+                        # Some environments have pro_pitch_events without the
+                        # unique constraint required by ON CONFLICT inference.
+                        # Fall back to UPDATE + INSERT-WHERE-NOT-EXISTS.
+                        conn.rollback()
+                        with conn.cursor() as cur:
+                            cur.executemany(UPDATE_NORM_NO_CONFLICT, norm_payloads)
+                            cur.executemany(INSERT_NORM_IF_MISSING, norm_payloads)
+                        conn.commit()
                 total_games += 1
                 total_rows += len(payloads)
                 print(f"  game {game_pk}: pitches={len(payloads)} total={total_rows}")

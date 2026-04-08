@@ -2254,6 +2254,12 @@ main {
   justify-self: end;
 }
 
+.portal-custom-reports-brand-logo--school-pcu {
+  width: 64px;
+  height: 64px;
+  max-width: 64px;
+}
+
 .portal-custom-reports-brand-logo--school-gcu {
   height: 48px;
   max-width: 120px;

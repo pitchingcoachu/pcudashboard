@@ -87,6 +87,12 @@ class SavantRow:
     contact_position_x: Optional[float]
     contact_position_y: Optional[float]
     contact_position_z: Optional[float]
+    vx0: Optional[float]
+    vy0: Optional[float]
+    vz0: Optional[float]
+    ax: Optional[float]
+    ay: Optional[float]
+    az: Optional[float]
 
 
 def _as_feet(value: Optional[float]) -> Optional[float]:
@@ -181,6 +187,12 @@ def _iter_savant_rows(path: str) -> Iterable[SavantRow]:
                         )
                     )
                 ),
+                vx0=_safe_float(_pick(row, "vx0", "v_x0", "vx_0")),
+                vy0=_safe_float(_pick(row, "vy0", "v_y0", "vy_0")),
+                vz0=_safe_float(_pick(row, "vz0", "v_z0", "vz_0")),
+                ax=_safe_float(_pick(row, "ax", "a_x")),
+                ay=_safe_float(_pick(row, "ay", "a_y")),
+                az=_safe_float(_pick(row, "az", "a_z")),
             )
 
 
@@ -215,6 +227,18 @@ ALTER TABLE public.pro_pitch_events
   ADD COLUMN IF NOT EXISTS contact_position_y DOUBLE PRECISION;
 ALTER TABLE public.pro_pitch_events
   ADD COLUMN IF NOT EXISTS contact_position_z DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS vx0 DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS vy0 DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS vz0 DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS ax DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS ay DOUBLE PRECISION;
+ALTER TABLE public.pro_pitch_events
+  ADD COLUMN IF NOT EXISTS az DOUBLE PRECISION;
 """
 
 
@@ -236,6 +260,12 @@ SET
   contact_position_x = %(contact_position_x)s,
   contact_position_y = %(contact_position_y)s,
   contact_position_z = %(contact_position_z)s,
+  vx0 = %(vx0)s,
+  vy0 = %(vy0)s,
+  vz0 = %(vz0)s,
+  ax = %(ax)s,
+  ay = %(ay)s,
+  az = %(az)s,
   updated_at = NOW()
 WHERE school_code = 'PRO'
   AND game_pk = %(game_pk)s
@@ -365,6 +395,12 @@ def main() -> int:
                             "contact_position_x": row.contact_position_x,
                             "contact_position_y": row.contact_position_y,
                             "contact_position_z": row.contact_position_z,
+                            "vx0": row.vx0,
+                            "vy0": row.vy0,
+                            "vz0": row.vz0,
+                            "ax": row.ax,
+                            "ay": row.ay,
+                            "az": row.az,
                         }
                         # Derive stable spray direction (degrees off center field line, 0=center).
                         # Uses Statcast hit coordinate frame when available.
@@ -391,6 +427,12 @@ def main() -> int:
                                 "contact_position_x",
                                 "contact_position_y",
                                 "contact_position_z",
+                                "vx0",
+                                "vy0",
+                                "vz0",
+                                "ax",
+                                "ay",
+                                "az",
                             )
                         ):
                             total_non_null += 1

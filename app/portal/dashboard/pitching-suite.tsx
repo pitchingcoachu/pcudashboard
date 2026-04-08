@@ -256,11 +256,11 @@ function fmtNum(value: number | null | undefined, digits = 1): string {
 }
 
 function formatNameFirstLast(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed.includes(',')) return trimmed;
-  const [last, first] = trimmed.split(',').map((part) => part.trim());
-  if (!last || !first) return trimmed;
-  return `${first} ${last}`;
+  const normalized = (name || '').trim();
+  if (!normalized) return '';
+  const parts = normalized.split(',').map((entry) => entry.trim()).filter(Boolean);
+  if (parts.length >= 2) return `${parts.slice(1).join(' ')} ${parts[0]}`.replace(/\s+/g, ' ').trim();
+  return normalized;
 }
 
 function normalizePersonName(value: string | null | undefined): string {
@@ -1335,6 +1335,14 @@ export default function PitchingSuite({
     if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
     return Math.max(0, Math.floor((end - start) / 86400000) + 1);
   }, [isLeague, startDate, endDate]);
+  const proWindowDays = useMemo(() => {
+    if (!isPro || !startDate || !endDate) return 0;
+    const start = Date.parse(startDate);
+    const end = Date.parse(endDate);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+    return Math.max(0, Math.floor((end - start) / 86400000) + 1);
+  }, [isPro, startDate, endDate]);
+  const isProAllSelection = isPro && teamType === 'All' && allPitchersSelected && allHittersSelected;
   const shouldForceLeagueFastTable =
     isLeague && (dashboardPage === 'Summary' || dashboardPage === 'Leaderboard') && leagueWindowDays > 14 && isLeagueAllSelection;
   const filteredPitchers = useMemo(() => {
@@ -1750,6 +1758,7 @@ export default function PitchingSuite({
     const isTrendPage = dashboardPage === 'Trend';
     const isLeaderboard = dashboardPage === 'Leaderboard';
     const isSummaryPage = dashboardPage === 'Summary';
+    const isHeatMapsPage = dashboardPage === 'HeatMaps';
     const shouldLoadLeagueCharts = isLeague && !isLeagueAllSelection && !shouldForceLeagueFastTable;
     const shouldIncludeRowPitches =
       (!isLeague && !isPro) || (isLeague && !hideLeagueSummaryCharts && !shouldForceLeagueFastTable && leagueWindowDays <= 14);
@@ -1764,9 +1773,21 @@ export default function PitchingSuite({
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', isTrendPage ? '1' : '0');
     } else if (isLeaderboard) {
+      if (isPro) {
+        params.set('include_chart_points', '0');
+        params.set('include_row_pitches', '0');
+        params.set('include_trend_rows', '0');
+      } else {
+        params.set('include_chart_points', '1');
+        params.set('chart_points_limit', '1000');
+        params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
+        params.set('include_trend_rows', '0');
+      }
+    } else if (isHeatMapsPage) {
       params.set('include_chart_points', '1');
-      params.set('chart_points_limit', isPro ? '400' : '1000');
-      params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
+      params.set('chart_points_limit', isPro ? '1200' : '1000');
+      params.set('chart_only', '1');
+      params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
     } else if (hideLeagueSummaryCharts || shouldForceLeagueFastTable) {
       params.set('include_chart_points', '0');
@@ -1779,7 +1800,8 @@ export default function PitchingSuite({
       params.set('include_trend_rows', isLeague ? '0' : (isTrendPage ? '1' : '0'));
     }
     const requestKey = `/api/dashboard/pitching/overview?${params.toString()}`;
-    const chartRequestKey = shouldForceProFastSummary
+    const shouldSkipProCompanionChart = isPro && isSummaryPage && isProAllSelection && proWindowDays > 14;
+    const chartRequestKey = (shouldForceProFastSummary && !shouldSkipProCompanionChart)
       ? (() => {
           const chartParams = new URLSearchParams(params);
           chartParams.set('include_chart_points', '1');
@@ -1896,6 +1918,8 @@ export default function PitchingSuite({
     hideLeagueSummaryCharts,
     shouldForceLeagueFastTable,
     leagueWindowDays,
+    proWindowDays,
+    isProAllSelection,
     customTableColumns,
     visualOption,
     selectedAfterCountFilters,

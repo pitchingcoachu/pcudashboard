@@ -3308,6 +3308,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     if (!isProSchool) return schoolBrand.logoSrc ? schoolBrand.logoAlt : schoolCode || 'School';
     return 'Team';
   }, [isProSchool, schoolBrand.logoSrc, schoolBrand.logoAlt, schoolCode]);
+  const rightLogoIsPcu = useMemo(() => {
+    const src = String(customReportRightLogoSrc ?? '').trim().toLowerCase();
+    return src.endsWith('/pitching-coach-u-logo.png') || src === '/pitching-coach-u-logo.png';
+  }, [customReportRightLogoSrc]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -3717,6 +3721,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   src={customReportRightLogoSrc}
                   alt={customReportRightLogoAlt}
                   className={`portal-custom-reports-brand-logo portal-custom-reports-brand-logo--school${
+                    rightLogoIsPcu ? ' portal-custom-reports-brand-logo--school-pcu' : ''
+                  }${
                     String(activeSchoolCode || '').toUpperCase() === 'GCU' ? ' portal-custom-reports-brand-logo--school-gcu' : ''
                   }`}
                 />

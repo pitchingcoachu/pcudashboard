@@ -424,11 +424,11 @@ function parseNumber(value: unknown): number | null {
 }
 
 function formatNameFirstLast(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed.includes(',')) return trimmed;
-  const [last, first] = trimmed.split(',').map((part) => part.trim());
-  if (!last || !first) return trimmed;
-  return `${first} ${last}`;
+  const normalized = (name || '').trim();
+  if (!normalized) return '';
+  const parts = normalized.split(',').map((entry) => entry.trim()).filter(Boolean);
+  if (parts.length >= 2) return `${parts.slice(1).join(' ')} ${parts[0]}`.replace(/\s+/g, ' ').trim();
+  return normalized;
 }
 
 function toOptions(values?: string[], formatNames = false): OptionItem[] {
