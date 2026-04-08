@@ -122,6 +122,22 @@ function normalizedTableNameKey(name: string): string {
     .toLowerCase();
 }
 
+function parseOrgSchoolMap(raw: string): Record<number, string> {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<number, string> = {};
+    for (const [orgIdRaw, schoolRaw] of Object.entries(parsed)) {
+      const orgId = Number(orgIdRaw);
+      const schoolCode = typeof schoolRaw === 'string' ? String(schoolRaw).trim().toUpperCase() : '';
+      if (!Number.isFinite(orgId) || orgId <= 0 || !schoolCode) continue;
+      out[orgId] = schoolCode;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 declare global {
   var __dashboardCustomTablesSchemaReady: boolean | undefined;
 }
@@ -145,7 +161,10 @@ async function getSession(): Promise<PortalSession | null> {
   };
 }
 
-function resolveCustomTableOrganizationId(session: PortalSession, schoolCode: string): number {
+function resolveCustomTableOrganizationScope(
+  session: PortalSession,
+  schoolCode: string
+): { primaryOrganizationId: number; organizationIds: number[] } {
   const selectedSchool = String(schoolCode ?? '').trim().toUpperCase();
   const sessionOrgId = Number(session.organizationId ?? 0);
   const scopedOrganizationIdResolved = resolveSchoolScopedOrganizationId(session);
@@ -153,13 +172,32 @@ function resolveCustomTableOrganizationId(session: PortalSession, schoolCode: st
     Number.isFinite(scopedOrganizationIdResolved) && scopedOrganizationIdResolved > 0
       ? scopedOrganizationIdResolved
       : sessionOrgId;
+  const map = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
+  const mappedOrgIds = Object.entries(map)
+    .filter(([, mappedSchoolCode]) => mappedSchoolCode === selectedSchool)
+    .map(([orgId]) => Number(orgId))
+    .filter((orgId) => Number.isFinite(orgId) && orgId > 0);
+  const orgSet = new Set<number>();
+  if (Number.isFinite(scopedOrganizationId) && scopedOrganizationId > 0) orgSet.add(scopedOrganizationId);
+  if (Number.isFinite(sessionOrgId) && sessionOrgId > 0) orgSet.add(sessionOrgId);
+  for (const orgId of mappedOrgIds) orgSet.add(orgId);
+  const organizationIds = Array.from(orgSet);
+  const primaryOrganizationId =
+    Number.isFinite(scopedOrganizationId) && scopedOrganizationId > 0
+      ? scopedOrganizationId
+      : Number.isFinite(sessionOrgId) && sessionOrgId > 0
+        ? sessionOrgId
+        : 0;
 
   // Keep PRO custom tables anchored to the signed-in org for all roles.
   // This prevents "missing table" behavior when school->org mapping changes.
   if (selectedSchool === 'PRO' && Number.isFinite(sessionOrgId) && sessionOrgId > 0) {
-    return sessionOrgId;
+    return {
+      primaryOrganizationId: sessionOrgId,
+      organizationIds: Array.from(new Set([sessionOrgId, ...mappedOrgIds])),
+    };
   }
-  return scopedOrganizationId;
+  return { primaryOrganizationId, organizationIds };
 }
 
 async function ensureDashboardCustomTableSchema(pool: Pool): Promise<void> {
@@ -204,10 +242,10 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationId = resolveCustomTableOrganizationId(session, schoolCode);
+  const { organizationIds } = resolveCustomTableOrganizationScope(session, schoolCode);
   const userId = Number(session.userId ?? 0);
   const hasUserScope = Number.isFinite(userId) && userId > 0;
-  if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
+  if (!organizationIds.length) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
   const pool = getDbPool();
@@ -224,14 +262,14 @@ export async function GET() {
       `
       SELECT id, name, school_code, columns_json, created_at, updated_at
       FROM dashboard_custom_tables
-      WHERE (organization_id = $1 OR ($3::boolean AND created_by_user_id = $4))
+      WHERE (organization_id = ANY($1::int[]) OR ($3::boolean AND created_by_user_id = $4))
         AND (
           school_code = $2
           OR created_by_user_id = $4
         )
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrganizationId, schoolCode, hasUserScope, userId]
+      [organizationIds, schoolCode, hasUserScope, userId]
     );
     const deduped = new Map<string, (typeof result.rows)[number]>();
     for (const row of result.rows) {
@@ -281,10 +319,10 @@ export async function POST(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationId = resolveCustomTableOrganizationId(session, schoolCode);
+  const { primaryOrganizationId, organizationIds } = resolveCustomTableOrganizationScope(session, schoolCode);
   const userId = Number(session.userId ?? 0);
   const hasUserScope = Number.isFinite(userId) && userId > 0;
-  if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
+  if (!Number.isFinite(primaryOrganizationId) || primaryOrganizationId <= 0 || !organizationIds.length) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
   const pool = getDbPool();
@@ -312,14 +350,14 @@ export async function POST(request: Request) {
       }>(
         `
         UPDATE dashboard_custom_tables
-           SET name = $4,
-               columns_json = $5::jsonb,
+           SET name = $3,
+               columns_json = $4::jsonb,
                updated_at = NOW()
-         WHERE id = $3
-           AND (organization_id = $1 OR ($6::boolean AND created_by_user_id = $7))
+         WHERE id = $2
+           AND (organization_id = ANY($1::int[]) OR ($5::boolean AND created_by_user_id = $6))
          RETURNING id, name, columns_json, created_at, updated_at
         `,
-        [scopedOrganizationId, schoolCode, id, name, payload, hasUserScope, userId]
+        [organizationIds, id, name, payload, hasUserScope, userId]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -336,7 +374,7 @@ export async function POST(request: Request) {
         WITH existing AS (
           SELECT id
           FROM dashboard_custom_tables
-          WHERE (organization_id = $1 OR ($6::boolean AND created_by_user_id = $7))
+          WHERE (organization_id = ANY($1::int[]) OR ($6::boolean AND created_by_user_id = $7))
             AND school_code = $2
             AND lower(name) = lower($3)
           LIMIT 1
@@ -353,7 +391,7 @@ export async function POST(request: Request) {
           INSERT INTO dashboard_custom_tables (
             organization_id, school_code, name, columns_json, created_by_user_id
           )
-          SELECT $1, $2, $3, $4::jsonb, $5
+          SELECT $8, $2, $3, $4::jsonb, $5
           WHERE NOT EXISTS (SELECT 1 FROM existing)
           RETURNING id, name, columns_json, created_at, updated_at
         )
@@ -361,7 +399,7 @@ export async function POST(request: Request) {
         UNION ALL
         SELECT id, name, columns_json, created_at, updated_at FROM inserted
         `,
-        [scopedOrganizationId, schoolCode, name, payload, session.userId || null, hasUserScope, userId]
+        [organizationIds, schoolCode, name, payload, session.userId || null, hasUserScope, userId, primaryOrganizationId]
       );
     }
 
@@ -388,10 +426,10 @@ export async function DELETE(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const scopedOrganizationId = resolveCustomTableOrganizationId(session, schoolCode);
+  const { organizationIds } = resolveCustomTableOrganizationScope(session, schoolCode);
   const userId = Number(session.userId ?? 0);
   const hasUserScope = Number.isFinite(userId) && userId > 0;
-  if (!Number.isFinite(scopedOrganizationId) || scopedOrganizationId <= 0) {
+  if (!organizationIds.length) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
   const url = new URL(request.url);
@@ -407,10 +445,10 @@ export async function DELETE(request: Request) {
       SELECT name
       FROM dashboard_custom_tables
       WHERE id = $1
-        AND (organization_id = $2 OR ($4::boolean AND created_by_user_id = $5))
+        AND (organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
       LIMIT 1
       `,
-      [id, scopedOrganizationId, schoolCode, hasUserScope, userId]
+      [id, organizationIds, hasUserScope, userId]
     );
     const existingName = String(protectedCheck.rows[0]?.name ?? '').trim();
     if (normalizedTableNameKey(existingName) === normalizedTableNameKey("Jared's Dashboard")) {
@@ -420,9 +458,9 @@ export async function DELETE(request: Request) {
       `
       DELETE FROM dashboard_custom_tables
       WHERE id = $1
-        AND (organization_id = $2 OR ($4::boolean AND created_by_user_id = $5))
+        AND (organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
       `,
-      [id, scopedOrganizationId, schoolCode, hasUserScope, userId]
+      [id, organizationIds, hasUserScope, userId]
     );
     return NextResponse.json({ ok: (result.rowCount ?? 0) > 0 });
   } catch (error) {
