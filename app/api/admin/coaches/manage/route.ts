@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
-import { resolveClientManagementOrganizationId, resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
+import { resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
 import { deleteStaffUser, resolveOrganizationIdForSchool, setStaffActiveStatus, updateStaffUser } from '../../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
@@ -23,11 +23,10 @@ export async function POST(request: Request) {
 
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/coaches');
-    const scopedOrganizationId = resolveClientManagementOrganizationId(session);
     const selectedSchoolCode = resolveProgrammingSchoolCode(session);
     const organizationId = await resolveOrganizationIdForSchool({
       schoolCode: selectedSchoolCode,
-      fallbackOrganizationId: scopedOrganizationId,
+      fallbackOrganizationId: 0,
       createIfMissing: session.role === 'admin' && selectedSchoolCode !== 'LEAGUE',
     });
     if (organizationId <= 0) {

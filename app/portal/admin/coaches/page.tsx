@@ -4,7 +4,6 @@ import { requirePortalSession } from '../../../../lib/portal-session';
 import { listClientsByOrganization, listCoachesByOrganization, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 import {
   canUseClientManagement,
-  resolveClientManagementOrganizationId,
   resolveProgrammingSchoolCode,
 } from '../../../../lib/programming-scope';
 import { CoachesTable } from './table-client';
@@ -28,7 +27,7 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const clientManagementOrganizationId = await resolveOrganizationIdForSchool({
     schoolCode: programmingSchoolCode,
-    fallbackOrganizationId: resolveClientManagementOrganizationId(session),
+    fallbackOrganizationId: 0,
     createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
   });
 
