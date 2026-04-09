@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     const organizationId = await resolveOrganizationIdForSchool({
       schoolCode: selectedSchoolCode,
       fallbackOrganizationId: scopedOrganizationId,
-      createIfMissing: false,
+      createIfMissing: session.role === 'admin' && selectedSchoolCode !== 'LEAGUE',
     });
     if (organizationId <= 0) {
       return redirectWithMessage(request, redirectTo, 'error', 'Coach management is not enabled for this school.');

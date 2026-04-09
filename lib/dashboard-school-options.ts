@@ -60,6 +60,33 @@ function schoolFromOrganizationName(name: string | null | undefined): string | n
   return null;
 }
 
+const SCHOOL_DOMAIN_HINTS: Array<{ schoolCode: string; fragments: string[] }> = [
+  { schoolCode: 'CBU', fragments: ['calbaptist.edu'] },
+  { schoolCode: 'GCU', fragments: ['gcu.edu', 'gcu.com'] },
+  { schoolCode: 'OSU', fragments: ['oregonstate.edu', 'okstate.edu'] },
+  { schoolCode: 'CNU', fragments: ['cnu.edu'] },
+  { schoolCode: 'GMU', fragments: ['gmu.edu'] },
+  { schoolCode: 'LSU', fragments: ['lsu.edu'] },
+  { schoolCode: 'UNM', fragments: ['unm.edu'] },
+  { schoolCode: 'SEMO', fragments: ['semo.edu'] },
+  { schoolCode: 'CREIGHTON', fragments: ['creighton.edu'] },
+  { schoolCode: 'HARVARD', fragments: ['harvard.edu'] },
+];
+
+function schoolFromEmailDomain(email: string | null | undefined): string | null {
+  const normalized = String(email ?? '').trim().toLowerCase();
+  const atIdx = normalized.lastIndexOf('@');
+  if (atIdx < 0) return null;
+  const domain = normalized.slice(atIdx + 1);
+  if (!domain) return null;
+  for (const hint of SCHOOL_DOMAIN_HINTS) {
+    if (hint.fragments.some((fragment) => domain === fragment || domain.endsWith(`.${fragment}`))) {
+      return hint.schoolCode;
+    }
+  }
+  return null;
+}
+
 async function resolveStaffSchoolCodes(email: string): Promise<string[]> {
   const organizations = await listActiveStaffOrganizationsByEmail(email);
   const codes = organizations
@@ -71,12 +98,17 @@ async function resolveStaffSchoolCodes(email: string): Promise<string[]> {
 export async function resolveSessionDashboardSchoolOptions(session: PortalSession): Promise<string[]> {
   const selected = normalizeSchoolCode(session.dashboardSchoolCode ?? '');
   const fallback = resolveDashboardSchoolCode(session);
+  const domainHint = schoolFromEmailDomain(session.email);
 
   if (session.role === 'admin') {
     if (isGlobalAdminEmail(session.email)) return Array.from(new Set([...resolveAllowedDashboardSchoolCodes(), 'LEAGUE', 'PRO']));
     const codes = await resolveStaffSchoolCodes(session.email);
-    const proAllowed = codes.includes('PRO');
-    const merged = Array.from(new Set([...codes, selected, fallback, 'LEAGUE'].filter(Boolean))).filter(
+    const seededCodes = Array.from(new Set([...codes, domainHint].filter(Boolean)));
+    const proAllowed = seededCodes.includes('PRO');
+    const mergedBase = seededCodes.length
+      ? seededCodes
+      : Array.from(new Set([selected, fallback].filter(Boolean)));
+    const merged = Array.from(new Set([...mergedBase, 'LEAGUE'].filter(Boolean))).filter(
       (code) => code !== 'PRO' || proAllowed
     );
     return merged.length > 0 ? merged : [fallback];
@@ -84,10 +116,14 @@ export async function resolveSessionDashboardSchoolOptions(session: PortalSessio
 
   if (session.role === 'coach') {
     const codes = await resolveStaffSchoolCodes(session.email);
+    const seededCodes = Array.from(new Set([...codes, domainHint].filter(Boolean)));
     // Coaches created under PRO should only see PRO unless explicitly linked to other schools.
-    if (codes.length === 1 && codes[0] === 'PRO') return ['PRO'];
-    const proAllowed = codes.includes('PRO');
-    const merged = Array.from(new Set([...codes, selected, fallback, 'LEAGUE'].filter(Boolean))).filter(
+    if (seededCodes.length === 1 && seededCodes[0] === 'PRO') return ['PRO'];
+    const proAllowed = seededCodes.includes('PRO');
+    const mergedBase = seededCodes.length
+      ? seededCodes
+      : Array.from(new Set([selected, fallback].filter(Boolean)));
+    const merged = Array.from(new Set([...mergedBase, 'LEAGUE'].filter(Boolean))).filter(
       (code) => code !== 'PRO' || proAllowed
     );
     return merged.length > 0 ? merged : [fallback];

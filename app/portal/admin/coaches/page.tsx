@@ -29,7 +29,7 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
   const clientManagementOrganizationId = await resolveOrganizationIdForSchool({
     schoolCode: programmingSchoolCode,
     fallbackOrganizationId: resolveClientManagementOrganizationId(session),
-    createIfMissing: false,
+    createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
   });
 
   const [coaches, clients, params] = await Promise.all([

@@ -9,6 +9,7 @@ import {
   validateLoginCredentials,
 } from '../../../../lib/auth';
 import { canUseProgrammingData } from '../../../../lib/programming-scope';
+import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
 
 type LoginPayload = {
   email?: string;
@@ -97,8 +98,22 @@ export async function POST(request: Request) {
 
     const orgMappedSchoolCode =
       user.role === 'admin' ? null : resolveMappedSchoolCodeForOrgId(user.organizationId ?? null);
-    const resolvedDashboardSchoolCode =
+    let resolvedDashboardSchoolCode =
       orgMappedSchoolCode ?? resolveLoginDefaultDashboardSchoolCode(user.email, user.dashboardSchoolCode);
+    if (!resolvedDashboardSchoolCode && (user.role === 'admin' || user.role === 'coach')) {
+      const allowed = await resolveSessionDashboardSchoolOptions({
+        userId: user.userId ?? 0,
+        email: user.email,
+        name: user.name,
+        role: user.role === 'admin' ? 'admin' : 'coach',
+        organizationId: user.organizationId ?? 0,
+        playerId: user.playerId ?? null,
+        dashboardSchoolCode: null,
+        appUrl: user.appUrl,
+        apps: user.apps,
+      });
+      resolvedDashboardSchoolCode = allowed.find((code) => code !== 'LEAGUE') ?? allowed[0] ?? null;
+    }
 
     const token = createSessionToken({
       ...user,

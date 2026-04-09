@@ -4,7 +4,7 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
 import { ensureTrainingDbReady } from '../../../../../lib/training-db';
-import { getDbPool } from '../../../../../lib/auth-db';
+import { getDbPool, listActiveStaffOrganizationIdsByEmail } from '../../../../../lib/auth-db';
 import type { PortalSession } from '../../../../../lib/portal-session';
 import type { Pool } from 'pg';
 
@@ -138,6 +138,26 @@ function parseOrgSchoolMap(raw: string): Record<number, string> {
   }
 }
 
+function parseGlobalAdminEmails(): string[] {
+  const raw = String(
+    process.env.GLOBAL_ADMIN_EMAILS ??
+      'jgaynor@pitchingcoachu.com,ahalverson@pitchingcoachu.com,jchipman@pitchingcoachu.com'
+  );
+  const values = raw
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  return Array.from(new Set(values));
+}
+
+function isGlobalAdminSession(session: PortalSession): boolean {
+  if (session.role !== 'admin') return false;
+  if (process.env.NODE_ENV !== 'production') return true;
+  const email = String(session.email ?? '').trim().toLowerCase();
+  if (!email) return false;
+  return parseGlobalAdminEmails().includes(email);
+}
+
 declare global {
   var __dashboardCustomTablesSchemaReady: boolean | undefined;
 }
@@ -161,10 +181,10 @@ async function getSession(): Promise<PortalSession | null> {
   };
 }
 
-function resolveCustomTableOrganizationScope(
+async function resolveCustomTableOrganizationScope(
   session: PortalSession,
   schoolCode: string
-): { primaryOrganizationId: number; organizationIds: number[] } {
+): Promise<{ primaryOrganizationId: number; organizationIds: number[] }> {
   const selectedSchool = String(schoolCode ?? '').trim().toUpperCase();
   const sessionOrgId = Number(session.organizationId ?? 0);
   const scopedOrganizationIdResolved = resolveSchoolScopedOrganizationId(session);
@@ -192,12 +212,20 @@ function resolveCustomTableOrganizationScope(
   // Keep PRO custom tables anchored to the signed-in org for all roles.
   // This prevents "missing table" behavior when school->org mapping changes.
   if (selectedSchool === 'PRO' && Number.isFinite(sessionOrgId) && sessionOrgId > 0) {
+    const staffOrgIds =
+      session.role === 'admin' || session.role === 'coach'
+        ? await listActiveStaffOrganizationIdsByEmail(session.email).catch(() => [])
+        : [];
     return {
       primaryOrganizationId: sessionOrgId,
-      organizationIds: Array.from(new Set([sessionOrgId, ...mappedOrgIds])),
+      organizationIds: Array.from(new Set([sessionOrgId, ...mappedOrgIds, ...staffOrgIds])),
     };
   }
-  return { primaryOrganizationId, organizationIds };
+  const staffOrgIds =
+    session.role === 'admin' || session.role === 'coach'
+      ? await listActiveStaffOrganizationIdsByEmail(session.email).catch(() => [])
+      : [];
+  return { primaryOrganizationId, organizationIds: Array.from(new Set([...organizationIds, ...staffOrgIds])) };
 }
 
 async function ensureDashboardCustomTableSchema(pool: Pool): Promise<void> {
@@ -242,10 +270,11 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const { organizationIds } = resolveCustomTableOrganizationScope(session, schoolCode);
+  const { organizationIds } = await resolveCustomTableOrganizationScope(session, schoolCode);
+  const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const hasUserScope = Number.isFinite(userId) && userId > 0;
-  if (!organizationIds.length) {
+  if (!organizationIds.length && !isGlobalAdmin) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
   const pool = getDbPool();
@@ -262,10 +291,10 @@ export async function GET() {
       `
       SELECT id, name, school_code, columns_json, created_at, updated_at
       FROM dashboard_custom_tables
-      WHERE (organization_id = ANY($1::int[]) OR ($3::boolean AND created_by_user_id = $4))
+      WHERE ($4::boolean OR organization_id = ANY($1::int[]) OR ($2::boolean AND created_by_user_id = $3))
       ORDER BY updated_at DESC, id DESC
       `,
-      [organizationIds, schoolCode, hasUserScope, userId]
+      [organizationIds, hasUserScope, userId, isGlobalAdmin]
     );
     const deduped = new Map<string, (typeof result.rows)[number]>();
     for (const row of result.rows) {
@@ -315,10 +344,15 @@ export async function POST(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const { primaryOrganizationId, organizationIds } = resolveCustomTableOrganizationScope(session, schoolCode);
+  const { primaryOrganizationId, organizationIds } = await resolveCustomTableOrganizationScope(session, schoolCode);
+  const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const hasUserScope = Number.isFinite(userId) && userId > 0;
-  if (!Number.isFinite(primaryOrganizationId) || primaryOrganizationId <= 0 || !organizationIds.length) {
+  if (
+    !Number.isFinite(primaryOrganizationId) ||
+    primaryOrganizationId <= 0 ||
+    (!organizationIds.length && !isGlobalAdmin)
+  ) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
   const pool = getDbPool();
@@ -350,10 +384,10 @@ export async function POST(request: Request) {
                columns_json = $4::jsonb,
                updated_at = NOW()
          WHERE id = $2
-           AND (organization_id = ANY($1::int[]) OR ($5::boolean AND created_by_user_id = $6))
+           AND ($7::boolean OR organization_id = ANY($1::int[]) OR ($5::boolean AND created_by_user_id = $6))
          RETURNING id, name, columns_json, created_at, updated_at
         `,
-        [organizationIds, id, name, payload, hasUserScope, userId]
+        [organizationIds, id, name, payload, hasUserScope, userId, isGlobalAdmin]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -370,7 +404,7 @@ export async function POST(request: Request) {
         WITH existing AS (
           SELECT id
           FROM dashboard_custom_tables
-          WHERE (organization_id = ANY($1::int[]) OR ($6::boolean AND created_by_user_id = $7))
+          WHERE ($9::boolean OR organization_id = ANY($1::int[]) OR ($6::boolean AND created_by_user_id = $7))
             AND school_code = $2
             AND lower(name) = lower($3)
           LIMIT 1
@@ -395,7 +429,7 @@ export async function POST(request: Request) {
         UNION ALL
         SELECT id, name, columns_json, created_at, updated_at FROM inserted
         `,
-        [organizationIds, schoolCode, name, payload, session.userId || null, hasUserScope, userId, primaryOrganizationId]
+        [organizationIds, schoolCode, name, payload, session.userId || null, hasUserScope, userId, primaryOrganizationId, isGlobalAdmin]
       );
     }
 
@@ -422,10 +456,11 @@ export async function DELETE(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
-  const { organizationIds } = resolveCustomTableOrganizationScope(session, schoolCode);
+  const { organizationIds } = await resolveCustomTableOrganizationScope(session, schoolCode);
+  const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const hasUserScope = Number.isFinite(userId) && userId > 0;
-  if (!organizationIds.length) {
+  if (!organizationIds.length && !isGlobalAdmin) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
   const url = new URL(request.url);
@@ -441,10 +476,10 @@ export async function DELETE(request: Request) {
       SELECT name
       FROM dashboard_custom_tables
       WHERE id = $1
-        AND (organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
+        AND ($5::boolean OR organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
       LIMIT 1
       `,
-      [id, organizationIds, hasUserScope, userId]
+      [id, organizationIds, hasUserScope, userId, isGlobalAdmin]
     );
     const existingName = String(protectedCheck.rows[0]?.name ?? '').trim();
     if (normalizedTableNameKey(existingName) === normalizedTableNameKey("Jared's Dashboard")) {
@@ -454,9 +489,9 @@ export async function DELETE(request: Request) {
       `
       DELETE FROM dashboard_custom_tables
       WHERE id = $1
-        AND (organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
+        AND ($5::boolean OR organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
       `,
-      [id, organizationIds, hasUserScope, userId]
+      [id, organizationIds, hasUserScope, userId, isGlobalAdmin]
     );
     return NextResponse.json({ ok: (result.rowCount ?? 0) > 0 });
   } catch (error) {
