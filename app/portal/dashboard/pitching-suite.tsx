@@ -5972,7 +5972,7 @@ export default function PitchingSuite({
                                           const key = String(rawValue).trim();
                                           const keyNorm = key.toLowerCase().replace(/[^a-z0-9]/g, '');
                                           const formattedNorm = formatted.toLowerCase().replace(/[^a-z0-9]/g, '');
-                                          const teamCode =
+                                          let teamCode =
                                             latestTeamByPitcher[key] ??
                                             latestTeamByPitcher[keyNorm] ??
                                             latestTeamByPitcher[formatted] ??
@@ -5980,7 +5980,19 @@ export default function PitchingSuite({
                                             filterTeamByPitcher[key] ??
                                             filterTeamByPitcher[keyNorm] ??
                                             filterTeamByPitcher[formatted] ??
-                                            filterTeamByPitcher[formattedNorm];
+                                            filterTeamByPitcher[formattedNorm] ??
+                                            '';
+                                          if (!teamCode && isPro && rowPitches.length) {
+                                            const rowPitchTeam = rowPitches.find((pitch) => {
+                                              const code = String((pitch as { pitcher_team_code?: string }).pitcher_team_code ?? '').trim();
+                                              return !!code;
+                                            });
+                                            teamCode = String(
+                                              (rowPitchTeam as { pitcher_team_code?: string } | undefined)?.pitcher_team_code ?? ''
+                                            )
+                                              .trim()
+                                              .toUpperCase();
+                                          }
                                           if (!teamCode || String(rawValue ?? '').trim().toLowerCase() === 'all') return formatted;
                                           const logoUrl = isPro ? getProTeamLogoUrl(teamCode) : '';
                                           if (!logoUrl) return formatted;

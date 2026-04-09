@@ -263,10 +263,6 @@ export async function GET() {
       SELECT id, name, school_code, columns_json, created_at, updated_at
       FROM dashboard_custom_tables
       WHERE (organization_id = ANY($1::int[]) OR ($3::boolean AND created_by_user_id = $4))
-        AND (
-          school_code = $2
-          OR created_by_user_id = $4
-        )
       ORDER BY updated_at DESC, id DESC
       `,
       [organizationIds, schoolCode, hasUserScope, userId]
