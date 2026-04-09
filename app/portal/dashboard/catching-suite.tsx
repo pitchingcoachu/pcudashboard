@@ -108,6 +108,22 @@ const RESULT_SHAPES: Record<string, 'circle' | 'ring' | 'triangle' | 'star' | 's
   Error: 'square',
   Undefined: 'ring',
 };
+const LEAGUE_SEASON_START = '2026-02-13';
+
+function toYmdNow(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function clampYmdToToday(value: string): string {
+  const v = (value || '').trim();
+  if (!v) return v;
+  const today = toYmdNow();
+  return v > today ? today : v;
+}
 
 function fmtDate(v: string | null | undefined): string {
   if (!v) return '-';
@@ -419,6 +435,16 @@ export default function CatchingSuite() {
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Catcher') : splitBy;
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
   const isPro = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
+  const isLeagueAllSelection = isLeague && teamType === 'All' && catcher === 'All';
+  const leagueWindowDays = useMemo(() => {
+    if (!isLeague || !dateStart || !dateEnd) return 0;
+    const start = new Date(`${dateStart}T00:00:00`);
+    const end = new Date(`${dateEnd}T00:00:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+    return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+  }, [isLeague, dateStart, dateEnd]);
+  const shouldForceLeagueFastTable =
+    isLeague && (page === 'Summary' || page === 'Leaderboard') && leagueWindowDays > 14 && isLeagueAllSelection;
   useEffect(() => {
     if (!isLeague && leaderboardViewBy !== 'Player') {
       setLeaderboardViewBy('Player');
@@ -456,10 +482,17 @@ export default function CatchingSuite() {
         autoFallbackAppliedRef.current = false;
         setFilters(payload);
         setTeamType(pickDefaultTeamType(payload.team_types, payload.school_code));
-        const latest = payload.max_date ?? payload.min_date ?? '';
-        if (latest) {
-          setDateStart(latest);
-          setDateEnd(latest);
+        const latest = clampYmdToToday(payload.max_date ?? payload.min_date ?? '');
+        const nextDate = latest || toYmdNow();
+        const minDate = payload.min_date ?? '';
+        const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
+        if (isLeagueSchool) {
+          const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
+          setDateStart(leagueStart);
+          setDateEnd(nextDate || leagueStart);
+        } else if (nextDate) {
+          setDateStart(nextDate);
+          setDateEnd(nextDate);
         }
       })
       .catch((err) => {
@@ -538,8 +571,9 @@ export default function CatchingSuite() {
     if (effectiveSplitBy) params.set('split_by', effectiveSplitBy);
     if (tableMode === 'Custom' && customCols.length) params.set('custom_columns', customCols.join(','));
     const shouldForceProFastLoad = isPro;
-    params.set('include_chart_points', shouldForceProFastLoad ? '0' : '1');
-    if (!shouldForceProFastLoad) {
+    const shouldIncludeCharts = !shouldForceProFastLoad && !shouldForceLeagueFastTable;
+    params.set('include_chart_points', shouldIncludeCharts ? '1' : '0');
+    if (shouldIncludeCharts) {
       params.set('chart_points_limit', isPro ? '500' : '800');
     }
 
@@ -1537,7 +1571,7 @@ export default function CatchingSuite() {
                                         ? Math.abs(c.value) / maxAbs
                                         : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
                                     const runValueBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                                    if (heatmapDisplayView !== 'Frequency' && densityNorm < 0.16) return null;
+                                    if (heatmapDisplayView !== 'Frequency' && densityNorm < 0.03) return null;
                                     if (heatmapDisplayView !== 'Run Values' && normalized < 0.06) return null;
                                     return <circle key={`catching-heat-blur-${c.x}-${c.y}`} cx={cx} cy={cy} r={radius} fill={fill} opacity={Math.max(0.3, runValueBoost * 1.25 * (heatmapDisplayView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))} />;
                                   })}
@@ -1558,7 +1592,7 @@ export default function CatchingSuite() {
                                       ? Math.abs(c.value) / maxAbs
                                       : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
                                   const runValueBoost = heatmapDisplayView === 'Run Values' ? Math.pow(normalized, 0.55) : normalized;
-                                  if (heatmapDisplayView !== 'Frequency' && densityNorm < 0.16) return null;
+                                  if (heatmapDisplayView !== 'Frequency' && densityNorm < 0.03) return null;
                                   if (heatmapDisplayView !== 'Run Values' && normalized < 0.06) return null;
                                   return (
                                     <circle

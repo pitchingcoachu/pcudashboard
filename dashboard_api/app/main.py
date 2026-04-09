@@ -1193,6 +1193,39 @@ def _in_zone_label(plate_side: Any, plate_height: Any) -> str:
     return "No"
 
 
+def _pro_zone_num_in_zone_flag(row: Dict[str, Any]) -> Optional[bool]:
+    zone_num = row.get("zone_num")
+    if _is_num(zone_num):
+        return 1 <= int(float(zone_num)) <= 9
+    return None
+
+
+def _pro_in_zone_yes(row: Dict[str, Any]) -> bool:
+    zone_flag = _pro_zone_num_in_zone_flag(row)
+    if zone_flag is not None:
+        return zone_flag
+    if not (_is_num(row.get("plate_side")) and _is_num(row.get("plate_height"))):
+        return False
+    ps = float(row.get("plate_side"))
+    ph = float(row.get("plate_height"))
+    return (ZONE_LEFT <= ps <= ZONE_RIGHT) and (ZONE_BOTTOM <= ph <= ZONE_TOP)
+
+
+def _pro_in_zone_bucket(row: Dict[str, Any]) -> str:
+    zone_flag = _pro_zone_num_in_zone_flag(row)
+    if zone_flag is not None:
+        return "Yes" if zone_flag else "No"
+    if not (_is_num(row.get("plate_side")) and _is_num(row.get("plate_height"))):
+        return "No"
+    ps = float(row.get("plate_side"))
+    ph = float(row.get("plate_height"))
+    if (ZONE_LEFT <= ps <= ZONE_RIGHT) and (ZONE_BOTTOM <= ph <= ZONE_TOP):
+        return "Yes"
+    if (-1.5 <= ps <= 1.5) and (COMP_PCT_BOTTOM <= ph <= COMP_PCT_TOP):
+        return "Competitive"
+    return "No"
+
+
 def _sq_to_rc(sq: int) -> tuple[int, int]:
     row = ((sq - 1) // 3) + 1
     col = ((sq - 1) % 3) + 1
@@ -3292,6 +3325,369 @@ def _normalize_team_code(value: str) -> str:
     return re.sub(r"[^A-Z0-9_]", "", (value or "").strip().upper())
 
 
+LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
+    "ABI_WIL": "Abilene Christian University",
+    "AIR_FOR": "United States Air Force Academy",
+    "AKR_ZIP": "University of Akron",
+    "ALA_CRI": "University of Alabama",
+    "ALA_HOR": "Alabama State University",
+    "ALA_LIO": "University of North Alabama",
+    "APP_MOU": "Appalachian State University",
+    "ARI_SUN": "Arizona State University",
+    "ARI_WIL": "University of Arizona",
+    "ARK_RAZ": "University of Arkansas",
+    "ARL_MAV": "The University of Texas at Arlington",
+    "ASU_RED": "Arkansas State University",
+    "AUB_UNI": "Auburn University at Montgomery",
+    "AUB_TIG": "Auburn University",
+    "AVE_MAR": "Ave Maria University",
+    "ALA_ANM": "Alabama A&M University",
+    "ARK_TEC": "Arkansas Tech University",
+    "AUS_GOV": "Austin Peay State University",
+    "AZU_PAC": "Azusa Pacific University",
+    "BEL_ABB": "Belmont Abbey College",
+    "BEL_KNI": "Bellarmine University",
+    "BIN_BEA": "Binghamton University",
+    "BRO_BEA": "Brown University",
+    "BUT_BUL": "Butler University",
+    "BAY_BEA": "Baylor University",
+    "BEL_BRU": "Belmont University",
+    "BGS_FAL": "Bowling Green State University",
+    "BAL_CAR": "Ball State University",
+    "BOC_EAG": "Boston College",
+    "BRY_BUL": "Bryant University",
+    "BUC_BIS": "Bucknell University",
+    "BYU_COU": "Brigham Young University",
+    "CAL_LAN": "California Baptist University",
+    "CAN_GRI": "Canisius University",
+    "CAR_EAG": "Carson-Newman University",
+    "CAL_FUL": "California State University, Fullerton",
+    "CAL_POL": "California Polytechnic State University, San Luis Obispo",
+    "CAT_IND": "Catawba College",
+    "CEN_MIC": "Central Michigan University",
+    "CLE_TIG": "Clemson University",
+    "CIN_BEA": "University of Cincinnati",
+    "CIT_BUL": "The Citadel",
+    "COA_CHA": "Coastal Carolina University",
+    "COL_LION": "Columbia University",
+    "CRE_BLU": "Creighton University",
+    "CSU_BAK": "California State University, Bakersfield",
+    "COW_COU": "College of the Canyons",
+    "CUM_PAT": "University of the Cumberlands",
+    "CYP_CHR": "Cypress College",
+    "DAL_PAT": "Dallas Baptist University",
+    "DAR_GRE": "Dartmouth College",
+    "DAV_UNI": "Davidson College",
+    "DAV_WIL": "University of California, Davis",
+    "DAY_FLY": "University of Dayton",
+    "DEL_BLU": "University of Delaware",
+    "DEL_STA": "Delaware State University",
+    "DIC_RED": "Dickinson College",
+    "DUK_BLU": "Duke University",
+    "ECU_PIR": "East Carolina University",
+    "EKU_COL": "Eastern Kentucky University",
+    "EIU_PAN": "Eastern Illinois University",
+    "ELO_PHO": "Elon University",
+    "EMO_HEN": "Emory & Henry University",
+    "EMU_EAG": "Eastern Michigan University",
+    "ETS_BUC": "East Tennessee State University",
+    "EVA_ACE": "University of Evansville",
+    "FDU_KNI": "Fairleigh Dickinson University",
+    "FAU_OWL": "Florida Atlantic University",
+    "FGCU": "Florida Gulf Coast University",
+    "FLA_GAT": "University of Florida",
+    "FLO_RAT": "Florida A&M University",
+    "FLO_PAN": "Florida International University",
+    "FLO_SEM": "Florida State University",
+    "FRE_BUL": "California State University, Fresno",
+    "FRE_PAC": "Fresno Pacific University",
+    "FOR_RAM": "Fordham University",
+    "GEO_BUL": "University of Georgia",
+    "GEO_EAG": "Georgia Southern University",
+    "GEO_FOX": "George Fox University",
+    "GEO_GWI": "George Washington University",
+    "GEO_HOY": "Georgetown University",
+    "GEO_PAT": "George Mason University",
+    "GEO_PAN": "Georgia State University",
+    "GRA_CAN": "Grand Canyon University",
+    "GRA_TIG": "Grambling State University",
+    "GIT_YEL": "Georgia Institute of Technology",
+    "GON_BUL": "Gonzaga University",
+    "HAR_CRI": "Harvard University",
+    "HAW_HIL": "University of Hawai'i at Hilo",
+    "HAW_PAC": "Hawai'i Pacific University",
+    "HAW_WAR": "University of Hawaii",
+    "HBU_HUS": "Houston Christian University",
+    "HOF_PRI": "Hofstra University",
+    "HIG_PAN": "High Point University",
+    "HOL_CRU": "College of the Holy Cross",
+    "HOO_COL": "Hood College",
+    "HOU_COU": "University of Houston",
+    "HUT_COM": "Hutchinson Community College",
+    "ILL_TEC": "Illinois Institute of Technology",
+    "ILL_ILL": "University of Illinois Urbana-Champaign",
+    "ILL_RED": "Illinois State University",
+    "ILL_WES": "Illinois Wesleyan University",
+    "IND_TEC": "Indiana Tech",
+    "IND_SYC": "Indiana State University",
+    "ION_GAE": "Iona University",
+    "IOW_CEN": "Iowa Central Community College",
+    "IOW_HAW": "University of Iowa",
+    "IU": "Indiana University Bloomington",
+    "JAC_TIG": "Jackson College",
+    "JAC_GAM": "Jackson State University",
+    "JMU_DUK": "James Madison University",
+    "KAN_JAY": "University of Kansas",
+    "KAN_WIL": "Kansas State University",
+    "KEN_WIL": "University of Kentucky",
+    "KEN_OWL": "Kennesaw State University",
+    "LAF_LEP": "Lafayette College",
+    "LAK_ERI21": "Lake Erie College",
+    "LEE_UNI": "Lee University",
+    "LEN_BEA": "Lenoir-Rhyne University",
+    "LEH_MOU": "Lehigh University",
+    "LIB_FLA": "Liberty University",
+    "LIN_MEM": "Lincoln Memorial University",
+    "LIP_BIS": "Lipscomb University",
+    "LIT_TRO": "University of Arkansas at Little Rock",
+    "LOC_HAV": "Lock Haven University",
+    "LON_LAN": "Longwood University",
+    "LOU_BUL": "University of Louisville",
+    "LOU_CAJ": "University of Louisiana at Lafayette",
+    "LOU_CAR": "University of Louisiana Monroe",
+    "LOY_LIO": "Loyola Marymount University",
+    "LOY_UNI": "Loyola University Chicago",
+    "LSU_TIG": "Louisiana State University",
+    "LYC_COL": "Lycoming College",
+    "MAI_BLA": "University of Maine",
+    "MAD_UNI": "Madonna University",
+    "MAN_JAS": "Manhattan University",
+    "MAR_TER": "University of Maryland",
+    "MER_BEA": "Mercer University",
+    "MER_UNI": "Mercer University",
+    "MEX_LOB": "University of New Mexico",
+    "MIA_HUR": "University of Miami",
+    "MIC_SPA": "Michigan State University",
+    "MIC_WOL": "University of Michigan",
+    "MIA_RED": "Miami University",
+    "MID_GEO": "Middle Georgia State University",
+    "MIN_GOL": "University of Minnesota Twin Cities",
+    "MIS_DEL": "Mississippi Delta Community College",
+    "MIS_GUL": "Mississippi Gulf Coast Community College",
+    "MIS_BEA": "Missouri State University",
+    "MIZ_TIG": "University of Missouri",
+    "MON_HAW": "Monmouth University",
+    "MOR_EAG": "Morehead State University",
+    "MSM_MTN": "Mount St. Mary's University",
+    "MTSU_BLU": "Middle Tennessee State University",
+    "MUR_RAC": "Murray State University",
+    "NAV_COL": "Navarro College",
+    "NAV_MID": "United States Naval Academy",
+    "NCB": "North Carolina A&T State University",
+    "NEB": "University of Nebraska Lincoln",
+    "NEV_WOL": "University of Nevada, Reno",
+    "NIA_EAG": "Niagara University",
+    "NJI_HIG": "New Jersey Institute of Technology",
+    "NMS_AGG": "New Mexico State University",
+    "NOR_AGG": "North Carolina A&T State University",
+    "NOR_BIS": "North Dakota State University",
+    "NOR_GRE": "North Greenville University",
+    "NOR_HUS": "Northeastern University",
+    "NOR_TAR": "University of North Carolina at Chapel Hill",
+    "NOV_SOU": "Nova Southeastern University",
+    "NIU_HUS": "Northern Illinois University",
+    "NOT_IRI": "University of Notre Dame",
+    "ODE_COL": "Odessa College",
+    "OHI_BOB": "Ohio University",
+    "OAK_GOL": "Oakland University",
+    "OKL_COW": "Oklahoma State University",
+    "OKL_SOO": "University of Oklahoma",
+    "OKL_WES": "Oklahoma Wesleyan University",
+    "OLD_MON": "Old Dominion University",
+    "OLE_REB": "University of Mississippi",
+    "ORA_GOL": "Oral Roberts University",
+    "ORE_BEA": "Oregon State University",
+    "ORE_DUC": "University of Oregon",
+    "OUR_LAD": "Our Lady of the Lake University",
+    "PAC_TIG": "University of the Pacific",
+    "PAC_LUT": "Pacific Lutheran University",
+    "PAR_JUN": "Paris Junior College",
+    "PEA_RIV": "Pearl River Community College",
+    "PEN_NIT": "Pennsylvania State University",
+    "PEN_QUA": "University of Pennsylvania",
+    "PEP_WAV": "Pepperdine University",
+    "PIT_PAN": "University of Pittsburgh",
+    "POI_LOM": "Point Loma Nazarene University",
+    "POR_PIL": "University of Portland",
+    "PRA_PAN": "Prairie View A&M University",
+    "PRE_BLH": "Presbyterian College",
+    "PRI_TIG": "Princeton University",
+    "PUR_BOI": "Purdue University",
+    "QUI_HAW": "Quincy University",
+    "QUI_BOB": "Quinnipiac University",
+    "QUN_RYL": "Queens University of Charlotte",
+    "RAD_HIG": "Radford University",
+    "REI_UNI": "Reinhardt University",
+    "RHO_RAM": "University of Rhode Island",
+    "RID_BRO": "Rider University",
+    "RIC_OWL": "Rice University",
+    "RIC_SPI": "University of Richmond",
+    "RUT_SCA": "Rutgers University New Brunswick",
+    "SAC_HOR": "California State University, Sacramento",
+    "SAL_REG": "Salve Regina University",
+    "SAL_JAG": "University of South Alabama",
+    "SAM_BEA": "Sam Houston State University",
+    "SAM_BUL": "Samford University",
+    "SAN_AZT": "San Diego State University",
+    "SAN_DON": "University of San Diego",
+    "SAN_GAU": "University of California, Santa Barbara",
+    "SAN_JAC": "San Jacinto College",
+    "SAN_TOR": "University of San Diego",
+    "SBU_SEA": "Stony Brook University",
+    "SEA_RED": "Seattle University",
+    "SET_HIL": "Seton Hill University",
+    "SET_PIR": "Seton Hall University",
+    "SIE_HEI": "Siena Heights University",
+    "SIE_SAI": "Siena College",
+    "SIU_SAL": "Southern Illinois University Carbondale",
+    "SLC_CCB": "Salt Lake Community College",
+    "SLU_BILL": "Saint Louis University",
+    "SOU_GAM": "University of South Carolina",
+    "SOU_JAG": "University of South Alabama",
+    "SOU_LIO": "Southeastern Louisiana University",
+    "SOU_MIS": "University of Southern Mississippi",
+    "SOU_ORE": "Southern Oregon University",
+    "SOU_RED": "Southeast Missouri State University",
+    "SOU_TRO": "University of Southern California",
+    "SOU_WES": "Southern Wesleyan University",
+    "STB_BON": "St. Bonaventure University",
+    "STJ_HAW": "Saint Joseph's University",
+    "STJ_RED": "St. John's University",
+    "STM_GAE": "Saint Mary's College of California",
+    "STM_RAT": "St. Mary's University",
+    "STU_BOB": "St. Thomas University",
+    "TCU_HFG": "Texas Christian University",
+    "TAM_SPA": "University of Tampa",
+    "TAR_TEX": "Tarleton State University",
+    "TEN_TEC": "Tennessee Technological University",
+    "TEN_WES": "Tennessee Wesleyan University",
+    "TEN_VOL": "University of Tennessee",
+    "TEX_A&M": "Texas A&M University",
+    "TEX_AGG": "Texas A&M University",
+    "TEX_BOB": "Texas State University",
+    "TEX_ISL": "Texas A&M University-Corpus Christi",
+    "TEX_LON": "The University of Texas at Austin",
+    "TEX_RAI": "Texas Tech University",
+    "TEX_TIG": "Texas Southern University",
+    "THO_MOR": "Thomas More University",
+    "TJC_APA": "Tyler Junior College",
+    "TOL_ROC": "University of Toledo",
+    "TOU_COL": "Tougaloo College",
+    "TOW_TIG": "Towson University",
+    "TRE_VAL": "Trevecca Nazarene University",
+    "TRI_UNI": "Trinity University",
+    "TRO_TRJ": "Troy University",
+    "TRU_MCC": "Truett McConnell University",
+    "TUF_UNI": "Tufts University",
+    "TUL_GRE": "Tulane University",
+    "TUS_PIO": "Tusculum University",
+    "TUS_TUS": "Tuskegee University",
+    "UAB_BLA": "The University of Alabama at Birmingham",
+    "UCO_HUS": "University of Connecticut",
+    "UCF_KNI": "University of Central Florida",
+    "UCLA": "University of California, Los Angeles",
+    "UIC_FLA": "University of Illinois Chicago",
+    "ULM_WAR": "University of Louisiana Monroe",
+    "UNC_PEM": "The University of North Carolina at Pembroke",
+    "UNC_SEA": "University of North Carolina Wilmington",
+    "UNC_SPA": "The University of North Carolina at Greensboro",
+    "UNL_REB": "University of Nevada, Las Vegas",
+    "UMA_BOS": "University of Massachusetts Boston",
+    "UNI_BRI": "University of Bridgeport",
+    "UMA_AMH": "University of Massachusetts Amherst",
+    "UMBC_RET": "University of Maryland, Baltimore County",
+    "UNO_MAV": "University of Nebraska Omaha",
+    "USC_BEA": "University of California, Berkeley",
+    "USC_PAC": "University of South Carolina Aiken",
+    "USC_UPS": "University of South Carolina Upstate",
+    "USF_BUL": "University of South Florida",
+    "UTM_SKY": "University of Tennessee at Martin",
+    "UTS_ROA": "The University of Texas at San Antonio",
+    "UTA_UTE": "The University of Texas at Austin",
+    "UTR_VAQ": "The University of Texas Rio Grande Valley",
+    "UWM_PAN": "University of Wisconsin-Milwaukee",
+    "VAL_BLA": "Valdosta State University",
+    "VAL_CRU": "Valparaiso University",
+    "VCU_RAM": "Virginia Commonwealth University",
+    "VIL_WIL": "Villanova University",
+    "VIR_CAV": "University of Virginia",
+    "VIR_KEY": "Virginia Military Institute",
+    "VIR_TEC": "Virginia Polytechnic Institute and State University",
+    "WAB_VAL": "Wabash Valley College",
+    "WAG_SEA": "Wagner College",
+    "WAK_DEA": "Wake Forest University",
+    "WAR_UNI1": "Warner University",
+    "WAS_COU": "Washington State University",
+    "WAS_HUS": "University of Washington",
+    "WCC": "West Coast Conference",
+    "WHI_PIR": "Whitworth University",
+    "WIC_SHO": "Wichita State University",
+    "WOF_TER": "Wofford College",
+    "WIN_EAG": "Winthrop University",
+    "WIU_LEA": "Western Illinois University",
+    "WRI_RAI": "Wright State University",
+    "XAV_MUS": "Xavier University",
+    "WM_TRI": "William & Mary",
+    "YAL_BUL": "Yale University",
+    "YSU_PEN": "Youngstown State University",
+}
+LEAGUE_TEAM_CODE_BY_NAME = {value.lower(): code for code, value in LEAGUE_TEAM_NAME_BY_CODE.items()}
+
+
+def _league_team_label(team_code: str) -> str:
+    code = _normalize_team_code(team_code)
+    if not code:
+        return ""
+    return LEAGUE_TEAM_NAME_BY_CODE.get(code, code)
+
+
+def _league_team_code_from_value(team_value: Optional[str]) -> str:
+    raw = str(team_value or "").strip()
+    if not raw:
+        return ""
+    if raw.lower() == "all":
+        return "ALL"
+    as_code = _normalize_team_code(raw)
+    if as_code in LEAGUE_TEAM_NAME_BY_CODE:
+        return as_code
+    by_name = LEAGUE_TEAM_CODE_BY_NAME.get(raw.lower())
+    if by_name:
+        return by_name
+    return as_code
+
+
+def _league_team_types_from_codes(team_codes: List[str]) -> List[str]:
+    out: List[str] = ["All"]
+    seen: set[str] = {"All"}
+    for code in team_codes:
+        label = _league_team_label(code)
+        if not label or label in seen:
+            continue
+        out.append(label)
+        seen.add(label)
+    return out
+
+
+def _league_add_labeled_team_keys(by_team_code: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    out: Dict[str, List[str]] = {}
+    for team_code, names in by_team_code.items():
+        code = _normalize_team_code(team_code)
+        label = _league_team_label(code)
+        out[code] = names
+        out[label] = names
+    return out
+
+
 def _filter_pitching_rows_by_team_type(
     rows: List[Dict[str, Any]],
     team_type_value: str,
@@ -3303,7 +3699,7 @@ def _filter_pitching_rows_by_team_type(
     if team_type_value in {"", "All"}:
         return rows
     if school_code == "LEAGUE":
-        selected_code = _normalize_team_code(team_type_value)
+        selected_code = _normalize_team_code(_league_team_code_from_value(team_type_value))
         if not selected_code:
             return rows
         return [
@@ -5140,7 +5536,7 @@ def _try_pitching_overview_daily_rollup(
     if batter_side_norm and batter_side_norm.lower() != "all":
         where_parts.append("batterside_norm = %(batterside_norm)s::text")
         params["batterside_norm"] = batter_side_norm
-    team_type_norm = _normalize_team_code(team_type or "")
+    team_type_norm = _normalize_team_code(_league_team_code_from_value(team_type or ""))
     if team_type_norm and team_type_norm != "ALL":
         where_parts.append("pitcher_team_norm = %(team_type_norm)s::text")
         params["team_type_norm"] = team_type_norm
@@ -6254,10 +6650,6 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                   COUNT(hb)::int AS hb_n,
                   SUM(CASE
                         WHEN zone_num BETWEEN 1 AND 9 THEN 1
-                        WHEN zone_num IS NULL
-                             AND plate_side BETWEEN %(zone_left)s::double precision AND %(zone_right)s::double precision
-                             AND plate_height BETWEEN %(zone_bottom)s::double precision AND %(zone_top)s::double precision
-                          THEN 1
                         ELSE 0
                       END)::int AS in_zone_n,
                   SUM(CASE WHEN plate_side IS NOT NULL AND plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
@@ -6566,8 +6958,6 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                   COALESCE(SUM(hb), 0.0)::double precision AS hb_sum,
                   COUNT(hb)::int AS hb_n,
                   SUM(CASE WHEN zone_num BETWEEN 1 AND 9 THEN 1
-                           WHEN zone_num IS NULL AND plate_side BETWEEN %(zone_left)s::double precision AND %(zone_right)s::double precision
-                                AND plate_height BETWEEN %(zone_bottom)s::double precision AND %(zone_top)s::double precision THEN 1
                            ELSE 0 END)::int AS in_zone_n,
                   SUM(CASE WHEN plate_side IS NOT NULL AND plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
                   SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
@@ -6731,6 +7121,15 @@ def _try_pro_pitching_overview_rollup(
     include_trend_rows: bool,
 ) -> Optional[PitchingOverviewResponse]:
     if school_code != "PRO":
+        return None
+    today = date.today()
+    includes_today = (
+        (start_date is None or start_date <= today)
+        and (end_date is None or end_date >= today)
+    )
+    if includes_today:
+        # Rollup tables are Neon-backed snapshots and can lag during active MLB games.
+        # When the window includes today, force the raw path so live StatsAPI rows merge in.
         return None
     if include_chart_points or include_row_pitches or include_trend_rows:
         return None
@@ -8434,10 +8833,12 @@ def _pro_fetch_api_live_tail_rows(
     if isinstance(min_date_exclusive, date):
         if min_date_exclusive >= today:
             # DB may contain partial same-day rows; still allow live API merge for today.
+            # Do not advance to next_day here, or we'll exclude today entirely.
             w0 = today
-        next_day = min_date_exclusive + timedelta(days=1)
-        if next_day > w0:
-            w0 = next_day
+        else:
+            next_day = min_date_exclusive + timedelta(days=1)
+            if next_day > w0:
+                w0 = next_day
         if w0 > w1:
             return []
     level_norm = _pro_level_norm(level_filter)
@@ -9868,24 +10269,7 @@ def _pro_pitching_overview(
 
     if selected_in_zone:
         allowed_in_zone = set(selected_in_zone)
-
-        def _in_zone_bucket(row: Dict[str, Any]) -> Optional[str]:
-            zone_num = row.get("zone_num")
-            in_zone = _is_num(zone_num) and 1 <= int(float(zone_num)) <= 9
-            if not (_is_num(row.get("plate_side")) and _is_num(row.get("plate_height"))):
-                if in_zone:
-                    return "Yes"
-                return "No"
-            ps = float(row["plate_side"])
-            ph = float(row["plate_height"])
-            comp_zone = (-1.5 <= ps <= 1.5) and (COMP_PCT_BOTTOM <= ph <= COMP_PCT_TOP)
-            if in_zone:
-                return "Yes"
-            if comp_zone:
-                return "Competitive"
-            return "No"
-
-        rows = [r for r in rows if (_in_zone_bucket(r) in allowed_in_zone)]
+        rows = [r for r in rows if (_pro_in_zone_bucket(r) in allowed_in_zone)]
 
     if qp_locations and qp_locations not in {"All", ""}:
         want_qp = qp_locations == "Yes"
@@ -9938,11 +10322,7 @@ def _pro_pitching_overview(
     hb_vals = [float(r["hb"]) for r in rows if _is_num(r.get("hb"))]
 
     loc_rows = [r for r in rows if _is_num(r.get("plate_side")) and _is_num(r.get("plate_height"))]
-    in_zone_n = sum(
-        1
-        for r in rows
-        if (_is_num(r.get("zone_num")) and 1 <= int(float(r.get("zone_num"))) <= 9)
-    )
+    in_zone_n = sum(1 for r in rows if _pro_in_zone_yes(r))
     strike_calls = {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
     strike_n = sum(1 for r in rows if str(r.get("pitch_call") or "") in strike_calls)
     swing_calls = {"StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
@@ -10407,19 +10787,7 @@ def _pro_pitching_overview(
         row_obj["K%"] = f"{round((100.0 * k_val) / bf_val, 1)}%" if bf_val > 0 else None
         row_obj["BB%"] = f"{round((100.0 * bb_val) / bf_val, 1)}%" if bf_val > 0 else None
         row_obj["Strike%"] = f"{round((100.0 * strike_num) / total_pitches_val, 1)}%" if total_pitches_val > 0 else None
-        in_zone_count = sum(
-            1
-            for r in group_rows
-            if (
-                (_is_num(r.get("zone_num")) and 1 <= int(float(r.get("zone_num"))) <= 9)
-                or (
-                    _is_num(r.get("plate_side"))
-                    and _is_num(r.get("plate_height"))
-                    and (ZONE_LEFT <= float(r.get("plate_side")) <= ZONE_RIGHT)
-                    and (ZONE_BOTTOM <= float(r.get("plate_height")) <= ZONE_TOP)
-                )
-            )
-        )
+        in_zone_count = sum(1 for r in group_rows if _pro_in_zone_yes(r))
         row_obj["InZone%"] = f"{round((100.0 * in_zone_count) / total_pitches_val, 1)}%" if total_pitches_val > 0 else None
         row_obj["Swing%"] = f"{round((100.0 * swing_num) / total_pitches_val, 1)}%" if total_pitches_val > 0 else None
         row_obj["Whiff%"] = f"{round((100.0 * whiff_num) / swing_num, 1)}%" if swing_num > 0 else None
@@ -12021,7 +12389,7 @@ def pitching_filters(
                     {"school_code": school_code},
                 )
                 league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
-                team_types = ["All", *league_team_codes]
+                team_types = _league_team_types_from_codes(league_team_codes)
 
                 cur.execute(
                     """
@@ -12043,6 +12411,7 @@ def pitching_filters(
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
+                pitchers_by_team_code = _league_add_labeled_team_keys(pitchers_by_team_code)
 
                 cur.execute(
                     """
@@ -12064,6 +12433,7 @@ def pitching_filters(
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
+                opp_hitters_by_team_code = _league_add_labeled_team_keys(opp_hitters_by_team_code)
             else:
                 cur.execute(
                     """
@@ -12123,17 +12493,19 @@ def pitching_filters(
                 if school_code == "LEAGUE":
                     cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
                     league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
-                    team_types = ["All", *league_team_codes]
+                    team_types = _league_team_types_from_codes(league_team_codes)
                     cur.execute(_league_name_map_sql_expr("pitcherteam", "pitcher"), {"school_code": school_code})
                     pitchers_by_team_code = {
                         str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                         for row in cur.fetchall()
                     }
+                    pitchers_by_team_code = _league_add_labeled_team_keys(pitchers_by_team_code)
                     cur.execute(_league_name_map_sql_expr("pitcherteam", "batter"), {"school_code": school_code})
                     opp_hitters_by_team_code = {
                         str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                         for row in cur.fetchall()
                     }
+                    opp_hitters_by_team_code = _league_add_labeled_team_keys(opp_hitters_by_team_code)
                 else:
                     team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
@@ -15028,17 +15400,19 @@ def hitting_filters(
             if school_code == "LEAGUE":
                 cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
                 league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
-                team_types = ["All", *league_team_codes]
+                team_types = _league_team_types_from_codes(league_team_codes)
                 cur.execute(_league_name_map_sql_expr("batterteam", "batter"), {"school_code": school_code})
                 hitters_by_team_code = {
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
+                hitters_by_team_code = _league_add_labeled_team_keys(hitters_by_team_code)
                 cur.execute(_league_name_map_sql_expr("batterteam", "pitcher"), {"school_code": school_code})
                 opp_pitchers_by_team_code = {
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
+                opp_pitchers_by_team_code = _league_add_labeled_team_keys(opp_pitchers_by_team_code)
             else:
                 team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
@@ -15169,6 +15543,63 @@ def hitting_overview(
     mode_map = {"Results": "Hitting Results", "Swing Decisions": "Swing Decisions", "Batted Ball Data": "Batted Ball Data", "Custom": "Custom"}
     table_mode_mapped = mode_map.get(mode_raw, "Results")
     split_by = (split_by or "Pitch Types").strip() or "Pitch Types"
+    selected_hitter_values = _parse_name_list(hitter)
+    selected_opp_pitcher_values = _parse_name_list(opp_pitcher)
+    league_rollup_candidate = False
+    if school_code == "LEAGUE":
+        span_days: Optional[int] = None
+        if start_date and end_date:
+            span_days = max(0, (end_date - start_date).days + 1)
+        selected_in_zone = [v for v in selected_in_zone if str(v or "").strip() and str(v).strip().lower() != "all"]
+        selected_zone_locations = [v for v in selected_zone_locations if str(v or "").strip() and str(v).strip().lower() != "all"]
+        selected_pitch_results = [v for v in selected_pitch_results if str(v or "").strip() and str(v).strip().lower() != "all"]
+        selected_count_filters = [v for v in selected_count_filters if str(v or "").strip() and str(v).strip().lower() != "all"]
+        selected_after_count_filters = [v for v in selected_after_count_filters if str(v or "").strip() and str(v).strip().lower() != "all"]
+        selected_bip_results = [v for v in selected_bip_results if str(v or "").strip() and str(v).strip().lower() != "all"]
+        league_all_selection = (
+            (not selected_hitter_keys)
+            and (not selected_opp_pitcher_keys)
+            and (not team_type_value or str(team_type_value).strip().lower() == "all")
+        )
+        large_window = bool(span_days and span_days > 14)
+        league_rollup_candidate = large_window and league_all_selection and (not chart_only)
+        if league_rollup_candidate:
+            include_chart_points = False
+            selected_in_zone = []
+            selected_zone_locations = []
+            selected_pitch_results = []
+            selected_count_filters = []
+            selected_after_count_filters = []
+            selected_bip_results = []
+            parsed_velo_min = None
+            parsed_velo_max = None
+            parsed_ivb_min = None
+            parsed_ivb_max = None
+            parsed_hb_min = None
+            parsed_hb_max = None
+            parsed_pc_min = None
+            parsed_pc_max = None
+            if mode_raw not in {"Results", "Batted Ball Data"}:
+                mode_raw = "Results"
+            table_mode_mapped = mode_map.get(mode_raw, "Hitting Results")
+            if split_by not in {
+                "All",
+                "Pitch Types",
+                "Pitcher Hand",
+                "Batter Hand",
+                "Count",
+                "After Count",
+                "Zone Location",
+                "Times Through Order",
+                "Inning",
+                "Pitch Count",
+                "Velocity",
+                "IVB",
+                "HB",
+                "Pitcher",
+                "Catcher",
+            }:
+                split_by = "Pitch Types"
     overview_cache_key = _overview_cache_key(
         "hitting_overview",
         school_code,
@@ -15242,9 +15673,9 @@ def hitting_overview(
             end_date=end_date,
             level_filter=level_filter,
             team_type_value=team_type_value,
-            selected_hitter_values=_parse_name_list(hitter),
+            selected_hitter_values=selected_hitter_values,
             selected_hitter_keys=selected_hitter_keys,
-            selected_opp_pitcher_values=_parse_name_list(opp_pitcher),
+            selected_opp_pitcher_values=selected_opp_pitcher_values,
             selected_opp_pitcher_keys=selected_opp_pitcher_keys,
             hand=hand,
             batter_side=batter_side,
@@ -15289,9 +15720,9 @@ def hitting_overview(
             level_filter=level_filter,
             session_type_filter=session_type_filter,
             team_type_value=team_type_value,
-            selected_hitter_values=_parse_name_list(hitter),
+            selected_hitter_values=selected_hitter_values,
             selected_hitter_keys=selected_hitter_keys,
-            selected_opp_pitcher_values=_parse_name_list(opp_pitcher),
+            selected_opp_pitcher_values=selected_opp_pitcher_values,
             selected_opp_pitcher_keys=selected_opp_pitcher_keys,
             hand=hand,
             batter_side=batter_side,
@@ -15335,6 +15766,80 @@ def hitting_overview(
             total_pitches=int(response_payload.get("total_pitches") or 0),
         )
         return response_payload
+    if school_code == "LEAGUE" and league_rollup_candidate:
+        rollup_fast_response = _try_pitching_overview_daily_rollup(
+            school_code=school_code,
+            start_date=start_date,
+            end_date=end_date,
+            selected_pitchers=[],
+            selected_pitcher_keys=[],
+            team_type=team_type_value,
+            selected_opp_hitters=[],
+            with_video=None,
+            hand=hand,
+            batter_side=batter_side,
+            session_type_filter=session_type_filter,
+            stuff_level=None,
+            stuff_base=None,
+            table_mode="Batted Ball Data" if mode_raw == "Batted Ball Data" else "Results",
+            split_by=split_by,
+            selected_in_zone=[],
+            qp_locations=None,
+            selected_pitch_types=selected_pitch_types,
+            selected_zone_locations=[],
+            selected_pitch_results=[],
+            selected_count_filters=[],
+            selected_after_count_filters=[],
+            parsed_velo_min=None,
+            parsed_velo_max=None,
+            parsed_ivb_min=None,
+            parsed_ivb_max=None,
+            parsed_hb_min=None,
+            parsed_hb_max=None,
+            parsed_pc_min=None,
+            parsed_pc_max=None,
+            include_chart_points=False,
+            chart_points_limit=None,
+            include_row_pitches=False,
+            include_trend_rows=False,
+        )
+        if rollup_fast_response is not None:
+            rollup_payload: Dict[str, Any] = {
+                "school_code": school_code,
+                "hitter": selected_hitter_values[0] if len(selected_hitter_values) == 1 else None,
+                "opp_pitcher": selected_opp_pitcher_values[0] if len(selected_opp_pitcher_values) == 1 else None,
+                "hand": hand or None,
+                "batter_side": batter_side or None,
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+                "total_pitches": int(rollup_fast_response.total_pitches or 0),
+                "selected_pitch_types": selected_pitch_types,
+                "selected_zone_locations": selected_zone_locations,
+                "selected_pitch_results": selected_pitch_results,
+                "selected_count_filters": selected_count_filters,
+                "selected_after_count_filters": selected_after_count_filters,
+                "selected_bip_results": selected_bip_results,
+                "table_mode": mode_raw,
+                "split_by": split_by,
+                "pitch_type_legend": [str(p.pitch_type) for p in (rollup_fast_response.pitch_types or []) if str(getattr(p, "pitch_type", "")).strip()],
+                "table_columns": rollup_fast_response.table_columns or [],
+                "available_table_columns": rollup_fast_response.available_table_columns or ALL_TABLE_COLUMNS,
+                "table_rows": rollup_fast_response.table_rows or [],
+                "chart_points": [],
+                "heatmap_points": [],
+            }
+            _overview_cache_set(overview_cache_key, rollup_payload)
+            _perf_log(
+                "hitting_overview",
+                school_code,
+                "league_rollup_fast",
+                _perf_started,
+                cache_hit=False,
+                chart_only=chart_only,
+                include_chart_points=include_chart_points,
+                total_pitches=int(rollup_payload.get("total_pitches") or 0),
+            )
+            return rollup_payload
     need_prev_counts = bool(selected_after_count_filters) or (split_by == "After Count")
     need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
 
@@ -15528,7 +16033,7 @@ def hitting_overview(
             continue
         if use_team_filter:
             if school_code == "LEAGUE":
-                selected_code = _normalize_team_code(team_type_value)
+                selected_code = _normalize_team_code(_league_team_code_from_value(team_type_value))
                 row_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
                 if not selected_code or row_code != selected_code:
                     continue
@@ -16044,12 +16549,13 @@ def catching_filters(
             if school_code == "LEAGUE":
                 cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
                 league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
-                team_types = ["All", *league_team_codes]
+                team_types = _league_team_types_from_codes(league_team_codes)
                 cur.execute(_league_name_map_sql_expr("pitcherteam", "catcher"), {"school_code": school_code})
                 catchers_by_team_code = {
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
+                catchers_by_team_code = _league_add_labeled_team_keys(catchers_by_team_code)
             else:
                 team_types = ["All", school_code, "Opponents", "Campers"]
     except Exception as exc:
@@ -16112,7 +16618,8 @@ def catching_overview(
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be <= end_date.")
 
-    selected_catcher_keys = _name_filter_keys(_parse_name_list(catcher))
+    selected_catcher_values = _parse_name_list(catcher)
+    selected_catcher_keys = _name_filter_keys(selected_catcher_values)
     team_type_value = (team_type or "").strip() or "All"
     use_team_filter = team_type_value not in {"", "All"}
     selected_in_zone = _parse_csv_list(in_zone)
@@ -16140,6 +16647,58 @@ def catching_overview(
     split_by_raw = (split_by or "Pitch Types").strip() or "Pitch Types"
     if chart_only:
         include_chart_points = True
+    league_rollup_candidate = False
+    if school_code == "LEAGUE":
+        span_days: Optional[int] = None
+        if start_date and end_date:
+            span_days = max(0, (end_date - start_date).days + 1)
+        selected_in_zone = [v for v in selected_in_zone if str(v or "").strip() and str(v).strip().lower() != "all"]
+        selected_zone_locations = [v for v in selected_zone_locations if str(v or "").strip() and str(v).strip().lower() != "all"]
+        selected_pitch_results = [v for v in selected_pitch_results if str(v or "").strip() and str(v).strip().lower() != "all"]
+        selected_count_filters = [v for v in selected_count_filters if str(v or "").strip() and str(v).strip().lower() != "all"]
+        selected_after_count_filters = [v for v in selected_after_count_filters if str(v or "").strip() and str(v).strip().lower() != "all"]
+        selected_hm_results = [v for v in selected_hm_results if str(v or "").strip() and str(v).strip().lower() != "all"]
+        league_all_selection = (
+            (not selected_catcher_keys)
+            and (not team_type_value or str(team_type_value).strip().lower() == "all")
+        )
+        large_window = bool(span_days and span_days > 14)
+        league_rollup_candidate = large_window and league_all_selection and (not chart_only)
+        if league_rollup_candidate:
+            include_chart_points = False
+            selected_in_zone = []
+            selected_zone_locations = []
+            selected_pitch_results = []
+            selected_count_filters = []
+            selected_after_count_filters = []
+            selected_hm_results = []
+            parsed_velo_min = None
+            parsed_velo_max = None
+            parsed_pc_min = None
+            parsed_pc_max = None
+            if mode_raw not in {"Results", "Batted Ball Data"}:
+                mode_raw = "Results"
+            if split_by_raw not in {
+                "All",
+                "Pitch Types",
+                "Pitcher",
+                "Batter",
+                "Catcher",
+                "Pitcher Hand",
+                "Batter Hand",
+                "Team",
+                "Pitcher Team",
+                "Count",
+                "After Count",
+                "Zone Location",
+                "Times Through Order",
+                "Inning",
+                "Pitch Count",
+                "Velocity",
+                "IVB",
+                "HB",
+            }:
+                split_by_raw = "Pitch Types"
     overview_cache_key = _overview_cache_key(
         "catching_overview",
         school_code,
@@ -16180,6 +16739,66 @@ def catching_overview(
     cached_overview = _overview_cache_get(overview_cache_key)
     if cached_overview is not None:
         return cached_overview
+    if school_code == "LEAGUE" and league_rollup_candidate:
+        rollup_fast_response = _try_pitching_overview_daily_rollup(
+            school_code=school_code,
+            start_date=start_date,
+            end_date=end_date,
+            selected_pitchers=[],
+            selected_pitcher_keys=[],
+            team_type=team_type_value,
+            selected_opp_hitters=[],
+            with_video=None,
+            hand=hand,
+            batter_side=batter_side,
+            session_type_filter=session_type_filter,
+            stuff_level=None,
+            stuff_base=None,
+            table_mode="Batted Ball Data" if mode_raw == "Batted Ball Data" else "Results",
+            split_by=split_by_raw,
+            selected_in_zone=[],
+            qp_locations=None,
+            selected_pitch_types=selected_pitch_types,
+            selected_zone_locations=[],
+            selected_pitch_results=[],
+            selected_count_filters=[],
+            selected_after_count_filters=[],
+            parsed_velo_min=None,
+            parsed_velo_max=None,
+            parsed_ivb_min=None,
+            parsed_ivb_max=None,
+            parsed_hb_min=None,
+            parsed_hb_max=None,
+            parsed_pc_min=None,
+            parsed_pc_max=None,
+            include_chart_points=False,
+            chart_points_limit=None,
+            include_row_pitches=False,
+            include_trend_rows=False,
+        )
+        if rollup_fast_response is not None:
+            rollup_payload: Dict[str, Any] = {
+                "school_code": school_code,
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+                "session_type": session_type or None,
+                "catcher": selected_catcher_values[0] if len(selected_catcher_values) == 1 else None,
+                "hand": hand or None,
+                "batter_side": batter_side or None,
+                "total_pitches": int(rollup_fast_response.total_pitches or 0),
+                "table_mode": mode_raw,
+                "split_by": split_by_raw,
+                "selected_count_filters": selected_count_filters,
+                "selected_after_count_filters": selected_after_count_filters,
+                "table_columns": rollup_fast_response.table_columns or [],
+                "available_table_columns": rollup_fast_response.available_table_columns or ALL_TABLE_COLUMNS,
+                "table_rows": rollup_fast_response.table_rows or [],
+                "pitch_type_legend": [str(p.pitch_type) for p in (rollup_fast_response.pitch_types or []) if str(getattr(p, "pitch_type", "")).strip()],
+                "chart_points": [],
+                "heatmap_points": [],
+            }
+            _overview_cache_set(overview_cache_key, rollup_payload)
+            return rollup_payload
     need_prev_counts = bool(selected_after_count_filters) or (split_by_raw == "After Count")
     need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
 
@@ -16464,7 +17083,7 @@ def catching_overview(
     for row in rows:
         if use_team_filter:
             if school_code == "LEAGUE":
-                selected_code = _normalize_team_code(team_type_value)
+                selected_code = _normalize_team_code(_league_team_code_from_value(team_type_value))
                 row_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
                 if not selected_code or row_code != selected_code:
                     continue
@@ -17013,5 +17632,3 @@ def pitching_pitch_edit_count(school_code: str = Query(..., min_length=2, max_le
         raise HTTPException(status_code=500, detail=f"pitch edit count failed: {exc}") from exc
 
     return PitchEditCountResponse(school_code=school_code, edit_count=edit_count)
-    if e in {"truncated_pa", "truncatedpa"}:
-        return ""

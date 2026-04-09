@@ -41,8 +41,9 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
   const isLeague = String(selectedSchoolCode || '').toUpperCase() === 'LEAGUE';
   const isPro = String(selectedSchoolCode || '').toUpperCase() === 'PRO';
   const suiteOptions: SuiteName[] = useMemo(() => {
-    const base: SuiteName[] = ['Pitching', 'Hitting', 'Custom Reports', 'Comparison Tool'];
+    const base: SuiteName[] = ['Pitching', 'Hitting'];
     if (!isPro) base.push('Catching');
+    base.push('Custom Reports', 'Comparison Tool');
     if (!isLeague) base.push('Player Plans');
     if (!isLeague && canAccessPlayerNotes) base.push('Player Notes');
     if (!isLeague) base.push('Stuff+ Calculator');

@@ -4288,7 +4288,7 @@ export default function PitchingSuite({
                   const isSwingRateView = heatMetricView === 'Swing Rate';
                   const isGbRateView = heatMetricView === 'GB Rate';
                   const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
-                  if (densityNorm < 0.16) return null;
+                  if (densityNorm < 0.03) return null;
                   return (
                     <circle
                       key={`blur-${c.x}-${c.y}`}
@@ -4335,7 +4335,7 @@ export default function PitchingSuite({
                 const isSwingRateView = heatMetricView === 'Swing Rate';
                 const isGbRateView = heatMetricView === 'GB Rate';
                 const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
-                if (densityNorm < 0.16) return null;
+                if (densityNorm < 0.03) return null;
                 return (
                   <circle
                     key={`core-${c.x}-${c.y}`}
@@ -4613,7 +4613,7 @@ export default function PitchingSuite({
                   const isSwingRateView = heatMetricView === 'Swing Rate';
                   const isGbRateView = heatMetricView === 'GB Rate';
                   const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
-                  if (densityNorm < 0.16) return null;
+                  if (densityNorm < 0.03) return null;
                   return (
                     <circle
                       key={`hp-blur-${c.x}-${c.y}`}
@@ -4664,7 +4664,7 @@ export default function PitchingSuite({
                 const isSwingRateView = heatMetricView === 'Swing Rate';
                 const isGbRateView = heatMetricView === 'GB Rate';
                 const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
-                if (densityNorm < 0.16) return null;
+                if (densityNorm < 0.03) return null;
                 return (
                   <circle
                     key={`hp-core-${c.x}-${c.y}`}

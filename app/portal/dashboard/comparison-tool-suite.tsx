@@ -34,6 +34,9 @@ type FiltersPayload = {
   pitchers?: string[];
   hitters?: string[];
   catchers?: string[];
+  pitchers_by_team_code?: Record<string, string[]>;
+  hitters_by_team_code?: Record<string, string[]>;
+  catchers_by_team_code?: Record<string, string[]>;
   pitch_types?: string[];
   pitch_result_options?: string[];
   count_options?: string[];
@@ -92,6 +95,13 @@ type OverviewPayload = {
 };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
 type CellColors = { bg: string; text: string };
+type CustomTableConfig = {
+  id: number;
+  name: string;
+  columns: string[];
+  createdAt?: string;
+  updatedAt?: string;
+};
 
 type PaneState = {
   domain: Domain;
@@ -100,16 +110,16 @@ type PaneState = {
   velocityMode: VelocityMode;
   releaseView: ReleaseView;
   movementView: MovementView;
-  player: string;
+  player: string[];
   startDate: string;
   endDate: string;
   sessionType: string;
   level: string;
   teamType: string;
-  pitchType: string;
-  pitchResult: string;
-  countFilter: string;
-  afterCountFilter: string;
+  pitchType: string[];
+  pitchResult: string[];
+  countFilter: string[];
+  afterCountFilter: string[];
   pitcherHand: string;
   batterHand: string;
   tableMode: string;
@@ -117,6 +127,8 @@ type PaneState = {
   sortColumn: string;
   sortDirection: SortDirection;
 };
+
+const LEAGUE_SEASON_START = '2026-02-13';
 
 const DOMAIN_TABLES: Record<Domain, string[]> = {
   Pitching: ['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Raw Data'],
@@ -516,16 +528,16 @@ function emptyPaneState(): PaneState {
     velocityMode: 'Velocity Chart (Game/Inning)',
     releaseView: 'Averages and Pitches',
     movementView: 'Averages and Pitches',
-    player: 'All',
+    player: ['All'],
     startDate: '',
     endDate: '',
     sessionType: 'All',
     level: 'MLB',
     teamType: 'All',
-    pitchType: 'All',
-    pitchResult: 'All',
-    countFilter: 'All',
-    afterCountFilter: 'All',
+    pitchType: ['All'],
+    pitchResult: ['All'],
+    countFilter: ['All'],
+    afterCountFilter: ['All'],
     pitcherHand: 'All',
     batterHand: 'All',
     tableMode: defaultTableMode('Pitching'),
@@ -533,6 +545,14 @@ function emptyPaneState(): PaneState {
     sortColumn: '',
     sortDirection: 'desc',
   };
+}
+function normalizeMultiSelect(values: string[]): string[] {
+  const unique = Array.from(new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean)));
+  if (!unique.length || unique.includes('All')) return ['All'];
+  return unique.filter((value) => value !== 'All');
+}
+function selectedMultiValues(values: string[]): string[] {
+  return normalizeMultiSelect(values).filter((value) => value !== 'All');
 }
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const rgb = (r: number, g: number, b: number) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
@@ -793,6 +813,135 @@ function ControlSelect({ label, value, options, onChange }: { label: string; val
     </label>
   );
 }
+function SearchableSingleSelect({
+  options,
+  value,
+  onChange,
+  placeholder,
+}: {
+  options: OptionItem[];
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onDocClick = (event: MouseEvent) => {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const selected = options.find((option) => option.value === value);
+  const filtered = options.filter((option) => option.label.toLowerCase().includes(query.toLowerCase()));
+
+  return (
+    <div className="portal-search-select" ref={rootRef}>
+      <button type="button" className="portal-search-select-trigger" onClick={() => setOpen((current) => !current)}>
+        {selected?.label ?? placeholder ?? 'Select'}
+      </button>
+      {open ? (
+        <div className="portal-search-select-menu">
+          <input
+            className="portal-search-select-input"
+            placeholder="Type to filter..."
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <div className="portal-search-select-options">
+            {filtered.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className="portal-search-select-option"
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                  setQuery('');
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+function SearchableMultiSelect({ options, values, onChange }: { options: OptionItem[]; values: string[]; onChange: (next: string[]) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onDocClick = (event: MouseEvent) => {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const normalizedValues = normalizeMultiSelect(values);
+  const selectedLabels = options.filter((option) => normalizedValues.includes(option.value)).map((option) => option.label);
+  const triggerText =
+    normalizedValues.includes('All') || normalizedValues.length === 0
+      ? 'All'
+      : selectedLabels.length === 1
+        ? selectedLabels[0]
+        : `${selectedLabels.length} selected`;
+  const filtered = options.filter((option) => option.label.toLowerCase().includes(query.toLowerCase()));
+
+  const toggle = (value: string) => {
+    if (value === 'All') {
+      onChange(['All']);
+      return;
+    }
+    const current = normalizedValues.filter((entry) => entry !== 'All');
+    const next = current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value];
+    onChange(normalizeMultiSelect(next));
+  };
+
+  return (
+    <div className="portal-search-select" ref={rootRef}>
+      <button type="button" className="portal-search-select-trigger" onClick={() => setOpen((current) => !current)}>
+        {triggerText}
+      </button>
+      {open ? (
+        <div className="portal-search-select-menu">
+          <input
+            className="portal-search-select-input"
+            placeholder="Type to filter..."
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <div className="portal-search-select-options">
+            {filtered.map((option) => {
+              const checked = normalizedValues.includes(option.value);
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  className="portal-search-select-option portal-search-select-option-multi"
+                  onClick={() => toggle(option.value)}
+                >
+                  <span>{checked ? '✓' : ''}</span>
+                  <span>{option.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function ComparisonPane({ title, compact = false }: { title: string; compact?: boolean }) {
   const paneId = useMemo(() => title.toLowerCase().replace(/[^a-z0-9]+/g, '-'), [title]);
@@ -802,9 +951,31 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [enableTableColors, setEnableTableColors] = useState(true);
+  const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [locationHover, setLocationHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: OverviewPayload }>());
   const overviewInflightRef = useRef(new Map<string, Promise<OverviewPayload>>());
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/dashboard/pitching/custom-tables', { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { items?: CustomTableConfig[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load custom tables.');
+        return payload.items ?? [];
+      })
+      .then((items) => {
+        if (!active) return;
+        setCustomTables(items);
+      })
+      .catch(() => {
+        if (!active) return;
+        setCustomTables([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -821,13 +992,19 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         setFilters(payload);
         setState((current) => {
           const latest = String(payload.max_date ?? '');
+          const min = String(payload.min_date ?? '');
+          const isLeagueSchool = String(payload.school_code ?? '').trim().toUpperCase() === 'LEAGUE';
+          const defaultStart = isLeagueSchool
+            ? (min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START)
+            : latest;
           const tableModes = payload.table_modes?.length ? payload.table_modes : DOMAIN_TABLES[current.domain];
           const splitOptions = payload.split_by_options?.length ? payload.split_by_options : DOMAIN_SPLIT_BY[current.domain];
+          const keepCustomSelection = String(current.tableMode).startsWith('custom_saved:');
           return {
             ...current,
-            startDate: current.startDate || latest,
+            startDate: current.startDate || defaultStart,
             endDate: current.endDate || latest,
-            tableMode: tableModes.includes(current.tableMode) ? current.tableMode : tableModes[0],
+            tableMode: keepCustomSelection || tableModes.includes(current.tableMode) ? current.tableMode : tableModes[0],
             splitBy: splitOptions.includes(current.splitBy) ? current.splitBy : splitOptions[0],
           };
         });
@@ -844,21 +1021,31 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
   useEffect(() => {
     let active = true;
     if (!state.startDate || !state.endDate) return;
+    const selectedCustomTable = String(state.tableMode).startsWith('custom_saved:')
+      ? customTables.find((item) => `custom_saved:${item.id}` === state.tableMode) ?? null
+      : null;
+    const effectiveTableMode = selectedCustomTable ? 'Custom' : state.tableMode;
     const params = new URLSearchParams();
     params.set('start_date', state.startDate);
     params.set('end_date', state.endDate);
-    if (state.player !== 'All') params.set(playerQueryKey(state.domain), normalizeNameForApi(state.player));
+    const selectedPlayers = selectedMultiValues(state.player).map(normalizeNameForApi).filter(Boolean);
+    const selectedPitchTypes = selectedMultiValues(state.pitchType);
+    const selectedPitchResults = selectedMultiValues(state.pitchResult);
+    const selectedCountFilters = selectedMultiValues(state.countFilter);
+    const selectedAfterCountFilters = selectedMultiValues(state.afterCountFilter);
+    if (selectedPlayers.length) params.set(playerQueryKey(state.domain), selectedPlayers.join(';'));
     const isProSchool = String(filters?.school_code ?? '').trim().toUpperCase() === 'PRO';
     if (!isProSchool && state.sessionType !== 'All') params.set('session_type', state.sessionType);
     if (isProSchool && state.level !== 'All') params.set('level', state.level);
     if (state.teamType !== 'All') params.set('team_type', state.teamType);
-    if (state.pitchType !== 'All') params.set('pitch_types', state.pitchType);
-    if (state.pitchResult !== 'All') params.set('pitch_results', state.pitchResult);
-    if (state.countFilter !== 'All') params.set('count_filter', state.countFilter);
-    if (state.afterCountFilter !== 'All') params.set('after_count_filter', state.afterCountFilter);
+    if (selectedPitchTypes.length) params.set('pitch_types', selectedPitchTypes.join(';'));
+    if (selectedPitchResults.length) params.set('pitch_results', selectedPitchResults.join(';'));
+    if (selectedCountFilters.length) params.set('count_filter', selectedCountFilters.join(';'));
+    if (selectedAfterCountFilters.length) params.set('after_count_filter', selectedAfterCountFilters.join(';'));
     if (state.pitcherHand !== 'All') params.set('hand', state.pitcherHand);
     if (state.batterHand !== 'All') params.set('batter_side', state.batterHand);
-    params.set('table_mode', state.tableMode);
+    params.set('table_mode', effectiveTableMode);
+    if (selectedCustomTable?.columns?.length) params.set('custom_columns', selectedCustomTable.columns.join(','));
     params.set('split_by', state.splitBy);
     const shouldForceProFastLoad = isProSchool;
     params.set('include_chart_points', shouldForceProFastLoad ? '0' : '1');
@@ -866,7 +1053,8 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       params.set('chart_points_limit', isProSchool ? '700' : '1000');
     }
     const requestKey = `${domainOverviewEndpoint(state.domain)}?${params.toString()}`;
-    const chartRequestKey = shouldForceProFastLoad
+    const isLeagueSchool = String(filters?.school_code ?? '').trim().toUpperCase() === 'LEAGUE';
+    const chartRequestKey = (shouldForceProFastLoad || isLeagueSchool)
       ? (() => {
           const chartParams = new URLSearchParams(params);
           chartParams.set('include_chart_points', '1');
@@ -923,6 +1111,8 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         overviewCacheRef.current.set(requestKey, { at: Date.now(), payload });
         applyOverviewPayload(payload);
         if (!chartRequestKey) return;
+        const hasMainChartPoints = (payload.chart_points?.length ?? 0) > 0 || (payload.heatmap_points?.length ?? 0) > 0;
+        if (hasMainChartPoints) return;
         const cachedChart = overviewCacheRef.current.get(chartRequestKey);
         if (cachedChart && Date.now() - cachedChart.at < overviewTtlMs) {
           applyChartPayload(cachedChart.payload);
@@ -964,14 +1154,20 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       window.clearTimeout(loadingTimer);
       active = false;
     };
-  }, [state.domain, state.startDate, state.endDate, state.player, state.sessionType, state.level, state.teamType, state.pitchType, state.pitchResult, state.countFilter, state.afterCountFilter, state.pitcherHand, state.batterHand, state.tableMode, state.splitBy, filters?.school_code]);
+  }, [state.domain, state.startDate, state.endDate, state.player, state.sessionType, state.level, state.teamType, state.pitchType, state.pitchResult, state.countFilter, state.afterCountFilter, state.pitcherHand, state.batterHand, state.tableMode, state.splitBy, filters?.school_code, customTables]);
 
+  const playersByTeam = useMemo(() => {
+    if (!filters || !state.teamType || state.teamType === 'All') return null;
+    if (state.domain === 'Pitching') return filters.pitchers_by_team_code?.[state.teamType] ?? null;
+    if (state.domain === 'Hitting') return filters.hitters_by_team_code?.[state.teamType] ?? null;
+    return filters.catchers_by_team_code?.[state.teamType] ?? null;
+  }, [filters, state.domain, state.teamType]);
   const playerOptions = useMemo(() => {
     if (!filters) return [{ value: 'All', label: 'All' }];
-    if (state.domain === 'Pitching') return optionItems(filters.pitchers, true);
-    if (state.domain === 'Hitting') return optionItems(filters.hitters, true);
-    return optionItems(filters.catchers, true);
-  }, [filters, state.domain]);
+    if (state.domain === 'Pitching') return optionItems(playersByTeam ?? filters.pitchers, true);
+    if (state.domain === 'Hitting') return optionItems(playersByTeam ?? filters.hitters, true);
+    return optionItems(playersByTeam ?? filters.catchers, true);
+  }, [filters, state.domain, playersByTeam]);
   const teamOptions = useMemo(() => optionItems(filters?.team_types), [filters?.team_types]);
   const pitchTypeOptions = useMemo(() => optionItems(filters?.pitch_types), [filters?.pitch_types]);
   const pitchResultOptions = useMemo(() => optionItems(filters?.pitch_result_options), [filters?.pitch_result_options]);
@@ -983,8 +1179,10 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
   const batterOptions = useMemo(() => optionItems(filters?.batter_sides), [filters?.batter_sides]);
   const tableModeOptions = useMemo(() => {
     const values = filters?.table_modes?.length ? filters.table_modes : DOMAIN_TABLES[state.domain];
-    return values.map((value) => ({ value, label: value }));
-  }, [filters?.table_modes, state.domain]);
+    const base = values.map((value) => ({ value, label: value }));
+    const custom = customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: item.name }));
+    return [...base, ...custom];
+  }, [filters?.table_modes, state.domain, customTables]);
   const splitByOptions = useMemo(() => {
     const fromFilters = filters?.split_by_options ?? [];
     const values = Array.from(new Set([...DOMAIN_SPLIT_BY[state.domain], ...fromFilters]));
@@ -1002,7 +1200,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
   const tableColumns = overview?.table_columns ?? [];
   const tableColorMode = useMemo(() => {
     if (!state.tableMode) return '';
-    if (state.tableMode === 'Custom') return 'Custom';
+    if (state.tableMode === 'Custom' || String(state.tableMode).startsWith('custom_saved:')) return 'Custom';
     return state.tableMode;
   }, [state.tableMode]);
   const shouldColorTable = useMemo(
@@ -1115,7 +1313,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     const zoom = 1.2;
     const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
     const isProSchool = String(filters?.school_code ?? '').trim().toUpperCase() === 'PRO';
-    const selectedPitchTypes = state.pitchType === 'All' ? [] : [state.pitchType];
+    const selectedPitchTypes = selectedMultiValues(state.pitchType);
     const isPvMetric = state.heatMetric === 'PV/100';
     const heatMetricView = state.heatMetric;
     const isRunValuesMetric = heatMetricView === 'Run Values' || heatMetricView === 'PV/100';
@@ -1169,7 +1367,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
                       )
                     : Math.max(0, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal));
                 const runValueBoost = normalized;
-                if (densityNorm < 0.16) return null;
+                if (densityNorm < 0.03) return null;
                 return <circle key={`cmp-blur-${cell.x}-${cell.y}`} cx={cx} cy={cy} r={radius} fill={fill} opacity={Math.max(0.3, runValueBoost * 1.25 * (heatMetricView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))} />;
               })}
             </g>
@@ -1197,7 +1395,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
                     )
                   : Math.max(0, (cell.value - minVal) / Math.max(1e-9, maxVal - minVal));
               const runValueBoost = normalized;
-              if (densityNorm < 0.16) return null;
+              if (densityNorm < 0.03) return null;
               return <circle key={`cmp-core-${cell.x}-${cell.y}`} cx={cx} cy={cy} r={radius} fill="rgba(0,0,0,0.001)" />;
             })}
             <polygon points={`${px(-0.75)},${py(0.55)} ${px(0.75)},${py(0.55)} ${px(0.75)},${py(0.65)} ${px(0)},${py(0.75)} ${px(-0.75)},${py(0.65)}`} fill="none" stroke="rgba(255,255,255,0.85)" />
@@ -1337,7 +1535,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       );
       const dataPitcherSet = new Set(velocityPoints.map((point) => String((point as { pitcher?: string | null }).pitcher ?? '').trim()).filter(Boolean));
       const hasSingleGameOrDate = (gameSet.size > 0 && gameSet.size <= 1) || dateSet.size <= 1;
-      const hasSinglePitcher = state.player !== 'All' || dataPitcherSet.size === 1;
+      const hasSinglePitcher = selectedMultiValues(state.player).length === 1 || dataPitcherSet.size === 1;
       const showInningBoundaries = hasSinglePitcher && hasSingleGameOrDate;
       const inningToKey = (value: unknown): string => {
         const raw = String(value ?? '').trim();
@@ -1997,26 +2195,28 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       <article className="portal-admin-card" style={{ padding: 12, display: 'grid', gap: 10 }}>
         <strong>{title}</strong>
         <div className="portal-form-grid" style={{ gridTemplateColumns: compact ? '1fr' : 'repeat(3, minmax(150px, 1fr))' }}>
-          <ControlSelect
-            label="Domain"
-            value={state.domain}
-            options={[{ value: 'Pitching', label: 'Pitching' }, { value: 'Hitting', label: 'Hitting' }, { value: 'Catching', label: 'Catching' }]}
-            onChange={(next) =>
-              setState((current) => ({
-                ...current,
-                domain: next as Domain,
-                player: 'All',
-                teamType: 'All',
-                pitchType: 'All',
-                pitchResult: 'All',
-                countFilter: 'All',
-                afterCountFilter: 'All',
-                heatMetric: HEAT_METRICS_BY_DOMAIN[next as Domain][0],
-                tableMode: defaultTableMode(next as Domain),
-                splitBy: DOMAIN_SPLIT_BY[next as Domain][0],
-              }))
-            }
-          />
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span>Domain</span>
+            <SearchableSingleSelect
+              options={[{ value: 'Pitching', label: 'Pitching' }, { value: 'Hitting', label: 'Hitting' }, { value: 'Catching', label: 'Catching' }]}
+              value={state.domain}
+              onChange={(next) =>
+                setState((current) => ({
+                  ...current,
+                  domain: next as Domain,
+                  player: ['All'],
+                  teamType: 'All',
+                  pitchType: ['All'],
+                  pitchResult: ['All'],
+                  countFilter: ['All'],
+                  afterCountFilter: ['All'],
+                  heatMetric: HEAT_METRICS_BY_DOMAIN[next as Domain][0],
+                  tableMode: defaultTableMode(next as Domain),
+                  splitBy: DOMAIN_SPLIT_BY[next as Domain][0],
+                }))
+              }
+            />
+          </label>
           <label style={{ display: 'grid', gap: 4 }}>
             <span>Start Date</span>
             <input type="date" value={state.startDate} onChange={(event) => setState((current) => ({ ...current, startDate: event.target.value }))} />
@@ -2025,29 +2225,74 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
             <span>End Date</span>
             <input type="date" value={state.endDate} onChange={(event) => setState((current) => ({ ...current, endDate: event.target.value }))} />
           </label>
-          <ControlSelect label="Chart" value={state.chartType} options={CHART_OPTIONS.map((value) => ({ value, label: value }))} onChange={(next) => setState((current) => ({ ...current, chartType: next as ChartType }))} />
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span>Chart</span>
+            <SearchableSingleSelect options={CHART_OPTIONS.map((value) => ({ value, label: value }))} value={state.chartType} onChange={(next) => setState((current) => ({ ...current, chartType: next as ChartType }))} />
+          </label>
           {String(filters?.school_code ?? '').trim().toUpperCase() === 'PRO' ? (
-            <ControlSelect label="Level" value={state.level} options={levelOptions} onChange={(next) => setState((current) => ({ ...current, level: next }))} />
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span>Level</span>
+              <SearchableSingleSelect options={levelOptions} value={state.level} onChange={(next) => setState((current) => ({ ...current, level: next }))} placeholder="All" />
+            </label>
           ) : (
-            <ControlSelect label="Session Type" value={state.sessionType} options={sessionOptions} onChange={(next) => setState((current) => ({ ...current, sessionType: next }))} />
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span>Session Type</span>
+              <SearchableSingleSelect options={sessionOptions} value={state.sessionType} onChange={(next) => setState((current) => ({ ...current, sessionType: next }))} placeholder="All" />
+            </label>
           )}
-          <ControlSelect label={subjectLabel(state.domain)} value={state.player} options={playerOptions} onChange={(next) => setState((current) => ({ ...current, player: next }))} />
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span>{subjectLabel(state.domain)}</span>
+            <SearchableMultiSelect options={playerOptions} values={state.player} onChange={(next) => setState((current) => ({ ...current, player: normalizeMultiSelect(next) }))} />
+          </label>
           {state.chartType === 'Heatmap' ? (
-            <ControlSelect label="Heatmap Stat" value={state.heatMetric} options={heatMetricOptions} onChange={(next) => setState((current) => ({ ...current, heatMetric: next as HeatMetric }))} />
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span>Heatmap Stat</span>
+              <SearchableSingleSelect options={heatMetricOptions} value={state.heatMetric} onChange={(next) => setState((current) => ({ ...current, heatMetric: next as HeatMetric }))} />
+            </label>
           ) : state.chartType === 'Velocity Chart' ? (
-            <ControlSelect label="Velocity View" value={state.velocityMode} options={VELOCITY_MODES.map((value) => ({ value, label: value }))} onChange={(next) => setState((current) => ({ ...current, velocityMode: next as VelocityMode }))} />
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span>Velocity View</span>
+              <SearchableSingleSelect options={VELOCITY_MODES.map((value) => ({ value, label: value }))} value={state.velocityMode} onChange={(next) => setState((current) => ({ ...current, velocityMode: next as VelocityMode }))} />
+            </label>
           ) : state.chartType === 'Release Plot' ? (
-            <ControlSelect label="Release View" value={state.releaseView} options={RELEASE_VIEWS.map((value) => ({ value, label: value }))} onChange={(next) => setState((current) => ({ ...current, releaseView: next as ReleaseView }))} />
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span>Release View</span>
+              <SearchableSingleSelect options={RELEASE_VIEWS.map((value) => ({ value, label: value }))} value={state.releaseView} onChange={(next) => setState((current) => ({ ...current, releaseView: next as ReleaseView }))} />
+            </label>
           ) : state.chartType === 'Movement Plot' ? (
-            <ControlSelect label="Movement View" value={state.movementView} options={MOVEMENT_VIEWS.map((value) => ({ value, label: value }))} onChange={(next) => setState((current) => ({ ...current, movementView: next as MovementView }))} />
+            <label style={{ display: 'grid', gap: 4 }}>
+              <span>Movement View</span>
+              <SearchableSingleSelect options={MOVEMENT_VIEWS.map((value) => ({ value, label: value }))} value={state.movementView} onChange={(next) => setState((current) => ({ ...current, movementView: next as MovementView }))} />
+            </label>
           ) : null}
-          <ControlSelect label="Team" value={state.teamType} options={teamOptions} onChange={(next) => setState((current) => ({ ...current, teamType: next }))} />
-          <ControlSelect label="Pitch Type" value={state.pitchType} options={pitchTypeOptions} onChange={(next) => setState((current) => ({ ...current, pitchType: next }))} />
-          <ControlSelect label="Pitch Results" value={state.pitchResult} options={pitchResultOptions} onChange={(next) => setState((current) => ({ ...current, pitchResult: next }))} />
-          <ControlSelect label="Count" value={state.countFilter} options={countOptions} onChange={(next) => setState((current) => ({ ...current, countFilter: next }))} />
-          <ControlSelect label="After Count" value={state.afterCountFilter} options={afterCountOptions} onChange={(next) => setState((current) => ({ ...current, afterCountFilter: next }))} />
-          <ControlSelect label="Pitcher Hand" value={state.pitcherHand} options={handOptions} onChange={(next) => setState((current) => ({ ...current, pitcherHand: next }))} />
-          <ControlSelect label="Batter Hand" value={state.batterHand} options={batterOptions} onChange={(next) => setState((current) => ({ ...current, batterHand: next }))} />
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span>Team</span>
+            <SearchableSingleSelect options={teamOptions} value={state.teamType} onChange={(next) => setState((current) => ({ ...current, teamType: next, player: ['All'] }))} placeholder="All" />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span>Pitch Type</span>
+            <SearchableMultiSelect options={pitchTypeOptions} values={state.pitchType} onChange={(next) => setState((current) => ({ ...current, pitchType: normalizeMultiSelect(next) }))} />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span>Pitch Results</span>
+            <SearchableMultiSelect options={pitchResultOptions} values={state.pitchResult} onChange={(next) => setState((current) => ({ ...current, pitchResult: normalizeMultiSelect(next) }))} />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span>Count</span>
+            <SearchableMultiSelect options={countOptions} values={state.countFilter} onChange={(next) => setState((current) => ({ ...current, countFilter: normalizeMultiSelect(next) }))} />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span>After Count</span>
+            <SearchableMultiSelect options={afterCountOptions} values={state.afterCountFilter} onChange={(next) => setState((current) => ({ ...current, afterCountFilter: normalizeMultiSelect(next) }))} />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span>Pitcher Hand</span>
+            <SearchableSingleSelect options={handOptions} value={state.pitcherHand} onChange={(next) => setState((current) => ({ ...current, pitcherHand: next }))} placeholder="All" />
+          </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span>Batter Hand</span>
+            <SearchableSingleSelect options={batterOptions} value={state.batterHand} onChange={(next) => setState((current) => ({ ...current, batterHand: next }))} placeholder="All" />
+          </label>
         </div>
       </article>
 

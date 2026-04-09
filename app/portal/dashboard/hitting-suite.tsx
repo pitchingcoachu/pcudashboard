@@ -206,6 +206,7 @@ const SPRAY_RESULT_COLORS: Record<(typeof SPRAY_RESULT_ORDER)[number], string> =
 };
 const SPLIT_BY_DEFAULT = 'Pitch Types';
 const TABLE_MODE_DEFAULT = 'Results';
+const LEAGUE_SEASON_START = '2026-02-13';
 const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   '#',
   'Usage',
@@ -826,7 +827,7 @@ function LocationChart({
                 const runValueBoost = normalized;
                 const isSwingRateView = heatMetricView === 'Swing Rate';
                 const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
-                if (densityNorm < 0.16) return null;
+                if (densityNorm < 0.03) return null;
                 return (
                   <circle
                     key={`loc-heat-${cell.x}-${cell.y}`}
@@ -868,7 +869,7 @@ function LocationChart({
               const runValueBoost = normalized;
               const isSwingRateView = heatMetricView === 'Swing Rate';
               const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
-              if (densityNorm < 0.16) return null;
+              if (densityNorm < 0.03) return null;
               return (
                 <circle
                   key={`loc-heat-core-${cell.x}-${cell.y}`}
@@ -1796,6 +1797,16 @@ export default function HittingSuite({
   const canLoadOverview = useMemo(() => !!filters && !!startDate && !!endDate, [filters, startDate, endDate]);
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
   const isPro = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
+  const isLeagueAllSelection = isLeague && teamType === 'All' && hitter === 'All' && oppPitcher === 'All';
+  const leagueWindowDays = useMemo(() => {
+    if (!isLeague || !startDate || !endDate) return 0;
+    const start = new Date(`${startDate}T00:00:00`);
+    const end = new Date(`${endDate}T00:00:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+    return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
+  }, [isLeague, startDate, endDate]);
+  const shouldForceLeagueFastTable =
+    isLeague && (dashboardPage === 'Summary' || dashboardPage === 'Leaderboard') && leagueWindowDays > 14 && isLeagueAllSelection;
   useEffect(() => {
     if (!isLeague && !isPro && leaderboardViewBy !== 'Player') {
       setLeaderboardViewBy('Player');
@@ -1852,8 +1863,16 @@ export default function HittingSuite({
       setTeamType(pickDefaultTeamType(payload.team_types, payload.school_code));
       const latestDate = clampYmdToToday(payload.max_date ?? payload.min_date ?? '');
       const nextDate = latestDate || toYmdNow();
-      setStartDate(nextDate);
-      setEndDate(nextDate);
+      const minDate = payload.min_date ?? '';
+      const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
+      if (isLeagueSchool) {
+        const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
+        setStartDate(leagueStart);
+        setEndDate(nextDate || leagueStart);
+      } else {
+        setStartDate(nextDate);
+        setEndDate(nextDate);
+      }
       setPitchTypes([]);
       setZoneLocations([]);
       setPitchResults([]);
@@ -2034,7 +2053,7 @@ export default function HittingSuite({
     if (pcMax.trim()) params.set('pc_max', pcMax.trim());
     const isSummaryPage = dashboardPage === 'Summary';
     const shouldForceProFastSummary = isPro && isSummaryPage;
-    const shouldIncludeCharts = dashboardPage !== 'Leaderboard' && !shouldForceProFastSummary;
+    const shouldIncludeCharts = dashboardPage !== 'Leaderboard' && !shouldForceProFastSummary && !shouldForceLeagueFastTable;
     params.set('include_chart_points', shouldIncludeCharts ? '1' : '0');
     const requestKey = `/api/dashboard/hitting/overview?${params.toString()}`;
     const chartRequestKey = shouldForceProFastSummary
@@ -2511,7 +2530,7 @@ export default function HittingSuite({
                         : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                   const rvBoost = isRunValuesMetric ? normalized : normalized;
                   const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
-                  if (densityNorm < 0.16) return null;
+                  if (densityNorm < 0.03) return null;
                   return <circle key={`h-heat-blur-${c.x}-${c.y}`} cx={cx} cy={cy} r={radius} fill={fill} opacity={Math.max(0.3, rvBoost * 1.25 * (heatMetricView === 'Frequency' ? 1 : Math.max(0.55, densityNorm)))} />;
                 })}
               </g>
@@ -2543,7 +2562,7 @@ export default function HittingSuite({
                       : Math.max(0, Math.min(1, (c.value - minVal) / Math.max(1e-9, maxVal - minVal)));
                 const rvBoost = isRunValuesMetric ? normalized : normalized;
                 const isXMetricView = heatMetricView === 'xWOBA' || heatMetricView === 'xISO';
-                if (densityNorm < 0.16) return null;
+                if (densityNorm < 0.03) return null;
                 return (
                   <circle
                     key={`h-heat-core-${c.x}-${c.y}`}

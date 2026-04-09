@@ -2143,7 +2143,7 @@ export default function PlayerPlansSuite() {
                         : selectedHeatmapView === 'QP+'
                           ? Math.abs(c.value - 100) / 100
                           : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
-                    if (selectedHeatmapView !== 'Frequency' && selectedHeatmapView !== 'QP+' && densityNorm < 0.16) return null;
+                    if (selectedHeatmapView !== 'Frequency' && selectedHeatmapView !== 'QP+' && densityNorm < 0.03) return null;
                     if (selectedHeatmapView !== 'Run Values' && selectedHeatmapView !== 'QP+' && normalized < 0.06) return null;
                     const fill =
                       selectedHeatmapView === 'Run Values'
@@ -2179,7 +2179,7 @@ export default function PlayerPlansSuite() {
                         : selectedHeatmapView === 'QP+'
                           ? Math.abs(c.value - 100) / 100
                           : Math.max(0, (c.value - minVal) / Math.max(1e-9, maxVal - minVal));
-                    if (selectedHeatmapView !== 'Frequency' && selectedHeatmapView !== 'QP+' && densityNorm < 0.16) return null;
+                    if (selectedHeatmapView !== 'Frequency' && selectedHeatmapView !== 'QP+' && densityNorm < 0.03) return null;
                     if (selectedHeatmapView !== 'Run Values' && selectedHeatmapView !== 'QP+' && normalized < 0.06) return null;
                     const fill =
                       selectedHeatmapView === 'Run Values'

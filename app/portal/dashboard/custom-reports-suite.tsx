@@ -173,6 +173,8 @@ type OverviewLitePayload = {
   }>;
 };
 
+const LEAGUE_SEASON_START = '2026-02-13';
+
 type CellLoadState = {
   status: 'idle' | 'loading' | 'ready' | 'error';
   message?: string;
@@ -2489,7 +2491,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           setHittingTableModes(HITTING_TABLES);
           const min = toYmd(typed.min_date);
           const max = toYmd(typed.max_date);
-          setGlobalStartDate(max || min || '');
+          const isLeagueSchool = String(typed.school_code ?? '').toUpperCase() === 'LEAGUE';
+          const leagueStart = min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START;
+          setGlobalStartDate(isLeagueSchool ? leagueStart : (max || min || ''));
           setGlobalEndDate(max || min || '');
         } else if (reportType === 'Hitting') {
           const typed = payload as unknown as HittingFiltersPayload;
@@ -2514,7 +2518,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           setHittingTableModes(dynamicTableModes.length ? dynamicTableModes : HITTING_TABLES);
           const min = toYmd(typed.min_date);
           const max = toYmd(typed.max_date);
-          setGlobalStartDate(max || min || '');
+          const isLeagueSchool = String(typed.school_code ?? '').toUpperCase() === 'LEAGUE';
+          const leagueStart = min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START;
+          setGlobalStartDate(isLeagueSchool ? leagueStart : (max || min || ''));
           setGlobalEndDate(max || min || '');
         } else {
           const typed = payload as unknown as CatchingFiltersPayload;
@@ -2538,7 +2544,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           setHittingTableModes(HITTING_TABLES);
           const min = toYmd(typed.min_date);
           const max = toYmd(typed.max_date);
-          setGlobalStartDate(max || min || '');
+          const isLeagueSchool = String(typed.school_code ?? '').toUpperCase() === 'LEAGUE';
+          const leagueStart = min && min > LEAGUE_SEASON_START ? min : LEAGUE_SEASON_START;
+          setGlobalStartDate(isLeagueSchool ? leagueStart : (max || min || ''));
           setGlobalEndDate(max || min || '');
         }
       } catch (err) {
@@ -4848,7 +4856,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                           0.3,
                                           runValueBoost * 1.25 * (heatMetricLabel === 'Frequency' ? 1 : Math.max(0.55, densityNorm))
                                         );
-                                        if (densityNorm < 0.16) return null;
+                                        if (densityNorm < 0.03) return null;
                                         return (
                                           <circle
                                             key={`${cellId}-heat-blur-${c.x}-${c.y}`}
@@ -4890,7 +4898,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                               )
                                             : Math.max(0, Math.min(1, (safeValue - minVal) / Math.max(1e-9, maxVal - minVal)));
                                       const runValueBoost = normalized;
-                                      if (densityNorm < 0.16) return null;
+                                      if (densityNorm < 0.03) return null;
                                       return (
                                         <circle
                                           key={`${cellId}-heat-core-${c.x}-${c.y}`}
