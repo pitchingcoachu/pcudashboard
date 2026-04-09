@@ -444,7 +444,7 @@ export default function CatchingSuite() {
     return Math.floor((end.getTime() - start.getTime()) / 86400000) + 1;
   }, [isLeague, dateStart, dateEnd]);
   const shouldForceLeagueFastTable =
-    isLeague && (page === 'Summary' || page === 'Leaderboard') && leagueWindowDays > 14 && isLeagueAllSelection;
+    isLeague && isLeaderboardPage && leagueWindowDays > 14 && isLeagueAllSelection;
   useEffect(() => {
     if (!isLeague && leaderboardViewBy !== 'Player') {
       setLeaderboardViewBy('Player');
