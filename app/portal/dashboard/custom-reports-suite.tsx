@@ -3122,17 +3122,79 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       restoreLogos = await inlineBrandLogosForExport(reportNode);
       await waitForReportImages(reportNode);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const isSinglePlayerScope = reportScope === 'Single Player';
       const captureScale = Math.min(2, Math.max(1.5, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
-      const canvas = await html2canvas(reportNode, {
-        backgroundColor: '#000000',
+      const baseCanvas = await html2canvas(reportNode, {
+        backgroundColor: isSinglePlayerScope ? null : '#000000',
         scale: captureScale,
         useCORS: true,
         logging: false,
         ignoreElements: (element) => element.getAttribute?.('data-export-ignore') === 'true',
       });
-      const margin = 18;
+      const trimTransparentEdges = (input: HTMLCanvasElement): HTMLCanvasElement => {
+        const width = Math.max(1, input.width);
+        const height = Math.max(1, input.height);
+        const ctx = input.getContext('2d');
+        if (!ctx) return input;
+        const data = ctx.getImageData(0, 0, width, height).data;
+        let minX = width;
+        let minY = height;
+        let maxX = -1;
+        let maxY = -1;
+        for (let y = 0; y < height; y += 1) {
+          const rowOffset = y * width * 4;
+          for (let x = 0; x < width; x += 1) {
+            const alpha = data[rowOffset + x * 4 + 3];
+            if (alpha <= 8) continue;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+        if (maxX < minX || maxY < minY) return input;
+        const croppedW = Math.max(1, maxX - minX + 1);
+        const croppedH = Math.max(1, maxY - minY + 1);
+        const out = document.createElement('canvas');
+        out.width = croppedW;
+        out.height = croppedH;
+        const outCtx = out.getContext('2d');
+        if (!outCtx) return input;
+        outCtx.drawImage(input, minX, minY, croppedW, croppedH, 0, 0, croppedW, croppedH);
+        return out;
+      };
+      const canvas = isSinglePlayerScope ? trimTransparentEdges(baseCanvas) : baseCanvas;
+      const margin = isSinglePlayerScope ? 10 : 18;
       const rawW = Math.max(1, canvas.width);
       const rawH = Math.max(1, canvas.height);
+      if (isSinglePlayerScope) {
+        // Match "tall one-page" style by using a custom portrait page sized to
+        // the report content aspect ratio instead of forcing letter fit.
+        const pageWidth = 612;
+        const contentWidth = Math.max(1, pageWidth - margin * 2);
+        const pageHeight = Math.max(
+          792,
+          Math.round((rawH / rawW) * contentWidth + margin * 2)
+        );
+        const pdf = new jsPDF({
+          orientation: 'portrait',
+          unit: 'pt',
+          format: [pageWidth, pageHeight],
+        });
+        const contentHeight = Math.max(1, pageHeight - margin * 2);
+        const fitScale = Math.min(contentWidth / rawW, contentHeight / rawH);
+        const drawWidth = rawW * fitScale;
+        const drawHeight = rawH * fitScale;
+        const drawX = (pageWidth - drawWidth) / 2;
+        const drawY = (pageHeight - drawHeight) / 2;
+        pdf.setFillColor(4, 5, 7);
+        pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+        pdf.addImage(canvas.toDataURL('image/jpeg', 0.84), 'JPEG', drawX, drawY, drawWidth, drawHeight, undefined, 'FAST');
+        const safeName = (reportHeaderTitle || 'custom-report').replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-');
+        pdf.save(`${safeName}.pdf`);
+        return;
+      }
+
       const orientation: 'portrait' | 'landscape' = rawW >= rawH ? 'landscape' : 'portrait';
 
       const pdf = new jsPDF({
@@ -3145,6 +3207,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       const contentWidth = Math.max(1, pageWidth - margin * 2);
       const contentHeight = Math.max(1, pageHeight - margin * 2);
       const scale = contentWidth / rawW;
+
       const pageSourceHeight = Math.max(1, Math.floor(contentHeight / Math.max(scale, 1e-6)));
       const reportRect = reportNode.getBoundingClientRect();
       const panelBounds = Array.from(reportNode.querySelectorAll('.portal-custom-reports-cell'))

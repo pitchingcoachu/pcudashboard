@@ -95,6 +95,23 @@ declare global {
 const DATABASE_URL = process.env.DATABASE_URL;
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 
+function normalizePgConnectionString(raw: string): string {
+  const value = String(raw ?? '').trim();
+  if (!value) return value;
+  try {
+    const parsed = new URL(value);
+    const sslMode = String(parsed.searchParams.get('sslmode') ?? '').trim().toLowerCase();
+    const needsCompat = sslMode === 'prefer' || sslMode === 'require' || sslMode === 'verify-ca';
+    if (needsCompat && !parsed.searchParams.has('uselibpqcompat')) {
+      parsed.searchParams.set('uselibpqcompat', 'true');
+      return parsed.toString();
+    }
+    return value;
+  } catch {
+    return value;
+  }
+}
+
 export function isDatabaseConfigured(): boolean {
   return Boolean(DATABASE_URL);
 }
@@ -103,11 +120,12 @@ export function getDbPool(): Pool {
   if (!DATABASE_URL) {
     throw new Error('DATABASE_URL is not configured');
   }
+  const connectionString = normalizePgConnectionString(DATABASE_URL);
 
   if (!global.__pcuPool) {
     global.__pcuPool = new Pool({
-      connectionString: DATABASE_URL,
-      ssl: DATABASE_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
+      connectionString,
+      ssl: connectionString.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
     });
   }
 

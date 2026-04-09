@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
@@ -623,6 +624,7 @@ function normalizeColorColumnName(value: string): string {
   if (lower === 'csw%') return 'CSW%';
   if (lower === 'k%') return 'K%';
   if (lower === 'bb%') return 'BB%';
+  if (lower === 'hr%') return 'HR%';
   if (lower === 'gb%') return 'GB%';
   if (lower === 'era') return 'ERA';
   if (lower === 'fip') return 'FIP';
@@ -672,6 +674,10 @@ function getProcessThresholds(
   if (metric === 'Pitching+') return { poor: 80, avg: 95, great: 110 };
   if (metric === 'K%' && pitchType === 'all') return { poor: 18, avg: 23, great: 28 };
   if (metric === 'BB%' && pitchType === 'all') return { poor: 11, avg: 9, great: 7 };
+  if (metric === 'HR%' && pitchType === 'all') {
+    if (isPro) return { poor: 4.0, avg: 3.0, great: 2.0 };
+    return { poor: 3.4, avg: 2.4, great: 1.4 };
+  }
   if (metric === 'Whiff%') {
     if (pitchType === 'fastball') return { poor: 18, avg: 22, great: 26 };
     if (pitchType === 'sinker') return { poor: 9, avg: 13, great: 17 };
@@ -770,7 +776,7 @@ function getCellColorScale(
   const thresholds = getProcessThresholds(metric, pitchType, schoolCode);
   if (!thresholds) return null;
   const { poor, avg, great } = thresholds;
-  const reverseScale = ['EV', 'Barrel%', 'BB%', 'ERA', 'FIP', 'xFIP'].includes(metric) || metric === 'RV/100' || metric === 'PV/100';
+  const reverseScale = ['EV', 'Barrel%', 'BB%', 'HR%', 'ERA', 'FIP', 'xFIP'].includes(metric) || metric === 'RV/100' || metric === 'PV/100';
   if (reverseScale) {
     if (parsed >= poor) return { bg: '#0066CC', text: 'white' };
     if (parsed >= (poor + avg) / 2) return { bg: '#66B2FF', text: 'black' };
@@ -1215,6 +1221,7 @@ export default function PitchingSuite({
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
+  const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
   const autoFallbackAppliedRef = useRef(false);
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: FiltersPayload }>());
   const filtersInflightRef = useRef(new Map<string, Promise<FiltersPayload>>());
@@ -4737,8 +4744,8 @@ export default function PitchingSuite({
 
   const colorColumnsByMode: Record<string, string[]> = {
     Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP'],
-    Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'Whiff%', 'ERA', 'FIP', 'xFIP'],
-    Results: ['Whiff%', 'K%', 'BB%', 'CSW%', 'GB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP'],
+    Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'HR%', 'Whiff%', 'ERA', 'FIP', 'xFIP'],
+    Results: ['Whiff%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP'],
     Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
     Custom: [
       'InZone%',
@@ -4759,6 +4766,7 @@ export default function PitchingSuite({
       'PV/100',
       'K%',
       'BB%',
+      'HR%',
       'Whiff%',
       'CSW%',
       'GB%',
@@ -4928,6 +4936,14 @@ export default function PitchingSuite({
     const splitColumn = leaderboardBaseColumns[0] ?? '';
     return sortTableRows(rows, sortCol, leaderboardSortDirection, splitColumn);
   }, [tableRowsWithPv, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
+  const leaderboardRowsWithPins = useMemo(() => {
+    if (!isLeaderboardPage) return leaderboardRows;
+    return sortRowsWithPins(
+      leaderboardRows as Array<Record<string, string | number | null | undefined>>,
+      leaderboardBaseColumns,
+      pinnedLeaderboardKeys
+    ) as Array<Record<string, string | number | null>>;
+  }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
   const latestTeamByPitcher = useMemo(() => {
     const points = overview?.chart_points ?? [];
     const latestTsByName: Record<string, number> = {};
@@ -5888,18 +5904,19 @@ export default function PitchingSuite({
                     </tr>
                   </thead>
                   <tbody>
-                    {leaderboardRows?.length
+                    {leaderboardRowsWithPins?.length
                       ? (() => {
                           let leaderboardRankCounter = 0;
-                          return leaderboardRows.map((row, idx) => {
+                          return leaderboardRowsWithPins.map((row, idx) => {
                           const rowKey = String(row[displayedTableColumns?.[0] ?? 'row'] ?? 'Unknown');
                           const rowPitches = overview.row_pitches_by_key?.[rowKey] ?? [];
                           const isAllRow = isLeaderboardPage && String(row[displayedTableColumns?.[0] ?? ''] ?? '').trim().toLowerCase() === 'all';
-                          const rankValue = isAllRow ? '' : String(++leaderboardRankCounter);
+                          const isPinnedAllRow = isLeaderboardPage && String(row[displayedTableColumns?.[0] ?? ''] ?? '').trim().toLowerCase() === 'all (pinned)';
+                          const rankValue = isAllRow || isPinnedAllRow ? '' : String(++leaderboardRankCounter);
                           return (
                           <tr
                             key={`${String(row[displayedTableColumns?.[0] ?? 'row'] ?? 'row')}-${idx}`}
-                            style={isAllRow ? { background: 'rgba(255,255,255,0.12)', fontWeight: 700 } : undefined}
+                            style={isAllRow || isPinnedAllRow ? { background: 'rgba(255,255,255,0.12)', fontWeight: 700 } : undefined}
                           >
                             {isLeaderboardPage ? <td style={{ textAlign: 'center' }}>{rankValue}</td> : null}
                             {displayedTableColumns.map((column, colIndex) => (
@@ -5981,7 +5998,47 @@ export default function PitchingSuite({
                                     typeof value === 'string' || typeof value === 'number' || value === null || value === undefined
                                       ? formatTableDisplayValue(column, value)
                                       : value;
-                                  if (!cellStyle) return displayValue;
+                                  const canPinRow = isLeaderboardPage && column === displayedTableColumns[0] && !isAllRow && !isPinnedAllRow;
+                                  const pinKey = canPinRow
+                                    ? pinKeyFromRow(
+                                        row as Record<string, string | number | null | undefined>,
+                                        displayedTableColumns[0]
+                                      )
+                                    : '';
+                                  const isPinnedRow = canPinRow && pinnedLeaderboardKeys.has(pinKey);
+                                  const displayValueWithPin = canPinRow ? (
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                      <button
+                                        type="button"
+                                        aria-label={isPinnedRow ? 'Unpin row' : 'Pin row'}
+                                        title={isPinnedRow ? 'Unpin' : 'Pin'}
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          if (!pinKey) return;
+                                          setPinnedLeaderboardKeys((current) => {
+                                            const next = new Set(current);
+                                            if (next.has(pinKey)) next.delete(pinKey);
+                                            else next.add(pinKey);
+                                            return next;
+                                          });
+                                        }}
+                                        style={{
+                                          border: 'none',
+                                          background: 'transparent',
+                                          color: isPinnedRow ? '#fbbf24' : 'rgba(255,255,255,0.7)',
+                                          cursor: 'pointer',
+                                          padding: 0,
+                                          lineHeight: 1,
+                                          fontSize: 14,
+                                        }}
+                                      >
+                                        {isPinnedRow ? '📌' : '📍'}
+                                      </button>
+                                      <span>{displayValue}</span>
+                                    </span>
+                                  ) : displayValue;
+                                  if (!cellStyle) return displayValueWithPin;
                                   return (
                                     <span
                                       style={{
@@ -5993,7 +6050,7 @@ export default function PitchingSuite({
                                         textAlign: 'center',
                                       }}
                                     >
-                                      {displayValue}
+                                      {displayValueWithPin}
                                     </span>
                                   );
                                 })()}

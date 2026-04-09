@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
@@ -1754,6 +1755,7 @@ export default function HittingSuite({
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
+  const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
   const autoFallbackAppliedRef = useRef(false);
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: HittingFiltersPayload }>());
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: HittingOverviewPayload }>());
@@ -2276,6 +2278,14 @@ export default function HittingSuite({
     const splitColumn = leaderboardBaseColumns[0] ?? '';
     return sortTableRows(rows, sortCol, leaderboardSortDirection, splitColumn);
   }, [overview?.table_rows, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
+  const leaderboardRowsWithPins = useMemo(() => {
+    if (!isLeaderboardPage) return leaderboardRows;
+    return sortRowsWithPins(
+      leaderboardRows as Array<Record<string, string | number | null | undefined>>,
+      leaderboardBaseColumns,
+      pinnedLeaderboardKeys
+    ) as Array<Record<string, string | number | null>>;
+  }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
   const overviewHeaderLabel = useMemo(() => {
     const hitterLabel = selectedSingleHitter ? formatNameFirstLast(selectedSingleHitter) : 'All';
     const dateLabel = formatDashboardDateLabel(startDate, endDate, isPro);
@@ -3442,11 +3452,12 @@ export default function HittingSuite({
               <tbody>
                 {(() => {
                   let leaderboardRankCounter = 0;
-                  return leaderboardRows.map((row, idx) => {
+                  return leaderboardRowsWithPins.map((row, idx) => {
                     const isAllRow = isLeaderboardPage && String(row[displayedTableColumns[0] ?? ''] ?? '').trim().toLowerCase() === 'all';
-                    const rankValue = isAllRow ? '' : String(++leaderboardRankCounter);
+                    const isPinnedAllRow = isLeaderboardPage && String(row[displayedTableColumns[0] ?? ''] ?? '').trim().toLowerCase() === 'all (pinned)';
+                    const rankValue = isAllRow || isPinnedAllRow ? '' : String(++leaderboardRankCounter);
                     return (
-                  <tr key={`row-${idx}`} style={isAllRow ? { background: 'rgba(255,255,255,0.12)', fontWeight: 700 } : undefined}>
+                  <tr key={`row-${idx}`} style={isAllRow || isPinnedAllRow ? { background: 'rgba(255,255,255,0.12)', fontWeight: 700 } : undefined}>
                     {isLeaderboardPage ? (
                       <td style={{ textAlign: 'center', padding: '8px 6px', borderBottom: '1px solid rgba(255,255,255,0.1)', whiteSpace: 'nowrap' }}>{rankValue}</td>
                     ) : null}
@@ -3512,16 +3523,59 @@ export default function HittingSuite({
                             padding: '8px 6px',
                             borderBottom: '1px solid rgba(255,255,255,0.1)',
                             whiteSpace: 'nowrap',
-                            cursor: isLeaderboardPage && colIndex === 0 && !isAllRow ? 'pointer' : undefined,
-                            textDecoration: isLeaderboardPage && colIndex === 0 && !isAllRow ? 'underline' : undefined,
+                            cursor: isLeaderboardPage && colIndex === 0 && !isAllRow && !isPinnedAllRow ? 'pointer' : undefined,
+                            textDecoration: isLeaderboardPage && colIndex === 0 && !isAllRow && !isPinnedAllRow ? 'underline' : undefined,
                           }}
                           onClick={
-                            isLeaderboardPage && colIndex === 0 && !isAllRow
+                            isLeaderboardPage && colIndex === 0 && !isAllRow && !isPinnedAllRow
                               ? () => applyLeaderboardDrilldown(row[col], leaderboardViewBy)
                               : undefined
                           }
                         >
-                          {displayValue === null || displayValue === undefined ? '—' : renderedValue}
+                          {(() => {
+                            const canPinRow = isLeaderboardPage && colIndex === 0 && !isAllRow && !isPinnedAllRow;
+                            const pinKey = canPinRow
+                              ? pinKeyFromRow(
+                                  row as Record<string, string | number | null | undefined>,
+                                  displayedTableColumns[0]
+                                )
+                              : '';
+                            const isPinnedRow = canPinRow && pinnedLeaderboardKeys.has(pinKey);
+                            const content = displayValue === null || displayValue === undefined ? '—' : renderedValue;
+                            if (!canPinRow) return content;
+                            return (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <button
+                                  type="button"
+                                  aria-label={isPinnedRow ? 'Unpin row' : 'Pin row'}
+                                  title={isPinnedRow ? 'Unpin' : 'Pin'}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    if (!pinKey) return;
+                                    setPinnedLeaderboardKeys((current) => {
+                                      const next = new Set(current);
+                                      if (next.has(pinKey)) next.delete(pinKey);
+                                      else next.add(pinKey);
+                                      return next;
+                                    });
+                                  }}
+                                  style={{
+                                    border: 'none',
+                                    background: 'transparent',
+                                    color: isPinnedRow ? '#fbbf24' : 'rgba(255,255,255,0.7)',
+                                    cursor: 'pointer',
+                                    padding: 0,
+                                    lineHeight: 1,
+                                    fontSize: 14,
+                                  }}
+                                >
+                                  {isPinnedRow ? '📌' : '📍'}
+                                </button>
+                                <span>{content}</span>
+                              </span>
+                            );
+                          })()}
                         </td>
                       );
                     })}

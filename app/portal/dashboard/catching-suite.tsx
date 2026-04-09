@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { getProTeamLogoUrl } from './pro-team-logos';
 
 type OptionItem = { value: string; label: string };
@@ -424,6 +425,7 @@ export default function CatchingSuite() {
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
+  const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
 
   const [hmChartType, setHmChartType] = useState<'Heat' | 'Pitch'>('Heat');
   const [hmStat, setHmStat] = useState('Frequency');
@@ -992,6 +994,14 @@ export default function CatchingSuite() {
     const splitColumn = leaderboardBaseColumns[0] ?? '';
     return sortTableRows(rows, sortCol, leaderboardSortDirection, splitColumn);
   }, [overview?.table_rows, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
+  const leaderboardRowsWithPins = useMemo(() => {
+    if (!isLeaderboardPage) return leaderboardRows;
+    return sortRowsWithPins(
+      leaderboardRows as Array<Record<string, string | number | null | undefined>>,
+      leaderboardBaseColumns,
+      pinnedLeaderboardKeys
+    ) as Array<Record<string, string | number | null>>;
+  }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
   const latestTeamByCatcher = useMemo(() => {
     const points = overview?.chart_points ?? [];
     const latestTsByName: Record<string, number> = {};
@@ -1351,11 +1361,12 @@ export default function CatchingSuite() {
                     <tbody>
                       {(() => {
                         let leaderboardRankCounter = 0;
-                        return leaderboardRows.map((row, idx) => {
+                        return leaderboardRowsWithPins.map((row, idx) => {
                           const isAllRow = page === 'Leaderboard' && String(row[(overview?.table_columns ?? [])[0] ?? ''] ?? '').trim().toLowerCase() === 'all';
-                          const rankValue = isAllRow ? '' : String(++leaderboardRankCounter);
+                          const isPinnedAllRow = page === 'Leaderboard' && String(row[(overview?.table_columns ?? [])[0] ?? ''] ?? '').trim().toLowerCase() === 'all (pinned)';
+                          const rankValue = isAllRow || isPinnedAllRow ? '' : String(++leaderboardRankCounter);
                           return (
-                        <tr key={`catch-row-${idx}`} style={isAllRow ? { background: 'rgba(255,255,255,0.12)', fontWeight: 700 } : undefined}>
+                        <tr key={`catch-row-${idx}`} style={isAllRow || isPinnedAllRow ? { background: 'rgba(255,255,255,0.12)', fontWeight: 700 } : undefined}>
                           {page === 'Leaderboard' ? <td style={{ textAlign: 'center' }}>{rankValue}</td> : null}
                           {(overview?.table_columns ?? []).map((c, colIndex) => {
                             const val = row[c];
@@ -1401,7 +1412,50 @@ export default function CatchingSuite() {
                                       : 'center',
                                 }}
                               >
-                                {displayVal === null || displayVal === undefined ? '-' : renderedValue}
+                                {(() => {
+                                  const canPinRow = page === 'Leaderboard' && colIndex === 0 && !isAllRow && !isPinnedAllRow;
+                                  const pinKey = canPinRow
+                                    ? pinKeyFromRow(
+                                        row as Record<string, string | number | null | undefined>,
+                                        (overview?.table_columns ?? [])[0] ?? ''
+                                      )
+                                    : '';
+                                  const isPinnedRow = canPinRow && pinnedLeaderboardKeys.has(pinKey);
+                                  const content = displayVal === null || displayVal === undefined ? '-' : renderedValue;
+                                  if (!canPinRow) return content;
+                                  return (
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                      <button
+                                        type="button"
+                                        aria-label={isPinnedRow ? 'Unpin row' : 'Pin row'}
+                                        title={isPinnedRow ? 'Unpin' : 'Pin'}
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          if (!pinKey) return;
+                                          setPinnedLeaderboardKeys((current) => {
+                                            const next = new Set(current);
+                                            if (next.has(pinKey)) next.delete(pinKey);
+                                            else next.add(pinKey);
+                                            return next;
+                                          });
+                                        }}
+                                        style={{
+                                          border: 'none',
+                                          background: 'transparent',
+                                          color: isPinnedRow ? '#fbbf24' : 'rgba(255,255,255,0.7)',
+                                          cursor: 'pointer',
+                                          padding: 0,
+                                          lineHeight: 1,
+                                          fontSize: 14,
+                                        }}
+                                      >
+                                        {isPinnedRow ? '📌' : '📍'}
+                                      </button>
+                                      <span>{content}</span>
+                                    </span>
+                                  );
+                                })()}
                               </td>
                             );
                           })}

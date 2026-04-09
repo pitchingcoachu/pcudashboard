@@ -1916,6 +1916,35 @@ def _build_dynamic_table(
 
     out_rows: List[Dict[str, Any]] = []
     total = sum(len(v) for v in groups.values()) or 1
+    def _count_pair(r: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
+        b_raw = r.get("balls_num")
+        s_raw = r.get("strikes_num")
+        b = int(float(b_raw)) if _is_num(b_raw) else None
+        s = int(float(s_raw)) if _is_num(s_raw) else None
+        return b, s
+
+    usage_count_00_total = 0
+    usage_count_behind_total = 0
+    usage_count_even_total = 0
+    usage_count_ahead_total = 0
+    usage_count_lt2k_total = 0
+    usage_count_2k_total = 0
+    for r in rows:
+        b, s = _count_pair(r)
+        if b is None or s is None:
+            continue
+        if (b, s) == (0, 0):
+            usage_count_00_total += 1
+        if (b, s) in {(1, 0), (2, 0), (3, 0), (3, 1), (2, 1)}:
+            usage_count_behind_total += 1
+        if (b, s) in {(0, 0), (1, 1), (2, 2), (3, 2)}:
+            usage_count_even_total += 1
+        if (b, s) in {(0, 1), (0, 2), (1, 2)}:
+            usage_count_ahead_total += 1
+        if s < 2:
+            usage_count_lt2k_total += 1
+        if s == 2:
+            usage_count_2k_total += 1
     pro_fip_const, pro_lg_hr_fb = _derive_pro_fip_context(rows)
 
     def _row_for_group(key: str, grp: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2533,12 +2562,12 @@ def _build_dynamic_table(
             "EdgeSwings": edge_sw_num,
             "PosSD": possd_points,
             "GoZoneSw": gozone_sw_num,
-            "0-0": f"{round(100.0 * count_00 / n, 1)}%" if n else None,
-            "Behind": f"{round(100.0 * count_behind / n, 1)}%" if n else None,
-            "Even": f"{round(100.0 * count_even / n, 1)}%" if n else None,
-            "Ahead": f"{round(100.0 * count_ahead / n, 1)}%" if n else None,
-            "<2K": f"{round(100.0 * count_lt2k / n, 1)}%" if n else None,
-            "2K": f"{round(100.0 * count_2k / n, 1)}%" if n else None,
+            "0-0": f"{round(100.0 * count_00 / usage_count_00_total, 1)}%" if usage_count_00_total else None,
+            "Behind": f"{round(100.0 * count_behind / usage_count_behind_total, 1)}%" if usage_count_behind_total else None,
+            "Even": f"{round(100.0 * count_even / usage_count_even_total, 1)}%" if usage_count_even_total else None,
+            "Ahead": f"{round(100.0 * count_ahead / usage_count_ahead_total, 1)}%" if usage_count_ahead_total else None,
+            "<2K": f"{round(100.0 * count_lt2k / usage_count_lt2k_total, 1)}%" if usage_count_lt2k_total else None,
+            "2K": f"{round(100.0 * count_2k / usage_count_2k_total, 1)}%" if usage_count_2k_total else None,
             "PA": pa_ct,
             "AB": ab,
             "AVG": avg,
@@ -5895,6 +5924,16 @@ def _try_pitching_overview_daily_rollup(
             )
         )
 
+    def _nint(v: Any) -> int:
+        return int(float(v)) if _is_num(v) else 0
+
+    usage_count_00_total = int(sum(_nint(r.get("count_00_n")) for r in grouped_rows))
+    usage_count_behind_total = int(sum(_nint(r.get("count_behind_n")) for r in grouped_rows))
+    usage_count_even_total = int(sum(_nint(r.get("count_even_n")) for r in grouped_rows))
+    usage_count_ahead_total = int(sum(_nint(r.get("count_ahead_n")) for r in grouped_rows))
+    usage_count_lt2k_total = int(sum(_nint(r.get("count_lt2k_n")) for r in grouped_rows))
+    usage_count_2k_total = int(sum(_nint(r.get("count_2k_n")) for r in grouped_rows))
+
     stuff_level_clean = (stuff_level or "College").strip() or "College"
     if stuff_level_clean not in {"Pro", "College", "High School"}:
         stuff_level_clean = "College"
@@ -6071,6 +6110,12 @@ def _try_pitching_overview_daily_rollup(
         ahead_den = sum(int(r.get("ahead_den") or 0) for r in rows_for_split)
         ea_num = sum(int(r.get("ea_num") or 0) for r in rows_for_split)
         ea_den = sum(int(r.get("ea_den") or 0) for r in rows_for_split)
+        usage_count_00_split = sum(_nint(r.get("count_00_n")) for r in rows_for_split)
+        usage_count_behind_split = sum(_nint(r.get("count_behind_n")) for r in rows_for_split)
+        usage_count_even_split = sum(_nint(r.get("count_even_n")) for r in rows_for_split)
+        usage_count_ahead_split = sum(_nint(r.get("count_ahead_n")) for r in rows_for_split)
+        usage_count_lt2k_split = sum(_nint(r.get("count_lt2k_n")) for r in rows_for_split)
+        usage_count_2k_split = sum(_nint(r.get("count_2k_n")) for r in rows_for_split)
         avg_val = (hits_n / ab_n) if ab_n > 0 else None
         slg_val = (tb_n / ab_n) if ab_n > 0 else None
         obp_val = ((hits_n + bb_n + hbp_n) / bf_n) if bf_n > 0 else None
@@ -6131,12 +6176,12 @@ def _try_pitching_overview_daily_rollup(
             "Ahead%": _safe_pct(ahead_num, ahead_den),
             "1-1W%": _safe_pct(sum(int(r.get("oneone_num") or 0) for r in rows_for_split), sum(int(r.get("oneone_den") or 0) for r in rows_for_split)),
             "Usage": _safe_pct(pitches, total_pitches),
-            "0-0": _safe_pct(sum(int(r.get("count_00_n") or 0) for r in rows_for_split), pitches),
-            "Behind": _safe_pct(sum(int(r.get("count_behind_n") or 0) for r in rows_for_split), pitches),
-            "Even": _safe_pct(sum(int(r.get("count_even_n") or 0) for r in rows_for_split), pitches),
-            "Ahead": _safe_pct(sum(int(r.get("count_ahead_n") or 0) for r in rows_for_split), pitches),
-            "<2K": _safe_pct(sum(int(r.get("count_lt2k_n") or 0) for r in rows_for_split), pitches),
-            "2K": _safe_pct(sum(int(r.get("count_2k_n") or 0) for r in rows_for_split), pitches),
+            "0-0": _safe_pct(usage_count_00_split, usage_count_00_total),
+            "Behind": _safe_pct(usage_count_behind_split, usage_count_behind_total),
+            "Even": _safe_pct(usage_count_even_split, usage_count_even_total),
+            "Ahead": _safe_pct(usage_count_ahead_split, usage_count_ahead_total),
+            "<2K": _safe_pct(usage_count_lt2k_split, usage_count_lt2k_total),
+            "2K": _safe_pct(usage_count_2k_split, usage_count_2k_total),
             "QP%": (f"{round(qp_pct_num, 1)}%" if _is_num(qp_pct_num) else None),
             "Ctrl+": round(ctrl_plus_num, 1) if _is_num(ctrl_plus_num) else None,
             "QP+": round(qp_plus_num, 1) if _is_num(qp_plus_num) else None,
@@ -7427,6 +7472,15 @@ def _try_pro_pitching_overview_rollup(
     _, stuff_global_by_type = _compute_stuff_by_pitch_type(synthetic_stuff_rows, stuff_base_clean, stuff_level_clean)
 
     table_rows: List[Dict[str, Any]] = []
+    def _nint(v: Any) -> int:
+        return int(float(v)) if _is_num(v) else 0
+
+    usage_count_00_total = int(sum(_nint(r.get("count_00_n")) for r in grouped_rows))
+    usage_count_behind_total = int(sum(_nint(r.get("count_behind_n")) for r in grouped_rows))
+    usage_count_even_total = int(sum(_nint(r.get("count_even_n")) for r in grouped_rows))
+    usage_count_ahead_total = int(sum(_nint(r.get("count_ahead_n")) for r in grouped_rows))
+    usage_count_lt2k_total = int(sum(_nint(r.get("count_lt2k_n")) for r in grouped_rows))
+    usage_count_2k_total = int(sum(_nint(r.get("count_2k_n")) for r in grouped_rows))
     split_items = list(grouped_by_split.items())
     if split_clean == "Pitch Types":
         split_items.sort(key=lambda kv: (pitch_order.get(str(kv[0]), 99), str(kv[0])))
@@ -7504,6 +7558,12 @@ def _try_pro_pitching_overview_rollup(
         rv_sum_rollup = sum(float(r.get("rv_sum") or 0.0) for r in rows_for_split)
         pv100 = ((pv_sum_rollup / pitches) * 100.0) if pitches > 0 else None
         rv100 = (((rv_sum_rollup / pitches) * 100.0) - 0.43) if pitches > 0 else None
+        usage_count_00_split = sum(_nint(r.get("count_00_n")) for r in rows_for_split)
+        usage_count_behind_split = sum(_nint(r.get("count_behind_n")) for r in rows_for_split)
+        usage_count_even_split = sum(_nint(r.get("count_even_n")) for r in rows_for_split)
+        usage_count_ahead_split = sum(_nint(r.get("count_ahead_n")) for r in rows_for_split)
+        usage_count_lt2k_split = sum(_nint(r.get("count_lt2k_n")) for r in rows_for_split)
+        usage_count_2k_split = sum(_nint(r.get("count_2k_n")) for r in rows_for_split)
         ev_n = int(sum(int(r.get("ev_n") or 0) for r in rows_for_split))
         la_n = int(sum(int(r.get("la_n") or 0) for r in rows_for_split))
         ev_avg = (sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / ev_n) if ev_n > 0 else None
@@ -7569,12 +7629,12 @@ def _try_pro_pitching_overview_rollup(
             "Ahead%": _safe_pct(sum(int(r.get("ahead_num") or 0) for r in rows_for_split), bf_n),
             "1-1W%": _safe_pct(sum(int(r.get("oneone_num") or 0) for r in rows_for_split), sum(int(r.get("oneone_den") or 0) for r in rows_for_split)),
             "Usage": _safe_pct(pitches, total_pitches),
-            "0-0": _safe_pct(sum(int(r.get("count_00_n") or 0) for r in rows_for_split), pitches),
-            "Behind": _safe_pct(sum(int(r.get("count_behind_n") or 0) for r in rows_for_split), pitches),
-            "Even": _safe_pct(sum(int(r.get("count_even_n") or 0) for r in rows_for_split), pitches),
-            "Ahead": _safe_pct(sum(int(r.get("count_ahead_n") or 0) for r in rows_for_split), pitches),
-            "<2K": _safe_pct(sum(int(r.get("count_lt2k_n") or 0) for r in rows_for_split), pitches),
-            "2K": _safe_pct(sum(int(r.get("count_2k_n") or 0) for r in rows_for_split), pitches),
+            "0-0": _safe_pct(usage_count_00_split, usage_count_00_total),
+            "Behind": _safe_pct(usage_count_behind_split, usage_count_behind_total),
+            "Even": _safe_pct(usage_count_even_split, usage_count_even_total),
+            "Ahead": _safe_pct(usage_count_ahead_split, usage_count_ahead_total),
+            "<2K": _safe_pct(usage_count_lt2k_split, usage_count_lt2k_total),
+            "2K": _safe_pct(usage_count_2k_split, usage_count_2k_total),
             "QP%": (f"{round(qp_pct_num, 1)}%" if _is_num(qp_pct_num) else None),
             "Ctrl+": round(ctrl_plus_num, 1) if _is_num(ctrl_plus_num) else None,
             "QP+": round(qp_plus_num, 1) if _is_num(qp_plus_num) else None,
@@ -8360,8 +8420,6 @@ _PRO_API_ROWS_INFLIGHT: Dict[str, threading.Event] = {}
 _PRO_API_ROWS_INFLIGHT_LOCK = threading.Lock()
 _PRO_API_ROWS_BG_REFRESH_RUNNING: set[str] = set()
 _PRO_API_ROWS_BG_REFRESH_LOCK = threading.Lock()
-
-
 def _pro_tracked_aaa_name_keys() -> Set[str]:
     raw = str(os.getenv("PRO_TRACKED_AAA_PLAYERS", _PRO_TRACKED_AAA_PLAYERS_DEFAULT) or "")
     names = [part.strip() for part in raw.split(",") if part.strip()]
@@ -8500,7 +8558,7 @@ def _pro_extract_pitcher_boxscore_stats(feed: Dict[str, Any]) -> tuple[Dict[int,
     return by_id, by_name
 
 
-def _pro_api_fetch_game_rows(game_pk: int) -> List[Dict[str, Any]]:
+def _pro_api_fetch_game_rows(game_pk: int, session_date_hint: Optional[date] = None) -> List[Dict[str, Any]]:
     try:
         feed = _pro_api_json_get(f"{PRO_STATSAPI_GAME_FEED_BASE}/game/{game_pk}/feed/live")
     except Exception:
@@ -8511,6 +8569,7 @@ def _pro_api_fetch_game_rows(game_pk: int) -> List[Dict[str, Any]]:
         game_date_obj = date.fromisoformat(game_dt) if game_dt else None
     except Exception:
         game_date_obj = None
+    row_session_date = session_date_hint or game_date_obj
     teams = game_data.get("teams") or {}
     home_team = str((teams.get("home") or {}).get("abbreviation") or "").upper()
     away_team = str((teams.get("away") or {}).get("abbreviation") or "").upper()
@@ -8579,7 +8638,7 @@ def _pro_api_fetch_game_rows(game_pk: int) -> List[Dict[str, Any]]:
                 "id": row_id,
                 "game_pk": game_pk,
                 "sport_id": sport_id,
-                "session_date": game_date_obj,
+                "session_date": row_session_date,
                 "at_bat_index": ab_idx,
                 "event_index": idx,
                 "pitch_no": _pro_safe_int(ev.get("pitchNumber")),
@@ -8748,7 +8807,7 @@ def _pro_fetch_api_rows_window(
                 continue
             for game_pk in game_pks:
                 try:
-                    rows = _pro_api_fetch_game_rows(game_pk)
+                    rows = _pro_api_fetch_game_rows(game_pk, session_date_hint=day)
                 except Exception:
                     continue
                 for row in rows:
