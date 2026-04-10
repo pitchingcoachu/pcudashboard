@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import StatDefinitionTooltips from './stat-definition-tooltips';
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -49,7 +50,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <StatDefinitionTooltips />
+      </body>
     </html>
   );
 }

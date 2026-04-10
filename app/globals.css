@@ -15,6 +15,39 @@
   --portal-fastball-color: #ffffff;
 }
 
+.stat-definition-tooltip {
+  position: fixed;
+  z-index: 3000;
+  max-width: min(360px, 86vw);
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(2, 6, 23, 0.94);
+  color: #f8fafc;
+  padding: 0.52rem 0.62rem;
+  font-size: 0.78rem;
+  line-height: 1.3;
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.42);
+  pointer-events: none;
+  white-space: normal;
+}
+
+.stat-definition-tooltip-title {
+  font-weight: 700;
+  margin-bottom: 0.2rem;
+  color: #e2e8f0;
+}
+
+body.theme-light .stat-definition-tooltip {
+  background: rgba(255, 255, 255, 0.96);
+  color: #111827;
+  border-color: rgba(17, 24, 39, 0.22);
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.14);
+}
+
+body.theme-light .stat-definition-tooltip-title {
+  color: #0f172a;
+}
+
 body.theme-light {
   --bg: #f3f6fb;
   --panel: rgba(255, 255, 255, 0.95);
@@ -211,8 +244,8 @@ body.theme-light .portal-shell svg.portal-plot-dark-grid line[stroke='rgba(255,2
   stroke: rgba(15, 23, 42, 0.75) !important;
 }
 
-/* Axis labels black in dark mode on these charts (as requested). */
-body:not(.theme-light) .portal-shell svg.portal-plot-dark-grid text[fill='rgba(255,255,255,0.9)'] {
+/* Axis labels black only in light mode on these charts. */
+body.theme-light .portal-shell svg.portal-plot-dark-grid text[fill='rgba(255,255,255,0.9)'] {
   fill: #000 !important;
 }
 

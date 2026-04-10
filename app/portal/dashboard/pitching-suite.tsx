@@ -235,6 +235,8 @@ type HeatCell = { x: number; y: number; w: number; h: number; value: number; den
 type ChartHover = { x: number; y: number; text: string; bg?: string } | null;
 type CellColors = { bg: string; text: string };
 type PitchActionPoint = OverviewPayload['chart_points'][number];
+type PitchEditSelectMode = 'single' | 'lasso';
+type PlotLasso = { startX: number; startY: number; endX: number; endY: number; dragging: boolean } | null;
 const PITCH_TYPE_DISPLAY_ORDER = [
   'Fastball',
   'Sinker',
@@ -273,6 +275,11 @@ function normalizePersonName(value: string | null | undefined): string {
     .replace(/\./g, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+}
+
+function pitchIdentityKey(pitch: PitchActionPoint): string {
+  if (pitch.pitch_event_id) return `id:${pitch.pitch_event_id}`;
+  return `k:${pitch.play_id}|${pitch.pitch_no ?? ''}|${pitch.pitch_number ?? ''}|${pitch.session_date ?? ''}|${pitch.pitcher ?? ''}`;
 }
 
 function formatShortDate(value: string): string {
@@ -1238,6 +1245,7 @@ export default function PitchingSuite({
   const [manualProgressSortColumn, setManualProgressSortColumn] = useState('Date');
   const [manualProgressSortDirection, setManualProgressSortDirection] = useState<SortDirection>('desc');
   const [visualOption, setVisualOption] = useState('Play Video');
+  const [pitchEditSelectMode, setPitchEditSelectMode] = useState<PitchEditSelectMode>('single');
   const [enableTableColors, setEnableTableColors] = useState(true);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [loadingCustomTables, setLoadingCustomTables] = useState(false);
@@ -1296,6 +1304,8 @@ export default function PitchingSuite({
   const [targetShapes, setTargetShapes] = useState<Record<string, TargetShape>>({});
   const [releaseHover, setReleaseHover] = useState<ChartHover>(null);
   const [movementHover, setMovementHover] = useState<ChartHover>(null);
+  const [releaseLasso, setReleaseLasso] = useState<PlotLasso>(null);
+  const [movementLasso, setMovementLasso] = useState<PlotLasso>(null);
   const [locationHover, setLocationHover] = useState<ChartHover>(null);
   const [qpLocationsHover, setQpLocationsHover] = useState<ChartHover>(null);
   const [velocityMainHover, setVelocityMainHover] = useState<ChartHover>(null);
@@ -1333,9 +1343,11 @@ export default function PitchingSuite({
     String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
     String(filters?.school_code ?? '').toUpperCase() === 'PRO' ||
     String(filters?.school_code ?? '').toUpperCase() === 'MLB';
+  const isPitchEditDisplay = canUsePitchEdits && visualOption === 'Pitch Edit';
+  const isPitchEditLassoEnabled = isPitchEditDisplay && pitchEditSelectMode === 'lasso';
   const orientX = (x: number): number => (isPro ? -x : x);
   const canShowLeagueHeavyPages = !isLeague;
-  const canShowVeloManualEntry = !isLeague;
+  const canShowVeloManualEntry = !isLeague && !isPro;
   const allPitchersSelected = selectedPitchers.length === 0 || selectedPitchers.every((value) => value === 'All');
   const allHittersSelected = selectedHitters.length === 0 || selectedHitters.every((value) => value === 'All');
   const isLeagueAllSelection = isLeague && teamType === 'All' && allPitchersSelected && allHittersSelected;
@@ -2022,6 +2034,13 @@ export default function PitchingSuite({
     }
   }, [canUsePitchEdits, visualOption]);
 
+  useEffect(() => {
+    if (isPitchEditDisplay) return;
+    setPitchEditSelectMode('single');
+    setReleaseLasso(null);
+    setMovementLasso(null);
+  }, [isPitchEditDisplay]);
+
   const loadPitchEditCount = useCallback(async () => {
     if (!canUsePitchEdits) {
       setPitchEditsAppliedCount(0);
@@ -2159,14 +2178,15 @@ export default function PitchingSuite({
   const currentActionPitch = actionPitches[actionIndex] ?? null;
 
   const openActionModal = (pitches: PitchActionPoint[]) => {
-    if (!pitches.length) return;
+    const deduped = Array.from(new Map(pitches.map((pitch) => [pitchIdentityKey(pitch), pitch])).values());
+    if (!deduped.length) return;
     const nextMode: 'video' | 'edit' | 'spin' =
       visualOption === 'Pitch Edit' && canUsePitchEdits ? 'edit' : visualOption === 'Spin Visual' ? 'spin' : 'video';
-    setActionPitches(pitches);
+    setActionPitches(deduped);
     setActionIndex(0);
     setActionMode(nextMode);
-    setEditPitchType(pitches[0]?.pitch_type ?? '');
-    setEditPitcher(resolvePitcherName(pitches[0], selectedPitchers));
+    setEditPitchType(deduped[0]?.pitch_type ?? '');
+    setEditPitcher(resolvePitcherName(deduped[0], selectedPitchers));
     setActionSaveState('idle');
     setActionSaveMessage('');
     setActionIsPlaying(nextMode === 'spin');
@@ -2231,6 +2251,27 @@ export default function PitchingSuite({
         throw new Error(payload.error || 'Failed to save pitch edit.');
       }
 
+      const editSet = new Set(editIds);
+      const applyPitchEdit = (pitch: PitchActionPoint): PitchActionPoint =>
+        editSet.has(Number(pitch.pitch_event_id ?? -1))
+          ? { ...pitch, pitch_type: nextPitchType, pitcher: nextPitcher }
+          : pitch;
+
+      setOverview((previous) => {
+        if (!previous) return previous;
+        const nextChartPoints = (previous.chart_points ?? []).map((pitch) => applyPitchEdit(pitch as PitchActionPoint));
+        const nextRowPitches = Object.fromEntries(
+          Object.entries(previous.row_pitches_by_key ?? {}).map(([key, rows]) => [
+            key,
+            (rows ?? []).map((pitch) => applyPitchEdit(pitch as PitchActionPoint)),
+          ])
+        );
+        return {
+          ...previous,
+          chart_points: nextChartPoints,
+          row_pitches_by_key: nextRowPitches,
+        };
+      });
       setActionPitches((rows) =>
         rows.map((row, idx) =>
           editIds.includes(row.pitch_event_id ?? -1)
@@ -2240,6 +2281,8 @@ export default function PitchingSuite({
       );
       setActionSaveState('saved');
       setActionSaveMessage(`Saved ${payload.updated_count ?? editIds.length} pitch edit(s).`);
+      overviewCacheRef.current.clear();
+      overviewInflightRef.current.clear();
       setAppliedFilterVersion((current) => current + 1);
       await loadPitchEditCount();
     } catch (requestError) {
@@ -2716,8 +2759,7 @@ export default function PitchingSuite({
       : null;
 
   const pitchKeyFor = (pitch: PitchActionPoint): string => {
-    if (pitch.pitch_event_id) return `id:${pitch.pitch_event_id}`;
-    return `k:${pitch.play_id}|${pitch.pitch_no ?? ''}|${pitch.pitch_number ?? ''}|${pitch.session_date ?? ''}|${pitch.pitcher ?? ''}`;
+    return pitchIdentityKey(pitch);
   };
   const currentPitchKey = currentActionPitch ? pitchKeyFor(currentActionPitch) : '';
   const comparePitchPool = useMemo<PitchActionPoint[]>(
@@ -2884,6 +2926,42 @@ export default function PitchingSuite({
   );
 
   const summaryPoints = useMemo(() => overview?.chart_points ?? [], [overview]);
+  const resolveEditablePitchesForRow = useCallback(
+    (row: Record<string, string | number | null>, rowKey: string): PitchActionPoint[] => {
+      const mapped = (overview?.row_pitches_by_key?.[rowKey] ?? []) as PitchActionPoint[];
+      if (mapped.length) return mapped;
+
+      const splitColumn = String(overview?.table_columns?.[0] ?? '').trim();
+      const rawSplitValue = String(row[splitColumn] ?? rowKey ?? '').trim();
+      if (!rawSplitValue) return [];
+      if (rawSplitValue.toLowerCase() === 'all') return summaryPoints;
+
+      const norm = (value: string) => String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const splitNorm = norm(splitColumn);
+      const rowNorm = norm(rawSplitValue);
+
+      if (splitNorm === 'pitch' || splitNorm === 'pitch type' || splitNorm === 'pitch types') {
+        return summaryPoints.filter((pitch) => norm(pitch.pitch_type) === rowNorm);
+      }
+      if (splitNorm === 'pitcher') {
+        const expected = normalizePersonName(rawSplitValue);
+        return summaryPoints.filter((pitch) => normalizePersonName(pitch.pitcher) === expected);
+      }
+      if (splitNorm === 'batter') {
+        const expected = normalizePersonName(rawSplitValue);
+        return summaryPoints.filter((pitch) => normalizePersonName(pitch.batter) === expected);
+      }
+      if (splitNorm === 'catcher') {
+        const expected = normalizePersonName(rawSplitValue);
+        return summaryPoints.filter((pitch) => normalizePersonName(pitch.catcher) === expected);
+      }
+      if (splitNorm === 'session type') {
+        return summaryPoints.filter((pitch) => norm(pitch.session_type) === rowNorm);
+      }
+      return [];
+    },
+    [overview?.row_pitches_by_key, overview?.table_columns, summaryPoints]
+  );
   const summaryHeatmapPoints = useMemo(
     () => ((overview?.heatmap_points as PitchActionPoint[] | undefined) ?? summaryPoints),
     [overview?.heatmap_points, summaryPoints]
@@ -3935,8 +4013,55 @@ export default function PitchingSuite({
     const rubberBottom = py(0.76);
     const xTicks = [-4, -2, 0, 2, 4];
     const yTicks = Array.from({ length: Math.max(1, Math.floor(yMax - yMin) + 1) }, (_, i) => yMin + i);
+    const plottedPitches = summaryPoints.filter((p) => p.release_side !== null && p.release_height !== null);
+    const toSvgPoint = (event: { clientX: number; clientY: number; currentTarget: SVGSVGElement }) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      return {
+        x: ((event.clientX - rect.left) / Math.max(1, rect.width)) * w,
+        y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * h,
+      };
+    };
+    const finishLasso = (box: PlotLasso) => {
+      if (!box) return;
+      const minX = Math.min(box.startX, box.endX);
+      const maxX = Math.max(box.startX, box.endX);
+      const minY = Math.min(box.startY, box.endY);
+      const maxY = Math.max(box.startY, box.endY);
+      if (maxX - minX < 3 || maxY - minY < 3) return;
+      const selected = plottedPitches.filter((pitch) => {
+        const x = px(orientX(Number(pitch.release_side)));
+        const y = py(Number(pitch.release_height));
+        return x >= minX && x <= maxX && y >= minY && y <= maxY;
+      });
+      if (selected.length) openActionModal(selected);
+    };
     return (
-      <svg className="portal-plot-dark-grid" viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setReleaseHover(null)}>
+      <svg
+        className="portal-plot-dark-grid"
+        viewBox={`0 0 ${w} ${h}`}
+        style={{ width: '100%', height: 360, cursor: isPitchEditLassoEnabled ? 'crosshair' : undefined }}
+        onMouseDown={(event) => {
+          if (!isPitchEditLassoEnabled) return;
+          const next = toSvgPoint(event);
+          setReleaseLasso({ startX: next.x, startY: next.y, endX: next.x, endY: next.y, dragging: true });
+        }}
+        onMouseMove={(event) => {
+          if (!isPitchEditLassoEnabled || !releaseLasso?.dragging) return;
+          const next = toSvgPoint(event);
+          setReleaseLasso((current) => (current ? { ...current, endX: next.x, endY: next.y } : current));
+        }}
+        onMouseUp={(event) => {
+          if (!isPitchEditLassoEnabled || !releaseLasso?.dragging) return;
+          const next = toSvgPoint(event);
+          const finalized = { ...releaseLasso, endX: next.x, endY: next.y };
+          setReleaseLasso(null);
+          finishLasso(finalized);
+        }}
+        onMouseLeave={() => {
+          setReleaseHover(null);
+          if (releaseLasso?.dragging) setReleaseLasso(null);
+        }}
+      >
         {xTicks.map((tick) => (
           <line key={`r-x-grid-${tick}`} x1={px(tick)} y1={py(yMin)} x2={px(tick)} y2={py(yMax)} stroke="rgba(255,255,255,0.18)" />
         ))}
@@ -3957,19 +4082,17 @@ export default function PitchingSuite({
         <line x1={px(0)} y1={py(0)} x2={px(0)} y2={py(yMax)} stroke="rgba(255,255,255,0.85)" />
         <line x1={px(xMin)} y1={py(0)} x2={px(xMax)} y2={py(0)} stroke="rgba(255,255,255,0.85)" />
         {xTicks.map((tick) => (
-          <text key={`r-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="#000000">
+          <text key={`r-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="rgba(255,255,255,0.9)">
             {tick}
           </text>
         ))}
         {yTicks.map((tick) => (
-          <text key={`r-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="#000000">
+          <text key={`r-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="rgba(255,255,255,0.9)">
             {tick}
           </text>
         ))}
         {showPitches
-          ? summaryPoints
-              .filter((p) => p.release_side !== null && p.release_height !== null)
-              .map((p, i) => (
+          ? plottedPitches.map((p, i) => (
                 <circle
                   key={`r-p-${i}`}
                   cx={px(orientX(Number(p.release_side)))}
@@ -3988,7 +4111,10 @@ export default function PitchingSuite({
                     })
                   }
                   onMouseLeave={() => setReleaseHover(null)}
-                  onClick={() => openActionModal([p])}
+                  onClick={() => {
+                    if (isPitchEditLassoEnabled) return;
+                    openActionModal([p]);
+                  }}
                 />
               ))
           : null}
@@ -4015,15 +4141,28 @@ export default function PitchingSuite({
                   }
                   onMouseLeave={() => setReleaseHover(null)}
                   onClick={() => {
+                    if (isPitchEditLassoEnabled) return;
                     const matched = summaryPoints.filter((sp) => sp.pitch_type === p.pitch_type);
                     if (matched.length) openActionModal(matched);
                   }}
                 />
               ))
           : null}
+        {isPitchEditLassoEnabled && releaseLasso ? (
+          <rect
+            x={Math.min(releaseLasso.startX, releaseLasso.endX)}
+            y={Math.min(releaseLasso.startY, releaseLasso.endY)}
+            width={Math.abs(releaseLasso.endX - releaseLasso.startX)}
+            height={Math.abs(releaseLasso.endY - releaseLasso.startY)}
+            fill="rgba(59,130,246,0.16)"
+            stroke="rgba(147,197,253,0.95)"
+            strokeWidth={1.4}
+            pointerEvents="none"
+          />
+        ) : null}
       </svg>
     );
-  }, [summaryPoints, avgByType, releaseView, isPro]);
+  }, [summaryPoints, avgByType, releaseView, isPro, isPitchEditLassoEnabled, releaseLasso]);
 
   const movementSvg = useMemo(() => {
     const w = 520;
@@ -4078,8 +4217,55 @@ export default function PitchingSuite({
             y2: Number(base.ivb) + sep.ivb,
           }))
       : [];
+    const plottedPitches = summaryPoints.filter((p) => p.hb !== null && p.ivb !== null);
+    const toSvgPoint = (event: { clientX: number; clientY: number; currentTarget: SVGSVGElement }) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      return {
+        x: ((event.clientX - rect.left) / Math.max(1, rect.width)) * w,
+        y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * h,
+      };
+    };
+    const finishLasso = (box: PlotLasso) => {
+      if (!box) return;
+      const minX = Math.min(box.startX, box.endX);
+      const maxX = Math.max(box.startX, box.endX);
+      const minY = Math.min(box.startY, box.endY);
+      const maxY = Math.max(box.startY, box.endY);
+      if (maxX - minX < 3 || maxY - minY < 3) return;
+      const selected = plottedPitches.filter((pitch) => {
+        const x = px(Number(pitch.hb));
+        const y = py(Number(pitch.ivb));
+        return x >= minX && x <= maxX && y >= minY && y <= maxY;
+      });
+      if (selected.length) openActionModal(selected);
+    };
     return (
-      <svg className="portal-plot-dark-grid" viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setMovementHover(null)}>
+      <svg
+        className="portal-plot-dark-grid"
+        viewBox={`0 0 ${w} ${h}`}
+        style={{ width: '100%', height: 360, cursor: isPitchEditLassoEnabled ? 'crosshair' : undefined }}
+        onMouseDown={(event) => {
+          if (!isPitchEditLassoEnabled) return;
+          const next = toSvgPoint(event);
+          setMovementLasso({ startX: next.x, startY: next.y, endX: next.x, endY: next.y, dragging: true });
+        }}
+        onMouseMove={(event) => {
+          if (!isPitchEditLassoEnabled || !movementLasso?.dragging) return;
+          const next = toSvgPoint(event);
+          setMovementLasso((current) => (current ? { ...current, endX: next.x, endY: next.y } : current));
+        }}
+        onMouseUp={(event) => {
+          if (!isPitchEditLassoEnabled || !movementLasso?.dragging) return;
+          const next = toSvgPoint(event);
+          const finalized = { ...movementLasso, endX: next.x, endY: next.y };
+          setMovementLasso(null);
+          finishLasso(finalized);
+        }}
+        onMouseLeave={() => {
+          setMovementHover(null);
+          if (movementLasso?.dragging) setMovementLasso(null);
+        }}
+      >
         {ticks.map((tick) => (
           <line key={`m-x-grid-${tick}`} x1={px(tick)} y1={py(yMin)} x2={px(tick)} y2={py(yMax)} stroke="rgba(255,255,255,0.18)" />
         ))}
@@ -4089,19 +4275,17 @@ export default function PitchingSuite({
         <line x1={px(xMin)} y1={py(0)} x2={px(xMax)} y2={py(0)} stroke="rgba(255,255,255,0.85)" />
         <line x1={px(0)} y1={py(yMin)} x2={px(0)} y2={py(yMax)} stroke="rgba(255,255,255,0.85)" />
         {ticks.map((tick) => (
-          <text key={`m-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="#000000">
+          <text key={`m-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="rgba(255,255,255,0.9)">
             {tick}
           </text>
         ))}
         {ticks.map((tick) => (
-          <text key={`m-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="#000000">
+          <text key={`m-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="rgba(255,255,255,0.9)">
             {tick}
           </text>
         ))}
         {showPitches
-          ? summaryPoints
-              .filter((p) => p.hb !== null && p.ivb !== null)
-              .map((p, i) => (
+          ? plottedPitches.map((p, i) => (
                 <circle
                   key={`m-p-${i}`}
                   cx={px(Number(p.hb))}
@@ -4120,7 +4304,10 @@ export default function PitchingSuite({
                     })
                   }
                   onMouseLeave={() => setMovementHover(null)}
-                  onClick={() => openActionModal([p])}
+                  onClick={() => {
+                    if (isPitchEditLassoEnabled) return;
+                    openActionModal([p]);
+                  }}
                 />
               ))
           : null}
@@ -4147,6 +4334,7 @@ export default function PitchingSuite({
                   }
                   onMouseLeave={() => setMovementHover(null)}
                   onClick={() => {
+                    if (isPitchEditLassoEnabled) return;
                     const matched = summaryPoints.filter((sp) => sp.pitch_type === p.pitch_type);
                     if (matched.length) openActionModal(matched);
                   }}
@@ -4185,6 +4373,7 @@ export default function PitchingSuite({
                     }
                     onMouseLeave={() => setMovementHover(null)}
                     onClick={() => {
+                      if (isPitchEditLassoEnabled) return;
                       const matched = summaryPoints.filter((sp) => sp.pitch_type === p.pitch_type);
                       if (matched.length) openActionModal(matched);
                     }}
@@ -4193,9 +4382,21 @@ export default function PitchingSuite({
                 );
               })
           : null}
+        {isPitchEditLassoEnabled && movementLasso ? (
+          <rect
+            x={Math.min(movementLasso.startX, movementLasso.endX)}
+            y={Math.min(movementLasso.startY, movementLasso.endY)}
+            width={Math.abs(movementLasso.endX - movementLasso.startX)}
+            height={Math.abs(movementLasso.endY - movementLasso.startY)}
+            fill="rgba(59,130,246,0.16)"
+            stroke="rgba(147,197,253,0.95)"
+            strokeWidth={1.4}
+            pointerEvents="none"
+          />
+        ) : null}
       </svg>
     );
-  }, [summaryPoints, avgByType, movementView, breakLines, plottedPitcherHand, targetShapes]);
+  }, [summaryPoints, avgByType, movementView, breakLines, plottedPitcherHand, targetShapes, isPitchEditLassoEnabled, movementLasso]);
 
   const locationSvg = useMemo(() => {
     const w = 520;
@@ -5338,6 +5539,22 @@ export default function PitchingSuite({
                   />
                 </label>
               </div>
+              {isPitchEditDisplay ? (
+                <div className="portal-form-grid" style={{ marginTop: '0.55rem' }}>
+                  <label>
+                    Pitch Edit Selection
+                    <SearchableSingleSelect
+                      options={[
+                        { value: 'single', label: 'Single Click' },
+                        { value: 'lasso', label: 'Lasso Drag' },
+                      ]}
+                      value={pitchEditSelectMode}
+                      onChange={(next) => setPitchEditSelectMode((next as PitchEditSelectMode) || 'single')}
+                      placeholder="Single Click"
+                    />
+                  </label>
+                </div>
+              ) : null}
               {canUsePitchEdits ? (
                 <div style={{ marginTop: '0.8rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.12)' }}>
                   <p className="portal-muted-text" style={{ margin: 0 }}>
@@ -5934,7 +6151,7 @@ export default function PitchingSuite({
                           let leaderboardRankCounter = 0;
                           return leaderboardRowsWithPins.map((row, idx) => {
                           const rowKey = String(row[displayedTableColumns?.[0] ?? 'row'] ?? 'Unknown');
-                          const rowPitches = overview.row_pitches_by_key?.[rowKey] ?? [];
+                          const rowPitches = resolveEditablePitchesForRow(row, rowKey);
                           const isAllRow = isLeaderboardPage && String(row[displayedTableColumns?.[0] ?? ''] ?? '').trim().toLowerCase() === 'all';
                           const isPinnedAllRow = isLeaderboardPage && String(row[displayedTableColumns?.[0] ?? ''] ?? '').trim().toLowerCase() === 'all (pinned)';
                           const rankValue = isAllRow || isPinnedAllRow ? '' : String(++leaderboardRankCounter);

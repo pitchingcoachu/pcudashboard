@@ -471,9 +471,9 @@ export async function DELETE(request: Request) {
   const pool = getDbPool();
   try {
     await ensureDashboardCustomTableSchema(pool);
-    const protectedCheck = await pool.query<{ name: string }>(
+    const target = await pool.query<{ id: number; name: string; school_code: string }>(
       `
-      SELECT name
+      SELECT id, name, school_code
       FROM dashboard_custom_tables
       WHERE id = $1
         AND ($5::boolean OR organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
@@ -481,19 +481,31 @@ export async function DELETE(request: Request) {
       `,
       [id, organizationIds, hasUserScope, userId, isGlobalAdmin]
     );
-    const existingName = String(protectedCheck.rows[0]?.name ?? '').trim();
+    if (!(target.rowCount ?? 0)) {
+      return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
+    }
+    const existingName = String(target.rows[0]?.name ?? '').trim();
     if (normalizedTableNameKey(existingName) === normalizedTableNameKey("Jared's Dashboard")) {
       return NextResponse.json({ error: "Jared's Dashboard is protected and cannot be deleted." }, { status: 400 });
     }
     const result = await pool.query(
       `
       DELETE FROM dashboard_custom_tables
-      WHERE id = $1
+      WHERE school_code = $6
+        AND lower(regexp_replace(trim(name), '\\s+', ' ', 'g')) = $7
         AND ($5::boolean OR organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
       `,
-      [id, organizationIds, hasUserScope, userId, isGlobalAdmin]
+      [
+        id,
+        organizationIds,
+        hasUserScope,
+        userId,
+        isGlobalAdmin,
+        target.rows[0].school_code,
+        normalizedTableNameKey(target.rows[0].name),
+      ]
     );
-    return NextResponse.json({ ok: (result.rowCount ?? 0) > 0 });
+    return NextResponse.json({ ok: (result.rowCount ?? 0) > 0, deletedCount: Number(result.rowCount ?? 0) });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to delete custom table.' },

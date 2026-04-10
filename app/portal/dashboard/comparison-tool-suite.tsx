@@ -1970,12 +1970,12 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         <line x1={px(0)} y1={py(0)} x2={px(0)} y2={py(yMax)} stroke="rgba(255,255,255,0.85)" />
         <line x1={px(xMin)} y1={py(0)} x2={px(xMax)} y2={py(0)} stroke="rgba(255,255,255,0.85)" />
         {xTicks.map((tick) => (
-          <text key={`cmp-r-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="#000000">
+          <text key={`cmp-r-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="rgba(255,255,255,0.9)">
             {tick}
           </text>
         ))}
         {yTicks.map((tick) => (
-          <text key={`cmp-r-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="#000000">
+          <text key={`cmp-r-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="rgba(255,255,255,0.9)">
             {tick}
           </text>
         ))}
@@ -2099,12 +2099,12 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         <line x1={px(xMin)} y1={py(0)} x2={px(xMax)} y2={py(0)} stroke="rgba(255,255,255,0.85)" />
         <line x1={px(0)} y1={py(yMin)} x2={px(0)} y2={py(yMax)} stroke="rgba(255,255,255,0.85)" />
         {ticks.map((tick) => (
-          <text key={`cmp-m-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="#000000">
+          <text key={`cmp-m-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="rgba(255,255,255,0.9)">
             {tick}
           </text>
         ))}
         {ticks.map((tick) => (
-          <text key={`cmp-m-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="#000000">
+          <text key={`cmp-m-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="rgba(255,255,255,0.9)">
             {tick}
           </text>
         ))}
