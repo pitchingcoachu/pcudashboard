@@ -8,6 +8,7 @@ import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-bran
 import DashboardSchoolSelector from './dashboard-school-selector';
 import DashboardShell from './dashboard-shell';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
+import PortalThemeToggle from '../theme-toggle';
 
 export default async function PortalDashboardPage() {
   const session = await requirePortalSession();
@@ -92,6 +93,7 @@ export default async function PortalDashboardPage() {
             <h1>{session.name ?? session.email}</h1>
           </div>
           <LogoutButton />
+          <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">
             <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">
               <svg viewBox="0 0 24 24" aria-hidden="true">

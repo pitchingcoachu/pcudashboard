@@ -966,6 +966,10 @@ function AbPaChart({
   const [hover, setHover] = useState<ChartHover>(null);
   const abHoverTextColor = (bg?: string): string => {
     const value = String(bg ?? '').trim().toLowerCase();
+    if (value.includes('--portal-fastball-color')) {
+      const isLight = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+      return isLight ? '#fff' : '#111';
+    }
     if (value === '#ffffff' || value === '#fff' || value === 'white' || value === 'rgb(255,255,255)' || value === 'rgb(255, 255, 255)') {
       return '#111';
     }
@@ -1237,8 +1241,10 @@ export default function PitchingSuite({
   const [enableTableColors, setEnableTableColors] = useState(true);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [loadingCustomTables, setLoadingCustomTables] = useState(false);
+  const [customTablesLoaded, setCustomTablesLoaded] = useState(false);
   const [customTableName, setCustomTableName] = useState('');
   const [selectedCustomTableId, setSelectedCustomTableId] = useState<number | null>(null);
+  const proDefaultTableAppliedRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2052,12 +2058,27 @@ export default function PitchingSuite({
       setCustomSaveMessage(requestError instanceof Error ? requestError.message : 'Failed to load custom tables.');
     } finally {
       setLoadingCustomTables(false);
+      setCustomTablesLoaded(true);
     }
   };
 
   useEffect(() => {
     void loadCustomTables();
   }, []);
+
+  useEffect(() => {
+    if (!isPro || !customTablesLoaded || proDefaultTableAppliedRef.current) return;
+    proDefaultTableAppliedRef.current = true;
+    if (selectedCustomTableId !== null || tableMode !== 'Live') return;
+    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const preferred = customTables.find((item) => normalize(item.name) === 'jaredsdashboard');
+    if (!preferred) return;
+    setTableMode('Custom');
+    setSelectedCustomTableId(preferred.id);
+    setCustomTableName(preferred.name);
+    setCustomTableColumns(preferred.columns ?? []);
+    setAppliedFilterVersion((current) => current + 1);
+  }, [isPro, customTablesLoaded, customTables, selectedCustomTableId, tableMode]);
 
   useEffect(() => {
     setAbGameKey('');
@@ -2228,7 +2249,7 @@ export default function PitchingSuite({
   };
 
   const pitchColors: Record<string, string> = {
-    Fastball: '#ffffff',
+    Fastball: 'var(--portal-fastball-color)',
     Sinker: 'orange',
     Cutter: 'brown',
     Slider: 'red',
@@ -2242,6 +2263,10 @@ export default function PitchingSuite({
   const pitchHoverTextColor = (bg?: string): string => {
     if (!bg) return '#fff';
     const v = bg.toLowerCase();
+    if (v.includes('--portal-fastball-color')) {
+      const isLight = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+      return isLight ? '#fff' : '#111';
+    }
     if (v === '#ffffff' || v === 'white' || v === 'orange' || v === 'turquoise') return '#111';
     return '#fff';
   };
@@ -3911,7 +3936,7 @@ export default function PitchingSuite({
     const xTicks = [-4, -2, 0, 2, 4];
     const yTicks = Array.from({ length: Math.max(1, Math.floor(yMax - yMin) + 1) }, (_, i) => yMin + i);
     return (
-      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setReleaseHover(null)}>
+      <svg className="portal-plot-dark-grid" viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setReleaseHover(null)}>
         {xTicks.map((tick) => (
           <line key={`r-x-grid-${tick}`} x1={px(tick)} y1={py(yMin)} x2={px(tick)} y2={py(yMax)} stroke="rgba(255,255,255,0.18)" />
         ))}
@@ -3932,12 +3957,12 @@ export default function PitchingSuite({
         <line x1={px(0)} y1={py(0)} x2={px(0)} y2={py(yMax)} stroke="rgba(255,255,255,0.85)" />
         <line x1={px(xMin)} y1={py(0)} x2={px(xMax)} y2={py(0)} stroke="rgba(255,255,255,0.85)" />
         {xTicks.map((tick) => (
-          <text key={`r-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="rgba(255,255,255,0.9)">
+          <text key={`r-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="#000000">
             {tick}
           </text>
         ))}
         {yTicks.map((tick) => (
-          <text key={`r-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="rgba(255,255,255,0.9)">
+          <text key={`r-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="#000000">
             {tick}
           </text>
         ))}
@@ -4054,7 +4079,7 @@ export default function PitchingSuite({
           }))
       : [];
     return (
-      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setMovementHover(null)}>
+      <svg className="portal-plot-dark-grid" viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setMovementHover(null)}>
         {ticks.map((tick) => (
           <line key={`m-x-grid-${tick}`} x1={px(tick)} y1={py(yMin)} x2={px(tick)} y2={py(yMax)} stroke="rgba(255,255,255,0.18)" />
         ))}
@@ -4064,12 +4089,12 @@ export default function PitchingSuite({
         <line x1={px(xMin)} y1={py(0)} x2={px(xMax)} y2={py(0)} stroke="rgba(255,255,255,0.85)" />
         <line x1={px(0)} y1={py(yMin)} x2={px(0)} y2={py(yMax)} stroke="rgba(255,255,255,0.85)" />
         {ticks.map((tick) => (
-          <text key={`m-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="rgba(255,255,255,0.9)">
+          <text key={`m-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="#000000">
             {tick}
           </text>
         ))}
         {ticks.map((tick) => (
-          <text key={`m-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="rgba(255,255,255,0.9)">
+          <text key={`m-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="#000000">
             {tick}
           </text>
         ))}

@@ -188,7 +188,7 @@ const VELOCITY_MODES: VelocityMode[] = ['Velocity Chart (Game/Inning)', 'Average
 const RELEASE_VIEWS: ReleaseView[] = ['Averages Only', 'Averages and Pitches', 'Pitches'];
 const MOVEMENT_VIEWS: MovementView[] = ['Averages Only', 'Averages and Pitches'];
 const PITCH_COLORS: Record<string, string> = {
-  Fastball: '#ffffff',
+  Fastball: 'var(--portal-fastball-color)',
   Sinker: 'orange',
   Cutter: 'brown',
   Slider: 'red',
@@ -482,6 +482,10 @@ function resultLabel(pitchCallRaw: string | null | undefined, playResultRaw: str
 function pitchHoverTextColor(bg?: string): string {
   if (!bg) return '#fff';
   const v = bg.toLowerCase();
+  if (v.includes('--portal-fastball-color')) {
+    const isLight = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+    return isLight ? '#fff' : '#111';
+  }
   if (v === '#ffffff' || v === 'white' || v === 'orange' || v === 'turquoise') return '#111';
   return '#fff';
 }
@@ -1471,7 +1475,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       return <circle key={key} cx={x} cy={y} r={8.4} fill={fill} {...hoverProps} />;
     };
     return (
-      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setLocationHover(null)}>
+      <svg className="portal-plot-dark-grid" viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setLocationHover(null)}>
         <polygon points={`${px(-0.75)},${py(0.55)} ${px(0.75)},${py(0.55)} ${px(0.75)},${py(0.65)} ${px(0)},${py(0.75)} ${px(-0.75)},${py(0.65)}`} fill="none" stroke="rgba(255,255,255,0.85)" />
         <rect x={px(compLeft)} y={py(compTop)} width={px(compRight) - px(compLeft)} height={py(compBottom) - py(compTop)} fill="none" stroke="rgba(255,255,255,0.72)" />
         <line x1={px(compLeft)} y1={py(strikeCenterY)} x2={px(strikeLeft)} y2={py(strikeCenterY)} stroke="rgba(255,255,255,0.58)" />
@@ -1945,7 +1949,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       extension: sums.extensionN ? sums.extension / sums.extensionN : null,
     }));
     return (
-      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setLocationHover(null)}>
+      <svg className="portal-plot-dark-grid" viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 360 }} onMouseLeave={() => setLocationHover(null)}>
         {xTicks.map((tick) => (
           <line key={`cmp-r-x-grid-${tick}`} x1={px(tick)} y1={py(yMin)} x2={px(tick)} y2={py(yMax)} stroke="rgba(255,255,255,0.18)" />
         ))}
@@ -1966,12 +1970,12 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         <line x1={px(0)} y1={py(0)} x2={px(0)} y2={py(yMax)} stroke="rgba(255,255,255,0.85)" />
         <line x1={px(xMin)} y1={py(0)} x2={px(xMax)} y2={py(0)} stroke="rgba(255,255,255,0.85)" />
         {xTicks.map((tick) => (
-          <text key={`cmp-r-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="rgba(255,255,255,0.9)">
+          <text key={`cmp-r-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="#000000">
             {tick}
           </text>
         ))}
         {yTicks.map((tick) => (
-          <text key={`cmp-r-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="rgba(255,255,255,0.9)">
+          <text key={`cmp-r-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="#000000">
             {tick}
           </text>
         ))}
@@ -2095,12 +2099,12 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         <line x1={px(xMin)} y1={py(0)} x2={px(xMax)} y2={py(0)} stroke="rgba(255,255,255,0.85)" />
         <line x1={px(0)} y1={py(yMin)} x2={px(0)} y2={py(yMax)} stroke="rgba(255,255,255,0.85)" />
         {ticks.map((tick) => (
-          <text key={`cmp-m-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="rgba(255,255,255,0.9)">
+          <text key={`cmp-m-x-label-${tick}`} x={px(tick)} y={py(yMin) + 20} textAnchor="middle" fontSize={10.5} fill="#000000">
             {tick}
           </text>
         ))}
         {ticks.map((tick) => (
-          <text key={`cmp-m-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="rgba(255,255,255,0.9)">
+          <text key={`cmp-m-y-label-${tick}`} x={px(xMin) - 8} y={py(tick) + 3.5} textAnchor="end" fontSize={10.5} fill="#000000">
             {tick}
           </text>
         ))}

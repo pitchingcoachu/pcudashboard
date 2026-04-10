@@ -381,7 +381,7 @@ const PITCH_ABBR: Record<string, string> = {
   Undefined: 'UN',
 };
 const PITCH_COLORS: Record<string, string> = {
-  Fastball: '#ffffff',
+  Fastball: 'var(--portal-fastball-color)',
   Sinker: 'orange',
   Cutter: 'brown',
   Slider: 'red',
@@ -1833,6 +1833,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const hoverTextColor = (bg?: string) => {
     if (!bg) return '#ffffff';
     const color = bg.trim().toLowerCase();
+    if (color.includes('--portal-fastball-color')) {
+      const isLight = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+      return isLight ? '#ffffff' : '#111827';
+    }
     if (['#ffffff', 'white', '#f8fafc', '#e5e7eb', 'yellow', 'orange'].includes(color)) return '#111827';
     return '#ffffff';
   };

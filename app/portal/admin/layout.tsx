@@ -7,6 +7,7 @@ import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-bran
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
+import PortalThemeToggle from '../theme-toggle';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -102,6 +103,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <h1>{session.name ?? session.email}</h1>
           </div>
           <LogoutButton />
+          <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">
             <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">
               <svg viewBox="0 0 24 24" aria-hidden="true">

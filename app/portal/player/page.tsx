@@ -16,6 +16,7 @@ import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgram
 import MobileNavSelect from '../mobile-nav-select';
 import PreviewAthleteSelect from '../preview-athlete-select';
 import LogoutButton from '../logout-button';
+import PortalThemeToggle from '../theme-toggle';
 import ProfileDashboard from './profile-dashboard';
 
 type PlayerPageProps = {
@@ -103,12 +104,13 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             </nav>
           </div>
           <div className="portal-header-right">
-            <div className="portal-user-meta" aria-label="Logged in user">
-              <p>Logged In As</p>
-              <h1>{session.name ?? session.email}</h1>
-            </div>
-            <LogoutButton />
+          <div className="portal-user-meta" aria-label="Logged in user">
+            <p>Logged In As</p>
+            <h1>{session.name ?? session.email}</h1>
           </div>
+          <LogoutButton />
+          <PortalThemeToggle />
+        </div>
         </header>
         <section className="portal-panel">
           <h2>Programming Data</h2>
@@ -224,6 +226,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             <h1>{session.role === 'admin' || session.role === 'coach' ? player.fullName : session.name ?? session.email}</h1>
           </div>
           <LogoutButton />
+          <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">
             <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">
               <svg viewBox="0 0 24 24" aria-hidden="true">

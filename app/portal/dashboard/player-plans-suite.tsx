@@ -356,7 +356,7 @@ function toNum(value: unknown): number | null {
 }
 
 const GOAL_CHART_COLORS: Record<string, string> = {
-  Fastball: '#ffffff',
+  Fastball: 'var(--portal-fastball-color)',
   Sinker: 'orange',
   Cutter: 'brown',
   Slider: 'red',
@@ -371,6 +371,10 @@ const GOAL_CHART_COLORS: Record<string, string> = {
 function pitchHoverTextColor(bg?: string): string {
   if (!bg) return '#fff';
   const v = bg.toLowerCase();
+  if (v.includes('--portal-fastball-color')) {
+    const isLight = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+    return isLight ? '#fff' : '#111';
+  }
   if (v === '#ffffff' || v === 'white' || v === 'orange' || v === 'turquoise') return '#111';
   return '#fff';
 }
