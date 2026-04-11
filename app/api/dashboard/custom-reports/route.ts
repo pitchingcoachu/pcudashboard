@@ -178,7 +178,9 @@ export async function GET() {
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const hasUserScope = Number.isFinite(userId) && userId > 0;
-  if (!organizationIds.length && !isGlobalAdmin) {
+  // Allow user-owned fallback reads when org scope is temporarily empty.
+  // This prevents saved reports from "disappearing" for valid logged-in users.
+  if (!organizationIds.length && !isGlobalAdmin && !hasUserScope) {
     return NextResponse.json({ error: 'No valid organization scope for custom reports.' }, { status: 400 });
   }
   const pool = getDbPool();
