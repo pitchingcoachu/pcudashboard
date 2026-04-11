@@ -1845,6 +1845,19 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     if (['#ffffff', 'white', '#f8fafc', '#e5e7eb', 'yellow', 'orange'].includes(color)) return '#111827';
     return '#ffffff';
   };
+  const resolvePitchColor = (pitchTypeRaw: string): string => {
+    const raw = PITCH_COLORS[pitchTypeRaw] ?? '#9ca3af';
+    if (!raw.includes('var(')) return raw;
+    if (typeof document === 'undefined') return '#ffffff';
+    const cssVarMatch = raw.match(/var\((--[^),\s]+)(?:,\s*([^)]+))?\)/i);
+    if (!cssVarMatch) return raw;
+    const varName = cssVarMatch[1];
+    const fallback = (cssVarMatch[2] ?? '#ffffff').trim();
+    const fromBody = getComputedStyle(document.body).getPropertyValue(varName).trim();
+    if (fromBody) return fromBody;
+    const fromRoot = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+    return fromRoot || fallback || '#ffffff';
+  };
   const pitchTypeCellStyle = (value: string) => {
     const canonical = canonicalPitchType(value);
     if (!canonical) return null;
@@ -4603,7 +4616,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               if (!Number.isFinite(rawX) || !Number.isFinite(y)) return null;
                               const x = isProSchool ? -rawX : rawX;
                               const pitchType = (point.pitch_type ?? '').trim() || 'Undefined';
-                              const color = PITCH_COLORS[pitchType] ?? '#9ca3af';
+                              const color = resolvePitchColor(pitchType);
                               const shape = resultShape(
                                 String(point.pitch_call ?? ''),
                                 String(point.play_result ?? ''),
