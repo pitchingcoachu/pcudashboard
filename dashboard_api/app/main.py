@@ -3897,6 +3897,14 @@ _PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS = max(
 _PRO_DAILY_ROLLUP_LAST_AT: float = 0.0
 _PRO_DAILY_ROLLUP_REFRESH_LOCK = threading.Lock()
 _PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
+_ROLLUP_HEARTBEAT_SECONDS = max(
+    30.0, float(os.getenv("DASHBOARD_ROLLUP_HEARTBEAT_SECONDS", "90"))
+)
+_ROLLUP_SCHEDULER_ENABLED = str(os.getenv("DASHBOARD_ROLLUP_SCHEDULER_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
+_ROLLUP_SCHEDULER_LOCK = threading.Lock()
+_ROLLUP_SCHEDULER_RUNNING = False
+_LEAGUE_ROLLUP_ADVISORY_LOCK_KEY = 910001
+_PRO_ROLLUP_ADVISORY_LOCK_KEY = 910002
 
 
 def _ensure_pitch_event_edits_table(cur: Any) -> None:
@@ -4745,6 +4753,10 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
         return
     try:
         with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%(k)s) AS locked", {"k": _LEAGUE_ROLLUP_ADVISORY_LOCK_KEY})
+            lock_row = cur.fetchone() or {}
+            if not bool(lock_row.get("locked")):
+                return
             cur.execute("SET LOCAL lock_timeout = '2s'")
             # Full LEAGUE rollup backfills can exceed 5 minutes on large histories.
             cur.execute("SET LOCAL statement_timeout = '1200s'")
@@ -5425,6 +5437,8 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                 except Exception:
                     pass
         _LEAGUE_DAILY_ROLLUP_LAST_AT = now
+        _overview_cache_invalidate_school("LEAGUE")
+        _filters_cache_invalidate_school("LEAGUE")
     except Exception as exc:
         logger.warning("league daily rollup refresh failed: %s", exc)
         return
@@ -6321,7 +6335,7 @@ def _try_pitching_overview_daily_rollup(
                       COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip3', '')), ''), '') AS video_clip_3
                     FROM public.pitch_events pe
                     WHERE {chart_where_sql}
-                    ORDER BY pe.session_date DESC, COALESCE(pe.created_at, NOW()) DESC, pe.id DESC
+                    ORDER BY pe.session_date DESC, pe.created_at DESC NULLS LAST, pe.id DESC
                     LIMIT %(limit_count)s::int
                     """,
                     chart_params,
@@ -6396,6 +6410,10 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
         return
     try:
         with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%(k)s) AS locked", {"k": _PRO_ROLLUP_ADVISORY_LOCK_KEY})
+            lock_row = cur.fetchone() or {}
+            if not bool(lock_row.get("locked")):
+                return
             cur.execute("SET LOCAL lock_timeout = '2s'")
             cur.execute("SET LOCAL statement_timeout = '1800s'")
             for stmt in [
@@ -7100,6 +7118,8 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                 },
             )
         _PRO_DAILY_ROLLUP_LAST_AT = now
+        _overview_cache_invalidate_school("PRO")
+        _filters_cache_invalidate_school("PRO")
     except Exception as exc:
         logger.warning("pro rollup refresh failed: %s", exc)
         return
@@ -7126,6 +7146,49 @@ def _kick_pro_rollup_refresh_background() -> None:
     except Exception:
         with _PRO_DAILY_ROLLUP_REFRESH_LOCK:
             _PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
+
+
+def _start_rollup_scheduler_background() -> None:
+    global _ROLLUP_SCHEDULER_RUNNING
+    if not _ROLLUP_SCHEDULER_ENABLED:
+        return
+    with _ROLLUP_SCHEDULER_LOCK:
+        if _ROLLUP_SCHEDULER_RUNNING:
+            return
+        _ROLLUP_SCHEDULER_RUNNING = True
+
+    def _worker() -> None:
+        # Run one immediate catch-up pass on boot, then keep rollups hot.
+        try:
+            _refresh_league_daily_rollup(force=True)
+        except Exception:
+            pass
+        try:
+            _refresh_pro_daily_rollup(force=True)
+        except Exception:
+            pass
+        while True:
+            try:
+                _refresh_league_daily_rollup(force=False)
+            except Exception as exc:
+                logger.warning("league rollup scheduler tick failed: %s", exc)
+            try:
+                _refresh_pro_daily_rollup(force=False)
+            except Exception as exc:
+                logger.warning("pro rollup scheduler tick failed: %s", exc)
+            time.sleep(_ROLLUP_HEARTBEAT_SECONDS)
+
+    try:
+        thread = threading.Thread(target=_worker, name="rollup-scheduler", daemon=True)
+        thread.start()
+    except Exception:
+        with _ROLLUP_SCHEDULER_LOCK:
+            _ROLLUP_SCHEDULER_RUNNING = False
+
+
+@app.on_event("startup")
+def _dashboard_api_startup() -> None:
+    _start_rollup_scheduler_background()
 
 
 def _try_pro_pitching_overview_rollup(
@@ -12376,6 +12439,28 @@ def pitching_filters(
                     {"school_code": school_code},
                 )
                 date_row = cur.fetchone() or {}
+                # Rollup snapshots can lag live ingest; keep date bounds current from raw rows.
+                # This ensures UI date pickers expose newly ingested days immediately.
+                cur.execute(
+                    """
+                    SELECT
+                      MIN(session_date)::text AS raw_min_date,
+                      MAX(session_date)::text AS raw_max_date
+                    FROM public.pitch_events
+                    WHERE school_code = %(school_code)s
+                    """,
+                    {"school_code": school_code},
+                )
+                raw_date_row = cur.fetchone() or {}
+                rollup_min = str(date_row.get("min_date") or "")
+                rollup_max = str(date_row.get("max_date") or "")
+                raw_min = str(raw_date_row.get("raw_min_date") or "")
+                raw_max = str(raw_date_row.get("raw_max_date") or "")
+                if raw_min and (not rollup_min or raw_min < rollup_min):
+                    date_row["min_date"] = raw_min
+                if raw_max and (not rollup_max or raw_max > rollup_max):
+                    date_row["max_date"] = raw_max
+                    _kick_league_rollup_refresh_background()
 
                 cur.execute(
                     """
@@ -13105,7 +13190,7 @@ def pitching_overview(
         return response_payload
     should_try_league_rollup_fast = (
         school_code == "LEAGUE"
-        and league_rollup_candidate
+        and (league_rollup_candidate or chart_only)
     )
     rollup_fast_response: Optional[PitchingOverviewResponse] = None
     if should_try_league_rollup_fast:
