@@ -22,6 +22,14 @@ function resolveOverviewCachePolicy(schoolCode: string): { ttlMs: number; staleT
   return { ttlMs: 45000, staleTtlMs: 180000 };
 }
 
+function resolveOverviewRetries(schoolCode: string): number {
+  const upper = String(schoolCode ?? '').trim().toUpperCase();
+  // League overview/heatmap requests are long-running and most exposed to brief
+  // backend restarts; allow a couple retries before surfacing an error.
+  if (upper === 'LEAGUE') return 2;
+  return 1;
+}
+
 function parseIsoDate(value: string): Date | null {
   if (!value) return null;
   const d = new Date(value);
@@ -165,7 +173,7 @@ export async function GET(request: Request) {
       ttlMs: cachePolicy.ttlMs,
       staleTtlMs: cachePolicy.staleTtlMs,
       timeoutMs: resolveOverviewTimeoutMs(schoolCode),
-      retries: 0,
+      retries: resolveOverviewRetries(schoolCode),
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {

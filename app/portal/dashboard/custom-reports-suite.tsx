@@ -689,9 +689,9 @@ function SearchableSingleSelect({
         <div className="portal-search-select-menu">
           <input className="portal-search-select-input" placeholder="Type to filter..." value={query} onChange={(event) => setQuery(event.target.value)} />
           <div className="portal-search-select-options">
-            {filtered.map((option) => (
+            {filtered.map((option, idx) => (
               <button
-                key={option.value}
+                key={`${option.value}-${option.label}-${idx}`}
                 type="button"
                 className="portal-search-select-option"
                 onClick={() => {
@@ -758,8 +758,13 @@ function SearchableMultiSelect({
         <div className="portal-search-select-menu">
           <input className="portal-search-select-input" placeholder="Type to filter..." value={query} onChange={(event) => setQuery(event.target.value)} />
           <div className="portal-search-select-options">
-            {filtered.map((option) => (
-              <button key={option.value} type="button" className="portal-search-select-option portal-search-select-option-multi" onClick={() => toggle(option.value)}>
+            {filtered.map((option, idx) => (
+              <button
+                key={`${option.value}-${option.label}-${idx}`}
+                type="button"
+                className="portal-search-select-option portal-search-select-option-multi"
+                onClick={() => toggle(option.value)}
+              >
                 <span>{values.includes(option.value) ? '✓' : ''}</span>
                 <span>{option.label}</span>
               </button>
