@@ -8947,39 +8947,38 @@ def _pro_fetch_api_live_tail_rows(
                     except Exception:
                         pass
             return cached
-        # Keep UI responsive with cache-first behavior, but never hide today's live data.
-        # If the request window includes today and cache is cold, fetch just today's rows now,
-        # and continue warming the broader window in background.
-        today_rows: List[Dict[str, Any]] = []
-        if w1 >= today:
-            today_start = today
-            today_end = today
-            today_key = _pro_api_rows_cache_key(today_start, today_end, sport_ids, False)
-            cached_today = _pro_api_rows_cache_get(today_key)
-            if cached_today is not None and len(cached_today) > 0:
-                today_rows = cached_today
-            else:
-                try:
-                    with _PRO_API_ROWS_CACHE_LOCK:
-                        _PRO_API_ROWS_CACHE.pop(today_key, None)
-                except Exception:
-                    pass
-                try:
-                    today_rows = _pro_fetch_api_rows_window(
-                        start_date=today_start,
-                        end_date=today_end,
-                        sport_ids=sport_ids,
-                        nontracked_aaa_only=False,
-                    )
-                except Exception:
-                    today_rows = []
+        # Keep UI responsive with cache-first behavior, but never hide a cold-window query.
+        # Fetch the requested tail day synchronously (often a single-date dashboard query),
+        # while warming the full window in background.
+        tail_rows: List[Dict[str, Any]] = []
+        tail_start = w1
+        tail_end = w1
+        tail_key = _pro_api_rows_cache_key(tail_start, tail_end, sport_ids, False)
+        cached_tail = _pro_api_rows_cache_get(tail_key)
+        if cached_tail is not None and len(cached_tail) > 0:
+            tail_rows = cached_tail
+        else:
+            try:
+                with _PRO_API_ROWS_CACHE_LOCK:
+                    _PRO_API_ROWS_CACHE.pop(tail_key, None)
+            except Exception:
+                pass
+            try:
+                tail_rows = _pro_fetch_api_rows_window(
+                    start_date=tail_start,
+                    end_date=tail_end,
+                    sport_ids=sport_ids,
+                    nontracked_aaa_only=False,
+                )
+            except Exception:
+                tail_rows = []
         _kick_pro_api_rows_window_refresh(
             start_date=w0,
             end_date=w1,
             sport_ids=sport_ids,
             nontracked_aaa_only=False,
         )
-        return today_rows
+        return tail_rows
     return _pro_fetch_api_rows_window(
         start_date=w0,
         end_date=w1,

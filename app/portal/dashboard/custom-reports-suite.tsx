@@ -3190,7 +3190,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         const drawWidth = rawW * fitScale;
         const drawHeight = rawH * fitScale;
         const drawX = (pageWidth - drawWidth) / 2;
-        const drawY = (pageHeight - drawHeight) / 2;
+        const drawY = margin;
         pdf.setFillColor(4, 5, 7);
         pdf.rect(0, 0, pageWidth, pageHeight, 'F');
         pdf.addImage(canvas.toDataURL('image/jpeg', 0.84), 'JPEG', drawX, drawY, drawWidth, drawHeight, undefined, 'FAST');
