@@ -39,12 +39,14 @@ function parseOrgSchoolMap(raw: string): Record<number, string> {
 }
 
 function parseGlobalAdminEmails(): string[] {
-  const raw = String(
-    process.env.GLOBAL_ADMIN_EMAILS ??
-      'jgaynor@pitchingcoachu.com,ahalverson@pitchingcoachu.com,jchipman@pitchingcoachu.com'
-  );
-  const values = raw
-    .split(',')
+  const base = [
+    'jgaynor@pitchingcoachu.com',
+    'ahalverson@pitchingcoachu.com',
+    'jchipman@pitchingcoachu.com',
+    'patrick.jones@rosterpilot.com',
+    'corralf34@gmail.com',
+  ];
+  const values = [...base, ...String(process.env.GLOBAL_ADMIN_EMAILS ?? '').split(',')]
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean);
   return Array.from(new Set(values));
@@ -176,11 +178,13 @@ async function ensureDashboardCustomReportsSchema(pool: Pool): Promise<void> {
         name TEXT NOT NULL,
         payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_by_email TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
     await client.query(`ALTER TABLE dashboard_custom_reports ADD COLUMN IF NOT EXISTS applies_to_all_schools BOOLEAN NOT NULL DEFAULT FALSE;`);
+    await client.query(`ALTER TABLE dashboard_custom_reports ADD COLUMN IF NOT EXISTS created_by_email TEXT;`);
     await client.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_custom_reports_org_school_scope_name ON dashboard_custom_reports (organization_id, school_code, applies_to_all_schools, lower(name));`
     );
@@ -190,6 +194,18 @@ async function ensureDashboardCustomReportsSchema(pool: Pool): Promise<void> {
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_dashboard_custom_reports_org_global_updated ON dashboard_custom_reports (organization_id, applies_to_all_schools, updated_at DESC);`
     );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_dashboard_custom_reports_created_by_email ON dashboard_custom_reports (lower(created_by_email));`
+    );
+    await client.query(`
+      UPDATE dashboard_custom_reports d
+      SET created_by_email = LOWER(BTRIM(u.email))
+      FROM auth_users u
+      WHERE d.created_by_user_id = u.id
+        AND (d.created_by_email IS NULL OR BTRIM(d.created_by_email) = '')
+        AND u.email IS NOT NULL
+        AND BTRIM(u.email) <> '';
+    `);
     await client.query('COMMIT');
     global.__dashboardCustomReportsSchemaReady = true;
   } catch (error) {
@@ -209,6 +225,7 @@ export async function GET() {
   const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
+  const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
   const effectiveUserId =
     Number.isFinite(userId) && userId > 0
       ? userId
@@ -237,10 +254,11 @@ export async function GET() {
       WHERE (
         (($5::boolean OR organization_id = ANY($1::int[])) AND (school_code = $2 OR applies_to_all_schools = TRUE))
         OR ($3::boolean AND created_by_user_id = $4)
+        OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
       )
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrgIds, schoolCode, hasUserScope, effectiveUserId, isGlobalAdmin]
+      [scopedOrgIds, schoolCode, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
     );
     let rows = result.rows;
     if (!rows.length) {
@@ -256,12 +274,37 @@ export async function GET() {
         `
         SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
         FROM dashboard_custom_reports
-        WHERE $4::boolean OR organization_id = ANY($1::int[]) OR ($2::boolean AND created_by_user_id = $3)
+        WHERE $4::boolean
+           OR organization_id = ANY($1::int[])
+           OR ($2::boolean AND created_by_user_id = $3)
+           OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
         ORDER BY updated_at DESC, id DESC
         `,
-        [scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin]
+        [scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
       );
       rows = fallback.rows;
+    }
+    if (!rows.length) {
+      // Last-resort rescue for redeploy/session scope drift: return school/global
+      // reports rather than leaving Custom Reports blank.
+      const schoolFallback = await pool.query<{
+        id: number;
+        name: string;
+        applies_to_all_schools: boolean;
+        school_code: string;
+        payload_json: unknown;
+        created_at: string;
+        updated_at: string;
+      }>(
+        `
+        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
+        FROM dashboard_custom_reports
+        WHERE school_code = $1 OR applies_to_all_schools = TRUE
+        ORDER BY updated_at DESC, id DESC
+        `,
+        [schoolCode]
+      );
+      rows = schoolFallback.rows;
     }
 
     // Collapse duplicate names (e.g., school-scoped + all-schools copy).
@@ -318,6 +361,7 @@ export async function POST(request: Request) {
   const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
+  const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
   const effectiveUserId =
     Number.isFinite(userId) && userId > 0
       ? userId
@@ -359,12 +403,18 @@ export async function POST(request: Request) {
            SET name = $3,
                applies_to_all_schools = $5,
                payload_json = $4::jsonb,
+               created_by_email = CASE WHEN $9::text <> '' THEN $9::text ELSE created_by_email END,
                updated_at = NOW()
          WHERE id = $2
-           AND ($8::boolean OR organization_id = ANY($1::int[]) OR ($6::boolean AND created_by_user_id = $7))
+           AND (
+             $8::boolean
+             OR organization_id = ANY($1::int[])
+             OR ($6::boolean AND created_by_user_id = $7)
+             OR ($9::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($9))
+           )
          RETURNING id, name, applies_to_all_schools, payload_json, created_at, updated_at
         `,
-        [scopedOrgIds, id, name, JSON.stringify(payload), applyToAllSchools, hasUserScope, effectiveUserId, isGlobalAdmin]
+        [scopedOrgIds, id, name, JSON.stringify(payload), applyToAllSchools, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });
@@ -382,7 +432,12 @@ export async function POST(request: Request) {
         WITH existing AS (
           SELECT id
           FROM dashboard_custom_reports
-          WHERE ($10::boolean OR organization_id = ANY($1::int[]) OR ($7::boolean AND created_by_user_id = $8))
+          WHERE (
+            $10::boolean
+            OR organization_id = ANY($1::int[])
+            OR ($7::boolean AND created_by_user_id = $8)
+            OR ($11::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($11))
+          )
             AND school_code = $2
             AND applies_to_all_schools = $6
             AND lower(name) = lower($3)
@@ -399,9 +454,9 @@ export async function POST(request: Request) {
         ),
         inserted AS (
           INSERT INTO dashboard_custom_reports (
-            organization_id, school_code, applies_to_all_schools, name, payload_json, created_by_user_id
+            organization_id, school_code, applies_to_all_schools, name, payload_json, created_by_user_id, created_by_email
           )
-          SELECT $9, $2, $6, $3, $4::jsonb, $5
+          SELECT $9, $2, $6, $3, $4::jsonb, $5, CASE WHEN $11::text <> '' THEN $11::text ELSE NULL END
           WHERE NOT EXISTS (SELECT 1 FROM existing)
           RETURNING id, name, applies_to_all_schools, payload_json, created_at, updated_at
         )
@@ -421,6 +476,7 @@ export async function POST(request: Request) {
           effectiveUserId,
           effectivePrimaryOrganizationId,
           isGlobalAdmin,
+          normalizedEmail,
         ]
       );
     }
@@ -453,6 +509,7 @@ export async function DELETE(request: Request) {
   const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
+  const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
   const effectiveUserId =
     Number.isFinite(userId) && userId > 0
       ? userId
@@ -474,10 +531,15 @@ export async function DELETE(request: Request) {
       SELECT name
       FROM dashboard_custom_reports
       WHERE id = $1
-        AND ($5::boolean OR organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
+        AND (
+          $5::boolean
+          OR organization_id = ANY($2::int[])
+          OR ($3::boolean AND created_by_user_id = $4)
+          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+        )
       LIMIT 1
       `,
-      [id, scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin]
+      [id, scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
     );
     const existingName = String(protectedCheck.rows[0]?.name ?? '').trim();
     if (normalizedReportNameKey(existingName) === normalizedReportNameKey("Jared's Dashboard")) {
@@ -487,9 +549,14 @@ export async function DELETE(request: Request) {
       `
       DELETE FROM dashboard_custom_reports
       WHERE id = $1
-        AND ($5::boolean OR organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
+        AND (
+          $5::boolean
+          OR organization_id = ANY($2::int[])
+          OR ($3::boolean AND created_by_user_id = $4)
+          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+        )
       `,
-      [id, scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin]
+      [id, scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
     );
     if (!deleted.rowCount) {
       return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });

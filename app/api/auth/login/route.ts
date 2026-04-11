@@ -38,12 +38,14 @@ function resolveMappedSchoolCodeForOrgId(organizationId: number | null | undefin
 }
 
 function parseGlobalAdminEmails(): string[] {
-  const raw = String(
-    process.env.GLOBAL_ADMIN_EMAILS ??
-      'jgaynor@pitchingcoachu.com,ahalverson@pitchingcoachu.com,jchipman@pitchingcoachu.com'
-  );
-  const values = raw
-    .split(',')
+  const base = [
+    'jgaynor@pitchingcoachu.com',
+    'ahalverson@pitchingcoachu.com',
+    'jchipman@pitchingcoachu.com',
+    'patrick.jones@rosterpilot.com',
+    'corralf34@gmail.com',
+  ];
+  const values = [...base, ...String(process.env.GLOBAL_ADMIN_EMAILS ?? '').split(',')]
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean);
   return Array.from(new Set(values));

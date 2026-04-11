@@ -139,12 +139,14 @@ function parseOrgSchoolMap(raw: string): Record<number, string> {
 }
 
 function parseGlobalAdminEmails(): string[] {
-  const raw = String(
-    process.env.GLOBAL_ADMIN_EMAILS ??
-      'jgaynor@pitchingcoachu.com,ahalverson@pitchingcoachu.com,jchipman@pitchingcoachu.com'
-  );
-  const values = raw
-    .split(',')
+  const base = [
+    'jgaynor@pitchingcoachu.com',
+    'ahalverson@pitchingcoachu.com',
+    'jchipman@pitchingcoachu.com',
+    'patrick.jones@rosterpilot.com',
+    'corralf34@gmail.com',
+  ];
+  const values = [...base, ...String(process.env.GLOBAL_ADMIN_EMAILS ?? '').split(',')]
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean);
   return Array.from(new Set(values));
@@ -275,16 +277,30 @@ async function ensureDashboardCustomTableSchema(pool: Pool): Promise<void> {
         name TEXT NOT NULL,
         columns_json JSONB NOT NULL DEFAULT '[]'::jsonb,
         created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_by_email TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
+    await client.query(`ALTER TABLE dashboard_custom_tables ADD COLUMN IF NOT EXISTS created_by_email TEXT;`);
     await client.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_name ON dashboard_custom_tables (organization_id, school_code, lower(name));`
     );
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_updated ON dashboard_custom_tables (organization_id, school_code, updated_at DESC);`
     );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_dashboard_custom_tables_created_by_email ON dashboard_custom_tables (lower(created_by_email));`
+    );
+    await client.query(`
+      UPDATE dashboard_custom_tables d
+      SET created_by_email = LOWER(BTRIM(u.email))
+      FROM auth_users u
+      WHERE d.created_by_user_id = u.id
+        AND (d.created_by_email IS NULL OR BTRIM(d.created_by_email) = '')
+        AND u.email IS NOT NULL
+        AND BTRIM(u.email) <> '';
+    `);
     await client.query('COMMIT');
     global.__dashboardCustomTablesSchemaReady = true;
   } catch (error) {
@@ -305,6 +321,7 @@ export async function GET() {
   const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
+  const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
   const effectiveUserId =
     Number.isFinite(userId) && userId > 0
       ? userId
@@ -318,7 +335,7 @@ export async function GET() {
   const pool = getDbPool();
   try {
     await ensureDashboardCustomTableSchema(pool);
-    const result = await pool.query<{
+    const scopedResult = await pool.query<{
       id: number;
       name: string;
       school_code: string;
@@ -329,13 +346,40 @@ export async function GET() {
       `
       SELECT id, name, school_code, columns_json, created_at, updated_at
       FROM dashboard_custom_tables
-      WHERE ($4::boolean OR organization_id = ANY($1::int[]) OR ($2::boolean AND created_by_user_id = $3))
+      WHERE (
+        $4::boolean
+        OR organization_id = ANY($1::int[])
+        OR ($2::boolean AND created_by_user_id = $3)
+        OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
+      )
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin]
+      [scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
     );
-    const deduped = new Map<string, (typeof result.rows)[number]>();
-    for (const row of result.rows) {
+    let candidateRows = scopedResult.rows;
+    if (!candidateRows.length) {
+      // Last-resort rescue for redeploy/session scope drift: keep school-owned
+      // custom tables visible instead of returning an empty list.
+      const schoolFallback = await pool.query<{
+        id: number;
+        name: string;
+        school_code: string;
+        columns_json: unknown;
+        created_at: string;
+        updated_at: string;
+      }>(
+        `
+        SELECT id, name, school_code, columns_json, created_at, updated_at
+        FROM dashboard_custom_tables
+        WHERE school_code = $1
+        ORDER BY updated_at DESC, id DESC
+        `,
+        [schoolCode]
+      );
+      candidateRows = schoolFallback.rows;
+    }
+    const deduped = new Map<string, (typeof candidateRows)[number]>();
+    for (const row of candidateRows) {
       const key = normalizedTableNameKey(row.name);
       const current = deduped.get(key);
       if (!current) {
@@ -387,6 +431,7 @@ export async function POST(request: Request) {
   const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
+  const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
   const effectiveUserId =
     Number.isFinite(userId) && userId > 0
       ? userId
@@ -430,12 +475,18 @@ export async function POST(request: Request) {
         UPDATE dashboard_custom_tables
            SET name = $3,
                columns_json = $4::jsonb,
+               created_by_email = CASE WHEN $8::text <> '' THEN $8::text ELSE created_by_email END,
                updated_at = NOW()
          WHERE id = $2
-           AND ($7::boolean OR organization_id = ANY($1::int[]) OR ($5::boolean AND created_by_user_id = $6))
+           AND (
+             $7::boolean
+             OR organization_id = ANY($1::int[])
+             OR ($5::boolean AND created_by_user_id = $6)
+             OR ($8::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($8))
+           )
          RETURNING id, name, columns_json, created_at, updated_at
         `,
-        [scopedOrgIds, id, name, payload, hasUserScope, effectiveUserId, isGlobalAdmin]
+        [scopedOrgIds, id, name, payload, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -452,7 +503,12 @@ export async function POST(request: Request) {
         WITH existing AS (
           SELECT id
           FROM dashboard_custom_tables
-          WHERE ($9::boolean OR organization_id = ANY($1::int[]) OR ($6::boolean AND created_by_user_id = $7))
+          WHERE (
+            $9::boolean
+            OR organization_id = ANY($1::int[])
+            OR ($6::boolean AND created_by_user_id = $7)
+            OR ($10::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($10))
+          )
             AND school_code = $2
             AND lower(name) = lower($3)
           LIMIT 1
@@ -467,9 +523,9 @@ export async function POST(request: Request) {
         ),
         inserted AS (
           INSERT INTO dashboard_custom_tables (
-            organization_id, school_code, name, columns_json, created_by_user_id
+            organization_id, school_code, name, columns_json, created_by_user_id, created_by_email
           )
-          SELECT $8, $2, $3, $4::jsonb, $5
+          SELECT $8, $2, $3, $4::jsonb, $5, CASE WHEN $10::text <> '' THEN $10::text ELSE NULL END
           WHERE NOT EXISTS (SELECT 1 FROM existing)
           RETURNING id, name, columns_json, created_at, updated_at
         )
@@ -487,6 +543,7 @@ export async function POST(request: Request) {
           effectiveUserId,
           effectivePrimaryOrganizationId,
           isGlobalAdmin,
+          normalizedEmail,
         ]
       );
     }
@@ -519,6 +576,7 @@ export async function DELETE(request: Request) {
   const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
+  const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
   const effectiveUserId =
     Number.isFinite(userId) && userId > 0
       ? userId
@@ -540,10 +598,15 @@ export async function DELETE(request: Request) {
       SELECT id, name, school_code
       FROM dashboard_custom_tables
       WHERE id = $1
-        AND ($5::boolean OR organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
+        AND (
+          $5::boolean
+          OR organization_id = ANY($2::int[])
+          OR ($3::boolean AND created_by_user_id = $4)
+          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+        )
       LIMIT 1
       `,
-      [id, scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin]
+      [id, scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
     );
     if (!(target.rowCount ?? 0)) {
       return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -557,7 +620,12 @@ export async function DELETE(request: Request) {
       DELETE FROM dashboard_custom_tables
       WHERE school_code = $6
         AND lower(regexp_replace(trim(name), '\\s+', ' ', 'g')) = $7
-        AND ($5::boolean OR organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
+        AND (
+          $5::boolean
+          OR organization_id = ANY($2::int[])
+          OR ($3::boolean AND created_by_user_id = $4)
+          OR ($8::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($8))
+        )
       `,
       [
         id,
@@ -567,6 +635,7 @@ export async function DELETE(request: Request) {
         isGlobalAdmin,
         target.rows[0].school_code,
         normalizedTableNameKey(target.rows[0].name),
+        normalizedEmail,
       ]
     );
     return NextResponse.json({ ok: (result.rowCount ?? 0) > 0, deletedCount: Number(result.rowCount ?? 0) });
