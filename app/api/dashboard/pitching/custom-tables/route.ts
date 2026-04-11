@@ -4,7 +4,7 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
 import { ensureTrainingDbReady } from '../../../../../lib/training-db';
-import { getDbPool, listActiveStaffOrganizationIdsByEmail } from '../../../../../lib/auth-db';
+import { ensureAuthDbReady, getDbPool, listActiveStaffOrganizationIdsByEmail } from '../../../../../lib/auth-db';
 import type { PortalSession } from '../../../../../lib/portal-session';
 import type { Pool } from 'pg';
 
@@ -228,6 +228,36 @@ async function resolveCustomTableOrganizationScope(
   return { primaryOrganizationId, organizationIds: Array.from(new Set([...organizationIds, ...staffOrgIds])) };
 }
 
+async function resolveAuthIdentityFallback(session: PortalSession): Promise<{ fallbackUserId: number; fallbackOrgIds: number[] }> {
+  const email = String(session.email ?? '').trim().toLowerCase();
+  if (!email) return { fallbackUserId: 0, fallbackOrgIds: [] };
+  try {
+    await ensureAuthDbReady();
+    const pool = getDbPool();
+    const result = await pool.query<{ id: number | null; organization_id: number | null }>(
+      `
+      SELECT id, organization_id
+      FROM auth_users
+      WHERE LOWER(email) = LOWER($1)
+        AND COALESCE(is_active, TRUE) = TRUE
+      ORDER BY id DESC
+      `,
+      [email]
+    );
+    let fallbackUserId = 0;
+    const fallbackOrgSet = new Set<number>();
+    for (const row of result.rows) {
+      const uid = Number(row.id ?? 0);
+      if (uid > 0 && fallbackUserId <= 0) fallbackUserId = uid;
+      const orgId = Number(row.organization_id ?? 0);
+      if (orgId > 0) fallbackOrgSet.add(orgId);
+    }
+    return { fallbackUserId, fallbackOrgIds: Array.from(fallbackOrgSet) };
+  } catch {
+    return { fallbackUserId: 0, fallbackOrgIds: [] };
+  }
+}
+
 async function ensureDashboardCustomTableSchema(pool: Pool): Promise<void> {
   if (global.__dashboardCustomTablesSchemaReady) return;
   const client = await pool.connect();
@@ -271,12 +301,18 @@ export async function GET() {
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const { organizationIds } = await resolveCustomTableOrganizationScope(session, schoolCode);
+  const identityFallback = await resolveAuthIdentityFallback(session);
+  const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
-  const hasUserScope = Number.isFinite(userId) && userId > 0;
+  const effectiveUserId =
+    Number.isFinite(userId) && userId > 0
+      ? userId
+      : identityFallback.fallbackUserId;
+  const hasUserScope = Number.isFinite(effectiveUserId) && effectiveUserId > 0;
   // Allow user-owned fallback reads when org scope is temporarily empty.
   // This prevents saved tables from "disappearing" for valid logged-in users.
-  if (!organizationIds.length && !isGlobalAdmin && !hasUserScope) {
+  if (!scopedOrgIds.length && !isGlobalAdmin && !hasUserScope) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
   const pool = getDbPool();
@@ -296,7 +332,7 @@ export async function GET() {
       WHERE ($4::boolean OR organization_id = ANY($1::int[]) OR ($2::boolean AND created_by_user_id = $3))
       ORDER BY updated_at DESC, id DESC
       `,
-      [organizationIds, hasUserScope, userId, isGlobalAdmin]
+      [scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin]
     );
     const deduped = new Map<string, (typeof result.rows)[number]>();
     for (const row of result.rows) {
@@ -347,13 +383,23 @@ export async function POST(request: Request) {
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const { primaryOrganizationId, organizationIds } = await resolveCustomTableOrganizationScope(session, schoolCode);
+  const identityFallback = await resolveAuthIdentityFallback(session);
+  const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
-  const hasUserScope = Number.isFinite(userId) && userId > 0;
+  const effectiveUserId =
+    Number.isFinite(userId) && userId > 0
+      ? userId
+      : identityFallback.fallbackUserId;
+  const hasUserScope = Number.isFinite(effectiveUserId) && effectiveUserId > 0;
+  const effectivePrimaryOrganizationId =
+    Number.isFinite(primaryOrganizationId) && primaryOrganizationId > 0
+      ? primaryOrganizationId
+      : (Number(scopedOrgIds[0] ?? 0) || 0);
   if (
-    !Number.isFinite(primaryOrganizationId) ||
-    primaryOrganizationId <= 0 ||
-    (!organizationIds.length && !isGlobalAdmin)
+    !Number.isFinite(effectivePrimaryOrganizationId) ||
+    effectivePrimaryOrganizationId <= 0 ||
+    (!scopedOrgIds.length && !isGlobalAdmin)
   ) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
@@ -389,7 +435,7 @@ export async function POST(request: Request) {
            AND ($7::boolean OR organization_id = ANY($1::int[]) OR ($5::boolean AND created_by_user_id = $6))
          RETURNING id, name, columns_json, created_at, updated_at
         `,
-        [organizationIds, id, name, payload, hasUserScope, userId, isGlobalAdmin]
+        [scopedOrgIds, id, name, payload, hasUserScope, effectiveUserId, isGlobalAdmin]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -431,7 +477,17 @@ export async function POST(request: Request) {
         UNION ALL
         SELECT id, name, columns_json, created_at, updated_at FROM inserted
         `,
-        [organizationIds, schoolCode, name, payload, session.userId || null, hasUserScope, userId, primaryOrganizationId, isGlobalAdmin]
+        [
+          scopedOrgIds,
+          schoolCode,
+          name,
+          payload,
+          effectiveUserId > 0 ? effectiveUserId : null,
+          hasUserScope,
+          effectiveUserId,
+          effectivePrimaryOrganizationId,
+          isGlobalAdmin,
+        ]
       );
     }
 
@@ -459,10 +515,16 @@ export async function DELETE(request: Request) {
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
   const { organizationIds } = await resolveCustomTableOrganizationScope(session, schoolCode);
+  const identityFallback = await resolveAuthIdentityFallback(session);
+  const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
-  const hasUserScope = Number.isFinite(userId) && userId > 0;
-  if (!organizationIds.length && !isGlobalAdmin) {
+  const effectiveUserId =
+    Number.isFinite(userId) && userId > 0
+      ? userId
+      : identityFallback.fallbackUserId;
+  const hasUserScope = Number.isFinite(effectiveUserId) && effectiveUserId > 0;
+  if (!scopedOrgIds.length && !isGlobalAdmin) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
   const url = new URL(request.url);
@@ -481,7 +543,7 @@ export async function DELETE(request: Request) {
         AND ($5::boolean OR organization_id = ANY($2::int[]) OR ($3::boolean AND created_by_user_id = $4))
       LIMIT 1
       `,
-      [id, organizationIds, hasUserScope, userId, isGlobalAdmin]
+      [id, scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin]
     );
     if (!(target.rowCount ?? 0)) {
       return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -499,9 +561,9 @@ export async function DELETE(request: Request) {
       `,
       [
         id,
-        organizationIds,
+        scopedOrgIds,
         hasUserScope,
-        userId,
+        effectiveUserId,
         isGlobalAdmin,
         target.rows[0].school_code,
         normalizedTableNameKey(target.rows[0].name),
