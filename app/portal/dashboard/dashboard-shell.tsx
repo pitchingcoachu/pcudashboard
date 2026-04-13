@@ -168,9 +168,10 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
 
   const activeSuite: SuiteName = suiteOptions.includes(suite) ? suite : 'Home';
   const showSuite = (name: SuiteName) => activeSuite === name;
-  const activateSuite = (name: SuiteName) => {
-    setSuite(name);
-    setMountedSuites((current) => (current[name] ? current : { ...current, [name]: true }));
+  const activateSuite = (name: string) => {
+    const resolved = suiteOptions.includes(name as SuiteName) ? (name as SuiteName) : 'Home';
+    setSuite(resolved);
+    setMountedSuites((current) => (current[resolved] ? current : { ...current, [resolved]: true }));
   };
   const handleHomeNavigate = (input: Omit<HomeNavigateRequest, 'requestId'>) => {
     const nextRequest: HomeNavigateRequest = {

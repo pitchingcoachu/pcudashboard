@@ -287,12 +287,13 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
   );
   const sortedPitchingAlerts = useMemo(() => {
     const rows = [...(alertsPayload?.pitching ?? [])];
-    if (!pitchingSort.metric) return rows;
+    const metric = pitchingSort.metric;
+    if (!metric) return rows;
     rows.sort((a, b) => {
-      const aPair = a.metrics[pitchingSort.metric];
-      const bPair = b.metrics[pitchingSort.metric];
-      const aScore = metricImprovementScore(pitchingSort.metric, aPair?.season ?? null, aPair?.recent ?? null);
-      const bScore = metricImprovementScore(pitchingSort.metric, bPair?.season ?? null, bPair?.recent ?? null);
+      const aPair = a.metrics[metric];
+      const bPair = b.metrics[metric];
+      const aScore = metricImprovementScore(metric, aPair?.season ?? null, aPair?.recent ?? null);
+      const bScore = metricImprovementScore(metric, bPair?.season ?? null, bPair?.recent ?? null);
       if (aScore === null && bScore === null) return 0;
       if (aScore === null) return 1;
       if (bScore === null) return -1;
@@ -302,12 +303,13 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
   }, [alertsPayload?.pitching, pitchingSort]);
   const sortedHittingAlerts = useMemo(() => {
     const rows = [...(alertsPayload?.hitting ?? [])];
-    if (!hittingSort.metric) return rows;
+    const metric = hittingSort.metric;
+    if (!metric) return rows;
     rows.sort((a, b) => {
-      const aPair = a.metrics[hittingSort.metric];
-      const bPair = b.metrics[hittingSort.metric];
-      const aScore = metricImprovementScore(hittingSort.metric, aPair?.season ?? null, aPair?.recent ?? null);
-      const bScore = metricImprovementScore(hittingSort.metric, bPair?.season ?? null, bPair?.recent ?? null);
+      const aPair = a.metrics[metric];
+      const bPair = b.metrics[metric];
+      const aScore = metricImprovementScore(metric, aPair?.season ?? null, aPair?.recent ?? null);
+      const bScore = metricImprovementScore(metric, bPair?.season ?? null, bPair?.recent ?? null);
       if (aScore === null && bScore === null) return 0;
       if (aScore === null) return 1;
       if (bScore === null) return -1;
