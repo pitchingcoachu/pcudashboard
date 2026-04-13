@@ -566,6 +566,9 @@ export async function ensureAuthDbReady(): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_exercises_workout ON workout_exercises (workout_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_programs_player ON programs (player_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_days_date ON program_days (day_date);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_days_program_date ON program_days (program_id, day_date);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_day_sort ON program_day_items (program_day_id, sort_order, id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_logs_player_item ON exercise_logs (player_id, program_day_item_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_cycle_items_player_slot ON program_cycle_items (player_id, cycle_slot, sort_order);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_log_history_player_logged_at ON exercise_log_history (player_id, logged_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_log_history_program_item ON exercise_log_history (program_day_item_id);`);

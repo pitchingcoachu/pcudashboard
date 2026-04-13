@@ -1755,7 +1755,7 @@ type CustomReportsSuiteProps = {
 };
 
 export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomReportsSuiteProps) {
-  const [chartHover, setChartHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
+  const [chartHover, setChartHover] = useState<{ x: number; y: number; text: string; bg?: string; textColor?: string } | null>(null);
   const reportCanvasRef = useRef<HTMLElement | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
@@ -1841,6 +1841,19 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     if (color.includes('--portal-fastball-color')) {
       const isLight = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
       return isLight ? '#ffffff' : '#111827';
+    }
+    if (color.startsWith('rgb(') || color.startsWith('rgba(')) {
+      const parts = color
+        .replace(/rgba?\(/, '')
+        .replace(')', '')
+        .split(',')
+        .map((entry) => Number(entry.trim()))
+        .filter((entry) => Number.isFinite(entry));
+      if (parts.length >= 3) {
+        const [r, g, b] = parts;
+        const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        if (luminance >= 180) return '#111827';
+      }
     }
     if (['#ffffff', 'white', '#f8fafc', '#e5e7eb', 'yellow', 'orange'].includes(color)) return '#111827';
     return '#ffffff';
@@ -4617,6 +4630,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const x = isProSchool ? -rawX : rawX;
                               const pitchType = (point.pitch_type ?? '').trim() || 'Undefined';
                               const color = resolvePitchColor(pitchType);
+                              const canonical = canonicalPitchType(pitchType);
                               const shape = resultShape(
                                 String(point.pitch_call ?? ''),
                                 String(point.play_result ?? ''),
@@ -4631,6 +4645,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     x: event.clientX,
                                     y: event.clientY,
                                     bg: color,
+                                    textColor: canonical === 'Fastball' ? '#111827' : undefined,
                                     text: hoverText,
                                   }),
                                 onMouseLeave: () => setChartHover(null),
@@ -6172,7 +6187,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     padding: '0.35rem 0.45rem',
                     fontSize: '0.74rem',
                     lineHeight: 1.25,
-                    color: hoverTextColor(chartHover.bg),
+                    color: chartHover.textColor ?? hoverTextColor(chartHover.bg),
                   }}
                 >
                   {chartHover.text}

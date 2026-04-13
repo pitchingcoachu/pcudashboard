@@ -8,6 +8,39 @@ import WorkoutLogModal from '../../components/workout-log-modal';
 type PlayerChoice = { id: number; name: string };
 type WorkoutChoice = { id: number; name: string; exerciseCount: number; category: string };
 type ViewMode = 'day' | 'week' | 'month' | 'cycle';
+type BuilderMode = 'schedule' | 'template';
+type PaletteMode = 'workouts' | 'templates';
+type TemplateChoice = {
+  id: number;
+  name: string;
+  totalDays: number;
+  workoutCount: number;
+  updatedAt: string;
+  days: Array<{
+    id: number;
+    dayOffset: number;
+    items: Array<{
+      id: number;
+      workoutId: number;
+      workoutName: string;
+      workoutCategory: string | null;
+      sortOrder: number;
+      prescribedSets: string | null;
+      prescribedReps: string | null;
+      prescribedLoad: string | null;
+      prescribedNotes: string | null;
+    }>;
+  }>;
+};
+type TemplateDraftItem = {
+  workoutId: number;
+  workoutName: string;
+  workoutCategory: string | null;
+  prescribedSets?: string;
+  prescribedReps?: string;
+  prescribedLoad?: string;
+  prescribedNotes?: string;
+};
 
 type ScheduleBoardProps = {
   players: PlayerChoice[];
@@ -31,6 +64,8 @@ type CopiedPlanBuffer = {
 };
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const TEMPLATE_MIN_WEEKS = 1;
+const TEMPLATE_MAX_WEEKS = 52;
 const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c'; label: string }> = [
   { key: 'medium', label: 'Medium' },
   { key: 'high', label: 'High' },
@@ -142,14 +177,29 @@ function categoryBubbleStyle(category: string): CSSProperties {
 export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps) {
   const [playerId, setPlayerId] = useState<number>(players[0]?.id ?? 0);
   const [view, setView] = useState<ViewMode>('month');
+  const [builderMode, setBuilderMode] = useState<BuilderMode>('schedule');
+  const [paletteMode, setPaletteMode] = useState<PaletteMode>('workouts');
   const [anchorDate, setAnchorDate] = useState<string>(toIsoDate(new Date()));
   const [workoutQuery, setWorkoutQuery] = useState('');
+  const [templates, setTemplates] = useState<TemplateChoice[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
+  const [templateName, setTemplateName] = useState('');
+  const [templateWeekCount, setTemplateWeekCount] = useState(4);
+  const [templateDayItems, setTemplateDayItems] = useState<Record<number, TemplateDraftItem[]>>({});
   const [items, setItems] = useState<ProgramItemRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
   const [copiedPlan, setCopiedPlan] = useState<CopiedPlanBuffer | null>(null);
   const [menu, setMenu] = useState<{ dayDate: string; x: number; y: number } | null>(null);
+
+  const resetTemplateDraft = () => {
+    setSelectedTemplateId(null);
+    setTemplateName('');
+    setTemplateWeekCount(4);
+    setTemplateDayItems({});
+  };
 
   const visibleRange = useMemo(() => {
     if (view === 'cycle') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
@@ -196,6 +246,52 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     void loadItems();
   }, [loadItems]);
 
+  const loadTemplates = useCallback(async () => {
+    setTemplatesLoading(true);
+    try {
+      const response = await fetch('/api/admin/schedule/templates', { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as { templates?: TemplateChoice[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to load templates.');
+      setTemplates(Array.isArray(payload.templates) ? payload.templates : []);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to load templates.');
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTemplates();
+  }, [loadTemplates]);
+
+  useEffect(() => {
+    if (!selectedTemplateId) {
+      setTemplateName('');
+      setTemplateDayItems({});
+      return;
+    }
+    const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? null;
+    if (!selectedTemplate) return;
+    setTemplateName(selectedTemplate.name);
+    setTemplateWeekCount(Math.max(1, Math.ceil(Math.max(1, selectedTemplate.totalDays) / 7)));
+    const map: Record<number, TemplateDraftItem[]> = {};
+    selectedTemplate.days.forEach((day) => {
+      map[day.dayOffset] = day.items
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((item) => ({
+          workoutId: item.workoutId,
+          workoutName: item.workoutName,
+          workoutCategory: item.workoutCategory,
+          prescribedSets: item.prescribedSets ?? undefined,
+          prescribedReps: item.prescribedReps ?? undefined,
+          prescribedLoad: item.prescribedLoad ?? undefined,
+          prescribedNotes: item.prescribedNotes ?? undefined,
+        }));
+    });
+    setTemplateDayItems(map);
+  }, [selectedTemplateId, templates]);
+
   const itemsByDate = useMemo(() => {
     const map = new Map<string, ProgramItemRow[]>();
     for (const item of items) {
@@ -236,6 +332,93 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
       .filter((workout) => workout.name.toLowerCase().includes(q))
       .slice(0, 8);
   }, [workoutQuery, workouts]);
+  const filteredTemplates = useMemo(() => {
+    const query = workoutQuery.trim().toLowerCase();
+    if (!query) return templates;
+    return templates.filter((template) => template.name.toLowerCase().includes(query));
+  }, [templates, workoutQuery]);
+  const templateSuggestions = useMemo(() => {
+    const query = workoutQuery.trim().toLowerCase();
+    if (!query) return [];
+    return templates.filter((template) => template.name.toLowerCase().includes(query)).slice(0, 8);
+  }, [templates, workoutQuery]);
+  const templateGridOffsets = useMemo(
+    () => Array.from({ length: Math.max(1, templateWeekCount) * 7 }, (_, index) => index),
+    [templateWeekCount]
+  );
+
+  const applyTemplate = async (templateId: number, startDate: string) => {
+    if (!playerId) return;
+    setError('');
+    try {
+      const response = await fetch('/api/admin/schedule/templates/apply', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, templateId, startDate, programName: 'Current Program' }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to apply template.');
+      await loadItems();
+    } catch (applyError) {
+      setError(applyError instanceof Error ? applyError.message : 'Failed to apply template.');
+    }
+  };
+
+  const saveTemplate = async () => {
+    setError('');
+    try {
+      const days = Object.entries(templateDayItems)
+        .map(([offsetRaw, dayItems]) => ({
+          dayOffset: Number(offsetRaw),
+          items: dayItems.map((item) => ({
+            workoutId: item.workoutId,
+            prescribedSets: item.prescribedSets ?? '',
+            prescribedReps: item.prescribedReps ?? '',
+            prescribedLoad: item.prescribedLoad ?? '',
+            prescribedNotes: item.prescribedNotes ?? '',
+          })),
+        }))
+        .filter((day) => Number.isFinite(day.dayOffset) && day.dayOffset >= 0 && day.items.length > 0)
+        .sort((a, b) => a.dayOffset - b.dayOffset);
+      const response = await fetch('/api/admin/schedule/templates', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          templateId: selectedTemplateId ?? undefined,
+          name: templateName,
+          days,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; templateId?: number; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to save template.');
+      await loadTemplates();
+      if (Number.isFinite(Number(payload.templateId ?? 0)) && Number(payload.templateId ?? 0) > 0) {
+        setSelectedTemplateId(Number(payload.templateId));
+      }
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Failed to save template.');
+    }
+  };
+
+  const deleteTemplate = async () => {
+    if (!selectedTemplateId) return;
+    const confirmed = window.confirm('Delete this template?');
+    if (!confirmed) return;
+    setError('');
+    try {
+      const response = await fetch(`/api/admin/schedule/templates?templateId=${selectedTemplateId}`, {
+        method: 'DELETE',
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to delete template.');
+      setSelectedTemplateId(null);
+      setTemplateName('');
+      setTemplateDayItems({});
+      await loadTemplates();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete template.');
+    }
+  };
 
   const movePeriod = (direction: -1 | 1) => {
     if (view === 'cycle') return;
@@ -328,6 +511,12 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
 
   const onDayDrop = async (event: React.DragEvent<HTMLElement>, dayDate: string) => {
     event.preventDefault();
+    const templateId = Number(event.dataTransfer.getData('templateId'));
+    if (Number.isFinite(templateId) && templateId > 0) {
+      await applyTemplate(templateId, dayDate);
+      return;
+    }
+
     const scheduleItemId = Number(event.dataTransfer.getData('scheduleItemId'));
     const sourceDate = event.dataTransfer.getData('scheduleItemDay');
     if (Number.isFinite(scheduleItemId) && scheduleItemId > 0) {
@@ -530,6 +719,59 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     await assignCycleWorkout(cycleSlot, workoutId);
   };
 
+  const onTemplateDayDrop = (event: React.DragEvent<HTMLElement>, dayOffset: number) => {
+    event.preventDefault();
+    const sourceOffset = Number(event.dataTransfer.getData('templateDayOffset'));
+    const sourceIndex = Number(event.dataTransfer.getData('templateDayItemIndex'));
+    if (
+      Number.isFinite(sourceOffset) &&
+      sourceOffset >= 0 &&
+      Number.isFinite(sourceIndex) &&
+      sourceIndex >= 0
+    ) {
+      if (sourceOffset === dayOffset) return;
+      setTemplateDayItems((current) => {
+        const sourceList = [...(current[sourceOffset] ?? [])];
+        if (sourceIndex >= sourceList.length) return current;
+        const [moved] = sourceList.splice(sourceIndex, 1);
+        const targetList = [...(current[dayOffset] ?? []), moved];
+        const next: Record<number, TemplateDraftItem[]> = { ...current, [dayOffset]: targetList };
+        if (sourceList.length > 0) next[sourceOffset] = sourceList;
+        else delete next[sourceOffset];
+        return next;
+      });
+      return;
+    }
+
+    const workoutId = Number(event.dataTransfer.getData('workoutId'));
+    if (!Number.isFinite(workoutId) || workoutId <= 0) return;
+    const workout = workoutById.get(workoutId);
+    if (!workout) return;
+    setTemplateDayItems((current) => ({
+      ...current,
+      [dayOffset]: [
+        ...(current[dayOffset] ?? []),
+        {
+          workoutId: workout.id,
+          workoutName: workout.name,
+          workoutCategory: workout.category ?? null,
+        },
+      ],
+    }));
+  };
+
+  const removeTemplateDayItem = (dayOffset: number, itemIndex: number) => {
+    setTemplateDayItems((current) => {
+      const list = [...(current[dayOffset] ?? [])];
+      if (itemIndex < 0 || itemIndex >= list.length) return current;
+      list.splice(itemIndex, 1);
+      const next = { ...current };
+      if (list.length > 0) next[dayOffset] = list;
+      else delete next[dayOffset];
+      return next;
+    });
+  };
+
   const renderDayCell = (dayDate: string, compact: boolean, monthStart?: string, showDayLabel = false) => {
     const dayItems = itemsByDate.get(dayDate) ?? [];
     const isOutsideMonth = monthStart ? !dayDate.startsWith(monthStart.slice(0, 7)) : false;
@@ -618,38 +860,115 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   return (
     <div className="portal-admin-stack">
       <div className="portal-schedule-toolbar">
-        <label className="portal-schedule-player-picker">
-          Player
-          <select value={String(playerId)} onChange={(event) => setPlayerId(Number(event.target.value))}>
-            {players.map((player) => (
-              <option key={player.id} value={String(player.id)}>
-                {player.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
-          {(['day', 'week', 'month', 'cycle'] as ViewMode[]).map((mode) => (
+        <div className="portal-schedule-view-switch" role="group" aria-label="Builder mode">
+          {(['schedule', 'template'] as BuilderMode[]).map((mode) => (
             <button
               key={mode}
               type="button"
-              className={`btn ${view === mode ? 'btn-primary' : 'btn-ghost'}`}
+              className={`btn ${builderMode === mode ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => {
-                jumpToCurrentForView(mode);
-                setView(mode);
+                setBuilderMode(mode);
+                if (mode === 'template') setPaletteMode('workouts');
               }}
             >
-              {mode === 'cycle' ? '3-Day Cycle' : `${mode[0].toUpperCase()}${mode.slice(1)}`}
+              {mode === 'schedule' ? 'Schedule Builder' : 'Template Builder'}
             </button>
           ))}
         </div>
-        {view !== 'cycle' && (
-          <div className="portal-schedule-nav">
-            <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)}>
-              Prev
+        {builderMode === 'schedule' ? (
+          <>
+            <label className="portal-schedule-player-picker">
+              Player
+              <select value={String(playerId)} onChange={(event) => setPlayerId(Number(event.target.value))}>
+                {players.map((player) => (
+                  <option key={player.id} value={String(player.id)}>
+                    {player.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
+              {(['day', 'week', 'month', 'cycle'] as ViewMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`btn ${view === mode ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => {
+                    jumpToCurrentForView(mode);
+                    setView(mode);
+                  }}
+                >
+                  {mode === 'cycle' ? '3-Day Cycle' : `${mode[0].toUpperCase()}${mode.slice(1)}`}
+                </button>
+              ))}
+            </div>
+            {view !== 'cycle' && (
+              <div className="portal-schedule-nav">
+                <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)}>
+                  Prev
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={() => movePeriod(1)}>
+                  Next
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <label style={{ display: 'grid', gap: 4 }}>
+              Template
+              <select
+                value={selectedTemplateId ? String(selectedTemplateId) : ''}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  if (!Number.isFinite(next) || next <= 0) {
+                    resetTemplateDraft();
+                    return;
+                  }
+                  setSelectedTemplateId(next);
+                }}
+              >
+                <option value="">New Template</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={String(template.id)}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              Name
+              <input
+                value={templateName}
+                onChange={(event) => setTemplateName(event.target.value)}
+                placeholder="Template name"
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 4 }}>
+              Weeks
+              <input
+                type="number"
+                min={TEMPLATE_MIN_WEEKS}
+                max={TEMPLATE_MAX_WEEKS}
+                value={templateWeekCount}
+                onChange={(event) =>
+                  setTemplateWeekCount(
+                    Math.max(TEMPLATE_MIN_WEEKS, Math.min(TEMPLATE_MAX_WEEKS, Number(event.target.value) || TEMPLATE_MIN_WEEKS))
+                  )
+                }
+                style={{ width: 90 }}
+              />
+            </label>
+            <button type="button" className="btn btn-primary" onClick={() => void saveTemplate()}>
+              Save Template
             </button>
-            <button type="button" className="btn btn-ghost" onClick={() => movePeriod(1)}>
-              Next
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={!selectedTemplateId}
+              onClick={() => void deleteTemplate()}
+            >
+              Delete Template
             </button>
           </div>
         )}
@@ -657,16 +976,32 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
 
       <div className="portal-schedule-layout">
         <aside className="portal-workout-palette">
+          <div className="portal-schedule-view-switch" role="group" aria-label="Palette folder" style={{ marginBottom: 8 }}>
+            <button
+              type="button"
+              className={`btn ${paletteMode === 'workouts' ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setPaletteMode('workouts')}
+            >
+              Workout Folder
+            </button>
+            <button
+              type="button"
+              className={`btn ${paletteMode === 'templates' ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setPaletteMode('templates')}
+            >
+              Template Folder
+            </button>
+          </div>
           <div className="portal-search-wrap">
             <input
               type="search"
               value={workoutQuery}
               onChange={(event) => setWorkoutQuery(event.target.value)}
-              placeholder="Search workouts..."
+              placeholder={paletteMode === 'workouts' ? 'Search workouts...' : 'Search templates...'}
               className="portal-library-search"
-              aria-label="Search saved workouts"
+              aria-label={paletteMode === 'workouts' ? 'Search saved workouts' : 'Search saved templates'}
             />
-            {workoutQuery.trim().length > 0 && workoutSuggestions.length > 0 && (
+            {paletteMode === 'workouts' && workoutQuery.trim().length > 0 && workoutSuggestions.length > 0 && (
               <div className="portal-search-dropdown" role="listbox" aria-label="Workout search suggestions">
                 {workoutSuggestions.map((workout) => (
                   <button
@@ -686,30 +1021,68 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                 ))}
               </div>
             )}
+            {paletteMode === 'templates' && workoutQuery.trim().length > 0 && templateSuggestions.length > 0 && (
+              <div className="portal-search-dropdown" role="listbox" aria-label="Template search suggestions">
+                {templateSuggestions.map((template) => (
+                  <button
+                    key={`suggest-template-${template.id}`}
+                    type="button"
+                    className="portal-search-option"
+                    draggable={builderMode === 'schedule'}
+                    onDragStart={(event) => {
+                      event.dataTransfer.setData('templateId', String(template.id));
+                    }}
+                    onClick={() => setWorkoutQuery(template.name)}
+                  >
+                    {template.name}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div>
             <div className="portal-workout-palette-list">
-              {filteredWorkouts.map((workout) => (
-                <article
-                  key={workout.id}
-                  className="portal-workout-palette-item"
-                  style={categoryBubbleStyle(workout.category)}
-                  draggable
-                  onDragStart={(event) => {
-                    event.dataTransfer.setData('workoutId', String(workout.id));
-                  }}
-                >
-                  <strong>{workout.name}</strong>
-                </article>
-              ))}
-              {filteredWorkouts.length === 0 && <p className="portal-muted-text">No workouts match.</p>}
+              {paletteMode === 'workouts'
+                ? filteredWorkouts.map((workout) => (
+                    <article
+                      key={workout.id}
+                      className="portal-workout-palette-item"
+                      style={categoryBubbleStyle(workout.category)}
+                      draggable
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData('workoutId', String(workout.id));
+                      }}
+                    >
+                      <strong>{workout.name}</strong>
+                    </article>
+                  ))
+                : filteredTemplates.map((template) => (
+                    <article
+                      key={`template-${template.id}`}
+                      className="portal-workout-palette-item"
+                      style={categoryBubbleStyle('Template')}
+                      draggable={builderMode === 'schedule'}
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData('templateId', String(template.id));
+                      }}
+                    >
+                      <strong>{template.name}</strong>
+                      <div style={{ fontSize: '0.78rem', opacity: 0.85 }}>
+                        {template.workoutCount} workouts · {Math.max(1, Math.ceil(Math.max(1, template.totalDays) / 7))} weeks
+                      </div>
+                    </article>
+                  ))}
+              {paletteMode === 'workouts' && filteredWorkouts.length === 0 ? <p className="portal-muted-text">No workouts match.</p> : null}
+              {paletteMode === 'templates' && filteredTemplates.length === 0 ? (
+                <p className="portal-muted-text">{templatesLoading ? 'Loading templates...' : 'No templates yet.'}</p>
+              ) : null}
             </div>
           </div>
         </aside>
 
         <section className="portal-schedule-calendar" aria-busy={loading}>
-          <h3 className="portal-schedule-period">{periodLabel}</h3>
-          {view !== 'day' && view !== 'cycle' && (
+          {builderMode === 'schedule' ? <h3 className="portal-schedule-period">{periodLabel}</h3> : <h3 className="portal-schedule-period">Template Calendar</h3>}
+          {builderMode === 'schedule' && view !== 'day' && view !== 'cycle' && (
             <div
               className={`portal-schedule-weekdays${view === 'week' ? ' is-week' : ''}`}
               style={{
@@ -732,7 +1105,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               ))}
             </div>
           )}
-          {view === 'month' && (
+          {builderMode === 'schedule' && view === 'month' && (
             <div
               className="portal-schedule-month-grid"
               style={{
@@ -744,7 +1117,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               )}
             </div>
           )}
-          {view === 'week' && (
+          {builderMode === 'schedule' && view === 'week' && (
             <div
               className="portal-schedule-week-grid"
               style={{
@@ -754,8 +1127,8 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               {weekCells.map((date) => renderDayCell(date, false, undefined, false))}
             </div>
           )}
-          {view === 'day' && <div className="portal-schedule-day-grid">{dayCells.map((date) => renderDayCell(date, false, undefined, true))}</div>}
-          {view === 'cycle' && (
+          {builderMode === 'schedule' && view === 'day' && <div className="portal-schedule-day-grid">{dayCells.map((date) => renderDayCell(date, false, undefined, true))}</div>}
+          {builderMode === 'schedule' && view === 'cycle' && (
             <div
               className="portal-cycle-grid"
               style={{
@@ -808,6 +1181,68 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               ))}
             </div>
           )}
+          {builderMode === 'template' ? (
+            <div>
+              <div className="portal-schedule-weekdays is-week">
+                {WEEKDAY_LABELS.map((label) => (
+                  <span key={`template-weekday-${label}`}>{label}</span>
+                ))}
+              </div>
+              <div className="portal-schedule-month-grid" style={{ gridTemplateColumns: 'repeat(7, minmax(0, 1fr))' }}>
+                {templateGridOffsets.map((offset) => {
+                  const dayItems = templateDayItems[offset] ?? [];
+                  const weekNumber = Math.floor(offset / 7) + 1;
+                  const dayIndex = (offset % 7) + 1;
+                  return (
+                    <article
+                      key={`template-day-${offset}`}
+                      className="portal-schedule-day"
+                      style={{ minHeight: 150 }}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={(event) => onTemplateDayDrop(event, offset)}
+                    >
+                      <header>
+                        <strong>{`W${weekNumber}D${dayIndex}`}</strong>
+                      </header>
+                      <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.25rem' }}>
+                        {dayItems.map((item, index) => (
+                          <button
+                            key={`template-${offset}-${item.workoutId}-${index}`}
+                            type="button"
+                            className="portal-schedule-item"
+                            style={{
+                              display: 'grid',
+                              gap: 4,
+                              textAlign: 'left',
+                              ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
+                            }}
+                            draggable
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData('templateDayOffset', String(offset));
+                              event.dataTransfer.setData('templateDayItemIndex', String(index));
+                            }}
+                          >
+                            <span style={{ fontWeight: 700 }}>{item.workoutName}</span>
+                            <span
+                              style={{ fontSize: '0.72rem', textDecoration: 'underline' }}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                removeTemplateDayItem(offset, index);
+                              }}
+                            >
+                              Remove
+                            </span>
+                          </button>
+                        ))}
+                        {dayItems.length === 0 ? <p className="portal-muted-text" style={{ margin: 0 }}>Drag workout here</p> : null}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
         </section>
       </div>
 

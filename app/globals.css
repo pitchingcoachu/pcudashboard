@@ -249,6 +249,20 @@ body.theme-light .portal-shell svg.portal-plot-dark-grid text[fill='rgba(255,255
   fill: #000 !important;
 }
 
+/* Comparison Tool: strike-zone and plate overlays need dark contrast in light mode. */
+body.theme-light .portal-comparison-suite svg.portal-plot-dark-grid polygon[stroke='rgba(255,255,255,0.85)'],
+body.theme-light .portal-comparison-suite svg.portal-plot-dark-grid rect[stroke='rgba(255,255,255,0.72)'],
+body.theme-light .portal-comparison-suite svg.portal-plot-dark-grid rect[stroke='rgba(255,255,255,0.95)'],
+body.theme-light .portal-comparison-suite svg.portal-plot-dark-grid line[stroke='rgba(255,255,255,0.58)'],
+body.theme-light .portal-comparison-suite svg.portal-plot-dark-grid line[stroke='rgba(255,255,255,0.45)'] {
+  stroke: rgba(15, 23, 42, 0.86) !important;
+}
+
+body.theme-light .portal-comparison-suite svg.portal-plot-dark-grid rect[fill='#ffffff'] {
+  fill: rgba(15, 23, 42, 0.96) !important;
+  stroke: rgba(15, 23, 42, 0.72) !important;
+}
+
 body.theme-light .portal-form-grid input,
 body.theme-light .portal-form-grid textarea,
 body.theme-light .portal-form-grid select,

@@ -35,6 +35,8 @@ type SearchPayload = {
   selected: Candidate | null;
 };
 
+const HOME_SEARCH_TIMEOUT_MS = 12000;
+
 type SuiteName =
   | 'Home'
   | 'Pitching'
@@ -108,8 +110,8 @@ function resolveCandidateLogoUrl(isPro: boolean, candidate: Candidate): string {
   return String(getProTeamLogoUrl(teamSeed) ?? '').trim();
 }
 
-async function fetchHomePayload(): Promise<SearchPayload> {
-  const response = await fetch('/api/dashboard/home/search', { cache: 'no-store' });
+async function fetchHomePayload(signal?: AbortSignal): Promise<SearchPayload> {
+  const response = await fetch('/api/dashboard/home/search', { cache: 'no-store', signal });
   const payload = (await response.json()) as SearchPayload & { error?: string };
   if (!response.ok) throw new Error(payload.error || 'Failed to load dashboard search.');
   return payload;
@@ -183,7 +185,9 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
   };
   useEffect(() => {
     let isMounted = true;
-    fetchHomePayload()
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), HOME_SEARCH_TIMEOUT_MS);
+    fetchHomePayload(controller.signal)
       .then((payload) => {
         if (!isMounted) return;
         setNavSearchPayload(payload);
@@ -191,10 +195,18 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
       })
       .catch((error: unknown) => {
         if (!isMounted) return;
-        setNavSearchError(error instanceof Error ? error.message : 'Failed to load search options.');
+        const message =
+          error instanceof Error && error.name === 'AbortError'
+            ? 'Loading search is taking longer than expected. You can still open suites while it retries.'
+            : error instanceof Error
+              ? error.message
+              : 'Failed to load search options.';
+        setNavSearchError(message);
       });
     return () => {
       isMounted = false;
+      clearTimeout(timeout);
+      controller.abort();
     };
   }, [selectedSchoolCode]);
   const navMatchingCandidates = useMemo(() => {

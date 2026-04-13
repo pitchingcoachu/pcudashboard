@@ -32,7 +32,7 @@ export default async function AdminSchedulePage() {
       ) : null}
       <div className="portal-admin-headline">
         <h2>Schedule Builder</h2>
-        <p>Select a player, then drag workouts onto calendar dates.</p>
+        <p>Select a player, then use Workout Folder or Template Folder to drag onto the schedule.</p>
       </div>
       <article className="portal-admin-card">
         <ScheduleBoard players={players} workouts={workoutChoices} />

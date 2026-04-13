@@ -1274,7 +1274,9 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       if (pitchType === 'all') return null;
       const bg = PITCH_COLORS[pitchType];
       if (!bg) return null;
-      return { backgroundColor: bg, color: pitchType === 'Fastball' ? '#111827' : '#f8fafc' };
+      const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+      const textColor = pitchType === 'Fastball' ? (isLightTheme ? '#f8fafc' : '#111827') : '#f8fafc';
+      return { backgroundColor: bg, color: textColor };
     }
     if (!shouldColorTable) return null;
     if (!tableColorColumns.includes(column)) return null;

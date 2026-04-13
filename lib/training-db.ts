@@ -163,6 +163,34 @@ export type WorkoutDetailRow = {
   items: WorkoutEditorItem[];
 };
 
+export type ScheduleTemplateItemRow = {
+  id: number;
+  workoutId: number;
+  workoutName: string;
+  workoutCategory: string | null;
+  sortOrder: number;
+  prescribedSets: string | null;
+  prescribedReps: string | null;
+  prescribedLoad: string | null;
+  prescribedNotes: string | null;
+};
+
+export type ScheduleTemplateDayRow = {
+  id: number;
+  dayOffset: number;
+  items: ScheduleTemplateItemRow[];
+};
+
+export type ScheduleTemplateRow = {
+  id: number;
+  name: string;
+  totalDays: number;
+  workoutCount: number;
+  createdAt: string;
+  updatedAt: string;
+  days: ScheduleTemplateDayRow[];
+};
+
 export type WorkoutExerciseAssignment = {
   exerciseId: number | null;
   prefix: string | null;
@@ -375,6 +403,44 @@ export async function ensureTrainingDbReady(): Promise<void> {
   await pool.query(
     `CREATE INDEX IF NOT EXISTS idx_dashboard_player_notes_org_name_date ON dashboard_player_notes (organization_id, dashboard_player_name, note_date DESC, created_at DESC);`
   );
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS schedule_templates (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS schedule_template_days (
+      id BIGSERIAL PRIMARY KEY,
+      template_id BIGINT NOT NULL REFERENCES schedule_templates(id) ON DELETE CASCADE,
+      day_offset INTEGER NOT NULL CHECK (day_offset >= 0),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (template_id, day_offset)
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS schedule_template_day_items (
+      id BIGSERIAL PRIMARY KEY,
+      template_day_id BIGINT NOT NULL REFERENCES schedule_template_days(id) ON DELETE CASCADE,
+      workout_id INTEGER NOT NULL REFERENCES workout_library(id) ON DELETE CASCADE,
+      prescribed_sets TEXT,
+      prescribed_reps TEXT,
+      prescribed_load TEXT,
+      prescribed_notes TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_templates_org_name ON schedule_templates (organization_id, lower(name));`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_templates_org_updated ON schedule_templates (organization_id, updated_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_template_days_template_offset ON schedule_template_days (template_id, day_offset);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_template_day_items_day_sort ON schedule_template_day_items (template_day_id, sort_order);`);
   global.__pcuTrainingDbReady = true;
 }
 
@@ -1865,6 +1931,392 @@ export async function getWorkoutByIdInOrganization(input: {
   };
 }
 
+function addDaysIso(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  date.setUTCDate(date.getUTCDate() + days);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export async function listScheduleTemplatesByOrganization(organizationId: number): Promise<ScheduleTemplateRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: number;
+    name: string;
+    created_at: string;
+    updated_at: string;
+    day_id: number | null;
+    day_offset: number | null;
+    item_id: number | null;
+    workout_id: number | null;
+    workout_name: string | null;
+    workout_category: string | null;
+    sort_order: number | null;
+    prescribed_sets: string | null;
+    prescribed_reps: string | null;
+    prescribed_load: string | null;
+    prescribed_notes: string | null;
+  }>(
+    `
+      SELECT
+        t.id,
+        t.name,
+        t.created_at::text,
+        t.updated_at::text,
+        d.id AS day_id,
+        d.day_offset,
+        i.id AS item_id,
+        i.workout_id,
+        w.name AS workout_name,
+        w.category AS workout_category,
+        i.sort_order,
+        i.prescribed_sets,
+        i.prescribed_reps,
+        i.prescribed_load,
+        i.prescribed_notes
+      FROM schedule_templates t
+      LEFT JOIN schedule_template_days d ON d.template_id = t.id
+      LEFT JOIN schedule_template_day_items i ON i.template_day_id = d.id
+      LEFT JOIN workout_library w ON w.id = i.workout_id
+      WHERE t.organization_id = $1
+      ORDER BY t.updated_at DESC, t.id DESC, d.day_offset ASC NULLS LAST, i.sort_order ASC NULLS LAST, i.id ASC NULLS LAST
+    `,
+    [organizationId]
+  );
+
+  const byTemplate = new Map<number, ScheduleTemplateRow>();
+  const dayMaps = new Map<number, Map<number, ScheduleTemplateDayRow>>();
+  for (const row of result.rows) {
+    const templateId = Number(row.id);
+    if (!byTemplate.has(templateId)) {
+      byTemplate.set(templateId, {
+        id: templateId,
+        name: row.name,
+        totalDays: 0,
+        workoutCount: 0,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        days: [],
+      });
+      dayMaps.set(templateId, new Map());
+    }
+    const template = byTemplate.get(templateId)!;
+    const dayId = Number(row.day_id ?? 0);
+    if (dayId > 0) {
+      const dayMap = dayMaps.get(templateId)!;
+      if (!dayMap.has(dayId)) {
+        dayMap.set(dayId, {
+          id: dayId,
+          dayOffset: Number(row.day_offset ?? 0),
+          items: [],
+        });
+      }
+      const day = dayMap.get(dayId)!;
+      const itemId = Number(row.item_id ?? 0);
+      if (itemId > 0) {
+        day.items.push({
+          id: itemId,
+          workoutId: Number(row.workout_id ?? 0),
+          workoutName: String(row.workout_name ?? 'Workout'),
+          workoutCategory: row.workout_category,
+          sortOrder: Number(row.sort_order ?? 1),
+          prescribedSets: row.prescribed_sets,
+          prescribedReps: row.prescribed_reps,
+          prescribedLoad: row.prescribed_load,
+          prescribedNotes: row.prescribed_notes,
+        });
+      }
+    }
+    template.workoutCount += Number(row.item_id ?? 0) > 0 ? 1 : 0;
+  }
+
+  const templates = Array.from(byTemplate.values());
+  for (const template of templates) {
+    const dayMap = dayMaps.get(template.id);
+    const days = dayMap ? Array.from(dayMap.values()).sort((a, b) => a.dayOffset - b.dayOffset) : [];
+    template.days = days;
+    template.totalDays = days.length > 0 ? days[days.length - 1].dayOffset + 1 : 0;
+  }
+  return templates;
+}
+
+export async function saveScheduleTemplate(input: {
+  organizationId: number;
+  userId: number;
+  templateId?: number;
+  name: string;
+  days: Array<{
+    dayOffset: number;
+    items: Array<{
+      workoutId: number;
+      prescribedSets?: string;
+      prescribedReps?: string;
+      prescribedLoad?: string;
+      prescribedNotes?: string;
+    }>;
+  }>;
+}): Promise<{ ok: true; templateId: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const name = String(input.name ?? '').trim();
+  if (!name) return { ok: false, error: 'Template name is required.' };
+
+  const cleanedDays = (input.days ?? [])
+    .map((day) => ({
+      dayOffset: Number(day.dayOffset),
+      items: (day.items ?? [])
+        .map((item) => ({
+          workoutId: Number(item.workoutId ?? 0),
+          prescribedSets: String(item.prescribedSets ?? '').trim(),
+          prescribedReps: String(item.prescribedReps ?? '').trim(),
+          prescribedLoad: String(item.prescribedLoad ?? '').trim(),
+          prescribedNotes: String(item.prescribedNotes ?? '').trim(),
+        }))
+        .filter((item) => Number.isFinite(item.workoutId) && item.workoutId > 0),
+    }))
+    .filter((day) => Number.isFinite(day.dayOffset) && day.dayOffset >= 0 && day.items.length > 0)
+    .sort((a, b) => a.dayOffset - b.dayOffset);
+  if (cleanedDays.length === 0) return { ok: false, error: 'Add at least one workout day before saving.' };
+
+  const workoutIds = Array.from(new Set(cleanedDays.flatMap((day) => day.items.map((item) => item.workoutId))));
+  if (workoutIds.length === 0) return { ok: false, error: 'No workouts found for this template.' };
+  const validWorkouts = await pool.query<{ id: number }>(
+    `SELECT id FROM workout_library WHERE organization_id = $1 AND id = ANY($2::int[])`,
+    [input.organizationId, workoutIds]
+  );
+  if (validWorkouts.rows.length !== workoutIds.length) {
+    return { ok: false, error: 'One or more workouts are not available in this organization.' };
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let templateId = Number(input.templateId ?? 0);
+    if (templateId > 0) {
+      const owned = await client.query<{ id: number }>(
+        `SELECT id FROM schedule_templates WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+        [templateId, input.organizationId]
+      );
+      if ((owned.rowCount ?? 0) !== 1) {
+        await client.query('ROLLBACK');
+        return { ok: false, error: 'Template not found.' };
+      }
+      await client.query(
+        `UPDATE schedule_templates SET name = $1, updated_at = NOW() WHERE id = $2`,
+        [name, templateId]
+      );
+    } else {
+      const created = await client.query<{ id: number }>(
+        `
+          INSERT INTO schedule_templates (organization_id, name, created_by_user_id)
+          VALUES ($1, $2, $3)
+          RETURNING id
+        `,
+        [input.organizationId, name, input.userId]
+      );
+      templateId = Number(created.rows[0].id);
+    }
+
+    await client.query(`DELETE FROM schedule_template_days WHERE template_id = $1`, [templateId]);
+    for (const day of cleanedDays) {
+      const dayResult = await client.query<{ id: number }>(
+        `
+          INSERT INTO schedule_template_days (template_id, day_offset)
+          VALUES ($1, $2)
+          RETURNING id
+        `,
+        [templateId, day.dayOffset]
+      );
+      const templateDayId = Number(dayResult.rows[0].id);
+      let sortOrder = 1;
+      for (const item of day.items) {
+        await client.query(
+          `
+            INSERT INTO schedule_template_day_items (
+              template_day_id,
+              workout_id,
+              prescribed_sets,
+              prescribed_reps,
+              prescribed_load,
+              prescribed_notes,
+              sort_order
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+          `,
+          [
+            templateDayId,
+            item.workoutId,
+            item.prescribedSets || null,
+            item.prescribedReps || null,
+            item.prescribedLoad || null,
+            item.prescribedNotes || null,
+            sortOrder,
+          ]
+        );
+        sortOrder += 1;
+      }
+    }
+
+    await client.query('COMMIT');
+    return { ok: true, templateId };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to save template.' };
+  } finally {
+    client.release();
+  }
+}
+
+export async function deleteScheduleTemplate(input: {
+  organizationId: number;
+  templateId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const deleted = await pool.query<{ id: number }>(
+    `DELETE FROM schedule_templates WHERE id = $1 AND organization_id = $2 RETURNING id`,
+    [input.templateId, input.organizationId]
+  );
+  if ((deleted.rowCount ?? 0) !== 1) return { ok: false, error: 'Template not found.' };
+  return { ok: true };
+}
+
+export async function applyScheduleTemplateToPlayer(input: {
+  organizationId: number;
+  userId: number;
+  playerId: number;
+  templateId: number;
+  startDate: string;
+  programName?: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const date = String(input.startDate ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, error: 'startDate must be YYYY-MM-DD.' };
+
+  const playerCheck = await pool.query<{ id: number }>(
+    `SELECT id FROM players WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+    [input.playerId, input.organizationId]
+  );
+  if ((playerCheck.rowCount ?? 0) !== 1) {
+    return { ok: false, error: 'Player was not found in your organization.' };
+  }
+
+  const templateRows = await pool.query<{
+    day_offset: number;
+    workout_id: number;
+    prescribed_sets: string | null;
+    prescribed_reps: string | null;
+    prescribed_load: string | null;
+    prescribed_notes: string | null;
+    sort_order: number;
+  }>(
+    `
+      SELECT
+        d.day_offset,
+        i.workout_id,
+        i.prescribed_sets,
+        i.prescribed_reps,
+        i.prescribed_load,
+        i.prescribed_notes,
+        i.sort_order
+      FROM schedule_templates t
+      JOIN schedule_template_days d ON d.template_id = t.id
+      JOIN schedule_template_day_items i ON i.template_day_id = d.id
+      WHERE t.id = $1
+        AND t.organization_id = $2
+      ORDER BY d.day_offset ASC, i.sort_order ASC, i.id ASC
+    `,
+    [input.templateId, input.organizationId]
+  );
+  if (templateRows.rows.length === 0) return { ok: false, error: 'Template has no workouts to apply.' };
+
+  const programId = await getOrCreateCurrentProgram({
+    organizationId: input.organizationId,
+    userId: input.userId,
+    playerId: input.playerId,
+    programName: input.programName,
+  });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const byOffset = new Map<number, typeof templateRows.rows>();
+    for (const row of templateRows.rows) {
+      const offset = Number(row.day_offset ?? 0);
+      const list = byOffset.get(offset) ?? [];
+      list.push(row);
+      byOffset.set(offset, list);
+    }
+
+    for (const [offset, rows] of byOffset.entries()) {
+      const dayDate = addDaysIso(date, offset);
+      const day = await client.query<{ id: number }>(
+        `
+          INSERT INTO program_days (program_id, day_date)
+          VALUES ($1, $2)
+          ON CONFLICT (program_id, day_date)
+          DO UPDATE SET updated_at = NOW()
+          RETURNING id
+        `,
+        [programId, dayDate]
+      );
+      const programDayId = Number(day.rows[0].id);
+      const orderResult = await client.query<{ next_order: number }>(
+        `
+          SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order
+          FROM program_day_items
+          WHERE program_day_id = $1
+        `,
+        [programDayId]
+      );
+      let nextOrder = Number(orderResult.rows[0].next_order ?? 1);
+      for (const row of rows) {
+        await client.query(
+          `
+            INSERT INTO program_day_items (
+              program_day_id,
+              exercise_id,
+              workout_id,
+              prescribed_sets,
+              prescribed_reps,
+              prescribed_load,
+              prescribed_notes,
+              sort_order
+            )
+            VALUES ($1, NULL, $2, $3, $4, $5, $6, $7)
+          `,
+          [
+            programDayId,
+            Number(row.workout_id),
+            row.prescribed_sets,
+            row.prescribed_reps,
+            row.prescribed_load,
+            row.prescribed_notes,
+            nextOrder,
+          ]
+        );
+        nextOrder += 1;
+      }
+    }
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to apply template.' };
+  } finally {
+    client.release();
+  }
+}
+
 export async function createWorkout(input: {
   organizationId: number;
   userId: number;
@@ -2520,6 +2972,53 @@ export async function listProgramItemsForPlayerByDateRange(input: {
     program_name: string;
   }>(
     `
+      WITH selected_workout_ids AS (
+        SELECT DISTINCT i.workout_id
+        FROM programs p
+        JOIN program_days d ON d.program_id = p.id
+        JOIN program_day_items i ON i.program_day_id = d.id
+        WHERE p.player_id = $1
+          AND d.day_date >= $2::date
+          AND d.day_date < $3::date
+          AND i.workout_id IS NOT NULL
+      ),
+      workout_summaries AS (
+        SELECT
+          sw.workout_id,
+          STRING_AGG(
+            CASE
+              WHEN we2.exercise_prefix IS NOT NULL AND LENGTH(TRIM(we2.exercise_prefix)) > 0
+                THEN CONCAT(TRIM(we2.exercise_prefix), ': ', e2.name)
+              ELSE e2.name
+            END,
+            ', '
+            ORDER BY we2.sort_order, e2.name
+          ) AS exercise_names,
+          COALESCE(
+            JSON_AGG(
+              JSON_BUILD_OBJECT(
+                'exerciseId', e2.id,
+                'prefix', we2.exercise_prefix,
+                'name', e2.name,
+                'category', e2.category,
+                'repMeasure', e2.rep_measure,
+                'trackingType', e2.tracking_type,
+                'repsPerSide', e2.reps_per_side,
+                'prescribedSets', we2.prescribed_sets,
+                'prescribedReps', we2.prescribed_reps,
+                'instructionVideoUrl', e2.instruction_video_url,
+                'description', e2.description,
+                'coachingCues', e2.coaching_cues
+              )
+              ORDER BY we2.sort_order, e2.name
+            ) FILTER (WHERE e2.id IS NOT NULL),
+            '[]'::json
+          ) AS exercise_json
+        FROM selected_workout_ids sw
+        LEFT JOIN workout_exercises we2 ON we2.workout_id = sw.workout_id
+        LEFT JOIN exercise_library e2 ON e2.id = we2.exercise_id
+        GROUP BY sw.workout_id
+      )
       SELECT
         i.id AS item_id,
         d.day_date::text,
@@ -2553,41 +3052,7 @@ export async function listProgramItemsForPlayerByDateRange(input: {
       JOIN program_day_items i ON i.program_day_id = d.id
       LEFT JOIN exercise_library e ON e.id = i.exercise_id
       LEFT JOIN workout_library w ON w.id = i.workout_id
-      LEFT JOIN LATERAL (
-        SELECT
-          STRING_AGG(
-            CASE
-              WHEN we2.exercise_prefix IS NOT NULL AND LENGTH(TRIM(we2.exercise_prefix)) > 0
-                THEN CONCAT(TRIM(we2.exercise_prefix), ': ', e2.name)
-              ELSE e2.name
-            END,
-            ', '
-            ORDER BY we2.sort_order, e2.name
-          ) AS exercise_names,
-          COALESCE(
-            JSON_AGG(
-              JSON_BUILD_OBJECT(
-                'exerciseId', e2.id,
-                'prefix', we2.exercise_prefix,
-                'name', e2.name,
-                'category', e2.category,
-                'repMeasure', e2.rep_measure,
-                'trackingType', e2.tracking_type,
-                'repsPerSide', e2.reps_per_side,
-                'prescribedSets', we2.prescribed_sets,
-                'prescribedReps', we2.prescribed_reps,
-                'instructionVideoUrl', e2.instruction_video_url,
-                'description', e2.description,
-                'coachingCues', e2.coaching_cues
-              )
-              ORDER BY we2.sort_order, e2.name
-            ),
-            '[]'::json
-          ) AS exercise_json
-        FROM workout_exercises we2
-        JOIN exercise_library e2 ON e2.id = we2.exercise_id
-        WHERE we2.workout_id = i.workout_id
-      ) ws ON TRUE
+      LEFT JOIN workout_summaries ws ON ws.workout_id = i.workout_id
       LEFT JOIN exercise_logs l ON l.program_day_item_id = i.id AND l.player_id = p.player_id
       WHERE p.player_id = $1
         AND d.day_date >= $2::date
@@ -2649,19 +3114,14 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
     workout_exercise_json: unknown;
   }>(
     `
-      SELECT
-        ci.id AS item_id,
-        ci.cycle_slot,
-        w.id AS workout_id,
-        w.name AS workout_name,
-        w.category AS workout_category,
-        w.description AS workout_description,
-        ws.exercise_names AS workout_exercise_names,
-        ws.exercise_json AS workout_exercise_json
-      FROM program_cycle_items ci
-      JOIN workout_library w ON w.id = ci.workout_id
-      LEFT JOIN LATERAL (
+      WITH selected_workout_ids AS (
+        SELECT DISTINCT ci.workout_id
+        FROM program_cycle_items ci
+        WHERE ci.player_id = $1
+      ),
+      workout_summaries AS (
         SELECT
+          sw.workout_id,
           STRING_AGG(
             CASE
               WHEN we2.exercise_prefix IS NOT NULL AND LENGTH(TRIM(we2.exercise_prefix)) > 0
@@ -2688,13 +3148,26 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
                 'coachingCues', e2.coaching_cues
               )
               ORDER BY we2.sort_order, e2.name
-            ),
+            ) FILTER (WHERE e2.id IS NOT NULL),
             '[]'::json
           ) AS exercise_json
-        FROM workout_exercises we2
-        JOIN exercise_library e2 ON e2.id = we2.exercise_id
-        WHERE we2.workout_id = ci.workout_id
-      ) ws ON TRUE
+        FROM selected_workout_ids sw
+        LEFT JOIN workout_exercises we2 ON we2.workout_id = sw.workout_id
+        LEFT JOIN exercise_library e2 ON e2.id = we2.exercise_id
+        GROUP BY sw.workout_id
+      )
+      SELECT
+        ci.id AS item_id,
+        ci.cycle_slot,
+        w.id AS workout_id,
+        w.name AS workout_name,
+        w.category AS workout_category,
+        w.description AS workout_description,
+        ws.exercise_names AS workout_exercise_names,
+        ws.exercise_json AS workout_exercise_json
+      FROM program_cycle_items ci
+      JOIN workout_library w ON w.id = ci.workout_id
+      LEFT JOIN workout_summaries ws ON ws.workout_id = ci.workout_id
       WHERE ci.player_id = $1
       ORDER BY
         CASE ci.cycle_slot

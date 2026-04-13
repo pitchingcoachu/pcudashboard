@@ -2,6 +2,16 @@ import { listActiveStaffOrganizationsByEmail } from './auth-db';
 import type { PortalSession } from './portal-session';
 import { resolveAllowedDashboardSchoolCodes, resolveDashboardSchoolCode } from './dashboard-access';
 
+declare global {
+  var __pcuStaffSchoolCodesCache: Map<string, { at: number; codes: string[] }> | undefined;
+  var __pcuStaffSchoolCodesInflight: Map<string, Promise<string[]>> | undefined;
+  var __pcuDashboardSchoolOptionsCache: Map<string, { at: number; codes: string[] }> | undefined;
+}
+
+const STAFF_CODES_TTL_MS = 5 * 60 * 1000;
+const OPTIONS_TTL_MS = 60 * 1000;
+const STAFF_QUERY_TIMEOUT_MS = 2500;
+
 function normalizeSchoolCode(value: string): string {
   return String(value ?? '').trim().toUpperCase();
 }
@@ -97,28 +107,100 @@ function schoolFromEmailDomain(email: string | null | undefined): string | null 
   return null;
 }
 
+function getStaffCodesCache() {
+  if (!global.__pcuStaffSchoolCodesCache) global.__pcuStaffSchoolCodesCache = new Map();
+  return global.__pcuStaffSchoolCodesCache;
+}
+
+function getStaffCodesInflight() {
+  if (!global.__pcuStaffSchoolCodesInflight) global.__pcuStaffSchoolCodesInflight = new Map();
+  return global.__pcuStaffSchoolCodesInflight;
+}
+
+function getOptionsCache() {
+  if (!global.__pcuDashboardSchoolOptionsCache) global.__pcuDashboardSchoolOptionsCache = new Map();
+  return global.__pcuDashboardSchoolOptionsCache;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const timeoutPromise = new Promise<T>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
+    });
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 async function resolveStaffSchoolCodes(email: string): Promise<string[]> {
-  const organizations = await listActiveStaffOrganizationsByEmail(email);
-  const codes = organizations
-    .map((org) => schoolFromOrganizationId(org.organizationId) ?? schoolFromOrganizationName(org.organizationName))
-    .filter((value): value is string => Boolean(value));
-  return Array.from(new Set(codes));
+  const normalizedEmail = String(email ?? '').trim().toLowerCase();
+  if (!normalizedEmail) return [];
+  const now = Date.now();
+  const cache = getStaffCodesCache();
+  const cached = cache.get(normalizedEmail);
+  if (cached && now - cached.at <= STAFF_CODES_TTL_MS) return cached.codes;
+
+  const inflight = getStaffCodesInflight();
+  const active = inflight.get(normalizedEmail);
+  if (active) return active;
+
+  const promise = (async () => {
+    try {
+      const organizations = await withTimeout(
+        listActiveStaffOrganizationsByEmail(normalizedEmail),
+        STAFF_QUERY_TIMEOUT_MS
+      );
+      const codes = organizations
+        .map((org) => schoolFromOrganizationId(org.organizationId) ?? schoolFromOrganizationName(org.organizationName))
+        .filter((value): value is string => Boolean(value));
+      const deduped = Array.from(new Set(codes));
+      cache.set(normalizedEmail, { at: Date.now(), codes: deduped });
+      return deduped;
+    } catch {
+      return cached?.codes ?? [];
+    } finally {
+      inflight.delete(normalizedEmail);
+    }
+  })();
+
+  inflight.set(normalizedEmail, promise);
+  return promise;
 }
 
 export async function resolveSessionDashboardSchoolOptions(session: PortalSession): Promise<string[]> {
+  const cacheKey = [
+    String(session.role ?? ''),
+    String(session.email ?? '').trim().toLowerCase(),
+    Number(session.userId ?? 0),
+    Number(session.organizationId ?? 0),
+    Number(session.playerId ?? 0),
+    normalizeSchoolCode(session.dashboardSchoolCode ?? ''),
+  ].join('|');
+  const optionsCache = getOptionsCache();
+  const cached = optionsCache.get(cacheKey);
+  if (cached && Date.now() - cached.at <= OPTIONS_TTL_MS) return cached.codes;
+
   const selected = normalizeSchoolCode(session.dashboardSchoolCode ?? '');
   const fallback = resolveDashboardSchoolCode(session);
   const domainHint = schoolFromEmailDomain(session.email);
 
   if (session.role === 'admin') {
-    if (isGlobalAdminEmail(session.email)) return withLeagueAndPro(resolveAllowedDashboardSchoolCodes());
+    if (isGlobalAdminEmail(session.email)) {
+      const resolved = withLeagueAndPro(resolveAllowedDashboardSchoolCodes());
+      optionsCache.set(cacheKey, { at: Date.now(), codes: resolved });
+      return resolved;
+    }
     const codes = await resolveStaffSchoolCodes(session.email);
     const seededCodes = Array.from(new Set([...codes, domainHint].filter(isNonEmptyString)));
     const mergedBase = seededCodes.length
       ? seededCodes
       : Array.from(new Set([selected, fallback].filter(isNonEmptyString)));
     const merged = withLeagueAndPro(mergedBase);
-    return merged.length > 0 ? merged : [fallback];
+    const resolved = merged.length > 0 ? merged : [fallback];
+    optionsCache.set(cacheKey, { at: Date.now(), codes: resolved });
+    return resolved;
   }
 
   if (session.role === 'coach') {
@@ -128,8 +210,12 @@ export async function resolveSessionDashboardSchoolOptions(session: PortalSessio
       ? seededCodes
       : Array.from(new Set([selected, fallback].filter(isNonEmptyString)));
     const merged = withLeagueAndPro(mergedBase);
-    return merged.length > 0 ? merged : [fallback];
+    const resolved = merged.length > 0 ? merged : [fallback];
+    optionsCache.set(cacheKey, { at: Date.now(), codes: resolved });
+    return resolved;
   }
 
-  return withLeagueAndPro([fallback]);
+  const resolved = withLeagueAndPro([fallback]);
+  optionsCache.set(cacheKey, { at: Date.now(), codes: resolved });
+  return resolved;
 }
