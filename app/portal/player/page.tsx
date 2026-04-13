@@ -40,6 +40,19 @@ function addDays(value: string, days: number): string {
   return `${year}-${month}-${day}`;
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const timeoutPromise = new Promise<T>((resolve) => {
+      timeout = setTimeout(() => resolve(fallback), timeoutMs);
+    });
+    const safePromise = promise.catch(() => fallback);
+    return await Promise.race([safePromise, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export default async function PlayerPortalPage({ searchParams }: PlayerPageProps) {
   const session = await requirePortalSession();
   const canAccessProgramming = canUseProgrammingData(session);
@@ -142,10 +155,14 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
       startDate: today,
       endDate: tomorrow,
     }),
-    listBodyWeightLogsForPlayer({
-      playerId: effectivePlayerId,
-      limit: 120,
-    }),
+    withTimeout(
+      listBodyWeightLogsForPlayer({
+        playerId: effectivePlayerId,
+        limit: 120,
+      }),
+      3500,
+      []
+    ),
     session.role === 'admin' || session.role === 'coach'
       ? listClientsByOrganization(programmingOrganizationId).then((clients) =>
           session.role === 'coach' ? clients.filter((client) => client.assignedCoachUserId === session.userId) : clients
@@ -154,8 +171,26 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
     session.role === 'admin' || session.role === 'coach'
       ? listCoachesByOrganization(programmingOrganizationId)
       : Promise.resolve([]),
-    listAssessmentWorkoutScoresForPlayer({ playerId: effectivePlayerId, limit: 240 }),
-    listPlayerPlanGoalsForPlayer({ playerId: effectivePlayerId }),
+    withTimeout(
+      listAssessmentWorkoutScoresForPlayer({
+        playerId: effectivePlayerId,
+        limit: session.role === 'player' ? 80 : 180,
+      }),
+      3500,
+      []
+    ),
+    withTimeout(
+      listPlayerPlanGoalsForPlayer({ playerId: effectivePlayerId }),
+      3500,
+      {
+        activeGoals: [
+          { slotIndex: 1 as const, category: null, goalDescription: null, createdAt: null },
+          { slotIndex: 2 as const, category: null, goalDescription: null, createdAt: null },
+          { slotIndex: 3 as const, category: null, goalDescription: null, createdAt: null },
+        ],
+        completedGoals: [],
+      }
+    ),
   ]);
 
   if (!player) {

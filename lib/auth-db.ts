@@ -90,6 +90,7 @@ type ResetTokenRecord = {
 declare global {
   var __pcuPool: Pool | undefined;
   var __pcuAuthDbReady: boolean | undefined;
+  var __pcuAuthDbReadyPromise: Promise<void> | undefined;
 }
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -231,17 +232,22 @@ function preferredDashboardUrl(): string {
 
 export async function ensureAuthDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
-  const pool = getDbPool();
-
   if (global.__pcuAuthDbReady) return;
+  if (global.__pcuAuthDbReadyPromise) {
+    await global.__pcuAuthDbReadyPromise;
+    return;
+  }
+
+  const pool = getDbPool();
   const migrationLockId = 14840321;
 
-  // Prevent concurrent schema bootstrap from multiple requests/processes.
-  await pool.query(`SELECT pg_advisory_lock($1)`, [migrationLockId]);
-  try {
-    if (global.__pcuAuthDbReady) return;
+  global.__pcuAuthDbReadyPromise = (async () => {
+    // Prevent concurrent schema bootstrap from multiple requests/processes.
+    await pool.query(`SELECT pg_advisory_lock($1)`, [migrationLockId]);
+    try {
+      if (global.__pcuAuthDbReady) return;
 
-    await pool.query(`
+      await pool.query(`
     CREATE TABLE IF NOT EXISTS organizations (
       id SERIAL PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
@@ -700,10 +706,15 @@ export async function ensureAuthDbReady(): Promise<void> {
     client.release();
   }
 
-    global.__pcuAuthDbReady = true;
-  } finally {
-    await pool.query(`SELECT pg_advisory_unlock($1)`, [migrationLockId]);
-  }
+      global.__pcuAuthDbReady = true;
+    } finally {
+      await pool.query(`SELECT pg_advisory_unlock($1)`, [migrationLockId]);
+    }
+  })().finally(() => {
+    global.__pcuAuthDbReadyPromise = undefined;
+  });
+
+  await global.__pcuAuthDbReadyPromise;
 }
 
 export async function validateLoginWithDatabase(email: string, password: string): Promise<SessionUser | null> {

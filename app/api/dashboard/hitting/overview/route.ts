@@ -10,6 +10,7 @@ export const maxDuration = 300;
 const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=5, stale-while-revalidate=55',
 } as const;
+const SLOW_ROUTE_MS = 5000;
 
 function resolveOverviewTimeoutMs(schoolCode: string): number {
   return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 300000 : 120000;
@@ -23,6 +24,7 @@ function resolveOverviewCachePolicy(schoolCode: string): { ttlMs: number; staleT
 }
 
 export async function GET(request: Request) {
+  const routeStartedAt = Date.now();
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -122,6 +124,9 @@ export async function GET(request: Request) {
       headers: {
         ...RESPONSE_CACHE_HEADERS,
         'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',
+        'x-dashboard-cache-source': result.source,
+        'x-dashboard-upstream-ms': String(result.durationMs),
+        'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
       },
     });
   } catch (error) {
@@ -131,5 +136,10 @@ export async function GET(request: Request) {
       },
       { status: 502 }
     );
+  } finally {
+    const elapsed = Date.now() - routeStartedAt;
+    if (elapsed >= SLOW_ROUTE_MS) {
+      console.warn(`[dashboard][hitting/overview] slow request ${elapsed}ms`);
+    }
   }
 }

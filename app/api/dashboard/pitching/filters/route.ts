@@ -9,6 +9,7 @@ const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=30, stale-while-revalidate=300',
   vary: 'Cookie',
 } as const;
+const SLOW_ROUTE_MS = 2500;
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -32,6 +33,7 @@ function schoolRosterAdditions(schoolCode: string): { pitchers: string[] } {
 }
 
 export async function GET(request: Request) {
+  const routeStartedAt = Date.now();
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -93,6 +95,9 @@ export async function GET(request: Request) {
       headers: {
         ...RESPONSE_CACHE_HEADERS,
         'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',
+        'x-dashboard-cache-source': result.source,
+        'x-dashboard-upstream-ms': String(result.durationMs),
+        'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
       },
     });
   } catch (error) {
@@ -102,5 +107,10 @@ export async function GET(request: Request) {
       },
       { status: 502 }
     );
+  } finally {
+    const elapsed = Date.now() - routeStartedAt;
+    if (elapsed >= SLOW_ROUTE_MS) {
+      console.warn(`[dashboard][pitching/filters] slow request ${elapsed}ms`);
+    }
   }
 }

@@ -11,6 +11,14 @@ type CacheEntry = {
 const GLOBAL_CACHE_KEY = '__pcu_dashboard_route_cache_v1__';
 const GLOBAL_INFLIGHT_KEY = '__pcu_dashboard_route_cache_inflight_v1__';
 const MAX_ENTRIES = 800;
+export type DashboardCacheSource = 'HIT' | 'MISS' | 'STALE';
+export type DashboardFetchResult = {
+  status: number;
+  payload: JsonRecord;
+  cached: boolean;
+  source: DashboardCacheSource;
+  durationMs: number;
+};
 
 function getCacheStore(): Map<string, CacheEntry> {
   const globalRef = globalThis as typeof globalThis & {
@@ -22,12 +30,12 @@ function getCacheStore(): Map<string, CacheEntry> {
   return globalRef[GLOBAL_CACHE_KEY]!;
 }
 
-function getInflightStore(): Map<string, Promise<{ status: number; payload: JsonRecord; cached: boolean }>> {
+function getInflightStore(): Map<string, Promise<DashboardFetchResult>> {
   const globalRef = globalThis as typeof globalThis & {
-    [GLOBAL_INFLIGHT_KEY]?: Map<string, Promise<{ status: number; payload: JsonRecord; cached: boolean }>>;
+    [GLOBAL_INFLIGHT_KEY]?: Map<string, Promise<DashboardFetchResult>>;
   };
   if (!globalRef[GLOBAL_INFLIGHT_KEY]) {
-    globalRef[GLOBAL_INFLIGHT_KEY] = new Map<string, Promise<{ status: number; payload: JsonRecord; cached: boolean }>>();
+    globalRef[GLOBAL_INFLIGHT_KEY] = new Map<string, Promise<DashboardFetchResult>>();
   }
   return globalRef[GLOBAL_INFLIGHT_KEY]!;
 }
@@ -65,10 +73,11 @@ export async function fetchDashboardJsonWithCache(options: {
   timeoutMs?: number;
   retries?: number;
   fetcher: () => Promise<Response>;
-}): Promise<{ status: number; payload: JsonRecord; cached: boolean }> {
+}): Promise<DashboardFetchResult> {
   const store = getCacheStore();
   const inflight = getInflightStore();
   const now = Date.now();
+  const startedAt = now;
   pruneExpiredEntries(store, now);
   const hit = store.get(options.cacheKey);
   const staleTtlMs = Math.max(0, options.staleTtlMs ?? Math.max(15000, options.ttlMs * 4));
@@ -77,16 +86,22 @@ export async function fetchDashboardJsonWithCache(options: {
   const staleUntil = hit ? Number((hit as CacheEntry & { staleUntil?: number }).staleUntil ?? hit.expiresAt) : 0;
   const staleHit = hit && staleUntil > now ? hit : null;
   if (hit && hit.expiresAt > now) {
-    return { status: hit.status, payload: cloneJsonRecord(hit.payload), cached: true };
+    return { status: hit.status, payload: cloneJsonRecord(hit.payload), cached: true, source: 'HIT', durationMs: Date.now() - startedAt };
   }
 
   const inflightHit = inflight.get(options.cacheKey);
   if (inflightHit) {
     const shared = await inflightHit;
-    return { status: shared.status, payload: cloneJsonRecord(shared.payload), cached: shared.cached };
+    return {
+      status: shared.status,
+      payload: cloneJsonRecord(shared.payload),
+      cached: shared.cached,
+      source: shared.source,
+      durationMs: Date.now() - startedAt,
+    };
   }
 
-  const inFlightPromise = (async () => {
+  const inFlightPromise: Promise<DashboardFetchResult> = (async () => {
     try {
       let response: Response | null = null;
       let attempt = 0;
@@ -121,15 +136,27 @@ export async function fetchDashboardJsonWithCache(options: {
           payload: cloneJsonRecord(payload),
         });
         pruneOldestEntries(store, MAX_ENTRIES);
-        return { status: response.status, payload, cached: false };
+        return { status: response.status, payload, cached: false, source: 'MISS', durationMs: Date.now() - startedAt };
       }
       if (staleHit) {
-        return { status: staleHit.status, payload: cloneJsonRecord(staleHit.payload), cached: true };
+        return {
+          status: staleHit.status,
+          payload: cloneJsonRecord(staleHit.payload),
+          cached: true,
+          source: 'STALE',
+          durationMs: Date.now() - startedAt,
+        };
       }
-      return { status: response.status, payload, cached: false };
+      return { status: response.status, payload, cached: false, source: 'MISS', durationMs: Date.now() - startedAt };
     } catch (error) {
       if (staleHit) {
-        return { status: staleHit.status, payload: cloneJsonRecord(staleHit.payload), cached: true };
+        return {
+          status: staleHit.status,
+          payload: cloneJsonRecord(staleHit.payload),
+          cached: true,
+          source: 'STALE',
+          durationMs: Date.now() - startedAt,
+        };
       }
       throw error;
     } finally {
@@ -139,5 +166,11 @@ export async function fetchDashboardJsonWithCache(options: {
 
   inflight.set(options.cacheKey, inFlightPromise);
   const result = await inFlightPromise;
-  return { status: result.status, payload: cloneJsonRecord(result.payload), cached: result.cached };
+  return {
+    status: result.status,
+    payload: cloneJsonRecord(result.payload),
+    cached: result.cached,
+    source: result.source,
+    durationMs: Date.now() - startedAt,
+  };
 }

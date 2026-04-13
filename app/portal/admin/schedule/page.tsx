@@ -1,4 +1,4 @@
-import { listClientsByOrganization, listWorkoutsByOrganization } from '../../../../lib/training-db';
+import { listPlayerChoicesByOrganization, listWorkoutChoicesByOrganization } from '../../../../lib/training-db';
 import { requirePortalSession } from '../../../../lib/portal-session';
 import { resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import ScheduleBoard from './schedule-board';
@@ -7,20 +7,16 @@ export default async function AdminSchedulePage() {
   const session = await requirePortalSession();
   const programmingOrganizationId = resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
-  const [clients, workouts] = await Promise.all([
-    programmingOrganizationId > 0 ? listClientsByOrganization(programmingOrganizationId) : Promise.resolve([]),
-    programmingOrganizationId > 0 ? listWorkoutsByOrganization(programmingOrganizationId) : Promise.resolve([]),
+  const [players, workoutChoices] = await Promise.all([
+    programmingOrganizationId > 0
+      ? listPlayerChoicesByOrganization({
+          organizationId: programmingOrganizationId,
+          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+        })
+      : Promise.resolve([]),
+    programmingOrganizationId > 0 ? listWorkoutChoicesByOrganization(programmingOrganizationId) : Promise.resolve([]),
   ]);
-
-  const visibleClients =
-    session.role === 'coach' ? clients.filter((client) => client.assignedCoachUserId === session.userId) : clients;
-  const players = visibleClients.map((client) => ({ id: client.playerId, name: client.fullName }));
-  const workoutChoices = workouts.map((workout) => ({
-    id: workout.id,
-    name: workout.name,
-    exerciseCount: workout.exerciseCount,
-    category: workout.category,
-  }));
+  const playerChoices = players.map((player) => ({ id: player.playerId, name: player.fullName }));
 
   return (
     <div className="portal-admin-stack">
@@ -35,7 +31,7 @@ export default async function AdminSchedulePage() {
         <p>Select a player, then use Workout Folder or Template Folder to drag onto the schedule.</p>
       </div>
       <article className="portal-admin-card">
-        <ScheduleBoard players={players} workouts={workoutChoices} />
+        <ScheduleBoard players={playerChoices} workouts={workoutChoices} />
       </article>
     </div>
   );

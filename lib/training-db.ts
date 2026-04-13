@@ -3,6 +3,7 @@ const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 
 declare global {
   var __pcuTrainingDbReady: boolean | undefined;
+  var __pcuTrainingDbReadyPromise: Promise<void> | undefined;
   var __pcuAuthUsersSequenceStructureReady: boolean | undefined;
   var __pcuTrainingTrackingTypeReady: boolean | undefined;
 }
@@ -26,6 +27,13 @@ export type ClientRow = {
   userRole: 'admin' | 'coach' | 'player' | null;
 };
 
+export type ClientListPage = {
+  rows: ClientRow[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+};
+
 export type CoachRow = {
   userId: number;
   name: string;
@@ -34,6 +42,19 @@ export type CoachRow = {
   role: 'admin' | 'coach';
   isActive: boolean;
   assignedPlayerCount: number;
+};
+
+export type PlayerChoiceRow = {
+  playerId: number;
+  fullName: string;
+  assignedCoachUserId: number | null;
+};
+
+export type WorkoutChoiceRow = {
+  id: number;
+  name: string;
+  category: string;
+  exerciseCount: number;
 };
 
 export type PlayerProfileRow = {
@@ -323,32 +344,39 @@ async function syncAuthUsersIdSequence(db: Queryable): Promise<void> {
 export async function ensureTrainingDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
   if (global.__pcuTrainingDbReady) return;
-  await ensureAuthDbReady();
-  const pool = getDbPool();
-  await ensureAuthUsersIdSequence(pool);
-  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
-  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
-  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS height TEXT;`);
-  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_weight_lbs DOUBLE PRECISION;`);
-  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_photo_data_url TEXT;`);
-  if (!global.__pcuTrainingTrackingTypeReady) {
-    await pool.query(`ALTER TABLE exercise_library ADD COLUMN IF NOT EXISTS tracking_type TEXT NOT NULL DEFAULT 'lbs';`);
-    await pool.query(`UPDATE exercise_library SET tracking_type = 'lbs' WHERE tracking_type IS NULL OR LENGTH(TRIM(tracking_type)) = 0;`);
-    global.__pcuTrainingTrackingTypeReady = true;
+  if (global.__pcuTrainingDbReadyPromise) {
+    await global.__pcuTrainingDbReadyPromise;
+    return;
   }
-  await pool.query(
-    `ALTER TABLE players ADD COLUMN IF NOT EXISTS assigned_coach_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL;`
-  );
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_library_org_name ON exercise_library (organization_id, name);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_library_org_name ON workout_library (organization_id, name);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_exercises_workout_sort ON workout_exercises (workout_id, sort_order);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_programs_org ON programs (organization_id);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_days_program ON program_days (program_id);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_exercise ON program_day_items (exercise_id);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_workout ON program_day_items (workout_id);`);
-  await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
-  await pool.query(`
+
+  global.__pcuTrainingDbReadyPromise = (async () => {
+    await ensureAuthDbReady();
+    const pool = getDbPool();
+    await ensureAuthUsersIdSequence(pool);
+    await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
+    await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
+    await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS height TEXT;`);
+    await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_weight_lbs DOUBLE PRECISION;`);
+    await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_photo_data_url TEXT;`);
+    if (!global.__pcuTrainingTrackingTypeReady) {
+      await pool.query(`ALTER TABLE exercise_library ADD COLUMN IF NOT EXISTS tracking_type TEXT NOT NULL DEFAULT 'lbs';`);
+      await pool.query(`UPDATE exercise_library SET tracking_type = 'lbs' WHERE tracking_type IS NULL OR LENGTH(TRIM(tracking_type)) = 0;`);
+      global.__pcuTrainingTrackingTypeReady = true;
+    }
+    await pool.query(
+      `ALTER TABLE players ADD COLUMN IF NOT EXISTS assigned_coach_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL;`
+    );
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_org_full_name ON players (organization_id, full_name);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_library_org_name ON exercise_library (organization_id, name);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_library_org_name ON workout_library (organization_id, name);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_exercises_workout_sort ON workout_exercises (workout_id, sort_order);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_programs_org ON programs (organization_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_days_program ON program_days (program_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_exercise ON program_day_items (exercise_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_workout ON program_day_items (workout_id);`);
+    await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS dashboard_custom_tables (
       id BIGSERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -360,13 +388,13 @@ export async function ensureTrainingDbReady(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-  await pool.query(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_name ON dashboard_custom_tables (organization_id, school_code, lower(name));`
-  );
-  await pool.query(
-    `CREATE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_updated ON dashboard_custom_tables (organization_id, school_code, updated_at DESC);`
-  );
-  await pool.query(`
+    await pool.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_name ON dashboard_custom_tables (organization_id, school_code, lower(name));`
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_dashboard_custom_tables_org_school_updated ON dashboard_custom_tables (organization_id, school_code, updated_at DESC);`
+    );
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS player_plan_notes (
       id BIGSERIAL PRIMARY KEY,
       player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
@@ -382,8 +410,8 @@ export async function ensureTrainingDbReady(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_plan_notes_player_date ON player_plan_notes (player_id, note_date DESC, created_at DESC);`);
-  await pool.query(`
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_plan_notes_player_date ON player_plan_notes (player_id, note_date DESC, created_at DESC);`);
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS dashboard_player_notes (
       id BIGSERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -400,10 +428,10 @@ export async function ensureTrainingDbReady(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-  await pool.query(
-    `CREATE INDEX IF NOT EXISTS idx_dashboard_player_notes_org_name_date ON dashboard_player_notes (organization_id, dashboard_player_name, note_date DESC, created_at DESC);`
-  );
-  await pool.query(`
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_dashboard_player_notes_org_name_date ON dashboard_player_notes (organization_id, dashboard_player_name, note_date DESC, created_at DESC);`
+    );
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS schedule_templates (
       id BIGSERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -413,7 +441,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-  await pool.query(`
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS schedule_template_days (
       id BIGSERIAL PRIMARY KEY,
       template_id BIGINT NOT NULL REFERENCES schedule_templates(id) ON DELETE CASCADE,
@@ -423,7 +451,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
       UNIQUE (template_id, day_offset)
     );
   `);
-  await pool.query(`
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS schedule_template_day_items (
       id BIGSERIAL PRIMARY KEY,
       template_day_id BIGINT NOT NULL REFERENCES schedule_template_days(id) ON DELETE CASCADE,
@@ -437,11 +465,16 @@ export async function ensureTrainingDbReady(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_templates_org_name ON schedule_templates (organization_id, lower(name));`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_templates_org_updated ON schedule_templates (organization_id, updated_at DESC);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_template_days_template_offset ON schedule_template_days (template_id, day_offset);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_template_day_items_day_sort ON schedule_template_day_items (template_day_id, sort_order);`);
-  global.__pcuTrainingDbReady = true;
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_templates_org_name ON schedule_templates (organization_id, lower(name));`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_templates_org_updated ON schedule_templates (organization_id, updated_at DESC);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_template_days_template_offset ON schedule_template_days (template_id, day_offset);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_template_day_items_day_sort ON schedule_template_day_items (template_day_id, sort_order);`);
+    global.__pcuTrainingDbReady = true;
+  })().finally(() => {
+    global.__pcuTrainingDbReadyPromise = undefined;
+  });
+
+  await global.__pcuTrainingDbReadyPromise;
 }
 
 function validateHttpUrl(value: string): { ok: true; value: string } | { ok: false; error: string } {
@@ -518,9 +551,64 @@ function parseAssessmentNotesFromLog(value: string | null): string[] {
 }
 
 export async function listClientsByOrganization(organizationId: number): Promise<ClientRow[]> {
-  if (!isDatabaseConfigured()) return [];
+  const paged = await listClientsByOrganizationPaged({
+    organizationId,
+    page: 1,
+    pageSize: 50000,
+  });
+  return paged.rows;
+}
+
+export async function listClientsByOrganizationPaged(input: {
+  organizationId: number;
+  page: number;
+  pageSize: number;
+  query?: string;
+  coachUserId?: number | null;
+  assignedCoachOnlyUserId?: number | null;
+}): Promise<ClientListPage> {
+  if (!isDatabaseConfigured()) return { rows: [], totalCount: 0, page: 1, pageSize: 100 };
   await ensureTrainingDbReady();
   const pool = getDbPool();
+  const rawPage = Number(input.page);
+  const rawPageSize = Number(input.pageSize);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
+  const pageSize = Number.isFinite(rawPageSize) && rawPageSize > 0 ? Math.min(Math.floor(rawPageSize), 50000) : 100;
+  const offset = (page - 1) * pageSize;
+  const query = String(input.query ?? '').trim();
+  const coachUserId = Number(input.coachUserId ?? 0);
+  const assignedCoachOnlyUserId = Number(input.assignedCoachOnlyUserId ?? 0);
+
+  const filters: string[] = ['p.organization_id = $1'];
+  const params: Array<number | string> = [input.organizationId];
+  let nextParamIndex = 2;
+  if (Number.isFinite(coachUserId) && coachUserId > 0) {
+    filters.push(`p.assigned_coach_user_id = $${nextParamIndex}`);
+    params.push(coachUserId);
+    nextParamIndex += 1;
+  }
+  if (Number.isFinite(assignedCoachOnlyUserId) && assignedCoachOnlyUserId > 0) {
+    filters.push(`p.assigned_coach_user_id = $${nextParamIndex}`);
+    params.push(assignedCoachOnlyUserId);
+    nextParamIndex += 1;
+  }
+  if (query) {
+    filters.push(`(p.full_name ILIKE $${nextParamIndex} OR p.email ILIKE $${nextParamIndex} OR COALESCE(coach.name, '') ILIKE $${nextParamIndex})`);
+    params.push(`%${query}%`);
+    nextParamIndex += 1;
+  }
+  const whereSql = filters.join(' AND ');
+
+  const countResult = await pool.query<{ total_count: string }>(
+    `
+      SELECT COUNT(*)::text AS total_count
+      FROM players p
+      LEFT JOIN auth_users coach ON coach.id = p.assigned_coach_user_id
+      WHERE ${whereSql}
+    `,
+    params
+  );
+  const totalCount = Number(countResult.rows[0]?.total_count ?? '0') || 0;
 
   const result = await pool.query<{
     player_id: number;
@@ -561,30 +649,37 @@ export async function listClientsByOrganization(organizationId: number): Promise
       FROM players p
       LEFT JOIN auth_users u ON u.id = p.user_id
       LEFT JOIN auth_users coach ON coach.id = p.assigned_coach_user_id
-      WHERE p.organization_id = $1
+      WHERE ${whereSql}
       ORDER BY p.full_name ASC
+      LIMIT $${nextParamIndex}
+      OFFSET $${nextParamIndex + 1}
     `,
-    [organizationId]
+    [...params, pageSize, offset]
   );
 
-  return result.rows.map((row) => ({
-    playerId: row.player_id,
-    userId: row.user_id,
-    fullName: row.full_name,
-    email: row.email,
-    dateOfBirth: row.date_of_birth,
-    schoolTeam: row.school_team,
-    phone: row.phone,
-    collegeCommitment: row.college_commitment,
-    gradYear: row.grad_year,
-    position: row.position,
-    batsHand: row.bats_hand,
-    throwsHand: row.throws_hand,
-    assignedCoachUserId: row.assigned_coach_user_id,
-    assignedCoachName: row.assigned_coach_name,
-    status: row.status,
-    userRole: row.user_role === 'admin' || row.user_role === 'coach' || row.user_role === 'player' ? row.user_role : null,
-  }));
+  return {
+    rows: result.rows.map((row) => ({
+      playerId: row.player_id,
+      userId: row.user_id,
+      fullName: row.full_name,
+      email: row.email,
+      dateOfBirth: row.date_of_birth,
+      schoolTeam: row.school_team,
+      phone: row.phone,
+      collegeCommitment: row.college_commitment,
+      gradYear: row.grad_year,
+      position: row.position,
+      batsHand: row.bats_hand,
+      throwsHand: row.throws_hand,
+      assignedCoachUserId: row.assigned_coach_user_id,
+      assignedCoachName: row.assigned_coach_name,
+      status: row.status,
+      userRole: row.user_role === 'admin' || row.user_role === 'coach' || row.user_role === 'player' ? row.user_role : null,
+    })),
+    totalCount,
+    page,
+    pageSize,
+  };
 }
 
 export async function listCoachesByOrganization(organizationId: number): Promise<CoachRow[]> {
@@ -633,6 +728,68 @@ export async function listCoachesByOrganization(organizationId: number): Promise
       assignedPlayerCount: Number(row.assigned_player_count ?? '0') || 0,
     }))
     .filter((row) => row.role === 'admin' || row.role === 'coach');
+}
+
+export async function listPlayerChoicesByOrganization(input: {
+  organizationId: number;
+  assignedCoachUserId?: number | null;
+}): Promise<PlayerChoiceRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const assignedCoachUserId = Number(input.assignedCoachUserId ?? 0);
+  const useCoachFilter = Number.isFinite(assignedCoachUserId) && assignedCoachUserId > 0;
+  const result = await pool.query<{
+    player_id: number;
+    full_name: string;
+    assigned_coach_user_id: number | null;
+  }>(
+    `
+      SELECT p.id AS player_id, p.full_name, p.assigned_coach_user_id
+      FROM players p
+      WHERE p.organization_id = $1
+      ${useCoachFilter ? 'AND p.assigned_coach_user_id = $2' : ''}
+      ORDER BY p.full_name ASC
+    `,
+    useCoachFilter ? [input.organizationId, assignedCoachUserId] : [input.organizationId]
+  );
+  return result.rows.map((row) => ({
+    playerId: row.player_id,
+    fullName: row.full_name,
+    assignedCoachUserId: row.assigned_coach_user_id,
+  }));
+}
+
+export async function listWorkoutChoicesByOrganization(organizationId: number): Promise<WorkoutChoiceRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: number;
+    name: string;
+    category: string;
+    exercise_count: string;
+  }>(
+    `
+      SELECT
+        w.id,
+        w.name,
+        w.category,
+        COUNT(we.id)::text AS exercise_count
+      FROM workout_library w
+      LEFT JOIN workout_exercises we ON we.workout_id = w.id
+      WHERE w.organization_id = $1
+      GROUP BY w.id, w.name, w.category
+      ORDER BY w.name ASC
+    `,
+    [organizationId]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    category: row.category,
+    exerciseCount: Number(row.exercise_count ?? '0') || 0,
+  }));
 }
 
 export async function listStaffOrganizationIdsByEmail(email: string): Promise<number[]> {
