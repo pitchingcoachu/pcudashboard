@@ -12,6 +12,7 @@ type Props = {
 function formatSchoolCodeLabel(schoolCode: string): string {
   const code = String(schoolCode ?? '').trim().toUpperCase();
   if (code === 'PRO') return 'MLB';
+  if (code === 'LEAGUE') return 'NCAA';
   return code;
 }
 

@@ -101,11 +101,12 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
   },
   LEAGUE: {
     schoolCode: 'LEAGUE',
-    logoSrc: null,
-    logoAlt: 'League',
-    accent: '#c8102e',
-    accentSoft: '#8f0f24',
-    accentRgb: '200, 16, 46',
+    logoSrc: '/ncaa-logo.png',
+    logoAlt: 'NCAA',
+    accent: '#00A3E0',
+    accentSoft: '#0077B6',
+    accentRgb: '0, 163, 224',
+    accentRgbSecondary: '0, 163, 224',
   },
   PRO: {
     schoolCode: 'PRO',

@@ -3493,7 +3493,7 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "MAN_JAS": "Manhattan University",
     "MAR_TER": "University of Maryland",
     "MER_BEA": "Mercer University",
-    "MER_UNI": "Mercer University",
+    "MER_UNI": "Mercyhurst University",
     "MEX_LOB": "University of New Mexico",
     "MIA_HUR": "University of Miami",
     "MIC_SPA": "Michigan State University",
@@ -3508,6 +3508,7 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "MON_HAW": "Monmouth University",
     "MOR_EAG": "Morehead State University",
     "MSM_MTN": "Mount St. Mary's University",
+    "MSU_BDG": "Mississippi State University",
     "MTSU_BLU": "Middle Tennessee State University",
     "MUR_RAC": "Murray State University",
     "NAV_COL": "Navarro College",
@@ -3651,7 +3652,7 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "VIL_WIL": "Villanova University",
     "VIR_CAV": "University of Virginia",
     "VIR_KEY": "Virginia Military Institute",
-    "VIR_TEC": "Virginia Polytechnic Institute and State University",
+    "VIR_TEC": "Virginia Tech",
     "WAB_VAL": "Wabash Valley College",
     "WAG_SEA": "Wagner College",
     "WAK_DEA": "Wake Forest University",
@@ -3671,6 +3672,11 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "YSU_PEN": "Youngstown State University",
 }
 LEAGUE_TEAM_CODE_BY_NAME = {value.lower(): code for code, value in LEAGUE_TEAM_NAME_BY_CODE.items()}
+LEAGUE_TEAM_CODE_BY_NAME_NORMALIZED = {
+    re.sub(r"[^a-z0-9]", "", value.lower()): code
+    for code, value in LEAGUE_TEAM_NAME_BY_CODE.items()
+    if re.sub(r"[^a-z0-9]", "", value.lower())
+}
 
 
 def _league_team_label(team_code: str) -> str:
@@ -3692,6 +3698,9 @@ def _league_team_code_from_value(team_value: Optional[str]) -> str:
     by_name = LEAGUE_TEAM_CODE_BY_NAME.get(raw.lower())
     if by_name:
         return by_name
+    by_name_normalized = LEAGUE_TEAM_CODE_BY_NAME_NORMALIZED.get(re.sub(r"[^a-z0-9]", "", raw.lower()))
+    if by_name_normalized:
+        return by_name_normalized
     return as_code
 
 
@@ -7236,9 +7245,16 @@ def _try_pro_pitching_overview_rollup(
         and (end_date is None or end_date >= today)
     )
     if includes_today:
-        # Rollup tables are Neon-backed snapshots and can lag during active MLB games.
-        # When the window includes today, force the raw path so live StatsAPI rows merge in.
-        return None
+        # Prefer rollup speed by default even for windows including today.
+        # Set DASHBOARD_PRO_ROLLUP_INCLUDE_TODAY=0 to force raw path behavior.
+        include_today_rollup = str(os.getenv("DASHBOARD_PRO_ROLLUP_INCLUDE_TODAY", "1")).strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        if not include_today_rollup:
+            return None
     if include_chart_points or include_row_pitches or include_trend_rows:
         return None
     if (with_video or "").strip() not in {"", "All"}:
@@ -7852,8 +7868,6 @@ def _try_pro_hitting_overview_rollup(
     # FPS(FB)% / FPS(OS)% require row-level 0-0 swing classification by pitch type.
     # Rollup rows do not preserve enough sequence detail for exact parity, so use
     # the full overview path for correctness.
-    if mode_raw in {"Results", "Swing Decisions", "Batted Ball Data"}:
-        return None
     if mode_raw not in {"Results", "Swing Decisions", "Batted Ball Data"}:
         return None
     if selected_zone_locations or selected_pitch_results or selected_after_count_filters or selected_bip_results or selected_in_zone:
@@ -9511,10 +9525,398 @@ def _pro_team_code_from_value(team_value: Optional[str]) -> str:
     return upper
 
 
+def _pro_rollup_filters_pitching(level_norm: str) -> Optional[PitchingFiltersResponse]:
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.pro_pitch_events_daily_rollup')::text AS table_name")
+            reg = cur.fetchone() or {}
+            if not reg.get("table_name"):
+                return None
+
+            params = {"level_bucket": level_norm}
+            level_where = "(%(level_bucket)s::text = 'All' OR level_bucket = %(level_bucket)s::text)"
+
+            cur.execute(
+                """
+                SELECT MIN(session_date)::text AS min_date, MAX(session_date)::text AS max_date
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO' AND """
+                + level_where,
+                params,
+            )
+            date_row = cur.fetchone() or {}
+            max_date_raw = str(date_row.get("max_date") or "").strip()
+            if not max_date_raw:
+                return None
+
+            cur.execute(
+                """
+                SELECT DISTINCT NULLIF(TRIM(pitcher_name), '') AS pitcher
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO' AND """
+                + level_where
+                + """
+                  AND NULLIF(TRIM(pitcher_name), '') IS NOT NULL
+                ORDER BY pitcher
+                """,
+                params,
+            )
+            pitchers = [str(r["pitcher"]) for r in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT DISTINCT NULLIF(TRIM(batter_name), '') AS batter
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO' AND """
+                + level_where
+                + """
+                  AND NULLIF(TRIM(batter_name), '') IS NOT NULL
+                ORDER BY batter
+                """,
+                params,
+            )
+            opp_hitters = [str(r["batter"]) for r in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT pitch_type
+                FROM (
+                  SELECT DISTINCT
+                    pitch_type,
+                    CASE pitch_type
+                      WHEN 'Fastball' THEN 1
+                      WHEN 'Sinker' THEN 2
+                      WHEN 'Cutter' THEN 3
+                      WHEN 'Slider' THEN 4
+                      WHEN 'Sweeper' THEN 5
+                      WHEN 'Curveball' THEN 6
+                      WHEN 'ChangeUp' THEN 7
+                      WHEN 'Splitter' THEN 8
+                      WHEN 'Knuckleball' THEN 9
+                      WHEN 'Undefined' THEN 10
+                      ELSE 99
+                    END AS ord
+                  FROM public.pro_pitch_events_daily_rollup
+                  WHERE school_code = 'PRO' AND """
+                + level_where
+                + """
+                ) t
+                WHERE pitch_type IS NOT NULL AND pitch_type <> 'Undefined'
+                ORDER BY ord, pitch_type
+                """,
+                params,
+            )
+            pitch_types = [str(r["pitch_type"]) for r in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT DISTINCT NULLIF(TRIM(pitcher_team_code), '') AS team_code
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO' AND """
+                + level_where
+                + """
+                  AND NULLIF(TRIM(pitcher_team_code), '') IS NOT NULL
+                ORDER BY team_code
+                """,
+                params,
+            )
+            team_codes = [str(r["team_code"]) for r in cur.fetchall()]
+
+            cur.execute(
+                """
+                WITH latest_pitcher_team AS (
+                  SELECT DISTINCT ON (pitcher_norm)
+                    NULLIF(TRIM(pitcher_team_code), '') AS team_code,
+                    NULLIF(TRIM(pitcher_name), '') AS pitcher_name
+                  FROM public.pro_pitch_events_daily_rollup
+                  WHERE school_code = 'PRO'
+                    AND """
+                + level_where
+                + """
+                    AND NULLIF(TRIM(pitcher_name), '') IS NOT NULL
+                    AND NULLIF(TRIM(pitcher_team_code), '') IS NOT NULL
+                  ORDER BY pitcher_norm, session_date DESC
+                )
+                SELECT team_code, array_agg(pitcher_name ORDER BY pitcher_name) AS names
+                FROM latest_pitcher_team
+                GROUP BY team_code
+                ORDER BY team_code
+                """,
+                params,
+            )
+            pitchers_by_team_code = {
+                str(r["team_code"]): [str(name) for name in (r.get("names") or []) if str(name).strip()]
+                for r in cur.fetchall()
+            }
+
+            cur.execute(
+                """
+                SELECT
+                  NULLIF(TRIM(batter_team_code), '') AS team_code,
+                  array_agg(DISTINCT NULLIF(TRIM(batter_name), '') ORDER BY NULLIF(TRIM(batter_name), '')) AS names
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO'
+                  AND """
+                + level_where
+                + """
+                GROUP BY NULLIF(TRIM(batter_team_code), '')
+                HAVING NULLIF(TRIM(batter_team_code), '') IS NOT NULL
+                ORDER BY team_code
+                """,
+                params,
+            )
+            opp_hitters_by_team_code = {
+                str(r["team_code"]): [str(name) for name in (r.get("names") or []) if str(name).strip()]
+                for r in cur.fetchall()
+            }
+    except Exception:
+        return None
+
+    team_labels = [_pro_team_label(code, level_norm) for code in team_codes]
+    labeled_pitchers_by_team: Dict[str, List[str]] = {}
+    for code, names in pitchers_by_team_code.items():
+        label = _pro_team_label(code, level_norm)
+        labeled_pitchers_by_team[code] = names
+        labeled_pitchers_by_team[label] = names
+    labeled_opp_hitters_by_team: Dict[str, List[str]] = {}
+    for code, names in opp_hitters_by_team_code.items():
+        label = _pro_team_label(code, level_norm)
+        labeled_opp_hitters_by_team[code] = names
+        labeled_opp_hitters_by_team[label] = names
+
+    return PitchingFiltersResponse(
+        school_code="PRO",
+        min_date=date_row.get("min_date"),
+        max_date=max_date_raw or date.today().isoformat(),
+        pitchers=pitchers,
+        team_types=["All", *team_labels],
+        opp_hitters=opp_hitters,
+        with_video_options=["All", "Yes", "No"],
+        break_lines_options=["None", "Fastball", "Sinker"],
+        stuff_level_options=["Pro", "College", "High School"],
+        stuff_base_options=["Fastball", "Sinker"],
+        hands=["All", "Left", "Right"],
+        batter_sides=["All", "Left", "Right"],
+        session_types=["All"],
+        pitch_types=pitch_types,
+        zone_locations=ZONE_LOCATION_CHOICES,
+        in_zone_options=["All", "Yes", "No", "Competitive"],
+        qp_location_options=["All", "Yes", "No"],
+        pitch_results=PITCH_RESULT_CHOICES,
+        count_options=COUNT_CHOICES,
+        after_count_options=COUNT_CHOICES,
+        level_options=PRO_LEVEL_OPTIONS,
+        pitchers_by_team_code=labeled_pitchers_by_team,
+        opp_hitters_by_team_code=labeled_opp_hitters_by_team,
+    )
+
+
+def _pro_rollup_filters_hitting(level_norm: str) -> Optional[Dict[str, Any]]:
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.pro_pitch_events_daily_rollup')::text AS table_name")
+            reg = cur.fetchone() or {}
+            if not reg.get("table_name"):
+                return None
+
+            params = {"level_bucket": level_norm}
+            level_where = "(%(level_bucket)s::text = 'All' OR level_bucket = %(level_bucket)s::text)"
+
+            cur.execute(
+                """
+                SELECT MIN(session_date)::text AS min_date, MAX(session_date)::text AS max_date
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO' AND """
+                + level_where,
+                params,
+            )
+            date_row = cur.fetchone() or {}
+            max_date_raw = str(date_row.get("max_date") or "").strip()
+            if not max_date_raw:
+                return None
+
+            cur.execute(
+                """
+                SELECT DISTINCT NULLIF(TRIM(batter_name), '') AS hitter
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO' AND """
+                + level_where
+                + """
+                  AND NULLIF(TRIM(batter_name), '') IS NOT NULL
+                ORDER BY hitter
+                """,
+                params,
+            )
+            hitters = [str(r["hitter"]) for r in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT DISTINCT NULLIF(TRIM(pitcher_name), '') AS opp_pitcher
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO' AND """
+                + level_where
+                + """
+                  AND NULLIF(TRIM(pitcher_name), '') IS NOT NULL
+                ORDER BY opp_pitcher
+                """,
+                params,
+            )
+            opp_pitchers = [str(r["opp_pitcher"]) for r in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT pitch_type
+                FROM (
+                  SELECT DISTINCT
+                    pitch_type,
+                    CASE pitch_type
+                      WHEN 'Fastball' THEN 1
+                      WHEN 'Sinker' THEN 2
+                      WHEN 'Cutter' THEN 3
+                      WHEN 'Slider' THEN 4
+                      WHEN 'Sweeper' THEN 5
+                      WHEN 'Curveball' THEN 6
+                      WHEN 'ChangeUp' THEN 7
+                      WHEN 'Splitter' THEN 8
+                      WHEN 'Knuckleball' THEN 9
+                      WHEN 'Undefined' THEN 10
+                      ELSE 99
+                    END AS ord
+                  FROM public.pro_pitch_events_daily_rollup
+                  WHERE school_code = 'PRO' AND """
+                + level_where
+                + """
+                ) t
+                WHERE pitch_type IS NOT NULL AND pitch_type <> 'Undefined'
+                ORDER BY ord, pitch_type
+                """,
+                params,
+            )
+            pitch_types = [str(r["pitch_type"]) for r in cur.fetchall()]
+
+            cur.execute(
+                """
+                SELECT DISTINCT NULLIF(TRIM(batter_team_code), '') AS team_code
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO' AND """
+                + level_where
+                + """
+                  AND NULLIF(TRIM(batter_team_code), '') IS NOT NULL
+                ORDER BY team_code
+                """,
+                params,
+            )
+            team_codes = [str(r["team_code"]) for r in cur.fetchall()]
+
+            cur.execute(
+                """
+                WITH latest_hitter_team AS (
+                  SELECT DISTINCT ON (batter_norm)
+                    NULLIF(TRIM(batter_team_code), '') AS team_code,
+                    NULLIF(TRIM(batter_name), '') AS hitter_name
+                  FROM public.pro_pitch_events_daily_rollup
+                  WHERE school_code = 'PRO'
+                    AND """
+                + level_where
+                + """
+                    AND NULLIF(TRIM(batter_name), '') IS NOT NULL
+                    AND NULLIF(TRIM(batter_team_code), '') IS NOT NULL
+                  ORDER BY batter_norm, session_date DESC
+                )
+                SELECT team_code, array_agg(hitter_name ORDER BY hitter_name) AS names
+                FROM latest_hitter_team
+                GROUP BY team_code
+                ORDER BY team_code
+                """,
+                params,
+            )
+            hitters_by_team_code = {
+                str(r["team_code"]): [str(name) for name in (r.get("names") or []) if str(name).strip()]
+                for r in cur.fetchall()
+            }
+
+            cur.execute(
+                """
+                SELECT
+                  NULLIF(TRIM(batter_team_code), '') AS team_code,
+                  array_agg(DISTINCT NULLIF(TRIM(pitcher_name), '') ORDER BY NULLIF(TRIM(pitcher_name), '')) AS names
+                FROM public.pro_pitch_events_daily_rollup
+                WHERE school_code = 'PRO'
+                  AND """
+                + level_where
+                + """
+                GROUP BY NULLIF(TRIM(batter_team_code), '')
+                HAVING NULLIF(TRIM(batter_team_code), '') IS NOT NULL
+                ORDER BY team_code
+                """,
+                params,
+            )
+            opp_pitchers_by_team_code = {
+                str(r["team_code"]): [str(name) for name in (r.get("names") or []) if str(name).strip()]
+                for r in cur.fetchall()
+            }
+    except Exception:
+        return None
+
+    team_labels = [_pro_team_label(code, level_norm) for code in team_codes]
+    labeled_hitters_by_team: Dict[str, List[str]] = {}
+    for code, names in hitters_by_team_code.items():
+        label = _pro_team_label(code, level_norm)
+        labeled_hitters_by_team[code] = names
+        labeled_hitters_by_team[label] = names
+    labeled_opp_pitchers_by_team: Dict[str, List[str]] = {}
+    for code, names in opp_pitchers_by_team_code.items():
+        label = _pro_team_label(code, level_norm)
+        labeled_opp_pitchers_by_team[code] = names
+        labeled_opp_pitchers_by_team[label] = names
+
+    return {
+        "school_code": "PRO",
+        "min_date": date_row.get("min_date"),
+        "max_date": max_date_raw or date.today().isoformat(),
+        "hitters": hitters,
+        "opp_pitchers": opp_pitchers,
+        "team_types": ["All", *team_labels],
+        "session_types": ["All"],
+        "level_options": PRO_LEVEL_OPTIONS,
+        "hands": ["All", "Left", "Right"],
+        "batter_sides": ["All", "Left", "Right"],
+        "pitch_types": pitch_types,
+        "zone_locations": ZONE_LOCATION_CHOICES,
+        "in_zone_options": ["All", "Yes", "No", "Competitive"],
+        "pitch_results": PITCH_RESULT_CHOICES,
+        "count_options": COUNT_CHOICES,
+        "after_count_options": COUNT_CHOICES,
+        "bip_results": ["All", "Single", "Double", "Triple", "HomeRun", "Out"],
+        "hitters_by_team_code": labeled_hitters_by_team,
+        "opp_pitchers_by_team_code": labeled_opp_pitchers_by_team,
+        "table_modes": ["Results", "Swing Decisions", "Batted Ball Data", "Custom"],
+        "split_by_options": [
+            "All",
+            "Pitch Types",
+            "Pitcher Hand",
+            "Count",
+            "After Count",
+            "Zone Location",
+            "Times Through Order",
+            "Inning",
+            "Pitch Count",
+            "Velocity",
+            "IVB",
+            "HB",
+            "Pitcher",
+            "Catcher",
+        ],
+    }
+
+
 def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> PitchingFiltersResponse:
     source_table = _pro_pitch_source_table()
     level_norm = _pro_level_norm(level)
     level_sport_ids = _pro_level_sport_ids(level_norm)
+    rollup_response = _pro_rollup_filters_pitching(level_norm)
+    if rollup_response is not None:
+        return rollup_response
     if not source_table:
         return PitchingFiltersResponse(
             school_code=school_code,
@@ -11131,6 +11533,9 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
     source_table = _pro_pitch_source_table()
     level_norm = _pro_level_norm(level)
     level_sport_ids = _pro_level_sport_ids(level_norm)
+    rollup_response = _pro_rollup_filters_hitting(level_norm)
+    if rollup_response is not None:
+        return rollup_response
     if not source_table:
         return {
             "school_code": school_code,
@@ -14166,6 +14571,8 @@ def pitching_ab_report(
               COALESCE(NULLIF(TRIM(gameid), ''), '') AS game_id,
               ''::text AS game_uid,
               ''::text AS game_foreign_id,
+              UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) AS pitcher_team_code,
+              UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) AS batter_team_code,
               relspeed AS rel_speed,
               spinrate AS spin_rate,
               COALESCE(NULLIF(TRIM(releasetilt), ''), '') AS release_tilt,
@@ -14402,9 +14809,16 @@ def pitching_ab_report(
         session_dt = row.get("session_date")
         current = game_meta.get(key)
         if current is None:
-            game_meta[key] = {"date": session_dt}
+            current = {"date": session_dt, "opp_counts": {}}
+            game_meta[key] = current
         elif session_dt and (current.get("date") is None or session_dt > current.get("date")):
             current["date"] = session_dt
+        if school_code == "PRO":
+            pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+            batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
+            if batter_team_code and batter_team_code not in {"ALL", "OPPONENTS", "CAMPERS", "PRO"} and batter_team_code != pitcher_team_code:
+                opp_counts = current.setdefault("opp_counts", {})
+                opp_counts[batter_team_code] = int(opp_counts.get(batter_team_code) or 0) + 1
 
     sorted_games = sorted(
         game_meta.items(),
@@ -14413,18 +14827,34 @@ def pitching_ab_report(
             item[0],
         ),
     )
-    available_games = [
-        {
-            "game_key": key,
-            "date": meta["date"].isoformat() if meta.get("date") else "",
-            "label": (
-                f"{(meta['date'].month if meta.get('date') else '')}/"
-                f"{(meta['date'].day if meta.get('date') else '')}/"
-                f"{(str(meta['date'].year)[-2:] if meta.get('date') else '')} | {key}"
-            ) if meta.get("date") else key,
-        }
-        for key, meta in sorted_games
-    ]
+    available_games: List[Dict[str, str]] = []
+    for key, meta in sorted_games:
+        opponent = ""
+        if school_code == "PRO":
+            opp_counts = meta.get("opp_counts") or {}
+            if opp_counts:
+                opponent_code = max(
+                    opp_counts.items(),
+                    key=lambda item: (int(item[1] or 0), item[0]),
+                )[0]
+                opponent = _pro_team_label(opponent_code, "All") or opponent_code
+        if meta.get("date"):
+            date_short = (
+                f"{meta['date'].month}/"
+                f"{meta['date'].day}/"
+                f"{str(meta['date'].year)[-2:]}"
+            )
+            label = f"{date_short} | {opponent}" if opponent else f"{date_short} | {key}"
+        else:
+            label = opponent or key
+        available_games.append(
+            {
+                "game_key": key,
+                "date": meta["date"].isoformat() if meta.get("date") else "",
+                "label": label,
+                "opponent": opponent,
+            }
+        )
 
     selected_game_key = game_key
     if game_date and not selected_game_key:
@@ -14602,6 +15032,8 @@ def hitting_ab_report(
               COALESCE(NULLIF(TRIM(gameid), ''), '') AS game_id,
               ''::text AS game_uid,
               ''::text AS game_foreign_id,
+              UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) AS pitcher_team_code,
+              UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) AS batter_team_code,
               relspeed AS rel_speed,
               spinrate AS spin_rate,
               COALESCE(NULLIF(TRIM(releasetilt), ''), '') AS release_tilt,
@@ -14837,9 +15269,16 @@ def hitting_ab_report(
         session_dt = row.get("session_date")
         current = game_meta.get(key)
         if current is None:
-            game_meta[key] = {"date": session_dt}
+            current = {"date": session_dt, "opp_counts": {}}
+            game_meta[key] = current
         elif session_dt and (current.get("date") is None or session_dt > current.get("date")):
             current["date"] = session_dt
+        if school_code == "PRO":
+            pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+            batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
+            if pitcher_team_code and pitcher_team_code not in {"ALL", "OPPONENTS", "CAMPERS", "PRO"} and pitcher_team_code != batter_team_code:
+                opp_counts = current.setdefault("opp_counts", {})
+                opp_counts[pitcher_team_code] = int(opp_counts.get(pitcher_team_code) or 0) + 1
 
     sorted_games = sorted(
         game_meta.items(),
@@ -14848,18 +15287,34 @@ def hitting_ab_report(
             item[0],
         ),
     )
-    available_games = [
-        {
-            "game_key": key,
-            "date": meta["date"].isoformat() if meta.get("date") else "",
-            "label": (
-                f"{(meta['date'].month if meta.get('date') else '')}/"
-                f"{(meta['date'].day if meta.get('date') else '')}/"
-                f"{(str(meta['date'].year)[-2:] if meta.get('date') else '')} | {key}"
-            ) if meta.get("date") else key,
-        }
-        for key, meta in sorted_games
-    ]
+    available_games: List[Dict[str, str]] = []
+    for key, meta in sorted_games:
+        opponent = ""
+        if school_code == "PRO":
+            opp_counts = meta.get("opp_counts") or {}
+            if opp_counts:
+                opponent_code = max(
+                    opp_counts.items(),
+                    key=lambda item: (int(item[1] or 0), item[0]),
+                )[0]
+                opponent = _pro_team_label(opponent_code, "All") or opponent_code
+        if meta.get("date"):
+            date_short = (
+                f"{meta['date'].month}/"
+                f"{meta['date'].day}/"
+                f"{str(meta['date'].year)[-2:]}"
+            )
+            label = f"{date_short} | {opponent}" if opponent else f"{date_short} | {key}"
+        else:
+            label = opponent or key
+        available_games.append(
+            {
+                "game_key": key,
+                "date": meta["date"].isoformat() if meta.get("date") else "",
+                "label": label,
+                "opponent": opponent,
+            }
+        )
 
     selected_game_key = game_key
     if game_date and not selected_game_key:

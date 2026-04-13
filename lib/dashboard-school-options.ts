@@ -10,6 +10,10 @@ function isNonEmptyString(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function withLeagueAndPro(values: Array<string | null | undefined>): string[] {
+  return Array.from(new Set([...values, 'LEAGUE', 'PRO'].filter(isNonEmptyString)));
+}
+
 function parseOrgSchoolMap(raw: string): Record<number, string> {
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -107,33 +111,25 @@ export async function resolveSessionDashboardSchoolOptions(session: PortalSessio
   const domainHint = schoolFromEmailDomain(session.email);
 
   if (session.role === 'admin') {
-    if (isGlobalAdminEmail(session.email)) return Array.from(new Set([...resolveAllowedDashboardSchoolCodes(), 'LEAGUE', 'PRO']));
+    if (isGlobalAdminEmail(session.email)) return withLeagueAndPro(resolveAllowedDashboardSchoolCodes());
     const codes = await resolveStaffSchoolCodes(session.email);
     const seededCodes = Array.from(new Set([...codes, domainHint].filter(isNonEmptyString)));
-    const proAllowed = seededCodes.includes('PRO');
     const mergedBase = seededCodes.length
       ? seededCodes
       : Array.from(new Set([selected, fallback].filter(isNonEmptyString)));
-    const merged = Array.from(new Set([...mergedBase, 'LEAGUE'].filter(isNonEmptyString))).filter(
-      (code) => code !== 'PRO' || proAllowed
-    );
+    const merged = withLeagueAndPro(mergedBase);
     return merged.length > 0 ? merged : [fallback];
   }
 
   if (session.role === 'coach') {
     const codes = await resolveStaffSchoolCodes(session.email);
     const seededCodes = Array.from(new Set([...codes, domainHint].filter(isNonEmptyString)));
-    // Coaches created under PRO should only see PRO unless explicitly linked to other schools.
-    if (seededCodes.length === 1 && seededCodes[0] === 'PRO') return ['PRO'];
-    const proAllowed = seededCodes.includes('PRO');
     const mergedBase = seededCodes.length
       ? seededCodes
       : Array.from(new Set([selected, fallback].filter(isNonEmptyString)));
-    const merged = Array.from(new Set([...mergedBase, 'LEAGUE'].filter(isNonEmptyString))).filter(
-      (code) => code !== 'PRO' || proAllowed
-    );
+    const merged = withLeagueAndPro(mergedBase);
     return merged.length > 0 ? merged : [fallback];
   }
 
-  return [fallback];
+  return withLeagueAndPro([fallback]);
 }

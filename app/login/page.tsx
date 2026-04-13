@@ -19,7 +19,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (session) {
-    redirect(session.role === 'player' ? '/portal/player' : '/portal/admin');
+    redirect('/portal');
   }
 
   const params = await searchParams;

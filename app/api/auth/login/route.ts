@@ -8,60 +8,38 @@ import {
   SESSION_COOKIE_NAME,
   validateLoginCredentials,
 } from '../../../../lib/auth';
-import { canUseProgrammingData } from '../../../../lib/programming-scope';
 import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
+import { resolveHomeDashboardSchoolCode } from '../../../../lib/dashboard-home-school';
 
 type LoginPayload = {
   email?: string;
   password?: string;
 };
 
-function parseOrgSchoolMap(raw: string): Record<string, string> {
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.entries(parsed)
-        .filter(([k, v]) => k.trim().length > 0 && typeof v === 'string' && v.trim().length > 0)
-        .map(([k, v]) => [k.trim(), String(v).trim().toUpperCase()])
-    );
-  } catch {
-    return {};
-  }
+function normalizeSchoolCode(value: string | null | undefined): string {
+  return String(value ?? '').trim().toUpperCase();
 }
 
-function resolveMappedSchoolCodeForOrgId(organizationId: number | null | undefined): string | null {
-  const orgId = Number(organizationId ?? 0);
-  if (!Number.isFinite(orgId) || orgId <= 0) return null;
-  const map = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
-  const code = map[String(orgId)];
-  return code ? String(code).trim().toUpperCase() : null;
+function resolveDefaultDashboardSchoolCode(): string {
+  const value = normalizeSchoolCode(process.env.DASHBOARD_DEFAULT_SCHOOL_CODE ?? 'OSU');
+  return value || 'OSU';
 }
 
-function parseGlobalAdminEmails(): string[] {
-  const base = [
-    'jgaynor@pitchingcoachu.com',
-    'ahalverson@pitchingcoachu.com',
-    'jchipman@pitchingcoachu.com',
-    'patrick.jones@rosterpilot.com',
-    'corralf34@gmail.com',
-  ];
-  const values = [...base, ...String(process.env.GLOBAL_ADMIN_EMAILS ?? '').split(',')]
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
-  return Array.from(new Set(values));
-}
-
-function isGlobalAdminEmail(email: string): boolean {
-  const normalized = String(email ?? '').trim().toLowerCase();
-  if (!normalized) return false;
-  return parseGlobalAdminEmails().includes(normalized);
-}
-
-function resolveLoginDefaultDashboardSchoolCode(email: string, current: string | null | undefined): string | null | undefined {
-  if (isGlobalAdminEmail(email)) {
-    return 'PCU';
-  }
-  return current;
+function choosePreferredSchoolCode(current: string | null | undefined, allowed: string[]): string | null {
+  const normalizedAllowed = Array.from(
+    new Set(allowed.map((code) => normalizeSchoolCode(code)).filter(Boolean))
+  );
+  const preferred =
+    normalizedAllowed.find((code) => code !== 'LEAGUE' && code !== 'PRO') ??
+    normalizedAllowed[0] ??
+    null;
+  const currentCode = normalizeSchoolCode(current);
+  if (!currentCode) return preferred;
+  if (!normalizedAllowed.length) return currentCode;
+  if (!normalizedAllowed.includes(currentCode)) return preferred ?? currentCode;
+  const defaultCode = resolveDefaultDashboardSchoolCode();
+  if (currentCode === defaultCode && preferred && preferred !== currentCode) return preferred;
+  return currentCode;
 }
 
 export async function POST(request: Request) {
@@ -98,24 +76,25 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid credentials.' }, { status: 401 });
     }
 
-    const orgMappedSchoolCode =
-      user.role === 'admin' ? null : resolveMappedSchoolCodeForOrgId(user.organizationId ?? null);
-    let resolvedDashboardSchoolCode =
-      orgMappedSchoolCode ?? resolveLoginDefaultDashboardSchoolCode(user.email, user.dashboardSchoolCode);
-    if (!resolvedDashboardSchoolCode && (user.role === 'admin' || user.role === 'coach')) {
-      const allowed = await resolveSessionDashboardSchoolOptions({
-        userId: user.userId ?? 0,
-        email: user.email,
-        name: user.name,
-        role: user.role === 'admin' ? 'admin' : 'coach',
-        organizationId: user.organizationId ?? 0,
-        playerId: user.playerId ?? null,
-        dashboardSchoolCode: null,
-        appUrl: user.appUrl,
-        apps: user.apps,
-      });
-      resolvedDashboardSchoolCode = allowed.find((code) => code !== 'LEAGUE') ?? allowed[0] ?? null;
-    }
+    let resolvedDashboardSchoolCode = resolveHomeDashboardSchoolCode({
+      email: user.email,
+      organizationId: user.organizationId ?? null,
+      dashboardSchoolCode: user.dashboardSchoolCode ?? null,
+    });
+    const normalizedRole: 'admin' | 'coach' | 'player' =
+      user.role === 'player' ? 'player' : user.role === 'coach' ? 'coach' : 'admin';
+    const allowed = await resolveSessionDashboardSchoolOptions({
+      userId: user.userId ?? 0,
+      email: user.email,
+      name: user.name,
+      role: normalizedRole,
+      organizationId: user.organizationId ?? 0,
+      playerId: user.playerId ?? null,
+      dashboardSchoolCode: user.dashboardSchoolCode ?? null,
+      appUrl: user.appUrl,
+      apps: user.apps,
+    });
+    resolvedDashboardSchoolCode = choosePreferredSchoolCode(resolvedDashboardSchoolCode, allowed);
 
     const token = createSessionToken({
       ...user,
@@ -124,17 +103,7 @@ export async function POST(request: Request) {
     const hostname = requestUrl.hostname;
 
     if (isWebMode) {
-      const destination =
-        user.role === 'player'
-          ? canUseProgrammingData({
-              role: user.role,
-              organizationId: user.organizationId ?? 0,
-              email: user.email,
-              dashboardSchoolCode: user.dashboardSchoolCode ?? null,
-            })
-            ? '/portal/player'
-            : '/portal/dashboard'
-          : '/portal/admin';
+      const destination = '/portal';
       const response = NextResponse.redirect(new URL(destination, request.url), 303);
       response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
       const domainOptions = getDomainSessionCookieOptions(hostname);

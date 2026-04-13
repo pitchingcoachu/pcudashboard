@@ -311,6 +311,28 @@ async function ensureDashboardCustomTableSchema(pool: Pool): Promise<void> {
   }
 }
 
+function isTransientSchemaWarmupError(error: unknown): boolean {
+  const code = String((error as { code?: string } | null)?.code ?? '');
+  if (code === '55P03' || code === '57014' || code === '40001') return true;
+  const message = String((error as { message?: string } | null)?.message ?? '').toLowerCase();
+  return (
+    message.includes('lock timeout') ||
+    message.includes('statement timeout') ||
+    message.includes('could not obtain lock') ||
+    message.includes('canceling statement due to')
+  );
+}
+
+async function ensureDashboardCustomTableSchemaBestEffort(pool: Pool): Promise<void> {
+  try {
+    await ensureDashboardCustomTableSchema(pool);
+  } catch (error) {
+    // On serverless cold starts, concurrent schema warmup can briefly lock.
+    // Failing open here avoids intermittent "missing custom tables" behavior.
+    if (!isTransientSchemaWarmupError(error)) throw error;
+  }
+}
+
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -334,7 +356,7 @@ export async function GET() {
   }
   const pool = getDbPool();
   try {
-    await ensureDashboardCustomTableSchema(pool);
+    await ensureDashboardCustomTableSchemaBestEffort(pool);
     const scopedResult = await pool.query<{
       id: number;
       name: string;
@@ -450,7 +472,7 @@ export async function POST(request: Request) {
   }
   const pool = getDbPool();
   try {
-    await ensureDashboardCustomTableSchema(pool);
+    await ensureDashboardCustomTableSchemaBestEffort(pool);
     const body = (await request.json().catch(() => ({}))) as {
       id?: number;
       name?: string;
@@ -592,7 +614,7 @@ export async function DELETE(request: Request) {
   }
   const pool = getDbPool();
   try {
-    await ensureDashboardCustomTableSchema(pool);
+    await ensureDashboardCustomTableSchemaBestEffort(pool);
     const target = await pool.query<{ id: number; name: string; school_code: string }>(
       `
       SELECT id, name, school_code

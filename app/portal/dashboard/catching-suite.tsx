@@ -1159,7 +1159,7 @@ export default function CatchingSuite() {
                     </select>
                   </label>
                 ) : (
-                  <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
+                  <div className="portal-suite-page-tabs" style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
                     <button type="button" className={page === 'Data and Performance' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPage('Data and Performance')}>
                       DATA AND PERFORMANCE
                     </button>

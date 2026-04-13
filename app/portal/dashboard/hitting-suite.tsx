@@ -106,6 +106,7 @@ type AbReportPayload = {
     game_key: string;
     date: string;
     label: string;
+    opponent?: string;
   }>;
   pitch_type_legend: string[];
   pa_groups: Array<{
@@ -371,10 +372,21 @@ function isFullMonthRange(startDate: string, endDate: string): boolean {
   return start.getDate() === firstDay.getDate() && end.getDate() === lastDay.getDate();
 }
 
-function formatDashboardDateLabel(startDate: string, endDate: string, isProSchool: boolean): string {
+function formatDashboardDateLabel(
+  startDate: string,
+  endDate: string,
+  isProSchool: boolean,
+  schoolCodeRaw?: string,
+  latestDataDateRaw?: string
+): string {
   if (!startDate || !endDate) return 'All Dates';
   const today = toYmdNow();
   if (isProSchool && startDate === PRO_SEASON_START && endDate === today) return '2026 Season';
+  const schoolCode = String(schoolCodeRaw ?? '').trim().toUpperCase();
+  const isCollegeSchool = !!schoolCode && schoolCode !== 'PRO' && schoolCode !== 'LEAGUE' && schoolCode !== 'PCU';
+  const collegeSeasonStart = schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13';
+  void latestDataDateRaw;
+  if (isCollegeSchool && startDate === collegeSeasonStart) return '2026 Season';
   if (isFullMonthRange(startDate, endDate)) {
     const monthDate = new Date(`${startDate}T00:00:00`);
     const monthName = monthDate.toLocaleString('en-US', { month: 'long' });
@@ -460,6 +472,105 @@ function normalizeMulti(values: string[]): string[] {
   if (unique.length === 0) return ['All'];
   if (unique.includes('All')) return ['All'];
   return unique;
+}
+
+function normalizeLeagueTeamToken(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function isLikelyLeagueTeamCode(value: string): boolean {
+  const upper = String(value ?? '').trim().toUpperCase();
+  return /^[A-Z0-9]{2,}(?:_[A-Z0-9]+)+$/.test(upper);
+}
+
+function resolveLeagueTeamTypeForApi(
+  teamTypeValue: string,
+  byTeamMaps: Array<Record<string, string[]> | undefined>
+): string {
+  const raw = String(teamTypeValue ?? '').trim();
+  if (!raw || raw.toLowerCase() === 'all') return raw;
+  if (isLikelyLeagueTeamCode(raw)) return raw.toUpperCase();
+
+  const merged = new Map<string, string[]>();
+  for (const source of byTeamMaps) {
+    if (!source) continue;
+    for (const [key, names] of Object.entries(source)) {
+      if (!Array.isArray(names)) continue;
+      merged.set(String(key ?? '').trim(), names.map((entry) => String(entry ?? '').trim()).filter(Boolean));
+    }
+  }
+
+  const lookupKey = normalizeLeagueTeamToken(raw);
+  let matched: { key: string; names: string[] } | null = null;
+  for (const [key, names] of merged.entries()) {
+    if (normalizeLeagueTeamToken(key) === lookupKey) {
+      matched = { key, names };
+      break;
+    }
+  }
+  if (!matched) return raw;
+  if (isLikelyLeagueTeamCode(matched.key)) return matched.key.toUpperCase();
+
+  const signature = matched.names
+    .map(normalizeLeagueTeamToken)
+    .filter(Boolean)
+    .sort()
+    .join('|');
+  if (!signature) return raw;
+
+  for (const [key, names] of merged.entries()) {
+    if (!isLikelyLeagueTeamCode(key)) continue;
+    const keySignature = names
+      .map(normalizeLeagueTeamToken)
+      .filter(Boolean)
+      .sort()
+      .join('|');
+    if (keySignature && keySignature === signature) return key.toUpperCase();
+  }
+  return raw;
+}
+
+function buildLeagueTeamLabelByCode(
+  byTeamMaps: Array<Record<string, string[]> | undefined>
+): Record<string, string> {
+  const entries: Array<{ key: string; names: string[] }> = [];
+  for (const source of byTeamMaps) {
+    if (!source) continue;
+    for (const [keyRaw, namesRaw] of Object.entries(source)) {
+      const key = String(keyRaw ?? '').trim();
+      if (!key || !Array.isArray(namesRaw)) continue;
+      const names = namesRaw.map((entry) => String(entry ?? '').trim()).filter(Boolean);
+      entries.push({ key, names });
+    }
+  }
+
+  const signatureFor = (names: string[]): string =>
+    names
+      .map(normalizeLeagueTeamToken)
+      .filter(Boolean)
+      .sort()
+      .join('|');
+
+  const labelBySignature = new Map<string, string>();
+  for (const entry of entries) {
+    if (isLikelyLeagueTeamCode(entry.key)) continue;
+    const signature = signatureFor(entry.names);
+    if (!signature || labelBySignature.has(signature)) continue;
+    labelBySignature.set(signature, entry.key);
+  }
+
+  const out: Record<string, string> = {};
+  for (const entry of entries) {
+    if (!isLikelyLeagueTeamCode(entry.key)) continue;
+    const signature = signatureFor(entry.names);
+    if (!signature) continue;
+    const label = labelBySignature.get(signature);
+    if (label) out[entry.key.toUpperCase()] = label;
+  }
+  return out;
 }
 
 function hoverTextColor(bg?: string): string {
@@ -1701,8 +1812,21 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
 
 export default function HittingSuite({
   role,
+  selectedSchoolCode,
+  homeNavigateRequest,
 }: {
   role?: 'admin' | 'coach' | 'player';
+  selectedSchoolCode?: string;
+  homeNavigateRequest?: {
+    requestId: number;
+    suite: 'Pitching' | 'Hitting';
+    targetType: 'player' | 'team';
+    targetValue: string;
+    startDate: string;
+    endDate: string;
+    page?: 'Summary' | 'Leaderboard';
+    navigationSource?: 'search';
+  } | null;
 }) {
   const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'AB Report' | 'HeatMaps' | 'Swing Data'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
@@ -1766,6 +1890,8 @@ export default function HittingSuite({
   const overviewInflightRef = useRef(new Map<string, Promise<HittingOverviewPayload>>());
   const [abSortColumn, setAbSortColumn] = useState('Pitch #');
   const [abSortDirection, setAbSortDirection] = useState<SortDirection>('asc');
+  const suppressNextFilterDateAutofillRef = useRef(false);
+  const lastAppliedHomeRequestRef = useRef<number>(0);
   const isPlayerRole = role === 'player';
 
   const [pitchTypes, setPitchTypes] = useState<string[]>([]);
@@ -1783,6 +1909,32 @@ export default function HittingSuite({
   const [hbMax, setHbMax] = useState('');
   const [pcMin, setPcMin] = useState('');
   const [pcMax, setPcMax] = useState('');
+
+  useEffect(() => {
+    if (!homeNavigateRequest) return;
+    if (homeNavigateRequest.suite !== 'Hitting') return;
+    if (lastAppliedHomeRequestRef.current === homeNavigateRequest.requestId) return;
+    if (loadingFilters || !filters) return;
+    const isProNavigate = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
+    lastAppliedHomeRequestRef.current = homeNavigateRequest.requestId;
+    suppressNextFilterDateAutofillRef.current = homeNavigateRequest.navigationSource === 'search';
+    setDashboardPage(homeNavigateRequest.page ?? 'Summary');
+    setStartDate(homeNavigateRequest.startDate);
+    setEndDate(homeNavigateRequest.endDate);
+    if (homeNavigateRequest.targetType === 'player') {
+      setTeamType('All');
+      setHitter(homeNavigateRequest.targetValue);
+      setOppPitcher('All');
+      if (isProNavigate && homeNavigateRequest.navigationSource === 'search') {
+        setLevel('All');
+      }
+    } else {
+      setTeamType(homeNavigateRequest.targetValue);
+      setHitter('All');
+      setOppPitcher('All');
+    }
+    setAppliedFilterVersion((current) => current + 1);
+  }, [homeNavigateRequest, loadingFilters, filters]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1867,6 +2019,9 @@ export default function HittingSuite({
       autoFallbackAppliedRef.current = false;
       setFilters(payload);
       setTeamType(pickDefaultTeamType(payload.team_types, payload.school_code));
+      if (suppressNextFilterDateAutofillRef.current) {
+        suppressNextFilterDateAutofillRef.current = false;
+      } else {
       const latestDate = clampYmdToToday(payload.max_date ?? payload.min_date ?? '');
       const nextDate = latestDate || toYmdNow();
       const minDate = payload.min_date ?? '';
@@ -1878,6 +2033,7 @@ export default function HittingSuite({
       } else {
         setStartDate(nextDate);
         setEndDate(nextDate);
+      }
       }
       setPitchTypes([]);
       setZoneLocations([]);
@@ -2032,7 +2188,10 @@ export default function HittingSuite({
     if (startDate) params.set('start_date', startDate);
     if (endDate) params.set('end_date', endDate);
     if (hitter && hitter !== 'All') params.set('hitter', hitter);
-    if (teamType && teamType !== 'All') params.set('team_type', teamType);
+    const apiTeamType = isLeague
+      ? resolveLeagueTeamTypeForApi(teamType, [filters?.hitters_by_team_code, filters?.opp_pitchers_by_team_code])
+      : teamType;
+    if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
     if (isPro && level && level !== 'All') params.set('level', level);
     if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
     if (hand && hand !== 'All') params.set('hand', hand);
@@ -2161,7 +2320,7 @@ export default function HittingSuite({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole]);
+  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague]);
 
   const selectedSingleHitter = hitter && hitter !== 'All' ? hitter : '';
 
@@ -2186,7 +2345,10 @@ export default function HittingSuite({
     if (abGameKey) params.set('game_key', abGameKey);
     if (startDate) params.set('start_date', startDate);
     if (endDate) params.set('end_date', endDate);
-    if (teamType && teamType !== 'All') params.set('team_type', teamType);
+    const apiTeamType = isLeague
+      ? resolveLeagueTeamTypeForApi(teamType, [filters?.hitters_by_team_code, filters?.opp_pitchers_by_team_code])
+      : teamType;
+    if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
     if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
     if (hand && hand !== 'All') params.set('hand', hand);
     if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
@@ -2223,7 +2385,7 @@ export default function HittingSuite({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [dashboardPage, selectedSingleHitter, abGameKey, startDate, endDate, teamType, oppPitcher, hand, batterSide, pitchTypes]);
+  }, [dashboardPage, selectedSingleHitter, abGameKey, startDate, endDate, teamType, oppPitcher, hand, batterSide, pitchTypes, isLeague]);
 
   const points = overview?.chart_points ?? [];
   const heatmapPoints = useMemo(() => {
@@ -2292,9 +2454,10 @@ export default function HittingSuite({
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
   const overviewHeaderLabel = useMemo(() => {
     const hitterLabel = selectedSingleHitter ? formatNameFirstLast(selectedSingleHitter) : 'All';
-    const dateLabel = formatDashboardDateLabel(startDate, endDate, isPro);
+    const effectiveSchoolCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+    const dateLabel = formatDashboardDateLabel(startDate, endDate, isPro, effectiveSchoolCode, filters?.max_date ?? filters?.min_date ?? '');
     return `${hitterLabel} | ${dateLabel}`;
-  }, [selectedSingleHitter, startDate, endDate, isPro]);
+  }, [selectedSingleHitter, startDate, endDate, isPro, selectedSchoolCode, filters?.school_code, filters?.max_date, filters?.min_date]);
   const applyLeaderboardDrilldown = useCallback((rawValue: unknown, viewBy: 'Player' | 'Team') => {
     if (!isLeaderboardPage) return;
     const raw = String(rawValue ?? '').trim();
@@ -2373,6 +2536,10 @@ export default function HittingSuite({
     });
     return out;
   }, [filters?.hitters_by_team_code]);
+  const leagueTeamLabelByCode = useMemo(
+    () => buildLeagueTeamLabelByCode([filters?.hitters_by_team_code, filters?.opp_pitchers_by_team_code]),
+    [filters?.hitters_by_team_code, filters?.opp_pitchers_by_team_code]
+  );
   const summaryTeamLogoUrl = useMemo(() => {
     if (!isPro || dashboardPage !== 'Summary') return '';
     const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -2990,8 +3157,9 @@ export default function HittingSuite({
                     <SearchableSingleSelect
                       options={(abReport?.available_games ?? []).map((game) => ({
                         value: game.game_key,
-                        label:
-                          game.date && game.game_key === game.date
+                        label: game.label
+                          ? game.label
+                          : game.date && game.game_key === game.date
                             ? formatShortDate(game.date)
                             : game.date
                               ? `${formatShortDate(game.date)} | ${game.game_key}`
@@ -3096,7 +3264,7 @@ export default function HittingSuite({
                 </select>
               </label>
             ) : (
-              <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
+              <div className="portal-suite-page-tabs" style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
                 <button type="button" className={dashboardPage === 'Summary' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('Summary')}>
                   Summary
                 </button>
@@ -3472,7 +3640,15 @@ export default function HittingSuite({
                           ? (() => {
                               const formatted = formatNameFirstLast(rawValue);
                               if (leaderboardViewBy !== 'Player') {
-                                if (!isPro) return formatted;
+                                if (!isPro) {
+                                  const rawTeam = String(rawValue ?? '').trim();
+                                  if (!rawTeam || rawTeam.toLowerCase() === 'all') return rawTeam || formatted;
+                                  if (isLeague) {
+                                    const mappedLabel = leagueTeamLabelByCode[rawTeam.toUpperCase()];
+                                    if (mappedLabel) return mappedLabel;
+                                  }
+                                  return rawTeam;
+                                }
                                 const teamCode = inferProTeamCode(rawValue);
                                 if (!teamCode || String(rawValue ?? '').trim().toLowerCase() === 'all') return formatted;
                                 const teamLogo = getProTeamLogoUrl(teamCode);

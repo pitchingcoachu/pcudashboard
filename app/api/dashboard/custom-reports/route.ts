@@ -216,6 +216,28 @@ async function ensureDashboardCustomReportsSchema(pool: Pool): Promise<void> {
   }
 }
 
+function isTransientSchemaWarmupError(error: unknown): boolean {
+  const code = String((error as { code?: string } | null)?.code ?? '');
+  if (code === '55P03' || code === '57014' || code === '40001') return true;
+  const message = String((error as { message?: string } | null)?.message ?? '').toLowerCase();
+  return (
+    message.includes('lock timeout') ||
+    message.includes('statement timeout') ||
+    message.includes('could not obtain lock') ||
+    message.includes('canceling statement due to')
+  );
+}
+
+async function ensureDashboardCustomReportsSchemaBestEffort(pool: Pool): Promise<void> {
+  try {
+    await ensureDashboardCustomReportsSchema(pool);
+  } catch (error) {
+    // On serverless cold starts, concurrent schema warmup can briefly lock.
+    // Failing open here avoids intermittent "missing custom reports" behavior.
+    if (!isTransientSchemaWarmupError(error)) throw error;
+  }
+}
+
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -238,7 +260,7 @@ export async function GET() {
   }
   const pool = getDbPool();
   try {
-    await ensureDashboardCustomReportsSchema(pool);
+    await ensureDashboardCustomReportsSchemaBestEffort(pool);
     const result = await pool.query<{
       id: number;
       name: string;
@@ -380,7 +402,7 @@ export async function POST(request: Request) {
   }
   const pool = getDbPool();
   try {
-    await ensureDashboardCustomReportsSchema(pool);
+    await ensureDashboardCustomReportsSchemaBestEffort(pool);
     const body = (await request.json().catch(() => ({}))) as ReportPayload;
     const id = Number(body.id);
     const name = String(body.name ?? '').trim();
@@ -525,7 +547,7 @@ export async function DELETE(request: Request) {
 
   try {
     const pool = getDbPool();
-    await ensureDashboardCustomReportsSchema(pool);
+    await ensureDashboardCustomReportsSchemaBestEffort(pool);
     const protectedCheck = await pool.query<{ name: string }>(
       `
       SELECT name
