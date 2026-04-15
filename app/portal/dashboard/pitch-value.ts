@@ -7,7 +7,19 @@ type PitchValueInput = {
   outs_num?: number | null;
   outs_on_play_num?: number | null;
   pitch_value?: number | null;
+  school_code?: string | null;
 };
+
+const PV_BASELINE_SHIFT_PRO = 0.024;
+const PV_BASELINE_SHIFT_COLLEGE = 0.031;
+
+function pvBaselineShiftForSchoolCode(value: unknown): number {
+  const code = String(value ?? '').trim().toUpperCase();
+  if (code === 'PRO') return PV_BASELINE_SHIFT_PRO;
+  if (code === 'LEAGUE') return PV_BASELINE_SHIFT_COLLEGE;
+  if (code) return PV_BASELINE_SHIFT_COLLEGE;
+  return 0;
+}
 
 function normToken(value: unknown): string {
   const raw = String(value ?? '').trim().toLowerCase();
@@ -58,27 +70,28 @@ export function calcPitchValue(input: PitchValueInput): number {
   const playResult = canonicalPlayResult(input.play_result);
   const korbb = String(input.korbb ?? '');
   const adjust = countAdjust(input.balls_num, input.strikes_num);
+  const baselineShift = pvBaselineShiftForSchoolCode(input.school_code);
 
-  if (korbb === 'Strikeout' || playResult === 'Strikeout') return -0.18 + (0.35 * adjust);
-  if (korbb === 'Walk' || playResult === 'Walk') return 0.36 + (0.35 * adjust);
-  if (pitchCall === 'HitByPitch' || playResult === 'HitByPitch') return 0.34 + (0.35 * adjust);
+  if (korbb === 'Strikeout' || playResult === 'Strikeout') return (-0.18 + (0.35 * adjust)) - baselineShift;
+  if (korbb === 'Walk' || playResult === 'Walk') return (0.36 + (0.35 * adjust)) - baselineShift;
+  if (pitchCall === 'HitByPitch' || playResult === 'HitByPitch') return (0.34 + (0.35 * adjust)) - baselineShift;
 
   if (pitchCall === 'InPlay' || playResult) {
-    if (playResult === 'Single') return 0.48;
-    if (playResult === 'Double') return 0.78;
-    if (playResult === 'Triple') return 1.09;
-    if (playResult === 'HomeRun') return 1.4;
-    if (playResult === 'Error') return 0.33;
-    return -0.1;
+    if (playResult === 'Single') return 0.48 - baselineShift;
+    if (playResult === 'Double') return 0.78 - baselineShift;
+    if (playResult === 'Triple') return 1.09 - baselineShift;
+    if (playResult === 'HomeRun') return 1.4 - baselineShift;
+    if (playResult === 'Error') return 0.33 - baselineShift;
+    return -0.1 - baselineShift;
   }
 
-  if (pitchCall === 'BallCalled' || pitchCall === 'BallinDirt' || pitchCall === 'BallIntentional') return 0.02 + (0.35 * adjust);
-  if (pitchCall === 'StrikeCalled') return -0.03 + (0.35 * adjust);
-  if (pitchCall === 'StrikeSwinging') return -0.05 + (0.35 * adjust);
+  if (pitchCall === 'BallCalled' || pitchCall === 'BallinDirt' || pitchCall === 'BallIntentional') return (0.02 + (0.35 * adjust)) - baselineShift;
+  if (pitchCall === 'StrikeCalled') return (-0.03 + (0.35 * adjust)) - baselineShift;
+  if (pitchCall === 'StrikeSwinging') return (-0.05 + (0.35 * adjust)) - baselineShift;
   if (pitchCall === 'FoulBall' || pitchCall === 'FoulBallFieldable' || pitchCall === 'FoulBallNotFieldable') {
     const strikes = Math.min(2, Math.max(0, Number.isFinite(Number(input.strikes_num)) ? Number(input.strikes_num) : 0));
-    return (strikes >= 2 ? -0.005 : -0.02) + (0.3 * adjust);
+    return ((strikes >= 2 ? -0.005 : -0.02) + (0.3 * adjust)) - baselineShift;
   }
 
-  return 0;
+  return 0 - baselineShift;
 }

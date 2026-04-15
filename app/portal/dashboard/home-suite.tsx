@@ -36,9 +36,6 @@ type AlertsPayload = {
   hitting: AlertRow[];
 };
 
-const HOME_BASE_TIMEOUT_MS = 12000;
-const HOME_ALERTS_TIMEOUT_MS = 15000;
-
 type HomeSuiteProps = {
   selectedSchoolCode: string;
   activeSuite: string;
@@ -212,9 +209,7 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
 
   useEffect(() => {
     let isMounted = true;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), HOME_BASE_TIMEOUT_MS);
-    fetchHomePayload('', controller.signal)
+    fetchHomePayload('')
       .then((payload) => {
         if (!isMounted) return;
         setBasePayload(payload);
@@ -222,12 +217,7 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
       })
       .catch((err) => {
         if (!isMounted) return;
-        const message =
-          err instanceof Error && err.name === 'AbortError'
-            ? 'Loading data is taking longer than expected. Try refresh in a few seconds.'
-            : err instanceof Error
-              ? err.message
-              : 'Failed to load dashboard home data.';
+        const message = err instanceof Error ? err.message : 'Failed to load dashboard home data.';
         setError(message);
       })
       .finally(() => {
@@ -236,16 +226,12 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
       });
     return () => {
       isMounted = false;
-      clearTimeout(timeout);
-      controller.abort();
     };
   }, []);
   useEffect(() => {
     if (isHeavySchool) return () => {};
     let isMounted = true;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), HOME_ALERTS_TIMEOUT_MS);
-    fetchAlertsPayload(controller.signal)
+    fetchAlertsPayload()
       .then((payload) => {
         if (!isMounted) return;
         setAlertsPayload(payload);
@@ -253,12 +239,7 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
       })
       .catch((err) => {
         if (!isMounted) return;
-        const message =
-          err instanceof Error && err.name === 'AbortError'
-            ? 'Loading trends is taking longer than expected.'
-            : err instanceof Error
-              ? err.message
-              : 'Failed to load alerts.';
+        const message = err instanceof Error ? err.message : 'Failed to load alerts.';
         setAlertsError(message);
       })
       .finally(() => {
@@ -267,8 +248,6 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
       });
     return () => {
       isMounted = false;
-      clearTimeout(timeout);
-      controller.abort();
     };
   }, [isHeavySchool]);
 

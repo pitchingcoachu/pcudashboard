@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
-import { resolveDashboardPlayerIdentity, selectScopedPlayerName } from '../../../../../lib/dashboard-player-scope';
+import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlayerName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 const RESPONSE_CACHE_HEADERS = {
@@ -32,6 +32,15 @@ function schoolRosterAdditions(schoolCode: string): { pitchers: string[] } {
   return { pitchers: [] };
 }
 
+function pickLatestGameDate(payload: Record<string, unknown>): string | null {
+  const games = Array.isArray(payload.available_games) ? payload.available_games : [];
+  const dates = games
+    .map((entry) => String((entry as { date?: unknown }).date ?? '').trim())
+    .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+    .sort();
+  return dates.length > 0 ? dates[dates.length - 1] : null;
+}
+
 export async function GET(request: Request) {
   const routeStartedAt = Date.now();
   const cookieStore = await cookies();
@@ -58,13 +67,16 @@ export async function GET(request: Request) {
   if (level) url.searchParams.set('level', level);
 
   try {
-    const playerIdentity = await resolveDashboardPlayerIdentity({
-      role: session.role,
-      organizationId: session.organizationId,
-      userId: session.userId,
-      name: session.name,
-    });
-    if (session.role === 'player' && !playerIdentity) {
+    const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+    const playerIdentity = shouldScopePlayer
+      ? await resolveDashboardPlayerIdentity({
+          role: session.role,
+          organizationId: session.organizationId,
+          userId: session.userId,
+          name: session.name,
+        })
+      : null;
+    if (shouldScopePlayer && !playerIdentity) {
       return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
     }
 
@@ -87,9 +99,32 @@ export async function GET(request: Request) {
         ...additions.pitchers,
       ]);
     }
-    if (playerIdentity && Array.isArray(payload.pitchers)) {
+    let scopedPitcher: string | null = null;
+    if (shouldScopePlayer && playerIdentity && Array.isArray(payload.pitchers)) {
       const scoped = selectScopedPlayerName(payload.pitchers, playerIdentity);
-      payload.pitchers = scoped ? [scoped] : [];
+      const fallback = scopedPlayerQueryName(playerIdentity, 'Pitching');
+      scopedPitcher = scoped || fallback || null;
+      payload.pitchers = scopedPitcher ? [scopedPitcher] : [];
+    }
+    if (shouldScopePlayer && scopedPitcher) {
+      const abUrl = new URL(`${apiBase}/v1/pitching/ab-report`);
+      abUrl.searchParams.set('school_code', schoolCode);
+      abUrl.searchParams.set('pitcher', scopedPitcher);
+      const abResult = await fetchDashboardJsonWithCache({
+        cacheKey: `pitching:filters:last-date:${abUrl.toString()}`,
+        ttlMs: 120000,
+        staleTtlMs: 300000,
+        timeoutMs: 12000,
+        retries: 0,
+        fetcher: () => fetch(abUrl.toString(), { cache: 'no-store' }),
+      });
+      if (abResult.status >= 200 && abResult.status < 300) {
+        const playerLastDate = pickLatestGameDate(abResult.payload as Record<string, unknown>);
+        if (playerLastDate) {
+          payload.player_last_date = playerLastDate;
+          payload.max_date = playerLastDate;
+        }
+      }
     }
     return NextResponse.json(payload, {
       headers: {

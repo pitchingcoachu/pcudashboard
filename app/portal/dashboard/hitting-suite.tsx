@@ -14,6 +14,7 @@ type HittingFiltersPayload = {
   school_code: string;
   min_date: string | null;
   max_date: string | null;
+  player_last_date?: string | null;
   team_types?: string[];
   level_options?: string[];
   hitters: string[];
@@ -872,7 +873,7 @@ function LocationChart({
   const plottedInZone = points.filter((p) => parseNumber(p.plate_side) !== null && parseNumber(p.plate_height) !== null);
   const heatmapInZone = heatmapPoints.filter((p) => parseNumber(p.plate_side) !== null && parseNumber(p.plate_height) !== null);
   const heatMetricView = displayView;
-  const isRvLikeMetric = heatMetricView === 'Run Values' || heatMetricView === 'PV/100';
+  const isRvLikeMetric = (heatMetricView === 'RV/100' || heatMetricView === 'Run Values') || heatMetricView === 'PV/100';
   const cells = displayView === 'Pitch' ? [] : buildHeatCells(heatmapInZone, heatMetricView, strictRunValue);
   const values = cells.map((cell) => cell.value).sort((a, b) => a - b);
   const densityMax = Math.max(1e-9, ...cells.map((cell) => cell.density));
@@ -1773,7 +1774,7 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
       if (metric === 'Contact Rate') value = 100 * (((swingW - whiffW) + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
       if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
       if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
-      if (metric === 'Run Values') {
+      if (metric === 'RV/100' || metric === 'Run Values') {
         value =
           ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
       }
@@ -1892,6 +1893,7 @@ export default function HittingSuite({
   const [abSortDirection, setAbSortDirection] = useState<SortDirection>('asc');
   const suppressNextFilterDateAutofillRef = useRef(false);
   const lastAppliedHomeRequestRef = useRef<number>(0);
+  const pcuSearchPlayerDatePendingRef = useRef(false);
   const isPlayerRole = role === 'player';
 
   const [pitchTypes, setPitchTypes] = useState<string[]>([]);
@@ -1916,7 +1918,14 @@ export default function HittingSuite({
     if (lastAppliedHomeRequestRef.current === homeNavigateRequest.requestId) return;
     if (loadingFilters || !filters) return;
     const isProNavigate = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
+    const schoolCode = String(filters?.school_code ?? '').trim().toUpperCase();
+    const shouldUsePcuPlayerLatestDate =
+      schoolCode === 'PCU' &&
+      role !== 'player' &&
+      homeNavigateRequest.navigationSource === 'search' &&
+      homeNavigateRequest.targetType === 'player';
     lastAppliedHomeRequestRef.current = homeNavigateRequest.requestId;
+    pcuSearchPlayerDatePendingRef.current = shouldUsePcuPlayerLatestDate;
     suppressNextFilterDateAutofillRef.current = homeNavigateRequest.navigationSource === 'search';
     setDashboardPage(homeNavigateRequest.page ?? 'Summary');
     setStartDate(homeNavigateRequest.startDate);
@@ -1934,7 +1943,7 @@ export default function HittingSuite({
       setOppPitcher('All');
     }
     setAppliedFilterVersion((current) => current + 1);
-  }, [homeNavigateRequest, loadingFilters, filters]);
+  }, [homeNavigateRequest, loadingFilters, filters, role]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2022,11 +2031,24 @@ export default function HittingSuite({
       if (suppressNextFilterDateAutofillRef.current) {
         suppressNextFilterDateAutofillRef.current = false;
       } else {
-      const latestDate = clampYmdToToday(payload.max_date ?? payload.min_date ?? '');
+      const playerLastDate = clampYmdToToday(payload.player_last_date ?? '');
+      const latestDate = clampYmdToToday(playerLastDate || (payload.max_date ?? payload.min_date ?? ''));
       const nextDate = latestDate || toYmdNow();
       const minDate = payload.min_date ?? '';
       const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
-      if (isLeagueSchool) {
+      const isProSchool = String(payload.school_code ?? '').toUpperCase() === 'PRO';
+      if (isPlayerRole && !isLeagueSchool && !isProSchool) {
+        const schoolCode = String(payload.school_code ?? '').trim().toUpperCase();
+        if (schoolCode === 'PCU') {
+          setStartDate(nextDate);
+          setEndDate(nextDate);
+          return;
+        }
+        const defaultSeasonStart = schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13';
+        const seasonStart = minDate && minDate > defaultSeasonStart ? minDate : defaultSeasonStart;
+        setStartDate(seasonStart);
+        setEndDate(nextDate || seasonStart);
+      } else if (isLeagueSchool) {
         const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
         setStartDate(leagueStart);
         setEndDate(nextDate || leagueStart);
@@ -2323,6 +2345,75 @@ export default function HittingSuite({
   }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague]);
 
   const selectedSingleHitter = hitter && hitter !== 'All' ? hitter : '';
+  const [selectedHitterLastGameDate, setSelectedHitterLastGameDate] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    if (!filters || !selectedSingleHitter) {
+      setSelectedHitterLastGameDate('');
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
+    }
+    const schoolCode = String(filters.school_code ?? '').trim().toUpperCase();
+    if (!schoolCode || schoolCode === 'PRO' || schoolCode === 'LEAGUE') {
+      setSelectedHitterLastGameDate('');
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
+    }
+    const seasonStart = String(filters.min_date ?? '').trim() || (schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13');
+    const seasonEnd = String(filters.max_date ?? toYmdNow()).trim() || toYmdNow();
+    const params = new URLSearchParams();
+    params.set('start_date', seasonStart);
+    params.set('end_date', seasonEnd);
+    params.set('hitter', selectedSingleHitter);
+    params.set('table_mode', 'Live');
+    params.set('split_by', 'Batter');
+    params.set('include_chart_points', '1');
+    params.set('chart_points_limit', '6000');
+    params.set('include_row_pitches', '0');
+    params.set('include_trend_rows', '0');
+    params.set('chart_only', '1');
+    void fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { chart_points?: Array<{ session_date?: string | null }> };
+        if (!response.ok) return '';
+        const points = Array.isArray(payload.chart_points) ? payload.chart_points : [];
+        let latest = '';
+        for (const point of points) {
+          const dateKey = String(point.session_date ?? '').slice(0, 10);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
+          if (!latest || dateKey > latest) latest = dateKey;
+        }
+        return latest;
+      })
+      .then((latest) => {
+        if (cancelled) return;
+        setSelectedHitterLastGameDate(String(latest ?? '').trim());
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSelectedHitterLastGameDate('');
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [filters, selectedSingleHitter]);
+
+  useEffect(() => {
+    if (!pcuSearchPlayerDatePendingRef.current) return;
+    const latest = String(selectedHitterLastGameDate ?? '').trim();
+    pcuSearchPlayerDatePendingRef.current = false;
+    if (!latest) return;
+    setStartDate(latest);
+    setEndDate(latest);
+    setAppliedFilterVersion((current) => current + 1);
+  }, [selectedHitterLastGameDate]);
 
   useEffect(() => {
     if (dashboardPage !== 'AB Report') return;
@@ -2595,7 +2686,7 @@ export default function HittingSuite({
       { value: 'Swing Rate', label: 'Swing Rate' },
       { value: 'Exit Velocity', label: 'Exit Velocity' },
       ...(isPro ? ([{ value: 'xWOBA', label: 'xWOBA' }, { value: 'xISO', label: 'xISO' }] as OptionItem[]) : []),
-      { value: 'Run Values', label: 'Run Values' },
+      { value: 'RV/100', label: 'RV/100' },
       { value: 'PV/100', label: 'PV/100' },
     ],
     [isPro]
@@ -2663,7 +2754,7 @@ export default function HittingSuite({
     const maxVal = fixedScale?.max ?? dynamicMaxVal;
     const midVal = fixedScale?.mid ?? dynamicMidVal;
     const isPvMetric = heatmapDisplayView === 'PV/100';
-    const isRunValuesMetric = heatMetricView === 'Run Values' || heatMetricView === 'PV/100';
+    const isRunValuesMetric = (heatMetricView === 'RV/100' || heatMetricView === 'Run Values') || heatMetricView === 'PV/100';
     const rvMin = isPvMetric ? -2 : (isPro ? -5 : -2);
     const rvMax = isPvMetric ? 2 : (isPro ? 5 : 2);
     return (

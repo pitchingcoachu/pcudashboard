@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
-import { resolveDashboardPlayerIdentity, selectScopedPlayerName } from '../../../../../lib/dashboard-player-scope';
+import { resolveDashboardPlayerIdentity, selectScopedPlayerName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 const RESPONSE_CACHE_HEADERS = {
@@ -45,13 +45,16 @@ export async function GET(request: Request) {
   }
 
   try {
-    const playerIdentity = await resolveDashboardPlayerIdentity({
-      role: session.role,
-      organizationId: session.organizationId,
-      userId: session.userId,
-      name: session.name,
-    });
-    if (session.role === 'player' && !playerIdentity) {
+    const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+    const playerIdentity = shouldScopePlayer
+      ? await resolveDashboardPlayerIdentity({
+          role: session.role,
+          organizationId: session.organizationId,
+          userId: session.userId,
+          name: session.name,
+        })
+      : null;
+    if (shouldScopePlayer && !playerIdentity) {
       return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
     }
 
@@ -67,7 +70,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
     }
     const payload = result.payload as Record<string, unknown>;
-    if (playerIdentity && Array.isArray(payload.catchers)) {
+    if (shouldScopePlayer && playerIdentity && Array.isArray(payload.catchers)) {
       const scoped = selectScopedPlayerName(payload.catchers, playerIdentity);
       payload.catchers = scoped ? [scoped] : [];
     }

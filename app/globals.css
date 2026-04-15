@@ -2743,12 +2743,13 @@ body.theme-light .portal-theme-toggle-btn.active {
   text-align: center;
   font: 700 0.82rem/1.2 Manrope, sans-serif;
   letter-spacing: 0.02em;
+  white-space: pre-wrap;
   color: rgba(255, 255, 255, 0.93);
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 10px;
   background: rgba(8, 12, 20, 0.72);
-  padding: 0.28rem 0.45rem;
-  min-height: 32px;
+  padding: 0.12rem 0.18rem;
+  min-height: 0;
   display: grid;
   place-items: center;
 }

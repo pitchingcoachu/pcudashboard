@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import CatchingSuite from './catching-suite';
 import ComparisonToolSuite from './comparison-tool-suite';
 import CustomReportsSuite from './custom-reports-suite';
+import DashboardChat from './dashboard-chat';
 import HittingSuite from './hitting-suite';
 import HomeSuite from './home-suite';
 import PlayerNotesSuite from './player-notes-suite';
@@ -34,8 +35,6 @@ type SearchPayload = {
   suggestions: Candidate[];
   selected: Candidate | null;
 };
-
-const HOME_SEARCH_TIMEOUT_MS = 12000;
 
 type SuiteName =
   | 'Home'
@@ -185,9 +184,7 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
   };
   useEffect(() => {
     let isMounted = true;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), HOME_SEARCH_TIMEOUT_MS);
-    fetchHomePayload(controller.signal)
+    fetchHomePayload()
       .then((payload) => {
         if (!isMounted) return;
         setNavSearchPayload(payload);
@@ -195,18 +192,11 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
       })
       .catch((error: unknown) => {
         if (!isMounted) return;
-        const message =
-          error instanceof Error && error.name === 'AbortError'
-            ? 'Loading search is taking longer than expected. You can still open suites while it retries.'
-            : error instanceof Error
-              ? error.message
-              : 'Failed to load search options.';
+        const message = error instanceof Error ? error.message : 'Failed to load search options.';
         setNavSearchError(message);
       });
     return () => {
       isMounted = false;
-      clearTimeout(timeout);
-      controller.abort();
     };
   }, [selectedSchoolCode]);
   const navMatchingCandidates = useMemo(() => {
@@ -400,6 +390,7 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
           <StuffCalculatorSuite />
         </div>
       ) : null}
+      <DashboardChat isPro={isPro} />
     </div>
   );
 }

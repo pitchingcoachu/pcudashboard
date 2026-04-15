@@ -665,6 +665,36 @@ def _parse_optional_int(value: Optional[str], field_name: str) -> Optional[int]:
         raise HTTPException(status_code=400, detail=f"{field_name} must be an integer.") from exc
 
 
+def _apply_pitch_count_row_threshold(
+    table_rows: List[Dict[str, Any]],
+    pc_min: Optional[int],
+    pc_max: Optional[int],
+) -> List[Dict[str, Any]]:
+    if pc_min is None and pc_max is None:
+        return table_rows
+    filtered: List[Dict[str, Any]] = []
+    for row in table_rows:
+        # Pitching aggregate count is normally "#"; include fallbacks for
+        # custom/alternate table modes to avoid accidental empty tables.
+        count_value = row.get("#")
+        if not _is_num(count_value):
+            count_value = row.get("P")
+        if not _is_num(count_value):
+            count_value = row.get("BF")
+        if not _is_num(count_value):
+            count_value = row.get("PA")
+        if not _is_num(count_value):
+            filtered.append(row)
+            continue
+        total_pitches = int(float(count_value))
+        if pc_min is not None and total_pitches < pc_min:
+            continue
+        if pc_max is not None and total_pitches > pc_max:
+            continue
+        filtered.append(row)
+    return filtered
+
+
 def _normalize_session_type_filter(value: Optional[str]) -> Optional[str]:
     text = (value or "").strip().lower()
     if not text or text == "all":
@@ -979,6 +1009,16 @@ def _pv_count_adjust(balls: Any, strikes: Any) -> float:
     s = min(max(s, 0), 2)
     return max(-0.08, min(0.08, (float(b - s) * 0.02)))
 
+PV_BASELINE_SHIFT_PRO = 0.024
+PV_BASELINE_SHIFT_COLLEGE = 0.031
+
+
+def _pv_baseline_shift_for_school_code(school_code: Any) -> float:
+    code = str(school_code or "").strip().upper()
+    if code == "PRO":
+        return PV_BASELINE_SHIFT_PRO
+    return PV_BASELINE_SHIFT_COLLEGE
+
 
 def _calc_pitch_value(
     pitch_call: Any,
@@ -988,6 +1028,7 @@ def _calc_pitch_value(
     strikes: Any = None,
     outs: Any = None,
     outs_on_play: Any = None,
+    school_code: Any = None,
 ) -> float:
     # Positive value favors hitter; negative favors pitcher.
     raw_pitch_call = str(pitch_call or "")
@@ -997,14 +1038,15 @@ def _calc_pitch_value(
     pr = _canonical_play_result(play_result)
     kb = str(korbb or "")
     count_adj = _pv_count_adjust(balls, strikes)
+    pv_baseline_shift = _pv_baseline_shift_for_school_code(school_code)
 
     # Terminal outcomes.
     if kb == "Strikeout" or _pro_norm_token(play_result) in {"strikeout", "strikeoutdoubleplay", "strikeout_double_play"}:
-        return -0.18 + (0.35 * count_adj)
+        return (-0.18 + (0.35 * count_adj)) - pv_baseline_shift
     if kb == "Walk" or pr in {"Walk", "IntentionalWalk"}:
-        return 0.36 + (0.35 * count_adj)
+        return (0.36 + (0.35 * count_adj)) - pv_baseline_shift
     if pc == "HitByPitch" or pr == "HitByPitch":
-        return 0.34 + (0.35 * count_adj)
+        return (0.34 + (0.35 * count_adj)) - pv_baseline_shift
 
     if pc == "InPlay" or pr in {
         "Single",
@@ -1019,32 +1061,32 @@ def _calc_pitch_value(
         "TriplePlay",
     }:
         if pr == "Single":
-            return 0.48
+            return 0.48 - pv_baseline_shift
         if pr == "Double":
-            return 0.78
+            return 0.78 - pv_baseline_shift
         if pr == "Triple":
-            return 1.09
+            return 1.09 - pv_baseline_shift
         if pr == "HomeRun":
-            return 1.40
+            return 1.40 - pv_baseline_shift
         if pr == "Error":
-            return 0.33
+            return 0.33 - pv_baseline_shift
         outs_on_play_i = int(float(outs_on_play)) if _is_num(outs_on_play) else 0
         if outs_on_play_i > 0 or pr in {"Out", "FieldersChoice", "Sacrifice", "DoublePlay", "TriplePlay"}:
-            return -0.10
-        return -0.10
+            return -0.10 - pv_baseline_shift
+        return -0.10 - pv_baseline_shift
 
     # Non-terminal pitch outcomes with count leverage.
     if pc in {"BallCalled", "BallIntentional", "BallinDirt"}:
-        return 0.02 + (0.35 * count_adj)
+        return (0.02 + (0.35 * count_adj)) - pv_baseline_shift
     if pc == "StrikeCalled":
-        return -0.03 + (0.35 * count_adj)
+        return (-0.03 + (0.35 * count_adj)) - pv_baseline_shift
     if pc == "StrikeSwinging":
-        return -0.05 + (0.35 * count_adj)
+        return (-0.05 + (0.35 * count_adj)) - pv_baseline_shift
     if pc in {"FoulBall", "FoulBallFieldable", "FoulBallNotFieldable"}:
         s = int(float(strikes)) if _is_num(strikes) else 0
         base = -0.005 if s >= 2 else -0.02
-        return base + (0.3 * count_adj)
-    return 0.0
+        return (base + (0.3 * count_adj)) - pv_baseline_shift
+    return 0.0 - pv_baseline_shift
 
 
 def _sql_state_re_no_runners_expr(outs_expr: str, balls_expr: str, strikes_expr: str) -> str:
@@ -1114,7 +1156,7 @@ def _sql_run_value_expr(alias: str) -> str:
     )
 
 
-def _sql_pitch_value_expr(alias: str) -> str:
+def _sql_pitch_value_expr(alias: str, baseline_shift: float = PV_BASELINE_SHIFT_PRO) -> str:
     pitch_call = f"COALESCE({alias}.pitch_call, '')"
     play_result = f"COALESCE({alias}.play_result, '')"
     korbb = f"COALESCE({alias}.korbb, '')"
@@ -1123,7 +1165,7 @@ def _sql_pitch_value_expr(alias: str) -> str:
     strikes = f"LEAST(2, GREATEST(0, COALESCE({alias}.strikes_num, 0)))"
     count_adj = f"GREATEST(-0.08, LEAST(0.08, (({balls} - {strikes}) * 0.02)))"
     return (
-        f"(CASE "
+        f"((CASE "
         f"WHEN {korbb} = 'Strikeout' THEN (-0.18 + (0.35 * ({count_adj}))) "
         f"WHEN {korbb} = 'Walk' OR {play_result} IN ('Walk','IntentionalWalk') THEN (0.36 + (0.35 * ({count_adj}))) "
         f"WHEN {pitch_call} = 'HitByPitch' OR {play_result} = 'HitByPitch' THEN (0.34 + (0.35 * ({count_adj}))) "
@@ -1141,7 +1183,7 @@ def _sql_pitch_value_expr(alias: str) -> str:
         f"WHEN {pitch_call} = 'StrikeSwinging' THEN (-0.05 + (0.35 * ({count_adj}))) "
         f"WHEN {pitch_call} IN ('FoulBall','FoulBallFieldable','FoulBallNotFieldable') THEN "
         f"  ((CASE WHEN {strikes} >= 2 THEN -0.005 ELSE -0.02 END) + (0.3 * ({count_adj}))) "
-        f"ELSE 0.0 END)"
+        f"ELSE 0.0 END) - {float(baseline_shift)})"
     )
 
 
@@ -1904,9 +1946,227 @@ def _build_dynamic_table(
     }
     split_col_name = split_col_map.get((split_by or "Pitch Types").strip(), "Pitch")
     groups: Dict[str, List[Dict[str, Any]]] = {}
-    for row in rows:
-        key = _split_key_from_row(row, split_by)
-        groups.setdefault(key, []).append(row)
+
+    def _pa_key_for_split_row(r: Dict[str, Any]) -> str:
+        game_key = str(
+            r.get("game_pk")
+            or r.get("game_id")
+            or r.get("game_uid")
+            or r.get("game_foreign_id")
+            or r.get("session_date")
+            or ""
+        ).strip()
+        ab_idx = str(r.get("at_bat_index") or "").strip()
+        play_id = str(r.get("play_id") or "").strip()
+        inning = str(r.get("inning") or "").strip()
+        outs = str(r.get("outs_num") or "").strip()
+        batter_norm = _normalize_name_key(str(r.get("batter") or ""))
+        pitcher_norm = _normalize_name_key(str(r.get("pitcher") or ""))
+        if game_key and ab_idx:
+            return f"{game_key}|ab|{ab_idx}"
+        if game_key and inning and batter_norm:
+            return f"{game_key}|inn|{inning}|outs|{outs}|bat|{batter_norm}"
+        if game_key and inning and pitcher_norm:
+            return f"{game_key}|inn|{inning}|outs|{outs}|pit|{pitcher_norm}"
+        if game_key and play_id:
+            return f"{game_key}|play|{play_id}"
+        event_id = str(r.get("pitch_event_id") or r.get("id") or "").strip()
+        return event_id or f"row-{id(r)}"
+
+    def _global_outcome_baseline(source_rows: List[Dict[str, Any]]) -> Dict[str, Optional[str]]:
+        if not source_rows:
+            return {"BF": None, "K%": None, "BB%": None, "HR%": None}
+
+        def _order(rr: Dict[str, Any]) -> tuple:
+            return (
+                str(rr.get("session_date") or ""),
+                int(rr.get("game_pk") or rr.get("game_id") or 0),
+                int(rr.get("at_bat_index") or 0),
+                int(rr.get("event_index") or 0),
+                int(rr.get("pitch_number") or 0),
+                int(rr.get("id") or 0),
+            )
+
+        def _explicit(rr: Dict[str, Any]) -> str:
+            game_key = str(
+                rr.get("game_pk")
+                or rr.get("game_id")
+                or rr.get("game_uid")
+                or rr.get("game_foreign_id")
+                or ""
+            ).strip()
+            ab_idx = str(rr.get("at_bat_index") or "").strip()
+            inning = str(rr.get("inning") or "").strip()
+            outs = str(rr.get("outs_num") or "").strip()
+            batter_norm = _normalize_name_key(str(rr.get("batter") or ""))
+            pitcher_norm = _normalize_name_key(str(rr.get("pitcher") or ""))
+            if game_key and ab_idx:
+                return f"{game_key}|ab|{ab_idx}"
+            if game_key and inning and batter_norm:
+                return f"{game_key}|inn|{inning}|outs|{outs}|bat|{batter_norm}"
+            if game_key and inning and pitcher_norm:
+                return f"{game_key}|inn|{inning}|outs|{outs}|pit|{pitcher_norm}"
+            return ""
+
+        def _infer_terminal(rr: Dict[str, Any]) -> str:
+            kor = _korbb_bucket(rr.get("korbb"))
+            if kor == "Strikeout":
+                return "Strikeout"
+            if kor == "Walk":
+                return "Walk"
+            pr = _canonical_play_result(rr.get("play_result"))
+            if pr in {"Strikeout", "Walk", "IntentionalWalk", "HomeRun", "Single", "Double", "Triple", "Out", "FieldersChoice", "Sacrifice", "Error", "HitByPitch"}:
+                return pr
+            call = str(rr.get("pitch_call") or "").strip()
+            b = int(float(rr.get("balls_num"))) if _is_num(rr.get("balls_num")) else None
+            s = int(float(rr.get("strikes_num"))) if _is_num(rr.get("strikes_num")) else None
+            if call == "HitByPitch":
+                return "HitByPitch"
+            if call in {"BallCalled", "BallinDirt", "BallIntentional", "Ball"} and b == 3:
+                return "Walk"
+            if call in {"StrikeSwinging", "StrikeCalled"} and s == 2:
+                return "Strikeout"
+            if call == "InPlay":
+                return "Out"
+            return ""
+
+        fallback_pa_counters: Dict[str, int] = {}
+        fallback_pa_current: Dict[str, int] = {}
+        pa_rows: Dict[str, List[Dict[str, Any]]] = {}
+
+        for rr in sorted(source_rows, key=_order):
+            pa_key = _explicit(rr)
+            if not pa_key:
+                date_key = str(rr.get("session_date") or "")
+                inning = str(rr.get("inning") or "").strip()
+                batter_norm = _normalize_name_key(str(rr.get("batter") or ""))
+                pitcher_norm = _normalize_name_key(str(rr.get("pitcher") or ""))
+                cluster = f"{date_key}|{inning}|{pitcher_norm}|{batter_norm}"
+                b = int(float(rr.get("balls_num"))) if _is_num(rr.get("balls_num")) else None
+                s = int(float(rr.get("strikes_num"))) if _is_num(rr.get("strikes_num")) else None
+                if b == 0 and s == 0:
+                    next_idx = fallback_pa_counters.get(cluster, 0) + 1
+                    fallback_pa_counters[cluster] = next_idx
+                    fallback_pa_current[cluster] = next_idx
+                cur_idx = fallback_pa_current.get(cluster)
+                if cur_idx is None:
+                    cur_idx = fallback_pa_counters.get(cluster, 0) + 1
+                    fallback_pa_counters[cluster] = cur_idx
+                    fallback_pa_current[cluster] = cur_idx
+                pa_key = f"syn|{cluster}|{cur_idx}"
+            pa_rows.setdefault(pa_key, []).append(rr)
+
+        outcomes: List[str] = []
+        for _, pa_group in pa_rows.items():
+            outcome = ""
+            for rr in sorted(pa_group, key=_order, reverse=True):
+                inferred = _infer_terminal(rr)
+                if inferred:
+                    outcome = inferred
+                    break
+            if outcome:
+                outcomes.append(outcome)
+
+        bf = len(outcomes)
+        if bf <= 0:
+            return {"BF": None, "K%": None, "BB%": None, "HR%": None}
+        k_n = sum(1 for out in outcomes if out == "Strikeout")
+        bb_n = sum(1 for out in outcomes if out in {"Walk", "IntentionalWalk"})
+        hr_n = sum(1 for out in outcomes if out == "HomeRun")
+        return {
+            "BF": bf,
+            "K%": f"{round(100.0 * k_n / bf, 1)}%",
+            "BB%": f"{round(100.0 * bb_n / bf, 1)}%",
+            "HR%": f"{round(100.0 * hr_n / bf, 1)}%",
+        }
+
+    split_clean_for_grouping = (split_by or "").strip()
+    if split_clean_for_grouping == "After Count":
+        # After Count semantics: each bucket is all PA/BF that reached that
+        # count at any point during the plate appearance, and includes only
+        # pitches from that point forward in the PA.
+        pa_rows: Dict[str, List[Dict[str, Any]]] = {}
+        fallback_pa_counters: Dict[str, int] = {}
+        fallback_pa_current: Dict[str, int] = {}
+
+        def _explicit_pa_key(rr: Dict[str, Any]) -> str:
+            game_key = str(
+                rr.get("game_pk")
+                or rr.get("game_id")
+                or rr.get("game_uid")
+                or rr.get("game_foreign_id")
+                or ""
+            ).strip()
+            ab_idx = str(rr.get("at_bat_index") or "").strip()
+            inning = str(rr.get("inning") or "").strip()
+            outs = str(rr.get("outs_num") or "").strip()
+            batter_norm = _normalize_name_key(str(rr.get("batter") or ""))
+            pitcher_norm = _normalize_name_key(str(rr.get("pitcher") or ""))
+            if game_key and ab_idx:
+                return f"{game_key}|ab|{ab_idx}"
+            if game_key and inning and batter_norm:
+                return f"{game_key}|inn|{inning}|outs|{outs}|bat|{batter_norm}"
+            if game_key and inning and pitcher_norm:
+                return f"{game_key}|inn|{inning}|outs|{outs}|pit|{pitcher_norm}"
+            return ""
+
+        def _synthetic_pa_key(rr: Dict[str, Any]) -> str:
+            # College feeds often lack explicit PA ids. Build a stable PA key
+            # from ordered pitch sequence, starting new PA on 0-0 counts.
+            date_key = str(rr.get("session_date") or "")
+            inning = str(rr.get("inning") or "").strip()
+            batter_norm = _normalize_name_key(str(rr.get("batter") or ""))
+            pitcher_norm = _normalize_name_key(str(rr.get("pitcher") or ""))
+            cluster = f"{date_key}|{inning}|{pitcher_norm}|{batter_norm}"
+            b = int(float(rr.get("balls_num"))) if _is_num(rr.get("balls_num")) else None
+            s = int(float(rr.get("strikes_num"))) if _is_num(rr.get("strikes_num")) else None
+            if b == 0 and s == 0:
+                next_idx = fallback_pa_counters.get(cluster, 0) + 1
+                fallback_pa_counters[cluster] = next_idx
+                fallback_pa_current[cluster] = next_idx
+            cur_idx = fallback_pa_current.get(cluster)
+            if cur_idx is None:
+                cur_idx = fallback_pa_counters.get(cluster, 0) + 1
+                fallback_pa_counters[cluster] = cur_idx
+                fallback_pa_current[cluster] = cur_idx
+            return f"syn|{cluster}|{cur_idx}"
+        def _after_row_order_key(rr: Dict[str, Any]) -> tuple:
+            return (
+                str(rr.get("session_date") or ""),
+                int(rr.get("game_pk") or rr.get("game_id") or 0),
+                int(rr.get("at_bat_index") or 0),
+                int(rr.get("event_index") or 0),
+                int(rr.get("pitch_number") or 0),
+                int(rr.get("id") or 0),
+            )
+
+        def _count_token_from_pair(bv: Any, sv: Any) -> str:
+            if not _is_num(bv) or not _is_num(sv):
+                return ""
+            return f"{int(float(bv))}-{int(float(sv))}"
+
+        for row in rows:
+            pa_key = _explicit_pa_key(row) or _synthetic_pa_key(row)
+            pa_rows.setdefault(pa_key, []).append(row)
+
+        for _, pa_group_rows in pa_rows.items():
+            ordered = sorted(pa_group_rows, key=_after_row_order_key)
+            first_idx_by_count: Dict[str, int] = {"0-0": 0}
+            for idx, rr in enumerate(ordered):
+                tok_curr = _count_token_from_pair(rr.get("balls_num"), rr.get("strikes_num"))
+                tok_prev = _count_token_from_pair(rr.get("prev_balls"), rr.get("prev_strikes"))
+                if tok_curr and tok_curr not in first_idx_by_count:
+                    first_idx_by_count[tok_curr] = idx
+                if tok_prev and tok_prev not in first_idx_by_count:
+                    first_idx_by_count[tok_prev] = idx
+            for count_key, start_idx in first_idx_by_count.items():
+                tail_rows = ordered[start_idx:]
+                if tail_rows:
+                    groups.setdefault(count_key, []).extend(tail_rows)
+    else:
+        for row in rows:
+            key = _split_key_from_row(row, split_by)
+            groups.setdefault(key, []).append(row)
     if (split_by or "").strip() == "Inning":
         numeric_inning_keys_present = any(
             str(k).strip().isdigit() for k in groups.keys()
@@ -2128,14 +2388,14 @@ def _build_dynamic_table(
         bb_n = sum(
             1
             for r in grp
-            if str(r.get("korbb") or "") == "Walk"
+            if _korbb_bucket(r.get("korbb")) == "Walk"
             or _canonical_play_result(r.get("play_result")) in {"Walk", "IntentionalWalk"}
         )
         k_n = sum(
             1
             for r in grp
-            if str(r.get("korbb") or "") == "Strikeout"
-            or _pro_norm_token(r.get("play_result")) in {"strikeout", "strikeoutdoubleplay", "strikeout_double_play"}
+            if _korbb_bucket(r.get("korbb")) == "Strikeout"
+            or _canonical_play_result(r.get("play_result")) == "Strikeout"
         )
         hbp_n = sum(
             1
@@ -2210,12 +2470,41 @@ def _build_dynamic_table(
         k_with_out_recorded_n = sum(
             1
             for r in grp
-            if str(r.get("korbb") or "") == "Strikeout" and int(r.get("outs_on_play_num") or 0) > 0
+            if _korbb_bucket(r.get("korbb")) == "Strikeout" and int(r.get("outs_on_play_num") or 0) > 0
         )
         outs_n = outs_on_play_n + max(0, k_n - k_with_out_recorded_n)
 
         pa_keys: set[str] = set()
+        pa_keys_all: set[str] = set()
+        pa_terminal_rows_by_key: Dict[str, Dict[str, Any]] = {}
+        def _row_order_key_for_pa(rr: Dict[str, Any]) -> tuple:
+            return (
+                str(rr.get("session_date") or ""),
+                int(rr.get("game_pk") or rr.get("game_id") or 0),
+                int(rr.get("at_bat_index") or 0),
+                int(rr.get("event_index") or 0),
+                int(rr.get("pitch_number") or 0),
+                int(rr.get("id") or 0),
+            )
+        def _is_terminal_pa_row(rr: Dict[str, Any]) -> bool:
+            pr = _canonical_play_result(rr.get("play_result"))
+            if pr and pr != "Undefined":
+                return True
+            if _korbb_bucket(rr.get("korbb")) in {"Strikeout", "Walk"}:
+                return True
+            if str(rr.get("pitch_call") or "") == "HitByPitch":
+                return True
+            return False
         for r in grp:
+            pa_key_all = _pa_key_for_split_row(r)
+            if pa_key_all:
+                pa_keys_all.add(pa_key_all)
+                existing_terminal = pa_terminal_rows_by_key.get(pa_key_all)
+                if _is_terminal_pa_row(r) and (
+                    existing_terminal is None
+                    or _row_order_key_for_pa(r) >= _row_order_key_for_pa(existing_terminal)
+                ):
+                    pa_terminal_rows_by_key[pa_key_all] = r
             # Non-PRO BF is based on PA starts (0-0 counts), not all pitch rows.
             if not (r.get("balls_num") == 0 and r.get("strikes_num") == 0):
                 continue
@@ -2230,19 +2519,104 @@ def _build_dynamic_table(
             ab_idx = str(r.get("at_bat_index") or "").strip()
             play_id = str(r.get("play_id") or "").strip()
             inning = str(r.get("inning") or "").strip()
+            outs = str(r.get("outs_num") or "").strip()
             batter_norm = _normalize_name_key(str(r.get("batter") or ""))
             pa_key = ""
             if game_key and ab_idx:
                 pa_key = f"{game_key}|ab|{ab_idx}"
+            elif game_key and inning and batter_norm:
+                pa_key = f"{game_key}|inn|{inning}|outs|{outs}|bat|{batter_norm}"
             elif game_key and play_id:
                 pa_key = f"{game_key}|play|{play_id}"
-            elif game_key and inning and batter_norm:
-                pa_key = f"{game_key}|inn|{inning}|bat|{batter_norm}"
             if pa_key:
                 pa_keys.add(pa_key)
-        bf_starts = len(pa_keys) if pa_keys else sum(
-            1 for r in grp if r.get("balls_num") == 0 and r.get("strikes_num") == 0
-        )
+        if split_clean_for_grouping == "After Count":
+            # After Count outcome rates must be PA-based (one terminal outcome per PA).
+            pa_rows_for_outcome: Dict[str, List[Dict[str, Any]]] = {}
+            def _infer_terminal_outcome(rr: Dict[str, Any]) -> str:
+                kor = _korbb_bucket(rr.get("korbb"))
+                if kor == "Strikeout":
+                    return "Strikeout"
+                if kor == "Walk":
+                    return "Walk"
+                pr = _canonical_play_result(rr.get("play_result"))
+                if pr in {"Strikeout", "Walk", "IntentionalWalk", "HomeRun", "Single", "Double", "Triple", "Out", "FieldersChoice", "Sacrifice", "Error", "HitByPitch"}:
+                    return pr
+                call = str(rr.get("pitch_call") or "").strip()
+                b = int(float(rr.get("balls_num"))) if _is_num(rr.get("balls_num")) else None
+                s = int(float(rr.get("strikes_num"))) if _is_num(rr.get("strikes_num")) else None
+                if call == "HitByPitch":
+                    return "HitByPitch"
+                if call in {"BallCalled", "BallinDirt", "BallIntentional", "Ball"} and b == 3:
+                    return "Walk"
+                if call in {"StrikeSwinging", "StrikeCalled"} and s == 2:
+                    return "Strikeout"
+                if call == "InPlay":
+                    return "Out"
+                return ""
+            for rr in grp:
+                pa_k = _pa_key_for_split_row(rr)
+                if not pa_k or pa_k.startswith("row-"):
+                    continue
+                pa_rows_for_outcome.setdefault(pa_k, []).append(rr)
+
+            terminal_outcomes: List[str] = []
+            for _, pa_group in pa_rows_for_outcome.items():
+                ordered = sorted(pa_group, key=_row_order_key_for_pa)
+                outcome = ""
+                for rr in reversed(ordered):
+                    inferred = _infer_terminal_outcome(rr)
+                    if inferred:
+                        outcome = inferred
+                        break
+                if outcome:
+                    terminal_outcomes.append(outcome)
+
+            if terminal_outcomes:
+                bf_starts = len(terminal_outcomes)
+                k_n = sum(1 for out in terminal_outcomes if out == "Strikeout")
+                bb_n = sum(1 for out in terminal_outcomes if out in {"Walk", "IntentionalWalk"})
+                hr = sum(1 for out in terminal_outcomes if out == "HomeRun")
+            else:
+                terminal_rows_for_split = list(pa_terminal_rows_by_key.values())
+                bf_starts = len(terminal_rows_for_split) if terminal_rows_for_split else (len(pa_keys_all) if pa_keys_all else len(pa_keys))
+                if bf_starts == 0:
+                    bf_starts = sum(1 for r in grp if _is_num(r.get("balls_num")) and _is_num(r.get("strikes_num")))
+                k_n = sum(
+                    1
+                    for rr in terminal_rows_for_split
+                    if _korbb_bucket(rr.get("korbb")) == "Strikeout"
+                    or _canonical_play_result(rr.get("play_result")) == "Strikeout"
+                )
+                bb_n = sum(
+                    1
+                    for rr in terminal_rows_for_split
+                    if _korbb_bucket(rr.get("korbb")) == "Walk"
+                    or _canonical_play_result(rr.get("play_result")) in {"Walk", "IntentionalWalk"}
+                )
+                hr = sum(1 for rr in terminal_rows_for_split if _canonical_play_result(rr.get("play_result")) == "HomeRun")
+        elif split_clean_for_grouping == "Count":
+            terminal_rows_for_split = list(pa_terminal_rows_by_key.values())
+            bf_starts = len(terminal_rows_for_split) if terminal_rows_for_split else (len(pa_keys_all) if pa_keys_all else len(pa_keys))
+            if bf_starts == 0:
+                bf_starts = sum(1 for r in grp if _is_num(r.get("balls_num")) and _is_num(r.get("strikes_num")))
+            k_n = sum(
+                1
+                for rr in terminal_rows_for_split
+                if _korbb_bucket(rr.get("korbb")) == "Strikeout"
+                or _canonical_play_result(rr.get("play_result")) == "Strikeout"
+            )
+            bb_n = sum(
+                1
+                for rr in terminal_rows_for_split
+                if _korbb_bucket(rr.get("korbb")) == "Walk"
+                or _canonical_play_result(rr.get("play_result")) in {"Walk", "IntentionalWalk"}
+            )
+            hr = sum(1 for rr in terminal_rows_for_split if _canonical_play_result(rr.get("play_result")) == "HomeRun")
+        else:
+            bf_starts = len(pa_keys) if pa_keys else sum(
+                1 for r in grp if r.get("balls_num") == 0 and r.get("strikes_num") == 0
+            )
         qp_points = [q for q in (_compute_qp_point(r) for r in grp) if q is not None]
         qp_count = sum(1 for q in qp_points if (q * 200.0) >= 100.0)
         qp_mean = (sum(qp_points) / len(qp_points)) if qp_points else None
@@ -2335,6 +2709,7 @@ def _build_dynamic_table(
                 r.get("strikes_num"),
                 r.get("outs_num"),
                 r.get("outs_on_play_num"),
+                r.get("school_code"),
             )
             for r in grp
         ]
@@ -2344,7 +2719,7 @@ def _build_dynamic_table(
             r
             for r in grp
             if (str(r.get("play_result") or "") not in {"", "Undefined"})
-            or (str(r.get("korbb") or "") in {"Strikeout", "Walk"})
+            or (_korbb_bucket(r.get("korbb")) in {"Strikeout", "Walk"})
         ]
         is_pro_group = any(str(r.get("school_code") or "").strip().upper() == "PRO" for r in grp)
         terminal_pr = [
@@ -2363,7 +2738,7 @@ def _build_dynamic_table(
         bb_term = sum(
             1
             for idx, pr in enumerate(terminal_pr)
-            if str(terminal_rows[idx].get("korbb") or "") == "Walk" or pr == "Walk"
+            if _korbb_bucket(terminal_rows[idx].get("korbb")) == "Walk" or pr == "Walk"
         )
         ibb = sum(1 for pr in terminal_pr if pr == "IntentionalWalk")
         hbp_term = sum(1 for pr in terminal_pr if pr == "HitByPitch")
@@ -2629,15 +3004,43 @@ def _build_dynamic_table(
                     return (1, 10**9)
             return (1, 10**9)
         ordered_items = sorted(groups.items(), key=lambda kv: (_pitch_count_rank(str(kv[0])), str(kv[0])))
+    elif split_clean in {"Count", "After Count"}:
+        def _count_rank(v: str) -> tuple[int, int, int]:
+            raw = str(v or "").strip()
+            m = re.match(r"^([0-3])-([0-2])$", raw)
+            if not m:
+                return (1, 9, 9)
+            return (0, int(m.group(2)), int(m.group(1)))
+        ordered_items = sorted(groups.items(), key=lambda kv: (_count_rank(str(kv[0])), str(kv[0])))
     else:
         ordered_items = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
     for key, grp in ordered_items:
         out_rows.append(_row_for_group(key, grp))
 
     # Always add an All row at the bottom for split views.
-    all_group = [r for group_rows in groups.values() for r in group_rows]
+    if split_clean == "After Count":
+        # Count splits use overlapping PA cohorts; avoid duplicate inflation.
+        all_group = list(rows)
+    else:
+        all_group = [r for group_rows in groups.values() for r in group_rows]
     if all_group and split_clean != "All":
         out_rows.append(_row_for_group("All", all_group))
+
+    # Keep All-row BF/K%/BB%/HR% consistent across split modes.
+    row_all = next((row for row in out_rows if str(row.get(split_col_name) or "") == "All"), None)
+    if row_all is not None:
+        baseline = _global_outcome_baseline(rows)
+        for metric in ["BF", "K%", "BB%", "HR%"]:
+            row_all[metric] = baseline.get(metric)
+
+    # By definition, every PA reaches 0-0; After Count 0-0 outcome rates must
+    # match the All row baseline for BF-based outcome metrics.
+    if split_clean == "After Count":
+        row_all = next((row for row in out_rows if str(row.get(split_col_name) or "") == "All"), None)
+        row_zero = next((row for row in out_rows if str(row.get(split_col_name) or "") == "0-0"), None)
+        if row_all and row_zero:
+            for metric in ["BF", "K%", "BB%", "HR%"]:
+                row_zero[metric] = row_all.get(metric)
 
     column_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
@@ -2697,6 +3100,7 @@ def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str
         row.get("strikes_num"),
         row.get("outs_num"),
         row.get("outs_on_play_num"),
+        school_code,
     )
     break_tilt_raw = str(row.get("break_tilt") or "").strip()
     if school_code == "PRO" and not break_tilt_raw:
@@ -3086,6 +3490,7 @@ def _build_trend_rows(
             strikes,
             row.get("outs_num"),
             row.get("outs_on_play_num"),
+            row.get("school_code"),
         )
         if is_pro_row:
             agg["bf_keys"].add(pa_key)
@@ -3736,7 +4141,7 @@ def _filter_pitching_rows_by_team_type(
 ) -> List[Dict[str, Any]]:
     if team_type_value in {"", "All"}:
         return rows
-    if school_code == "LEAGUE":
+    if school_code != "PRO":
         selected_code = _normalize_team_code(_league_team_code_from_value(team_type_value))
         if not selected_code:
             return rows
@@ -3887,6 +4292,8 @@ _MOD_SYNC_INTERVAL_SECONDS = 90.0
 _MOD_SYNC_LAST_AT: Dict[str, float] = {}
 _MOD_SYNC_REFRESH_LOCK = threading.Lock()
 _MOD_SYNC_REFRESH_RUNNING: set[str] = set()
+_MANUAL_EDIT_SYNC_INTERVAL_SECONDS = 30.0
+_MANUAL_EDIT_SYNC_LAST_AT: Dict[str, float] = {}
 _PERF_INDEX_SYNC_INTERVAL_SECONDS = 3600.0
 _PERF_INDEX_LAST_AT: float = 0.0
 _PERF_INDEX_SYNC_LOCK = threading.Lock()
@@ -3897,9 +4304,11 @@ _PRO_PE_COLUMNS_TTL_SECONDS: float = 900.0
 _LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS = max(
     60.0, float(os.getenv("DASHBOARD_LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS", "300"))
 )
-_LEAGUE_DAILY_ROLLUP_LAST_AT: float = 0.0
+_LEAGUE_DAILY_ROLLUP_LAST_AT: Dict[str, float] = {}
 _LEAGUE_DAILY_ROLLUP_REFRESH_LOCK = threading.Lock()
 _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING = False
+_SCHOOL_ROLLUP_REFRESH_LOCK = threading.Lock()
+_SCHOOL_ROLLUP_REFRESH_RUNNING: set[str] = set()
 _PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS = max(
     60.0, float(os.getenv("DASHBOARD_PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS", "180"))
 )
@@ -4755,10 +5164,34 @@ def _pro_pitch_events_columns() -> set[str]:
     return _PRO_PE_COLUMNS_CACHE
 
 
-def _refresh_league_daily_rollup(force: bool = False) -> None:
+def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str] = None) -> None:
     global _LEAGUE_DAILY_ROLLUP_LAST_AT
+    school_filter = (school_code or "").strip().upper()
+    if not school_filter:
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT UPPER(TRIM(school_code)) AS school_code
+                    FROM public.pitch_events
+                    WHERE school_code IS NOT NULL
+                      AND TRIM(school_code) <> ''
+                      AND UPPER(TRIM(school_code)) <> 'PRO'
+                    ORDER BY 1
+                    """
+                )
+                school_codes = [str(row.get("school_code") or "").strip().upper() for row in cur.fetchall()]
+        except Exception:
+            return
+        for code in school_codes:
+            if not code:
+                continue
+            _refresh_league_daily_rollup(force=force, school_code=code)
+        return
+
     now = time.monotonic()
-    if (not force) and ((now - _LEAGUE_DAILY_ROLLUP_LAST_AT) < _LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS):
+    last_at = float(_LEAGUE_DAILY_ROLLUP_LAST_AT.get(school_filter, 0.0))
+    if (not force) and ((now - last_at) < _LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS):
         return
     try:
         with get_conn() as conn, conn.cursor() as cur:
@@ -4775,33 +5208,40 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                   MIN(session_date)::date AS min_date,
                   MAX(session_date)::date AS max_date
                 FROM public.pitch_events
-                WHERE school_code = 'LEAGUE'
+                WHERE school_code = %(school_code)s
                   AND session_date IS NOT NULL
-                """
+                """,
+                {"school_code": school_filter},
             )
             bounds = cur.fetchone() or {}
             min_date = bounds.get("min_date")
             max_date = bounds.get("max_date")
             if not min_date or not max_date:
-                _LEAGUE_DAILY_ROLLUP_LAST_AT = now
+                _LEAGUE_DAILY_ROLLUP_LAST_AT[school_filter] = now
                 return
             cur.execute(
                 """
                 SELECT MAX(session_date)::date AS max_rollup_date
                 FROM public.pitch_events_daily_rollup_league
-                WHERE school_code = 'LEAGUE'
-                """
+                WHERE school_code = %(school_code)s
+                """,
+                {"school_code": school_filter},
             )
             max_rollup = (cur.fetchone() or {}).get("max_rollup_date")
             cur.execute(
                 """
                 SELECT MAX(session_date)::date AS max_rollup_split_date
                 FROM public.pitch_events_daily_rollup_league_split
-                WHERE school_code = 'LEAGUE'
-                """
+                WHERE school_code = %(school_code)s
+                """,
+                {"school_code": school_filter},
             )
             max_rollup_split = (cur.fetchone() or {}).get("max_rollup_split_date")
-            if max_rollup and max_rollup_split:
+            if force:
+                refresh_start = min_date
+            elif not max_rollup_split:
+                refresh_start = min_date
+            elif max_rollup and max_rollup_split:
                 baseline = min(max_rollup, max_rollup_split)
                 refresh_start = max(min_date, baseline - timedelta(days=10))
             elif max_rollup:
@@ -4812,18 +5252,18 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
             cur.execute(
                 """
                 DELETE FROM public.pitch_events_daily_rollup_league
-                WHERE school_code = 'LEAGUE'
+                WHERE school_code = %(school_code)s
                   AND session_date >= %(refresh_start)s::date
                 """,
-                {"refresh_start": refresh_start},
+                {"school_code": school_filter, "refresh_start": refresh_start},
             )
             cur.execute(
                 """
                 DELETE FROM public.pitch_events_daily_rollup_league_split
-                WHERE school_code = 'LEAGUE'
+                WHERE school_code = %(school_code)s
                   AND session_date >= %(refresh_start)s::date
                 """,
-                {"refresh_start": refresh_start},
+                {"school_code": school_filter, "refresh_start": refresh_start},
             )
 
             try:
@@ -4906,7 +5346,7 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                     (regexp_match(COALESCE(to_jsonb(pe)->>'outs', ''), '[-+]?[0-9]+'))[1]::int AS outs_num,
                     (regexp_match(COALESCE(pe.outsonplay::text, ''), '[-+]?[0-9]+'))[1]::int AS outs_on_play_num
                   FROM public.pitch_events pe
-                  WHERE pe.school_code = 'LEAGUE'
+                  WHERE pe.school_code = %(school_code)s
                     AND pe.session_date >= %(refresh_start)s::date
                     AND pe.session_date <= %(max_date)s::date
                 )
@@ -4924,7 +5364,7 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                   spin_eff_sum, spin_eff_n, vaa_sum, vaa_n, haa_sum, haa_n, r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample
                 )
                 SELECT
-                  'LEAGUE',
+                  %(school_code)s::text,
                   b.session_date,
                   b.pitch_type,
                   MIN(b.pitcher_name) AS pitcher_name,
@@ -5036,7 +5476,7 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                   SUM(CASE WHEN b.pitch_call = 'InPlay' AND b.angle IS NOT NULL THEN b.angle ELSE 0.0 END)::double precision AS la_sum,
                   SUM(CASE WHEN b.pitch_call = 'InPlay' AND b.angle IS NOT NULL THEN 1 ELSE 0 END)::int AS la_n,
                   COALESCE(SUM(""" + _sql_run_value_expr("b") + """), 0.0)::double precision AS rv_sum,
-                  COALESCE(SUM(""" + _sql_pitch_value_expr("b") + """), 0.0)::double precision AS pv_sum,
+                  COALESCE(SUM(""" + _sql_pitch_value_expr("b", PV_BASELINE_SHIFT_COLLEGE) + """), 0.0)::double precision AS pv_sum,
                   SUM(CASE WHEN b.balls_num = 0 AND b.strikes_num = 0 THEN 1 ELSE 0 END)::int AS count_00_n,
                   SUM(CASE WHEN (b.balls_num, b.strikes_num) IN ((1,0),(2,0),(3,0),(3,1),(2,1)) THEN 1 ELSE 0 END)::int AS count_behind_n,
                   SUM(CASE WHEN (b.balls_num, b.strikes_num) IN ((0,0),(1,1),(2,2),(3,2)) THEN 1 ELSE 0 END)::int AS count_even_n,
@@ -5075,6 +5515,7 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                   b.pitcher_team_norm, b.batter_team_norm_eff, b.pitcherthrows_norm, b.batterside_norm, b.session_bucket
                 """,
                 {
+                    "school_code": school_filter,
                     "refresh_start": refresh_start,
                     "max_date": max_date,
                     "zone_left": ZONE_LEFT,
@@ -5164,7 +5605,7 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                     (regexp_match(COALESCE(to_jsonb(pe)->>'outs', ''), '[-+]?[0-9]+'))[1]::int AS outs_num,
                     (regexp_match(COALESCE(pe.outsonplay::text, ''), '[-+]?[0-9]+'))[1]::int AS outs_on_play_num
                   FROM public.pitch_events pe
-                  WHERE pe.school_code = 'LEAGUE'
+                  WHERE pe.school_code = %(school_code)s
                     AND pe.session_date >= %(refresh_start)s::date
                     AND pe.session_date <= %(max_date)s::date
                     AND """ + PITCH_TYPE_NORMALIZE_SQL.replace("taggedpitchtype", "pe.taggedpitchtype").replace("autopitchtype", "pe.autopitchtype") + """ <> 'Undefined'
@@ -5193,8 +5634,59 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                     LAG(p.strikes_num) OVER (
                       PARTITION BY p.session_date, p.game_key, p.pitcher_norm, p.pa_key
                       ORDER BY p.created_at, p.id
-                    ) AS prev_strikes
+                    ) AS prev_strikes,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY p.session_date, p.game_key, p.pitcher_norm, p.pa_key
+                      ORDER BY p.created_at, p.id
+                    ) AS pa_seq_idx
                   FROM pa_first p
+                ),
+                after_count_first AS (
+                  SELECT
+                    c.session_date,
+                    c.game_key,
+                    c.pitcher_norm,
+                    c.pa_key,
+                    c.count_token AS split_value,
+                    MIN(c.start_idx)::int AS start_idx
+                  FROM (
+                    SELECT
+                      p.session_date,
+                      p.game_key,
+                      p.pitcher_norm,
+                      p.pa_key,
+                      p.pa_seq_idx AS start_idx,
+                      CASE
+                        WHEN p.balls_num IS NULL OR p.strikes_num IS NULL THEN NULL
+                        ELSE p.balls_num::text || '-' || p.strikes_num::text
+                      END AS count_token
+                    FROM pa_ord p
+                    UNION ALL
+                    SELECT
+                      p.session_date,
+                      p.game_key,
+                      p.pitcher_norm,
+                      p.pa_key,
+                      p.pa_seq_idx AS start_idx,
+                      CASE
+                        WHEN p.prev_balls IS NULL OR p.prev_strikes IS NULL THEN NULL
+                        ELSE p.prev_balls::text || '-' || p.prev_strikes::text
+                      END AS count_token
+                    FROM pa_ord p
+                    UNION ALL
+                    SELECT
+                      p.session_date,
+                      p.game_key,
+                      p.pitcher_norm,
+                      p.pa_key,
+                      1 AS start_idx,
+                      '0-0'::text AS count_token
+                    FROM pa_ord p
+                    WHERE p.pa_seq_idx = 1
+                  ) c
+                  WHERE c.count_token IS NOT NULL
+                  GROUP BY
+                    c.session_date, c.game_key, c.pitcher_norm, c.pa_key, c.count_token
                 ),
                 expanded AS (
                   SELECT *,
@@ -5205,13 +5697,16 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                     END AS split_value
                   FROM pa_ord
                   UNION ALL
-                  SELECT *,
+                  SELECT p.*,
                     'After Count'::text AS split_group,
-                    CASE
-                      WHEN prev_balls IS NULL OR prev_strikes IS NULL THEN 'Unknown'
-                      ELSE prev_balls::text || '-' || prev_strikes::text
-                    END AS split_value
-                  FROM pa_ord
+                    af.split_value
+                  FROM pa_ord p
+                  JOIN after_count_first af
+                    ON p.session_date = af.session_date
+                   AND p.game_key = af.game_key
+                   AND p.pitcher_norm = af.pitcher_norm
+                   AND p.pa_key = af.pa_key
+                   AND p.pa_seq_idx >= af.start_idx
                   UNION ALL
                   SELECT *,
                     'Zone Location'::text AS split_group,
@@ -5290,11 +5785,11 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                   spin_eff_sum, spin_eff_n, vaa_sum, vaa_n, haa_sum, haa_n, r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample
                 )
                 SELECT
-                  'LEAGUE',
+                  %(school_code)s::text,
                   e.session_date,
                   e.split_group,
                   e.split_value,
-                  e.pitch_type,
+                  CASE WHEN e.split_group = 'After Count' THEN 'All' ELSE e.pitch_type END AS pitch_type,
                   MIN(e.pitcher_name) AS pitcher_name,
                   MIN(e.batter_name) AS batter_name,
                   MIN(e.catcher_name) AS catcher_name,
@@ -5389,14 +5884,18 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                   SUM(CASE WHEN e.pitch_call = 'InPlay' AND e.angle IS NOT NULL THEN e.angle ELSE 0.0 END)::double precision AS la_sum,
                   SUM(CASE WHEN e.pitch_call = 'InPlay' AND e.angle IS NOT NULL THEN 1 ELSE 0 END)::int AS la_n,
                   COALESCE(SUM(""" + _sql_run_value_expr("e") + """), 0.0)::double precision AS rv_sum,
-                  COALESCE(SUM(""" + _sql_pitch_value_expr("e") + """), 0.0)::double precision AS pv_sum,
+                  COALESCE(SUM(""" + _sql_pitch_value_expr("e", PV_BASELINE_SHIFT_COLLEGE) + """), 0.0)::double precision AS pv_sum,
                   SUM(CASE WHEN e.balls_num = 0 AND e.strikes_num = 0 THEN 1 ELSE 0 END)::int AS count_00_n,
                   SUM(CASE WHEN (e.balls_num, e.strikes_num) IN ((1,0),(2,0),(3,0),(3,1),(2,1)) THEN 1 ELSE 0 END)::int AS count_behind_n,
                   SUM(CASE WHEN (e.balls_num, e.strikes_num) IN ((0,0),(1,1),(2,2),(3,2)) THEN 1 ELSE 0 END)::int AS count_even_n,
                   SUM(CASE WHEN (e.balls_num, e.strikes_num) IN ((0,1),(0,2),(1,2)) THEN 1 ELSE 0 END)::int AS count_ahead_n,
                   SUM(CASE WHEN e.strikes_num < 2 THEN 1 ELSE 0 END)::int AS count_lt2k_n,
                   SUM(CASE WHEN e.strikes_num = 2 THEN 1 ELSE 0 END)::int AS count_2k_n,
-                  COUNT(DISTINCT CASE WHEN e.balls_num = 0 AND e.strikes_num = 0 THEN (e.game_key || '|' || e.pa_key) END)::int AS bf_n,
+                  COUNT(DISTINCT CASE
+                    WHEN e.split_group = 'After Count' THEN (e.game_key || '|' || e.pa_key)
+                    WHEN e.balls_num = 0 AND e.strikes_num = 0 THEN (e.game_key || '|' || e.pa_key)
+                    ELSE NULL
+                  END)::int AS bf_n,
                   COUNT(DISTINCT CASE WHEN e.korbb = 'Strikeout' THEN (e.game_key || '|' || e.pa_key) END)::int AS k_n,
                   COUNT(DISTINCT CASE WHEN e.korbb = 'Walk' THEN (e.game_key || '|' || e.pa_key) END)::int AS bb_n,
                   COUNT(DISTINCT CASE WHEN e.pitch_call = 'HitByPitch' OR e.play_result = 'HitByPitch' THEN (e.game_key || '|' || e.pa_key) END)::int AS hbp_n,
@@ -5423,10 +5922,11 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                   COALESCE(MIN(NULLIF(e.release_tilt, '')), '') AS r_tilt_sample
                 FROM expanded e
                 GROUP BY
-                  e.session_date, e.split_group, e.split_value, e.pitch_type, e.pitcher_norm, e.batter_norm, e.catcher_norm,
+                  e.session_date, e.split_group, e.split_value, (CASE WHEN e.split_group = 'After Count' THEN 'All' ELSE e.pitch_type END), e.pitcher_norm, e.batter_norm, e.catcher_norm,
                   e.pitcher_team_norm, e.batter_team_norm_eff, e.pitcherthrows_norm, e.batterside_norm, e.session_bucket
                 """,
                     {
+                        "school_code": school_filter,
                         "refresh_start": refresh_start,
                         "max_date": max_date,
                         "zone_left": ZONE_LEFT,
@@ -5445,9 +5945,9 @@ def _refresh_league_daily_rollup(force: bool = False) -> None:
                     cur.execute("RELEASE SAVEPOINT league_split_refresh")
                 except Exception:
                     pass
-        _LEAGUE_DAILY_ROLLUP_LAST_AT = now
-        _overview_cache_invalidate_school("LEAGUE")
-        _filters_cache_invalidate_school("LEAGUE")
+        _LEAGUE_DAILY_ROLLUP_LAST_AT[school_filter] = now
+        _overview_cache_invalidate_school(school_filter)
+        _filters_cache_invalidate_school(school_filter)
     except Exception as exc:
         logger.warning("league daily rollup refresh failed: %s", exc)
         return
@@ -5474,6 +5974,32 @@ def _kick_league_rollup_refresh_background() -> None:
     except Exception:
         with _LEAGUE_DAILY_ROLLUP_REFRESH_LOCK:
             _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING = False
+
+
+def _kick_school_rollup_refresh_background(school_code: str) -> None:
+    school = _validate_school_code(school_code)
+    if school == "PRO":
+        _kick_pro_rollup_refresh_background()
+        return
+
+    with _SCHOOL_ROLLUP_REFRESH_LOCK:
+        if school in _SCHOOL_ROLLUP_REFRESH_RUNNING:
+            return
+        _SCHOOL_ROLLUP_REFRESH_RUNNING.add(school)
+
+    def _worker() -> None:
+        try:
+            _refresh_league_daily_rollup(force=False, school_code=school)
+        finally:
+            with _SCHOOL_ROLLUP_REFRESH_LOCK:
+                _SCHOOL_ROLLUP_REFRESH_RUNNING.discard(school)
+
+    try:
+        thread = threading.Thread(target=_worker, name=f"school-rollup-refresh-{school.lower()}", daemon=True)
+        thread.start()
+    except Exception:
+        with _SCHOOL_ROLLUP_REFRESH_LOCK:
+            _SCHOOL_ROLLUP_REFRESH_RUNNING.discard(school)
 
 
 def _try_pitching_overview_daily_rollup(
@@ -5513,7 +6039,7 @@ def _try_pitching_overview_daily_rollup(
     include_row_pitches: bool,
     include_trend_rows: bool,
 ) -> Optional[PitchingOverviewResponse]:
-    if school_code != "LEAGUE":
+    if school_code == "PRO":
         return None
     # Fast path for high-volume league windows.
     if include_row_pitches or include_trend_rows:
@@ -5547,6 +6073,8 @@ def _try_pitching_overview_daily_rollup(
         return None
     split_rollup_col, split_col_name = split_conf
     use_split_rollup = split_clean in {"Count", "After Count", "Zone Location", "Times Through Order", "Pitch Count", "Velocity", "IVB", "HB"}
+    if split_clean == "After Count" and selected_pitch_types:
+        return None
     selected_opp_hitters = [v for v in selected_opp_hitters if str(v or "").strip().lower() != "all"]
     if selected_opp_hitters:
         return None
@@ -5557,9 +6085,10 @@ def _try_pitching_overview_daily_rollup(
         return None
     if (selected_count_filters or selected_after_count_filters) and not use_split_rollup:
         return None
-    if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max, parsed_pc_min, parsed_pc_max]):
+    if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max]):
         return None
     params: Dict[str, Any] = {
+        "school_code": school_code,
         "start_date": start_date,
         "end_date": end_date,
         "pitchers_norm": selected_pitcher_keys,
@@ -5568,7 +6097,7 @@ def _try_pitching_overview_daily_rollup(
         "pitch_types_count": len(selected_pitch_types),
     }
     where_parts = [
-        "school_code = 'LEAGUE'",
+        "school_code = %(school_code)s::text",
         "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
         "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
         "(%(pitchers_count)s::int = 0 OR pitcher_norm = ANY(%(pitchers_norm)s::text[]))",
@@ -5588,7 +6117,9 @@ def _try_pitching_overview_daily_rollup(
     if batter_side_norm and batter_side_norm.lower() != "all":
         where_parts.append("batterside_norm = %(batterside_norm)s::text")
         params["batterside_norm"] = batter_side_norm
-    team_type_norm = _normalize_team_code(_league_team_code_from_value(team_type or ""))
+    team_type_norm = _normalize_team_code(
+        _league_team_code_from_value(team_type or "") if school_code == "LEAGUE" else (team_type or "")
+    )
     if team_type_norm and team_type_norm != "ALL":
         where_parts.append("pitcher_team_norm = %(team_type_norm)s::text")
         params["team_type_norm"] = team_type_norm
@@ -5700,7 +6231,7 @@ def _try_pitching_overview_daily_rollup(
 
     if not grouped_rows:
         # Rollup may be empty on cold start / first deploy; do one synchronous build and retry once.
-        _refresh_league_daily_rollup(force=True)
+        _refresh_league_daily_rollup(force=True, school_code=school_code)
         try:
             with get_conn() as conn, conn.cursor() as cur:
                 cur.execute(
@@ -6244,12 +6775,14 @@ def _try_pitching_overview_daily_rollup(
 
     if split_clean != "All":
         table_rows.append(_build_common_row("All", grouped_rows))
+    table_rows = _apply_pitch_count_row_threshold(table_rows, parsed_pc_min, parsed_pc_max)
 
     chart_points: List[Dict[str, Any]] = []
     heatmap_points: List[Dict[str, Any]] = []
     if include_chart_points:
         limit = max(100, min(int(chart_points_limit or 2000), 6000))
         chart_params: Dict[str, Any] = {
+            "school_code": school_code,
             "start_date": start_date,
             "end_date": end_date,
             "pitchers_norm": selected_pitcher_keys,
@@ -6263,7 +6796,7 @@ def _try_pitching_overview_daily_rollup(
             "zone_top": ZONE_TOP,
         }
         chart_where = [
-            "pe.school_code = 'LEAGUE'",
+            "pe.school_code = %(school_code)s::text",
             "(%(start_date)s::date IS NULL OR pe.session_date >= %(start_date)s::date)",
             "(%(end_date)s::date IS NULL OR pe.session_date <= %(end_date)s::date)",
             "(%(pitchers_count)s::int = 0 OR " + PITCHER_NAME_NORM_SQL.replace("COALESCE(NULLIF(TRIM(pitcher), ''), '')", "COALESCE(NULLIF(TRIM(pe.pitcher), ''), '')") + " = ANY(%(pitchers_norm)s::text[]))",
@@ -6579,7 +7112,19 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                 """
             )
             max_rollup = (cur.fetchone() or {}).get("max_rollup_date")
-            if max_rollup:
+            cur.execute(
+                """
+                SELECT MAX(session_date)::date AS max_rollup_split_date
+                FROM public.pro_pitch_events_daily_rollup_split
+                WHERE school_code = 'PRO'
+                """
+            )
+            max_rollup_split = (cur.fetchone() or {}).get("max_rollup_split_date")
+            if force:
+                refresh_start = min_date
+            elif not max_rollup_split:
+                refresh_start = min_date
+            elif max_rollup:
                 refresh_start = max(min_date, max_rollup - timedelta(days=7))
             else:
                 refresh_start = min_date
@@ -6774,15 +7319,25 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND exit_speed IS NOT NULL THEN 1 ELSE 0 END)::int AS ev_n,
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND angle IS NOT NULL THEN angle ELSE 0.0 END)::double precision AS la_sum,
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND angle IS NOT NULL THEN 1 ELSE 0 END)::int AS la_n,
-                  SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS bf_n,
-                  SUM(CASE WHEN korbb_norm = 'strikeout' OR play_result_norm IN ('strikeout','strikeout_double_play','strikeoutdoubleplay') THEN 1 ELSE 0 END)::int AS k_n,
-                  SUM(CASE WHEN korbb_norm = 'walk' OR play_result_norm IN ('walk','intent_walk','intentional_walk','intentionalwalk') THEN 1 ELSE 0 END)::int AS bb_n,
-                  SUM(CASE WHEN pitch_call_norm IN ('hitbypitch','hit_by_pitch') OR play_result_norm IN ('hitbypitch','hit_by_pitch') THEN 1 ELSE 0 END)::int AS hbp_n,
-                  SUM(CASE WHEN play_result_norm IN ('homerun','home_run') THEN 1 ELSE 0 END)::int AS hr_n,
-                  SUM(CASE WHEN play_result_norm = 'single' THEN 1 ELSE 0 END)::int AS single_n,
-                  SUM(CASE WHEN play_result_norm = 'double' THEN 1 ELSE 0 END)::int AS double_n,
-                  SUM(CASE WHEN play_result_norm = 'triple' THEN 1 ELSE 0 END)::int AS triple_n,
-                  SUM(CASE WHEN play_result_norm IN ('sacrifice','sac_fly','sacfly') THEN 1 ELSE 0 END)::int AS sf_n,
+                  COUNT(DISTINCT CASE
+                    WHEN split_group = 'After Count' THEN (game_key || '|' || pa_key)
+                    WHEN balls_num = 0 AND strikes_num = 0 THEN (game_key || '|' || pa_key)
+                    ELSE NULL
+                  END)::int AS bf_n,
+                  COUNT(DISTINCT CASE
+                    WHEN korbb_norm = 'strikeout' OR play_result_norm IN ('strikeout','strikeout_double_play','strikeoutdoubleplay')
+                    THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS k_n,
+                  COUNT(DISTINCT CASE
+                    WHEN korbb_norm = 'walk' OR play_result_norm IN ('walk','intent_walk','intentional_walk','intentionalwalk')
+                    THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS bb_n,
+                  COUNT(DISTINCT CASE
+                    WHEN pitch_call_norm IN ('hitbypitch','hit_by_pitch') OR play_result_norm IN ('hitbypitch','hit_by_pitch')
+                    THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS hbp_n,
+                  COUNT(DISTINCT CASE WHEN play_result_norm IN ('homerun','home_run') THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS hr_n,
+                  COUNT(DISTINCT CASE WHEN play_result_norm = 'single' THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS single_n,
+                  COUNT(DISTINCT CASE WHEN play_result_norm = 'double' THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS double_n,
+                  COUNT(DISTINCT CASE WHEN play_result_norm = 'triple' THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS triple_n,
+                  COUNT(DISTINCT CASE WHEN play_result_norm IN ('sacrifice','sac_fly','sacfly') THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS sf_n,
                   COALESCE(SUM(rel_height), 0.0)::double precision AS rel_height_sum,
                   COUNT(rel_height)::int AS rel_height_n,
                   COALESCE(SUM(rel_side), 0.0)::double precision AS rel_side_sum,
@@ -6805,7 +7360,7 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                       ELSE """ + _sql_run_value_expr("staged") + """
                     END
                   ), 0.0)::double precision AS rv_sum,
-                  COALESCE(SUM(""" + _sql_pitch_value_expr("staged") + """), 0.0)::double precision AS pv_sum,
+                  COALESCE(SUM(""" + _sql_pitch_value_expr("staged", PV_BASELINE_SHIFT_PRO) + """), 0.0)::double precision AS pv_sum,
                   SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS count_00_n,
                   SUM(CASE WHEN (balls_num, strikes_num) IN ((1,0),(2,0),(3,0),(3,1),(2,1)) THEN 1 ELSE 0 END)::int AS count_behind_n,
                   SUM(CASE WHEN (balls_num, strikes_num) IN ((0,0),(1,1),(2,2),(3,2)) THEN 1 ELSE 0 END)::int AS count_even_n,
@@ -6945,17 +7500,74 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                     LAG(p.strikes_num) OVER (
                       PARTITION BY p.session_date, p.game_key, p.pitcher_norm, p.pa_key
                       ORDER BY p.created_at, p.id
-                    ) AS prev_strikes
+                    ) AS prev_strikes,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY p.session_date, p.game_key, p.pitcher_norm, p.pa_key
+                      ORDER BY p.created_at, p.id
+                    ) AS pa_seq_idx
                   FROM pa_first p
+                ),
+                after_count_first AS (
+                  SELECT
+                    c.session_date,
+                    c.game_key,
+                    c.pitcher_norm,
+                    c.pa_key,
+                    c.count_token AS split_value,
+                    MIN(c.start_idx)::int AS start_idx
+                  FROM (
+                    SELECT
+                      p.session_date,
+                      p.game_key,
+                      p.pitcher_norm,
+                      p.pa_key,
+                      p.pa_seq_idx AS start_idx,
+                      CASE
+                        WHEN p.balls_num IS NULL OR p.strikes_num IS NULL OR p.balls_num < 0 OR p.strikes_num < 0 THEN NULL
+                        ELSE p.balls_num::text || '-' || p.strikes_num::text
+                      END AS count_token
+                    FROM pa_ord p
+                    UNION ALL
+                    SELECT
+                      p.session_date,
+                      p.game_key,
+                      p.pitcher_norm,
+                      p.pa_key,
+                      p.pa_seq_idx AS start_idx,
+                      CASE
+                        WHEN p.prev_balls IS NULL OR p.prev_strikes IS NULL OR p.prev_balls < 0 OR p.prev_strikes < 0 THEN NULL
+                        ELSE p.prev_balls::text || '-' || p.prev_strikes::text
+                      END AS count_token
+                    FROM pa_ord p
+                    UNION ALL
+                    SELECT
+                      p.session_date,
+                      p.game_key,
+                      p.pitcher_norm,
+                      p.pa_key,
+                      1 AS start_idx,
+                      '0-0'::text AS count_token
+                    FROM pa_ord p
+                    WHERE p.pa_seq_idx = 1
+                  ) c
+                  WHERE c.count_token IS NOT NULL
+                  GROUP BY
+                    c.session_date, c.game_key, c.pitcher_norm, c.pa_key, c.count_token
                 ),
                 expanded AS (
                   SELECT *, 'Count'::text AS split_group,
                     CASE WHEN balls_num IS NULL OR strikes_num IS NULL THEN 'Unknown' ELSE balls_num::text || '-' || strikes_num::text END AS split_value
                   FROM pa_ord
                   UNION ALL
-                  SELECT *, 'After Count'::text AS split_group,
-                    CASE WHEN prev_balls IS NULL OR prev_strikes IS NULL THEN 'Unknown' ELSE prev_balls::text || '-' || prev_strikes::text END AS split_value
-                  FROM pa_ord
+                  SELECT p.*, 'After Count'::text AS split_group,
+                    af.split_value
+                  FROM pa_ord p
+                  JOIN after_count_first af
+                    ON p.session_date = af.session_date
+                   AND p.game_key = af.game_key
+                   AND p.pitcher_norm = af.pitcher_norm
+                   AND p.pa_key = af.pa_key
+                   AND p.pa_seq_idx >= af.start_idx
                   UNION ALL
                   SELECT *, 'Zone Location'::text AS split_group,
                     CASE
@@ -7015,10 +7627,12 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                   xwoba_sum, xwoba_n, woba_sum, woba_n
                 )
                 SELECT
-                  school_code, session_date, sport_id, level_bucket, split_group, split_value, pitch_type,
+                  school_code, session_date, sport_id, level_bucket, split_group, split_value,
+                  CASE WHEN split_group = 'After Count' THEN 'All' ELSE pitch_type END AS pitch_type,
                   MIN(pitcher_name), MIN(batter_name), MIN(catcher_name), pitcher_norm, batter_norm, catcher_norm,
                   pitcher_team_code, batter_team_code, pitcherthrows_norm, batterside_norm,
-                  balls_num, strikes_num,
+                  CASE WHEN split_group = 'After Count' THEN NULL ELSE balls_num END AS balls_num,
+                  CASE WHEN split_group = 'After Count' THEN NULL ELSE strikes_num END AS strikes_num,
                   COUNT(*)::int AS pitches,
                   COALESCE(SUM(rel_speed), 0.0)::double precision AS velo_sum,
                   COUNT(rel_speed)::int AS velo_n,
@@ -7095,7 +7709,7 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                   SUM(CASE WHEN release_tilt_deg IS NOT NULL THEN 1 ELSE 0 END)::int AS r_tilt_n,
                   COALESCE(MIN(NULLIF(release_tilt, '')), '') AS r_tilt_sample,
                   COALESCE(SUM(CASE WHEN delta_run_exp IS NOT NULL THEN delta_run_exp ELSE """ + _sql_run_value_expr("e") + """ END), 0.0)::double precision AS rv_sum,
-                  COALESCE(SUM(""" + _sql_pitch_value_expr("e") + """), 0.0)::double precision AS pv_sum,
+                  COALESCE(SUM(""" + _sql_pitch_value_expr("e", PV_BASELINE_SHIFT_PRO) + """), 0.0)::double precision AS pv_sum,
                   SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS count_00_n,
                   SUM(CASE WHEN (balls_num, strikes_num) IN ((1,0),(2,0),(3,0),(3,1),(2,1)) THEN 1 ELSE 0 END)::int AS count_behind_n,
                   SUM(CASE WHEN (balls_num, strikes_num) IN ((0,0),(1,1),(2,2),(3,2)) THEN 1 ELSE 0 END)::int AS count_even_n,
@@ -7108,9 +7722,12 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                   COUNT(woba_value)::int AS woba_n
                 FROM expanded e
                 GROUP BY
-                  school_code, session_date, sport_id, level_bucket, split_group, split_value, pitch_type,
+                  school_code, session_date, sport_id, level_bucket, split_group, split_value,
+                  (CASE WHEN split_group = 'After Count' THEN 'All' ELSE pitch_type END),
                   pitcher_norm, batter_norm, catcher_norm, pitcher_team_code, batter_team_code,
-                  pitcherthrows_norm, batterside_norm, balls_num, strikes_num
+                  pitcherthrows_norm, batterside_norm,
+                  (CASE WHEN split_group = 'After Count' THEN NULL ELSE balls_num END),
+                  (CASE WHEN split_group = 'After Count' THEN NULL ELSE strikes_num END)
                 """,
                 {
                     "refresh_start": refresh_start,
@@ -7261,7 +7878,7 @@ def _try_pro_pitching_overview_rollup(
         return None
     if selected_in_zone or qp_locations or selected_zone_locations or selected_pitch_results:
         return None
-    if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max, parsed_pc_min, parsed_pc_max]):
+    if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max]):
         return None
     mode_clean = (table_mode or "Live").strip()
     if mode_clean not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
@@ -7289,6 +7906,8 @@ def _try_pro_pitching_overview_rollup(
     if split_conf is None:
         return None
     use_split_rollup = split_clean in {"Count", "After Count", "Zone Location", "Times Through Order", "Velocity", "IVB", "HB"}
+    if split_clean == "After Count" and selected_pitch_types:
+        return None
     if selected_count_filters and split_clean != "Count":
         return None
 
@@ -7753,6 +8372,7 @@ def _try_pro_pitching_overview_rollup(
 
     if split_clean != "All":
         table_rows.append(_build_common_row("All", grouped_rows))
+    table_rows = _apply_pitch_count_row_threshold(table_rows, parsed_pc_min, parsed_pc_max)
     pitch_summary: Dict[str, Dict[str, Any]] = {}
     for row in grouped_rows:
         pt = str(row.get("pitch_type") or "")
@@ -8189,9 +8809,62 @@ def _sync_modifications_into_pitch_events(school_code: str, force: bool = False)
                 },
             )
             _MOD_SYNC_LAST_AT[normalized_school] = now
+            _kick_school_rollup_refresh_background(normalized_school)
     except Exception:
         # Never break core endpoints if modifications sync has a transient issue.
         _MOD_SYNC_LAST_AT[normalized_school] = now
+
+
+def _sync_pitch_event_edits_into_source_table(school_code: str, force: bool = False) -> None:
+    normalized_school = _validate_school_code(school_code)
+    now = time.monotonic()
+    last = _MANUAL_EDIT_SYNC_LAST_AT.get(normalized_school, 0.0)
+    if not force and (now - last) < _MANUAL_EDIT_SYNC_INTERVAL_SECONDS:
+        return
+
+    table_name = "public.pro_pitch_events" if normalized_school == "PRO" else "public.pitch_events"
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            _ensure_pitch_event_edits_table(cur)
+            cur.execute("SELECT to_regclass(%(tbl)s)::text AS table_name", {"tbl": table_name})
+            reg = cur.fetchone() or {}
+            if not reg.get("table_name"):
+                _MANUAL_EDIT_SYNC_LAST_AT[normalized_school] = now
+                return
+
+            cur.execute(
+                f"""
+                WITH latest_edit AS (
+                  SELECT DISTINCT ON (pe.pitch_event_id)
+                    pe.pitch_event_id,
+                    NULLIF(btrim(pe.pitch_type), '') AS pitch_type,
+                    NULLIF(btrim(pe.pitcher), '') AS pitcher
+                  FROM public.pitch_event_edits pe
+                  WHERE pe.school_code = %(school_code)s
+                    AND (
+                      NULLIF(btrim(COALESCE(pe.pitch_type, '')), '') IS NOT NULL
+                      OR NULLIF(btrim(COALESCE(pe.pitcher, '')), '') IS NOT NULL
+                    )
+                  ORDER BY pe.pitch_event_id, pe.edited_at DESC, pe.id DESC
+                )
+                UPDATE {table_name} src
+                   SET taggedpitchtype = COALESCE(le.pitch_type, src.taggedpitchtype),
+                       pitcher = COALESCE(le.pitcher, src.pitcher)
+                  FROM latest_edit le
+                 WHERE src.school_code = %(school_code)s
+                   AND src.id = le.pitch_event_id
+                   AND (
+                     (le.pitch_type IS NOT NULL AND COALESCE(btrim(src.taggedpitchtype), '') <> le.pitch_type)
+                     OR
+                     (le.pitcher IS NOT NULL AND COALESCE(btrim(src.pitcher), '') <> le.pitcher)
+                   )
+                """,
+                {"school_code": normalized_school},
+            )
+            _MANUAL_EDIT_SYNC_LAST_AT[normalized_school] = now
+    except Exception:
+        # Keep dashboard endpoints resilient even if sync has transient DB issues.
+        _MANUAL_EDIT_SYNC_LAST_AT[normalized_school] = now
 
 
 def _kick_modifications_sync_background(school_code: str) -> None:
@@ -10807,7 +11480,7 @@ def _pro_pitching_overview(
                 kept.append(row)
         rows = kept
 
-    if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max, parsed_pc_min, parsed_pc_max]):
+    if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max]):
         filtered_rows: List[Dict[str, Any]] = []
         for row in rows:
             if parsed_velo_min is not None and (not _is_num(row.get("rel_speed")) or float(row.get("rel_speed")) < parsed_velo_min):
@@ -10821,10 +11494,6 @@ def _pro_pitching_overview(
             if parsed_hb_min is not None and (not _is_num(row.get("hb")) or float(row.get("hb")) < parsed_hb_min):
                 continue
             if parsed_hb_max is not None and (not _is_num(row.get("hb")) or float(row.get("hb")) > parsed_hb_max):
-                continue
-            if parsed_pc_min is not None and (not _is_num(row.get("pitch_number")) or int(float(row.get("pitch_number"))) < parsed_pc_min):
-                continue
-            if parsed_pc_max is not None and (not _is_num(row.get("pitch_number")) or int(float(row.get("pitch_number"))) > parsed_pc_max):
                 continue
             filtered_rows.append(row)
         rows = filtered_rows
@@ -11048,6 +11717,46 @@ def _pro_pitching_overview(
     grouped_for_pro: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         grouped_for_pro.setdefault(_split_key_from_row(r, split_by), []).append(r)
+
+    # PRO After Count must use PA-tail cohorts (all pitches after first time
+    # that count is reached in the PA), not just immediate prev-count rows.
+    grouped_after_count_for_pro: Dict[str, List[Dict[str, Any]]] = {}
+    if (split_by or "").strip() == "After Count":
+        def _count_token_pair(bv: Any, sv: Any) -> str:
+            if not (_is_num(bv) and _is_num(sv)):
+                return ""
+            b_i = int(float(bv))
+            s_i = int(float(sv))
+            if b_i < 0 or s_i < 0:
+                return ""
+            return f"{b_i}-{s_i}"
+
+        def _pa_key_for_after_count(r: Dict[str, Any]) -> str:
+            game_pk = str(r.get("game_pk") or "").strip()
+            ab_idx = str(r.get("at_bat_index") or "").strip()
+            if game_pk and ab_idx:
+                return f"{game_pk}|ab|{ab_idx}"
+            return f"row-{id(r)}"
+
+        pa_rows_for_after: Dict[str, List[Dict[str, Any]]] = {}
+        for rr in sorted(rows, key=_row_order_key):
+            pa_rows_for_after.setdefault(_pa_key_for_after_count(rr), []).append(rr)
+
+        for _, pa_group_rows in pa_rows_for_after.items():
+            ordered = sorted(pa_group_rows, key=_row_order_key)
+            first_idx_by_count: Dict[str, int] = {"0-0": 0}
+            for idx, rr in enumerate(ordered):
+                tok_curr = _count_token_pair(rr.get("balls_num"), rr.get("strikes_num"))
+                tok_prev = _count_token_pair(rr.get("prev_balls"), rr.get("prev_strikes"))
+                if tok_curr and tok_curr not in first_idx_by_count:
+                    first_idx_by_count[tok_curr] = idx
+                if tok_prev and tok_prev not in first_idx_by_count:
+                    first_idx_by_count[tok_prev] = idx
+            for count_key, start_idx in first_idx_by_count.items():
+                tail_rows = ordered[start_idx:]
+                if tail_rows:
+                    grouped_after_count_for_pro.setdefault(count_key, []).extend(tail_rows)
+
     pro_fip_const, pro_lg_hr_fb = _derive_pro_fip_context(rows)
 
     def _update_row_metrics(row_obj: Dict[str, Any], group_rows: List[Dict[str, Any]]) -> None:
@@ -11296,6 +12005,7 @@ def _pro_pitching_overview(
                 r.get("strikes_num"),
                 r.get("outs_num"),
                 r.get("outs_on_play_num"),
+                "PRO",
             )
             for r in group_rows
         ]
@@ -11453,11 +12163,15 @@ def _pro_pitching_overview(
             if key_val == "All":
                 _update_row_metrics(tr, rows)
             else:
-                grp_rows = grouped_for_pro.get(key_val, [])
+                if (split_by or "").strip() == "After Count":
+                    grp_rows = grouped_after_count_for_pro.get(key_val, [])
+                else:
+                    grp_rows = grouped_for_pro.get(key_val, [])
                 if not grp_rows:
                     grp_rows = [r for r in rows if _split_key_from_row(r, split_by) == key_val]
                 _update_row_metrics(tr, grp_rows)
 
+    table_rows = _apply_pitch_count_row_threshold(table_rows, parsed_pc_min, parsed_pc_max)
     pitch_type_rows = [
         PitchTypeSummaryRow(
             **row,
@@ -12374,6 +13088,7 @@ def _pro_hitting_overview(
                         row.get("strikes_num"),
                         row.get("outs_num"),
                         row.get("outs_on_play_num"),
+                        "PRO",
                     ),
                     "estimated_woba_using_speedangle": (
                         float(row.get("estimated_woba_using_speedangle"))
@@ -12449,6 +13164,7 @@ def _pro_hitting_overview(
                         row.get("strikes_num"),
                         row.get("outs_num"),
                         row.get("outs_on_play_num"),
+                        "PRO",
                     ),
                     "estimated_woba_using_speedangle": (
                         float(row.get("estimated_woba_using_speedangle"))
@@ -12654,6 +13370,7 @@ def _pro_hitting_overview(
                     row.get("strikes_num"),
                     row.get("outs_num"),
                     row.get("outs_on_play_num"),
+                    "PRO",
                 ),
                 "estimated_woba_using_speedangle": (
                     float(row.get("estimated_woba_using_speedangle"))
@@ -12733,6 +13450,7 @@ def _pro_hitting_overview(
                     row.get("strikes_num"),
                     row.get("outs_num"),
                     row.get("outs_on_play_num"),
+                    "PRO",
                 ),
                 "estimated_woba_using_speedangle": (
                     float(row.get("estimated_woba_using_speedangle"))
@@ -12826,13 +13544,13 @@ def pitching_filters(
     try:
         with get_conn() as conn, conn.cursor() as cur:
             session_types = ["Season", "All"] if school_code == "LEAGUE" else ["Season", "Bullpen", "Live BP", "All"]
-            use_league_rollup_filters = False
-            if school_code == "LEAGUE":
+            use_college_rollup_filters = False
+            if school_code != "PRO":
                 cur.execute("SELECT to_regclass('public.pitch_events_daily_rollup_league')::text AS table_name")
                 reg = cur.fetchone() or {}
-                use_league_rollup_filters = bool(reg.get("table_name"))
+                use_college_rollup_filters = bool(reg.get("table_name"))
 
-            if school_code == "LEAGUE" and use_league_rollup_filters:
+            if school_code != "PRO" and use_college_rollup_filters:
                 cur.execute(
                     """
                     SELECT
@@ -12865,7 +13583,7 @@ def pitching_filters(
                     date_row["min_date"] = raw_min
                 if raw_max and (not rollup_max or raw_max > rollup_max):
                     date_row["max_date"] = raw_max
-                    _kick_league_rollup_refresh_background()
+                    _refresh_league_daily_rollup(force=False, school_code=school_code)
 
                 cur.execute(
                     """
@@ -12936,8 +13654,11 @@ def pitching_filters(
                     """,
                     {"school_code": school_code},
                 )
-                league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
-                team_types = _league_team_types_from_codes(league_team_codes)
+                team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
+                if school_code == "LEAGUE":
+                    team_types = _league_team_types_from_codes(team_codes)
+                else:
+                    team_types = ["All", school_code, "Opponents", "Campers"]
 
                 cur.execute(
                     """
@@ -12959,7 +13680,8 @@ def pitching_filters(
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
-                pitchers_by_team_code = _league_add_labeled_team_keys(pitchers_by_team_code)
+                if school_code == "LEAGUE":
+                    pitchers_by_team_code = _league_add_labeled_team_keys(pitchers_by_team_code)
 
                 cur.execute(
                     """
@@ -12981,7 +13703,8 @@ def pitching_filters(
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
                     for row in cur.fetchall()
                 }
-                opp_hitters_by_team_code = _league_add_labeled_team_keys(opp_hitters_by_team_code)
+                if school_code == "LEAGUE":
+                    opp_hitters_by_team_code = _league_add_labeled_team_keys(opp_hitters_by_team_code)
             else:
                 cur.execute(
                     """
@@ -13140,6 +13863,7 @@ def pitching_overview(
     _ensure_performance_indexes()
     if school_code not in {"LEAGUE", "PRO"}:
         _sync_modifications_into_pitch_events(school_code)
+    _sync_pitch_event_edits_into_source_table(school_code)
     roster = _load_school_roster(school_code)
     team_norm = roster.get("team_only_norm", [])
     hitter_norm = roster.get("hitter_norm", [])
@@ -13228,7 +13952,7 @@ def pitching_overview(
     league_all_selection = False
     league_large_window = False
     league_rollup_candidate = False
-    if school_code == "LEAGUE":
+    if school_code != "PRO":
         span_days: Optional[int] = None
         if start_date and end_date:
             span_days = max(0, (end_date - start_date).days + 1)
@@ -13269,17 +13993,54 @@ def pitching_overview(
             selected_pitch_results = []
             selected_count_filters = []
             selected_after_count_filters = []
-            parsed_velo_min = None
-            parsed_velo_max = None
-            parsed_ivb_min = None
-            parsed_ivb_max = None
-            parsed_hb_min = None
-            parsed_hb_max = None
-            parsed_pc_min = None
-            parsed_pc_max = None
             with_video = None
 
         if league_rollup_candidate:
+            if table_mode not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
+                table_mode = "Live"
+            if split_by not in {
+                "All",
+                "Pitch Types",
+                "Pitcher",
+                "Batter",
+                "Catcher",
+                "Pitcher Hand",
+                "Batter Hand",
+                "Team",
+                "Pitcher Team",
+                "Count",
+                "After Count",
+                "Zone Location",
+                "Times Through Order",
+                "Inning",
+                "Pitch Count",
+                "Velocity",
+                "IVB",
+                "HB",
+            }:
+                split_by = "Pitch Types"
+    elif school_code != "PRO":
+        span_days: Optional[int] = None
+        if start_date and end_date:
+            span_days = max(0, (end_date - start_date).days + 1)
+        college_all_selection = (
+            (not selected_pitcher_keys)
+            and (not selected_opp_hitter_keys)
+            and (not team_type or str(team_type).strip().lower() == "all")
+        )
+        large_window = bool(span_days and span_days > 14)
+        league_rollup_candidate = large_window and college_all_selection and (not chart_only)
+        if league_rollup_candidate:
+            include_chart_points = False
+            include_row_pitches = False
+            include_trend_rows = False
+            selected_in_zone = []
+            qp_locations = None
+            selected_zone_locations = []
+            selected_pitch_results = []
+            selected_count_filters = []
+            selected_after_count_filters = []
+            with_video = None
             if table_mode not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
                 table_mode = "Live"
             if split_by not in {
@@ -13324,14 +14085,6 @@ def pitching_overview(
             selected_pitch_results = []
             selected_count_filters = []
             selected_after_count_filters = []
-            parsed_velo_min = None
-            parsed_velo_max = None
-            parsed_ivb_min = None
-            parsed_ivb_max = None
-            parsed_hb_min = None
-            parsed_hb_max = None
-            parsed_pc_min = None
-            parsed_pc_max = None
             with_video = None
             if table_mode not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
                 table_mode = "Live"
@@ -13594,8 +14347,8 @@ def pitching_overview(
         )
         return response_payload
     should_try_league_rollup_fast = (
-        school_code == "LEAGUE"
-        and (league_rollup_candidate or chart_only)
+        school_code != "PRO"
+        and (league_rollup_candidate or (chart_only and school_code == "LEAGUE"))
     )
     rollup_fast_response: Optional[PitchingOverviewResponse] = None
     if should_try_league_rollup_fast:
@@ -14041,8 +14794,6 @@ def pitching_overview(
           AND (%(ivb_max)s::double precision IS NULL OR ivb <= %(ivb_max)s::double precision)
           AND (%(hb_min)s::double precision IS NULL OR hb >= %(hb_min)s::double precision)
           AND (%(hb_max)s::double precision IS NULL OR hb <= %(hb_max)s::double precision)
-          AND (%(pc_min)s::int IS NULL OR pitch_number >= %(pc_min)s::int)
-          AND (%(pc_max)s::int IS NULL OR pitch_number <= %(pc_max)s::int)
       )
     """
 
@@ -14348,6 +15099,7 @@ def pitching_overview(
                 avg_stuff_by_pitch_type,
                 selected_custom_columns,
             )
+            table_rows = _apply_pitch_count_row_threshold(table_rows, parsed_pc_min, parsed_pc_max)
             pitch_type_rows = [
                 PitchTypeSummaryRow(
                     **row,
@@ -15826,10 +16578,22 @@ def _canonical_play_result(play_result: Any) -> str:
         "homer": "HomeRun",
         "homeurn": "HomeRun",
         "out": "Out",
+        "strikeout": "Strikeout",
+        "struckout": "Strikeout",
+        "strikeoutswinging": "Strikeout",
+        "strikeoutlooking": "Strikeout",
+        "kswinging": "Strikeout",
+        "klooking": "Strikeout",
+        "k": "Strikeout",
         "fielderschoice": "FieldersChoice",
         "sacrifice": "Sacrifice",
         "error": "Error",
         "walk": "Walk",
+        "baseonballs": "Walk",
+        "baseonball": "Walk",
+        "basesonballs": "Walk",
+        "intentionalbaseonballs": "IntentionalWalk",
+        "intentionalbaseonball": "IntentionalWalk",
         "intentwalk": "IntentionalWalk",
         "intentionalwalk": "IntentionalWalk",
         "hitbypitch": "HitByPitch",
@@ -15837,7 +16601,7 @@ def _canonical_play_result(play_result: Any) -> str:
         "fielderschoiceout": "Out",
         "groundedintodoubleplay": "Out",
         "doubleplay": "Out",
-        "strikeoutdoubleplay": "Out",
+        "strikeoutdoubleplay": "Strikeout",
         "undefined": "Undefined",
     }
     return aliases.get(compact, raw)
@@ -15880,6 +16644,18 @@ def _count_token_match(token: str, balls: Any, strikes: Any) -> bool:
     if t == "2KNF":
         return s == 2 and b < 3
     return t == f"{b}-{s}"
+
+
+def _korbb_bucket(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    compact = re.sub(r"[^a-z0-9]", "", raw)
+    if compact in {"strikeout", "strikeouts", "k", "so"}:
+        return "Strikeout"
+    if compact in {"walk", "bb", "baseonballs", "baseonball", "intentwalk", "intentionalwalk", "ibb"}:
+        return "Walk"
+    return ""
 
 
 def _zone_location_match(token: str, row: Dict[str, Any]) -> bool:
@@ -16098,6 +16874,7 @@ def hitting_overview(
     _perf_started = time.perf_counter()
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
+    _sync_pitch_event_edits_into_source_table(school_code)
     roster = _load_school_roster(school_code)
     hitter_norm = set(roster.get("hitter_norm", []) or [])
     campers_norm = set(roster.get("campers_norm", []) or [])
@@ -16144,7 +16921,7 @@ def hitting_overview(
     selected_hitter_values = _parse_name_list(hitter)
     selected_opp_pitcher_values = _parse_name_list(opp_pitcher)
     league_rollup_candidate = False
-    if school_code == "LEAGUE":
+    if school_code != "PRO":
         span_days: Optional[int] = None
         if start_date and end_date:
             span_days = max(0, (end_date - start_date).days + 1)
@@ -16364,7 +17141,7 @@ def hitting_overview(
             total_pitches=int(response_payload.get("total_pitches") or 0),
         )
         return response_payload
-    if school_code == "LEAGUE" and league_rollup_candidate:
+    if school_code != "PRO" and league_rollup_candidate:
         rollup_fast_response = _try_pitching_overview_daily_rollup(
             school_code=school_code,
             start_date=start_date,
@@ -16771,6 +17548,7 @@ def hitting_overview(
                     row.get("strikes_num"),
                     row.get("outs_num"),
                     row.get("outs_on_play_num"),
+                    row.get("school_code"),
                 ),
                 "distance": row.get("distance"),
                 "direction": row.get("direction"),
@@ -16835,6 +17613,7 @@ def hitting_overview(
                     row.get("strikes_num"),
                     row.get("outs_num"),
                     row.get("outs_on_play_num"),
+                    row.get("school_code"),
                 ),
                 "distance": row.get("distance"),
                 "direction": row.get("direction"),
@@ -17208,6 +17987,7 @@ def catching_overview(
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
+    _sync_pitch_event_edits_into_source_table(school_code)
     roster = _load_school_roster(school_code)
     campers_norm = set(roster.get("campers_norm", []) or [])
     hitter_norm = set(roster.get("hitter_norm", []) or [])
@@ -17246,7 +18026,7 @@ def catching_overview(
     if chart_only:
         include_chart_points = True
     league_rollup_candidate = False
-    if school_code == "LEAGUE":
+    if school_code != "PRO":
         span_days: Optional[int] = None
         if start_date and end_date:
             span_days = max(0, (end_date - start_date).days + 1)
@@ -17337,7 +18117,7 @@ def catching_overview(
     cached_overview = _overview_cache_get(overview_cache_key)
     if cached_overview is not None:
         return cached_overview
-    if school_code == "LEAGUE" and league_rollup_candidate:
+    if school_code != "PRO" and league_rollup_candidate:
         rollup_fast_response = _try_pitching_overview_daily_rollup(
             school_code=school_code,
             start_date=start_date,
@@ -18159,6 +18939,7 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
 
     _overview_cache_invalidate_school(school_code)
     _filters_cache_invalidate_school(school_code)
+    _kick_school_rollup_refresh_background(school_code)
     return PitchEditResponse(ok=True, updated_count=len(pitch_ids))
 
 

@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
-import { resolveDashboardPlayerIdentity, scopedPlayerQueryName } from '../../../../../lib/dashboard-player-scope';
+import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 export const maxDuration = 300;
@@ -42,16 +42,19 @@ export async function GET(request: Request) {
   });
 
   const inputUrl = new URL(request.url);
-  const playerIdentity = await resolveDashboardPlayerIdentity({
-    role: session.role,
-    organizationId: session.organizationId,
-    userId: session.userId,
-    name: session.name,
-  });
-  if (session.role === 'player' && !playerIdentity) {
+  const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+  const playerIdentity = shouldScopePlayer
+    ? await resolveDashboardPlayerIdentity({
+        role: session.role,
+        organizationId: session.organizationId,
+        userId: session.userId,
+        name: session.name,
+      })
+    : null;
+  if (shouldScopePlayer && !playerIdentity) {
     return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
   }
-  const scopedHitter = playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Hitting') : '';
+  const scopedHitter = shouldScopePlayer && playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Hitting') : '';
   const pass = [
     'level',
     'start_date',
@@ -98,7 +101,7 @@ export async function GET(request: Request) {
     const value = inputUrl.searchParams.get(key)?.trim() ?? '';
     if (value) url.searchParams.set(key, value);
   }
-  if (session.role === 'player') {
+  if (shouldScopePlayer) {
     url.searchParams.set('include_chart_points', '1');
   }
   const cachePolicy = resolveOverviewCachePolicy(schoolCode);

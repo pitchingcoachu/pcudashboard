@@ -14,15 +14,16 @@ export async function POST(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role !== 'admin' && session.role !== 'coach') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const body = (await request.json().catch(() => ({}))) as { schoolCode?: string | null };
   const requested = String(body.schoolCode ?? '').trim().toUpperCase();
+  const role: 'admin' | 'coach' | 'player' =
+    session.role === 'player' ? 'player' : session.role === 'coach' ? 'coach' : 'admin';
   const allowed = await resolveSessionDashboardSchoolOptions({
     userId: session.userId ?? 0,
     email: session.email,
     name: session.name,
-    role: session.role === 'admin' ? 'admin' : 'coach',
+    role,
     organizationId: session.organizationId ?? 0,
     playerId: session.playerId ?? null,
     dashboardSchoolCode: session.dashboardSchoolCode ?? null,

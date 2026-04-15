@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
+import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 type FiltersPayload = {
@@ -115,7 +116,8 @@ function buildPitchingRows(
   recentRows: Array<Record<string, unknown>>,
   seasonFbSiRows: Array<Record<string, unknown>>,
   recentFbSiRows: Array<Record<string, unknown>>,
-  allowedPlayerKeys?: Set<string>
+  allowedPlayerKeys?: Set<string>,
+  minSeasonSample = 25
 ): AlertRow[] {
   const seasonVeloByName = new Map<string, number | null>();
   const recentVeloByName = new Map<string, number | null>();
@@ -168,14 +170,15 @@ function buildPitchingRows(
     current.metrics['E+A%'].recent = rowMetric(row, 'E+A%');
   }
   return Array.from(byName.values())
-    .filter((entry) => entry.sample >= 25)
+    .filter((entry) => entry.sample >= minSeasonSample)
     .sort((a, b) => (b.recentSample - a.recentSample) || (b.sample - a.sample));
 }
 
 function buildHittingRows(
   seasonRows: Array<Record<string, unknown>>,
   recentRows: Array<Record<string, unknown>>,
-  allowedPlayerKeys?: Set<string>
+  allowedPlayerKeys?: Set<string>,
+  minSeasonSample = 20
 ): AlertRow[] {
   const byName = new Map<string, AlertRow>();
   for (const row of seasonRows) {
@@ -209,7 +212,7 @@ function buildHittingRows(
     current.metrics['GoZoneSw%'].recent = rowMetric(row, 'GoZoneSw%');
   }
   return Array.from(byName.values())
-    .filter((entry) => entry.sample >= 20)
+    .filter((entry) => entry.sample >= minSeasonSample)
     .sort((a, b) => (b.recentSample - a.recentSample) || (b.sample - a.sample));
 }
 
@@ -217,7 +220,9 @@ async function fetchPitchingAlerts(
   apiBase: string,
   schoolCode: string,
   dates: ReturnType<typeof resolveDateWindows>,
-  allowedPlayerKeys?: Set<string>
+  allowedPlayerKeys?: Set<string>,
+  scopedPitcher?: string,
+  minSeasonSample = 25
 ): Promise<AlertRow[]> {
   const buildOverviewUrl = (startDate: string, endDate: string) => {
     const url = new URL(`${apiBase}/v1/pitching/overview`);
@@ -230,6 +235,7 @@ async function fetchPitchingAlerts(
     url.searchParams.set('include_chart_points', '0');
     url.searchParams.set('include_row_pitches', '0');
     url.searchParams.set('include_trend_rows', '0');
+    if (scopedPitcher) url.searchParams.set('pitcher', scopedPitcher);
     return url;
   };
   const buildFbSiVeloUrl = (startDate: string, endDate: string) => {
@@ -244,6 +250,7 @@ async function fetchPitchingAlerts(
     url.searchParams.set('include_chart_points', '0');
     url.searchParams.set('include_row_pitches', '0');
     url.searchParams.set('include_trend_rows', '0');
+    if (scopedPitcher) url.searchParams.set('pitcher', scopedPitcher);
     return url;
   };
   const seasonUrl = buildOverviewUrl(dates.seasonStart, dates.seasonEnd);
@@ -280,14 +287,16 @@ async function fetchPitchingAlerts(
   const recentFbSiRows = Array.isArray((recentFbSiResult.payload as { table_rows?: unknown[] }).table_rows)
     ? ((recentFbSiResult.payload as { table_rows?: unknown[] }).table_rows as Array<Record<string, unknown>>)
     : [];
-  return buildPitchingRows(seasonRows, recentRows, seasonFbSiRows, recentFbSiRows, allowedPlayerKeys);
+  return buildPitchingRows(seasonRows, recentRows, seasonFbSiRows, recentFbSiRows, allowedPlayerKeys, minSeasonSample);
 }
 
 async function fetchHittingAlerts(
   apiBase: string,
   schoolCode: string,
   dates: ReturnType<typeof resolveDateWindows>,
-  allowedPlayerKeys?: Set<string>
+  allowedPlayerKeys?: Set<string>,
+  scopedHitter?: string,
+  minSeasonSample = 20
 ): Promise<AlertRow[]> {
   const buildUrl = (startDate: string, endDate: string) => {
     const url = new URL(`${apiBase}/v1/hitting/overview`);
@@ -298,6 +307,7 @@ async function fetchHittingAlerts(
     url.searchParams.set('split_by', 'Batter');
     url.searchParams.set('custom_columns', 'xWOBA,Barrel%,GoZoneSw%');
     url.searchParams.set('include_chart_points', '0');
+    if (scopedHitter) url.searchParams.set('hitter', scopedHitter);
     return url;
   };
   const seasonUrl = buildUrl(dates.seasonStart, dates.seasonEnd);
@@ -318,7 +328,7 @@ async function fetchHittingAlerts(
   const recentRows = Array.isArray((recentResult.payload as { table_rows?: unknown[] }).table_rows)
     ? ((recentResult.payload as { table_rows?: unknown[] }).table_rows as Array<Record<string, unknown>>)
     : [];
-  return buildHittingRows(seasonRows, recentRows, allowedPlayerKeys);
+  return buildHittingRows(seasonRows, recentRows, allowedPlayerKeys, minSeasonSample);
 }
 
 export async function GET() {
@@ -339,9 +349,23 @@ export async function GET() {
   });
   const dates = resolveDateWindows();
   const apiBase = resolveDashboardApiBaseUrl();
+  const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
 
   try {
-    const snapshotKey = `${schoolCode}:${dates.seasonStart}:${dates.seasonEnd}:${dates.recentStart}:${dates.recentEnd}`;
+    const playerIdentity = shouldScopePlayer
+      ? await resolveDashboardPlayerIdentity({
+          role: session.role,
+          organizationId: session.organizationId,
+          userId: session.userId,
+          name: session.name,
+        })
+      : null;
+    if (shouldScopePlayer && !playerIdentity) {
+      return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
+    }
+    const scopedPitcher = shouldScopePlayer && playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Pitching') : '';
+    const scopedHitter = shouldScopePlayer && playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Hitting') : '';
+    const snapshotKey = `${schoolCode}:${dates.seasonStart}:${dates.seasonEnd}:${dates.recentStart}:${dates.recentEnd}:${shouldScopePlayer ? 'scoped' : 'all'}:${scopedPitcher.toLowerCase()}:${scopedHitter.toLowerCase()}`;
     const ttlMs = snapshotTtlMsForSchool(schoolCode);
     const cached = alertsSnapshotCache.get(snapshotKey);
     const now = Date.now();
@@ -349,20 +373,34 @@ export async function GET() {
     if (cached && now - cached.at <= ttlMs) {
       snapshot = cached.payload;
     } else {
-      const filtersPayload = await fetchFilters(apiBase, schoolCode);
+      const filtersPayload = shouldScopePlayer ? null : await fetchFilters(apiBase, schoolCode);
       const allowedPitchingPlayers = new Set(
-        (filtersPayload.pitching.pitchers ?? [])
+        (filtersPayload?.pitching.pitchers ?? [])
           .map((name) => normalizedNameKey(String(name ?? '')))
           .filter(Boolean)
       );
       const allowedHittingPlayers = new Set(
-        (filtersPayload.hitting.hitters ?? [])
+        (filtersPayload?.hitting.hitters ?? [])
           .map((name) => normalizedNameKey(String(name ?? '')))
           .filter(Boolean)
       );
       const [pitching, hitting] = await Promise.all([
-        fetchPitchingAlerts(apiBase, schoolCode, dates, allowedPitchingPlayers),
-        fetchHittingAlerts(apiBase, schoolCode, dates, allowedHittingPlayers),
+        fetchPitchingAlerts(
+          apiBase,
+          schoolCode,
+          dates,
+          shouldScopePlayer ? undefined : allowedPitchingPlayers,
+          scopedPitcher,
+          shouldScopePlayer ? 0 : 25
+        ),
+        fetchHittingAlerts(
+          apiBase,
+          schoolCode,
+          dates,
+          shouldScopePlayer ? undefined : allowedHittingPlayers,
+          scopedHitter,
+          shouldScopePlayer ? 0 : 20
+        ),
       ]);
       snapshot = { pitching, hitting };
       alertsSnapshotCache.set(snapshotKey, { at: now, payload: snapshot });

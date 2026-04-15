@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../lib/portal-session';
 import { canManagePlayer } from '../../../lib/portal-access';
+import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
+import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 import {
   getPlayerByIdInOrganization,
   getPlayerForUser,
@@ -16,6 +18,7 @@ import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgram
 import MobileNavSelect from '../mobile-nav-select';
 import PreviewAthleteSelect from '../preview-athlete-select';
 import LogoutButton from '../logout-button';
+import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalThemeToggle from '../theme-toggle';
 import ProfileDashboard from './profile-dashboard';
 
@@ -55,6 +58,8 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: 
 
 export default async function PlayerPortalPage({ searchParams }: PlayerPageProps) {
   const session = await requirePortalSession();
+  const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
+  const selectedSchool = resolveDashboardSchoolCode(session);
   const canAccessProgramming = canUseProgrammingData(session);
   if (session.role === 'player' && !canAccessProgramming) {
     redirect('/portal/dashboard');
@@ -92,9 +97,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
       <div className="portal-shell">
         <header className="portal-header">
           <div className="portal-header-left">
-            <Link href="/portal/player" className="portal-header-logo-link" aria-label="PCU Home">
-              <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
-            </Link>
+            <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
           </div>
           <div className="portal-header-center">
             <nav className="portal-nav" aria-label="Portal Navigation">
@@ -206,9 +209,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
     <div className="portal-shell">
       <header className="portal-header">
         <div className="portal-header-left">
-          <Link href="/portal/player" className="portal-header-logo-link" aria-label="PCU Home">
-            <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
-          </Link>
+          <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
           {session.role === 'admin' || session.role === 'coach' ? (
             <PreviewAthleteSelect
               basePath="/portal/player"

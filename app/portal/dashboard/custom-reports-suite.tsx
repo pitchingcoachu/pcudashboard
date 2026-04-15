@@ -276,7 +276,15 @@ type ReportPayload = {
 };
 
 const MAX_REPORT_ROWS = 120;
+const MAX_REPORT_COLS = 6;
 const PRO_DEFAULT_TEAM = 'Boston Red Sox';
+
+function normalizedReportNameKey(name: string): string {
+  return String(name ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
 
 const PITCHING_PANEL_TYPES: PanelType[] = [
   '',
@@ -515,8 +523,11 @@ function normalizeNameKey(value: string): string {
 function formatVerticalRowLabel(value: string): string {
   const raw = String(value ?? '').trim();
   if (!raw) return '';
-  const compact = raw.replace(/\s+/g, '');
-  return compact.split('').join('\n');
+  const normalized = raw.replace(/\t/g, ' ');
+  return normalized
+    .split('')
+    .map((char) => (char === ' ' ? '\u00A0' : char))
+    .join('\n');
 }
 
 function normalizeTeamLookupKey(value: string): string {
@@ -1004,7 +1015,13 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
   merged.velocityChart = VELOCITY_CHART_OPTIONS.includes(merged.velocityChart) ? merged.velocityChart : 'Velocity Chart (Game/Inning)';
   merged.releaseView = RELEASE_VIEW_OPTIONS.includes(merged.releaseView) ? merged.releaseView : 'Averages and Pitches';
   merged.movementView = MOVEMENT_VIEW_OPTIONS.includes(merged.movementView) ? merged.movementView : 'Averages and Pitches';
-  merged.colSpan = Math.max(1, Math.min(5, Number((input as { colSpan?: number; rowSpan?: number } | undefined)?.colSpan ?? (input as { rowSpan?: number } | undefined)?.rowSpan ?? 1) || 1));
+  merged.colSpan = Math.max(
+    1,
+    Math.min(
+      MAX_REPORT_COLS,
+      Number((input as { colSpan?: number; rowSpan?: number } | undefined)?.colSpan ?? (input as { rowSpan?: number } | undefined)?.rowSpan ?? 1) || 1
+    )
+  );
   merged.showControls = merged.showControls !== false;
   merged.contact2dMode = merged.contact2dMode === 'average_pitch_type' ? 'average_pitch_type' : 'individual';
   merged.contact2dColorBy = merged.contact2dColorBy === 'exit_velocity' || merged.contact2dColorBy === 'result' ? merged.contact2dColorBy : 'pitch_type';
@@ -1785,8 +1802,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [rowPlayers, setRowPlayers] = useState<string[]>(Array.from({ length: MAX_REPORT_ROWS }, () => 'All'));
   const [rowNotes, setRowNotes] = useState<string[]>(Array.from({ length: MAX_REPORT_ROWS }, () => ''));
   const [rowNoteSpans, setRowNoteSpans] = useState<number[]>(Array.from({ length: MAX_REPORT_ROWS }, () => 1));
-  const [columnNotes, setColumnNotes] = useState<string[]>(Array.from({ length: 5 }, () => ''));
-  const [columnNoteSpans, setColumnNoteSpans] = useState<number[]>(Array.from({ length: 5 }, () => 1));
+  const [columnNotes, setColumnNotes] = useState<string[]>(Array.from({ length: MAX_REPORT_COLS }, () => ''));
+  const [columnNoteSpans, setColumnNoteSpans] = useState<number[]>(Array.from({ length: MAX_REPORT_COLS }, () => 1));
   const [cellConfigs, setCellConfigs] = useState<Record<string, CellConfig>>({ r1c1: emptyCell() });
   const [colSpanInputs, setColSpanInputs] = useState<Record<string, string>>({});
   const [savedReports, setSavedReports] = useState<SavedReportItem[]>([]);
@@ -2174,6 +2191,29 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const list = reportTeam !== 'All' ? selectedTeamRoster : playersByTeam;
     return [{ value: 'All', label: 'All' }, ...list.map((entry) => ({ value: entry, label: toFirstLast(entry) }))];
   }, [playersByTeam, reportTeam, selectedTeamRoster]);
+
+  const handleReportTeamChange = (nextTeamRaw: string) => {
+    const nextTeam = String(nextTeamRaw ?? '').trim() || 'All';
+    setReportTeam(nextTeam);
+    if (restoringSavedReportRef.current) return;
+    if (reportScope === 'Team') return;
+    setReportPlayers(['All']);
+    setRowPlayers(Array.from({ length: MAX_REPORT_ROWS }, () => 'All'));
+    setCellConfigs((current) => {
+      let changed = false;
+      const next: Record<string, CellConfig> = {};
+      for (const [key, cfg] of Object.entries(current)) {
+        const normalized = normalizeCellConfig(cfg);
+        if (String(normalized.player ?? 'All').trim() !== 'All') {
+          changed = true;
+          next[key] = { ...normalized, player: 'All' };
+        } else {
+          next[key] = normalized;
+        }
+      }
+      return changed ? next : current;
+    });
+  };
 
   const removeTeamScopePlayer = (name: string) => {
     setTeamScopeSelectedPlayers((current) => current.filter((entry) => entry !== name));
@@ -2997,7 +3037,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setReportScope((payload.scope as ReportScope) || 'Single Player');
     setReportPlayers(payload.players?.length ? payload.players : ['All']);
     setReportRows(Math.max(1, Math.min(MAX_REPORT_ROWS, Number(payload.rows) || 1)));
-    setReportCols(Math.max(1, Math.min(5, Number(payload.cols) || 1)));
+    setReportCols(Math.max(1, Math.min(MAX_REPORT_COLS, Number(payload.cols) || 1)));
     setUseGlobalDates(Boolean(payload.useGlobalDates));
     setShowPitchTypeKey(payload.showPitchTypeKey !== false);
     setShowLocationChartKey(Boolean(payload.showLocationChartKey));
@@ -3015,9 +3055,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setRowPlayers(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => payload.rowPlayers?.[idx] ?? 'All'));
     setRowNotes(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => payload.rowNotes?.[idx] ?? ''));
     setRowNoteSpans(Array.from({ length: MAX_REPORT_ROWS }, (_, idx) => Math.max(1, Number(payload.rowNoteSpans?.[idx]) || 1)));
-    setColumnNotes(Array.from({ length: 5 }, (_, idx) => payload.columnNotes?.[idx] ?? ''));
-    setColumnNoteSpans(Array.from({ length: 5 }, (_, idx) => Math.max(1, Number(payload.columnNoteSpans?.[idx]) || 1)));
-    setCellConfigs(ensureCellConfigMap(payload.cells ?? {}, Math.max(1, Math.min(MAX_REPORT_ROWS, Number(payload.rows) || 1)), Math.max(1, Math.min(5, Number(payload.cols) || 1))));
+    setColumnNotes(Array.from({ length: MAX_REPORT_COLS }, (_, idx) => payload.columnNotes?.[idx] ?? ''));
+    setColumnNoteSpans(Array.from({ length: MAX_REPORT_COLS }, (_, idx) => Math.max(1, Number(payload.columnNoteSpans?.[idx]) || 1)));
+    setCellConfigs(
+      ensureCellConfigMap(
+        payload.cells ?? {},
+        Math.max(1, Math.min(MAX_REPORT_ROWS, Number(payload.rows) || 1)),
+        Math.max(1, Math.min(MAX_REPORT_COLS, Number(payload.cols) || 1))
+      )
+    );
   };
 
   const currentPayload = (): ReportPayload => ({
@@ -3053,12 +3099,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const fallbackName = reportTitle.trim() || `Custom Report ${new Date().toLocaleDateString()}`;
     const name = window.prompt('Report name', selected?.name || fallbackName)?.trim();
     if (!name) return;
+    const shouldUpdateExisting =
+      Boolean(selected?.id) &&
+      normalizedReportNameKey(name) === normalizedReportNameKey(selected?.name || '');
     try {
       const response = await fetch('/api/dashboard/custom-reports', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          id: selected?.id,
+          id: shouldUpdateExisting ? selected?.id : undefined,
           name,
           applyToAllSchools: isAdminUser && saveScope === 'All Schools',
           payload: currentPayload(),
@@ -3111,8 +3160,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setRowPlayers(Array.from({ length: MAX_REPORT_ROWS }, () => 'All'));
     setRowNotes(Array.from({ length: MAX_REPORT_ROWS }, () => ''));
     setRowNoteSpans(Array.from({ length: MAX_REPORT_ROWS }, () => 1));
-    setColumnNotes(Array.from({ length: 5 }, () => ''));
-    setColumnNoteSpans(Array.from({ length: 5 }, () => 1));
+    setColumnNotes(Array.from({ length: MAX_REPORT_COLS }, () => ''));
+    setColumnNoteSpans(Array.from({ length: MAX_REPORT_COLS }, () => 1));
     setCellConfigs({ r1c1: emptyCell() });
     setSelectedReportId(null);
     setSaveScope('Current School');
@@ -3127,7 +3176,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
 
   const applyReportColsInput = () => {
     const parsed = Number(reportColsInput);
-    const normalized = Number.isFinite(parsed) ? Math.max(1, Math.min(5, Math.trunc(parsed))) : reportCols;
+    const normalized = Number.isFinite(parsed) ? Math.max(1, Math.min(MAX_REPORT_COLS, Math.trunc(parsed))) : reportCols;
     setReportCols(normalized);
     setReportColsInput(String(normalized));
   };
@@ -3484,7 +3533,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               </label>
               <label>
                 {reportScope === 'Team' ? 'Team (Roster Source)' : 'Team'}
-                <SearchableSingleSelect options={teamOptions} value={reportTeam} onChange={setReportTeam} />
+                <SearchableSingleSelect options={teamOptions} value={reportTeam} onChange={handleReportTeamChange} />
               </label>
               {isProSchool ? (
                 <label>
@@ -3552,7 +3601,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 <input
                   type="number"
                   min={1}
-                  max={5}
+                  max={MAX_REPORT_COLS}
                   value={reportColsInput}
                   onChange={(event) => setReportColsInput(event.target.value)}
                   onBlur={applyReportColsInput}
@@ -3838,15 +3887,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   <div
                     className="portal-custom-reports-col-label-grid"
                     style={{
-                      gridTemplateColumns: `repeat(${reportCols}, minmax(0, 1fr))`,
-                      marginLeft: hasRowLabels ? '2.8rem' : undefined,
+                      gridTemplateColumns: hasRowLabels ? `3.1rem repeat(${reportCols}, minmax(0, 1fr))` : `repeat(${reportCols}, minmax(0, 1fr))`,
                     }}
                   >
+                    {hasRowLabels ? <div aria-hidden="true" /> : null}
                     {columnLabelEntries.map((entry) => (
                       <div
                         key={`col-label-${entry.colStart}-${entry.colSpan}`}
                         className="portal-custom-reports-col-label"
-                        style={{ gridColumn: `${entry.colStart} / span ${entry.colSpan}` }}
+                        style={{ gridColumn: `${hasRowLabels ? entry.colStart + 1 : entry.colStart} / span ${entry.colSpan}` }}
                       >
                         {entry.text}
                       </div>

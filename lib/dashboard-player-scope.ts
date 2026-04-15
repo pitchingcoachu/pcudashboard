@@ -34,6 +34,13 @@ export type DashboardPlayerIdentity = {
   candidateKeys: Set<string>;
 };
 
+export function shouldScopeDashboardPlayer(role: string | null | undefined, schoolCode: string | null | undefined): boolean {
+  const normalizedRole = String(role ?? '').trim().toLowerCase();
+  if (normalizedRole !== 'player') return false;
+  const school = String(schoolCode ?? '').trim().toUpperCase();
+  return school !== 'PRO' && school !== 'LEAGUE';
+}
+
 function normalizeSpace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }

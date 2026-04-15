@@ -1,4 +1,4 @@
-import { listActiveStaffOrganizationsByEmail } from './auth-db';
+import { ensureAuthDbReady, getDbPool, isDatabaseConfigured, listActiveStaffOrganizationsByEmail } from './auth-db';
 import type { PortalSession } from './portal-session';
 import { resolveAllowedDashboardSchoolCodes, resolveDashboardSchoolCode } from './dashboard-access';
 
@@ -6,10 +6,12 @@ declare global {
   var __pcuStaffSchoolCodesCache: Map<string, { at: number; codes: string[] }> | undefined;
   var __pcuStaffSchoolCodesInflight: Map<string, Promise<string[]>> | undefined;
   var __pcuDashboardSchoolOptionsCache: Map<string, { at: number; codes: string[] }> | undefined;
+  var __pcuOrgSchoolCodeCache: Map<number, { at: number; schoolCode: string | null }> | undefined;
 }
 
 const STAFF_CODES_TTL_MS = 5 * 60 * 1000;
 const OPTIONS_TTL_MS = 60 * 1000;
+const ORG_SCHOOL_TTL_MS = 10 * 60 * 1000;
 const STAFF_QUERY_TIMEOUT_MS = 2500;
 
 function normalizeSchoolCode(value: string): string {
@@ -70,6 +72,7 @@ function schoolFromOrganizationName(name: string | null | undefined): string | n
   const value = String(name ?? '').trim();
   if (!value) return null;
   const upper = value.toUpperCase();
+  if (upper.includes('PITCHINGCOACHU')) return 'PCU';
   const compact = upper.replace(/[^A-Z0-9]/g, '');
   const allowed = resolveAllowedDashboardSchoolCodes();
   for (const school of allowed) {
@@ -120,6 +123,43 @@ function getStaffCodesInflight() {
 function getOptionsCache() {
   if (!global.__pcuDashboardSchoolOptionsCache) global.__pcuDashboardSchoolOptionsCache = new Map();
   return global.__pcuDashboardSchoolOptionsCache;
+}
+
+function getOrgSchoolCache() {
+  if (!global.__pcuOrgSchoolCodeCache) global.__pcuOrgSchoolCodeCache = new Map();
+  return global.__pcuOrgSchoolCodeCache;
+}
+
+async function resolveSchoolCodeByOrganizationId(organizationId: number): Promise<string | null> {
+  if (!Number.isFinite(organizationId) || organizationId <= 0) return null;
+  const mapped = schoolFromOrganizationId(organizationId);
+  if (mapped) return mapped;
+
+  const cache = getOrgSchoolCache();
+  const cached = cache.get(organizationId);
+  const now = Date.now();
+  if (cached && now - cached.at <= ORG_SCHOOL_TTL_MS) return cached.schoolCode;
+
+  if (!isDatabaseConfigured()) {
+    cache.set(organizationId, { at: now, schoolCode: null });
+    return null;
+  }
+
+  try {
+    await ensureAuthDbReady();
+    const pool = getDbPool();
+    const result = await pool.query<{ name: string | null }>(
+      `SELECT name FROM organizations WHERE id = $1 LIMIT 1`,
+      [organizationId]
+    );
+    const orgName = String(result.rows[0]?.name ?? '').trim();
+    const schoolCode = schoolFromOrganizationName(orgName);
+    cache.set(organizationId, { at: now, schoolCode });
+    return schoolCode;
+  } catch {
+    cache.set(organizationId, { at: now, schoolCode: null });
+    return null;
+  }
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -215,7 +255,9 @@ export async function resolveSessionDashboardSchoolOptions(session: PortalSessio
     return resolved;
   }
 
-  const resolved = withLeagueAndPro([fallback]);
+  const orgSchoolCode = await resolveSchoolCodeByOrganizationId(Number(session.organizationId ?? 0));
+  const base = orgSchoolCode || fallback;
+  const resolved = withLeagueAndPro([base]);
   optionsCache.set(cacheKey, { at: Date.now(), codes: resolved });
   return resolved;
 }

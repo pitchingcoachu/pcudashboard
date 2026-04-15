@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
-import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlayerName } from '../../../../../lib/dashboard-player-scope';
+import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlayerName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching';
@@ -36,13 +36,16 @@ export async function GET(request: Request) {
     apps: session.apps,
   });
   const apiBase = resolveDashboardApiBaseUrl();
-  const playerIdentity = await resolveDashboardPlayerIdentity({
-    role: session.role,
-    organizationId: session.organizationId,
-    userId: session.userId,
-    name: session.name,
-  });
-  if (session.role === 'player' && !playerIdentity) {
+  const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+  const playerIdentity = shouldScopePlayer
+    ? await resolveDashboardPlayerIdentity({
+        role: session.role,
+        organizationId: session.organizationId,
+        userId: session.userId,
+        name: session.name,
+      })
+    : null;
+  if (shouldScopePlayer && !playerIdentity) {
     return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
   }
 
@@ -72,7 +75,7 @@ export async function GET(request: Request) {
             ? result.payload.pitchers
             : result.payload.catchers;
       const playerPool = uniqueNames(Array.isArray(poolRaw) ? poolRaw : []);
-      if (!playerIdentity) return NextResponse.json({ players: playerPool }, { headers: RESPONSE_CACHE_HEADERS });
+      if (!shouldScopePlayer || !playerIdentity) return NextResponse.json({ players: playerPool }, { headers: RESPONSE_CACHE_HEADERS });
       const scoped = selectScopedPlayerName(playerPool, playerIdentity);
       if (scoped) return NextResponse.json({ players: [scoped] }, { headers: RESPONSE_CACHE_HEADERS });
       const fallback = scopedPlayerQueryName(playerIdentity, domain);

@@ -2,28 +2,12 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
-import { resolveDashboardPlayerIdentity, scopedPlayerQueryName } from '../../../../../lib/dashboard-player-scope';
+import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const inputUrl = new URL(request.url);
-  const playerIdentity = await resolveDashboardPlayerIdentity({
-    role: session.role,
-    organizationId: session.organizationId,
-    userId: session.userId,
-    name: session.name,
-  });
-  if (session.role === 'player' && !playerIdentity) {
-    return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
-  }
-  const requestedPitcher = inputUrl.searchParams.get('pitcher')?.trim() ?? '';
-  const pitcher = playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Pitching') : requestedPitcher;
-  if (!pitcher) {
-    return NextResponse.json({ error: 'pitcher is required.' }, { status: 400 });
-  }
 
   const schoolCode = resolveDashboardSchoolCode({
     userId: session.userId ?? 0,
@@ -36,6 +20,24 @@ export async function GET(request: Request) {
     appUrl: session.appUrl,
     apps: session.apps,
   });
+  const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+  const inputUrl = new URL(request.url);
+  const playerIdentity = shouldScopePlayer
+    ? await resolveDashboardPlayerIdentity({
+        role: session.role,
+        organizationId: session.organizationId,
+        userId: session.userId,
+        name: session.name,
+      })
+    : null;
+  if (shouldScopePlayer && !playerIdentity) {
+    return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
+  }
+  const requestedPitcher = inputUrl.searchParams.get('pitcher')?.trim() ?? '';
+  const pitcher = shouldScopePlayer && playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Pitching') : requestedPitcher;
+  if (!pitcher) {
+    return NextResponse.json({ error: 'pitcher is required.' }, { status: 400 });
+  }
 
   const apiBase = resolveDashboardApiBaseUrl();
   const url = new URL(`${apiBase}/v1/pitching/ab-report`);

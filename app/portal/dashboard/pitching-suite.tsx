@@ -11,6 +11,7 @@ type FiltersPayload = {
   school_code: string;
   min_date: string | null;
   max_date: string | null;
+  player_last_date?: string | null;
   pitchers: string[];
   team_types: string[];
   opp_hitters: string[];
@@ -725,7 +726,10 @@ function normalizePitchTypeName(value: string): string {
   const v = value.trim().toLowerCase();
   if (!v) return 'all';
   if (v === 'all') return 'all';
-  return v.replace(/\s+/g, '');
+  const compact = v.replace(/\s+/g, '');
+  if (compact === 'forkball') return 'splitter';
+  if (compact === 'screwball') return 'changeup';
+  return compact;
 }
 
 function normalizeColorColumnName(value: string): string {
@@ -831,24 +835,51 @@ function getProcessThresholds(
   if (metric === 'EV') return { poor: 95, avg: 85, great: 75 };
   if (metric === 'Stuff+') return { poor: 90, avg: 100, great: 110 };
   if (metric === 'RV/100') {
-    if (pitchType === 'fastball') return { poor: 1.5, avg: 0.7, great: -0.1 };
-    if (pitchType === 'sinker') return { poor: 2.3, avg: 0.9, great: -0.5 };
-    if (pitchType === 'cutter') return { poor: 0.9, avg: -0.2, great: -1.3 };
-    if (pitchType === 'slider') return { poor: -0.4, avg: -1.1, great: -1.8 };
-    if (pitchType === 'curveball') return { poor: -0.1, avg: -1.3, great: -2.5 };
-    if (pitchType === 'changeup') return { poor: 0.7, avg: -0.5, great: -1.7 };
-    if (pitchType === 'splitter') return { poor: 0, avg: -1.4, great: -2.8 };
-    return { poor: 0.7, avg: 0, great: -0.7 };
+    if (isPro) {
+      if (pitchType === 'fastball') return { poor: 2.4, avg: -0.4, great: -2.4 };
+      if (pitchType === 'sinker') return { poor: 2.4, avg: -0.6, great: -2.8 };
+      if (pitchType === 'cutter') return { poor: 2.4, avg: -0.4, great: -2.4 };
+      if (pitchType === 'slider') return { poor: 2.2, avg: -0.6, great: -2.8 };
+      if (pitchType === 'sweeper') return { poor: 2.5, avg: -0.5, great: -2.5 };
+      if (pitchType === 'curveball') return { poor: 2.0, avg: -0.1, great: -2.0 };
+      if (pitchType === 'changeup') return { poor: 2.4, avg: -0.4, great: -2.4 };
+      if (pitchType === 'splitter') return { poor: 2.5, avg: -0.5, great: -2.5 };
+      if (pitchType === 'knuckleball') return { poor: 3.0, avg: 0.9, great: -0.1 };
+      return { poor: 2.0, avg: -0.4, great: -2.0 };
+    }
+    if (pitchType === 'fastball') return { poor: 4.6, avg: 1.8, great: -0.2 };
+    if (pitchType === 'sinker') return { poor: 4.6, avg: 1.6, great: -0.6 };
+    if (pitchType === 'cutter') return { poor: 3.6, avg: 0.8, great: -1.2 };
+    if (pitchType === 'slider') return { poor: 3.7, avg: 0.9, great: -1.3 };
+    if (pitchType === 'sweeper') return { poor: 3.5, avg: 0.5, great: -1.5 };
+    if (pitchType === 'curveball') return { poor: 3.1, avg: 1.0, great: -0.9 };
+    if (pitchType === 'changeup') return { poor: 4.0, avg: 1.2, great: -0.8 };
+    if (pitchType === 'splitter') return { poor: 3.9, avg: 0.9, great: -1.1 };
+    if (pitchType === 'knuckleball') return { poor: 3.1, avg: 1.0, great: 0.0 };
+    return { poor: 3.8, avg: 1.4, great: -0.2 };
   }
   if (metric === 'PV/100') {
-    if (pitchType === 'fastball') return { poor: 1.5, avg: 0.7, great: -0.1 };
-    if (pitchType === 'sinker') return { poor: 2.3, avg: 0.9, great: -0.5 };
-    if (pitchType === 'cutter') return { poor: 0.9, avg: -0.2, great: -1.3 };
-    if (pitchType === 'slider') return { poor: -0.4, avg: -1.1, great: -1.8 };
-    if (pitchType === 'curveball') return { poor: -0.1, avg: -1.3, great: -2.5 };
-    if (pitchType === 'changeup') return { poor: 0.7, avg: -0.5, great: -1.7 };
-    if (pitchType === 'splitter') return { poor: 0, avg: -1.4, great: -2.8 };
-    return { poor: 0.7, avg: 0, great: -0.7 };
+    if (isPro) {
+      if (pitchType === 'fastball') return { poor: 2.0, avg: 0.3, great: -1.4 };
+      if (pitchType === 'sinker') return { poor: 3.0, avg: 1.4, great: -0.2 };
+      if (pitchType === 'cutter') return { poor: 2.5, avg: 0.7, great: -1.1 };
+      if (pitchType === 'slider') return { poor: 1.5, avg: -0.4, great: -2.3 };
+      if (pitchType === 'sweeper' || pitchType === 'curveball') return { poor: 1.1, avg: -0.8, great: -2.7 };
+      if (pitchType === 'changeup') return { poor: 2.0, avg: -0.1, great: -2.1 };
+      if (pitchType === 'splitter') return { poor: 1.0, avg: -0.7, great: -2.4 };
+      if (pitchType === 'knuckleball') return { poor: 1.1, avg: -0.8, great: -2.7 };
+      return { poor: 2.0, avg: 0.2, great: -1.8 };
+    }
+    if (pitchType === 'fastball') return { poor: 2.9, avg: 1.2, great: -0.5 };
+    if (pitchType === 'sinker') return { poor: 2.8, avg: 1.2, great: -0.4 };
+    if (pitchType === 'cutter') return { poor: 1.7, avg: -0.1, great: -1.9 };
+    if (pitchType === 'slider') return { poor: 1.0, avg: -0.9, great: -2.8 };
+    if (pitchType === 'sweeper') return { poor: 0.2, avg: -1.7, great: -3.6 };
+    if (pitchType === 'curveball') return { poor: 0.5, avg: -1.4, great: -3.3 };
+    if (pitchType === 'changeup') return { poor: 1.5, avg: -0.6, great: -2.6 };
+    if (pitchType === 'splitter') return { poor: 0.5, avg: -1.2, great: -2.9 };
+    if (pitchType === 'knuckleball') return { poor: 1.7, avg: -0.2, great: -2.1 };
+    return { poor: 2.1, avg: 0.3, great: -1.7 };
   }
   return null;
 }
@@ -1421,6 +1452,7 @@ export default function PitchingSuite({
 
   const [appliedFilterVersion, setAppliedFilterVersion] = useState(0);
   const lastAppliedHomeRequestRef = useRef<number>(0);
+  const pcuSearchPlayerDatePendingRef = useRef(false);
   const [releaseView, setReleaseView] = useState('Averages Only');
   const [movementView, setMovementView] = useState('Averages and Pitches');
   const [locationView, setLocationView] = useState('Pitch');
@@ -1460,7 +1492,14 @@ export default function PitchingSuite({
       String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
       String(filters?.school_code ?? '').toUpperCase() === 'PRO' ||
       String(filters?.school_code ?? '').toUpperCase() === 'MLB';
+    const schoolCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+    const shouldUsePcuPlayerLatestDate =
+      schoolCode === 'PCU' &&
+      role !== 'player' &&
+      homeNavigateRequest.navigationSource === 'search' &&
+      homeNavigateRequest.targetType === 'player';
     lastAppliedHomeRequestRef.current = homeNavigateRequest.requestId;
+    pcuSearchPlayerDatePendingRef.current = shouldUsePcuPlayerLatestDate;
     suppressNextFilterDateAutofillRef.current = homeNavigateRequest.navigationSource === 'search';
     setDashboardPage(homeNavigateRequest.page ?? 'Summary');
     setStartDate(homeNavigateRequest.startDate);
@@ -1478,7 +1517,7 @@ export default function PitchingSuite({
       setSelectedHitters(['All']);
     }
     setAppliedFilterVersion((current) => current + 1);
-  }, [homeNavigateRequest, loadingFilters, filters, selectedSchoolCode]);
+  }, [homeNavigateRequest, loadingFilters, filters, selectedSchoolCode, role]);
   const [actionSideBySide, setActionSideBySide] = useState(false);
   const [actionLeftPitchKey, setActionLeftPitchKey] = useState('');
   const [actionRightPitchKey, setActionRightPitchKey] = useState('');
@@ -1714,11 +1753,24 @@ export default function PitchingSuite({
         suppressNextFilterDateAutofillRef.current = false;
         return;
       }
-      const latestDate = clampYmdToToday(payload.max_date ?? payload.min_date ?? '');
+      const playerLastDate = clampYmdToToday(payload.player_last_date ?? '');
+      const latestDate = clampYmdToToday(playerLastDate || (payload.max_date ?? payload.min_date ?? ''));
       const nextDate = latestDate || toYmdNow();
       const minDate = payload.min_date ?? '';
       const isLeagueSchool = String(payload.school_code ?? '').toUpperCase() === 'LEAGUE';
-      if (isLeagueSchool) {
+      const isProSchool = String(payload.school_code ?? '').toUpperCase() === 'PRO';
+      if (isPlayerRole && !isLeagueSchool && !isProSchool) {
+        const schoolCode = String(payload.school_code ?? '').trim().toUpperCase();
+        if (schoolCode === 'PCU') {
+          setStartDate(nextDate);
+          setEndDate(nextDate);
+          return;
+        }
+        const defaultSeasonStart = schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13';
+        const seasonStart = minDate && minDate > defaultSeasonStart ? minDate : defaultSeasonStart;
+        setStartDate(seasonStart);
+        setEndDate(nextDate || seasonStart);
+      } else if (isLeagueSchool) {
         const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
         setStartDate(leagueStart);
         setEndDate(nextDate || leagueStart);
@@ -1824,14 +1876,14 @@ export default function PitchingSuite({
       };
     }
     const schoolCode = String(filters.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
-    if (!schoolCode || schoolCode === 'PRO' || schoolCode === 'LEAGUE' || schoolCode === 'PCU') {
+    if (!schoolCode || schoolCode === 'PRO' || schoolCode === 'LEAGUE') {
       setSelectedPitcherLastGameDate('');
       return () => {
         cancelled = true;
         controller.abort();
       };
     }
-    const seasonStart = schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13';
+    const seasonStart = String(filters.min_date ?? '').trim() || (schoolCode === 'CNU' ? '2026-01-30' : '2026-02-13');
     const seasonEnd = String(filters.max_date ?? toYmdNow()).trim() || toYmdNow();
     const params = new URLSearchParams();
     params.set('start_date', seasonStart);
@@ -1870,6 +1922,15 @@ export default function PitchingSuite({
       controller.abort();
     };
   }, [filters, selectedSinglePitcher, selectedSchoolCode]);
+  useEffect(() => {
+    if (!pcuSearchPlayerDatePendingRef.current) return;
+    const latest = String(selectedPitcherLastGameDate ?? '').trim();
+    pcuSearchPlayerDatePendingRef.current = false;
+    if (!latest) return;
+    setStartDate(latest);
+    setEndDate(latest);
+    setAppliedFilterVersion((current) => current + 1);
+  }, [selectedPitcherLastGameDate]);
   const overviewHeaderLabel = useMemo(() => {
     const selected = selectedPitchers.filter((value) => value !== 'All');
     const playerLabel = selected.length === 1 ? formatNameFirstLast(selected[0]) : 'All';
@@ -2317,17 +2378,38 @@ export default function PitchingSuite({
 
   useEffect(() => {
     if (!isPro || !customTablesLoaded || proDefaultTableAppliedRef.current) return;
-    proDefaultTableAppliedRef.current = true;
-    if (selectedCustomTableId !== null || tableMode !== 'Live') return;
     const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
     const preferred = customTables.find((item) => normalize(item.name) === 'jaredsdashboard');
-    if (!preferred) return;
+    if (!preferred) {
+      proDefaultTableAppliedRef.current = true;
+      return;
+    }
+    const alreadyApplied = tableMode === 'Custom' && selectedCustomTableId === preferred.id;
+    if (alreadyApplied) {
+      proDefaultTableAppliedRef.current = true;
+      return;
+    }
+    const canApplyDefault = selectedCustomTableId === null && (tableMode === 'Live' || tableMode === 'Custom');
+    if (!canApplyDefault) return;
     setTableMode('Custom');
     setSelectedCustomTableId(preferred.id);
     setCustomTableName(preferred.name);
     setCustomTableColumns(preferred.columns ?? []);
     setAppliedFilterVersion((current) => current + 1);
+    proDefaultTableAppliedRef.current = true;
   }, [isPro, customTablesLoaded, customTables, selectedCustomTableId, tableMode]);
+
+  useEffect(() => {
+    if (!isPro || !customTablesLoaded) return;
+    if (tableMode !== 'Custom' || selectedCustomTableId !== null) return;
+    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const preferred = customTables.find((item) => normalize(item.name) === 'jaredsdashboard');
+    if (!preferred) return;
+    setSelectedCustomTableId(preferred.id);
+    setCustomTableName(preferred.name);
+    setCustomTableColumns(preferred.columns ?? []);
+    setAppliedFilterVersion((current) => current + 1);
+  }, [isPro, customTablesLoaded, customTables, tableMode, selectedCustomTableId]);
 
   useEffect(() => {
     setAbGameKey('');
@@ -2514,7 +2596,13 @@ export default function PitchingSuite({
       overviewCacheRef.current.clear();
       overviewInflightRef.current.clear();
       setAppliedFilterVersion((current) => current + 1);
+      window.setTimeout(() => {
+        overviewCacheRef.current.clear();
+        overviewInflightRef.current.clear();
+        setAppliedFilterVersion((current) => current + 1);
+      }, 900);
       await loadPitchEditCount();
+      setActionMode(null);
     } catch (requestError) {
       setActionSaveState('error');
       setActionSaveMessage(requestError instanceof Error ? requestError.message : 'Failed to save pitch edit.');
@@ -4106,7 +4194,7 @@ export default function PitchingSuite({
         if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
         if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
         if (metric === 'QP+') value = (qpWSum + shrinkStrength * globalQpAvg) / Math.max(eps, qpW + shrinkStrength);
-        if (metric === 'Run Values') {
+        if (metric === 'RV/100' || metric === 'Run Values') {
           value = ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
         }
         if (metric === 'PV/100') {
@@ -4663,7 +4751,7 @@ export default function PitchingSuite({
     const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
     const isPvMetric = locationView === 'PV/100';
     const heatMetricView = locationView;
-    const isRvLikeMetric = heatMetricView === 'Run Values' || heatMetricView === 'PV/100';
+    const isRvLikeMetric = (heatMetricView === 'RV/100' || heatMetricView === 'Run Values') || heatMetricView === 'PV/100';
     const cells = locationView === 'Pitch' ? [] : buildHeatCells(summaryHeatmapPoints, 'plate_side', 'plate_height', heatMetricView);
     const values = cells.map((c) => c.value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
     const densityMax = Math.max(1e-9, ...cells.map((c) => c.density));
@@ -4730,7 +4818,7 @@ export default function PitchingSuite({
                     fill = sequentialColor(c.value, minVal, maxVal);
                   } else if (isRvLikeMetric) {
                     const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
-                    fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
+                    fill = divergingColor(rvClamped, rvMin, 0, rvMax);
                   } else {
                     fill = divergingColor(c.value, minVal, midVal, maxVal);
                   }
@@ -4777,7 +4865,7 @@ export default function PitchingSuite({
                   fill = sequentialColor(c.value, minVal, maxVal);
                 } else if (isRvLikeMetric) {
                   const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
-                  fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
+                  fill = divergingColor(rvClamped, rvMin, 0, rvMax);
                 } else {
                   fill = divergingColor(c.value, minVal, midVal, maxVal);
                 }
@@ -4861,7 +4949,7 @@ export default function PitchingSuite({
       { value: 'Swing Rate', label: 'Swing Rate' },
       { value: 'Exit Velocity', label: 'Exit Velocity' },
       ...(isPro ? ([{ value: 'xWOBA', label: 'xWOBA' }, { value: 'xISO', label: 'xISO' }] as OptionItem[]) : []),
-      { value: 'Run Values', label: 'Run Values' },
+      { value: 'RV/100', label: 'RV/100' },
       { value: 'PV/100', label: 'PV/100' },
       { value: 'QP+', label: 'QP+' },
     ],
@@ -4979,7 +5067,7 @@ export default function PitchingSuite({
     const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
     const isPvMetric = heatmapDisplayView === 'PV/100';
     const heatMetricView = heatmapDisplayView;
-    const isRvLikeMetric = heatMetricView === 'Run Values' || heatMetricView === 'PV/100';
+    const isRvLikeMetric = (heatMetricView === 'RV/100' || heatMetricView === 'Run Values') || heatMetricView === 'PV/100';
     const allowHeatCells = heatmapDisplayView !== 'Pitch' && (heatmapDisplayView !== 'QP+' || canRenderQpHeatmap);
     const cells =
       !allowHeatCells
@@ -5053,7 +5141,7 @@ export default function PitchingSuite({
                     fill = divergingColor(c.value, 0, 100, 200);
                   } else if (isRvLikeMetric) {
                     const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
-                    fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
+                    fill = divergingColor(rvClamped, rvMin, 0, rvMax);
                   } else {
                     fill = divergingColor(c.value, minVal, midVal, maxVal);
                   }
@@ -5104,7 +5192,7 @@ export default function PitchingSuite({
                   fill = divergingColor(c.value, 0, 100, 200);
                 } else if (isRvLikeMetric) {
                   const rvClamped = Math.max(rvMin, Math.min(rvMax, c.value));
-                  fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
+                  fill = divergingColor(rvClamped, rvMin, 0, rvMax);
                 } else {
                   fill = divergingColor(c.value, minVal, midVal, maxVal);
                 }
@@ -5354,32 +5442,10 @@ export default function PitchingSuite({
       setLeaderboardSortDirection('desc');
     }
   }, [isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn]);
-  const tableRowsWithPv = useMemo(() => {
-    const rows = overview?.table_rows ?? [];
-    const rowPitchesByKey = overview?.row_pitches_by_key ?? {};
-    const fallbackAllPitches = summaryPoints ?? [];
-    if (!rows.length) return rows;
-    return rows.map((row) => {
-      const currentPv = row['PV/100'];
-      if (currentPv !== null && currentPv !== undefined && currentPv !== '') return row;
-      const splitKey = String(row[splitColName] ?? '').trim();
-      if (!splitKey) return row;
-      const rowPitches =
-        rowPitchesByKey[splitKey] ??
-        (splitKey.toLowerCase() === 'all' ? fallbackAllPitches : []);
-      if (!rowPitches.length) return row;
-      let pvSum = 0;
-      let pvN = 0;
-      for (const pitch of rowPitches) {
-        const pv = calcPitchValue(pitch as Parameters<typeof calcPitchValue>[0]);
-        if (!Number.isFinite(pv)) continue;
-        pvSum += pv;
-        pvN += 1;
-      }
-      if (pvN <= 0) return row;
-      return { ...row, 'PV/100': Number(((pvSum / pvN) * 100).toFixed(1)) };
-    });
-  }, [overview?.table_rows, overview?.row_pitches_by_key, splitColName, summaryPoints]);
+  // Keep PV/100 source-of-truth on the backend/rollups so reloads cannot switch
+  // between mixed client fallback and server-calculated values.
+  // Pitch-count min/max filtering is enforced server-side for consistency.
+  const tableRowsWithPv = useMemo(() => overview?.table_rows ?? [], [overview?.table_rows]);
   const leaderboardRows = useMemo(() => {
     const rows = tableRowsWithPv;
     if (!isLeaderboardPage) return rows;

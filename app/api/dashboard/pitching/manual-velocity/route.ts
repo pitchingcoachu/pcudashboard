@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
-import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlayerName } from '../../../../../lib/dashboard-player-scope';
+import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlayerName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 
 function getPortalSession() {
   return cookies().then((cookieStore) => {
@@ -25,11 +25,12 @@ function getPortalSession() {
 export async function GET() {
   const session = await getPortalSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const playerIdentity = await resolveDashboardPlayerIdentity(session);
-  if (session.role === 'player' && !playerIdentity) {
+  const schoolCode = resolveDashboardSchoolCode(session);
+  const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+  const playerIdentity = shouldScopePlayer ? await resolveDashboardPlayerIdentity(session) : null;
+  if (shouldScopePlayer && !playerIdentity) {
     return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
   }
-  const schoolCode = resolveDashboardSchoolCode(session);
   const apiBase = resolveDashboardApiBaseUrl();
   const url = new URL(`${apiBase}/v1/pitching/manual-velocity`);
   url.searchParams.set('school_code', schoolCode);
@@ -64,11 +65,12 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await getPortalSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const playerIdentity = await resolveDashboardPlayerIdentity(session);
-  if (session.role === 'player' && !playerIdentity) {
+  const schoolCode = resolveDashboardSchoolCode(session);
+  const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+  const playerIdentity = shouldScopePlayer ? await resolveDashboardPlayerIdentity(session) : null;
+  if (shouldScopePlayer && !playerIdentity) {
     return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
   }
-  const schoolCode = resolveDashboardSchoolCode(session);
   const apiBase = resolveDashboardApiBaseUrl();
   const url = new URL(`${apiBase}/v1/pitching/manual-velocity`);
   try {
@@ -103,11 +105,12 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   const session = await getPortalSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const playerIdentity = await resolveDashboardPlayerIdentity(session);
-  if (session.role === 'player' && !playerIdentity) {
+  const schoolCode = resolveDashboardSchoolCode(session);
+  const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+  const playerIdentity = shouldScopePlayer ? await resolveDashboardPlayerIdentity(session) : null;
+  if (shouldScopePlayer && !playerIdentity) {
     return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
   }
-  const schoolCode = resolveDashboardSchoolCode(session);
   const entryId = (new URL(request.url).searchParams.get('entry_id') ?? '').trim();
   if (!entryId) {
     return NextResponse.json({ error: 'entry_id is required.' }, { status: 400 });
