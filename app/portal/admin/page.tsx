@@ -11,7 +11,6 @@ import {
   canUseClientManagement,
   canUseProgrammingData,
   getSchoolProductAccess,
-  refreshSchoolProductAccessCache,
   resolveClientManagementOrganizationId,
   resolveProgrammingOrganizationId,
   resolveProgrammingSchoolCode,
@@ -19,7 +18,6 @@ import {
 
 export default async function AdminHomePage() {
   const session = await requirePortalSession();
-  await refreshSchoolProductAccessCache();
   const canAccessClientManagement = canUseClientManagement(session);
   const canAccessProgramming = canUseProgrammingData(session);
   const clientManagementOrganizationId = resolveClientManagementOrganizationId(session);
