@@ -4141,8 +4141,17 @@ def _filter_pitching_rows_by_team_type(
 ) -> List[Dict[str, Any]]:
     if team_type_value in {"", "All"}:
         return rows
-    if school_code != "PRO":
+    if school_code == "LEAGUE":
         selected_code = _normalize_team_code(_league_team_code_from_value(team_type_value))
+        if not selected_code:
+            return rows
+        return [
+            row
+            for row in rows
+            if _normalize_team_code(str(row.get("pitcher_team_code") or "")) == selected_code
+        ]
+    if school_code == "PRO":
+        selected_code = _normalize_team_code(_pro_team_code_from_value(team_type_value))
         if not selected_code:
             return rows
         return [
@@ -13993,7 +14002,9 @@ def pitching_overview(
             selected_pitch_results = []
             selected_count_filters = []
             selected_after_count_filters = []
-            with_video = None
+            # Respect explicit with_video filters even on wide windows.
+            if (with_video or "").strip().lower() not in {"yes", "no"}:
+                with_video = None
 
         if league_rollup_candidate:
             if table_mode not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
@@ -14040,7 +14051,9 @@ def pitching_overview(
             selected_pitch_results = []
             selected_count_filters = []
             selected_after_count_filters = []
-            with_video = None
+            # Respect explicit with_video filters even on wide windows.
+            if (with_video or "").strip().lower() not in {"yes", "no"}:
+                with_video = None
             if table_mode not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
                 table_mode = "Live"
             if split_by not in {
@@ -14085,7 +14098,9 @@ def pitching_overview(
             selected_pitch_results = []
             selected_count_filters = []
             selected_after_count_filters = []
-            with_video = None
+            # Respect explicit with_video filters even on wide windows.
+            if (with_video or "").strip().lower() not in {"yes", "no"}:
+                with_video = None
             if table_mode not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
                 table_mode = "Live"
             if split_by not in {
@@ -14800,7 +14815,9 @@ def pitching_overview(
     try:
         with get_conn() as conn, conn.cursor() as cur:
             video_map_table = None
-            table_candidates = [f"public.video_map_{school_code.lower()}", "public.video_map"]
+            # Prefer the shared canonical video_map table first.
+            # Some legacy school-specific tables may contain stale/unmatched play_ids.
+            table_candidates = ["public.video_map", f"public.video_map_{school_code.lower()}"]
             for candidate in table_candidates:
                 cur.execute("SELECT to_regclass(%(tbl)s)::text AS reg", {"tbl": candidate})
                 reg = (cur.fetchone() or {}).get("reg")

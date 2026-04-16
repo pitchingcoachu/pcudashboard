@@ -130,9 +130,11 @@ async function resolveCustomReportOrganizationScope(
   return { primaryOrganizationId, organizationIds: Array.from(new Set([...organizationIds, ...staffOrgIds])) };
 }
 
-async function resolveAuthIdentityFallback(session: PortalSession): Promise<{ fallbackUserId: number; fallbackOrgIds: number[] }> {
+async function resolveAuthIdentityFallback(
+  session: PortalSession
+): Promise<{ fallbackUserId: number; fallbackUserIds: number[]; fallbackOrgIds: number[] }> {
   const email = String(session.email ?? '').trim().toLowerCase();
-  if (!email) return { fallbackUserId: 0, fallbackOrgIds: [] };
+  if (!email) return { fallbackUserId: 0, fallbackUserIds: [], fallbackOrgIds: [] };
   try {
     await ensureAuthDbReady();
     const pool = getDbPool();
@@ -147,16 +149,22 @@ async function resolveAuthIdentityFallback(session: PortalSession): Promise<{ fa
       [email]
     );
     let fallbackUserId = 0;
+    const fallbackUserSet = new Set<number>();
     const fallbackOrgSet = new Set<number>();
     for (const row of result.rows) {
       const uid = Number(row.id ?? 0);
       if (uid > 0 && fallbackUserId <= 0) fallbackUserId = uid;
+      if (uid > 0) fallbackUserSet.add(uid);
       const orgId = Number(row.organization_id ?? 0);
       if (orgId > 0) fallbackOrgSet.add(orgId);
     }
-    return { fallbackUserId, fallbackOrgIds: Array.from(fallbackOrgSet) };
+    return {
+      fallbackUserId,
+      fallbackUserIds: Array.from(fallbackUserSet),
+      fallbackOrgIds: Array.from(fallbackOrgSet),
+    };
   } catch {
-    return { fallbackUserId: 0, fallbackOrgIds: [] };
+    return { fallbackUserId: 0, fallbackUserIds: [], fallbackOrgIds: [] };
   }
 }
 
@@ -248,11 +256,13 @@ export async function GET() {
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
-  const effectiveUserId =
-    Number.isFinite(userId) && userId > 0
-      ? userId
-      : identityFallback.fallbackUserId;
-  const hasUserScope = Number.isFinite(effectiveUserId) && effectiveUserId > 0;
+  const effectiveUserIds = Array.from(
+    new Set([
+      ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
+      ...identityFallback.fallbackUserIds,
+    ])
+  );
+  const hasUserScope = effectiveUserIds.length > 0;
   // Allow user-owned fallback reads when org scope is temporarily empty.
   // This prevents saved reports from "disappearing" for valid logged-in users.
   if (!scopedOrgIds.length && !isGlobalAdmin && !hasUserScope) {
@@ -275,12 +285,12 @@ export async function GET() {
       FROM dashboard_custom_reports
       WHERE (
         (($5::boolean OR organization_id = ANY($1::int[])) AND (school_code = $2 OR applies_to_all_schools = TRUE))
-        OR ($3::boolean AND created_by_user_id = $4)
+        OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
         OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
       )
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrgIds, schoolCode, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
+      [scopedOrgIds, schoolCode, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
     );
     let rows = result.rows;
     if (!rows.length) {
@@ -298,11 +308,11 @@ export async function GET() {
         FROM dashboard_custom_reports
         WHERE $4::boolean
            OR organization_id = ANY($1::int[])
-           OR ($2::boolean AND created_by_user_id = $3)
+           OR ($2::boolean AND created_by_user_id = ANY($3::bigint[]))
            OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
         ORDER BY updated_at DESC, id DESC
         `,
-        [scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
+        [scopedOrgIds, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
       );
       rows = fallback.rows;
     }
@@ -384,11 +394,14 @@ export async function POST(request: Request) {
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
-  const effectiveUserId =
-    Number.isFinite(userId) && userId > 0
-      ? userId
-      : identityFallback.fallbackUserId;
-  const hasUserScope = Number.isFinite(effectiveUserId) && effectiveUserId > 0;
+  const effectiveUserIds = Array.from(
+    new Set([
+      ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
+      ...identityFallback.fallbackUserIds,
+    ])
+  );
+  const hasUserScope = effectiveUserIds.length > 0;
+  const effectiveUserId = hasUserScope ? effectiveUserIds[0] : 0;
   const effectivePrimaryOrganizationId =
     Number.isFinite(primaryOrganizationId) && primaryOrganizationId > 0
       ? primaryOrganizationId
@@ -431,12 +444,12 @@ export async function POST(request: Request) {
            AND (
              $8::boolean
              OR organization_id = ANY($1::int[])
-             OR ($6::boolean AND created_by_user_id = $7)
+             OR ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
              OR ($9::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($9))
            )
          RETURNING id, name, applies_to_all_schools, payload_json, created_at, updated_at
         `,
-        [scopedOrgIds, id, name, JSON.stringify(payload), applyToAllSchools, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
+        [scopedOrgIds, id, name, JSON.stringify(payload), applyToAllSchools, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });
@@ -457,7 +470,7 @@ export async function POST(request: Request) {
           WHERE (
             $10::boolean
             OR organization_id = ANY($1::int[])
-            OR ($7::boolean AND created_by_user_id = $8)
+            OR ($7::boolean AND created_by_user_id = ANY($8::bigint[]))
             OR ($11::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($11))
           )
             AND school_code = $2
@@ -495,7 +508,7 @@ export async function POST(request: Request) {
           effectiveUserId > 0 ? effectiveUserId : null,
           applyToAllSchools,
           hasUserScope,
-          effectiveUserId,
+          effectiveUserIds,
           effectivePrimaryOrganizationId,
           isGlobalAdmin,
           normalizedEmail,
@@ -532,11 +545,13 @@ export async function DELETE(request: Request) {
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
-  const effectiveUserId =
-    Number.isFinite(userId) && userId > 0
-      ? userId
-      : identityFallback.fallbackUserId;
-  const hasUserScope = Number.isFinite(effectiveUserId) && effectiveUserId > 0;
+  const effectiveUserIds = Array.from(
+    new Set([
+      ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
+      ...identityFallback.fallbackUserIds,
+    ])
+  );
+  const hasUserScope = effectiveUserIds.length > 0;
   if (!scopedOrgIds.length && !isGlobalAdmin) {
     return NextResponse.json({ error: 'No valid organization scope for custom reports.' }, { status: 400 });
   }
@@ -556,12 +571,12 @@ export async function DELETE(request: Request) {
         AND (
           $5::boolean
           OR organization_id = ANY($2::int[])
-          OR ($3::boolean AND created_by_user_id = $4)
+          OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
           OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
         )
       LIMIT 1
       `,
-      [id, scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
+      [id, scopedOrgIds, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
     );
     const existingName = String(protectedCheck.rows[0]?.name ?? '').trim();
     if (normalizedReportNameKey(existingName) === normalizedReportNameKey("Jared's Dashboard")) {
@@ -574,11 +589,11 @@ export async function DELETE(request: Request) {
         AND (
           $5::boolean
           OR organization_id = ANY($2::int[])
-          OR ($3::boolean AND created_by_user_id = $4)
+          OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
           OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
         )
       `,
-      [id, scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
+      [id, scopedOrgIds, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
     );
     if (!deleted.rowCount) {
       return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });

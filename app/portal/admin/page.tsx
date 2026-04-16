@@ -11,58 +11,26 @@ import {
   canUseClientManagement,
   canUseProgrammingData,
   getSchoolProductAccess,
+  refreshSchoolProductAccessCache,
   resolveClientManagementOrganizationId,
   resolveProgrammingOrganizationId,
   resolveProgrammingSchoolCode,
 } from '../../../lib/programming-scope';
 
-async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const timeoutPromise = new Promise<T>((resolve) => {
-      timer = setTimeout(() => resolve(fallback), ms);
-    });
-    return await Promise.race([promise, timeoutPromise]);
-  } catch {
-    return fallback;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 export default async function AdminHomePage() {
   const session = await requirePortalSession();
+  await refreshSchoolProductAccessCache();
   const canAccessClientManagement = canUseClientManagement(session);
   const canAccessProgramming = canUseProgrammingData(session);
   const clientManagementOrganizationId = resolveClientManagementOrganizationId(session);
   const programmingOrganizationId = resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const [clients, coaches, exercises, workouts, schoolAccess] = await Promise.all([
-    withTimeout(
-      clientManagementOrganizationId > 0 ? listClientsByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
-      6000,
-      []
-    ),
-    withTimeout(
-      clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
-      6000,
-      []
-    ),
-    withTimeout(
-      programmingOrganizationId > 0 ? listExercisesByOrganization(programmingOrganizationId) : Promise.resolve([]),
-      6000,
-      []
-    ),
-    withTimeout(
-      programmingOrganizationId > 0 ? listWorkoutsByOrganization(programmingOrganizationId) : Promise.resolve([]),
-      6000,
-      []
-    ),
-    withTimeout(
-      getSchoolProductAccess(programmingSchoolCode),
-      3000,
-      { dashboard: true, programming: false, clientManagement: true }
-    ),
+    clientManagementOrganizationId > 0 ? listClientsByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
+    clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
+    programmingOrganizationId > 0 ? listExercisesByOrganization(programmingOrganizationId) : Promise.resolve([]),
+    programmingOrganizationId > 0 ? listWorkoutsByOrganization(programmingOrganizationId) : Promise.resolve([]),
+    getSchoolProductAccess(programmingSchoolCode),
   ]);
   const visibleClients =
     session.role === 'coach' ? clients.filter((client) => client.assignedCoachUserId === session.userId) : clients;

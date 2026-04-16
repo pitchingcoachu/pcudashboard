@@ -41,6 +41,7 @@ type HomeSearchBaseSnapshot = {
 };
 
 const homeSearchBaseCache = new Map<string, { at: number; payload: HomeSearchBaseSnapshot }>();
+const homeSearchBaseInflight = new Map<string, Promise<HomeSearchBaseSnapshot>>();
 
 function resolveHomeSearchBaseTtlMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -302,46 +303,44 @@ async function fetchLatestScopedDate(input: {
   scopedPitcher: string;
   scopedHitter: string;
 }): Promise<string | null> {
-  const latestDates: Array<string | null> = [];
-  if (input.scopedPitcher) {
-    const pitchingUrl = new URL(`${input.apiBase}/v1/pitching/ab-report`);
-    pitchingUrl.searchParams.set('school_code', input.schoolCode);
-    pitchingUrl.searchParams.set('pitcher', input.scopedPitcher);
-    const pitchingResult = await fetchJsonWithCache(
-      pitchingUrl,
-      `home:scoped:last-date:pitching:${pitchingUrl.toString()}`,
-      12000,
-      0
-    );
-    if (pitchingResult.status >= 200 && pitchingResult.status < 300) {
-      const games = Array.isArray((pitchingResult.payload as { available_games?: unknown[] }).available_games)
-        ? ((pitchingResult.payload as { available_games?: unknown[] }).available_games as Array<Record<string, unknown>>)
-        : [];
-      latestDates.push(
-        pickLatestDate(games.map((game) => String(game.date ?? '').trim()))
-      );
-    }
-  }
-  if (input.scopedHitter) {
-    const hittingUrl = new URL(`${input.apiBase}/v1/hitting/ab-report`);
-    hittingUrl.searchParams.set('school_code', input.schoolCode);
-    hittingUrl.searchParams.set('hitter', input.scopedHitter);
-    const hittingResult = await fetchJsonWithCache(
-      hittingUrl,
-      `home:scoped:last-date:hitting:${hittingUrl.toString()}`,
-      12000,
-      0
-    );
-    if (hittingResult.status >= 200 && hittingResult.status < 300) {
-      const games = Array.isArray((hittingResult.payload as { available_games?: unknown[] }).available_games)
-        ? ((hittingResult.payload as { available_games?: unknown[] }).available_games as Array<Record<string, unknown>>)
-        : [];
-      latestDates.push(
-        pickLatestDate(games.map((game) => String(game.date ?? '').trim()))
-      );
-    }
-  }
-  return pickLatestDate(latestDates);
+  const pitchingLatestPromise = input.scopedPitcher
+    ? (async () => {
+        const pitchingUrl = new URL(`${input.apiBase}/v1/pitching/ab-report`);
+        pitchingUrl.searchParams.set('school_code', input.schoolCode);
+        pitchingUrl.searchParams.set('pitcher', input.scopedPitcher);
+        const pitchingResult = await fetchJsonWithCache(
+          pitchingUrl,
+          `home:scoped:last-date:pitching:${pitchingUrl.toString()}`,
+          12000,
+          0
+        );
+        if (pitchingResult.status < 200 || pitchingResult.status >= 300) return null;
+        const games = Array.isArray((pitchingResult.payload as { available_games?: unknown[] }).available_games)
+          ? ((pitchingResult.payload as { available_games?: unknown[] }).available_games as Array<Record<string, unknown>>)
+          : [];
+        return pickLatestDate(games.map((game) => String(game.date ?? '').trim()));
+      })()
+    : Promise.resolve<string | null>(null);
+  const hittingLatestPromise = input.scopedHitter
+    ? (async () => {
+        const hittingUrl = new URL(`${input.apiBase}/v1/hitting/ab-report`);
+        hittingUrl.searchParams.set('school_code', input.schoolCode);
+        hittingUrl.searchParams.set('hitter', input.scopedHitter);
+        const hittingResult = await fetchJsonWithCache(
+          hittingUrl,
+          `home:scoped:last-date:hitting:${hittingUrl.toString()}`,
+          12000,
+          0
+        );
+        if (hittingResult.status < 200 || hittingResult.status >= 300) return null;
+        const games = Array.isArray((hittingResult.payload as { available_games?: unknown[] }).available_games)
+          ? ((hittingResult.payload as { available_games?: unknown[] }).available_games as Array<Record<string, unknown>>)
+          : [];
+        return pickLatestDate(games.map((game) => String(game.date ?? '').trim()));
+      })()
+    : Promise.resolve<string | null>(null);
+  const [pitchingLatest, hittingLatest] = await Promise.all([pitchingLatestPromise, hittingLatestPromise]);
+  return pickLatestDate([pitchingLatest, hittingLatest]);
 }
 
 export async function GET(request: Request) {
@@ -392,92 +391,108 @@ export async function GET(request: Request) {
     if (cachedBase && now - cachedBase.at <= ttlMs) {
       baseSnapshot = cachedBase.payload;
     } else {
-      try {
-        const { pitching, hitting } = shouldScopePlayer
-          ? {
-              pitching: { pitchers: uniqueStrings([scopedPitcher]) } as FiltersPayload,
-              hitting: { hitters: uniqueStrings([scopedHitter]) } as FiltersPayload,
-            }
-          : await fetchFilters(apiBase, schoolCode);
-
-        const pitchingPlayers = shouldScopePlayer ? uniqueStrings([scopedPitcher]) : uniqueStrings(pitching.pitchers ?? []);
-        const hittingPlayers = shouldScopePlayer ? uniqueStrings([scopedHitter]) : uniqueStrings(hitting.hitters ?? []);
-        const playerTeamByName = new Map<string, string>();
-        mergePlayerTeamMap(playerTeamByName, pitching.pitchers_by_team_code);
-        mergePlayerTeamMap(playerTeamByName, hitting.hitters_by_team_code);
-
-        const playerMap = new Map<string, { value: string; inPitching: boolean; inHitting: boolean; team_code?: string }>();
-        for (const name of pitchingPlayers) {
-          const key = name.toLowerCase();
-          const normalizedKey = normalizedNameKey(name);
-          const current = playerMap.get(key) ?? { value: name, inPitching: false, inHitting: false };
-          current.value = current.value || name;
-          current.inPitching = true;
-          if (!current.team_code && normalizedKey) current.team_code = playerTeamByName.get(normalizedKey);
-          playerMap.set(key, current);
+      const inflight = homeSearchBaseInflight.get(snapshotKey);
+      if (inflight) {
+        try {
+          baseSnapshot = await inflight;
+        } catch (refreshError) {
+          if (cachedBase) baseSnapshot = cachedBase.payload;
+          else throw refreshError;
         }
-        for (const name of hittingPlayers) {
-          const key = name.toLowerCase();
-          const normalizedKey = normalizedNameKey(name);
-          const current = playerMap.get(key) ?? { value: name, inPitching: false, inHitting: false };
-          current.value = current.value || name;
-          current.inHitting = true;
-          if (!current.team_code && normalizedKey) current.team_code = playerTeamByName.get(normalizedKey);
-          playerMap.set(key, current);
-        }
-        const playerCandidates: Candidate[] = Array.from(playerMap.values())
-          .map((entry) => ({
-            type: 'player' as const,
-            value: entry.value,
-            suite: entry.inPitching ? 'Pitching' : 'Hitting',
-            team_code: entry.team_code,
-          }));
+      } else {
+        const refreshPromise = (async (): Promise<HomeSearchBaseSnapshot> => {
+          const { pitching, hitting } = shouldScopePlayer
+            ? {
+                pitching: { pitchers: uniqueStrings([scopedPitcher]) } as FiltersPayload,
+                hitting: { hitters: uniqueStrings([scopedHitter]) } as FiltersPayload,
+              }
+            : await fetchFilters(apiBase, schoolCode);
 
-        const teamCandidates: Candidate[] = shouldScopePlayer
-          ? []
-          : (() => {
-              const teamCodeLookup = buildCanonicalTeamCodeLookup([
-                pitching.pitchers_by_team_code,
-                hitting.hitters_by_team_code,
-              ]);
-              const teams = uniqueStrings([...(pitching.team_types ?? []), ...(hitting.team_types ?? [])])
-                .filter((value) => value.toLowerCase() !== 'all');
-              return teams.map((value) => ({
-                type: 'team' as const,
-                value,
-                suite: 'Pitching' as const,
-                team_code: teamCodeLookup.get(normalizeTeamKey(value)) ?? normalizeTeamKey(value),
-              }));
-            })();
+          const pitchingPlayers = shouldScopePlayer ? uniqueStrings([scopedPitcher]) : uniqueStrings(pitching.pitchers ?? []);
+          const hittingPlayers = shouldScopePlayer ? uniqueStrings([scopedHitter]) : uniqueStrings(hitting.hitters ?? []);
+          const playerTeamByName = new Map<string, string>();
+          mergePlayerTeamMap(playerTeamByName, pitching.pitchers_by_team_code);
+          mergePlayerTeamMap(playerTeamByName, hitting.hitters_by_team_code);
 
-        const candidates: Candidate[] = [...playerCandidates, ...teamCandidates].sort((a, b) => {
-          if (a.type !== b.type) return a.type.localeCompare(b.type);
-          return a.value.localeCompare(b.value);
-        });
+          const playerMap = new Map<string, { value: string; inPitching: boolean; inHitting: boolean; team_code?: string }>();
+          for (const name of pitchingPlayers) {
+            const key = name.toLowerCase();
+            const normalizedKey = normalizedNameKey(name);
+            const current = playerMap.get(key) ?? { value: name, inPitching: false, inHitting: false };
+            current.value = current.value || name;
+            current.inPitching = true;
+            if (!current.team_code && normalizedKey) current.team_code = playerTeamByName.get(normalizedKey);
+            playerMap.set(key, current);
+          }
+          for (const name of hittingPlayers) {
+            const key = name.toLowerCase();
+            const normalizedKey = normalizedNameKey(name);
+            const current = playerMap.get(key) ?? { value: name, inPitching: false, inHitting: false };
+            current.value = current.value || name;
+            current.inHitting = true;
+            if (!current.team_code && normalizedKey) current.team_code = playerTeamByName.get(normalizedKey);
+            playerMap.set(key, current);
+          }
+          const playerCandidates: Candidate[] = Array.from(playerMap.values())
+            .map((entry) => ({
+              type: 'player' as const,
+              value: entry.value,
+              suite: entry.inPitching ? 'Pitching' : 'Hitting',
+              team_code: entry.team_code,
+            }));
 
-        const latestDate = shouldScopePlayer
-          ? await fetchLatestScopedDate({
-              apiBase,
-              schoolCode,
-              scopedPitcher,
-              scopedHitter,
-            })
-          : pickLatestDate([pitching.max_date, hitting.max_date]);
-        const dateWindow = shouldScopePlayer
-          ? resolveScopedPlayerWindow(schoolCode, latestDate)
-          : resolveSeasonWindow(schoolCode, latestDate);
+          const teamCandidates: Candidate[] = shouldScopePlayer
+            ? []
+            : (() => {
+                const teamCodeLookup = buildCanonicalTeamCodeLookup([
+                  pitching.pitchers_by_team_code,
+                  hitting.hitters_by_team_code,
+                ]);
+                const teams = uniqueStrings([...(pitching.team_types ?? []), ...(hitting.team_types ?? [])])
+                  .filter((value) => value.toLowerCase() !== 'all');
+                return teams.map((value) => ({
+                  type: 'team' as const,
+                  value,
+                  suite: 'Pitching' as const,
+                  team_code: teamCodeLookup.get(normalizeTeamKey(value)) ?? normalizeTeamKey(value),
+                }));
+              })();
 
-        baseSnapshot = {
-          candidates,
-          dateWindow,
-          latestDate,
-        };
-        homeSearchBaseCache.set(snapshotKey, { at: now, payload: baseSnapshot });
-      } catch (refreshError) {
-        if (cachedBase) {
-          baseSnapshot = cachedBase.payload;
-        } else {
-          throw refreshError;
+          const candidates: Candidate[] = [...playerCandidates, ...teamCandidates].sort((a, b) => {
+            if (a.type !== b.type) return a.type.localeCompare(b.type);
+            return a.value.localeCompare(b.value);
+          });
+
+          const latestDate = shouldScopePlayer
+            ? await fetchLatestScopedDate({
+                apiBase,
+                schoolCode,
+                scopedPitcher,
+                scopedHitter,
+              })
+            : pickLatestDate([pitching.max_date, hitting.max_date]);
+          const dateWindow = shouldScopePlayer
+            ? resolveScopedPlayerWindow(schoolCode, latestDate)
+            : resolveSeasonWindow(schoolCode, latestDate);
+
+          return {
+            candidates,
+            dateWindow,
+            latestDate,
+          };
+        })();
+        homeSearchBaseInflight.set(snapshotKey, refreshPromise);
+        try {
+          baseSnapshot = await refreshPromise;
+          homeSearchBaseCache.set(snapshotKey, { at: now, payload: baseSnapshot });
+        } catch (refreshError) {
+          if (cachedBase) {
+            baseSnapshot = cachedBase.payload;
+          } else {
+            throw refreshError;
+          }
+        } finally {
+          homeSearchBaseInflight.delete(snapshotKey);
         }
       }
     }

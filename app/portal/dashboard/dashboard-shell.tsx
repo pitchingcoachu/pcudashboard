@@ -183,8 +183,14 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
     activateSuite(input.suite);
   };
   useEffect(() => {
+    if (activeSuite === 'Home') return;
+    const cachedSchoolCode = String(navSearchPayload?.school_code ?? '').trim().toUpperCase();
+    const selectedCode = String(selectedSchoolCode ?? '').trim().toUpperCase();
+    if (cachedSchoolCode && cachedSchoolCode === selectedCode) return;
     let isMounted = true;
-    fetchHomePayload()
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+    fetchHomePayload(controller.signal)
       .then((payload) => {
         if (!isMounted) return;
         setNavSearchPayload(payload);
@@ -192,13 +198,19 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
       })
       .catch((error: unknown) => {
         if (!isMounted) return;
+        if (error instanceof DOMException && error.name === 'AbortError') return;
         const message = error instanceof Error ? error.message : 'Failed to load search options.';
         setNavSearchError(message);
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId);
       });
     return () => {
       isMounted = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
     };
-  }, [selectedSchoolCode]);
+  }, [activeSuite, navSearchPayload?.school_code, selectedSchoolCode]);
   const navMatchingCandidates = useMemo(() => {
     const source = navSearchPayload?.candidates ?? [];
     const needle = navSearchQuery.trim().toLowerCase();
@@ -350,6 +362,7 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
       {mountedSuites.Home ? (
         <div style={{ display: showSuite('Home') ? 'block' : 'none' }}>
           <HomeSuite
+            role={role}
             selectedSchoolCode={selectedSchoolCode}
             activeSuite={activeSuite}
             suiteOptions={suiteOptions}

@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
-import { canUseClientManagement, canUseProgrammingData } from '../../../lib/programming-scope';
+import { canUseClientManagement, canUseProgrammingData, refreshSchoolProductAccessCache } from '../../../lib/programming-scope';
 import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-brand';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
@@ -12,6 +12,7 @@ import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-sch
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const session = await requirePortalSession();
+  await refreshSchoolProductAccessCache();
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
   const brand = resolveSchoolBrand(selectedSchool);

@@ -37,6 +37,7 @@ type AlertsPayload = {
 };
 
 type HomeSuiteProps = {
+  role: 'admin' | 'coach' | 'player';
   selectedSchoolCode: string;
   activeSuite: string;
   suiteOptions: string[];
@@ -162,13 +163,13 @@ function todayYmd(): string {
   return `${year}-${month}-${day}`;
 }
 
-export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOptions, onOpenSuite, onNavigate }: HomeSuiteProps) {
+export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suiteOptions, onOpenSuite, onNavigate }: HomeSuiteProps) {
   const [basePayload, setBasePayload] = useState<SearchPayload | null>(null);
   const [alertsPayload, setAlertsPayload] = useState<AlertsPayload | null>(null);
   const [query, setQuery] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [loadingBase, setLoadingBase] = useState(true);
-  const [loadingAlerts, setLoadingAlerts] = useState(true);
+  const [loadingAlerts, setLoadingAlerts] = useState(false);
   const [alertsError, setAlertsError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pitchingSort, setPitchingSort] = useState<{ metric: PitchingAlertMetric | null; mode: SortMode }>({
@@ -185,6 +186,7 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
   const isProSchool = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'PRO';
   const isLeagueSchool = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'LEAGUE';
   const isHeavySchool = isProSchool || isLeagueSchool;
+  const shouldLoadAlerts = !isHeavySchool && role !== 'player';
   const homeSearchBorder = isProSchool
     ? '1px solid rgba(88, 132, 198, 0.62)'
     : '1px solid rgba(var(--portal-accent-rgb, 200, 16, 46), 0.45)';
@@ -229,8 +231,14 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
     };
   }, []);
   useEffect(() => {
-    if (isHeavySchool) return () => {};
+    if (!shouldLoadAlerts) {
+      setLoadingAlerts(false);
+      setAlertsPayload(null);
+      setAlertsError(null);
+      return () => {};
+    }
     let isMounted = true;
+    setLoadingAlerts(true);
     fetchAlertsPayload()
       .then((payload) => {
         if (!isMounted) return;
@@ -249,7 +257,7 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
     return () => {
       isMounted = false;
     };
-  }, [isHeavySchool]);
+  }, [shouldLoadAlerts]);
 
   const matchingCandidates = useMemo(() => {
     const source = basePayload?.candidates ?? [];
@@ -634,7 +642,7 @@ export default function HomeSuite({ selectedSchoolCode, activeSuite, suiteOption
         ))}
       </div>
 
-      {!isHeavySchool ? (
+      {shouldLoadAlerts ? (
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', marginTop: 8 }}>
         <section className="portal-panel" style={{ margin: 0 }}>
           <h3 style={{ marginTop: 0, marginBottom: 8 }}>Pitching Trends (Last 2 Weeks vs Season)</h3>

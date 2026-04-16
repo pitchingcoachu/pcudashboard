@@ -230,9 +230,11 @@ async function resolveCustomTableOrganizationScope(
   return { primaryOrganizationId, organizationIds: Array.from(new Set([...organizationIds, ...staffOrgIds])) };
 }
 
-async function resolveAuthIdentityFallback(session: PortalSession): Promise<{ fallbackUserId: number; fallbackOrgIds: number[] }> {
+async function resolveAuthIdentityFallback(
+  session: PortalSession
+): Promise<{ fallbackUserId: number; fallbackUserIds: number[]; fallbackOrgIds: number[] }> {
   const email = String(session.email ?? '').trim().toLowerCase();
-  if (!email) return { fallbackUserId: 0, fallbackOrgIds: [] };
+  if (!email) return { fallbackUserId: 0, fallbackUserIds: [], fallbackOrgIds: [] };
   try {
     await ensureAuthDbReady();
     const pool = getDbPool();
@@ -247,16 +249,20 @@ async function resolveAuthIdentityFallback(session: PortalSession): Promise<{ fa
       [email]
     );
     let fallbackUserId = 0;
+    const fallbackUserIds: number[] = [];
     const fallbackOrgSet = new Set<number>();
     for (const row of result.rows) {
       const uid = Number(row.id ?? 0);
-      if (uid > 0 && fallbackUserId <= 0) fallbackUserId = uid;
+      if (uid > 0) {
+        if (fallbackUserId <= 0) fallbackUserId = uid;
+        fallbackUserIds.push(uid);
+      }
       const orgId = Number(row.organization_id ?? 0);
       if (orgId > 0) fallbackOrgSet.add(orgId);
     }
-    return { fallbackUserId, fallbackOrgIds: Array.from(fallbackOrgSet) };
+    return { fallbackUserId, fallbackUserIds, fallbackOrgIds: Array.from(fallbackOrgSet) };
   } catch {
-    return { fallbackUserId: 0, fallbackOrgIds: [] };
+    return { fallbackUserId: 0, fallbackUserIds: [], fallbackOrgIds: [] };
   }
 }
 
@@ -344,11 +350,13 @@ export async function GET() {
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
-  const effectiveUserId =
-    Number.isFinite(userId) && userId > 0
-      ? userId
-      : identityFallback.fallbackUserId;
-  const hasUserScope = Number.isFinite(effectiveUserId) && effectiveUserId > 0;
+  const effectiveUserIds = Array.from(
+    new Set([
+      ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
+      ...identityFallback.fallbackUserIds,
+    ])
+  );
+  const hasUserScope = effectiveUserIds.length > 0;
   // Allow user-owned fallback reads when org scope is temporarily empty.
   // This prevents saved tables from "disappearing" for valid logged-in users.
   if (!scopedOrgIds.length && !isGlobalAdmin && !hasUserScope) {
@@ -371,12 +379,12 @@ export async function GET() {
       WHERE (
         $4::boolean
         OR organization_id = ANY($1::int[])
-        OR ($2::boolean AND created_by_user_id = $3)
+        OR ($2::boolean AND created_by_user_id = ANY($3::bigint[]))
         OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
       )
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
+      [scopedOrgIds, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
     );
     let candidateRows = scopedResult.rows;
     if (!candidateRows.length) {
@@ -454,11 +462,14 @@ export async function POST(request: Request) {
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
-  const effectiveUserId =
-    Number.isFinite(userId) && userId > 0
-      ? userId
-      : identityFallback.fallbackUserId;
-  const hasUserScope = Number.isFinite(effectiveUserId) && effectiveUserId > 0;
+  const effectiveUserIds = Array.from(
+    new Set([
+      ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
+      ...identityFallback.fallbackUserIds,
+    ])
+  );
+  const hasUserScope = effectiveUserIds.length > 0;
+  const effectiveUserId = hasUserScope ? effectiveUserIds[0] : 0;
   const effectivePrimaryOrganizationId =
     Number.isFinite(primaryOrganizationId) && primaryOrganizationId > 0
       ? primaryOrganizationId
@@ -503,12 +514,12 @@ export async function POST(request: Request) {
            AND (
              $7::boolean
              OR organization_id = ANY($1::int[])
-             OR ($5::boolean AND created_by_user_id = $6)
+             OR ($5::boolean AND created_by_user_id = ANY($6::bigint[]))
              OR ($8::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($8))
            )
          RETURNING id, name, columns_json, created_at, updated_at
         `,
-        [scopedOrgIds, id, name, payload, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
+        [scopedOrgIds, id, name, payload, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -528,7 +539,7 @@ export async function POST(request: Request) {
           WHERE (
             $9::boolean
             OR organization_id = ANY($1::int[])
-            OR ($6::boolean AND created_by_user_id = $7)
+            OR ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
             OR ($10::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($10))
           )
             AND school_code = $2
@@ -562,7 +573,7 @@ export async function POST(request: Request) {
           payload,
           effectiveUserId > 0 ? effectiveUserId : null,
           hasUserScope,
-          effectiveUserId,
+          effectiveUserIds,
           effectivePrimaryOrganizationId,
           isGlobalAdmin,
           normalizedEmail,
@@ -599,12 +610,14 @@ export async function DELETE(request: Request) {
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
-  const effectiveUserId =
-    Number.isFinite(userId) && userId > 0
-      ? userId
-      : identityFallback.fallbackUserId;
-  const hasUserScope = Number.isFinite(effectiveUserId) && effectiveUserId > 0;
-  if (!scopedOrgIds.length && !isGlobalAdmin) {
+  const effectiveUserIds = Array.from(
+    new Set([
+      ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
+      ...identityFallback.fallbackUserIds,
+    ])
+  );
+  const hasUserScope = effectiveUserIds.length > 0;
+  if (!scopedOrgIds.length && !isGlobalAdmin && !hasUserScope) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
   const url = new URL(request.url);
@@ -623,12 +636,12 @@ export async function DELETE(request: Request) {
         AND (
           $5::boolean
           OR organization_id = ANY($2::int[])
-          OR ($3::boolean AND created_by_user_id = $4)
+          OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
           OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
         )
       LIMIT 1
       `,
-      [id, scopedOrgIds, hasUserScope, effectiveUserId, isGlobalAdmin, normalizedEmail]
+      [id, scopedOrgIds, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
     );
     if (!(target.rowCount ?? 0)) {
       return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -645,7 +658,7 @@ export async function DELETE(request: Request) {
         AND (
           $5::boolean
           OR organization_id = ANY($2::int[])
-          OR ($3::boolean AND created_by_user_id = $4)
+          OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
           OR ($8::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($8))
         )
       `,
@@ -653,7 +666,7 @@ export async function DELETE(request: Request) {
         id,
         scopedOrgIds,
         hasUserScope,
-        effectiveUserId,
+        effectiveUserIds,
         isGlobalAdmin,
         target.rows[0].school_code,
         normalizedTableNameKey(target.rows[0].name),
