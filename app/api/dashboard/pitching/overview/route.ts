@@ -170,10 +170,12 @@ export async function GET(request: Request) {
     url.searchParams.set('include_row_pitches', '0');
   }
   const cachePolicy = resolveOverviewCachePolicy(schoolCode);
+  const isGameSplit = splitBy === 'Game';
+  const gameSplitCacheBuster = isGameSplit ? `:game:${Date.now()}` : '';
 
   try {
     const result = await fetchDashboardJsonWithCache({
-      cacheKey: `pitching:overview:${url.toString()}`,
+      cacheKey: `pitching:overview:${url.toString()}${gameSplitCacheBuster}`,
       ttlMs: cachePolicy.ttlMs,
       staleTtlMs: cachePolicy.staleTtlMs,
       timeoutMs: resolveOverviewTimeoutMs(schoolCode),

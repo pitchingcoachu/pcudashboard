@@ -26,6 +26,37 @@ export default function SchoolAccessCard({ schoolCode, initialAccess }: Props) {
     setClientManagement(initialAccess.clientManagement);
   }, [initialAccess.clientManagement, initialAccess.dashboard, initialAccess.programming, schoolCode]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+    (async () => {
+      try {
+        const response = await fetch(`/api/admin/school-access?schoolCode=${encodeURIComponent(schoolCode)}`, {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          dashboard?: boolean;
+          programming?: boolean;
+          clientManagement?: boolean;
+        };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load school access.');
+        if (typeof payload.dashboard === 'boolean') setDashboard(payload.dashboard);
+        if (typeof payload.programming === 'boolean') setProgramming(payload.programming);
+        if (typeof payload.clientManagement === 'boolean') setClientManagement(payload.clientManagement);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    })();
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [schoolCode]);
+
   async function save() {
     setSaving(true);
     setMessage('');

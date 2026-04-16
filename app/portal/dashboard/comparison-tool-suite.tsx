@@ -2333,12 +2333,17 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         <div className="portal-form-grid" style={{ marginBottom: 10, gridTemplateColumns: compact ? '1fr' : 'repeat(3, minmax(160px, 260px))' }}>
           <ControlSelect label="Table" value={state.tableMode} options={tableModeOptions} onChange={(next) => setState((current) => ({ ...current, tableMode: next }))} />
           <ControlSelect label="Split By" value={state.splitBy} options={splitByOptions} onChange={(next) => setState((current) => ({ ...current, splitBy: next }))} />
-          <label style={{ display: 'grid', gap: 4 }}>
-            <span>Table Colors</span>
-            <button type="button" className="btn btn-ghost" onClick={() => setEnableTableColors((current) => !current)}>
-              {enableTableColors ? 'ON' : 'OFF'}
-            </button>
-          </label>
+          <div className="portal-color-toggle" style={{ alignSelf: 'end' }}>
+            <span className="portal-color-toggle-label">Color Code</span>
+            <button
+              type="button"
+              className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
+              aria-label="Toggle table color coding"
+              aria-pressed={enableTableColors}
+              title={enableTableColors ? 'Color code on' : 'Color code off'}
+              onClick={() => setEnableTableColors((current) => !current)}
+            />
+          </div>
         </div>
         <table className="portal-table">
           <thead>

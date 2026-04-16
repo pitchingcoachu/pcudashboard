@@ -3642,10 +3642,17 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   <input type="checkbox" checked={showBattedResultsKey} onChange={(event) => setShowBattedResultsKey(event.target.checked)} />
                   Show batted results key
                 </label>
-                <label className="portal-checkbox-label">
-                  <input type="checkbox" checked={enableTableColors} onChange={(event) => setEnableTableColors(event.target.checked)} />
-                  Color code tables
-                </label>
+                <div className="portal-color-toggle">
+                  <span className="portal-color-toggle-label">Color Code</span>
+                  <button
+                    type="button"
+                    className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
+                    aria-label="Toggle custom report table color coding"
+                    aria-pressed={enableTableColors}
+                    title={enableTableColors ? 'Color code on' : 'Color code off'}
+                    onClick={() => setEnableTableColors((current) => !current)}
+                  />
+                </div>
               </div>
 
               {useGlobalDates ? (

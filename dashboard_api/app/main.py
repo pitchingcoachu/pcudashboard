@@ -1405,6 +1405,74 @@ def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
         return _normalize_team_code(raw) or "Unknown"
     if split == "Catcher":
         return str(row.get("catcher") or "Unknown")
+    if split == "Game":
+        session_value = row.get("session_date")
+        if isinstance(session_value, date):
+            session_date = session_value.isoformat()
+        else:
+            session_date = str(session_value or "").strip()
+        pitcher_team = (
+            str(row.get("pitcher_team_norm") or "").strip()
+            or _normalize_team_code(str(row.get("pitcherteam") or row.get("pitcher_team_code") or "").strip())
+            or "Unknown"
+        )
+        batter_team = (
+            str(row.get("batter_team_norm_eff") or row.get("batter_team_norm") or "").strip()
+            or _normalize_team_code(str(row.get("batterteam") or row.get("batter_team_code") or "").strip())
+            or "Unknown"
+        )
+        game_key = str(
+            row.get("game_pk")
+            or row.get("game_id")
+            or row.get("game_uid")
+            or row.get("game_foreign_id")
+            or ""
+        ).strip() or "-"
+        pitcher_marker = "?"
+        batter_marker = "?"
+        half_raw = str(
+            row.get("inning_topbot")
+            or row.get("inningtopbot")
+            or row.get("half_inning")
+            or row.get("inning_half")
+            or row.get("half")
+            or ""
+        ).strip().lower()
+        pitcher_is_home: Optional[bool] = None
+        if half_raw.startswith("top"):
+            pitcher_is_home = True
+        elif half_raw.startswith("bottom"):
+            pitcher_is_home = False
+        if pitcher_is_home is None:
+            home_team = _normalize_team_code(
+                str(
+                    row.get("home_team_code")
+                    or row.get("hometeam")
+                    or row.get("home_team")
+                    or ""
+                ).strip()
+            )
+            away_team = _normalize_team_code(
+                str(
+                    row.get("away_team_code")
+                    or row.get("awayteam")
+                    or row.get("away_team")
+                    or ""
+                ).strip()
+            )
+            if home_team and away_team:
+                if pitcher_team == home_team and batter_team == away_team:
+                    pitcher_is_home = True
+                elif pitcher_team == away_team and batter_team == home_team:
+                    pitcher_is_home = False
+                elif batter_team == home_team and pitcher_team == away_team:
+                    pitcher_is_home = False
+                elif batter_team == away_team and pitcher_team == home_team:
+                    pitcher_is_home = True
+        if pitcher_is_home is not None:
+            pitcher_marker = "vs." if pitcher_is_home else "@"
+            batter_marker = "@" if pitcher_is_home else "vs."
+        return f"{session_date}||{pitcher_team}||{batter_team}||{game_key}||{pitcher_marker}||{batter_marker}"
     return str(row.get("pitch_type") or "Unknown")
 
 
@@ -1943,6 +2011,7 @@ def _build_dynamic_table(
         "Pitcher": "Pitcher",
         "Batter": "Batter",
         "Catcher": "Catcher",
+        "Game": "Game",
     }
     split_col_name = split_col_map.get((split_by or "Pitch Types").strip(), "Pitch")
     groups: Dict[str, List[Dict[str, Any]]] = {}
@@ -3012,6 +3081,14 @@ def _build_dynamic_table(
                 return (1, 9, 9)
             return (0, int(m.group(2)), int(m.group(1)))
         ordered_items = sorted(groups.items(), key=lambda kv: (_count_rank(str(kv[0])), str(kv[0])))
+    elif split_clean == "Game":
+        def _game_rank(v: str) -> tuple[str, str]:
+            raw = str(v or "").strip()
+            parts = raw.split("||")
+            date_part = parts[0].strip() if parts else ""
+            key_part = parts[3].strip() if len(parts) > 3 else raw
+            return (date_part, key_part)
+        ordered_items = sorted(groups.items(), key=lambda kv: _game_rank(str(kv[0])), reverse=True)
     else:
         ordered_items = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
     for key, grp in ordered_items:
@@ -11152,6 +11229,9 @@ def _pro_pitching_overview(
       COALESCE(NULLIF(TRIM(batterside), ''), '') AS batterside,
       UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) AS pitcher_team_code,
       UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) AS batter_team_code,
+      UPPER(COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'hometeam', to_jsonb(pe)->>'home_team', '')), ''), '')) AS home_team_code,
+      UPPER(COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'awayteam', to_jsonb(pe)->>'away_team', '')), ''), '')) AS away_team_code,
+      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'inningtopbot', to_jsonb(pe)->>'InningTopBot', to_jsonb(pe)->>'half_inning', to_jsonb(pe)->>'inning_half', to_jsonb(pe)->>'half', '')), ''), '') AS inning_topbot,
       UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) AS pitcher_team_norm,
       UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) AS batter_team_norm_eff,
       """ + PRO_PITCH_TYPE_SQL + """ AS pitch_type,
@@ -12804,6 +12884,9 @@ def _pro_hitting_overview(
       COALESCE(NULLIF(TRIM(catcher), ''), '') AS catcher,
       UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) AS pitcher_team_code,
       UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) AS batter_team_code,
+      UPPER(COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'hometeam', to_jsonb(pe)->>'home_team', '')), ''), '')) AS home_team_code,
+      UPPER(COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'awayteam', to_jsonb(pe)->>'away_team', '')), ''), '')) AS away_team_code,
+      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'inningtopbot', to_jsonb(pe)->>'InningTopBot', to_jsonb(pe)->>'half_inning', to_jsonb(pe)->>'inning_half', to_jsonb(pe)->>'half', '')), ''), '') AS inning_topbot,
       COALESCE(NULLIF(TRIM(pitcherthrows), ''), '') AS pitcherthrows,
       COALESCE(NULLIF(TRIM(batterside), ''), '') AS batterside,
       """ + PRO_PITCH_TYPE_SQL + """ AS pitch_type,
@@ -14015,6 +14098,7 @@ def pitching_overview(
                 "Pitcher",
                 "Batter",
                 "Catcher",
+                "Game",
                 "Pitcher Hand",
                 "Batter Hand",
                 "Team",
@@ -14062,6 +14146,7 @@ def pitching_overview(
                 "Pitcher",
                 "Batter",
                 "Catcher",
+                "Game",
                 "Pitcher Hand",
                 "Batter Hand",
                 "Team",
@@ -14109,6 +14194,7 @@ def pitching_overview(
                 "Pitcher",
                 "Batter",
                 "Catcher",
+                "Game",
                 "Pitcher Hand",
                 "Batter Hand",
                 "Team",
@@ -14501,6 +14587,9 @@ def pitching_overview(
           COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), 'Unknown') AS session_type_norm,
           UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) AS pitcher_team_code,
           UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) AS batter_team_code,
+          UPPER(COALESCE(NULLIF(TRIM(hometeam), ''), '')) AS home_team_code,
+          UPPER(COALESCE(NULLIF(TRIM(awayteam), ''), '')) AS away_team_code,
+          COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'inningtopbot', to_jsonb(pe)->>'InningTopBot', to_jsonb(pe)->>'half_inning', to_jsonb(pe)->>'inning_half', to_jsonb(pe)->>'half', '')), ''), '') AS inning_topbot,
           """ + PITCHER_TEAM_NORM_SQL + """ AS pitcher_team_norm,
           """ + BATTER_TEAM_NORM_EFF_SQL + """ AS batter_team_norm_eff,
           """ + PITCH_TYPE_NORMALIZE_SQL + """ AS pitch_type,
@@ -16990,6 +17079,7 @@ def hitting_overview(
                 "HB",
                 "Pitcher",
                 "Catcher",
+                "Game",
             }:
                 split_by = "Pitch Types"
     overview_cache_key = _overview_cache_key(
@@ -17266,6 +17356,7 @@ def hitting_overview(
                   COALESCE(NULLIF(TRIM(batterteam), ''), '') AS batter_team_code,
                   COALESCE(NULLIF(TRIM(hometeam), ''), '') AS home_team_code,
                   COALESCE(NULLIF(TRIM(awayteam), ''), '') AS away_team_code,
+                  COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'inningtopbot', to_jsonb(pe)->>'InningTopBot', to_jsonb(pe)->>'half_inning', to_jsonb(pe)->>'inning_half', to_jsonb(pe)->>'half', '')), ''), '') AS inning_topbot,
                   COALESCE(NULLIF(TRIM(pitcherthrows), ''), '') AS pitcherthrows,
                   COALESCE(NULLIF(TRIM(batterside), ''), '') AS batterside,
                   """
@@ -18265,6 +18356,7 @@ def catching_overview(
                       COALESCE(NULLIF(TRIM(batterteam), ''), '') AS batter_team_code,
                       COALESCE(NULLIF(TRIM(hometeam), ''), '') AS home_team_code,
                       COALESCE(NULLIF(TRIM(awayteam), ''), '') AS away_team_code,
+                      COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'inningtopbot', to_jsonb(pe)->>'InningTopBot', to_jsonb(pe)->>'half_inning', to_jsonb(pe)->>'inning_half', to_jsonb(pe)->>'half', '')), ''), '') AS inning_topbot,
                       COALESCE(NULLIF(TRIM(pitcherthrows), ''), '') AS pitcherthrows,
                       COALESCE(NULLIF(TRIM(batterside), ''), '') AS batterside,
                       """
@@ -18395,6 +18487,7 @@ def catching_overview(
                   COALESCE(NULLIF(TRIM(batterteam), ''), '') AS batter_team_code,
                   COALESCE(NULLIF(TRIM(hometeam), ''), '') AS home_team_code,
                   COALESCE(NULLIF(TRIM(awayteam), ''), '') AS away_team_code,
+                  COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'inningtopbot', to_jsonb(pe)->>'InningTopBot', to_jsonb(pe)->>'half_inning', to_jsonb(pe)->>'inning_half', to_jsonb(pe)->>'half', '')), ''), '') AS inning_topbot,
                   COALESCE(NULLIF(TRIM(pitcherthrows), ''), '') AS pitcherthrows,
                   COALESCE(NULLIF(TRIM(batterside), ''), '') AS batterside,
                   """

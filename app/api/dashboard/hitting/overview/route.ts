@@ -42,6 +42,7 @@ export async function GET(request: Request) {
   });
 
   const inputUrl = new URL(request.url);
+  const splitBy = inputUrl.searchParams.get('split_by')?.trim() ?? '';
   const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
   const playerIdentity = shouldScopePlayer
     ? await resolveDashboardPlayerIdentity({
@@ -105,10 +106,12 @@ export async function GET(request: Request) {
     url.searchParams.set('include_chart_points', '1');
   }
   const cachePolicy = resolveOverviewCachePolicy(schoolCode);
+  const isGameSplit = splitBy === 'Game';
+  const gameSplitCacheBuster = isGameSplit ? `:game:${Date.now()}` : '';
 
   try {
     const result = await fetchDashboardJsonWithCache({
-      cacheKey: `hitting:overview:${url.toString()}`,
+      cacheKey: `hitting:overview:${url.toString()}${gameSplitCacheBuster}`,
       ttlMs: cachePolicy.ttlMs,
       staleTtlMs: cachePolicy.staleTtlMs,
       timeoutMs: resolveOverviewTimeoutMs(schoolCode),

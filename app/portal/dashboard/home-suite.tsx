@@ -48,7 +48,7 @@ type HomeSuiteProps = {
     targetValue: string;
     startDate: string;
     endDate: string;
-    page?: 'Summary' | 'Leaderboard';
+    page?: 'Summary' | 'Leaderboard' | 'Game Log';
     navigationSource?: 'search';
   }) => void;
 };
@@ -295,6 +295,20 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
     () => (isHeavySchool ? orderedQuickPanels.slice(2) : []),
     [isHeavySchool, orderedQuickPanels]
   );
+  const schoolPanelsWithoutStuff = useMemo(() => {
+    if (isHeavySchool) return [] as Array<{ suite: string; title: string }>;
+    const panels = orderedQuickPanels.filter((panel) => panel.suite !== 'Stuff+ Calculator');
+    const comparisonIndex = panels.findIndex((panel) => panel.suite === 'Comparison Tool');
+    const gameLogPanel = { suite: '__game_log__', title: 'Game Log' };
+    if (comparisonIndex >= 0) {
+      return [...panels.slice(0, comparisonIndex + 1), gameLogPanel, ...panels.slice(comparisonIndex + 1)];
+    }
+    return [...panels, gameLogPanel];
+  }, [isHeavySchool, orderedQuickPanels]);
+  const hasSchoolStuffPanel = useMemo(
+    () => !isHeavySchool && orderedQuickPanels.some((panel) => panel.suite === 'Stuff+ Calculator'),
+    [isHeavySchool, orderedQuickPanels]
+  );
   const sortedPitchingAlerts = useMemo(() => {
     const rows = [...(alertsPayload?.pitching ?? [])];
     const metric = pitchingSort.metric;
@@ -417,6 +431,34 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
     if (isProSchool) return { startDate: '2026-03-25', endDate };
     return { startDate: '2026-02-13', endDate };
   }
+  function resolveGameLogTargetTeam(): string {
+    const teamCandidates = (basePayload?.candidates ?? []).filter(
+      (candidate) => candidate.type === 'team' && candidate.suite === 'Pitching'
+    );
+    const nonAllTeam = teamCandidates.find((candidate) => String(candidate.value ?? '').trim().toLowerCase() !== 'all');
+    if (isHeavySchool) {
+      return nonAllTeam?.value ?? 'All';
+    }
+    const schoolCode = String(selectedSchoolCode ?? '').trim();
+    if (!schoolCode) return nonAllTeam?.value ?? 'All';
+    const exactSchoolTeam =
+      teamCandidates.find((candidate) => String(candidate.value ?? '').trim().toUpperCase() === schoolCode.toUpperCase()) ??
+      teamCandidates.find((candidate) => String(candidate.value ?? '').trim().toLowerCase() === schoolCode.toLowerCase());
+    return exactSchoolTeam?.value ?? nonAllTeam?.value ?? schoolCode;
+  }
+  function openHomeGameLog() {
+    const window = basePayload?.date_window;
+    const fallbackWindow = resolveHeavyLeaderboardWindow();
+    const targetTeam = resolveGameLogTargetTeam();
+    onNavigate({
+      suite: 'Pitching',
+      targetType: 'team',
+      targetValue: targetTeam,
+      startDate: window?.startDate ?? fallbackWindow.startDate,
+      endDate: window?.endDate ?? fallbackWindow.endDate,
+      page: 'Game Log',
+    });
+  }
   function togglePitchingSort(metric: PitchingAlertMetric) {
     setPitchingPage(1);
     setPitchingSort((current) => {
@@ -509,39 +551,32 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
       </div>
 
       <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', marginTop: 24, marginBottom: 16 }}>
-        {leadingQuickPanels.map((panel) => (
-          (() => {
-            const centerOddStuffPanel = !isHeavySchool && orderedQuickPanels.length % 2 === 1 && panel.suite === 'Stuff+ Calculator';
-            return (
-          <button
-            key={panel.suite}
-            type="button"
-            className="home-suite-panel-card"
-            onClick={() => onOpenSuite(panel.suite)}
-            style={{
-              textAlign: 'center',
-              borderRadius: 14,
-              border: homePanelBorder,
-              background: homePanelBackground,
-              padding: '14px 14px 13px',
-              cursor: 'pointer',
-              color: '#f8fafc',
-              boxShadow: homePanelShadow,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              opacity: panel.suite === activeSuite ? 0.9 : 1,
-              gridColumn: centerOddStuffPanel ? '1 / -1' : undefined,
-              justifySelf: centerOddStuffPanel ? 'center' : undefined,
-              width: centerOddStuffPanel ? 'min(520px, 100%)' : undefined,
-            }}
-          >
-            <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: '0.01em' }}>{panel.title}</span>
-          </button>
-            );
-          })()
-        ))}
         {isHeavySchool ? (
+          <>
+            {leadingQuickPanels.map((panel) => (
+              <button
+                key={panel.suite}
+                type="button"
+                className="home-suite-panel-card"
+                onClick={() => onOpenSuite(panel.suite)}
+                style={{
+                  textAlign: 'center',
+                  borderRadius: 14,
+                  border: homePanelBorder,
+                  background: homePanelBackground,
+                  padding: '14px 14px 13px',
+                  cursor: 'pointer',
+                  color: '#f8fafc',
+                  boxShadow: homePanelShadow,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: panel.suite === activeSuite ? 0.9 : 1,
+                }}
+              >
+                <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: '0.01em' }}>{panel.title}</span>
+              </button>
+            ))}
           <>
             <button
               key="heavy-pitching-leaderboard"
@@ -606,40 +641,113 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
               <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: '0.01em' }}>Hitting Leaderboard</span>
             </button>
           </>
-        ) : null}
-        {trailingQuickPanels.map((panel) => (
-          (() => {
-            const totalCount = leadingQuickPanels.length + trailingQuickPanels.length + (isHeavySchool ? 2 : 0);
-            const centerOddStuffPanel = totalCount % 2 === 1 && panel.suite === 'Stuff+ Calculator';
-            return (
-          <button
-            key={`tail-${panel.suite}`}
-            type="button"
-            className="home-suite-panel-card"
-            onClick={() => onOpenSuite(panel.suite)}
-            style={{
-              textAlign: 'center',
-              borderRadius: 14,
-              border: homePanelBorder,
-              background: homePanelBackground,
-              padding: '14px 14px 13px',
-              cursor: 'pointer',
-              color: '#f8fafc',
-              boxShadow: homePanelShadow,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              opacity: panel.suite === activeSuite ? 0.9 : 1,
-              gridColumn: centerOddStuffPanel ? '1 / -1' : undefined,
-              justifySelf: centerOddStuffPanel ? 'center' : undefined,
-              width: centerOddStuffPanel ? 'min(520px, 100%)' : undefined,
-            }}
-          >
-            <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: '0.01em' }}>{panel.title}</span>
-          </button>
-            );
-          })()
-        ))}
+            <button
+              key="home-game-log"
+              type="button"
+              className="home-suite-panel-card"
+              onClick={openHomeGameLog}
+              style={{
+                textAlign: 'center',
+                borderRadius: 14,
+                border: homePanelBorder,
+                background: homePanelBackground,
+                padding: '14px 14px 13px',
+                cursor: 'pointer',
+                color: '#f8fafc',
+                boxShadow: homePanelShadow,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: '0.01em' }}>Game Log</span>
+            </button>
+            {trailingQuickPanels.map((panel) => (
+              <button
+                key={`tail-${panel.suite}`}
+                type="button"
+                className="home-suite-panel-card"
+                onClick={() => onOpenSuite(panel.suite)}
+                style={{
+                  textAlign: 'center',
+                  borderRadius: 14,
+                  border: homePanelBorder,
+                  background: homePanelBackground,
+                  padding: '14px 14px 13px',
+                  cursor: 'pointer',
+                  color: '#f8fafc',
+                  boxShadow: homePanelShadow,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: panel.suite === activeSuite ? 0.9 : 1,
+                }}
+              >
+                <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: '0.01em' }}>{panel.title}</span>
+              </button>
+            ))}
+          </>
+        ) : (
+          <>
+            {schoolPanelsWithoutStuff.map((panel) => (
+              <button
+                key={panel.suite}
+                type="button"
+                className="home-suite-panel-card"
+                onClick={() => {
+                  if (panel.suite === '__game_log__') {
+                    openHomeGameLog();
+                    return;
+                  }
+                  onOpenSuite(panel.suite);
+                }}
+                style={{
+                  textAlign: 'center',
+                  borderRadius: 14,
+                  border: homePanelBorder,
+                  background: homePanelBackground,
+                  padding: '14px 14px 13px',
+                  cursor: 'pointer',
+                  color: '#f8fafc',
+                  boxShadow: homePanelShadow,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: panel.suite === activeSuite ? 0.9 : 1,
+                }}
+              >
+                <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: '0.01em' }}>{panel.title}</span>
+              </button>
+            ))}
+            {hasSchoolStuffPanel ? (
+              <button
+                key="school-stuff-bottom"
+                type="button"
+                className="home-suite-panel-card"
+                onClick={() => onOpenSuite('Stuff+ Calculator')}
+                style={{
+                  textAlign: 'center',
+                  borderRadius: 14,
+                  border: homePanelBorder,
+                  background: homePanelBackground,
+                  padding: '14px 14px 13px',
+                  cursor: 'pointer',
+                  color: '#f8fafc',
+                  boxShadow: homePanelShadow,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: activeSuite === 'Stuff+ Calculator' ? 0.9 : 1,
+                  gridColumn: '1 / -1',
+                  justifySelf: 'center',
+                  width: 'min(520px, 100%)',
+                }}
+              >
+                <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: '0.01em' }}>Stuff+ Calculator</span>
+              </button>
+            ) : null}
+          </>
+        )}
       </div>
 
       {shouldLoadAlerts ? (

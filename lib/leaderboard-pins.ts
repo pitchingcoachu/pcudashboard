@@ -32,6 +32,26 @@ const TOTAL_COLUMNS = new Set([
   'PB',
 ]);
 
+const THREE_DECIMAL_COLUMNS = new Set([
+  'AVG',
+  'SLG',
+  'OBP',
+  'OPS',
+  'WOBA',
+  'XWOBA',
+  'ISO',
+  'XISO',
+  'BABIP',
+]);
+
+const TWO_DECIMAL_COLUMNS = new Set([
+  'ERA',
+  'FIP',
+  'XFIP',
+  'P/IP',
+  'P/BF',
+]);
+
 function isPercentLike(value: TableValue, column: string): boolean {
   if (column.includes('%')) return true;
   if (typeof value !== 'string') return false;
@@ -48,11 +68,11 @@ function parseNumeric(value: TableValue): number | null {
 }
 
 function roundForColumn(value: number, column: string): number {
+  const upper = column.trim().toUpperCase();
+  if (THREE_DECIMAL_COLUMNS.has(upper)) return Math.round(value * 1000) / 1000;
+  if (TWO_DECIMAL_COLUMNS.has(upper)) return Math.round(value * 100) / 100;
   if (TOTAL_COLUMNS.has(column)) return Math.round(value);
-  const abs = Math.abs(value);
-  if (abs >= 100) return Math.round(value * 10) / 10;
-  if (abs >= 10) return Math.round(value * 100) / 100;
-  return Math.round(value * 1000) / 1000;
+  return Math.round(value * 10) / 10;
 }
 
 function normalizeKey(value: TableValue): string {
@@ -68,7 +88,7 @@ function resolveWeight(row: TableRow): number {
   return 1;
 }
 
-function buildPinnedAllRow(columns: string[], pinnedRows: TableRow[]): TableRow | null {
+export function buildPinnedAllRow(columns: string[], pinnedRows: TableRow[]): TableRow | null {
   if (!columns.length || !pinnedRows.length) return null;
   const first = columns[0];
   const out: TableRow = { [first]: 'All (Pinned)' };
@@ -142,4 +162,3 @@ export function sortRowsWithPins(
     ...unpinnedRows,
   ];
 }
-

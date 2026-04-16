@@ -54,7 +54,7 @@ type HomeNavigateRequest = {
   targetValue: string;
   startDate: string;
   endDate: string;
-  page?: 'Summary' | 'Leaderboard';
+  page?: 'Summary' | 'Leaderboard' | 'Game Log';
   navigationSource?: 'search';
 };
 

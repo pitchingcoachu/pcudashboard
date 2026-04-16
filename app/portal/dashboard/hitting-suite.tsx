@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
-import { pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
+import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
@@ -483,8 +483,12 @@ function normalizeLeagueTeamToken(value: string): string {
 }
 
 function isLikelyLeagueTeamCode(value: string): boolean {
-  const upper = String(value ?? '').trim().toUpperCase();
-  return /^[A-Z0-9]{2,}(?:_[A-Z0-9]+)+$/.test(upper);
+  const raw = String(value ?? '').trim();
+  if (!raw) return false;
+  const upper = raw.toUpperCase();
+  if (/^[A-Z0-9]{2,}(?:_[A-Z0-9]+)+$/.test(upper)) return true;
+  // College codes are often plain uppercase tokens (e.g., GCU, PCU, LSU).
+  return raw === upper && /^[A-Z0-9]{2,6}$/.test(raw);
 }
 
 function resolveLeagueTeamTypeForApi(
@@ -1825,11 +1829,11 @@ export default function HittingSuite({
     targetValue: string;
     startDate: string;
     endDate: string;
-    page?: 'Summary' | 'Leaderboard';
+    page?: 'Summary' | 'Leaderboard' | 'Game Log';
     navigationSource?: 'search';
   } | null;
 }) {
-  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'AB Report' | 'HeatMaps' | 'Swing Data'>('Summary');
+  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'AB Report' | 'HeatMaps' | 'Swing Data'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
   const [filters, setFilters] = useState<HittingFiltersPayload | null>(null);
@@ -1885,6 +1889,15 @@ export default function HittingSuite({
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
+  const [gameLogRows, setGameLogRows] = useState<Array<Record<string, unknown>>>([]);
+  const [gameLogColumns, setGameLogColumns] = useState<string[]>([]);
+  const [loadingGameLog, setLoadingGameLog] = useState(false);
+  const [gameLogError, setGameLogError] = useState('');
+  const [gameLogSortColumn, setGameLogSortColumn] = useState('Date');
+  const [gameLogSortDirection, setGameLogSortDirection] = useState<SortDirection>('desc');
+  const [pinnedGameLogKeys, setPinnedGameLogKeys] = useState<Set<string>>(new Set());
+  const [enableTableColors, setEnableTableColors] = useState(true);
+  const [enableGameLogColors, setEnableGameLogColors] = useState(true);
   const autoFallbackAppliedRef = useRef(false);
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: HittingFiltersPayload }>());
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: HittingOverviewPayload }>());
@@ -1960,6 +1973,8 @@ export default function HittingSuite({
   }, [isMobileView]);
 
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
+  const hasSpecificHitterSelection = hitter && hitter !== 'All';
+  const canRunGameLog = Boolean(hasSpecificHitterSelection || (teamType && teamType !== 'All'));
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Batter Team' : 'Batter') : splitBy;
   const canLoadOverview = useMemo(() => !!filters && !!startDate && !!endDate, [filters, startDate, endDate]);
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
@@ -2239,9 +2254,15 @@ export default function HittingSuite({
     if (pcMin.trim()) params.set('pc_min', pcMin.trim());
     if (pcMax.trim()) params.set('pc_max', pcMax.trim());
     const isSummaryPage = dashboardPage === 'Summary';
+    const isGameLogPage = dashboardPage === 'Game Log';
     const shouldForceProFastSummary = isPro && isSummaryPage;
     const shouldIncludeCharts = dashboardPage !== 'Leaderboard' && !shouldForceProFastSummary && !shouldForceLeagueFastTable;
     params.set('include_chart_points', shouldIncludeCharts ? '1' : '0');
+    if (isGameLogPage) {
+      params.set('include_chart_points', '1');
+      params.set('chart_only', '1');
+      params.set('chart_points_limit', isPro ? '6000' : '5000');
+    }
     const requestKey = `/api/dashboard/hitting/overview?${params.toString()}`;
     const chartRequestKey = shouldForceProFastSummary
       ? (() => {
@@ -2343,6 +2364,212 @@ export default function HittingSuite({
       controller.abort();
     };
   }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague]);
+
+  const sortedGameLogRows = useMemo(
+    () => sortTableRows(gameLogRows, gameLogSortColumn, gameLogSortDirection),
+    [gameLogRows, gameLogSortColumn, gameLogSortDirection]
+  );
+  const gameLogRowsWithPins = useMemo(() => {
+    if (!sortedGameLogRows.length || !gameLogColumns.length) return sortedGameLogRows;
+    const pinned: Array<Record<string, unknown>> = [];
+    const unpinned: Array<Record<string, unknown>> = [];
+    for (const row of sortedGameLogRows) {
+      const key = String(row._game_pin_key ?? '');
+      if (key && pinnedGameLogKeys.has(key)) pinned.push(row);
+      else unpinned.push(row);
+    }
+    const toTableRows = (rows: Array<Record<string, unknown>>) =>
+      rows.map((row) => row as Record<string, string | number | null | undefined>);
+    const pinnedAll = buildPinnedAllRow(gameLogColumns, toTableRows(pinned));
+    const allRow = buildPinnedAllRow(gameLogColumns, toTableRows(sortedGameLogRows));
+    const decorate = (row: Record<string, string | number | null | undefined> | null, kind: 'all' | 'all_pinned') => {
+      if (!row) return null;
+      return {
+        ...row,
+        Team: kind === 'all_pinned' ? 'All (Pinned)' : 'All',
+        Date: '-',
+        Opponent: '-',
+        _game_pin_key: kind === 'all_pinned' ? '__game_all_pinned__' : '__game_all__',
+        _game_row_kind: kind,
+      } as Record<string, unknown>;
+    };
+    const pinnedAllRow = decorate(pinnedAll, 'all_pinned');
+    const allSummaryRow = decorate(allRow, 'all');
+    return [
+      ...pinned,
+      ...(pinnedAllRow ? [pinnedAllRow] : []),
+      ...(allSummaryRow ? [allSummaryRow] : []),
+      ...unpinned,
+    ];
+  }, [sortedGameLogRows, pinnedGameLogKeys, gameLogColumns]);
+  const gameLogColumnRanges = useMemo(() => {
+    const ranges = new Map<string, { min: number; max: number }>();
+    for (const column of gameLogColumns) {
+      if (column === 'Team' || column === 'Date' || column === 'Opponent') continue;
+      const values = gameLogRows
+        .map((entry) => parseSortableNumber(entry[column]))
+        .filter((entry): entry is number => entry !== null);
+      if (!values.length) continue;
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      if (max <= min) continue;
+      ranges.set(column, { min, max });
+    }
+    return ranges;
+  }, [gameLogColumns, gameLogRows]);
+
+  useEffect(() => {
+    if (dashboardPage !== 'Game Log') return;
+    if (!canLoadOverview) return;
+    if (!canRunGameLog) {
+      setGameLogRows([]);
+      setGameLogColumns([]);
+      setGameLogError('');
+      setLoadingGameLog(false);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    setLoadingGameLog(true);
+    setGameLogError('');
+    const run = async () => {
+      const apiTeamType = isLeague
+        ? resolveLeagueTeamTypeForApi(teamType, [filters?.hitters_by_team_code, filters?.opp_pitchers_by_team_code])
+        : teamType;
+      const params = new URLSearchParams();
+      if (startDate) params.set('start_date', startDate);
+      if (endDate) params.set('end_date', endDate);
+      if (hitter && hitter !== 'All') params.set('hitter', hitter);
+      if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
+      if (isPro && level && level !== 'All') params.set('level', level);
+      if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
+      if (hand && hand !== 'All') params.set('hand', hand);
+      if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
+      params.set('table_mode', tableMode);
+      params.set('split_by', 'Game');
+      if (tableMode === 'Custom' && customTableColumns.length) params.set('custom_columns', customTableColumns.join(','));
+      if (pitchTypes.length) params.set('pitch_types', pitchTypes.join(';'));
+      if (zoneLocations.length) params.set('zone_locations', zoneLocations.join(';'));
+      if (pitchResults.length) params.set('pitch_results', pitchResults.join(';'));
+      if (countFilter.length) params.set('count_filter', countFilter.join(';'));
+      if (afterCountFilter.length) params.set('after_count_filter', afterCountFilter.join(';'));
+      if (bipResult.length) params.set('bip_result', bipResult.join(';'));
+      if (inZone.length) params.set('in_zone', inZone.join(';'));
+      if (veloMin.trim()) params.set('velo_min', veloMin.trim());
+      if (veloMax.trim()) params.set('velo_max', veloMax.trim());
+      if (ivbMin.trim()) params.set('ivb_min', ivbMin.trim());
+      if (ivbMax.trim()) params.set('ivb_max', ivbMax.trim());
+      if (hbMin.trim()) params.set('hb_min', hbMin.trim());
+      if (hbMax.trim()) params.set('hb_max', hbMax.trim());
+      if (pcMin.trim()) params.set('pc_min', pcMin.trim());
+      if (pcMax.trim()) params.set('pc_max', pcMax.trim());
+      params.set('include_chart_points', '0');
+      const response = await fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+      const payload = (await response.json().catch(() => ({}))) as HittingOverviewPayload & { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to load game log.');
+      const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+      const tableRows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+      const splitColumn = String(tableColumns[0] ?? 'Game').trim() || 'Game';
+      const parseGameSplit = (raw: unknown): { date: string; team: string; opponent: string; gameKey: string; batterMarker: string } => {
+        const token = String(raw ?? '').trim();
+        const parts = token.split('||');
+        if (parts.length >= 4) {
+          const datePart = String(parts[0] ?? '').trim();
+          const pitcherTeam = String(parts[1] ?? '').trim();
+          const batterTeam = String(parts[2] ?? '').trim();
+          const gameKey = String(parts[3] ?? '').trim() || token;
+          return {
+            date: datePart,
+            team: batterTeam || '-',
+            opponent: pitcherTeam || '-',
+            gameKey,
+            batterMarker: String(parts[5] ?? '').trim(),
+          };
+        }
+        const dateMatch = token.match(/\d{4}-\d{2}-\d{2}/);
+        return {
+          date: dateMatch ? dateMatch[0] : '',
+          team: '-',
+          opponent: '-',
+          gameKey: token || `${Date.now()}`,
+          batterMarker: '',
+        };
+      };
+      const rows = tableRows
+        .filter((row) => String((row as Record<string, unknown>)[splitColumn] ?? '').trim().toLowerCase() !== 'all')
+        .map((row, rowIndex) => {
+          const parsed = parseGameSplit((row as Record<string, unknown>)[splitColumn]);
+          return {
+            ...(row as Record<string, unknown>),
+            _game_pin_key: `${parsed.gameKey}|${parsed.date}|${rowIndex}`,
+            _game_venue_marker: parsed.batterMarker,
+            Team: parsed.team || '-',
+            Date: parsed.date || '-',
+            Opponent: parsed.opponent || '-',
+          } as Record<string, unknown>;
+        });
+      if (cancelled) return;
+      const leadingColumns = ['Team', 'Date', 'Opponent'];
+      const seen = new Set(leadingColumns.map((col) => col.toLowerCase()));
+      const metricColumns = tableColumns.filter((column) => {
+        const key = String(column ?? '').trim();
+        if (!key) return false;
+        if (key === splitColumn) return false;
+        const lower = key.toLowerCase();
+        if (seen.has(lower)) return false;
+        seen.add(lower);
+        return true;
+      });
+      setGameLogColumns([...leadingColumns, ...metricColumns]);
+      setGameLogRows(rows);
+    };
+    run()
+      .catch((requestError) => {
+        if (cancelled) return;
+        if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
+        setGameLogError(requestError instanceof Error ? requestError.message : 'Failed to load game log.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingGameLog(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    dashboardPage,
+    canLoadOverview,
+    canRunGameLog,
+    startDate,
+    endDate,
+    hitter,
+    teamType,
+    isLeague,
+    filters?.hitters_by_team_code,
+    filters?.opp_pitchers_by_team_code,
+    isPro,
+    level,
+    oppPitcher,
+    hand,
+    batterSide,
+    tableMode,
+    customTableColumns,
+    pitchTypes,
+    zoneLocations,
+    pitchResults,
+    countFilter,
+    afterCountFilter,
+    bipResult,
+    inZone,
+    veloMin,
+    veloMax,
+    ivbMin,
+    ivbMax,
+    hbMin,
+    hbMax,
+    pcMin,
+    pcMax,
+  ]);
 
   const selectedSingleHitter = hitter && hitter !== 'All' ? hitter : '';
   const [selectedHitterLastGameDate, setSelectedHitterLastGameDate] = useState('');
@@ -2507,6 +2734,34 @@ export default function HittingSuite({
     () => (tableMode === 'Custom' && selectedCustomTableId ? `custom_saved:${selectedCustomTableId}` : tableMode),
     [tableMode, selectedCustomTableId]
   );
+  const handleTableModeSelection = useCallback((next: string) => {
+    if (next.startsWith('custom_saved:')) {
+      const id = Number(next.replace('custom_saved:', ''));
+      const found = customTables.find((row) => Number(row.id) === id);
+      if (!found) return;
+      setTableMode('Custom');
+      setShowCustomEditor(false);
+      setSelectedCustomTableId(found.id);
+      setCustomTableName(found.name);
+      setCustomTableColumns(found.columns ?? []);
+      setCustomSaveState('idle');
+      setCustomSaveMessage('');
+      setAppliedFilterVersion((current) => current + 1);
+      return;
+    }
+    setTableMode(next);
+    if (next === 'Custom') {
+      setShowCustomEditor(true);
+      setSelectedCustomTableId(null);
+      setCustomTableName('');
+      setCustomTableColumns([]);
+      setCustomSaveState('idle');
+      setCustomSaveMessage('');
+      setAppliedFilterVersion((current) => current + 1);
+    } else {
+      setShowCustomEditor(false);
+    }
+  }, [customTables]);
   const displayedTableColumns = useMemo(() => {
     const splitColumn = overview?.table_columns?.[0] ?? 'Pitch';
     if (tableMode === 'Custom') {
@@ -2543,6 +2798,26 @@ export default function HittingSuite({
       pinnedLeaderboardKeys
     ) as Array<Record<string, string | number | null>>;
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
+  const leaderboardColumnRanges = useMemo(() => {
+    if (!isLeaderboardPage) return new Map<string, { min: number; max: number }>();
+    const ranges = new Map<string, { min: number; max: number }>();
+    const sourceRows = leaderboardRowsWithPins.filter((row) => {
+      const firstCol = displayedTableColumns[0] ?? '';
+      const label = String(row[firstCol] ?? '').trim().toLowerCase();
+      return label !== 'all' && label !== 'all (pinned)';
+    });
+    for (const column of displayedTableColumns.slice(1)) {
+      const values = sourceRows
+        .map((row) => parseSortableNumber(row[column]))
+        .filter((value): value is number => value !== null);
+      if (!values.length) continue;
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      if (max <= min) continue;
+      ranges.set(column, { min, max });
+    }
+    return ranges;
+  }, [isLeaderboardPage, leaderboardRowsWithPins, displayedTableColumns]);
   const overviewHeaderLabel = useMemo(() => {
     const hitterLabel = selectedSingleHitter ? formatNameFirstLast(selectedSingleHitter) : 'All';
     const effectiveSchoolCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
@@ -2654,6 +2929,36 @@ export default function HittingSuite({
     }
     return getProTeamLogoUrl(teamCode) || '';
   }, [isPro, dashboardPage, selectedSingleHitter, latestTeamByHitter, filterTeamByHitter, teamType]);
+  const gameLogHeader = useMemo(() => {
+    const primaryLabel = selectedSingleHitter
+      ? formatNameFirstLast(selectedSingleHitter)
+      : (teamType && teamType !== 'All'
+        ? (isPro ? getProTeamDisplayName(teamType, (level as 'MLB' | 'AAA' | 'All') || 'All') : (leagueTeamLabelByCode[teamType.toUpperCase()] ?? teamType))
+        : 'Selection');
+    const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    let teamCode = '';
+    if (selectedSingleHitter) {
+      const key = String(selectedSingleHitter ?? '').trim();
+      const formatted = formatNameFirstLast(key);
+      teamCode =
+        latestTeamByHitter[key] ??
+        latestTeamByHitter[formatted] ??
+        latestTeamByHitter[norm(key)] ??
+        latestTeamByHitter[norm(formatted)] ??
+        filterTeamByHitter[key] ??
+        filterTeamByHitter[formatted] ??
+        filterTeamByHitter[norm(key)] ??
+        filterTeamByHitter[norm(formatted)] ??
+        '';
+    }
+    if (!teamCode && teamType && teamType !== 'All') {
+      teamCode = inferProTeamCode(teamType);
+    }
+    return {
+      label: `Game Log: ${primaryLabel}`,
+      logoUrl: isPro ? (getProTeamLogoUrl(teamCode) || '') : '',
+    };
+  }, [selectedSingleHitter, teamType, isPro, level, leagueTeamLabelByCode, latestTeamByHitter, filterTeamByHitter]);
   const availableCustomColumns = useMemo(
     () => {
       const base = overview?.available_table_columns?.length ? overview.available_table_columns : FALLBACK_AVAILABLE_CUSTOM_COLUMNS;
@@ -3349,6 +3654,7 @@ export default function HittingSuite({
                 >
                   <option value="Summary">Summary</option>
                   <option value="Leaderboard">Leaderboard</option>
+                  <option value="Game Log">Game Log</option>
                   <option value="AB Report">AB Report</option>
                   <option value="HeatMaps">HeatMaps</option>
                   <option value="Swing Data">Swing Data</option>
@@ -3361,6 +3667,9 @@ export default function HittingSuite({
                 </button>
                 <button type="button" className={dashboardPage === 'Leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('Leaderboard')}>
                   Leaderboard
+                </button>
+                <button type="button" className={dashboardPage === 'Game Log' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('Game Log')}>
+                  Game Log
                 </button>
                 <button type="button" className={dashboardPage === 'AB Report' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setDashboardPage('AB Report')}>
                   AB Report
@@ -3476,34 +3785,7 @@ export default function HittingSuite({
               <SearchableSingleSelect
                 options={tableModeOptions}
                 value={tableModeSelectValue}
-                onChange={(next) => {
-                  if (next.startsWith('custom_saved:')) {
-                    const id = Number(next.replace('custom_saved:', ''));
-                    const found = customTables.find((row) => Number(row.id) === id);
-                    if (!found) return;
-                    setTableMode('Custom');
-                    setShowCustomEditor(false);
-                    setSelectedCustomTableId(found.id);
-                    setCustomTableName(found.name);
-                    setCustomTableColumns(found.columns ?? []);
-                    setCustomSaveState('idle');
-                    setCustomSaveMessage('');
-                    setAppliedFilterVersion((current) => current + 1);
-                    return;
-                  }
-                  setTableMode(next);
-                  if (next === 'Custom') {
-                    setShowCustomEditor(true);
-                    setSelectedCustomTableId(null);
-                    setCustomTableName('');
-                    setCustomTableColumns([]);
-                    setCustomSaveState('idle');
-                    setCustomSaveMessage('');
-                    setAppliedFilterVersion((current) => current + 1);
-                  } else {
-                    setShowCustomEditor(false);
-                  }
-                }}
+                onChange={handleTableModeSelection}
                 placeholder={TABLE_MODE_DEFAULT}
               />
             </label>
@@ -3520,6 +3802,19 @@ export default function HittingSuite({
                   placeholder="Player"
                 />
               </label>
+            ) : null}
+            {isLeaderboardPage ? (
+              <div className="portal-color-toggle">
+                <span className="portal-color-toggle-label">Color Code</span>
+                <button
+                  type="button"
+                  className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
+                  aria-label="Toggle table color coding"
+                  aria-pressed={enableTableColors}
+                  title={enableTableColors ? 'Color code on' : 'Color code off'}
+                  onClick={() => setEnableTableColors((current) => !current)}
+                />
+              </div>
             ) : null}
             {!isLeaderboardPage ? (
               <label>
@@ -3691,7 +3986,19 @@ export default function HittingSuite({
                     return (
                       <th
                         key={col}
-                        style={{ textAlign: 'center', padding: '8px 6px', borderBottom: '1px solid rgba(255,255,255,0.18)', whiteSpace: 'nowrap', cursor: isSortable ? 'pointer' : 'default', position: isLeaderboardPage ? 'sticky' : undefined, top: isLeaderboardPage ? 0 : undefined, zIndex: isLeaderboardPage ? 3 : undefined, background: isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined }}
+                        style={{
+                          textAlign: 'center',
+                          padding: '8px 6px',
+                          borderBottom: '1px solid rgba(255,255,255,0.18)',
+                          whiteSpace: 'nowrap',
+                          cursor: isSortable ? 'pointer' : 'default',
+                          position: isLeaderboardPage ? 'sticky' : undefined,
+                          top: isLeaderboardPage ? 0 : undefined,
+                          zIndex: isLeaderboardPage ? 3 : undefined,
+                          background: activeSort
+                            ? 'rgba(59,130,246,0.24)'
+                            : (isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined),
+                        }}
                         onClick={
                           isSortable
                             ? () => {
@@ -3791,6 +4098,7 @@ export default function HittingSuite({
                               isLeaderboardPage && colIndex === 0 && (leaderboardViewBy === 'Player' || leaderboardViewBy === 'Team')
                                 ? (isAllRow ? 'center' : 'left')
                                 : 'center',
+                            background: leaderboardSortColumn === col ? 'rgba(59,130,246,0.12)' : undefined,
                             padding: '8px 6px',
                             borderBottom: '1px solid rgba(255,255,255,0.1)',
                             whiteSpace: 'nowrap',
@@ -3813,7 +4121,34 @@ export default function HittingSuite({
                               : '';
                             const isPinnedRow = canPinRow && pinnedLeaderboardKeys.has(pinKey);
                             const content = displayValue === null || displayValue === undefined ? '—' : renderedValue;
-                            if (!canPinRow) return content;
+                            if (!canPinRow) {
+                              const numericValue = parseSortableNumber(rawValue);
+                              const range = leaderboardColumnRanges.get(col);
+                              const canColorCell =
+                                isLeaderboardPage &&
+                                enableTableColors &&
+                                colIndex > 0 &&
+                                !isAllRow &&
+                                !isPinnedAllRow &&
+                                range &&
+                                numericValue !== null;
+                              if (!canColorCell) return content;
+                              return (
+                                <span
+                                  style={{
+                                    background: divergingColor(numericValue, range.min, (range.min + range.max) / 2, range.max),
+                                    color: '#ffffff',
+                                    borderRadius: 3,
+                                    padding: '2px 4px',
+                                    display: 'inline-block',
+                                    width: '100%',
+                                    textAlign: 'center',
+                                  }}
+                                >
+                                  {content}
+                                </span>
+                              );
+                            }
                             return (
                               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                                 <button
@@ -3862,6 +4197,236 @@ export default function HittingSuite({
           ) : null}
             </div>
               </>
+            ) : dashboardPage === 'Game Log' ? (
+              <div className="dashboard-panel" style={{ padding: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                  <h3 style={{ marginTop: 0, marginBottom: 0 }}>{gameLogHeader.label}</h3>
+                  {gameLogHeader.logoUrl ? (
+                    <img src={gameLogHeader.logoUrl} alt="Team" style={{ width: 36, height: 36, objectFit: 'contain', flexShrink: 0 }} />
+                  ) : null}
+                </div>
+                <div className="portal-form-grid" style={{ marginBottom: 10, gridTemplateColumns: 'repeat(2, minmax(160px, 260px))' }}>
+                  <label>
+                    Table
+                    <SearchableSingleSelect
+                      options={tableModeOptions}
+                      value={tableModeSelectValue}
+                      onChange={handleTableModeSelection}
+                      placeholder={TABLE_MODE_DEFAULT}
+                    />
+                  </label>
+                  <div className="portal-color-toggle">
+                    <span className="portal-color-toggle-label">Color Code</span>
+                    <button
+                      type="button"
+                      className={`portal-color-toggle-btn${enableGameLogColors ? ' is-on' : ''}`}
+                      aria-label="Toggle game log color coding"
+                      aria-pressed={enableGameLogColors}
+                      title={enableGameLogColors ? 'Color code on' : 'Color code off'}
+                      onClick={() => setEnableGameLogColors((current) => !current)}
+                    />
+                  </div>
+                </div>
+                {!canRunGameLog ? (
+                  <p className="portal-muted-text" style={{ marginBottom: 0 }}>
+                    Game Log requires a selected team or player. Choose a team (not `All`) or filter to one or more hitters.
+                  </p>
+                ) : loadingGameLog ? (
+                  <p className="portal-muted-text" style={{ marginBottom: 0 }}>Loading game log...</p>
+                ) : gameLogError ? (
+                  <p style={{ color: '#ff8a8a', marginBottom: 0 }}>{gameLogError}</p>
+                ) : gameLogRowsWithPins.length ? (
+                  <div className="portal-table-wrap" style={{ maxHeight: '68vh', overflowY: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                      <thead>
+                        <tr>
+                          <th
+                            style={{
+                              textAlign: 'center',
+                              padding: '8px 6px',
+                              borderBottom: '1px solid rgba(255,255,255,0.18)',
+                              whiteSpace: 'nowrap',
+                              position: 'sticky',
+                              top: 0,
+                              zIndex: 3,
+                              background: 'rgba(7,9,14,0.98)',
+                              width: 34,
+                            }}
+                          >
+                            Pin
+                          </th>
+                          {gameLogColumns.map((column) => {
+                            const activeSort = gameLogSortColumn === column;
+                            return (
+                              <th
+                                key={column}
+                                style={{
+                                  textAlign: 'center',
+                                  padding: '8px 6px',
+                                  borderBottom: '1px solid rgba(255,255,255,0.18)',
+                                  whiteSpace: 'nowrap',
+                                  cursor: 'pointer',
+                                  position: 'sticky',
+                                  top: 0,
+                                  zIndex: 3,
+                                  background: activeSort ? 'rgba(59,130,246,0.24)' : 'rgba(7,9,14,0.98)',
+                                }}
+                                onClick={() => {
+                                  if (activeSort) {
+                                    setGameLogSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+                                  } else {
+                                    setGameLogSortColumn(column);
+                                    setGameLogSortDirection(column === 'Date' ? 'desc' : 'asc');
+                                  }
+                                }}
+                              >
+                                {column}
+                                {activeSort ? ` ${gameLogSortDirection === 'asc' ? '↑' : '↓'}` : ''}
+                              </th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {gameLogRowsWithPins.map((row, rowIndex) => (
+                          <tr
+                            key={String(row._game_pin_key ?? rowIndex)}
+                            style={(() => {
+                              const rowKind = String(row._game_row_kind ?? '');
+                              const isSummaryRow = rowKind === 'all' || rowKind === 'all_pinned';
+                              return isSummaryRow ? { background: 'rgba(255,255,255,0.12)', fontWeight: 700 } : undefined;
+                            })()}
+                          >
+                            {(() => {
+                              const rowKind = String(row._game_row_kind ?? '');
+                              const isSummaryRow = rowKind === 'all' || rowKind === 'all_pinned';
+                              const pinKey = String(row._game_pin_key ?? '');
+                              const isPinnedRow = pinnedGameLogKeys.has(pinKey);
+                              return (
+                                <td style={{ textAlign: 'center' }}>
+                                  {isSummaryRow ? '' : (
+                                    <button
+                                      type="button"
+                                      aria-label={isPinnedRow ? 'Unpin game' : 'Pin game'}
+                                      title={isPinnedRow ? 'Unpin' : 'Pin'}
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        if (!pinKey) return;
+                                        setPinnedGameLogKeys((current) => {
+                                          const next = new Set(current);
+                                          if (next.has(pinKey)) next.delete(pinKey);
+                                          else next.add(pinKey);
+                                          return next;
+                                        });
+                                      }}
+                                      style={{
+                                        border: 'none',
+                                        background: 'transparent',
+                                        color: isPinnedRow ? '#fbbf24' : 'rgba(255,255,255,0.7)',
+                                        cursor: 'pointer',
+                                        padding: 0,
+                                        lineHeight: 1,
+                                        fontSize: 14,
+                                      }}
+                                    >
+                                      {isPinnedRow ? '📌' : '📍'}
+                                    </button>
+                                  )}
+                                </td>
+                              );
+                            })()}
+                            {gameLogColumns.map((column, colIndex) => {
+                              const rawValue = row[column];
+                              const cellValue = formatTableDisplayValue(column, rawValue);
+                              const mappedTeamLabel = (value: unknown): string => {
+                                const raw = String(value ?? '').trim();
+                                if (!raw) return '-';
+                                if (isPro) return raw;
+                                return leagueTeamLabelByCode[raw.toUpperCase()] ?? raw;
+                              };
+                              const rowKind = String(row._game_row_kind ?? '');
+                              const isSummaryRow = rowKind === 'all' || rowKind === 'all_pinned';
+                              return (
+                                <td
+                                  key={`${rowIndex}-${column}`}
+                                  style={{
+                                    textAlign: colIndex <= 2 ? 'left' : 'center',
+                                    padding: '8px 6px',
+                                    borderBottom: '1px solid rgba(255,255,255,0.1)',
+                                    whiteSpace: 'nowrap',
+                                    background: gameLogSortColumn === column ? 'rgba(59,130,246,0.12)' : undefined,
+                                  }}
+                                >
+                                  {column === 'Team' && isPro && !isSummaryRow ? (
+                                    (() => {
+                                      const code = inferProTeamCode(String(rawValue ?? ''));
+                                      const logo = getProTeamLogoUrl(code);
+                                      return logo ? <img src={logo} alt={code || 'Team'} style={{ width: 18, height: 18, objectFit: 'contain' }} /> : <span>{cellValue === null || cellValue === undefined ? '—' : cellValue}</span>;
+                                    })()
+                                  ) : column === 'Opponent' && isPro && !isSummaryRow ? (
+                                    (() => {
+                                      const code = inferProTeamCode(String(rawValue ?? ''));
+                                      const logo = getProTeamLogoUrl(code);
+                                      const markerRaw = String(row._game_venue_marker ?? '').trim().toLowerCase();
+                                      const markerText = markerRaw === '@' || markerRaw === 'away'
+                                        ? '@'
+                                        : markerRaw === 'vs.' || markerRaw === 'vs' || markerRaw === 'home'
+                                          ? 'vs.'
+                                          : '';
+                                      return (
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                                          {markerText ? <span>{markerText}</span> : null}
+                                          {logo ? <img src={logo} alt={code || 'Opponent'} style={{ width: 18, height: 18, objectFit: 'contain' }} /> : <span>{cellValue === null || cellValue === undefined ? '—' : cellValue}</span>}
+                                        </span>
+                                      );
+                                    })()
+                                  ) : column === 'Team' && !isPro && !isSummaryRow ? (
+                                    mappedTeamLabel(rawValue)
+                                  ) : column === 'Opponent' && !isPro && !isSummaryRow ? (
+                                    (() => {
+                                      const markerRaw = String(row._game_venue_marker ?? '').trim().toLowerCase();
+                                      const markerText = markerRaw === '@' || markerRaw === 'away'
+                                        ? '@ '
+                                        : markerRaw === 'vs.' || markerRaw === 'vs' || markerRaw === 'home'
+                                          ? 'vs. '
+                                          : '';
+                                      const valueText = mappedTeamLabel(rawValue);
+                                      return `${markerText}${valueText}`;
+                                    })()
+                                  ) : (
+                                    <span
+                                      style={(() => {
+                                        if (!enableGameLogColors || colIndex <= 2) return undefined;
+                                        const range = gameLogColumnRanges.get(column);
+                                        if (!range) return undefined;
+                                        const value = parseSortableNumber(rawValue);
+                                        if (value === null) return undefined;
+                                        return {
+                                          background: divergingColor(value, range.min, (range.min + range.max) / 2, range.max),
+                                          color: '#ffffff',
+                                          borderRadius: 3,
+                                          padding: '2px 4px',
+                                          display: 'inline-block',
+                                          width: '100%',
+                                        };
+                                      })()}
+                                    >
+                                      {cellValue === null || cellValue === undefined ? '—' : cellValue}
+                                    </span>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="portal-muted-text" style={{ marginBottom: 0 }}>No game log rows found for current filters.</p>
+                )}
+              </div>
             ) : dashboardPage === 'HeatMaps' ? (
               <>
                 <div className="dashboard-panel" style={{ padding: 14 }}>
@@ -4563,7 +5128,11 @@ export default function HittingSuite({
                                         return (
                                           <th
                                             key={column}
-                                            style={{ textAlign: 'center', cursor: 'pointer' }}
+                                            style={{
+                                              textAlign: 'center',
+                                              cursor: 'pointer',
+                                              background: activeSort ? 'rgba(59,130,246,0.24)' : undefined,
+                                            }}
                                             onClick={() => {
                                               if (abSortColumn === column) {
                                                 setAbSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));

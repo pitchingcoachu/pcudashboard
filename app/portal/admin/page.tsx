@@ -5,6 +5,7 @@ import {
   listCoachesByOrganization,
   listExercisesByOrganization,
   listWorkoutsByOrganization,
+  resolveOrganizationIdForSchool,
 } from '../../../lib/training-db';
 import { requirePortalSession } from '../../../lib/portal-session';
 import {
@@ -18,17 +19,30 @@ import {
 
 export default async function AdminHomePage() {
   const session = await requirePortalSession();
-  const canAccessClientManagement = canUseClientManagement(session);
-  const canAccessProgramming = canUseProgrammingData(session);
-  const clientManagementOrganizationId = resolveClientManagementOrganizationId(session);
-  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
-  const [clients, coaches, exercises, workouts, schoolAccess] = await Promise.all([
+  const schoolAccess = await getSchoolProductAccess(programmingSchoolCode);
+  const canAccessClientManagement =
+    session.role === 'admin' ? schoolAccess.clientManagement : canUseClientManagement(session);
+  const canAccessProgramming = session.role === 'admin' ? schoolAccess.programming : canUseProgrammingData(session);
+  const [resolvedClientManagementOrganizationId, resolvedProgrammingOrganizationId] = await Promise.all([
+    resolveOrganizationIdForSchool({
+      schoolCode: programmingSchoolCode,
+      fallbackOrganizationId: resolveClientManagementOrganizationId(session),
+      createIfMissing: false,
+    }),
+    resolveOrganizationIdForSchool({
+      schoolCode: programmingSchoolCode,
+      fallbackOrganizationId: resolveProgrammingOrganizationId(session),
+      createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
+    }),
+  ]);
+  const clientManagementOrganizationId = canAccessClientManagement ? resolvedClientManagementOrganizationId : 0;
+  const programmingOrganizationId = canAccessProgramming ? resolvedProgrammingOrganizationId : 0;
+  const [clients, coaches, exercises, workouts] = await Promise.all([
     clientManagementOrganizationId > 0 ? listClientsByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
     clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
     programmingOrganizationId > 0 ? listExercisesByOrganization(programmingOrganizationId) : Promise.resolve([]),
     programmingOrganizationId > 0 ? listWorkoutsByOrganization(programmingOrganizationId) : Promise.resolve([]),
-    getSchoolProductAccess(programmingSchoolCode),
   ]);
   const visibleClients =
     session.role === 'coach' ? clients.filter((client) => client.assignedCoachUserId === session.userId) : clients;

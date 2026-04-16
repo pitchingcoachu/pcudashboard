@@ -19,6 +19,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const canAccessClientManagement = canUseClientManagement(session);
   const isProSchool = String(selectedSchool).trim().toUpperCase() === 'PRO';
   const showCoachClientTabs = canAccessClientManagement && !(session.role === 'coach' && isProSchool);
+  const useCompactProgrammingNav = canAccessProgramming;
 
   if (session.role === 'player') {
     redirect('/portal/player');
@@ -43,58 +44,62 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <div className="portal-header-center">
           <div className="portal-header-nav-stack">
             <nav className="portal-nav" aria-label="Portal Navigation">
-              <Link href="/portal/admin" className="portal-nav-link">
-                Home
-              </Link>
-              {(session.role === 'admin' || session.role === 'coach') && showCoachClientTabs && (
-                <Link href="/portal/admin/clients" className="portal-nav-link">
-                  Players
-                </Link>
-              )}
-              {session.role === 'admin' && showCoachClientTabs && (
-                <Link href="/portal/admin/coaches" className="portal-nav-link">
-                  Coaches
-                </Link>
-              )}
-              {canAccessProgramming ? (
+              {useCompactProgrammingNav ? (
                 <>
-                  <Link href="/portal/admin/exercises" className="portal-nav-link">
-                    Exercise Library
+                  <Link href="/portal/admin" className="portal-nav-link">
+                    Home
                   </Link>
-                  <Link href="/portal/admin/workouts" className="portal-nav-link">
-                    Workouts
+                  <Link href="/portal/dashboard" className="portal-nav-link">
+                    Dashboard
                   </Link>
                   <Link href="/portal/admin/schedule" className="portal-nav-link">
                     Schedule
                   </Link>
-                  <Link href="/portal/admin/testing" className="portal-nav-link">
-                    Testing
+                  <Link href="/tutorials" className="portal-nav-link">
+                    Tutorials
                   </Link>
                 </>
-              ) : null}
-              <Link href="/portal/dashboard" className="portal-nav-link">
-                Dashboard
-              </Link>
+              ) : (
+                <>
+                  <Link href="/portal/admin" className="portal-nav-link">
+                    Home
+                  </Link>
+                  {(session.role === 'admin' || session.role === 'coach') && showCoachClientTabs && (
+                    <Link href="/portal/admin/clients" className="portal-nav-link">
+                      Players
+                    </Link>
+                  )}
+                  {session.role === 'admin' && showCoachClientTabs && (
+                    <Link href="/portal/admin/coaches" className="portal-nav-link">
+                      Coaches
+                    </Link>
+                  )}
+                  <Link href="/portal/dashboard" className="portal-nav-link">
+                    Dashboard
+                  </Link>
+                </>
+              )}
             </nav>
           </div>
           <MobileNavSelect
             loggedInAs={session.name ?? session.email}
-            items={[
-              { href: '/portal/admin', label: 'Home' },
-              ...(session.role === 'admin' || session.role === 'coach'
-                ? [...(showCoachClientTabs ? [{ href: '/portal/admin/clients', label: 'Players' }] : [])]
-                : []),
-              ...(session.role === 'admin' && showCoachClientTabs ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
-              ...(canAccessProgramming
+            items={
+              useCompactProgrammingNav
                 ? [
-                    { href: '/portal/admin/exercises', label: 'Exercise Library' },
-                    { href: '/portal/admin/workouts', label: 'Workouts' },
+                    { href: '/portal/admin', label: 'Home' },
+                    { href: '/portal/dashboard', label: 'Dashboard' },
                     { href: '/portal/admin/schedule', label: 'Schedule' },
-                    { href: '/portal/admin/testing', label: 'Testing' },
+                    { href: '/tutorials', label: 'Tutorials' },
                   ]
-                : []),
-              { href: '/portal/dashboard', label: 'Dashboard' },
-            ]}
+                : [
+                    { href: '/portal/admin', label: 'Home' },
+                    ...(session.role === 'admin' || session.role === 'coach'
+                      ? [...(showCoachClientTabs ? [{ href: '/portal/admin/clients', label: 'Players' }] : [])]
+                      : []),
+                    ...(session.role === 'admin' && showCoachClientTabs ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
+                    { href: '/portal/dashboard', label: 'Dashboard' },
+                  ]
+            }
           />
         </div>
         <div className="portal-header-right">
