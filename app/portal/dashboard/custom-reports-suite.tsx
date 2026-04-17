@@ -349,6 +349,7 @@ const UNIVERSAL_SPLIT_BY = [
   'Session Type',
   'Count',
   'After Count',
+  'Venue',
   'In Zone',
   'Zone Location',
   'Times Through Order',

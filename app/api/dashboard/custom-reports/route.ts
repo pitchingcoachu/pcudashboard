@@ -14,12 +14,29 @@ type ReportPayload = {
   applyToAllSchools?: boolean;
 };
 
+const PERMANENT_REPORT_EXACT_KEYS = new Set([
+  'pitch value and locations',
+  'know yourself page',
+  'pitching summary report',
+  'bullpen summary report',
+]);
+
 function normalizedReportNameKey(name: string): string {
   return name
     .trim()
     .replace(/\s*\(all schools\)\s*$/i, '')
     .replace(/\s+/g, ' ')
     .toLowerCase();
+}
+
+function isPermanentGlobalReportName(name: string): boolean {
+  const key = normalizedReportNameKey(name);
+  if (PERMANENT_REPORT_EXACT_KEYS.has(key)) return true;
+  // Covers:
+  // - Advance vs. RHP (Whiff)
+  // - Advance vs. LHP (PV/100)
+  // - Advance Report vs. RHP
+  return /^advance\s+(report\s+)?vs\.\s*(rhp|lhp)\b/i.test(key);
 }
 
 function parseOrgSchoolMap(raw: string): Record<number, string> {
@@ -366,6 +383,51 @@ export async function GET() {
     }
     rows = Array.from(deduped.values());
 
+    // Force-include permanent report templates so they always appear for every
+    // school/pro, regardless org/session scope drift.
+    try {
+      const permanentCandidates = await pool.query<{
+        id: number;
+        name: string;
+        applies_to_all_schools: boolean;
+        school_code: string;
+        payload_json: unknown;
+        created_at: string;
+        updated_at: string;
+      }>(
+        `
+        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
+        FROM dashboard_custom_reports
+        WHERE
+          lower(name) = ANY($1::text[])
+          OR lower(name) ~ $2
+        ORDER BY updated_at DESC, id DESC
+        `,
+        [
+          Array.from(PERMANENT_REPORT_EXACT_KEYS),
+          '^advance\\s+(report\\s+)?vs\\.\\s*(rhp|lhp)(\\s*\\(.*\\))?$',
+        ]
+      );
+      const byName = new Map<string, (typeof permanentCandidates.rows)[number]>();
+      for (const row of permanentCandidates.rows) {
+        const key = normalizedReportNameKey(row.name);
+        if (!isPermanentGlobalReportName(row.name)) continue;
+        if (!byName.has(key)) byName.set(key, row);
+      }
+      for (const row of byName.values()) {
+        const key = normalizedReportNameKey(row.name);
+        if (!deduped.has(key)) deduped.set(key, row);
+      }
+      rows = Array.from(deduped.values()).sort((a, b) => {
+        const aTime = String(a.updated_at ?? '');
+        const bTime = String(b.updated_at ?? '');
+        if (aTime === bTime) return Number(b.id) - Number(a.id);
+        return aTime > bTime ? -1 : 1;
+      });
+    } catch {
+      // Non-fatal: keep scoped rows if permanent fallback query fails.
+    }
+
     return NextResponse.json({
       items: rows.map((row) => ({
         id: Number(row.id),
@@ -581,6 +643,9 @@ export async function DELETE(request: Request) {
     const existingName = String(protectedCheck.rows[0]?.name ?? '').trim();
     if (normalizedReportNameKey(existingName) === normalizedReportNameKey("Jared's Dashboard")) {
       return NextResponse.json({ error: "Jared's Dashboard is protected and cannot be deleted." }, { status: 400 });
+    }
+    if (isPermanentGlobalReportName(existingName)) {
+      return NextResponse.json({ error: 'This permanent report template cannot be deleted.' }, { status: 400 });
     }
     const deleted = await pool.query(
       `

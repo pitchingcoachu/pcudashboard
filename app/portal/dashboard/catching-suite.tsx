@@ -402,6 +402,7 @@ export default function CatchingSuite() {
   const [catcher, setCatcher] = useState('All');
   const [hand, setHand] = useState('All');
   const [batterSide, setBatterSide] = useState('All');
+  const [venue, setVenue] = useState('All');
   const [dateStart, setDateStart] = useState('');
   const [dateEnd, setDateEnd] = useState('');
   const [inZone, setInZone] = useState('All');
@@ -558,6 +559,7 @@ export default function CatchingSuite() {
     if (catcher && catcher !== 'All') params.set('catcher', catcher);
     if (hand && hand !== 'All') params.set('hand', hand);
     if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
+    if (venue && venue !== 'All') params.set('venue', venue);
     if (inZone && inZone !== 'All') params.set('in_zone', inZone);
     const pitchTypeTokens = pitchTypes.includes('All') ? [] : pitchTypes;
     if (pitchTypeTokens.length) params.set('pitch_types', pitchTypeTokens.join(','));
@@ -679,7 +681,7 @@ export default function CatchingSuite() {
     return () => {
       active = false;
     };
-  }, [dateStart, dateEnd, sessionType, level, teamType, catcher, hand, batterSide, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols, page, isPro]);
+  }, [dateStart, dateEnd, sessionType, level, teamType, catcher, hand, batterSide, venue, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols, page, isPro]);
 
   useEffect(() => {
     let active = true;
@@ -954,6 +956,7 @@ export default function CatchingSuite() {
         'Batter Hand',
         'Count',
         'After Count',
+        'Venue',
         'Zone Location',
         'Times Through Order',
         'Inning',
@@ -1095,6 +1098,15 @@ export default function CatchingSuite() {
                 <label>
                   Batter Hand
                   <SearchableSingleSelect options={batterSideOptions} value={batterSide} onChange={setBatterSide} placeholder="All" />
+                </label>
+                <label>
+                  Venue
+                  <SearchableSingleSelect
+                    options={toOptions(['All', 'Home', 'Away'])}
+                    value={venue}
+                    onChange={setVenue}
+                    placeholder="All"
+                  />
                 </label>
                 <label>
                   Pitch Type

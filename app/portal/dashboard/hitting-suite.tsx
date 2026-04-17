@@ -1854,6 +1854,7 @@ export default function HittingSuite({
   const [oppPitcher, setOppPitcher] = useState('All');
   const [hand, setHand] = useState('All');
   const [batterSide, setBatterSide] = useState('All');
+  const [venue, setVenue] = useState('All');
   const [tableMode, setTableMode] = useState(TABLE_MODE_DEFAULT);
   const [splitBy, setSplitBy] = useState(SPLIT_BY_DEFAULT);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
@@ -2233,6 +2234,7 @@ export default function HittingSuite({
     if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
     if (hand && hand !== 'All') params.set('hand', hand);
     if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
+    if (venue && venue !== 'All') params.set('venue', venue);
     params.set('table_mode', tableMode);
     params.set('split_by', effectiveSplitBy);
     if (tableMode === 'Custom' && customTableColumns.length) {
@@ -2363,7 +2365,7 @@ export default function HittingSuite({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague]);
+  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, venue, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague]);
 
   const sortedGameLogRows = useMemo(
     () => sortTableRows(gameLogRows, gameLogSortColumn, gameLogSortDirection),
@@ -2445,6 +2447,7 @@ export default function HittingSuite({
       if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
       if (hand && hand !== 'All') params.set('hand', hand);
       if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
+      if (venue && venue !== 'All') params.set('venue', venue);
       params.set('table_mode', tableMode);
       params.set('split_by', 'Game');
       if (tableMode === 'Custom' && customTableColumns.length) params.set('custom_columns', customTableColumns.join(','));
@@ -2502,12 +2505,53 @@ export default function HittingSuite({
           return {
             ...(row as Record<string, unknown>),
             _game_pin_key: `${parsed.gameKey}|${parsed.date}|${rowIndex}`,
+            _game_key: parsed.gameKey,
             _game_venue_marker: parsed.batterMarker,
             Team: parsed.team || '-',
             Date: parsed.date || '-',
             Opponent: parsed.opponent || '-',
           } as Record<string, unknown>;
         });
+      const normalizeTeamToken = (value: unknown): string =>
+        String(value ?? '')
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-Z0-9_]/g, '');
+      const isPlaceholderOpponent = (value: unknown): boolean => {
+        const token = normalizeTeamToken(value);
+        return token === '' || token === '-' || token === 'UNKNOWN' || token === 'OPP' || token === 'OPPONENT' || token === 'OPPONENTS';
+      };
+      const opponentByGameKey = new Map<string, string>();
+      const ambiguousGameKey = new Set<string>();
+      const opponentsByDate = new Map<string, Set<string>>();
+      for (const row of rows) {
+        const gameKey = String(row._game_key ?? '').trim();
+        const dateKey = String(row.Date ?? '').trim();
+        const opponent = String(row.Opponent ?? '').trim();
+        if (!isPlaceholderOpponent(opponent)) {
+          if (gameKey && gameKey !== '-') {
+            const existing = opponentByGameKey.get(gameKey);
+            if (!existing) opponentByGameKey.set(gameKey, opponent);
+            else if (existing !== opponent) ambiguousGameKey.add(gameKey);
+          }
+          if (dateKey) {
+            const set = opponentsByDate.get(dateKey) ?? new Set<string>();
+            set.add(opponent);
+            opponentsByDate.set(dateKey, set);
+          }
+        }
+      }
+      for (const key of ambiguousGameKey) opponentByGameKey.delete(key);
+      const rowsResolved = rows.map((row) => {
+        if (!isPlaceholderOpponent(row.Opponent)) return row;
+        const gameKey = String(row._game_key ?? '').trim();
+        const dateKey = String(row.Date ?? '').trim();
+        const inferredFromGame = gameKey && gameKey !== '-' ? opponentByGameKey.get(gameKey) : undefined;
+        if (inferredFromGame) return { ...row, Opponent: inferredFromGame };
+        const byDate = dateKey ? Array.from(opponentsByDate.get(dateKey) ?? []) : [];
+        if (byDate.length === 1) return { ...row, Opponent: byDate[0] };
+        return row;
+      });
       if (cancelled) return;
       const leadingColumns = ['Team', 'Date', 'Opponent'];
       const seen = new Set(leadingColumns.map((col) => col.toLowerCase()));
@@ -2521,7 +2565,7 @@ export default function HittingSuite({
         return true;
       });
       setGameLogColumns([...leadingColumns, ...metricColumns]);
-      setGameLogRows(rows);
+      setGameLogRows(rowsResolved);
     };
     run()
       .catch((requestError) => {
@@ -2552,6 +2596,7 @@ export default function HittingSuite({
     oppPitcher,
     hand,
     batterSide,
+    venue,
     tableMode,
     customTableColumns,
     pitchTypes,
@@ -3473,6 +3518,15 @@ export default function HittingSuite({
                     <SearchableSingleSelect options={toOptions(filters.batter_sides)} value={batterSide} onChange={setBatterSide} placeholder="All" />
                   </label>
                   <label>
+                    Venue
+                    <SearchableSingleSelect
+                      options={toOptions(['All', 'Home', 'Away'])}
+                      value={venue}
+                      onChange={setVenue}
+                      placeholder="All"
+                    />
+                  </label>
+                  <label>
                     Pitch Type
                     <SearchableMultiSelect options={[{ value: 'All', label: 'All' }, ...toOptions(filters.pitch_types)]} values={pitchTypes} onChange={setPitchTypes} />
                   </label>
@@ -3996,8 +4050,9 @@ export default function HittingSuite({
                           top: isLeaderboardPage ? 0 : undefined,
                           zIndex: isLeaderboardPage ? 3 : undefined,
                           background: activeSort
-                            ? 'rgba(59,130,246,0.24)'
+                            ? 'rgb(var(--portal-accent-rgb, 59,130,246))'
                             : (isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined),
+                          color: activeSort ? '#fff' : undefined,
                         }}
                         onClick={
                           isSortable
@@ -4098,7 +4153,8 @@ export default function HittingSuite({
                               isLeaderboardPage && colIndex === 0 && (leaderboardViewBy === 'Player' || leaderboardViewBy === 'Team')
                                 ? (isAllRow ? 'center' : 'left')
                                 : 'center',
-                            background: leaderboardSortColumn === col ? 'rgba(59,130,246,0.12)' : undefined,
+                            background: leaderboardSortColumn === col ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                            color: leaderboardSortColumn === col ? '#fff' : undefined,
                             padding: '8px 6px',
                             borderBottom: '1px solid rgba(255,255,255,0.1)',
                             whiteSpace: 'nowrap',
@@ -4269,7 +4325,8 @@ export default function HittingSuite({
                                   position: 'sticky',
                                   top: 0,
                                   zIndex: 3,
-                                  background: activeSort ? 'rgba(59,130,246,0.24)' : 'rgba(7,9,14,0.98)',
+                                  background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : 'rgba(7,9,14,0.98)',
+                                  color: activeSort ? '#fff' : undefined,
                                 }}
                                 onClick={() => {
                                   if (activeSort) {
@@ -4355,7 +4412,8 @@ export default function HittingSuite({
                                     padding: '8px 6px',
                                     borderBottom: '1px solid rgba(255,255,255,0.1)',
                                     whiteSpace: 'nowrap',
-                                    background: gameLogSortColumn === column ? 'rgba(59,130,246,0.12)' : undefined,
+                                    background: gameLogSortColumn === column ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                                    color: gameLogSortColumn === column ? '#fff' : undefined,
                                   }}
                                 >
                                   {column === 'Team' && isPro && !isSummaryRow ? (
@@ -5131,7 +5189,8 @@ export default function HittingSuite({
                                             style={{
                                               textAlign: 'center',
                                               cursor: 'pointer',
-                                              background: activeSort ? 'rgba(59,130,246,0.24)' : undefined,
+                                              background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                                              color: activeSort ? '#fff' : undefined,
                                             }}
                                             onClick={() => {
                                               if (abSortColumn === column) {

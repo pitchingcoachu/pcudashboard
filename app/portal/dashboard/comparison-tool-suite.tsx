@@ -144,6 +144,7 @@ const DOMAIN_SPLIT_BY: Record<Domain, string[]> = {
     'Session Type',
     'Count',
     'After Count',
+    'Venue',
     'In Zone',
     'Zone Location',
     'Times Through Order',
@@ -164,6 +165,7 @@ const DOMAIN_SPLIT_BY: Record<Domain, string[]> = {
     'Session Type',
     'Count',
     'After Count',
+    'Venue',
     'In Zone',
     'Zone Location',
     'Times Through Order',
@@ -176,7 +178,7 @@ const DOMAIN_SPLIT_BY: Record<Domain, string[]> = {
     'Batter',
     'Catcher',
   ],
-  Catching: ['Pitch Types', 'Pitcher Hand', 'Batter Hand', 'Count', 'After Count', 'Zone Location', 'Times Through Order', 'Inning', 'Pitch Count', 'Velocity', 'IVB', 'HB', 'Pitcher', 'Batter', 'Catcher'],
+  Catching: ['Pitch Types', 'Pitcher Hand', 'Batter Hand', 'Count', 'After Count', 'Venue', 'Zone Location', 'Times Through Order', 'Inning', 'Pitch Count', 'Velocity', 'IVB', 'HB', 'Pitcher', 'Batter', 'Catcher'],
 };
 const CHART_OPTIONS: ChartType[] = ['Heatmap', 'Pitch Chart', 'Velocity Chart', 'Movement Plot', 'Release Plot'];
 const HEAT_METRICS_BY_DOMAIN: Record<Domain, HeatMetric[]> = {

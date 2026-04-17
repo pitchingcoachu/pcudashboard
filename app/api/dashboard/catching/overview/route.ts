@@ -62,6 +62,7 @@ export async function GET(request: Request) {
     'catcher',
     'hand',
     'batter_side',
+    'venue',
     'in_zone',
     'pitch_types',
     'zone_locations',

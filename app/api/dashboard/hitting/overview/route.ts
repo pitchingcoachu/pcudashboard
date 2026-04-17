@@ -65,6 +65,7 @@ export async function GET(request: Request) {
     'opp_pitcher',
     'hand',
     'batter_side',
+    'venue',
     'table_mode',
     'split_by',
     'custom_columns',

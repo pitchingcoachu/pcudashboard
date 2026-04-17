@@ -1352,6 +1352,8 @@ def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
         b = row.get("prev_balls")
         s = row.get("prev_strikes")
         return f"{b}-{s}" if b is not None and s is not None else "Unknown"
+    if split == "Venue":
+        return _venue_bucket_for_row(row)
     if split == "Zone Location":
         ph = row.get("plate_height")
         ps = row.get("plate_side")
@@ -1406,28 +1408,54 @@ def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
     if split == "Catcher":
         return str(row.get("catcher") or "Unknown")
     if split == "Game":
+        def _team_match_token(value: Any) -> str:
+            raw = str(value or "").strip()
+            if not raw:
+                return ""
+            mapped = _normalize_team_code(_league_team_code_from_value(raw))
+            if mapped and mapped != "ALL":
+                return mapped
+            return _normalize_team_code(raw)
+
         session_value = row.get("session_date")
         if isinstance(session_value, date):
             session_date = session_value.isoformat()
         else:
             session_date = str(session_value or "").strip()
-        pitcher_team = (
-            str(row.get("pitcher_team_norm") or "").strip()
-            or _normalize_team_code(str(row.get("pitcherteam") or row.get("pitcher_team_code") or "").strip())
+        pitcher_team_code = (
+            _team_match_token(row.get("pitcher_team_norm"))
+            or _team_match_token(row.get("pitcherteam"))
+            or _team_match_token(row.get("pitcher_team_code"))
             or "Unknown"
         )
-        batter_team = (
-            str(row.get("batter_team_norm_eff") or row.get("batter_team_norm") or "").strip()
-            or _normalize_team_code(str(row.get("batterteam") or row.get("batter_team_code") or "").strip())
+        batter_team_code = (
+            _team_match_token(row.get("batter_team_norm_eff"))
+            or _team_match_token(row.get("batter_team_norm"))
+            or _team_match_token(row.get("batterteam"))
+            or _team_match_token(row.get("batter_team_code"))
             or "Unknown"
         )
-        game_key = str(
+        # Use the canonical league code->name mapping for game split display labels.
+        # If a code is unmapped, _league_team_label returns the original code.
+        pitcher_team = _league_team_label(pitcher_team_code) if pitcher_team_code != "Unknown" else "Unknown"
+        batter_team = _league_team_label(batter_team_code) if batter_team_code != "Unknown" else "Unknown"
+        raw_game_key = str(
             row.get("game_pk")
             or row.get("game_id")
             or row.get("game_uid")
             or row.get("game_foreign_id")
+            or row.get("_source_game_key")
+            or _source_game_key_from_filename(row.get("source_file_name"))
             or ""
-        ).strip() or "-"
+        ).strip()
+        low_quality_game_key = (
+            not raw_game_key
+            or raw_game_key in {"-", "0", "UNKNOWN"}
+            or (session_date and (raw_game_key == session_date or raw_game_key.startswith(f"{session_date}-")))
+        )
+        game_key = str(
+            row.get("_derived_game_key") if low_quality_game_key else raw_game_key
+        ).strip() or raw_game_key or "-"
         pitcher_marker = "?"
         batter_marker = "?"
         half_raw = str(
@@ -1444,30 +1472,24 @@ def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
         elif half_raw.startswith("bottom"):
             pitcher_is_home = False
         if pitcher_is_home is None:
-            home_team = _normalize_team_code(
-                str(
-                    row.get("home_team_code")
-                    or row.get("hometeam")
-                    or row.get("home_team")
-                    or ""
-                ).strip()
+            home_team = (
+                _team_match_token(row.get("home_team_code"))
+                or _team_match_token(row.get("hometeam"))
+                or _team_match_token(row.get("home_team"))
             )
-            away_team = _normalize_team_code(
-                str(
-                    row.get("away_team_code")
-                    or row.get("awayteam")
-                    or row.get("away_team")
-                    or ""
-                ).strip()
+            away_team = (
+                _team_match_token(row.get("away_team_code"))
+                or _team_match_token(row.get("awayteam"))
+                or _team_match_token(row.get("away_team"))
             )
             if home_team and away_team:
-                if pitcher_team == home_team and batter_team == away_team:
+                if pitcher_team_code == home_team and batter_team_code == away_team:
                     pitcher_is_home = True
-                elif pitcher_team == away_team and batter_team == home_team:
+                elif pitcher_team_code == away_team and batter_team_code == home_team:
                     pitcher_is_home = False
-                elif batter_team == home_team and pitcher_team == away_team:
+                elif batter_team_code == home_team and pitcher_team_code == away_team:
                     pitcher_is_home = False
-                elif batter_team == away_team and pitcher_team == home_team:
+                elif batter_team_code == away_team and pitcher_team_code == home_team:
                     pitcher_is_home = True
         if pitcher_is_home is not None:
             pitcher_marker = "vs." if pitcher_is_home else "@"
@@ -1508,6 +1530,122 @@ def _parse_inning_number(value: Any) -> Optional[int]:
         return int(m.group(0))
     except Exception:
         return None
+
+
+def _source_game_key_from_filename(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    base = os.path.basename(raw)
+    if base.lower().endswith(".csv"):
+        base = base[:-4]
+    # Strip ingest-status suffixes so reprocessed files map to the same game key.
+    base = re.sub(r"_(verified|unverified)$", "", base, flags=re.IGNORECASE)
+    m = re.search(r"(\d{8}-[A-Za-z0-9]+-\d+)$", base)
+    if m:
+        return m.group(1)
+    return base
+
+
+def _annotate_derived_game_keys(rows: List[Dict[str, Any]]) -> None:
+    if not rows:
+        return
+
+    def _explicit_game_key(rr: Dict[str, Any]) -> str:
+        return str(
+            rr.get("game_pk")
+            or rr.get("game_id")
+            or rr.get("game_uid")
+            or rr.get("game_foreign_id")
+            or rr.get("_source_game_key")
+            or _source_game_key_from_filename(rr.get("source_file_name"))
+            or ""
+        ).strip()
+
+    def _order(rr: Dict[str, Any]) -> tuple:
+        return (
+            str(rr.get("session_date") or ""),
+            str(_explicit_game_key(rr) or ""),
+            int(rr.get("at_bat_index") or 0),
+            int(rr.get("event_index") or 0),
+            int(rr.get("pitch_number") or 0),
+            int(rr.get("id") or rr.get("pitch_event_id") or 0),
+        )
+
+    rows_sorted = sorted(rows, key=_order)
+    segments: Dict[str, int] = {}
+    max_inning_by_cluster: Dict[str, int] = {}
+    prev_ab_by_cluster: Dict[str, int] = {}
+
+    def _is_low_quality_game_key(game_key: str, session_key: str) -> bool:
+        gk = str(game_key or "").strip()
+        if not gk or gk in {"-", "0", "UNKNOWN"}:
+            return True
+        if session_key and gk == session_key:
+            return True
+        if session_key and gk.startswith(session_key):
+            # Date-prefixed placeholders (common in some feeds) are not reliable
+            # as unique game identifiers for doubleheaders.
+            tail = gk[len(session_key):]
+            if tail in {"", "_", "-", "|"}:
+                return True
+        return False
+
+    prev_inning_by_cluster: Dict[str, int] = {}
+    prev_ticks_by_cluster: Dict[str, int] = {}
+    tick_gap_reset_threshold = 20 * 60 * 10_000_000  # 20 minutes in UUID1 100ns ticks
+    for rr in rows_sorted:
+        explicit_key = _explicit_game_key(rr)
+        session_key = _session_date_key(rr.get("session_date")) or "unknown-date"
+        pitcher_code = _normalize_team_code(str(rr.get("pitcher_team_code") or rr.get("pitcherteam") or ""))
+        batter_code = _normalize_team_code(str(rr.get("batter_team_code") or rr.get("batterteam") or ""))
+        home_code = _normalize_team_code(str(rr.get("home_team_code") or rr.get("hometeam") or ""))
+        away_code = _normalize_team_code(str(rr.get("away_team_code") or rr.get("awayteam") or ""))
+        explicit_part = "" if _is_low_quality_game_key(explicit_key, session_key) else explicit_key
+        cluster_key = f"{session_key}|{pitcher_code}|{batter_code}|{home_code}|{away_code}|{explicit_part}"
+        is_fallback_cluster = explicit_part == ""
+
+        current_segment = segments.get(cluster_key, 1)
+        inning_num = _parse_inning_number(rr.get("inning"))
+        prev_max_inning = max_inning_by_cluster.get(cluster_key, 0)
+        prev_inning = prev_inning_by_cluster.get(cluster_key, 0)
+        ab_idx = int(rr.get("at_bat_index") or 0)
+        prev_ab = prev_ab_by_cluster.get(cluster_key, 0)
+        curr_ticks = _uuid1_ticks(rr.get("pitch_uid"))
+        prev_ticks = prev_ticks_by_cluster.get(cluster_key)
+
+        inning_reset = (
+            inning_num is not None
+            and prev_max_inning >= 7
+            and inning_num <= 2
+            and inning_num < prev_max_inning
+        )
+        inning_drop_reset = False
+        ab_reset = prev_ab >= 18 and ab_idx > 0 and ab_idx < prev_ab
+        tick_gap_reset = (
+            curr_ticks is not None
+            and prev_ticks is not None
+            and curr_ticks > prev_ticks
+            and (curr_ticks - prev_ticks) >= tick_gap_reset_threshold
+        )
+        should_split = inning_reset or inning_drop_reset or ab_reset or tick_gap_reset
+        if should_split and is_fallback_cluster and current_segment >= 2:
+            should_split = False
+        if should_split:
+            current_segment += 1
+            max_inning_by_cluster[cluster_key] = 0
+            prev_ab_by_cluster[cluster_key] = 0
+
+        segments[cluster_key] = current_segment
+        if inning_num is not None:
+            max_inning_by_cluster[cluster_key] = max(max_inning_by_cluster.get(cluster_key, 0), inning_num)
+            prev_inning_by_cluster[cluster_key] = inning_num
+        if ab_idx > 0:
+            prev_ab_by_cluster[cluster_key] = ab_idx
+        if curr_ticks is not None:
+            prev_ticks_by_cluster[cluster_key] = curr_ticks
+
+        rr["_derived_game_key"] = f"{session_key}|{pitcher_code or 'UNK'}|{batter_code or 'UNK'}|g{current_segment}"
 
 
 def _uuid1_ticks(value: Any) -> Optional[int]:
@@ -2001,6 +2139,7 @@ def _build_dynamic_table(
         "Batter Hand": "Batter Hand",
         "Count": "Count",
         "After Count": "After Count",
+        "Venue": "Venue",
         "Zone Location": "Zone Location",
         "Times Through Order": "Times Through Order",
         "Inning": "Inning of Appearance",
@@ -2150,6 +2289,8 @@ def _build_dynamic_table(
         }
 
     split_clean_for_grouping = (split_by or "").strip()
+    if split_clean_for_grouping == "Game":
+        _annotate_derived_game_keys(rows)
     if split_clean_for_grouping == "After Count":
         # After Count semantics: each bucket is all PA/BF that reached that
         # count at any point during the plate appearance, and includes only
@@ -3123,6 +3264,7 @@ def _build_dynamic_table(
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
         "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
         "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
+        "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
         "Hitting Results": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Swing%", "FPS(FB)%", "FPS(OS)%", "Whiff%", "GB%", "K%", "BB%", "Barrel%", "EV", "LA"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
@@ -3836,6 +3978,132 @@ def _normalize_team_code(value: str) -> str:
     return re.sub(r"[^A-Z0-9_]", "", (value or "").strip().upper())
 
 
+_TEAM_PLACEHOLDER_CODES = {"", "ALL", "OPP", "OPPONENTS", "CAMPERS", "PRO"}
+
+
+def _is_placeholder_team_code(value: Any) -> bool:
+    return _normalize_team_code(str(value or "")) in _TEAM_PLACEHOLDER_CODES
+
+
+def _session_date_key(value: Any) -> str:
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value or "").strip()
+
+
+def _row_game_group_key(row: Dict[str, Any]) -> Optional[str]:
+    session_key = _session_date_key(row.get("session_date"))
+    if not session_key:
+        return None
+    game_id = str(row.get("game_id") or "").strip()
+    game_uid = str(row.get("game_uid") or "").strip()
+    game_foreign_id = str(row.get("game_foreign_id") or "").strip()
+    if game_uid:
+        return f"{session_key}|uid:{game_uid}"
+    if game_id:
+        return f"{session_key}|gid:{game_id}"
+    if game_foreign_id:
+        return f"{session_key}|fgid:{game_foreign_id}"
+    home_code = _normalize_team_code(str(row.get("home_team_code") or ""))
+    away_code = _normalize_team_code(str(row.get("away_team_code") or ""))
+    if home_code and away_code:
+        return f"{session_key}|ha:{home_code}|{away_code}"
+    return None
+
+
+def _resolve_college_opp_placeholders(
+    rows: List[Dict[str, Any]],
+    school_code: str,
+    team_markers_norm: set[str],
+) -> List[Dict[str, Any]]:
+    # PRO and PCU intentionally keep their existing team-code behavior.
+    if not rows or school_code in {"PRO", "PCU"}:
+        return rows
+    markers = {
+        _normalize_team_code(code)
+        for code in ({*team_markers_norm, school_code})
+        if _normalize_team_code(code)
+    }
+    if not markers:
+        return rows
+
+    opponent_code_by_group: Dict[str, str] = {}
+    candidates_by_group: Dict[str, set[str]] = {}
+    for row in rows:
+        group_key = _row_game_group_key(row)
+        if not group_key:
+            continue
+        candidate_set = candidates_by_group.setdefault(group_key, set())
+        for raw in (
+            row.get("pitcher_team_code"),
+            row.get("batter_team_code"),
+            row.get("home_team_code"),
+            row.get("away_team_code"),
+        ):
+            code = _normalize_team_code(str(raw or ""))
+            if not code or code in markers or _is_placeholder_team_code(code):
+                continue
+            candidate_set.add(code)
+    for group_key, codes in candidates_by_group.items():
+        if len(codes) == 1:
+            opponent_code_by_group[group_key] = next(iter(codes))
+
+    if not opponent_code_by_group:
+        return rows
+
+    for row in rows:
+        group_key = _row_game_group_key(row)
+        if not group_key:
+            continue
+        opponent_code = opponent_code_by_group.get(group_key)
+        if not opponent_code:
+            continue
+        pitcher_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+        batter_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
+        home_code = _normalize_team_code(str(row.get("home_team_code") or ""))
+        away_code = _normalize_team_code(str(row.get("away_team_code") or ""))
+
+        marker_hint_on_row = (
+            (pitcher_code in markers)
+            or (batter_code in markers)
+            or (home_code in markers)
+            or (away_code in markers)
+        )
+        if not marker_hint_on_row:
+            continue
+
+        if _is_placeholder_team_code(pitcher_code):
+            row["pitcher_team_code"] = opponent_code
+            pitcher_code = opponent_code
+        if _is_placeholder_team_code(batter_code):
+            row["batter_team_code"] = opponent_code
+            batter_code = opponent_code
+        if _is_placeholder_team_code(home_code) and away_code in markers:
+            row["home_team_code"] = opponent_code
+            home_code = opponent_code
+        if _is_placeholder_team_code(away_code) and home_code in markers:
+            row["away_team_code"] = opponent_code
+            away_code = opponent_code
+
+        if "pitcher_team_norm" in row:
+            row["pitcher_team_norm"] = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+        if "batter_team_norm" in row:
+            row["batter_team_norm"] = _normalize_team_code(str(row.get("batter_team_code") or ""))
+        if "batter_team_norm_eff" in row:
+            batter_eff = _normalize_team_code(str(row.get("batter_team_code") or ""))
+            if not batter_eff:
+                pitcher_eff = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+                home_eff = _normalize_team_code(str(row.get("home_team_code") or ""))
+                away_eff = _normalize_team_code(str(row.get("away_team_code") or ""))
+                if pitcher_eff and home_eff and away_eff:
+                    if pitcher_eff == home_eff and away_eff:
+                        batter_eff = away_eff
+                    elif pitcher_eff == away_eff and home_eff:
+                        batter_eff = home_eff
+            row["batter_team_norm_eff"] = batter_eff
+    return rows
+
+
 LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "ABI_WIL": "Abilene Christian University",
     "AIR_FOR": "United States Air Force Academy",
@@ -3844,6 +4112,7 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "ALA_HOR": "Alabama State University",
     "ALA_LIO": "University of North Alabama",
     "APP_MOU": "Appalachian State University",
+    "AND_TRO": "Anderson University",
     "ARI_SUN": "Arizona State University",
     "ARI_WIL": "University of Arizona",
     "ARK_RAZ": "University of Arkansas",
@@ -3859,6 +4128,7 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "BEL_ABB": "Belmont Abbey College",
     "BEL_KNI": "Bellarmine University",
     "BIN_BEA": "Binghamton University",
+    "BET_WIL": "Bethune-Cookman University",
     "BRO_BEA": "Brown University",
     "BUT_BUL": "Butler University",
     "BAY_BEA": "Baylor University",
@@ -3873,19 +4143,25 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "CAN_GRI": "Canisius University",
     "CAR_EAG": "Carson-Newman University",
     "CAL_FUL": "California State University, Fullerton",
+    "CAL_HIG": "University of California, Riverside",
+    "CAL_ANT": "University of California, Irvine",
     "CAL_POL": "California Polytechnic State University, San Luis Obispo",
     "CAT_IND": "Catawba College",
+    "CEN_BEA": "University of Central Arkansas",
     "CEN_MIC": "Central Michigan University",
     "CLE_TIG": "Clemson University",
     "CIN_BEA": "University of Cincinnati",
     "CIT_BUL": "The Citadel",
     "COA_CHA": "Coastal Carolina University",
     "COL_LION": "Columbia University",
+    "COR_BRE": "Cornell University",
     "CRE_BLU": "Creighton University",
+    "CSD_TRI": "University of California, San Diego",
     "CSU_BAK": "California State University, Bakersfield",
     "COW_COU": "College of the Canyons",
     "CUM_PAT": "University of the Cumberlands",
     "CYP_CHR": "Cypress College",
+    "CED_UNI": "Cedarville University",
     "DAL_PAT": "Dallas Baptist University",
     "DAR_GRE": "Dartmouth College",
     "DAV_UNI": "Davidson College",
@@ -3949,9 +4225,11 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "JAC_GAM": "Jackson State University",
     "JMU_DUK": "James Madison University",
     "KAN_JAY": "University of Kansas",
+    "KS_GF": "Kent State University",
     "KAN_WIL": "Kansas State University",
     "KEN_WIL": "University of Kentucky",
     "KEN_OWL": "Kennesaw State University",
+    "KIN_UNI": "King University",
     "LAF_LEP": "Lafayette College",
     "LAK_ERI21": "Lake Erie College",
     "LEE_UNI": "Lee University",
@@ -3959,12 +4237,14 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "LEH_MOU": "Lehigh University",
     "LIB_FLA": "Liberty University",
     "LIN_MEM": "Lincoln Memorial University",
+    "LIN_UNI": "Lindenwood University",
     "LIP_BIS": "Lipscomb University",
     "LIT_TRO": "University of Arkansas at Little Rock",
     "LOC_HAV": "Lock Haven University",
     "LON_LAN": "Longwood University",
-    "LOU_BUL": "University of Louisville",
-    "LOU_CAJ": "University of Louisiana at Lafayette",
+    "LON_DIR": "Long Beach State University",
+    "LOU_BUL": "Louisiana Tech University",
+    "LOU_CAJ": "University of Louisiana, Lafayette",
     "LOU_CAR": "University of Louisiana Monroe",
     "LOY_LIO": "Loyola Marymount University",
     "LOY_UNI": "Loyola University Chicago",
@@ -3973,7 +4253,9 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "MAI_BLA": "University of Maine",
     "MAD_UNI": "Madonna University",
     "MAN_JAS": "Manhattan University",
+    "MCN_COW": "McNeese State University",
     "MAR_TER": "University of Maryland",
+    "MAR_LIO": "Mars Hill University",
     "MER_BEA": "Mercer University",
     "MER_UNI": "Mercyhurst University",
     "MEX_LOB": "University of New Mexico",
@@ -3997,11 +4279,15 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "NAV_MID": "United States Naval Academy",
     "NCB": "North Carolina A&T State University",
     "NEB": "University of Nebraska Lincoln",
+    "NU": "University of Nebraska",
     "NEV_WOL": "University of Nevada, Reno",
+    "NIC_COL": "Nicholls State University",
     "NIA_EAG": "Niagara University",
     "NJI_HIG": "New Jersey Institute of Technology",
     "NMS_AGG": "New Mexico State University",
+    "NEW_WLV": "Newberry University",
     "NOR_AGG": "North Carolina A&T State University",
+    "NOR_DEM": "Northwestern State University",
     "NOR_BIS": "North Dakota State University",
     "NOR_GRE": "North Greenville University",
     "NOR_HUS": "Northeastern University",
@@ -4026,6 +4312,7 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "PAR_JUN": "Paris Junior College",
     "PEA_RIV": "Pearl River Community College",
     "PEN_NIT": "Pennsylvania State University",
+    "PSU": "Penn State University",
     "PEN_QUA": "University of Pennsylvania",
     "PEP_WAV": "Pepperdine University",
     "PIT_PAN": "University of Pittsburgh",
@@ -4065,7 +4352,8 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "SLC_CCB": "Salt Lake Community College",
     "SLU_BILL": "Saint Louis University",
     "SOU_GAM": "University of South Carolina",
-    "SOU_JAG": "University of South Alabama",
+    "SOU_JAC": "South Dakota State University",
+    "SOU_JAG": "Southern University",
     "SOU_LIO": "Southeastern Louisiana University",
     "SOU_MIS": "University of Southern Mississippi",
     "SOU_ORE": "Southern Oregon University",
@@ -4084,6 +4372,7 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "TEN_TEC": "Tennessee Technological University",
     "TEN_WES": "Tennessee Wesleyan University",
     "TEN_VOL": "University of Tennessee",
+    "TNU": "Trevecca Nazarene University",
     "TEX_A&M": "Texas A&M University",
     "TEX_AGG": "Texas A&M University",
     "TEX_BOB": "Texas State University",
@@ -4125,11 +4414,12 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "USF_BUL": "University of South Florida",
     "UTM_SKY": "University of Tennessee at Martin",
     "UTS_ROA": "The University of Texas at San Antonio",
-    "UTA_UTE": "The University of Texas at Austin",
+    "UTA_UTE": "University of Utah",
     "UTR_VAQ": "The University of Texas Rio Grande Valley",
     "UWM_PAN": "University of Wisconsin-Milwaukee",
     "VAL_BLA": "Valdosta State University",
     "VAL_CRU": "Valparaiso University",
+    "VAN_COM": "Vanderbilt University",
     "VCU_RAM": "Virginia Commonwealth University",
     "VIL_WIL": "Villanova University",
     "VIR_CAV": "University of Virginia",
@@ -4146,6 +4436,8 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "WIC_SHO": "Wichita State University",
     "WOF_TER": "Wofford College",
     "WIN_EAG": "Winthrop University",
+    "WIN_BUL": "Wingate University",
+    "WES_HIL": "Western Kentucky University",
     "WIU_LEA": "Western Illinois University",
     "WRI_RAI": "Wright State University",
     "XAV_MUS": "Xavier University",
@@ -6120,6 +6412,7 @@ def _try_pitching_overview_daily_rollup(
     parsed_hb_max: Optional[float],
     parsed_pc_min: Optional[int],
     parsed_pc_max: Optional[int],
+    venue_filter: Optional[str],
     include_chart_points: bool,
     chart_points_limit: Optional[int],
     include_row_pitches: bool,
@@ -6127,13 +6420,17 @@ def _try_pitching_overview_daily_rollup(
 ) -> Optional[PitchingOverviewResponse]:
     if school_code == "PRO":
         return None
+    if venue_filter:
+        return None
     # Fast path for high-volume league windows.
     if include_row_pitches or include_trend_rows:
         return None
     mode_clean = (table_mode or "Live").strip()
-    if mode_clean not in {"Live", "Process", "Results", "Usage", "Stuff", "Bullpen", "Raw Data", "Batted Ball Data"}:
+    if mode_clean not in {"Live", "Process", "Results", "Usage", "Stuff", "Bullpen", "Banny", "Raw Data", "Batted Ball Data"}:
         return None
     split_clean = (split_by or "Pitch Types").strip()
+    if split_clean == "Venue":
+        return None
     split_to_rollup_col: Dict[str, tuple[str, str]] = {
         "All": ("pitch_type", "All"),
         "Pitch Types": ("pitch_type", "Pitch"),
@@ -6409,6 +6706,7 @@ def _try_pitching_overview_daily_rollup(
             "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
             "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
             "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
+            "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
             "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
             "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
             "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
@@ -6981,6 +7279,7 @@ def _try_pitching_overview_daily_rollup(
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
+        "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
         "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
         "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
@@ -7936,6 +8235,7 @@ def _try_pro_pitching_overview_rollup(
     parsed_hb_max: Optional[float],
     parsed_pc_min: Optional[int],
     parsed_pc_max: Optional[int],
+    venue_filter: Optional[str],
     include_chart_points: bool,
     include_row_pitches: bool,
     include_trend_rows: bool,
@@ -7960,6 +8260,8 @@ def _try_pro_pitching_overview_rollup(
             return None
     if include_chart_points or include_row_pitches or include_trend_rows:
         return None
+    if venue_filter:
+        return None
     if (with_video or "").strip() not in {"", "All"}:
         return None
     if selected_in_zone or qp_locations or selected_zone_locations or selected_pitch_results:
@@ -7967,7 +8269,7 @@ def _try_pro_pitching_overview_rollup(
     if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max]):
         return None
     mode_clean = (table_mode or "Live").strip()
-    if mode_clean not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
+    if mode_clean not in {"Stuff", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
         return None
     split_clean = (split_by or "Pitch Types").strip()
     split_to_expr: Dict[str, tuple[str, str]] = {
@@ -8137,6 +8439,7 @@ def _try_pro_pitching_overview_rollup(
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
+        "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
         "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
         "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "CSW%", "EV", "LA"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
@@ -8564,12 +8867,15 @@ def _try_pro_hitting_overview_rollup(
     parsed_pc_min: Optional[int],
     parsed_pc_max: Optional[int],
     selected_custom_columns: List[str],
+    venue_filter: Optional[str],
 ) -> Optional[Dict[str, Any]]:
     if school_code != "PRO":
         return None
     if include_chart_points:
         return None
     if selected_custom_columns:
+        return None
+    if venue_filter:
         return None
     # FPS(FB)% / FPS(OS)% require row-level 0-0 swing classification by pitch type.
     # Rollup rows do not preserve enough sequence detail for exact parity, so use
@@ -10656,6 +10962,7 @@ def _pro_rollup_filters_hitting(level_norm: str) -> Optional[Dict[str, Any]]:
             "Pitcher Hand",
             "Count",
             "After Count",
+            "Venue",
             "Zone Location",
             "Times Through Order",
             "Inning",
@@ -11041,6 +11348,7 @@ def _pro_pitching_overview(
     parsed_hb_max: Optional[float],
     parsed_pc_min: Optional[int],
     parsed_pc_max: Optional[int],
+    venue_filter: Optional[str],
     include_chart_points: bool,
     parsed_chart_points_limit: Optional[int],
     include_row_pitches: bool,
@@ -11430,6 +11738,7 @@ def _pro_pitching_overview(
     for r in rows:
         r["prev_balls"] = None
         r["prev_strikes"] = None
+        r["_venue_context"] = "pitching"
 
     def _pro_row_order_key(r: Dict[str, Any]) -> tuple:
         return (
@@ -11468,6 +11777,8 @@ def _pro_pitching_overview(
                 for r in rows
                 if any(_pro_count_token_match(token, r.get("prev_balls"), r.get("prev_strikes")) for token in after_tokens)
             ]
+    if venue_filter:
+        rows = [r for r in rows if _venue_filter_match(r, venue_filter)]
 
     if selected_pitch_results:
         allowed_results = set(selected_pitch_results)
@@ -12367,6 +12678,7 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
                 "Pitcher Hand",
                 "Count",
                 "After Count",
+                "Venue",
                 "Zone Location",
                 "Times Through Order",
                 "Inning",
@@ -12673,6 +12985,7 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
             "Pitcher Hand",
             "Count",
             "After Count",
+            "Venue",
             "Zone Location",
             "Times Through Order",
             "Inning",
@@ -12719,6 +13032,7 @@ def _pro_hitting_overview(
     parsed_hb_max: Optional[float],
     parsed_pc_min: Optional[int],
     parsed_pc_max: Optional[int],
+    venue_filter: Optional[str],
     include_chart_points: bool,
     parsed_chart_points_limit: Optional[int],
     chart_only: bool,
@@ -13070,6 +13384,9 @@ def _pro_hitting_overview(
 
     out_rows: List[Dict[str, Any]] = []
     for row in rows:
+        row["_venue_context"] = "hitting"
+        if venue_filter and not _venue_filter_match(row, venue_filter):
+            continue
         if selected_pitch_types and str(row.get("pitch_type") or "") not in selected_pitch_types:
             continue
         if selected_zone_locations and not any(_zone_location_match(tok, row) for tok in selected_zone_locations):
@@ -13924,6 +14241,7 @@ def pitching_overview(
     stuff_base: Optional[str] = Query(default=None),
     hand: Optional[str] = Query(default=None),
     batter_side: Optional[str] = Query(default=None),
+    venue: Optional[str] = Query(default=None),
     session_type: Optional[str] = Query(default=None),
     table_mode: Optional[str] = Query(default=None),
     split_by: Optional[str] = Query(default=None),
@@ -13981,6 +14299,7 @@ def pitching_overview(
     batter_side = (batter_side or "").strip() or None
     if batter_side and batter_side.lower() == "all":
         batter_side = None
+    venue_filter = _normalize_venue_filter(venue)
     session_type_filter = _normalize_session_type_filter(session_type)
     use_osu_date_session_rules = school_code.upper() == "OSU"
     table_mode_raw = (table_mode or "").strip() or "Stuff"
@@ -13991,6 +14310,7 @@ def pitching_overview(
         "hitting results": "Hitting Results",
         "bullpen": "Bullpen",
         "live": "Live",
+        "banny": "Banny",
         "usage": "Usage",
         "raw data": "Raw Data",
         "batted ball data": "Batted Ball Data",
@@ -14090,7 +14410,7 @@ def pitching_overview(
                 with_video = None
 
         if league_rollup_candidate:
-            if table_mode not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
+            if table_mode not in {"Stuff", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
                 table_mode = "Live"
             if split_by not in {
                 "All",
@@ -14112,6 +14432,7 @@ def pitching_overview(
                 "Velocity",
                 "IVB",
                 "HB",
+                "Venue",
             }:
                 split_by = "Pitch Types"
     elif school_code != "PRO":
@@ -14138,7 +14459,7 @@ def pitching_overview(
             # Respect explicit with_video filters even on wide windows.
             if (with_video or "").strip().lower() not in {"yes", "no"}:
                 with_video = None
-            if table_mode not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
+            if table_mode not in {"Stuff", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
                 table_mode = "Live"
             if split_by not in {
                 "All",
@@ -14160,6 +14481,7 @@ def pitching_overview(
                 "Velocity",
                 "IVB",
                 "HB",
+                "Venue",
             }:
                 split_by = "Pitch Types"
     if school_code == "PRO":
@@ -14186,7 +14508,7 @@ def pitching_overview(
             # Respect explicit with_video filters even on wide windows.
             if (with_video or "").strip().lower() not in {"yes", "no"}:
                 with_video = None
-            if table_mode not in {"Stuff", "Bullpen", "Live", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
+            if table_mode not in {"Stuff", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Raw Data", "Batted Ball Data"}:
                 table_mode = "Live"
             if split_by not in {
                 "All",
@@ -14206,6 +14528,7 @@ def pitching_overview(
                 "Velocity",
                 "IVB",
                 "HB",
+                "Venue",
             }:
                 split_by = "Pitch Types"
 
@@ -14234,6 +14557,7 @@ def pitching_overview(
         "with_video": with_video,
         "hand": hand,
         "batter_side": batter_side,
+        "venue": venue_filter,
         "session_type_filter": session_type_filter,
         "use_osu_date_session_rules": use_osu_date_session_rules,
         "osu_season_start": OSU_SEASON_START,
@@ -14289,6 +14613,7 @@ def pitching_overview(
             "stuff_base": stuff_base,
             "hand": hand,
             "batter_side": batter_side,
+            "venue": venue_filter,
             "session_type": session_type_filter,
             "table_mode": table_mode,
             "split_by": split_by,
@@ -14375,6 +14700,7 @@ def pitching_overview(
             parsed_hb_max=parsed_hb_max,
             parsed_pc_min=parsed_pc_min,
             parsed_pc_max=parsed_pc_max,
+            venue_filter=venue_filter,
             include_chart_points=include_chart_points,
             include_row_pitches=include_row_pitches,
             include_trend_rows=include_trend_rows,
@@ -14428,6 +14754,7 @@ def pitching_overview(
             parsed_hb_max=parsed_hb_max,
             parsed_pc_min=parsed_pc_min,
             parsed_pc_max=parsed_pc_max,
+            venue_filter=venue_filter,
             include_chart_points=include_chart_points,
             parsed_chart_points_limit=parsed_chart_points_limit,
             include_row_pitches=include_row_pitches,
@@ -14484,6 +14811,7 @@ def pitching_overview(
             parsed_hb_max=parsed_hb_max,
             parsed_pc_min=parsed_pc_min,
             parsed_pc_max=parsed_pc_max,
+            venue_filter=venue_filter,
             include_chart_points=include_chart_points,
             chart_points_limit=parsed_chart_points_limit,
             include_row_pitches=include_row_pitches,
@@ -14568,6 +14896,10 @@ def pitching_overview(
             NULLIF(TRIM(pd_play.inning), ''),
             ''
           ) AS inning,
+          COALESCE(
+            NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'filename', to_jsonb(pe)->>'FileName', to_jsonb(pe)->>'source_file', to_jsonb(pe)->>'SourceFile', '')), ''),
+            ''
+          ) AS source_file_name,
           COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip', '')), ''), '') AS video_clip_1,
           COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip2', '')), ''), '') AS video_clip_2,
           COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip3', '')), ''), '') AS video_clip_3,
@@ -15012,6 +15344,10 @@ def pitching_overview(
                   game_uid,
                   game_foreign_id,
                   inning,
+                  source_file_name,
+                  inning_topbot,
+                  home_team_code,
+                  away_team_code,
                   pitch_number,
                   pitcher,
                   pitch_type,
@@ -15059,10 +15395,16 @@ def pitching_overview(
                 params,
             )
             table_source_rows = [row for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
+            table_source_rows = _resolve_college_opp_placeholders(
+                [dict(row) for row in table_source_rows],
+                school_code=school_code,
+                team_markers_norm=set(team_markers_norm or []),
+            )
             # When All pitchers are selected, split-by Inning should use true game inning.
             use_game_inning_for_split = len(selected_pitcher_keys) == 0
             for row in table_source_rows:
                 row["_inning_split_use_game_inning"] = use_game_inning_for_split
+                row["_venue_context"] = "pitching"
             _annotate_game_inning(table_source_rows)
             _annotate_times_through_order(table_source_rows)
             team_type_value = (team_type or "").strip() or "All"
@@ -15074,6 +15416,8 @@ def pitching_overview(
                 campers_norm=set(campers_norm or []),
                 team_markers_norm=set(team_markers_norm or []),
             )
+            if venue_filter:
+                table_source_rows = [row for row in table_source_rows if _venue_filter_match(row, venue_filter)]
 
             # Recompute aggregate/summary metrics from the post-filtered rows so team_type behavior
             # is always exact, even if SQL team bucketing and route params diverge.
@@ -16752,6 +17096,53 @@ def _count_token_match(token: str, balls: Any, strikes: Any) -> bool:
     return t == f"{b}-{s}"
 
 
+def _normalize_venue_filter(value: Optional[str]) -> Optional[str]:
+    raw = str(value or "").strip().lower()
+    if not raw or raw == "all":
+        return None
+    if raw in {"home", "vs", "vs."}:
+        return "Home"
+    if raw in {"away", "@"}:
+        return "Away"
+    return None
+
+
+def _venue_bucket_for_row(row: Dict[str, Any]) -> str:
+    context = str(row.get("_venue_context") or "pitching").strip().lower()
+    is_hitting_context = context == "hitting"
+    pitcher_team_code = _normalize_team_code(str(row.get("pitcher_team_code") or ""))
+    batter_team_code = _normalize_team_code(str(row.get("batter_team_code") or ""))
+    team_code = batter_team_code if is_hitting_context else pitcher_team_code
+
+    half_raw = str(
+        row.get("inning_topbot")
+        or row.get("inningtopbot")
+        or row.get("half_inning")
+        or row.get("inning_half")
+        or row.get("half")
+        or ""
+    ).strip().lower()
+    if half_raw.startswith("top"):
+        return "Away" if is_hitting_context else "Home"
+    if half_raw.startswith("bottom"):
+        return "Home" if is_hitting_context else "Away"
+
+    home_code = _normalize_team_code(str(row.get("home_team_code") or row.get("hometeam") or row.get("home_team") or ""))
+    away_code = _normalize_team_code(str(row.get("away_team_code") or row.get("awayteam") or row.get("away_team") or ""))
+    if team_code and home_code and away_code:
+        if team_code == home_code:
+            return "Home"
+        if team_code == away_code:
+            return "Away"
+    return "Unknown"
+
+
+def _venue_filter_match(row: Dict[str, Any], venue_filter: Optional[str]) -> bool:
+    if not venue_filter:
+        return True
+    return _venue_bucket_for_row(row) == venue_filter
+
+
 def _korbb_bucket(value: Any) -> str:
     raw = str(value or "").strip().lower()
     if not raw:
@@ -16927,6 +17318,7 @@ def hitting_filters(
             "Pitcher Hand",
             "Count",
             "After Count",
+            "Venue",
             "Zone Location",
             "Times Through Order",
             "Inning",
@@ -16952,6 +17344,7 @@ def hitting_overview(
     opp_pitcher: Optional[str] = Query(default=None),
     hand: Optional[str] = Query(default=None),
     batter_side: Optional[str] = Query(default=None),
+    venue: Optional[str] = Query(default=None),
     table_mode: Optional[str] = Query(default=None),
     split_by: Optional[str] = Query(default=None),
     custom_columns: Optional[str] = Query(default=None),
@@ -17005,6 +17398,7 @@ def hitting_overview(
     selected_bip_results = _parse_csv_list(bip_result)
     selected_custom_columns = _parse_csv_list(custom_columns)
     session_type_filter = _normalize_session_type_filter(session_type)
+    venue_filter = _normalize_venue_filter(venue)
 
     parsed_velo_min = _parse_optional_float(velo_min, "velo_min")
     parsed_velo_max = _parse_optional_float(velo_max, "velo_max")
@@ -17070,6 +17464,7 @@ def hitting_overview(
                 "Batter Hand",
                 "Count",
                 "After Count",
+                "Venue",
                 "Zone Location",
                 "Times Through Order",
                 "Inning",
@@ -17096,6 +17491,7 @@ def hitting_overview(
             "opp_pitcher": sorted(selected_opp_pitcher_keys),
             "hand": hand,
             "batter_side": batter_side,
+            "venue": venue_filter,
             "table_mode": table_mode_mapped,
             "split_by": split_by,
             "custom_columns": selected_custom_columns,
@@ -17180,6 +17576,7 @@ def hitting_overview(
             parsed_pc_min=parsed_pc_min,
             parsed_pc_max=parsed_pc_max,
             selected_custom_columns=selected_custom_columns,
+            venue_filter=venue_filter,
         )
         if rollup_payload is not None:
             _overview_cache_set(overview_cache_key, rollup_payload)
@@ -17227,6 +17624,7 @@ def hitting_overview(
             parsed_hb_max=parsed_hb_max,
             parsed_pc_min=parsed_pc_min,
             parsed_pc_max=parsed_pc_max,
+            venue_filter=venue_filter,
             include_chart_points=include_chart_points,
             parsed_chart_points_limit=parsed_chart_points_limit,
             chart_only=chart_only,
@@ -17280,6 +17678,7 @@ def hitting_overview(
             parsed_hb_max=None,
             parsed_pc_min=None,
             parsed_pc_max=None,
+            venue_filter=venue_filter,
             include_chart_points=False,
             chart_points_limit=None,
             include_row_pitches=False,
@@ -17348,6 +17747,8 @@ def hitting_overview(
                 SELECT
                   id AS pitch_event_id,
                   session_date,
+                  COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'pitchuid', to_jsonb(pe)->>'PitchUID', '')), ''), '') AS pitch_uid,
+                  COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'filename', to_jsonb(pe)->>'FileName', to_jsonb(pe)->>'source_file', to_jsonb(pe)->>'SourceFile', '')), ''), '') AS source_file_name,
                   COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), 'Unknown') AS session_type_norm,
                   COALESCE(NULLIF(TRIM(pitcher), ''), 'Unknown Pitcher') AS pitcher,
                   COALESCE(NULLIF(TRIM(batter), ''), '') AS batter,
@@ -17505,14 +17906,22 @@ def hitting_overview(
                 },
             )
             rows = [dict(row) for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
+            rows = _resolve_college_opp_placeholders(
+                rows,
+                school_code=school_code,
+                team_markers_norm=set(team_markers_norm or []),
+            )
             _annotate_times_through_order(rows)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"hitting overview query failed: {exc}") from exc
 
     out_rows: List[Dict[str, Any]] = []
     for row in rows:
+        row["_venue_context"] = "hitting"
         row_session_bucket = _session_bucket_for_row(row, team_markers_norm)
         if session_type_filter and row_session_bucket != session_type_filter:
+            continue
+        if venue_filter and not _venue_filter_match(row, venue_filter):
             continue
         if use_team_filter:
             if school_code == "LEAGUE":
@@ -18075,6 +18484,7 @@ def catching_overview(
     catcher: Optional[str] = Query(default=None),
     hand: Optional[str] = Query(default=None),
     batter_side: Optional[str] = Query(default=None),
+    venue: Optional[str] = Query(default=None),
     in_zone: Optional[str] = Query(default=None),
     pitch_types: Optional[str] = Query(default=None),
     zone_locations: Optional[str] = Query(default=None),
@@ -18117,6 +18527,7 @@ def catching_overview(
     selected_hm_results = _parse_csv_list(hm_results)
     selected_custom_columns = _parse_csv_list(custom_columns)
     session_type_filter = _normalize_session_type_filter(session_type)
+    venue_filter = _normalize_venue_filter(venue)
     level_filter = _pro_level_norm(level)
     parsed_velo_min = _parse_optional_float(velo_min, "velo_min")
     parsed_velo_max = _parse_optional_float(velo_max, "velo_max")
@@ -18183,6 +18594,7 @@ def catching_overview(
                 "Velocity",
                 "IVB",
                 "HB",
+                "Venue",
             }:
                 split_by_raw = "Pitch Types"
     overview_cache_key = _overview_cache_key(
@@ -18198,6 +18610,7 @@ def catching_overview(
             "catcher": sorted(selected_catcher_keys),
             "hand": hand,
             "batter_side": batter_side,
+            "venue": venue_filter,
             "in_zone": selected_in_zone,
             "pitch_types": selected_pitch_types,
             "zone_locations": selected_zone_locations,
@@ -18257,6 +18670,7 @@ def catching_overview(
             parsed_hb_max=None,
             parsed_pc_min=None,
             parsed_pc_max=None,
+            venue_filter=venue_filter,
             include_chart_points=False,
             chart_points_limit=None,
             include_row_pitches=False,
@@ -18479,6 +18893,8 @@ def catching_overview(
                 SELECT
                   id AS pitch_event_id,
                   session_date,
+                  COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'pitchuid', to_jsonb(pe)->>'PitchUID', '')), ''), '') AS pitch_uid,
+                  COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'filename', to_jsonb(pe)->>'FileName', to_jsonb(pe)->>'source_file', to_jsonb(pe)->>'SourceFile', '')), ''), '') AS source_file_name,
                   COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), 'Unknown') AS session_type_norm,
                   COALESCE(NULLIF(TRIM(catcher), ''), '') AS catcher,
                   COALESCE(NULLIF(TRIM(pitcher), ''), 'Unknown Pitcher') AS pitcher,
@@ -18567,8 +18983,15 @@ def catching_overview(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"catching overview query failed: {exc}") from exc
 
+    rows = _resolve_college_opp_placeholders(
+        rows,
+        school_code=school_code,
+        team_markers_norm=set(team_markers_norm or []),
+    )
+
     filtered: List[Dict[str, Any]] = []
     for row in rows:
+        row["_venue_context"] = "catching"
         if use_team_filter:
             if school_code == "LEAGUE":
                 selected_code = _normalize_team_code(_league_team_code_from_value(team_type_value))
@@ -18615,6 +19038,8 @@ def catching_overview(
             continue
         row_session_bucket = _session_bucket_for_row(row, team_markers_norm)
         if session_type_filter and row_session_bucket != session_type_filter:
+            continue
+        if venue_filter and not _venue_filter_match(row, venue_filter):
             continue
         if hand and hand != "All" and _norm_hand(row.get("pitcherthrows")) != hand:
             continue
@@ -18799,6 +19224,9 @@ def catching_overview(
                 b, s = name.split("-", 1)
                 return (0, int(b), int(s))
             return (1, name)
+        if split_by_raw == "Venue":
+            order = {"Home": 0, "Away": 1, "Unknown": 9}
+            return (order.get(name, 8), name)
         if split_by_raw == "Times Through Order":
             order = {"1": 0, "2": 1, "3": 2, "4+": 3}
             return (order.get(name, 9), name)

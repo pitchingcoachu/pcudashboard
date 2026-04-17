@@ -1384,6 +1384,7 @@ export default function PitchingSuite({
   const [stuffBase, setStuffBase] = useState('Fastball');
   const [hand, setHand] = useState('All');
   const [batterSide, setBatterSide] = useState('All');
+  const [venue, setVenue] = useState('All');
   const [sessionType, setSessionType] = useState('');
   const [level, setLevel] = useState('MLB');
   const [qpLocations, setQpLocations] = useState('All');
@@ -1549,6 +1550,9 @@ export default function PitchingSuite({
     String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
     String(filters?.school_code ?? '').toUpperCase() === 'PRO' ||
     String(filters?.school_code ?? '').toUpperCase() === 'MLB';
+  const isGcu =
+    String(selectedSchoolCode ?? '').toUpperCase() === 'GCU' ||
+    String(filters?.school_code ?? '').toUpperCase() === 'GCU';
   const isPitchEditDisplay = canUsePitchEdits && visualOption === 'Pitch Edit';
   const isPitchEditLassoEnabled = isPitchEditDisplay && pitchEditSelectMode === 'lasso';
   const orientX = (x: number): number => (isPro ? -x : x);
@@ -1646,6 +1650,7 @@ export default function PitchingSuite({
       'Batter Hand',
       'Count',
       'After Count',
+      'Venue',
       'Zone Location',
       'Times Through Order',
       'Inning',
@@ -1882,6 +1887,12 @@ export default function PitchingSuite({
   const canRunGameLog = hasSpecificPitcherSelection || (teamType && teamType !== 'All');
   const [selectedPitcherLastGameDate, setSelectedPitcherLastGameDate] = useState('');
   useEffect(() => {
+    if (dashboardPage !== 'Game Log') return;
+    if (isPro) return;
+    if (sessionType) return;
+    setSessionType('Season');
+  }, [dashboardPage, isPro, sessionType]);
+  useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
     if (!filters || !selectedSinglePitcher) {
@@ -2052,6 +2063,7 @@ export default function PitchingSuite({
     if (stuffBase) params.set('stuff_base', stuffBase);
     if (hand && hand !== 'All') params.set('hand', hand);
     if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
+    if (venue && venue !== 'All') params.set('venue', venue);
     if (!isPro && sessionType) params.set('session_type', sessionType);
     if (qpLocations && qpLocations !== 'All') params.set('qp_locations', qpLocations);
     if (tableMode) params.set('table_mode', tableMode);
@@ -2245,6 +2257,7 @@ export default function PitchingSuite({
     canLoadOverview,
     endDate,
     hand,
+    venue,
     hbMax,
     hbMin,
     ivbMax,
@@ -2359,6 +2372,7 @@ export default function PitchingSuite({
       if (stuffBase) params.set('stuff_base', stuffBase);
       if (hand && hand !== 'All') params.set('hand', hand);
       if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
+      if (venue && venue !== 'All') params.set('venue', venue);
       if (!isPro && sessionType) params.set('session_type', sessionType);
       if (qpLocations && qpLocations !== 'All') params.set('qp_locations', qpLocations);
       if (tableMode) params.set('table_mode', tableMode);
@@ -2421,12 +2435,53 @@ export default function PitchingSuite({
           return {
             ...(row as Record<string, unknown>),
             _game_pin_key: `${parsed.gameKey}|${parsed.date}|${rowIndex}`,
+            _game_key: parsed.gameKey,
             _game_venue_marker: parsed.pitcherMarker,
             Team: parsed.team || '-',
             Date: parsed.date || '-',
             Opponent: parsed.opponent || '-',
           } as Record<string, unknown>;
         });
+      const normalizeTeamToken = (value: unknown): string =>
+        String(value ?? '')
+          .trim()
+          .toUpperCase()
+          .replace(/[^A-Z0-9_]/g, '');
+      const isPlaceholderOpponent = (value: unknown): boolean => {
+        const token = normalizeTeamToken(value);
+        return token === '' || token === '-' || token === 'UNKNOWN' || token === 'OPP' || token === 'OPPONENT' || token === 'OPPONENTS';
+      };
+      const opponentByGameKey = new Map<string, string>();
+      const ambiguousGameKey = new Set<string>();
+      const opponentsByDate = new Map<string, Set<string>>();
+      for (const row of rows) {
+        const gameKey = String(row._game_key ?? '').trim();
+        const dateKey = String(row.Date ?? '').trim();
+        const opponent = String(row.Opponent ?? '').trim();
+        if (!isPlaceholderOpponent(opponent)) {
+          if (gameKey && gameKey !== '-') {
+            const existing = opponentByGameKey.get(gameKey);
+            if (!existing) opponentByGameKey.set(gameKey, opponent);
+            else if (existing !== opponent) ambiguousGameKey.add(gameKey);
+          }
+          if (dateKey) {
+            const set = opponentsByDate.get(dateKey) ?? new Set<string>();
+            set.add(opponent);
+            opponentsByDate.set(dateKey, set);
+          }
+        }
+      }
+      for (const key of ambiguousGameKey) opponentByGameKey.delete(key);
+      const rowsResolved = rows.map((row) => {
+        if (!isPlaceholderOpponent(row.Opponent)) return row;
+        const gameKey = String(row._game_key ?? '').trim();
+        const dateKey = String(row.Date ?? '').trim();
+        const inferredFromGame = gameKey && gameKey !== '-' ? opponentByGameKey.get(gameKey) : undefined;
+        if (inferredFromGame) return { ...row, Opponent: inferredFromGame };
+        const byDate = dateKey ? Array.from(opponentsByDate.get(dateKey) ?? []) : [];
+        if (byDate.length === 1) return { ...row, Opponent: byDate[0] };
+        return row;
+      });
       if (!active) return;
       const leadingColumns = ['Team', 'Date', 'Opponent'];
       const seen = new Set(leadingColumns.map((col) => col.toLowerCase()));
@@ -2440,7 +2495,7 @@ export default function PitchingSuite({
         return true;
       });
       setGameLogColumns([...leadingColumns, ...metricColumns]);
-      setGameLogRows(rows);
+      setGameLogRows(rowsResolved);
     };
     run()
       .catch((requestError) => {
@@ -2481,6 +2536,7 @@ export default function PitchingSuite({
     stuffBase,
     hand,
     batterSide,
+    venue,
     sessionType,
     qpLocations,
     tableMode,
@@ -5518,7 +5574,7 @@ export default function PitchingSuite({
   }, [tableMode]);
 
   const shouldColorTable = useMemo(
-    () => enableTableColors && ['Process', 'Live', 'Results', 'Bullpen', 'Custom'].includes(tableColorMode),
+    () => enableTableColors && ['Process', 'Live', 'Results', 'Bullpen', 'Banny', 'Custom'].includes(tableColorMode),
     [enableTableColors, tableColorMode]
   );
 
@@ -5527,6 +5583,7 @@ export default function PitchingSuite({
     Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'HR%', 'Whiff%', 'ERA', 'FIP', 'xFIP'],
     Results: ['Whiff%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP'],
     Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
+    Banny: ['Strike%', 'Whiff%', 'K%', 'BB%', 'QP+'],
     Custom: [
       'InZone%',
       'Comp%',
@@ -5608,12 +5665,13 @@ export default function PitchingSuite({
             { value: 'Results', label: 'Results' },
             { value: 'Bullpen', label: 'Bullpen' },
             { value: 'Live', label: 'Live' },
+            ...(isGcu ? [{ value: 'Banny', label: 'Banny' }] : []),
             { value: 'Usage', label: 'Usage' },
             { value: 'Raw Data', label: 'Raw Data' },
             { value: 'Batted Ball Data', label: 'Batted Ball Data' },
           ]
       ).concat([...customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: item.name })), { value: 'Custom', label: 'Custom' }]),
-    [customTables, isLeague]
+    [customTables, isLeague, isGcu]
   );
   const splitByOptions = useMemo(
     () =>
@@ -5626,6 +5684,7 @@ export default function PitchingSuite({
             { value: 'Batter Hand', label: 'Batter Hand' },
             { value: 'Count', label: 'Count' },
             { value: 'After Count', label: 'After Count' },
+            { value: 'Venue', label: 'Venue' },
             { value: 'Zone Location', label: 'Zone Location' },
             { value: 'Times Through Order', label: 'Times Through Order' },
             { value: 'Inning', label: 'Inning of Appearance' },
@@ -5643,6 +5702,7 @@ export default function PitchingSuite({
             { value: 'Batter Hand', label: 'Batter Hand' },
             { value: 'Count', label: 'Count' },
             { value: 'After Count', label: 'After Count' },
+            { value: 'Venue', label: 'Venue' },
             { value: 'Zone Location', label: 'Zone Location' },
             { value: 'Times Through Order', label: 'Times Through Order' },
             { value: 'Inning', label: 'Inning of Appearance' },
@@ -5977,13 +6037,12 @@ export default function PitchingSuite({
                   </label>
                 )}
                 <label>
-                  With Video
-                  <SearchableSingleSelect
-                    options={toOptions(filters.with_video_options)}
-                    value={withVideo}
-                    onChange={setWithVideo}
-                    placeholder="All"
-                  />
+                  Pitchers
+                  <SearchableMultiSelect options={pitcherOptions} values={selectedPitchers} onChange={setSelectedPitchers} />
+                </label>
+                <label>
+                  Hitters
+                  <SearchableMultiSelect options={hitterOptions} values={selectedHitters} onChange={setSelectedHitters} />
                 </label>
                 <label>
                   Pitcher Hand
@@ -5996,6 +6055,22 @@ export default function PitchingSuite({
                     value={batterSide}
                     onChange={setBatterSide}
                     placeholder="All"
+                  />
+                </label>
+                <label>
+                  Pitch Type
+                  <SearchableMultiSelect
+                    options={pitchTypeOptions}
+                    values={selectedPitchTypes}
+                    onChange={setSelectedPitchTypes}
+                  />
+                </label>
+                <label>
+                  Pitch Results
+                  <SearchableMultiSelect
+                    options={pitchResultOptions}
+                    values={selectedPitchResults}
+                    onChange={setSelectedPitchResults}
                   />
                 </label>
                 <label>
@@ -6017,6 +6092,51 @@ export default function PitchingSuite({
                   />
                 </label>
                 <label>
+                  Zone Location
+                  <SearchableMultiSelect
+                    options={zoneLocationOptions}
+                    values={selectedZoneLocations}
+                    onChange={setSelectedZoneLocations}
+                  />
+                </label>
+                <label>
+                  In Zone
+                  <SearchableMultiSelect options={inZoneOptions} values={selectedInZone} onChange={setSelectedInZone} />
+                </label>
+                <label>
+                  Count
+                  <SearchableMultiSelect options={countOptions} values={selectedCountFilters} onChange={setSelectedCountFilters} />
+                </label>
+                <label>
+                  After Count
+                  <SearchableMultiSelect
+                    options={afterCountOptions}
+                    values={selectedAfterCountFilters}
+                    onChange={setSelectedAfterCountFilters}
+                  />
+                </label>
+              </div>
+
+              <div className="portal-form-grid" style={{ marginTop: '0.8rem' }}>
+                <label>
+                  With Video
+                  <SearchableSingleSelect
+                    options={toOptions(filters.with_video_options)}
+                    value={withVideo}
+                    onChange={setWithVideo}
+                    placeholder="All"
+                  />
+                </label>
+                <label>
+                  Venue
+                  <SearchableSingleSelect
+                    options={toOptions(['All', 'Home', 'Away'])}
+                    value={venue}
+                    onChange={setVenue}
+                    placeholder="All"
+                  />
+                </label>
+                <label>
                   Stuff+ Level
                   <SearchableSingleSelect
                     options={toOptions(filters.stuff_level_options)}
@@ -6034,57 +6154,6 @@ export default function PitchingSuite({
                     placeholder="Fastball"
                   />
                 </label>
-                <label>
-                  Pitchers
-                  <SearchableMultiSelect options={pitcherOptions} values={selectedPitchers} onChange={setSelectedPitchers} />
-                </label>
-                <label>
-                  Hitters
-                  <SearchableMultiSelect options={hitterOptions} values={selectedHitters} onChange={setSelectedHitters} />
-                </label>
-                <label>
-                  Pitch Type
-                  <SearchableMultiSelect
-                    options={pitchTypeOptions}
-                    values={selectedPitchTypes}
-                    onChange={setSelectedPitchTypes}
-                  />
-                </label>
-                <label>
-                  Zone Location
-                  <SearchableMultiSelect
-                    options={zoneLocationOptions}
-                    values={selectedZoneLocations}
-                    onChange={setSelectedZoneLocations}
-                  />
-                </label>
-                <label>
-                  In Zone
-                  <SearchableMultiSelect options={inZoneOptions} values={selectedInZone} onChange={setSelectedInZone} />
-                </label>
-                <label>
-                  Pitch Results
-                  <SearchableMultiSelect
-                    options={pitchResultOptions}
-                    values={selectedPitchResults}
-                    onChange={setSelectedPitchResults}
-                  />
-                </label>
-                <label>
-                  Count
-                  <SearchableMultiSelect options={countOptions} values={selectedCountFilters} onChange={setSelectedCountFilters} />
-                </label>
-                <label>
-                  After Count
-                  <SearchableMultiSelect
-                    options={afterCountOptions}
-                    values={selectedAfterCountFilters}
-                    onChange={setSelectedAfterCountFilters}
-                  />
-                </label>
-              </div>
-
-              <div className="portal-form-grid" style={{ marginTop: '0.8rem' }}>
                 <label>
                   Velo Min
                   <input type="number" value={veloMin} onChange={(event) => setVeloMin(event.target.value)} />
@@ -6119,7 +6188,10 @@ export default function PitchingSuite({
                 </label>
               </div>
 
-              <div className="portal-form-grid" style={{ marginTop: '0.8rem' }}>
+              <div
+                className="portal-form-grid"
+                style={{ marginTop: '0.8rem', gridTemplateColumns: 'minmax(220px, 320px)', justifyContent: 'center' }}
+              >
                 <label>
                   Display Option
                   <SearchableSingleSelect
@@ -6718,8 +6790,9 @@ export default function PitchingSuite({
                               top: isLeaderboardPage ? 0 : undefined,
                               zIndex: isLeaderboardPage ? 3 : undefined,
                               background: activeSort
-                                ? 'rgba(59,130,246,0.24)'
+                                ? 'rgb(var(--portal-accent-rgb, 59,130,246))'
                                 : (isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined),
+                              color: activeSort ? '#fff' : undefined,
                             }}
                             onClick={
                               isSortable
@@ -6767,7 +6840,8 @@ export default function PitchingSuite({
                                     isLeaderboardPage && colIndex === 0 && (leaderboardViewBy === 'Player' || leaderboardViewBy === 'Team')
                                       ? (isAllRow ? 'center' : 'left')
                                       : 'center',
-                                  background: leaderboardSortColumn === column ? 'rgba(59,130,246,0.12)' : undefined,
+                                  background: leaderboardSortColumn === column ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                                  color: leaderboardSortColumn === column ? '#fff' : undefined,
                                   cursor:
                                     (column === '#' && rowPitches.length)
                                     || (isLeaderboardPage && column === leaderboardPrimaryColumn && !isAllRow)
@@ -7011,7 +7085,8 @@ export default function PitchingSuite({
                                 position: 'sticky',
                                 top: 0,
                                 zIndex: 3,
-                                background: activeSort ? 'rgba(59,130,246,0.24)' : 'rgba(7,9,14,0.98)',
+                                background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : 'rgba(7,9,14,0.98)',
+                                color: activeSort ? '#fff' : undefined,
                               }}
                               onClick={() => {
                                 if (activeSort) {
@@ -7046,9 +7121,9 @@ export default function PitchingSuite({
                             return (
                               <td style={{ textAlign: 'center' }}>
                                 {isSummaryRow ? '' : (
-                                  <button
-                                    type="button"
-                                    className={`btn btn-ghost${isPinnedRow ? ' is-active' : ''}`}
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
                                     aria-label={isPinnedRow ? 'Unpin game row' : 'Pin game row'}
                                     title={isPinnedRow ? 'Unpin row' : 'Pin row'}
                                     onClick={(event) => {
@@ -7063,10 +7138,30 @@ export default function PitchingSuite({
                                         return next;
                                       });
                                     }}
-                                    style={{ minHeight: 'unset', padding: '0.1rem 0.34rem', fontSize: '0.75rem' }}
+                                    onKeyDown={(event) => {
+                                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      const key = String(row._game_pin_key ?? '');
+                                      if (!key) return;
+                                      setPinnedGameLogKeys((current) => {
+                                        const next = new Set(current);
+                                        if (next.has(key)) next.delete(key);
+                                        else next.add(key);
+                                        return next;
+                                      });
+                                    }}
+                                    style={{
+                                      cursor: 'pointer',
+                                      userSelect: 'none',
+                                      color: isPinnedRow ? '#fbbf24' : 'rgba(255,255,255,0.72)',
+                                      fontSize: 14,
+                                      lineHeight: 1,
+                                      display: 'inline-block',
+                                    }}
                                   >
                                     {isPinnedRow ? '📌' : '📍'}
-                                  </button>
+                                  </span>
                                 )}
                               </td>
                             );
@@ -7090,7 +7185,8 @@ export default function PitchingSuite({
                                 key={`game-log-cell-${rowIndex}-${column}`}
                                 style={{
                                   textAlign: 'center',
-                                  background: gameLogSortColumn === column ? 'rgba(59,130,246,0.12)' : undefined,
+                                  background: gameLogSortColumn === column ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                                  color: gameLogSortColumn === column ? '#fff' : undefined,
                                 }}
                               >
                                 {column === 'Team' && isPro && !isSummaryRow ? (
@@ -7279,7 +7375,8 @@ export default function PitchingSuite({
                                               style={{
                                                 textAlign: 'center',
                                                 cursor: 'pointer',
-                                                background: activeSort ? 'rgba(59,130,246,0.24)' : undefined,
+                                                background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                                                color: activeSort ? '#fff' : undefined,
                                               }}
                                               onClick={() => {
                                                 if (abSortColumn === column) {
@@ -7743,7 +7840,8 @@ export default function PitchingSuite({
                                       key={column}
                                       style={{
                                         cursor: 'pointer',
-                                        background: activeSort ? 'rgba(59,130,246,0.24)' : undefined,
+                                        background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                                        color: activeSort ? '#fff' : undefined,
                                       }}
                                       onClick={() => {
                                         if (manualEntriesSortColumn === column) {
@@ -8180,7 +8278,8 @@ export default function PitchingSuite({
                                         key={column}
                                         style={{
                                           cursor: 'pointer',
-                                          background: activeSort ? 'rgba(59,130,246,0.24)' : undefined,
+                                          background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                                          color: activeSort ? '#fff' : undefined,
                                         }}
                                         onClick={() => {
                                           if (manualProgressSortColumn === column) {
