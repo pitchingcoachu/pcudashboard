@@ -131,9 +131,9 @@ type PaneState = {
 const LEAGUE_SEASON_START = '2026-02-13';
 
 const DOMAIN_TABLES: Record<Domain, string[]> = {
-  Pitching: ['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Raw Data'],
+  Pitching: ['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data'],
   Hitting: ['Results', 'Swing Decisions'],
-  Catching: ['Catching Data', 'Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Raw Data', 'Batted Ball Data', 'Swing Decisions'],
+  Catching: ['Catching Data', 'Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data', 'Batted Ball Data', 'Swing Decisions'],
 };
 const DOMAIN_SPLIT_BY: Record<Domain, string[]> = {
   Pitching: [

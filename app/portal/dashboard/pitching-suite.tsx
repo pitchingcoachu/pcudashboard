@@ -1335,7 +1335,7 @@ export default function PitchingSuite({
     startDate: string;
     endDate: string;
     page?: 'Summary' | 'Leaderboard' | 'Game Log';
-    navigationSource?: 'search';
+    navigationSource?: 'search' | 'home_leaderboard';
   } | null;
 }) {
   const canUsePitchEdits = role === 'admin' || role === 'coach';
@@ -1513,10 +1513,38 @@ export default function PitchingSuite({
       homeNavigateRequest.targetType === 'player';
     lastAppliedHomeRequestRef.current = homeNavigateRequest.requestId;
     pcuSearchPlayerDatePendingRef.current = shouldUsePcuPlayerLatestDate;
-    suppressNextFilterDateAutofillRef.current = homeNavigateRequest.navigationSource === 'search';
+    suppressNextFilterDateAutofillRef.current =
+      homeNavigateRequest.navigationSource === 'search' ||
+      homeNavigateRequest.navigationSource === 'home_leaderboard';
     setDashboardPage(homeNavigateRequest.page ?? 'Summary');
     setStartDate(homeNavigateRequest.startDate);
     setEndDate(homeNavigateRequest.endDate);
+    if (homeNavigateRequest.navigationSource === 'home_leaderboard') {
+      setWithVideo('All');
+      setBreakLines('None');
+      setHand('All');
+      setBatterSide('All');
+      setVenue('All');
+      setQpLocations('All');
+      setSelectedPitchTypes(['All']);
+      setSelectedZoneLocations(['All']);
+      setSelectedPitchResults(['All']);
+      setSelectedCountFilters(['All']);
+      setSelectedAfterCountFilters(['All']);
+      setSelectedInZone(['All']);
+      setVeloMin('');
+      setVeloMax('');
+      setIvbMin('');
+      setIvbMax('');
+      setHbMin('');
+      setHbMax('');
+      setPcMin('');
+      setPcMax('');
+      setTableMode('Live');
+      setSplitBy('Pitch Types');
+      setLeaderboardViewBy('Player');
+      if (isProNavigate) setLevel('MLB');
+    }
     if (homeNavigateRequest.targetType === 'player') {
       setTeamType('All');
       setSelectedPitchers([homeNavigateRequest.targetValue]);
@@ -2048,6 +2076,8 @@ export default function PitchingSuite({
     const controller = new AbortController();
     setLoadingOverview(true);
     setError('');
+    const isLeaderboardPage = dashboardPage === 'Leaderboard';
+    const strictProLeaderboard = isPro && isLeaderboardPage;
 
     const params = new URLSearchParams();
     params.set('start_date', startDate);
@@ -2057,22 +2087,29 @@ export default function PitchingSuite({
       ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
       : teamType;
     if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
-    if (isPro && level && level !== 'All') params.set('level', level);
-    if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
-    if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
+    if (isPro) {
+      if (strictProLeaderboard) {
+        params.set('level', 'MLB');
+      } else if (level && level !== 'All') {
+        params.set('level', level);
+      }
+    }
+    if (withVideo && withVideo !== 'All' && !strictProLeaderboard) params.set('with_video', withVideo);
+    if (breakLines && breakLines !== 'None' && !strictProLeaderboard) params.set('break_lines', breakLines);
     if (stuffLevel) params.set('stuff_level', stuffLevel);
     if (stuffBase) params.set('stuff_base', stuffBase);
-    if (hand && hand !== 'All') params.set('hand', hand);
-    if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
-    if (venue && venue !== 'All') params.set('venue', venue);
+    if (hand && hand !== 'All' && !strictProLeaderboard) params.set('hand', hand);
+    if (batterSide && batterSide !== 'All' && !strictProLeaderboard) params.set('batter_side', batterSide);
+    if (venue && venue !== 'All' && !strictProLeaderboard) params.set('venue', venue);
     if (!isPro && sessionType) params.set('session_type', sessionType);
-    if (qpLocations && qpLocations !== 'All') params.set('qp_locations', qpLocations);
-    if (tableMode) params.set('table_mode', tableMode);
+    if (qpLocations && qpLocations !== 'All' && !strictProLeaderboard) params.set('qp_locations', qpLocations);
+    if (tableMode && !strictProLeaderboard) params.set('table_mode', tableMode);
+    if (strictProLeaderboard) params.set('table_mode', 'Live');
     if (effectiveSplitBy) params.set('split_by', effectiveSplitBy);
-    if (tableMode === 'Custom' && customTableColumns.length > 0) {
+    if (!strictProLeaderboard && tableMode === 'Custom' && customTableColumns.length > 0) {
       params.set('custom_columns', customTableColumns.join(','));
     }
-    if (visualOption && visualOption !== 'All') params.set('visual_option', visualOption);
+    if (visualOption && visualOption !== 'All' && !strictProLeaderboard) params.set('visual_option', visualOption);
 
     const pitchersParam = toParamValue(selectedPitchers);
     const hittersParam = toParamValue(selectedHitters);
@@ -2085,21 +2122,22 @@ export default function PitchingSuite({
 
     if (pitchersParam) params.set('pitcher', pitchersParam);
     if (hittersParam) params.set('opp_hitter', hittersParam);
-    if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
-    if (zoneParam) params.set('zone_locations', zoneParam);
-    if (resultsParam) params.set('pitch_results', resultsParam);
-    if (countParam) params.set('count_filter', countParam);
-    if (afterCountParam) params.set('after_count_filter', afterCountParam);
-    if (inZoneParam) params.set('in_zone', inZoneParam);
-
-    if (veloMin) params.set('velo_min', veloMin);
-    if (veloMax) params.set('velo_max', veloMax);
-    if (ivbMin) params.set('ivb_min', ivbMin);
-    if (ivbMax) params.set('ivb_max', ivbMax);
-    if (hbMin) params.set('hb_min', hbMin);
-    if (hbMax) params.set('hb_max', hbMax);
-    if (pcMin) params.set('pc_min', pcMin);
-    if (pcMax) params.set('pc_max', pcMax);
+    if (!strictProLeaderboard) {
+      if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
+      if (zoneParam) params.set('zone_locations', zoneParam);
+      if (resultsParam) params.set('pitch_results', resultsParam);
+      if (countParam) params.set('count_filter', countParam);
+      if (afterCountParam) params.set('after_count_filter', afterCountParam);
+      if (inZoneParam) params.set('in_zone', inZoneParam);
+      if (veloMin) params.set('velo_min', veloMin);
+      if (veloMax) params.set('velo_max', veloMax);
+      if (ivbMin) params.set('ivb_min', ivbMin);
+      if (ivbMax) params.set('ivb_max', ivbMax);
+      if (hbMin) params.set('hb_min', hbMin);
+      if (hbMax) params.set('hb_max', hbMax);
+      if (pcMin) params.set('pc_min', pcMin);
+      if (pcMax) params.set('pc_max', pcMax);
+    }
     const isTrendPage = dashboardPage === 'Trend';
     const isLeaderboard = dashboardPage === 'Leaderboard';
     const isGameLogPage = dashboardPage === 'Game Log';
@@ -5686,6 +5724,7 @@ export default function PitchingSuite({
             { value: 'Process', label: 'Process' },
             { value: 'Results', label: 'Results' },
             { value: 'Bullpen', label: 'Bullpen' },
+            { value: 'Banny', label: "Jared's Dashboard" },
             { value: 'Usage', label: 'Usage' },
             { value: 'Raw Data', label: 'Raw Data' },
             { value: 'Batted Ball Data', label: 'Batted Ball Data' },
@@ -5696,13 +5735,13 @@ export default function PitchingSuite({
             { value: 'Results', label: 'Results' },
             { value: 'Bullpen', label: 'Bullpen' },
             { value: 'Live', label: 'Live' },
-            ...(isGcu ? [{ value: 'Banny', label: 'Banny' }] : []),
+            { value: 'Banny', label: "Jared's Dashboard" },
             { value: 'Usage', label: 'Usage' },
             { value: 'Raw Data', label: 'Raw Data' },
             { value: 'Batted Ball Data', label: 'Batted Ball Data' },
           ]
       ).concat([...customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: item.name })), { value: 'Custom', label: 'Custom' }]),
-    [customTables, isLeague, isGcu]
+    [customTables, isLeague]
   );
   const splitByOptions = useMemo(
     () =>

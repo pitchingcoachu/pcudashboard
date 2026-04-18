@@ -37,6 +37,11 @@ function parseIsoDate(value: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function isTruthy(value: string): boolean {
+  const raw = String(value ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
 export async function GET(request: Request) {
   const routeStartedAt = Date.now();
   const cookieStore = await cookies();
@@ -145,10 +150,16 @@ export async function GET(request: Request) {
   if (pcMin) url.searchParams.set('pc_min', pcMin);
   if (pcMax) url.searchParams.set('pc_max', pcMax);
   const isLeague = String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE';
+  const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
   const start = parseIsoDate(startDate);
   const end = parseIsoDate(endDate);
   const daySpan = start && end ? Math.floor((end.getTime() - start.getTime()) / 86400000) + 1 : 0;
   const forceLeagueLight = isLeague && daySpan >= 14;
+  const broadScope =
+    !scopedPitcher &&
+    !pitcher &&
+    !oppHitter &&
+    (!teamType || teamType.toLowerCase() === 'all');
 
   if (includeChartPoints) url.searchParams.set('include_chart_points', includeChartPoints);
   if (chartPointsLimit) url.searchParams.set('chart_points_limit', chartPointsLimit);
@@ -157,12 +168,17 @@ export async function GET(request: Request) {
   if (includeTrendRows) url.searchParams.set('include_trend_rows', includeTrendRows);
   if (forceLeagueLight) {
     url.searchParams.set('include_chart_points', '1');
-    url.searchParams.set('chart_points_limit', '1000');
+    url.searchParams.set('chart_points_limit', '600');
     url.searchParams.set('include_row_pitches', '0');
     url.searchParams.set('include_trend_rows', '0');
   } else if (isLeague && !includeRowPitches) {
     // Default League calls to lighter payload unless explicitly requested for short windows.
     url.searchParams.set('include_row_pitches', '0');
+  }
+  if (!includeChartPoints && broadScope && daySpan >= 21 && !chartOnly) {
+    url.searchParams.set('include_chart_points', '0');
+    url.searchParams.set('include_row_pitches', '0');
+    url.searchParams.set('include_trend_rows', '0');
   }
   if (shouldScopePlayer) {
     const requestedLimit = Number(url.searchParams.get('chart_points_limit') ?? '0');
@@ -170,6 +186,61 @@ export async function GET(request: Request) {
     url.searchParams.set('include_chart_points', '1');
     url.searchParams.set('chart_points_limit', String(cappedLimit));
     url.searchParams.set('include_row_pitches', '0');
+  } else if ((url.searchParams.get('include_chart_points') ?? '').trim() === '1') {
+    const requestedLimit = Number(url.searchParams.get('chart_points_limit') ?? '0');
+    const maxLimit = broadScope ? 600 : 2000;
+    const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, maxLimit) : maxLimit;
+    url.searchParams.set('chart_points_limit', String(cappedLimit));
+  }
+  const isProLeaderboardSplit = isPro && (splitBy === 'Pitcher' || splitBy === 'Pitcher Team');
+  const proBroadScope =
+    isPro &&
+    !scopedPitcher &&
+    !pitcher &&
+    !oppHitter &&
+    (!teamType || teamType.toLowerCase() === 'all');
+  const shouldForceProLeaderboardRollupShape =
+    isProLeaderboardSplit &&
+    proBroadScope &&
+    daySpan >= 14 &&
+    !isTruthy(chartOnly);
+  if (shouldForceProLeaderboardRollupShape) {
+    // Match league broad-window behavior: keep this request strictly rollup-safe.
+    url.searchParams.set('team_type', 'All');
+    url.searchParams.set('level', 'MLB');
+    url.searchParams.set('table_mode', 'Live');
+    url.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
+    url.searchParams.set('include_chart_points', '0');
+    url.searchParams.set('include_row_pitches', '0');
+    url.searchParams.set('include_trend_rows', '0');
+    const dropKeys = [
+      'with_video',
+      'break_lines',
+      'hand',
+      'batter_side',
+      'venue',
+      'session_type',
+      'qp_locations',
+      'custom_columns',
+      'visual_option',
+      'in_zone',
+      'pitch_types',
+      'zone_locations',
+      'pitch_results',
+      'count_filter',
+      'after_count_filter',
+      'velo_min',
+      'velo_max',
+      'ivb_min',
+      'ivb_max',
+      'hb_min',
+      'hb_max',
+      'pc_min',
+      'pc_max',
+      'chart_only',
+      'chart_points_limit',
+    ] as const;
+    for (const key of dropKeys) url.searchParams.delete(key);
   }
   const cachePolicy = resolveOverviewCachePolicy(schoolCode);
   const isGameSplit = splitBy === 'Game';
@@ -185,6 +256,44 @@ export async function GET(request: Request) {
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {
+      const leaderboardLikeSplit = splitBy === 'Pitcher' || splitBy === 'Pitcher Team';
+      const shouldFallbackToLeanProLeaderboard =
+        isPro &&
+        leaderboardLikeSplit &&
+        !isTruthy(chartOnly);
+      if (shouldFallbackToLeanProLeaderboard && result.status >= 500) {
+        const fallbackUrl = new URL(`${apiBase}/v1/pitching/overview`);
+        fallbackUrl.searchParams.set('school_code', schoolCode);
+        if (startDate) fallbackUrl.searchParams.set('start_date', startDate);
+        if (endDate) fallbackUrl.searchParams.set('end_date', endDate);
+        fallbackUrl.searchParams.set('team_type', 'All');
+        fallbackUrl.searchParams.set('level', 'MLB');
+        fallbackUrl.searchParams.set('table_mode', 'Live');
+        fallbackUrl.searchParams.set('split_by', 'Pitcher');
+        fallbackUrl.searchParams.set('include_chart_points', '0');
+        fallbackUrl.searchParams.set('include_row_pitches', '0');
+        fallbackUrl.searchParams.set('include_trend_rows', '0');
+        const fallback = await fetchDashboardJsonWithCache({
+          cacheKey: `pitching:overview:pro-safe-leaderboard:${fallbackUrl.toString()}`,
+          ttlMs: cachePolicy.ttlMs,
+          staleTtlMs: cachePolicy.staleTtlMs,
+          timeoutMs: resolveOverviewTimeoutMs(schoolCode),
+          retries: resolveOverviewRetries(schoolCode),
+          fetcher: () => fetch(fallbackUrl.toString(), { cache: 'no-store' }),
+        });
+        if (fallback.status >= 200 && fallback.status < 300) {
+          return NextResponse.json(fallback.payload, {
+            headers: {
+              ...RESPONSE_CACHE_HEADERS,
+              'x-dashboard-cache': fallback.cached ? 'HIT' : 'MISS',
+              'x-dashboard-cache-source': fallback.source,
+              'x-dashboard-upstream-ms': String(fallback.durationMs),
+              'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
+              'x-dashboard-fallback': 'pro-leaderboard-safe',
+            },
+          });
+        }
+      }
       const routeError = result.payload.detail ?? result.payload.error;
       const message =
         typeof routeError === 'string' && routeError.trim().length

@@ -23,6 +23,18 @@ function resolveOverviewCachePolicy(schoolCode: string): { ttlMs: number; staleT
   return { ttlMs: 45000, staleTtlMs: 180000 };
 }
 
+function resolveOverviewRetries(schoolCode: string): number {
+  const upper = String(schoolCode ?? '').trim().toUpperCase();
+  if (upper === 'PRO' || upper === 'LEAGUE') return 1;
+  return 0;
+}
+
+function parseIsoDate(value: string): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export async function GET(request: Request) {
   const routeStartedAt = Date.now();
   const cookieStore = await cookies();
@@ -43,6 +55,17 @@ export async function GET(request: Request) {
 
   const inputUrl = new URL(request.url);
   const splitBy = inputUrl.searchParams.get('split_by')?.trim() ?? '';
+  const startDate = inputUrl.searchParams.get('start_date')?.trim() ?? '';
+  const endDate = inputUrl.searchParams.get('end_date')?.trim() ?? '';
+  const teamType = inputUrl.searchParams.get('team_type')?.trim() ?? '';
+  const oppPitcher = inputUrl.searchParams.get('opp_pitcher')?.trim() ?? '';
+  const hitterParam = inputUrl.searchParams.get('hitter')?.trim() ?? '';
+  const includeChartPoints = inputUrl.searchParams.get('include_chart_points')?.trim() ?? '';
+  const chartPointsLimit = inputUrl.searchParams.get('chart_points_limit')?.trim() ?? '';
+  const chartOnly = inputUrl.searchParams.get('chart_only')?.trim() ?? '';
+  const start = parseIsoDate(startDate);
+  const end = parseIsoDate(endDate);
+  const daySpan = start && end ? Math.floor((end.getTime() - start.getTime()) / 86400000) + 1 : 0;
   const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
   const playerIdentity = shouldScopePlayer
     ? await resolveDashboardPlayerIdentity({
@@ -103,8 +126,24 @@ export async function GET(request: Request) {
     const value = inputUrl.searchParams.get(key)?.trim() ?? '';
     if (value) url.searchParams.set(key, value);
   }
+  const broadScope =
+    !scopedHitter &&
+    !hitterParam &&
+    !oppPitcher &&
+    (!teamType || teamType.toLowerCase() === 'all');
+  if (!includeChartPoints && broadScope && daySpan >= 21 && !chartOnly) {
+    url.searchParams.set('include_chart_points', '0');
+  }
   if (shouldScopePlayer) {
+    const requestedLimit = Number(chartPointsLimit || '0');
+    const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 400) : 400;
     url.searchParams.set('include_chart_points', '1');
+    url.searchParams.set('chart_points_limit', String(cappedLimit));
+  } else if ((includeChartPoints || '').trim() === '1') {
+    const requestedLimit = Number(chartPointsLimit || '0');
+    const maxLimit = broadScope ? 600 : 2000;
+    const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, maxLimit) : maxLimit;
+    url.searchParams.set('chart_points_limit', String(cappedLimit));
   }
   const cachePolicy = resolveOverviewCachePolicy(schoolCode);
   const isGameSplit = splitBy === 'Game';
@@ -116,7 +155,7 @@ export async function GET(request: Request) {
       ttlMs: cachePolicy.ttlMs,
       staleTtlMs: cachePolicy.staleTtlMs,
       timeoutMs: resolveOverviewTimeoutMs(schoolCode),
-      retries: 0,
+      retries: resolveOverviewRetries(schoolCode),
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {

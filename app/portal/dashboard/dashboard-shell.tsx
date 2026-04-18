@@ -55,7 +55,7 @@ type HomeNavigateRequest = {
   startDate: string;
   endDate: string;
   page?: 'Summary' | 'Leaderboard' | 'Game Log';
-  navigationSource?: 'search';
+  navigationSource?: 'search' | 'home_leaderboard';
 };
 
 function toFirstLast(value: string): string {

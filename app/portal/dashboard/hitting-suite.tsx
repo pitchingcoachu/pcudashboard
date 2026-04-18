@@ -1830,7 +1830,7 @@ export default function HittingSuite({
     startDate: string;
     endDate: string;
     page?: 'Summary' | 'Leaderboard' | 'Game Log';
-    navigationSource?: 'search';
+    navigationSource?: 'search' | 'home_leaderboard';
   } | null;
 }) {
   const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'AB Report' | 'HeatMaps' | 'Swing Data'>('Summary');
@@ -1940,10 +1940,37 @@ export default function HittingSuite({
       homeNavigateRequest.targetType === 'player';
     lastAppliedHomeRequestRef.current = homeNavigateRequest.requestId;
     pcuSearchPlayerDatePendingRef.current = shouldUsePcuPlayerLatestDate;
-    suppressNextFilterDateAutofillRef.current = homeNavigateRequest.navigationSource === 'search';
+    suppressNextFilterDateAutofillRef.current =
+      homeNavigateRequest.navigationSource === 'search' ||
+      homeNavigateRequest.navigationSource === 'home_leaderboard';
     setDashboardPage(homeNavigateRequest.page ?? 'Summary');
     setStartDate(homeNavigateRequest.startDate);
     setEndDate(homeNavigateRequest.endDate);
+    if (homeNavigateRequest.navigationSource === 'home_leaderboard') {
+      setOppPitcher('All');
+      setHand('All');
+      setBatterSide('All');
+      setVenue('All');
+      setPitchTypes([]);
+      setZoneLocations([]);
+      setPitchResults([]);
+      setCountFilter([]);
+      setAfterCountFilter([]);
+      setBipResult([]);
+      setInZone([]);
+      setVeloMin('');
+      setVeloMax('');
+      setIvbMin('');
+      setIvbMax('');
+      setHbMin('');
+      setHbMax('');
+      setPcMin('');
+      setPcMax('');
+      setTableMode('Results');
+      setSplitBy('Pitch Types');
+      setLeaderboardViewBy('Player');
+      if (isProNavigate) setLevel('MLB');
+    }
     if (homeNavigateRequest.targetType === 'player') {
       setTeamType('All');
       setHitter(homeNavigateRequest.targetValue);
@@ -2222,6 +2249,8 @@ export default function HittingSuite({
     }, isPro ? 150000 : 90000);
     setLoadingOverview(true);
     setError(null);
+    const isLeaderboardPage = dashboardPage === 'Leaderboard';
+    const strictProLeaderboard = isPro && isLeaderboardPage;
     const params = new URLSearchParams();
     if (startDate) params.set('start_date', startDate);
     if (endDate) params.set('end_date', endDate);
@@ -2230,31 +2259,39 @@ export default function HittingSuite({
       ? resolveLeagueTeamTypeForApi(teamType, [filters?.hitters_by_team_code, filters?.opp_pitchers_by_team_code])
       : teamType;
     if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
-    if (isPro && level && level !== 'All') params.set('level', level);
+    if (isPro) {
+      if (strictProLeaderboard) {
+        params.set('level', 'MLB');
+      } else if (level && level !== 'All') {
+        params.set('level', level);
+      }
+    }
     if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
-    if (hand && hand !== 'All') params.set('hand', hand);
-    if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
-    if (venue && venue !== 'All') params.set('venue', venue);
-    params.set('table_mode', tableMode);
+    if (hand && hand !== 'All' && !strictProLeaderboard) params.set('hand', hand);
+    if (batterSide && batterSide !== 'All' && !strictProLeaderboard) params.set('batter_side', batterSide);
+    if (venue && venue !== 'All' && !strictProLeaderboard) params.set('venue', venue);
+    params.set('table_mode', strictProLeaderboard ? 'Results' : tableMode);
     params.set('split_by', effectiveSplitBy);
-    if (tableMode === 'Custom' && customTableColumns.length) {
+    if (!strictProLeaderboard && tableMode === 'Custom' && customTableColumns.length) {
       params.set('custom_columns', customTableColumns.join(','));
     }
-    if (pitchTypes.length) params.set('pitch_types', pitchTypes.join(';'));
-    if (zoneLocations.length) params.set('zone_locations', zoneLocations.join(';'));
-    if (pitchResults.length) params.set('pitch_results', pitchResults.join(';'));
-    if (countFilter.length) params.set('count_filter', countFilter.join(';'));
-    if (afterCountFilter.length) params.set('after_count_filter', afterCountFilter.join(';'));
-    if (bipResult.length) params.set('bip_result', bipResult.join(';'));
-    if (inZone.length) params.set('in_zone', inZone.join(';'));
-    if (veloMin.trim()) params.set('velo_min', veloMin.trim());
-    if (veloMax.trim()) params.set('velo_max', veloMax.trim());
-    if (ivbMin.trim()) params.set('ivb_min', ivbMin.trim());
-    if (ivbMax.trim()) params.set('ivb_max', ivbMax.trim());
-    if (hbMin.trim()) params.set('hb_min', hbMin.trim());
-    if (hbMax.trim()) params.set('hb_max', hbMax.trim());
-    if (pcMin.trim()) params.set('pc_min', pcMin.trim());
-    if (pcMax.trim()) params.set('pc_max', pcMax.trim());
+    if (!strictProLeaderboard) {
+      if (pitchTypes.length) params.set('pitch_types', pitchTypes.join(';'));
+      if (zoneLocations.length) params.set('zone_locations', zoneLocations.join(';'));
+      if (pitchResults.length) params.set('pitch_results', pitchResults.join(';'));
+      if (countFilter.length) params.set('count_filter', countFilter.join(';'));
+      if (afterCountFilter.length) params.set('after_count_filter', afterCountFilter.join(';'));
+      if (bipResult.length) params.set('bip_result', bipResult.join(';'));
+      if (inZone.length) params.set('in_zone', inZone.join(';'));
+      if (veloMin.trim()) params.set('velo_min', veloMin.trim());
+      if (veloMax.trim()) params.set('velo_max', veloMax.trim());
+      if (ivbMin.trim()) params.set('ivb_min', ivbMin.trim());
+      if (ivbMax.trim()) params.set('ivb_max', ivbMax.trim());
+      if (hbMin.trim()) params.set('hb_min', hbMin.trim());
+      if (hbMax.trim()) params.set('hb_max', hbMax.trim());
+      if (pcMin.trim()) params.set('pc_min', pcMin.trim());
+      if (pcMax.trim()) params.set('pc_max', pcMax.trim());
+    }
     const isSummaryPage = dashboardPage === 'Summary';
     const isGameLogPage = dashboardPage === 'Game Log';
     const shouldDeferCharts = isSummaryPage;

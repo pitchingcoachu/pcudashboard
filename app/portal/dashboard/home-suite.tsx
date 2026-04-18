@@ -49,7 +49,7 @@ type HomeSuiteProps = {
     startDate: string;
     endDate: string;
     page?: 'Summary' | 'Leaderboard' | 'Game Log';
-    navigationSource?: 'search';
+    navigationSource?: 'search' | 'home_leaderboard';
   }) => void;
 };
 
@@ -591,6 +591,7 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
                   startDate: window.startDate,
                   endDate: window.endDate,
                   page: 'Leaderboard',
+                  navigationSource: 'home_leaderboard',
                 });
               }}
               style={{
@@ -622,6 +623,7 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
                   startDate: window.startDate,
                   endDate: window.endDate,
                   page: 'Leaderboard',
+                  navigationSource: 'home_leaderboard',
                 });
               }}
               style={{

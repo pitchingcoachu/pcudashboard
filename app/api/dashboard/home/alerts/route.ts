@@ -365,6 +365,37 @@ export async function GET() {
     }
     const scopedPitcher = shouldScopePlayer && playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Pitching') : '';
     const scopedHitter = shouldScopePlayer && playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Hitting') : '';
+    const trendsUrl = new URL(`${apiBase}/v1/home/trends`);
+    trendsUrl.searchParams.set('school_code', schoolCode);
+    trendsUrl.searchParams.set('season_start', dates.seasonStart);
+    trendsUrl.searchParams.set('season_end', dates.seasonEnd);
+    trendsUrl.searchParams.set('recent_start', dates.recentStart);
+    trendsUrl.searchParams.set('recent_end', dates.recentEnd);
+    if (scopedPitcher) trendsUrl.searchParams.set('scoped_pitcher', scopedPitcher);
+    if (scopedHitter) trendsUrl.searchParams.set('scoped_hitter', scopedHitter);
+    const trendsResult = await fetchCachedJson(trendsUrl, `home:alerts:trends:${trendsUrl.toString()}`, 120000, 1);
+    if (trendsResult.status >= 200 && trendsResult.status < 300) {
+      const payload = trendsResult.payload as {
+        school_code?: string;
+        season_start?: string;
+        season_end?: string;
+        recent_start?: string;
+        recent_end?: string;
+        pitching?: AlertRow[];
+        hitting?: AlertRow[];
+      };
+      if (Array.isArray(payload.pitching) && Array.isArray(payload.hitting)) {
+        return NextResponse.json({
+          school_code: payload.school_code ?? schoolCode,
+          season_start: payload.season_start ?? dates.seasonStart,
+          season_end: payload.season_end ?? dates.seasonEnd,
+          recent_start: payload.recent_start ?? dates.recentStart,
+          recent_end: payload.recent_end ?? dates.recentEnd,
+          pitching: payload.pitching,
+          hitting: payload.hitting,
+        });
+      }
+    }
     const snapshotKey = `${schoolCode}:${dates.seasonStart}:${dates.seasonEnd}:${dates.recentStart}:${dates.recentEnd}:${shouldScopePlayer ? 'scoped' : 'all'}:${scopedPitcher.toLowerCase()}:${scopedHitter.toLowerCase()}`;
     const ttlMs = snapshotTtlMsForSchool(schoolCode);
     const cached = alertsSnapshotCache.get(snapshotKey);

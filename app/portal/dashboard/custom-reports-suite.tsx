@@ -362,9 +362,9 @@ const UNIVERSAL_SPLIT_BY = [
   'Batter',
   'Catcher',
 ];
-const PITCHING_TABLES = ['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Raw Data'];
+const PITCHING_TABLES = ['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data'];
 const HITTING_TABLES = ['Results', 'Swing Decisions'];
-const CATCHING_TABLES = ['Catching Data', 'Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Raw Data', 'Batted Ball Data', 'Swing Decisions'];
+const CATCHING_TABLES = ['Catching Data', 'Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data', 'Batted Ball Data', 'Swing Decisions'];
 const CATCHING_SPLIT_BY = UNIVERSAL_SPLIT_BY;
 const HEATMAP_STATS = ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'SwStrk%', 'Exit Velocity', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Run Values', 'PV/100', 'xWOBA', 'xISO'];
 const HITTING_HEATMAP_STATS = ['Frequency', 'Whiff Rate', 'SwStrk%', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Exit Velocity', 'Run Values', 'PV/100', 'xWOBA', 'xISO'] as const;

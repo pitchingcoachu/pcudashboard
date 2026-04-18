@@ -166,6 +166,19 @@ _FILTERS_SNAPSHOT_REFRESH_COOLDOWN_SECONDS = max(
 _FILTERS_SNAPSHOT_REFRESH_LOCK = threading.Lock()
 _FILTERS_SNAPSHOT_REFRESH_RUNNING: set[str] = set()
 _FILTERS_SNAPSHOT_REFRESH_LAST_AT: Dict[str, float] = {}
+_HOME_TRENDS_SNAPSHOT_SCHEMA_READY = False
+_HOME_TRENDS_SNAPSHOT_SCHEMA_LOCK = threading.Lock()
+_HOME_TRENDS_SNAPSHOT_MAX_AGE_SECONDS = max(60, int(os.getenv("DASHBOARD_HOME_TRENDS_SNAPSHOT_MAX_AGE_SECONDS", "900")))
+_HOME_TRENDS_SNAPSHOT_REFRESH_COOLDOWN_SECONDS = max(
+    15.0, float(os.getenv("DASHBOARD_HOME_TRENDS_SNAPSHOT_REFRESH_COOLDOWN_SECONDS", "60"))
+)
+_HOME_TRENDS_SNAPSHOT_REFRESH_LOCK = threading.Lock()
+_HOME_TRENDS_SNAPSHOT_REFRESH_RUNNING: set[str] = set()
+_HOME_TRENDS_SNAPSHOT_REFRESH_LAST_AT: Dict[str, float] = {}
+_ENDPOINT_CACHE_WARM_COOLDOWN_SECONDS = max(30.0, float(os.getenv("DASHBOARD_ENDPOINT_CACHE_WARM_COOLDOWN_SECONDS", "300")))
+_ENDPOINT_CACHE_WARM_LOCK = threading.Lock()
+_ENDPOINT_CACHE_WARM_RUNNING: set[str] = set()
+_ENDPOINT_CACHE_WARM_LAST_AT: Dict[str, float] = {}
 _PERF_LOG_ENABLED = str(os.getenv("DASHBOARD_PERF_LOG_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 
@@ -521,6 +534,566 @@ def _kick_filters_snapshot_refresh_background(
             _FILTERS_SNAPSHOT_REFRESH_RUNNING.discard(key)
 
 
+def _ensure_home_trends_snapshot_schema() -> None:
+    global _HOME_TRENDS_SNAPSHOT_SCHEMA_READY
+    if _HOME_TRENDS_SNAPSHOT_SCHEMA_READY:
+        return
+    with _HOME_TRENDS_SNAPSHOT_SCHEMA_LOCK:
+        if _HOME_TRENDS_SNAPSHOT_SCHEMA_READY:
+            return
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute("SET LOCAL lock_timeout = '2s'")
+                cur.execute("SET LOCAL statement_timeout = '30s'")
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS public.dashboard_home_trends_snapshot (
+                      school_code TEXT NOT NULL,
+                      level_bucket TEXT NOT NULL DEFAULT 'All',
+                      season_start DATE NOT NULL,
+                      season_end DATE NOT NULL,
+                      recent_start DATE NOT NULL,
+                      recent_end DATE NOT NULL,
+                      scoped_pitcher TEXT NOT NULL DEFAULT '',
+                      scoped_hitter TEXT NOT NULL DEFAULT '',
+                      payload_json JSONB NOT NULL,
+                      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      PRIMARY KEY (
+                        school_code, level_bucket, season_start, season_end, recent_start, recent_end, scoped_pitcher, scoped_hitter
+                      )
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dashboard_home_trends_snapshot_updated_at
+                    ON public.dashboard_home_trends_snapshot (updated_at DESC)
+                    """
+                )
+            _HOME_TRENDS_SNAPSHOT_SCHEMA_READY = True
+        except Exception:
+            return
+
+
+def _load_home_trends_snapshot_with_meta(
+    *,
+    school_code: str,
+    level_bucket: str,
+    season_start: date,
+    season_end: date,
+    recent_start: date,
+    recent_end: date,
+    scoped_pitcher: str,
+    scoped_hitter: str,
+) -> tuple[Optional[Dict[str, Any]], Optional[datetime]]:
+    _ensure_home_trends_snapshot_schema()
+    school = (school_code or "").strip().upper()
+    if not school:
+        return None, None
+    level = (level_bucket or "All").strip() or "All"
+    pitch_scope = _normalize_name_key(scoped_pitcher or "")
+    hit_scope = _normalize_name_key(scoped_hitter or "")
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT payload_json, updated_at
+                FROM public.dashboard_home_trends_snapshot
+                WHERE school_code = %(school_code)s
+                  AND level_bucket = %(level_bucket)s
+                  AND season_start = %(season_start)s::date
+                  AND season_end = %(season_end)s::date
+                  AND recent_start = %(recent_start)s::date
+                  AND recent_end = %(recent_end)s::date
+                  AND scoped_pitcher = %(scoped_pitcher)s
+                  AND scoped_hitter = %(scoped_hitter)s
+                LIMIT 1
+                """,
+                {
+                    "school_code": school,
+                    "level_bucket": level,
+                    "season_start": season_start,
+                    "season_end": season_end,
+                    "recent_start": recent_start,
+                    "recent_end": recent_end,
+                    "scoped_pitcher": pitch_scope,
+                    "scoped_hitter": hit_scope,
+                },
+            )
+            row = cur.fetchone() or {}
+            payload = row.get("payload_json")
+            updated_at = row.get("updated_at")
+            if isinstance(payload, dict):
+                return payload, updated_at if isinstance(updated_at, datetime) else None
+            if isinstance(payload, str) and payload.strip():
+                try:
+                    parsed = json.loads(payload)
+                    if isinstance(parsed, dict):
+                        return parsed, updated_at if isinstance(updated_at, datetime) else None
+                except Exception:
+                    return None, None
+            return None, updated_at if isinstance(updated_at, datetime) else None
+    except Exception:
+        return None, None
+
+
+def _save_home_trends_snapshot(
+    *,
+    school_code: str,
+    level_bucket: str,
+    season_start: date,
+    season_end: date,
+    recent_start: date,
+    recent_end: date,
+    scoped_pitcher: str,
+    scoped_hitter: str,
+    payload: Dict[str, Any],
+) -> None:
+    _ensure_home_trends_snapshot_schema()
+    school = (school_code or "").strip().upper()
+    if not school:
+        return
+    level = (level_bucket or "All").strip() or "All"
+    pitch_scope = _normalize_name_key(scoped_pitcher or "")
+    hit_scope = _normalize_name_key(scoped_hitter or "")
+    try:
+        payload_json = json.loads(json.dumps(_json_stable(payload), default=str))
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.dashboard_home_trends_snapshot (
+                  school_code, level_bucket, season_start, season_end, recent_start, recent_end,
+                  scoped_pitcher, scoped_hitter, payload_json, updated_at
+                )
+                VALUES (
+                  %(school_code)s, %(level_bucket)s, %(season_start)s::date, %(season_end)s::date,
+                  %(recent_start)s::date, %(recent_end)s::date, %(scoped_pitcher)s, %(scoped_hitter)s,
+                  %(payload_json)s::jsonb, NOW()
+                )
+                ON CONFLICT (
+                  school_code, level_bucket, season_start, season_end, recent_start, recent_end, scoped_pitcher, scoped_hitter
+                )
+                DO UPDATE SET payload_json = EXCLUDED.payload_json, updated_at = NOW()
+                """,
+                {
+                    "school_code": school,
+                    "level_bucket": level,
+                    "season_start": season_start,
+                    "season_end": season_end,
+                    "recent_start": recent_start,
+                    "recent_end": recent_end,
+                    "scoped_pitcher": pitch_scope,
+                    "scoped_hitter": hit_scope,
+                    "payload_json": json.dumps(payload_json),
+                },
+            )
+    except Exception:
+        return
+
+
+def _home_trends_snapshot_is_stale(updated_at: Optional[datetime]) -> bool:
+    if not isinstance(updated_at, datetime):
+        return True
+    try:
+        ts = updated_at if updated_at.tzinfo is not None else updated_at.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds()
+        return age_seconds > float(_HOME_TRENDS_SNAPSHOT_MAX_AGE_SECONDS)
+    except Exception:
+        return True
+
+
+def _display_name_first_last(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "," not in raw:
+        return raw
+    parts = [part.strip() for part in raw.split(",")]
+    if len(parts) < 2:
+        return raw
+    combined = " ".join([*parts[1:], parts[0]]).strip()
+    return re.sub(r"\s+", " ", combined) or raw
+
+
+def _home_metric_number(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and (isnan(value) or not isfinite(value)):
+            return None
+        return float(value)
+    raw = str(value).strip()
+    if not raw:
+        return None
+    cleaned = raw.replace("%", "").replace(",", "").replace("$", "")
+    try:
+        parsed = float(cleaned)
+        if isnan(parsed) or not isfinite(parsed):
+            return None
+        return parsed
+    except Exception:
+        return None
+
+
+def _home_metric_from_row(row: Dict[str, Any], aliases: List[str], *, pct_like: bool = False) -> Optional[float]:
+    keys = list(row.keys())
+    alias_norm = {_normalize_name_key(alias): alias for alias in aliases if str(alias).strip()}
+    for key in keys:
+        key_str = str(key)
+        if key_str in aliases:
+            metric = _home_metric_number(row.get(key))
+            if metric is None:
+                continue
+            if pct_like and metric > 100.0:
+                continue
+            return metric
+    for key in keys:
+        key_norm = _normalize_name_key(str(key))
+        if key_norm in alias_norm:
+            metric = _home_metric_number(row.get(key))
+            if metric is None:
+                continue
+            if pct_like and metric > 100.0:
+                continue
+            return metric
+    return None
+
+
+def _rows_from_overview_payload(payload: Any) -> List[Dict[str, Any]]:
+    rows: Any = None
+    if isinstance(payload, dict):
+        rows = payload.get("table_rows")
+    elif hasattr(payload, "table_rows"):
+        rows = getattr(payload, "table_rows", None)
+    if not isinstance(rows, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        if isinstance(row, dict):
+            out.append(row)
+        elif hasattr(row, "model_dump"):
+            try:
+                dumped = row.model_dump()
+                if isinstance(dumped, dict):
+                    out.append(dumped)
+            except Exception:
+                continue
+    return out
+
+
+def _build_home_pitching_rows(
+    season_rows: List[Dict[str, Any]],
+    recent_rows: List[Dict[str, Any]],
+    season_fbsi_rows: List[Dict[str, Any]],
+    recent_fbsi_rows: List[Dict[str, Any]],
+    *,
+    allowed_pitcher_keys: Optional[Set[str]],
+    min_season_sample: int,
+) -> List[Dict[str, Any]]:
+    season_velo: Dict[str, Optional[float]] = {}
+    recent_velo: Dict[str, Optional[float]] = {}
+    for row in season_fbsi_rows:
+        name_raw = str(row.get("Pitcher") or row.get("pitcher") or row.get("Name") or "").strip()
+        key = _normalize_name_key(name_raw)
+        if not key or key == "all":
+            continue
+        season_velo[key] = _home_metric_number(row.get("Velo"))
+    for row in recent_fbsi_rows:
+        name_raw = str(row.get("Pitcher") or row.get("pitcher") or row.get("Name") or "").strip()
+        key = _normalize_name_key(name_raw)
+        if not key or key == "all":
+            continue
+        recent_velo[key] = _home_metric_number(row.get("Velo"))
+
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for row in season_rows:
+        name_raw = str(row.get("Pitcher") or row.get("pitcher") or row.get("Name") or "").strip()
+        key = _normalize_name_key(name_raw)
+        if not key or key == "all":
+            continue
+        if allowed_pitcher_keys and key not in allowed_pitcher_keys:
+            continue
+        by_name[key] = {
+            "name": _display_name_first_last(name_raw),
+            "sample": int(_home_metric_number(row.get("#")) or 0),
+            "recentSample": 0,
+            "metrics": {
+                "Velo": {"season": season_velo.get(key), "recent": None},
+                "K%": {"season": _home_metric_number(row.get("K%")), "recent": None},
+                "BB%": {"season": _home_metric_number(row.get("BB%")), "recent": None},
+                "E+A%": {"season": _home_metric_number(row.get("E+A%")), "recent": None},
+            },
+        }
+    for row in recent_rows:
+        name_raw = str(row.get("Pitcher") or row.get("pitcher") or row.get("Name") or "").strip()
+        key = _normalize_name_key(name_raw)
+        if not key or key == "all" or key not in by_name:
+            continue
+        by_name[key]["recentSample"] = int(_home_metric_number(row.get("#")) or by_name[key]["recentSample"])
+        by_name[key]["metrics"]["Velo"]["recent"] = recent_velo.get(key)
+        by_name[key]["metrics"]["K%"]["recent"] = _home_metric_number(row.get("K%"))
+        by_name[key]["metrics"]["BB%"]["recent"] = _home_metric_number(row.get("BB%"))
+        by_name[key]["metrics"]["E+A%"]["recent"] = _home_metric_number(row.get("E+A%"))
+    rows = [row for row in by_name.values() if int(row.get("sample") or 0) >= int(min_season_sample)]
+    rows.sort(key=lambda row: (-(int(row.get("recentSample") or 0)), -(int(row.get("sample") or 0)), str(row.get("name") or "")))
+    return rows
+
+
+def _build_home_hitting_rows(
+    season_rows: List[Dict[str, Any]],
+    recent_rows: List[Dict[str, Any]],
+    *,
+    allowed_hitter_keys: Optional[Set[str]],
+    min_season_sample: int,
+) -> List[Dict[str, Any]]:
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for row in season_rows:
+        name_raw = str(row.get("Batter") or row.get("Hitter") or row.get("hitter") or row.get("Name") or "").strip()
+        key = _normalize_name_key(name_raw)
+        if not key or key == "all":
+            continue
+        if allowed_hitter_keys and key not in allowed_hitter_keys:
+            continue
+        sample = int(_home_metric_number(row.get("#")) or _home_metric_number(row.get("PA")) or 0)
+        by_name[key] = {
+            "name": _display_name_first_last(name_raw),
+            "sample": sample,
+            "recentSample": 0,
+            "metrics": {
+                "xWOBA": {"season": _home_metric_from_row(row, ["xWOBA"]), "recent": None},
+                "Barrel%": {"season": _home_metric_from_row(row, ["Barrel%", "BarrelPct"], pct_like=True), "recent": None},
+                "GoZoneSw%": {
+                    "season": _home_metric_from_row(
+                        row,
+                        ["GoZoneSw%", "GoZoneSwPct", "GoZoneSwing%", "GoZoneSwingPct", "GoZoneSw"],
+                        pct_like=True,
+                    ),
+                    "recent": None,
+                },
+            },
+        }
+    for row in recent_rows:
+        name_raw = str(row.get("Batter") or row.get("Hitter") or row.get("hitter") or row.get("Name") or "").strip()
+        key = _normalize_name_key(name_raw)
+        if not key or key == "all" or key not in by_name:
+            continue
+        by_name[key]["recentSample"] = int(
+            _home_metric_number(row.get("#")) or _home_metric_number(row.get("PA")) or by_name[key]["recentSample"]
+        )
+        by_name[key]["metrics"]["xWOBA"]["recent"] = _home_metric_from_row(row, ["xWOBA"])
+        by_name[key]["metrics"]["Barrel%"]["recent"] = _home_metric_from_row(row, ["Barrel%", "BarrelPct"], pct_like=True)
+        by_name[key]["metrics"]["GoZoneSw%"]["recent"] = _home_metric_from_row(
+            row,
+            ["GoZoneSw%", "GoZoneSwPct", "GoZoneSwing%", "GoZoneSwingPct", "GoZoneSw"],
+            pct_like=True,
+        )
+    rows = [row for row in by_name.values() if int(row.get("sample") or 0) >= int(min_season_sample)]
+    rows.sort(key=lambda row: (-(int(row.get("recentSample") or 0)), -(int(row.get("sample") or 0)), str(row.get("name") or "")))
+    return rows
+
+
+def _compute_home_trends_payload(
+    *,
+    school_code: str,
+    season_start: date,
+    season_end: date,
+    recent_start: date,
+    recent_end: date,
+    scoped_pitcher: str,
+    scoped_hitter: str,
+    level_bucket: str,
+) -> Dict[str, Any]:
+    school = _validate_school_code(school_code)
+    level = (level_bucket or "All").strip() or "All"
+    is_scoped = bool((scoped_pitcher or "").strip() or (scoped_hitter or "").strip())
+    min_pitching_sample = 0 if is_scoped else 25
+    min_hitting_sample = 0 if is_scoped else 20
+
+    roster = _load_school_roster(school)
+    allowed_pitcher_keys: Optional[Set[str]] = None
+    allowed_hitter_keys: Optional[Set[str]] = None
+    if school not in {"PRO", "LEAGUE"}:
+        roster_pitchers = {str(key).strip() for key in roster.get("team_only_norm", []) if str(key).strip()}
+        roster_hitters = {str(key).strip() for key in roster.get("hitter_norm", []) if str(key).strip()}
+        allowed_pitcher_keys = roster_pitchers if roster_pitchers else None
+        allowed_hitter_keys = roster_hitters if roster_hitters else None
+
+    season_pitching = pitching_overview(
+        school_code=school,
+        start_date=season_start,
+        end_date=season_end,
+        level=(level if school == "PRO" else None),
+        pitcher=(scoped_pitcher or None),
+        table_mode="Custom",
+        split_by="Pitcher",
+        custom_columns="K%,BB%,E+A%",
+        include_chart_points=False,
+        include_row_pitches=False,
+        include_trend_rows=False,
+    )
+    recent_pitching = pitching_overview(
+        school_code=school,
+        start_date=recent_start,
+        end_date=recent_end,
+        level=(level if school == "PRO" else None),
+        pitcher=(scoped_pitcher or None),
+        table_mode="Custom",
+        split_by="Pitcher",
+        custom_columns="K%,BB%,E+A%",
+        include_chart_points=False,
+        include_row_pitches=False,
+        include_trend_rows=False,
+    )
+    season_pitching_fbsi = pitching_overview(
+        school_code=school,
+        start_date=season_start,
+        end_date=season_end,
+        level=(level if school == "PRO" else None),
+        pitcher=(scoped_pitcher or None),
+        table_mode="Custom",
+        split_by="Pitcher",
+        custom_columns="Velo",
+        pitch_types="Fastball,Sinker",
+        include_chart_points=False,
+        include_row_pitches=False,
+        include_trend_rows=False,
+    )
+    recent_pitching_fbsi = pitching_overview(
+        school_code=school,
+        start_date=recent_start,
+        end_date=recent_end,
+        level=(level if school == "PRO" else None),
+        pitcher=(scoped_pitcher or None),
+        table_mode="Custom",
+        split_by="Pitcher",
+        custom_columns="Velo",
+        pitch_types="Fastball,Sinker",
+        include_chart_points=False,
+        include_row_pitches=False,
+        include_trend_rows=False,
+    )
+    season_hitting = hitting_overview(
+        school_code=school,
+        start_date=season_start,
+        end_date=season_end,
+        level=(level if school == "PRO" else None),
+        hitter=(scoped_hitter or None),
+        table_mode="Custom",
+        split_by="Batter",
+        custom_columns="xWOBA,Barrel%,GoZoneSw%",
+        include_chart_points=False,
+    )
+    recent_hitting = hitting_overview(
+        school_code=school,
+        start_date=recent_start,
+        end_date=recent_end,
+        level=(level if school == "PRO" else None),
+        hitter=(scoped_hitter or None),
+        table_mode="Custom",
+        split_by="Batter",
+        custom_columns="xWOBA,Barrel%,GoZoneSw%",
+        include_chart_points=False,
+    )
+
+    pitching_rows = _build_home_pitching_rows(
+        _rows_from_overview_payload(season_pitching),
+        _rows_from_overview_payload(recent_pitching),
+        _rows_from_overview_payload(season_pitching_fbsi),
+        _rows_from_overview_payload(recent_pitching_fbsi),
+        allowed_pitcher_keys=allowed_pitcher_keys,
+        min_season_sample=min_pitching_sample,
+    )
+    hitting_rows = _build_home_hitting_rows(
+        _rows_from_overview_payload(season_hitting),
+        _rows_from_overview_payload(recent_hitting),
+        allowed_hitter_keys=allowed_hitter_keys,
+        min_season_sample=min_hitting_sample,
+    )
+    return {
+        "school_code": school,
+        "season_start": season_start.isoformat(),
+        "season_end": season_end.isoformat(),
+        "recent_start": recent_start.isoformat(),
+        "recent_end": recent_end.isoformat(),
+        "pitching": pitching_rows,
+        "hitting": hitting_rows,
+    }
+
+
+def _kick_home_trends_snapshot_refresh_background(
+    *,
+    school_code: str,
+    season_start: date,
+    season_end: date,
+    recent_start: date,
+    recent_end: date,
+    scoped_pitcher: str,
+    scoped_hitter: str,
+    level_bucket: str = "All",
+) -> None:
+    school = _validate_school_code(school_code)
+    level = (level_bucket or "All").strip() or "All"
+    pitch_scope = _normalize_name_key(scoped_pitcher or "")
+    hit_scope = _normalize_name_key(scoped_hitter or "")
+    key = "|".join(
+        [
+            school,
+            level,
+            season_start.isoformat(),
+            season_end.isoformat(),
+            recent_start.isoformat(),
+            recent_end.isoformat(),
+            pitch_scope,
+            hit_scope,
+        ]
+    )
+    now = time.monotonic()
+    with _HOME_TRENDS_SNAPSHOT_REFRESH_LOCK:
+        if key in _HOME_TRENDS_SNAPSHOT_REFRESH_RUNNING:
+            return
+        last_at = float(_HOME_TRENDS_SNAPSHOT_REFRESH_LAST_AT.get(key, 0.0))
+        if (now - last_at) < _HOME_TRENDS_SNAPSHOT_REFRESH_COOLDOWN_SECONDS:
+            return
+        _HOME_TRENDS_SNAPSHOT_REFRESH_RUNNING.add(key)
+        _HOME_TRENDS_SNAPSHOT_REFRESH_LAST_AT[key] = now
+
+    def _worker() -> None:
+        try:
+            payload = _compute_home_trends_payload(
+                school_code=school,
+                season_start=season_start,
+                season_end=season_end,
+                recent_start=recent_start,
+                recent_end=recent_end,
+                scoped_pitcher=scoped_pitcher,
+                scoped_hitter=scoped_hitter,
+                level_bucket=level,
+            )
+            _save_home_trends_snapshot(
+                school_code=school,
+                level_bucket=level,
+                season_start=season_start,
+                season_end=season_end,
+                recent_start=recent_start,
+                recent_end=recent_end,
+                scoped_pitcher=scoped_pitcher,
+                scoped_hitter=scoped_hitter,
+                payload=payload,
+            )
+        except Exception:
+            return
+        finally:
+            with _HOME_TRENDS_SNAPSHOT_REFRESH_LOCK:
+                _HOME_TRENDS_SNAPSHOT_REFRESH_RUNNING.discard(key)
+
+    try:
+        thread = threading.Thread(target=_worker, name=f"home-trends-refresh-{school.lower()}-{level.lower()}", daemon=True)
+        thread.start()
+    except Exception:
+        with _HOME_TRENDS_SNAPSHOT_REFRESH_LOCK:
+            _HOME_TRENDS_SNAPSHOT_REFRESH_RUNNING.discard(key)
+
+
 def _downsample_rows_for_chart_points(rows: List[Dict[str, Any]], max_points: int = _CHART_POINTS_MAX) -> List[Dict[str, Any]]:
     total = len(rows)
     if max_points <= 0 or total <= max_points:
@@ -567,7 +1140,8 @@ def _dynamic_chart_points_limit(
 ) -> int:
     team_val = str(team_type_value or "").strip().lower()
     all_all = team_val in {"", "all"} and primary_selected_count == 0 and secondary_selected_count == 0
-    base_limit = 1000 if all_all else 4000
+    # Keep broad-scope defaults smaller so dashboards return faster under heavy load.
+    base_limit = 700 if all_all else 3000
     return max(100, min(base_limit, _CHART_POINTS_MAX))
 
 
@@ -5432,6 +6006,14 @@ def _ensure_performance_indexes() -> None:
         ON public.pitch_events_daily_rollup_league (school_code, session_date, pitch_type)
         """,
         """
+        CREATE INDEX IF NOT EXISTS idx_rollup_league_school_date_session_bucket
+        ON public.pitch_events_daily_rollup_league (school_code, session_date, session_bucket)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_rollup_league_school_date_hands
+        ON public.pitch_events_daily_rollup_league (school_code, session_date, pitcherthrows_norm, batterside_norm)
+        """,
+        """
         CREATE INDEX IF NOT EXISTS idx_rollup_league_split_school_date_group
         ON public.pitch_events_daily_rollup_league_split (school_code, session_date, split_group)
         """,
@@ -5442,6 +6024,14 @@ def _ensure_performance_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_rollup_league_split_school_date_team
         ON public.pitch_events_daily_rollup_league_split (school_code, session_date, split_group, pitcher_team_norm)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_rollup_league_split_school_date_group_value
+        ON public.pitch_events_daily_rollup_league_split (school_code, session_date, split_group, split_value)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_rollup_league_split_school_date_group_hands
+        ON public.pitch_events_daily_rollup_league_split (school_code, session_date, split_group, pitcherthrows_norm, batterside_norm)
         """,
         """
         CREATE TABLE IF NOT EXISTS public.pitch_events_game_rollup_league
@@ -5650,6 +6240,10 @@ def _ensure_performance_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_pro_rollup_date_team_pitch_type
         ON public.pro_pitch_events_daily_rollup (school_code, session_date, pitcher_team_code, pitch_type)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_pro_rollup_date_level_hands
+        ON public.pro_pitch_events_daily_rollup (school_code, session_date, level_bucket, pitcherthrows_norm, batterside_norm)
         """,
         # PRO query-path indexes (partial to keep index size/write cost lower).
         """
@@ -6687,6 +7281,7 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
         _kick_filters_snapshot_refresh_background(school_code=school_filter, domain="pitching", level_bucket="All")
         _kick_filters_snapshot_refresh_background(school_code=school_filter, domain="hitting", level_bucket="All")
         _kick_filters_snapshot_refresh_background(school_code=school_filter, domain="catching", level_bucket="All")
+        _kick_endpoint_cache_warm_background(school_filter)
     except Exception as exc:
         logger.warning("league daily rollup refresh failed: %s", exc)
         return
@@ -6795,6 +7390,215 @@ def _warm_filters_snapshots(force: bool = False) -> None:
                 )
 
 
+def _warm_home_trends_snapshots(force: bool = False) -> None:
+    school_codes: List[str] = []
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT UPPER(TRIM(school_code)) AS school_code
+                FROM public.pitch_events
+                WHERE school_code IS NOT NULL
+                  AND TRIM(school_code) <> ''
+                ORDER BY 1
+                """
+            )
+            school_codes = [str(row.get("school_code") or "").strip().upper() for row in cur.fetchall() if str(row.get("school_code") or "").strip()]
+            cur.execute("SELECT to_regclass('public.pro_pitch_events')::text AS t")
+            has_pro = bool((cur.fetchone() or {}).get("t"))
+            if has_pro and "PRO" not in school_codes:
+                school_codes.append("PRO")
+    except Exception:
+        school_codes = ["PRO", "LEAGUE"]
+
+    today = date.today()
+    season_start = date(2026, 2, 13)
+    recent_start = today - timedelta(days=13)
+    for school in sorted({code for code in school_codes if code}):
+        levels = ["All", "AAA", "MLB"] if school == "PRO" else ["All"]
+        for level_bucket in levels:
+            if force:
+                try:
+                    payload = _compute_home_trends_payload(
+                        school_code=school,
+                        season_start=season_start,
+                        season_end=today,
+                        recent_start=recent_start,
+                        recent_end=today,
+                        scoped_pitcher="",
+                        scoped_hitter="",
+                        level_bucket=level_bucket,
+                    )
+                    _save_home_trends_snapshot(
+                        school_code=school,
+                        level_bucket=level_bucket,
+                        season_start=season_start,
+                        season_end=today,
+                        recent_start=recent_start,
+                        recent_end=today,
+                        scoped_pitcher="",
+                        scoped_hitter="",
+                        payload=payload,
+                    )
+                except Exception:
+                    continue
+            else:
+                _kick_home_trends_snapshot_refresh_background(
+                    school_code=school,
+                    season_start=season_start,
+                    season_end=today,
+                    recent_start=recent_start,
+                    recent_end=today,
+                    scoped_pitcher="",
+                    scoped_hitter="",
+                    level_bucket=level_bucket,
+                )
+
+
+def _collect_known_school_codes() -> List[str]:
+    school_codes: List[str] = []
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT UPPER(TRIM(school_code)) AS school_code
+                FROM public.pitch_events
+                WHERE school_code IS NOT NULL
+                  AND TRIM(school_code) <> ''
+                ORDER BY 1
+                """
+            )
+            school_codes = [str(row.get("school_code") or "").strip().upper() for row in cur.fetchall() if str(row.get("school_code") or "").strip()]
+            cur.execute("SELECT to_regclass('public.pro_pitch_events')::text AS t")
+            has_pro = bool((cur.fetchone() or {}).get("t"))
+            if has_pro and "PRO" not in school_codes:
+                school_codes.append("PRO")
+    except Exception:
+        school_codes = ["PRO", "LEAGUE"]
+    return sorted({code for code in school_codes if code})
+
+
+def _warm_overview_endpoints_for_school(school_code: str, level_bucket: str = "All") -> None:
+    school = _validate_school_code(school_code)
+    today = date.today()
+    season_start = date(2026, 2, 13)
+    game_start = today - timedelta(days=31)
+    level = _pro_level_norm(level_bucket) if school == "PRO" else None
+    session_type = "Season" if school != "PRO" else None
+
+    pitching_overview(
+        school_code=school,
+        start_date=season_start,
+        end_date=today,
+        level=level,
+        session_type=session_type,
+        table_mode="Live",
+        split_by="Pitch Types",
+        include_chart_points=False,
+        include_row_pitches=False,
+        include_trend_rows=False,
+    )
+    pitching_overview(
+        school_code=school,
+        start_date=game_start,
+        end_date=today,
+        level=level,
+        session_type=session_type,
+        table_mode="Live",
+        split_by="Game",
+        include_chart_points=False,
+        include_row_pitches=False,
+        include_trend_rows=False,
+    )
+    hitting_overview(
+        school_code=school,
+        start_date=season_start,
+        end_date=today,
+        level=level,
+        session_type=session_type,
+        table_mode="Results",
+        split_by="Pitch Types",
+        include_chart_points=False,
+    )
+    hitting_overview(
+        school_code=school,
+        start_date=season_start,
+        end_date=today,
+        level=level,
+        session_type=session_type,
+        table_mode="Results",
+        split_by="Batter",
+        include_chart_points=False,
+    )
+    home_trends(
+        school_code=school,
+        season_start=season_start,
+        season_end=today,
+        recent_start=today - timedelta(days=13),
+        recent_end=today,
+        level=level,
+        force_refresh=True,
+    )
+
+
+def _warm_endpoint_caches(force: bool = False, school_code: Optional[str] = None) -> None:
+    schools = [_validate_school_code(school_code)] if school_code else _collect_known_school_codes()
+    now = time.monotonic()
+    for school in schools:
+        levels = ["All", "AAA", "MLB"] if school == "PRO" else ["All"]
+        for level_bucket in levels:
+            cache_key = f"{school}|{level_bucket}"
+            if not force:
+                with _ENDPOINT_CACHE_WARM_LOCK:
+                    if cache_key in _ENDPOINT_CACHE_WARM_RUNNING:
+                        continue
+                    last_at = float(_ENDPOINT_CACHE_WARM_LAST_AT.get(cache_key, 0.0))
+                    if (now - last_at) < _ENDPOINT_CACHE_WARM_COOLDOWN_SECONDS:
+                        continue
+                    _ENDPOINT_CACHE_WARM_RUNNING.add(cache_key)
+                    _ENDPOINT_CACHE_WARM_LAST_AT[cache_key] = now
+                try:
+                    _warm_overview_endpoints_for_school(school, level_bucket=level_bucket)
+                except Exception:
+                    pass
+                finally:
+                    with _ENDPOINT_CACHE_WARM_LOCK:
+                        _ENDPOINT_CACHE_WARM_RUNNING.discard(cache_key)
+            else:
+                try:
+                    _warm_overview_endpoints_for_school(school, level_bucket=level_bucket)
+                except Exception:
+                    continue
+
+
+def _kick_endpoint_cache_warm_background(school_code: Optional[str] = None) -> None:
+    school = _validate_school_code(school_code) if school_code else None
+    target_key = school or "ALL"
+    now = time.monotonic()
+    with _ENDPOINT_CACHE_WARM_LOCK:
+        if target_key in _ENDPOINT_CACHE_WARM_RUNNING:
+            return
+        last_at = float(_ENDPOINT_CACHE_WARM_LAST_AT.get(target_key, 0.0))
+        if (now - last_at) < _ENDPOINT_CACHE_WARM_COOLDOWN_SECONDS:
+            return
+        _ENDPOINT_CACHE_WARM_RUNNING.add(target_key)
+        _ENDPOINT_CACHE_WARM_LAST_AT[target_key] = now
+
+    def _worker() -> None:
+        try:
+            _warm_endpoint_caches(force=False, school_code=school)
+        finally:
+            with _ENDPOINT_CACHE_WARM_LOCK:
+                _ENDPOINT_CACHE_WARM_RUNNING.discard(target_key)
+
+    try:
+        thread = threading.Thread(target=_worker, name=f"endpoint-cache-warmer-{(target_key or 'all').lower()}", daemon=True)
+        thread.start()
+    except Exception:
+        with _ENDPOINT_CACHE_WARM_LOCK:
+            _ENDPOINT_CACHE_WARM_RUNNING.discard(target_key)
+
+
 def _start_filters_snapshot_warmer_background() -> None:
     def _worker() -> None:
         try:
@@ -6804,6 +7608,34 @@ def _start_filters_snapshot_warmer_background() -> None:
 
     try:
         thread = threading.Thread(target=_worker, name="filters-snapshot-warmer", daemon=True)
+        thread.start()
+    except Exception:
+        return
+
+
+def _start_home_trends_snapshot_warmer_background() -> None:
+    def _worker() -> None:
+        try:
+            _warm_home_trends_snapshots(force=False)
+        except Exception:
+            return
+
+    try:
+        thread = threading.Thread(target=_worker, name="home-trends-snapshot-warmer", daemon=True)
+        thread.start()
+    except Exception:
+        return
+
+
+def _start_endpoint_cache_warmer_background() -> None:
+    def _worker() -> None:
+        try:
+            _warm_endpoint_caches(force=False, school_code=None)
+        except Exception:
+            return
+
+    try:
+        thread = threading.Thread(target=_worker, name="endpoint-cache-warmer", daemon=True)
         thread.start()
     except Exception:
         return
@@ -6959,6 +7791,7 @@ def _try_pitching_overview_daily_rollup(
         rollup_source = "public.pitch_events_daily_rollup_league_split" if use_split_rollup else "public.pitch_events_daily_rollup_league"
 
     # Aggregate rows by split + pitch type.
+    _rollup_perf_started = time.perf_counter()
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -7041,13 +7874,38 @@ def _try_pitching_overview_daily_rollup(
                 params,
             )
             grouped_rows = [dict(r) for r in cur.fetchall()]
+            _perf_log(
+                "pitching_rollup_fast_query",
+                school_code,
+                "league_rollup",
+                _rollup_perf_started,
+                split_by=split_clean,
+                source=rollup_source,
+                rows=len(grouped_rows),
+                pitchers_count=len(selected_pitcher_keys),
+                pitch_types_count=len(selected_pitch_types),
+                team_type=team_type_norm or "ALL",
+                session_type=session_type_filter or "All",
+                hand=hand_norm or "All",
+                batter_side=batter_side_norm or "All",
+            )
     except Exception as exc:
         logger.warning("league rollup fast-path aggregate failed: %s", exc)
+        _perf_log(
+            "pitching_rollup_fast_query",
+            school_code,
+            "league_rollup_error",
+            _rollup_perf_started,
+            split_by=split_clean,
+            source=rollup_source,
+            error=str(exc),
+        )
         return None
 
     if not grouped_rows:
         # Rollup may be empty on cold start / first deploy; do one synchronous build and retry once.
         _refresh_league_daily_rollup(force=True, school_code=school_code)
+        _rollup_retry_started = time.perf_counter()
         try:
             with get_conn() as conn, conn.cursor() as cur:
                 cur.execute(
@@ -7130,8 +7988,26 @@ def _try_pitching_overview_daily_rollup(
                     params,
                 )
                 grouped_rows = [dict(r) for r in cur.fetchall()]
+                _perf_log(
+                    "pitching_rollup_fast_query",
+                    school_code,
+                    "league_rollup_retry",
+                    _rollup_retry_started,
+                    split_by=split_clean,
+                    source=rollup_source,
+                    rows=len(grouped_rows),
+                )
         except Exception as exc:
             logger.warning("league rollup fast-path retry failed: %s", exc)
+            _perf_log(
+                "pitching_rollup_fast_query",
+                school_code,
+                "league_rollup_retry_error",
+                _rollup_retry_started,
+                split_by=split_clean,
+                source=rollup_source,
+                error=str(exc),
+            )
             return None
 
     if not grouped_rows:
@@ -7890,6 +8766,8 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_pro_rollup_split_school_date_group ON public.pro_pitch_events_daily_rollup_split (school_code, session_date, split_group)",
                 "CREATE INDEX IF NOT EXISTS idx_pro_rollup_split_school_date_group_pitcher ON public.pro_pitch_events_daily_rollup_split (school_code, session_date, split_group, pitcher_norm)",
                 "CREATE INDEX IF NOT EXISTS idx_pro_rollup_split_school_date_group_team ON public.pro_pitch_events_daily_rollup_split (school_code, session_date, split_group, pitcher_team_code)",
+                "CREATE INDEX IF NOT EXISTS idx_pro_rollup_split_school_date_group_value ON public.pro_pitch_events_daily_rollup_split (school_code, session_date, split_group, split_value)",
+                "CREATE INDEX IF NOT EXISTS idx_pro_rollup_split_school_date_group_level_hands ON public.pro_pitch_events_daily_rollup_split (school_code, session_date, split_group, level_bucket, pitcherthrows_norm, batterside_norm)",
                 "CREATE TABLE IF NOT EXISTS public.pro_pitch_events_game_rollup (LIKE public.pro_pitch_events_daily_rollup_split INCLUDING DEFAULTS INCLUDING GENERATED INCLUDING STORAGE INCLUDING COMMENTS)",
                 "CREATE INDEX IF NOT EXISTS idx_pro_rollup_game_school_date ON public.pro_pitch_events_game_rollup (school_code, session_date)",
                 "CREATE INDEX IF NOT EXISTS idx_pro_rollup_game_school_date_pitcher ON public.pro_pitch_events_game_rollup (school_code, session_date, pitcher_norm)",
@@ -8733,6 +9611,7 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
             _kick_filters_snapshot_refresh_background(school_code="PRO", domain="pitching", level_bucket=lvl)
             _kick_filters_snapshot_refresh_background(school_code="PRO", domain="hitting", level_bucket=lvl)
             _kick_filters_snapshot_refresh_background(school_code="PRO", domain="catching", level_bucket=lvl)
+        _kick_endpoint_cache_warm_background("PRO")
     except Exception as exc:
         logger.warning("pro rollup refresh failed: %s", exc)
         return
@@ -8803,6 +9682,8 @@ def _start_rollup_scheduler_background() -> None:
 def _dashboard_api_startup() -> None:
     _start_rollup_scheduler_background()
     _start_filters_snapshot_warmer_background()
+    _start_home_trends_snapshot_warmer_background()
+    _start_endpoint_cache_warmer_background()
 
 
 def _try_pro_pitching_overview_rollup(
@@ -9040,7 +9921,31 @@ def _try_pro_pitching_overview_rollup(
                 params,
             )
             grouped_rows = [dict(r) for r in cur.fetchall()]
+            _perf_log(
+                "pitching_rollup_fast_query",
+                school_code,
+                "pro_rollup",
+                _rollup_perf_started,
+                split_by=split_clean,
+                source=rollup_source,
+                rows=len(grouped_rows),
+                level=level_norm,
+                pitchers_count=len(selected_pitcher_keys),
+                opp_hitters_count=len(selected_opp_hitter_keys),
+                pitch_types_count=len(selected_pitch_types),
+                team_type=team_type_norm or "ALL",
+                hand=(hand or "All"),
+                batter_side=(batter_side or "All"),
+            )
     except Exception:
+        _perf_log(
+            "pitching_rollup_fast_query",
+            school_code,
+            "pro_rollup_error",
+            _rollup_perf_started,
+            split_by=split_clean,
+            source=rollup_source,
+        )
         return None
     mode_columns_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
@@ -9499,6 +10404,9 @@ def _try_pro_hitting_overview_rollup(
         return None
     split_to_expr: Dict[str, tuple[str, bool]] = {
         "Pitch Types": ("pitch_type", False),
+        "Batter": ("batter_name", False),
+        "Batter Team": ("batter_team_code", False),
+        "Batter Hand": ("batterside_norm", False),
         "Pitcher Hand": ("pitcherthrows_norm", False),
         "Pitcher": ("pitcher_name", False),
         "Catcher": ("catcher_name", False),
@@ -9599,7 +10507,31 @@ def _try_pro_hitting_overview_rollup(
                 params,
             )
             grouped_rows = [dict(r) for r in cur.fetchall()]
+            _perf_log(
+                "hitting_rollup_fast_query",
+                school_code,
+                "pro_rollup",
+                _rollup_perf_started,
+                split_by=split_by,
+                source=rollup_source,
+                rows=len(grouped_rows),
+                level=level_norm,
+                hitters_count=len(selected_hitter_keys),
+                opp_pitchers_count=len(selected_opp_pitcher_keys),
+                pitch_types_count=len(selected_pitch_types),
+                team_type=team_type_norm or "ALL",
+                hand=(hand or "All"),
+                batter_side=(batter_side or "All"),
+            )
     except Exception:
+        _perf_log(
+            "hitting_rollup_fast_query",
+            school_code,
+            "pro_rollup_error",
+            _rollup_perf_started,
+            split_by=split_by,
+            source=rollup_source,
+        )
         return None
     if not grouped_rows:
         if split_by == "Game":
@@ -14952,6 +15884,76 @@ def pitching_filters(
     return response
 
 
+@app.get("/v1/home/trends")
+def home_trends(
+    school_code: str = Query(..., min_length=1),
+    season_start: date = Query(...),
+    season_end: date = Query(...),
+    recent_start: date = Query(...),
+    recent_end: date = Query(...),
+    scoped_pitcher: Optional[str] = Query(default=None),
+    scoped_hitter: Optional[str] = Query(default=None),
+    level: Optional[str] = Query(default=None),
+    force_refresh: bool = Query(default=False),
+) -> Dict[str, Any]:
+    if season_start > season_end:
+        raise HTTPException(status_code=400, detail="season_start must be <= season_end.")
+    if recent_start > recent_end:
+        raise HTTPException(status_code=400, detail="recent_start must be <= recent_end.")
+    school = _validate_school_code(school_code)
+    level_bucket = _pro_level_norm(level) if school == "PRO" else "All"
+    scoped_pitcher_value = str(scoped_pitcher or "").strip()
+    scoped_hitter_value = str(scoped_hitter or "").strip()
+
+    if not force_refresh:
+        cached_payload, cached_updated_at = _load_home_trends_snapshot_with_meta(
+            school_code=school,
+            level_bucket=level_bucket,
+            season_start=season_start,
+            season_end=season_end,
+            recent_start=recent_start,
+            recent_end=recent_end,
+            scoped_pitcher=scoped_pitcher_value,
+            scoped_hitter=scoped_hitter_value,
+        )
+        if isinstance(cached_payload, dict):
+            if _home_trends_snapshot_is_stale(cached_updated_at):
+                _kick_home_trends_snapshot_refresh_background(
+                    school_code=school,
+                    season_start=season_start,
+                    season_end=season_end,
+                    recent_start=recent_start,
+                    recent_end=recent_end,
+                    scoped_pitcher=scoped_pitcher_value,
+                    scoped_hitter=scoped_hitter_value,
+                    level_bucket=level_bucket,
+                )
+            return cached_payload
+
+    payload = _compute_home_trends_payload(
+        school_code=school,
+        season_start=season_start,
+        season_end=season_end,
+        recent_start=recent_start,
+        recent_end=recent_end,
+        scoped_pitcher=scoped_pitcher_value,
+        scoped_hitter=scoped_hitter_value,
+        level_bucket=level_bucket,
+    )
+    _save_home_trends_snapshot(
+        school_code=school,
+        level_bucket=level_bucket,
+        season_start=season_start,
+        season_end=season_end,
+        recent_start=recent_start,
+        recent_end=recent_end,
+        scoped_pitcher=scoped_pitcher_value,
+        scoped_hitter=scoped_hitter_value,
+        payload=payload,
+    )
+    return payload
+
+
 @app.get("/v1/pitching/overview", response_model=PitchingOverviewResponse)
 def pitching_overview(
     school_code: str = Query(..., min_length=1),
@@ -15037,6 +16039,8 @@ def pitching_overview(
         "bullpen": "Bullpen",
         "live": "Live",
         "banny": "Banny",
+        "jared's dashboard": "Banny",
+        "jareds dashboard": "Banny",
         "usage": "Usage",
         "raw data": "Raw Data",
         "batted ball data": "Batted Ball Data",
@@ -18185,6 +19189,27 @@ def hitting_overview(
     mode_map = {"Results": "Hitting Results", "Swing Decisions": "Swing Decisions", "Batted Ball Data": "Batted Ball Data", "Custom": "Custom"}
     table_mode_mapped = mode_map.get(mode_raw, "Results")
     split_by = (split_by or "Pitch Types").strip() or "Pitch Types"
+    custom_rollup_unsafe_columns = {
+        "FPS(FB)%",
+        "FPS(OS)%",
+        "Called-S%",
+        "Take%",
+        "Chase%",
+        "GoZoneSw%",
+        "IZswing%",
+        "EdgeSwing%",
+        "PosSD%",
+        "Swings",
+        "Takes",
+        "Called-S",
+        "Chases",
+        "IZswings",
+        "FPS",
+        "EdgeSwings",
+        "PosSD",
+        "GoZoneSw",
+    }
+    force_raw_custom = mode_raw == "Custom" and any(col in custom_rollup_unsafe_columns for col in selected_custom_columns)
     selected_hitter_values = _parse_name_list(hitter)
     selected_opp_pitcher_values = _parse_name_list(opp_pitcher)
     league_rollup_candidate = False
@@ -18205,6 +19230,8 @@ def hitting_overview(
         )
         large_window = bool(span_days and span_days > 14)
         league_rollup_candidate = large_window and league_all_selection and (not chart_only)
+        if force_raw_custom:
+            league_rollup_candidate = False
         if league_rollup_candidate:
             include_chart_points = False
             selected_in_zone = []
@@ -18227,6 +19254,7 @@ def hitting_overview(
             if split_by not in {
                 "All",
                 "Pitch Types",
+                "Batter",
                 "Pitcher Hand",
                 "Batter Hand",
                 "Count",

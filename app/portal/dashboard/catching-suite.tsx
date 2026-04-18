@@ -935,6 +935,7 @@ export default function CatchingSuite() {
         { value: 'Results', label: 'Results' },
         { value: 'Bullpen', label: 'Bullpen' },
         { value: 'Live', label: 'Live' },
+        { value: 'Banny', label: "Jared's Dashboard" },
         { value: 'Usage', label: 'Usage' },
         { value: 'Raw Data', label: 'Raw Data' },
         { value: 'Batted Ball Data', label: 'Batted Ball Data' },
