@@ -9724,6 +9724,7 @@ def _try_pro_pitching_overview_rollup(
     include_row_pitches: bool,
     include_trend_rows: bool,
 ) -> Optional[PitchingOverviewResponse]:
+    _rollup_perf_started = time.perf_counter()
     if school_code != "PRO":
         return None
     today = date.today()
@@ -10385,6 +10386,7 @@ def _try_pro_hitting_overview_rollup(
     selected_custom_columns: List[str],
     venue_filter: Optional[str],
 ) -> Optional[Dict[str, Any]]:
+    _rollup_perf_started = time.perf_counter()
     if school_code != "PRO":
         return None
     if include_chart_points:
@@ -11427,15 +11429,83 @@ def _pro_api_fetch_game_rows(game_pk: int, session_date_hint: Optional[date] = N
 
 
 def _pro_row_unique_key(row: Dict[str, Any]) -> tuple:
-    return (
-        str(row.get("session_date") or ""),
-        int(row.get("game_pk") or 0),
-        int(row.get("at_bat_index") or 0),
-        int(row.get("event_index") or 0),
-        int(row.get("pitch_number") or 0),
-        str(row.get("pitcher") or ""),
-        str(row.get("batter") or ""),
-    )
+    return _pro_pitch_event_identity_key(row)
+
+
+def _pro_coerce_date(value: Any) -> Optional[date]:
+    if isinstance(value, date):
+        return value
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw[:10])
+    except Exception:
+        return None
+
+
+def _pro_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    return False
+
+
+def _pro_pitch_event_identity_key(row: Dict[str, Any]) -> tuple[Any, ...]:
+    game_pk = int(row.get("game_pk") or 0)
+    at_bat_index = int(row.get("at_bat_index") or 0)
+    event_index = int(row.get("event_index") or 0)
+    pitch_number = int(row.get("pitch_number") or row.get("pitch_no") or 0)
+    pitcher_key = _normalize_name_key(str(row.get("pitcher") or ""))
+    batter_key = _normalize_name_key(str(row.get("batter") or ""))
+    if game_pk > 0 and at_bat_index > 0 and (event_index > 0 or pitch_number > 0):
+        return ("game", game_pk, at_bat_index, event_index, pitch_number, pitcher_key, batter_key)
+    pitch_uid = str(row.get("pitch_uid") or "").strip()
+    if pitch_uid:
+        return ("uid", pitch_uid)
+    pitch_event_id = int(row.get("pitch_event_id") or row.get("id") or 0)
+    if game_pk > 0 and pitch_event_id > 0:
+        return ("gameid", game_pk, pitch_event_id)
+    session_key = str(row.get("session_date") or "").strip()
+    return ("fallback", session_key, pitch_event_id, pitcher_key, batter_key)
+
+
+def _pro_merge_duplicate_row(existing: Dict[str, Any], incoming: Dict[str, Any]) -> None:
+    existing_dt = _pro_coerce_date(existing.get("session_date"))
+    incoming_dt = _pro_coerce_date(incoming.get("session_date"))
+    if existing_dt is None and incoming_dt is not None:
+        existing["session_date"] = incoming_dt
+    elif existing_dt is not None and incoming_dt is not None and incoming_dt < existing_dt:
+        existing["session_date"] = incoming_dt
+
+    for stat_key in ("official_earned_runs", "official_outs_recorded"):
+        cur_v = existing.get(stat_key)
+        nxt_v = incoming.get(stat_key)
+        if _is_num(cur_v) and _is_num(nxt_v):
+            existing[stat_key] = max(float(cur_v), float(nxt_v))
+        elif not _is_num(cur_v) and _is_num(nxt_v):
+            existing[stat_key] = nxt_v
+
+    for key, value in incoming.items():
+        if key == "session_date":
+            continue
+        if _pro_missing_value(existing.get(key)) and not _pro_missing_value(value):
+            existing[key] = value
+
+
+def _dedupe_pro_pitch_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not rows:
+        return []
+    deduped: Dict[tuple[Any, ...], Dict[str, Any]] = {}
+    for row in rows:
+        key = _pro_pitch_event_identity_key(row)
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = dict(row)
+            continue
+        _pro_merge_duplicate_row(existing, row)
+    return list(deduped.values())
 
 
 def _pro_api_rows_cache_key(start_date: date, end_date: date, sport_ids: List[int], nontracked_aaa_only: bool) -> str:
@@ -11519,10 +11589,7 @@ def _pro_fetch_api_rows_window(
                         if pitch_key in tracked_keys or bat_key in tracked_keys:
                             continue
                     out.append(row)
-        dedup: Dict[tuple, Dict[str, Any]] = {}
-        for row in out:
-            dedup[_pro_row_unique_key(row)] = row
-        rows = list(dedup.values())
+        rows = _dedupe_pro_pitch_rows(out)
         _pro_api_rows_cache_set(cache_key, rows)
         return rows
     finally:
@@ -11733,13 +11800,8 @@ def _pro_max_session_date_in_rows(rows: List[Dict[str, Any]]) -> Optional[date]:
     return max_dt
 
 
-def _pro_merge_pitch_key(row: Dict[str, Any]) -> tuple[str, int, int, int]:
-    return (
-        str(row.get("session_date") or ""),
-        int(row.get("game_pk") or 0),
-        int(row.get("at_bat_index") or 0),
-        int(row.get("event_index") or 0),
-    )
+def _pro_merge_pitch_key(row: Dict[str, Any]) -> tuple[Any, ...]:
+    return _pro_pitch_event_identity_key(row)
 
 
 def _pro_enrich_row_from_api_match(existing: Dict[str, Any], incoming: Dict[str, Any]) -> None:
@@ -13276,6 +13338,7 @@ def _pro_pitching_overview(
                 rows = list(merged.values())
         except Exception:
             pass
+    rows = _dedupe_pro_pitch_rows(rows)
 
     # Keep Stuff+ scale consistent between leaderboard and single-player views:
     # compute pitch-type Stuff baselines from the broader level/date slice, not the
@@ -14928,6 +14991,7 @@ def _pro_hitting_overview(
                 rows = list(merged.values())
         except Exception:
             pass
+    rows = _dedupe_pro_pitch_rows(rows)
 
     for row in rows:
         desc_norm = _pro_norm_token(row.get("description_raw"))

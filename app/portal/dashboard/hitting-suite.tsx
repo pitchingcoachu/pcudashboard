@@ -1897,7 +1897,7 @@ export default function HittingSuite({
   const [gameLogSortColumn, setGameLogSortColumn] = useState('Date');
   const [gameLogSortDirection, setGameLogSortDirection] = useState<SortDirection>('desc');
   const [pinnedGameLogKeys, setPinnedGameLogKeys] = useState<Set<string>>(new Set());
-  const [enableTableColors, setEnableTableColors] = useState(true);
+  const [enableTableColors, setEnableTableColors] = useState(false);
   const [enableGameLogColors, setEnableGameLogColors] = useState(true);
   const autoFallbackAppliedRef = useRef(false);
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: HittingFiltersPayload }>());
@@ -2001,6 +2001,7 @@ export default function HittingSuite({
   }, [isMobileView]);
 
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
+  const showSecondarySidebar = !isSidebarHidden && dashboardPage !== 'Swing Data' && dashboardPage !== 'Leaderboard';
   const hasSpecificHitterSelection = hitter && hitter !== 'All';
   const canRunGameLog = Boolean(hasSpecificHitterSelection || (teamType && teamType !== 'All'));
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Batter Team' : 'Batter') : splitBy;
@@ -2266,7 +2267,7 @@ export default function HittingSuite({
         params.set('level', level);
       }
     }
-    if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
+    if (oppPitcher && oppPitcher !== 'All' && !strictProLeaderboard) params.set('opp_pitcher', oppPitcher);
     if (hand && hand !== 'All' && !strictProLeaderboard) params.set('hand', hand);
     if (batterSide && batterSide !== 'All' && !strictProLeaderboard) params.set('batter_side', batterSide);
     if (venue && venue !== 'All' && !strictProLeaderboard) params.set('venue', venue);
@@ -3494,7 +3495,7 @@ export default function HittingSuite({
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
       <div
-        className={`portal-dashboard-suite-layout${!isSidebarHidden && dashboardPage !== 'Swing Data' ? ' portal-dashboard-suite-layout--double' : ''}`}
+        className={`portal-dashboard-suite-layout${showSecondarySidebar ? ' portal-dashboard-suite-layout--double' : ''}`}
         style={isSidebarHidden ? { gridTemplateColumns: 'minmax(0, 1fr)' } : undefined}
       >
         {!isSidebarHidden ? (
@@ -3634,7 +3635,7 @@ export default function HittingSuite({
           </article>
         ) : null}
 
-        {!isSidebarHidden && dashboardPage !== 'Swing Data' ? (
+        {showSecondarySidebar ? (
           <article
             className="portal-admin-card portal-dashboard-sidebar"
             style={dashboardPage === 'AB Report' ? { alignContent: 'start', height: 'fit-content', alignSelf: 'start' } : { alignContent: 'start' }}
@@ -3870,7 +3871,7 @@ export default function HittingSuite({
             style={{
               marginBottom: '0.8rem',
               gridTemplateColumns: isLeaderboardPage
-                ? (isLeague ? 'repeat(2, minmax(160px, 260px))' : 'minmax(160px, 260px)')
+                ? ((isLeague || isPro) ? 'repeat(2, minmax(160px, 260px))' : 'minmax(160px, 260px)')
                 : 'repeat(2, minmax(160px, 260px))',
             }}
           >

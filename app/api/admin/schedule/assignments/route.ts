@@ -2,8 +2,9 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
-import { addProgramItem, getPlayerByIdInOrganization, listProgramItemsForPlayerByDateRange } from '../../../../../lib/training-db';
+import { addProgramItem, listProgramItemsForPlayerByDateRange } from '../../../../../lib/training-db';
 import { canManagePlayer } from '../../../../../lib/portal-access';
+import { logApiTiming } from '../../../../../lib/request-timing';
 
 function parseDate(value: string): string | null {
   const trimmed = value.trim();
@@ -12,41 +13,49 @@ function parseDate(value: string): string | null {
 }
 
 export async function GET(request: Request) {
+  const startedAtMs = Date.now();
+  const finish = (status: number, payload: Record<string, unknown>, meta?: Record<string, unknown>) => {
+    logApiTiming({ route: 'admin.schedule.assignments.GET', startedAtMs, status, meta });
+    return NextResponse.json(payload, { status });
+  };
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (!session) return finish(401, { error: 'Unauthorized' });
+  if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
   const url = new URL(request.url);
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
   const startDate = parseDate(url.searchParams.get('startDate') ?? '');
   const endDate = parseDate(url.searchParams.get('endDate') ?? '');
   if (!Number.isFinite(playerId) || playerId <= 0 || !startDate || !endDate) {
-    return NextResponse.json({ error: 'playerId, startDate, and endDate are required.' }, { status: 400 });
+    return finish(400, { error: 'playerId, startDate, and endDate are required.' });
   }
   const organizationId = resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) {
-    return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });
+    return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }
   const allowed = await canManagePlayer(session, playerId);
-  if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  const player = await getPlayerByIdInOrganization({ organizationId, playerId });
-  if (!player) return NextResponse.json({ error: 'Player not found.' }, { status: 404 });
+  if (!allowed) return finish(403, { error: 'Forbidden' });
 
   const items = await listProgramItemsForPlayerByDateRange({ playerId, startDate, endDate });
-  return NextResponse.json({ items });
+  return finish(200, { items }, { playerId, startDate, endDate, count: Array.isArray(items) ? items.length : 0 });
 }
 
 export async function POST(request: Request) {
+  const startedAtMs = Date.now();
+  const finish = (status: number, payload: Record<string, unknown>, meta?: Record<string, unknown>) => {
+    logApiTiming({ route: 'admin.schedule.assignments.POST', startedAtMs, status, meta });
+    return NextResponse.json(payload, { status });
+  };
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (!session) return finish(401, { error: 'Unauthorized' });
+  if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
   const body = (await request.json().catch(() => null)) as
     | { playerId?: number; dayDate?: string; workoutId?: number; programName?: string }
     | null;
-  if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+  if (!body) return finish(400, { error: 'Invalid JSON body.' });
 
   const playerId = Number(body.playerId ?? 0);
   const dayDate = parseDate(String(body.dayDate ?? ''));
@@ -55,15 +64,13 @@ export async function POST(request: Request) {
   const userId = session.userId ?? 0;
 
   if (organizationId <= 0 || userId <= 0) {
-    return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });
+    return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }
   if (!Number.isFinite(playerId) || playerId <= 0 || !dayDate || !Number.isFinite(workoutId) || workoutId <= 0) {
-    return NextResponse.json({ error: 'playerId, dayDate, and workoutId are required.' }, { status: 400 });
+    return finish(400, { error: 'playerId, dayDate, and workoutId are required.' });
   }
   const allowed = await canManagePlayer(session, playerId);
-  if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  const player = await getPlayerByIdInOrganization({ organizationId, playerId });
-  if (!player) return NextResponse.json({ error: 'Player not found.' }, { status: 404 });
+  if (!allowed) return finish(403, { error: 'Forbidden' });
 
   const result = await addProgramItem({
     organizationId,
@@ -75,6 +82,6 @@ export async function POST(request: Request) {
     programName: String(body.programName ?? 'Current Program'),
   });
 
-  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
-  return NextResponse.json({ ok: true });
+  if (!result.ok) return finish(400, { error: result.error });
+  return finish(200, { ok: true }, { playerId, dayDate, workoutId });
 }

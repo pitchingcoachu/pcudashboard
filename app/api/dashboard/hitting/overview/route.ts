@@ -35,6 +35,11 @@ function parseIsoDate(value: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+function isTruthy(value: string): boolean {
+  const raw = String(value ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
 export async function GET(request: Request) {
   const routeStartedAt = Date.now();
   const cookieStore = await cookies();
@@ -131,6 +136,9 @@ export async function GET(request: Request) {
     !hitterParam &&
     !oppPitcher &&
     (!teamType || teamType.toLowerCase() === 'all');
+  const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
+  const isProLeaderboardSplit = isPro && (splitBy === 'Batter' || splitBy === 'Batter Team');
+  const shouldForceProLeaderboardRollupShape = isProLeaderboardSplit && !isTruthy(chartOnly);
   if (!includeChartPoints && broadScope && daySpan >= 21 && !chartOnly) {
     url.searchParams.set('include_chart_points', '0');
   }
@@ -144,6 +152,41 @@ export async function GET(request: Request) {
     const maxLimit = broadScope ? 600 : 2000;
     const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, maxLimit) : maxLimit;
     url.searchParams.set('chart_points_limit', String(cappedLimit));
+  }
+  if (shouldForceProLeaderboardRollupShape) {
+    url.searchParams.set('team_type', 'All');
+    url.searchParams.set('level', 'MLB');
+    url.searchParams.set('table_mode', 'Results');
+    url.searchParams.set('split_by', splitBy === 'Batter Team' ? 'Batter Team' : 'Batter');
+    url.searchParams.set('include_chart_points', '0');
+    const dropKeys = [
+      'opp_pitcher',
+      'hand',
+      'batter_side',
+      'venue',
+      'custom_columns',
+      'in_zone',
+      'pitch_types',
+      'zone_locations',
+      'pitch_results',
+      'count_filter',
+      'after_count_filter',
+      'bip_result',
+      'velo_min',
+      'velo_max',
+      'ivb_min',
+      'ivb_max',
+      'hb_min',
+      'hb_max',
+      'pc_min',
+      'pc_max',
+      'chart_only',
+      'chart_points_limit',
+      'recent_pa_mode',
+      'recent_pa_count',
+      'recent_pa_ignore_dates',
+    ] as const;
+    for (const key of dropKeys) url.searchParams.delete(key);
   }
   const cachePolicy = resolveOverviewCachePolicy(schoolCode);
   const isGameSplit = splitBy === 'Game';
@@ -159,6 +202,41 @@ export async function GET(request: Request) {
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
     if (result.status < 200 || result.status >= 300) {
+      const shouldFallbackToLeanProLeaderboard =
+        isPro &&
+        (splitBy === 'Batter' || splitBy === 'Batter Team') &&
+        !isTruthy(chartOnly);
+      if (shouldFallbackToLeanProLeaderboard && result.status >= 500) {
+        const fallbackUrl = new URL(`${apiBase}/v1/hitting/overview`);
+        fallbackUrl.searchParams.set('school_code', schoolCode);
+        if (startDate) fallbackUrl.searchParams.set('start_date', startDate);
+        if (endDate) fallbackUrl.searchParams.set('end_date', endDate);
+        fallbackUrl.searchParams.set('team_type', 'All');
+        fallbackUrl.searchParams.set('level', 'MLB');
+        fallbackUrl.searchParams.set('table_mode', 'Results');
+        fallbackUrl.searchParams.set('split_by', splitBy === 'Batter Team' ? 'Batter Team' : 'Batter');
+        fallbackUrl.searchParams.set('include_chart_points', '0');
+        const fallback = await fetchDashboardJsonWithCache({
+          cacheKey: `hitting:overview:pro-safe-leaderboard:${fallbackUrl.toString()}`,
+          ttlMs: cachePolicy.ttlMs,
+          staleTtlMs: cachePolicy.staleTtlMs,
+          timeoutMs: resolveOverviewTimeoutMs(schoolCode),
+          retries: resolveOverviewRetries(schoolCode),
+          fetcher: () => fetch(fallbackUrl.toString(), { cache: 'no-store' }),
+        });
+        if (fallback.status >= 200 && fallback.status < 300) {
+          return NextResponse.json(fallback.payload, {
+            headers: {
+              ...RESPONSE_CACHE_HEADERS,
+              'x-dashboard-cache': fallback.cached ? 'HIT' : 'MISS',
+              'x-dashboard-cache-source': fallback.source,
+              'x-dashboard-upstream-ms': String(fallback.durationMs),
+              'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
+              'x-dashboard-fallback': 'pro-leaderboard-safe',
+            },
+          });
+        }
+      }
       const routeError = result.payload.detail ?? result.payload.error;
       const message =
         typeof routeError === 'string' && routeError.trim().length

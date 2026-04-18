@@ -1,10 +1,11 @@
 import Link from 'next/link';
 import SchoolAccessCard from './school-access-card';
 import {
-  listClientsByOrganization,
+  getClientCountByOrganization,
+  getExerciseCountByOrganization,
+  getWorkoutCountByOrganization,
+  listClientStatusCountsByOrganization,
   listCoachesByOrganization,
-  listExercisesByOrganization,
-  listWorkoutsByOrganization,
   resolveOrganizationIdForSchool,
 } from '../../../lib/training-db';
 import { requirePortalSession } from '../../../lib/portal-session';
@@ -38,22 +39,25 @@ export default async function AdminHomePage() {
   ]);
   const clientManagementOrganizationId = canAccessClientManagement ? resolvedClientManagementOrganizationId : 0;
   const programmingOrganizationId = canAccessProgramming ? resolvedProgrammingOrganizationId : 0;
-  const [clients, coaches, exercises, workouts] = await Promise.all([
-    clientManagementOrganizationId > 0 ? listClientsByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
+  const [visibleClientCount, coaches, exerciseCount, workoutCount, coachStatusCounts] = await Promise.all([
+    clientManagementOrganizationId > 0
+      ? getClientCountByOrganization({
+          organizationId: clientManagementOrganizationId,
+          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+        })
+      : Promise.resolve(0),
     clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
-    programmingOrganizationId > 0 ? listExercisesByOrganization(programmingOrganizationId) : Promise.resolve([]),
-    programmingOrganizationId > 0 ? listWorkoutsByOrganization(programmingOrganizationId) : Promise.resolve([]),
+    programmingOrganizationId > 0 ? getExerciseCountByOrganization(programmingOrganizationId) : Promise.resolve(0),
+    programmingOrganizationId > 0 ? getWorkoutCountByOrganization(programmingOrganizationId) : Promise.resolve(0),
+    session.role === 'coach' && clientManagementOrganizationId > 0
+      ? listClientStatusCountsByOrganization({
+          organizationId: clientManagementOrganizationId,
+          assignedCoachUserId: session.userId ?? 0,
+        })
+      : Promise.resolve([]),
   ]);
-  const visibleClients =
-    session.role === 'coach' ? clients.filter((client) => client.assignedCoachUserId === session.userId) : clients;
-  const statusCounts = visibleClients.reduce<Record<string, number>>((acc, client) => {
-    const key = (client.status || 'unknown').trim() || 'unknown';
-    acc[key] = (acc[key] ?? 0) + 1;
-    return acc;
-  }, {});
-  const statusSummary = Object.entries(statusCounts)
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([status, count]) => `${status}: ${count}`)
+  const statusSummary = coachStatusCounts
+    .map(({ status, count }) => `${status}: ${count}`)
     .join(' | ');
   return (
     <div className="portal-admin-grid">
@@ -76,7 +80,7 @@ export default async function AdminHomePage() {
       {session.role === 'admin' && canAccessClientManagement ? (
         <article className="portal-admin-card">
           <h2>Players</h2>
-          <p>{visibleClients.length} total athletes with plans and login access.</p>
+          <p>{visibleClientCount} total athletes with plans and login access.</p>
           <Link href="/portal/admin/clients" className="btn btn-primary as-link">
             Manage Players
           </Link>
@@ -85,7 +89,7 @@ export default async function AdminHomePage() {
       {session.role === 'coach' ? (
         <article className="portal-admin-card">
           <h2>Assigned Players</h2>
-          <p>{visibleClients.length} players assigned to your coaching account.</p>
+          <p>{visibleClientCount} players assigned to your coaching account.</p>
           <Link href="/portal/admin/schedule" className="btn btn-primary as-link">
             Open Schedule
           </Link>
@@ -113,14 +117,14 @@ export default async function AdminHomePage() {
         <>
           <article className="portal-admin-card">
             <h2>Exercise Library</h2>
-            <p>{exercises.length} exercises and drills available for assignments.</p>
+            <p>{exerciseCount} exercises and drills available for assignments.</p>
             <Link href="/portal/admin/exercises" className="btn btn-primary as-link">
               Manage Exercises
             </Link>
           </article>
           <article className="portal-admin-card">
             <h2>Workout Library</h2>
-            <p>{workouts.length} workouts available to assign to players.</p>
+            <p>{workoutCount} workouts available to assign to players.</p>
             <Link href="/portal/admin/workouts" className="btn btn-primary as-link">
               Manage Workouts
             </Link>

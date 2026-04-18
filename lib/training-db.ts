@@ -50,6 +50,15 @@ export type PlayerChoiceRow = {
   assignedCoachUserId: number | null;
 };
 
+export type PlayerSummaryRow = {
+  playerId: number;
+  fullName: string;
+  assignedCoachUserId: number | null;
+  throwsHand: string | null;
+  batsHand: string | null;
+  position: string | null;
+};
+
 export type WorkoutChoiceRow = {
   id: number;
   name: string;
@@ -550,6 +559,123 @@ function parseAssessmentNotesFromLog(value: string | null): string[] {
   }
 }
 
+type TrainingReadCacheEntry = {
+  expiresAt: number;
+  value: unknown;
+};
+
+const TRAINING_READ_CACHE_KEY = '__pcu_training_read_cache_v1__';
+const TRAINING_READ_INFLIGHT_KEY = '__pcu_training_read_inflight_v1__';
+const TRAINING_READ_CACHE_MAX_ENTRIES = 800;
+
+function _trainingReadCacheStore(): Map<string, TrainingReadCacheEntry> {
+  const globalRef = globalThis as typeof globalThis & {
+    [TRAINING_READ_CACHE_KEY]?: Map<string, TrainingReadCacheEntry>;
+  };
+  if (!globalRef[TRAINING_READ_CACHE_KEY]) {
+    globalRef[TRAINING_READ_CACHE_KEY] = new Map<string, TrainingReadCacheEntry>();
+  }
+  return globalRef[TRAINING_READ_CACHE_KEY]!;
+}
+
+function _trainingReadInflightStore(): Map<string, Promise<unknown>> {
+  const globalRef = globalThis as typeof globalThis & {
+    [TRAINING_READ_INFLIGHT_KEY]?: Map<string, Promise<unknown>>;
+  };
+  if (!globalRef[TRAINING_READ_INFLIGHT_KEY]) {
+    globalRef[TRAINING_READ_INFLIGHT_KEY] = new Map<string, Promise<unknown>>();
+  }
+  return globalRef[TRAINING_READ_INFLIGHT_KEY]!;
+}
+
+function _trainingClone<T>(value: T): T {
+  try {
+    if (typeof structuredClone === 'function') return structuredClone(value);
+  } catch {
+    // Fallback below.
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function _trainingPruneExpired(now: number) {
+  const cache = _trainingReadCacheStore();
+  for (const [key, entry] of cache.entries()) {
+    if (entry.expiresAt <= now) cache.delete(key);
+  }
+}
+
+function _trainingPruneOldest() {
+  const cache = _trainingReadCacheStore();
+  if (cache.size <= TRAINING_READ_CACHE_MAX_ENTRIES) return;
+  const ordered = Array.from(cache.entries()).sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+  const removeCount = Math.max(1, cache.size - TRAINING_READ_CACHE_MAX_ENTRIES);
+  for (let idx = 0; idx < removeCount; idx += 1) {
+    cache.delete(ordered[idx][0]);
+  }
+}
+
+async function _withTrainingReadCache<T>(cacheKey: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const ttl = Math.max(250, ttlMs);
+  _trainingPruneExpired(now);
+  const cache = _trainingReadCacheStore();
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return _trainingClone(cached.value as T);
+  }
+  const inflight = _trainingReadInflightStore();
+  const existing = inflight.get(cacheKey);
+  if (existing) {
+    return _trainingClone((await existing) as T);
+  }
+  const run = (async () => {
+    try {
+      const value = await loader();
+      cache.set(cacheKey, { expiresAt: Date.now() + ttl, value: _trainingClone(value) });
+      _trainingPruneOldest();
+      return value;
+    } finally {
+      inflight.delete(cacheKey);
+    }
+  })();
+  inflight.set(cacheKey, run as Promise<unknown>);
+  return _trainingClone((await run) as T);
+}
+
+function _invalidateTrainingReadCache(prefixes: string[]) {
+  if (!prefixes.length) return;
+  const cache = _trainingReadCacheStore();
+  for (const key of Array.from(cache.keys())) {
+    if (prefixes.some((prefix) => key.startsWith(prefix))) {
+      cache.delete(key);
+    }
+  }
+}
+
+function _invalidateTrainingReadCacheForOrganization(organizationId: number) {
+  const org = Number(organizationId);
+  if (!Number.isFinite(org) || org <= 0) return;
+  _invalidateTrainingReadCache([
+    `player_choices:${org}:`,
+    `player_summaries:${org}:`,
+    `client_count:${org}:`,
+    `client_status_counts:${org}:`,
+    `exercise_count:${org}`,
+    `workout_count:${org}`,
+    `workout_choices:${org}`,
+    `schedule_templates:${org}`,
+  ]);
+}
+
+function _invalidateTrainingReadCacheForPlayer(playerId: number) {
+  const pid = Number(playerId);
+  if (!Number.isFinite(pid) || pid <= 0) return;
+  _invalidateTrainingReadCache([
+    `exercise_history:${pid}:`,
+    `tracked_exercises:${pid}`,
+  ]);
+}
+
 export async function listClientsByOrganization(organizationId: number): Promise<ClientRow[]> {
   const paged = await listClientsByOrganizationPaged({
     organizationId,
@@ -736,60 +862,202 @@ export async function listPlayerChoicesByOrganization(input: {
 }): Promise<PlayerChoiceRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
-  const pool = getDbPool();
   const assignedCoachUserId = Number(input.assignedCoachUserId ?? 0);
   const useCoachFilter = Number.isFinite(assignedCoachUserId) && assignedCoachUserId > 0;
-  const result = await pool.query<{
-    player_id: number;
-    full_name: string;
-    assigned_coach_user_id: number | null;
-  }>(
-    `
-      SELECT p.id AS player_id, p.full_name, p.assigned_coach_user_id
-      FROM players p
-      WHERE p.organization_id = $1
-      ${useCoachFilter ? 'AND p.assigned_coach_user_id = $2' : ''}
-      ORDER BY p.full_name ASC
-    `,
-    useCoachFilter ? [input.organizationId, assignedCoachUserId] : [input.organizationId]
-  );
-  return result.rows.map((row) => ({
-    playerId: row.player_id,
-    fullName: row.full_name,
-    assignedCoachUserId: row.assigned_coach_user_id,
-  }));
+  const cacheKey = `player_choices:${input.organizationId}:${useCoachFilter ? assignedCoachUserId : 0}`;
+  return _withTrainingReadCache(cacheKey, 20_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{
+      player_id: number;
+      full_name: string;
+      assigned_coach_user_id: number | null;
+    }>(
+      `
+        SELECT p.id AS player_id, p.full_name, p.assigned_coach_user_id
+        FROM players p
+        WHERE p.organization_id = $1
+        ${useCoachFilter ? 'AND p.assigned_coach_user_id = $2' : ''}
+        ORDER BY p.full_name ASC
+      `,
+      useCoachFilter ? [input.organizationId, assignedCoachUserId] : [input.organizationId]
+    );
+    return result.rows.map((row) => ({
+      playerId: row.player_id,
+      fullName: row.full_name,
+      assignedCoachUserId: row.assigned_coach_user_id,
+    }));
+  });
+}
+
+export async function listPlayerSummariesByOrganization(input: {
+  organizationId: number;
+  assignedCoachUserId?: number | null;
+}): Promise<PlayerSummaryRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const assignedCoachUserId = Number(input.assignedCoachUserId ?? 0);
+  const useCoachFilter = Number.isFinite(assignedCoachUserId) && assignedCoachUserId > 0;
+  const cacheKey = `player_summaries:${input.organizationId}:${useCoachFilter ? assignedCoachUserId : 0}`;
+  return _withTrainingReadCache(cacheKey, 20_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{
+      player_id: number;
+      full_name: string;
+      assigned_coach_user_id: number | null;
+      throws_hand: string | null;
+      bats_hand: string | null;
+      position: string | null;
+    }>(
+      `
+        SELECT
+          p.id AS player_id,
+          p.full_name,
+          p.assigned_coach_user_id,
+          p.throws_hand,
+          p.bats_hand,
+          p.position
+        FROM players p
+        WHERE p.organization_id = $1
+        ${useCoachFilter ? 'AND p.assigned_coach_user_id = $2' : ''}
+        ORDER BY p.full_name ASC
+      `,
+      useCoachFilter ? [input.organizationId, assignedCoachUserId] : [input.organizationId]
+    );
+    return result.rows.map((row) => ({
+      playerId: row.player_id,
+      fullName: row.full_name,
+      assignedCoachUserId: row.assigned_coach_user_id,
+      throwsHand: row.throws_hand,
+      batsHand: row.bats_hand,
+      position: row.position,
+    }));
+  });
+}
+
+export async function getClientCountByOrganization(input: {
+  organizationId: number;
+  assignedCoachUserId?: number | null;
+}): Promise<number> {
+  if (!isDatabaseConfigured()) return 0;
+  await ensureTrainingDbReady();
+  const assignedCoachUserId = Number(input.assignedCoachUserId ?? 0);
+  const useCoachFilter = Number.isFinite(assignedCoachUserId) && assignedCoachUserId > 0;
+  const cacheKey = `client_count:${input.organizationId}:${useCoachFilter ? assignedCoachUserId : 0}`;
+  return _withTrainingReadCache(cacheKey, 15_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{ total_count: string }>(
+      `
+        SELECT COUNT(*)::text AS total_count
+        FROM players p
+        WHERE p.organization_id = $1
+        ${useCoachFilter ? 'AND p.assigned_coach_user_id = $2' : ''}
+      `,
+      useCoachFilter ? [input.organizationId, assignedCoachUserId] : [input.organizationId]
+    );
+    return Number(result.rows[0]?.total_count ?? '0') || 0;
+  });
+}
+
+export async function listClientStatusCountsByOrganization(input: {
+  organizationId: number;
+  assignedCoachUserId?: number | null;
+}): Promise<Array<{ status: string; count: number }>> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const assignedCoachUserId = Number(input.assignedCoachUserId ?? 0);
+  const useCoachFilter = Number.isFinite(assignedCoachUserId) && assignedCoachUserId > 0;
+  const cacheKey = `client_status_counts:${input.organizationId}:${useCoachFilter ? assignedCoachUserId : 0}`;
+  return _withTrainingReadCache(cacheKey, 15_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{ status_key: string; status_count: string }>(
+      `
+        SELECT
+          COALESCE(NULLIF(TRIM(p.status), ''), 'unknown') AS status_key,
+          COUNT(*)::text AS status_count
+        FROM players p
+        WHERE p.organization_id = $1
+        ${useCoachFilter ? 'AND p.assigned_coach_user_id = $2' : ''}
+        GROUP BY status_key
+        ORDER BY status_key ASC
+      `,
+      useCoachFilter ? [input.organizationId, assignedCoachUserId] : [input.organizationId]
+    );
+    return result.rows.map((row) => ({
+      status: row.status_key,
+      count: Number(row.status_count ?? '0') || 0,
+    }));
+  });
 }
 
 export async function listWorkoutChoicesByOrganization(organizationId: number): Promise<WorkoutChoiceRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
-  const pool = getDbPool();
-  const result = await pool.query<{
-    id: number;
-    name: string;
-    category: string;
-    exercise_count: string;
-  }>(
-    `
-      SELECT
-        w.id,
-        w.name,
-        w.category,
-        COUNT(we.id)::text AS exercise_count
-      FROM workout_library w
-      LEFT JOIN workout_exercises we ON we.workout_id = w.id
-      WHERE w.organization_id = $1
-      GROUP BY w.id, w.name, w.category
-      ORDER BY w.name ASC
-    `,
-    [organizationId]
-  );
-  return result.rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    category: row.category,
-    exerciseCount: Number(row.exercise_count ?? '0') || 0,
-  }));
+  const cacheKey = `workout_choices:${organizationId}`;
+  return _withTrainingReadCache(cacheKey, 25_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{
+      id: number;
+      name: string;
+      category: string;
+      exercise_count: string;
+    }>(
+      `
+        SELECT
+          w.id,
+          w.name,
+          w.category,
+          COUNT(we.id)::text AS exercise_count
+        FROM workout_library w
+        LEFT JOIN workout_exercises we ON we.workout_id = w.id
+        WHERE w.organization_id = $1
+        GROUP BY w.id, w.name, w.category
+        ORDER BY w.name ASC
+      `,
+      [organizationId]
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      category: row.category,
+      exerciseCount: Number(row.exercise_count ?? '0') || 0,
+    }));
+  });
+}
+
+export async function getExerciseCountByOrganization(organizationId: number): Promise<number> {
+  if (!isDatabaseConfigured()) return 0;
+  await ensureTrainingDbReady();
+  const cacheKey = `exercise_count:${organizationId}`;
+  return _withTrainingReadCache(cacheKey, 20_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{ total_count: string }>(
+      `
+        SELECT COUNT(*)::text AS total_count
+        FROM exercise_library
+        WHERE organization_id = $1
+      `,
+      [organizationId]
+    );
+    return Number(result.rows[0]?.total_count ?? '0') || 0;
+  });
+}
+
+export async function getWorkoutCountByOrganization(organizationId: number): Promise<number> {
+  if (!isDatabaseConfigured()) return 0;
+  await ensureTrainingDbReady();
+  const cacheKey = `workout_count:${organizationId}`;
+  return _withTrainingReadCache(cacheKey, 20_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{ total_count: string }>(
+      `
+        SELECT COUNT(*)::text AS total_count
+        FROM workout_library
+        WHERE organization_id = $1
+      `,
+      [organizationId]
+    );
+    return Number(result.rows[0]?.total_count ?? '0') || 0;
+  });
 }
 
 export async function listStaffOrganizationIdsByEmail(email: string): Promise<number[]> {
@@ -934,6 +1202,26 @@ export async function isCoachAssignedToPlayer(input: {
       LIMIT 1
     `,
     [input.organizationId, input.playerId, input.coachUserId]
+  );
+  return (result.rowCount ?? 0) === 1;
+}
+
+export async function playerExistsInOrganization(input: {
+  organizationId: number;
+  playerId: number;
+}): Promise<boolean> {
+  if (!isDatabaseConfigured()) return false;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ id: number }>(
+    `
+      SELECT p.id
+      FROM players p
+      WHERE p.organization_id = $1
+        AND p.id = $2
+      LIMIT 1
+    `,
+    [input.organizationId, input.playerId]
   );
   return (result.rowCount ?? 0) === 1;
 }
@@ -1107,6 +1395,7 @@ export async function createClientWithLogin(input: {
     );
 
     await client.query('COMMIT');
+    _invalidateTrainingReadCacheForOrganization(input.organizationId);
     return { ok: true };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1658,6 +1947,7 @@ export async function createExerciseCategory(input: {
     [input.organizationId, name, input.userId]
   );
 
+  _invalidateTrainingReadCacheForOrganization(input.organizationId);
   return { ok: true };
 }
 
@@ -1800,6 +2090,7 @@ export async function createExercise(input: {
     ]
   );
 
+  _invalidateTrainingReadCacheForOrganization(input.organizationId);
   return { ok: true };
 }
 
@@ -1874,6 +2165,7 @@ export async function updateExercise(input: {
   if ((updated.rowCount ?? 0) !== 1) {
     return { ok: false, error: 'Exercise was not found in your organization.' };
   }
+  _invalidateTrainingReadCacheForOrganization(input.organizationId);
   return { ok: true };
 }
 
@@ -1924,6 +2216,7 @@ export async function deleteExercise(input: {
     return { ok: false, error: 'Exercise not found.' };
   }
 
+  _invalidateTrainingReadCacheForOrganization(input.organizationId);
   return { ok: true };
 }
 
@@ -1961,6 +2254,7 @@ export async function deleteWorkout(input: {
     return { ok: false, error: 'Workout not found.' };
   }
 
+  _invalidateTrainingReadCacheForOrganization(input.organizationId);
   return { ok: true };
 }
 
@@ -2101,105 +2395,108 @@ function addDaysIso(value: string, days: number): string {
 export async function listScheduleTemplatesByOrganization(organizationId: number): Promise<ScheduleTemplateRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
-  const pool = getDbPool();
-  const result = await pool.query<{
-    id: number;
-    name: string;
-    created_at: string;
-    updated_at: string;
-    day_id: number | null;
-    day_offset: number | null;
-    item_id: number | null;
-    workout_id: number | null;
-    workout_name: string | null;
-    workout_category: string | null;
-    sort_order: number | null;
-    prescribed_sets: string | null;
-    prescribed_reps: string | null;
-    prescribed_load: string | null;
-    prescribed_notes: string | null;
-  }>(
-    `
-      SELECT
-        t.id,
-        t.name,
-        t.created_at::text,
-        t.updated_at::text,
-        d.id AS day_id,
-        d.day_offset,
-        i.id AS item_id,
-        i.workout_id,
-        w.name AS workout_name,
-        w.category AS workout_category,
-        i.sort_order,
-        i.prescribed_sets,
-        i.prescribed_reps,
-        i.prescribed_load,
-        i.prescribed_notes
-      FROM schedule_templates t
-      LEFT JOIN schedule_template_days d ON d.template_id = t.id
-      LEFT JOIN schedule_template_day_items i ON i.template_day_id = d.id
-      LEFT JOIN workout_library w ON w.id = i.workout_id
-      WHERE t.organization_id = $1
-      ORDER BY t.updated_at DESC, t.id DESC, d.day_offset ASC NULLS LAST, i.sort_order ASC NULLS LAST, i.id ASC NULLS LAST
-    `,
-    [organizationId]
-  );
+  const cacheKey = `schedule_templates:${organizationId}`;
+  return _withTrainingReadCache(cacheKey, 25_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{
+      id: number;
+      name: string;
+      created_at: string;
+      updated_at: string;
+      day_id: number | null;
+      day_offset: number | null;
+      item_id: number | null;
+      workout_id: number | null;
+      workout_name: string | null;
+      workout_category: string | null;
+      sort_order: number | null;
+      prescribed_sets: string | null;
+      prescribed_reps: string | null;
+      prescribed_load: string | null;
+      prescribed_notes: string | null;
+    }>(
+      `
+        SELECT
+          t.id,
+          t.name,
+          t.created_at::text,
+          t.updated_at::text,
+          d.id AS day_id,
+          d.day_offset,
+          i.id AS item_id,
+          i.workout_id,
+          w.name AS workout_name,
+          w.category AS workout_category,
+          i.sort_order,
+          i.prescribed_sets,
+          i.prescribed_reps,
+          i.prescribed_load,
+          i.prescribed_notes
+        FROM schedule_templates t
+        LEFT JOIN schedule_template_days d ON d.template_id = t.id
+        LEFT JOIN schedule_template_day_items i ON i.template_day_id = d.id
+        LEFT JOIN workout_library w ON w.id = i.workout_id
+        WHERE t.organization_id = $1
+        ORDER BY t.updated_at DESC, t.id DESC, d.day_offset ASC NULLS LAST, i.sort_order ASC NULLS LAST, i.id ASC NULLS LAST
+      `,
+      [organizationId]
+    );
 
-  const byTemplate = new Map<number, ScheduleTemplateRow>();
-  const dayMaps = new Map<number, Map<number, ScheduleTemplateDayRow>>();
-  for (const row of result.rows) {
-    const templateId = Number(row.id);
-    if (!byTemplate.has(templateId)) {
-      byTemplate.set(templateId, {
-        id: templateId,
-        name: row.name,
-        totalDays: 0,
-        workoutCount: 0,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        days: [],
-      });
-      dayMaps.set(templateId, new Map());
-    }
-    const template = byTemplate.get(templateId)!;
-    const dayId = Number(row.day_id ?? 0);
-    if (dayId > 0) {
-      const dayMap = dayMaps.get(templateId)!;
-      if (!dayMap.has(dayId)) {
-        dayMap.set(dayId, {
-          id: dayId,
-          dayOffset: Number(row.day_offset ?? 0),
-          items: [],
+    const byTemplate = new Map<number, ScheduleTemplateRow>();
+    const dayMaps = new Map<number, Map<number, ScheduleTemplateDayRow>>();
+    for (const row of result.rows) {
+      const templateId = Number(row.id);
+      if (!byTemplate.has(templateId)) {
+        byTemplate.set(templateId, {
+          id: templateId,
+          name: row.name,
+          totalDays: 0,
+          workoutCount: 0,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          days: [],
         });
+        dayMaps.set(templateId, new Map());
       }
-      const day = dayMap.get(dayId)!;
-      const itemId = Number(row.item_id ?? 0);
-      if (itemId > 0) {
-        day.items.push({
-          id: itemId,
-          workoutId: Number(row.workout_id ?? 0),
-          workoutName: String(row.workout_name ?? 'Workout'),
-          workoutCategory: row.workout_category,
-          sortOrder: Number(row.sort_order ?? 1),
-          prescribedSets: row.prescribed_sets,
-          prescribedReps: row.prescribed_reps,
-          prescribedLoad: row.prescribed_load,
-          prescribedNotes: row.prescribed_notes,
-        });
+      const template = byTemplate.get(templateId)!;
+      const dayId = Number(row.day_id ?? 0);
+      if (dayId > 0) {
+        const dayMap = dayMaps.get(templateId)!;
+        if (!dayMap.has(dayId)) {
+          dayMap.set(dayId, {
+            id: dayId,
+            dayOffset: Number(row.day_offset ?? 0),
+            items: [],
+          });
+        }
+        const day = dayMap.get(dayId)!;
+        const itemId = Number(row.item_id ?? 0);
+        if (itemId > 0) {
+          day.items.push({
+            id: itemId,
+            workoutId: Number(row.workout_id ?? 0),
+            workoutName: String(row.workout_name ?? 'Workout'),
+            workoutCategory: row.workout_category,
+            sortOrder: Number(row.sort_order ?? 1),
+            prescribedSets: row.prescribed_sets,
+            prescribedReps: row.prescribed_reps,
+            prescribedLoad: row.prescribed_load,
+            prescribedNotes: row.prescribed_notes,
+          });
+        }
       }
+      template.workoutCount += Number(row.item_id ?? 0) > 0 ? 1 : 0;
     }
-    template.workoutCount += Number(row.item_id ?? 0) > 0 ? 1 : 0;
-  }
 
-  const templates = Array.from(byTemplate.values());
-  for (const template of templates) {
-    const dayMap = dayMaps.get(template.id);
-    const days = dayMap ? Array.from(dayMap.values()).sort((a, b) => a.dayOffset - b.dayOffset) : [];
-    template.days = days;
-    template.totalDays = days.length > 0 ? days[days.length - 1].dayOffset + 1 : 0;
-  }
-  return templates;
+    const templates = Array.from(byTemplate.values());
+    for (const template of templates) {
+      const dayMap = dayMaps.get(template.id);
+      const days = dayMap ? Array.from(dayMap.values()).sort((a, b) => a.dayOffset - b.dayOffset) : [];
+      template.days = days;
+      template.totalDays = days.length > 0 ? days[days.length - 1].dayOffset + 1 : 0;
+    }
+    return templates;
+  });
 }
 
 export async function saveScheduleTemplate(input: {
@@ -2321,6 +2618,7 @@ export async function saveScheduleTemplate(input: {
     }
 
     await client.query('COMMIT');
+    _invalidateTrainingReadCacheForOrganization(input.organizationId);
     return { ok: true, templateId };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -2342,6 +2640,7 @@ export async function deleteScheduleTemplate(input: {
     [input.templateId, input.organizationId]
   );
   if ((deleted.rowCount ?? 0) !== 1) return { ok: false, error: 'Template not found.' };
+  _invalidateTrainingReadCacheForOrganization(input.organizationId);
   return { ok: true };
 }
 
@@ -2532,6 +2831,7 @@ export async function createWorkout(input: {
       `,
       [input.organizationId, name, category, (input.description ?? '').trim() || null, input.userId]
     );
+    _invalidateTrainingReadCacheForOrganization(input.organizationId);
     return { ok: true };
   }
 
@@ -2606,6 +2906,7 @@ export async function createWorkout(input: {
     }
 
     await client.query('COMMIT');
+    _invalidateTrainingReadCacheForOrganization(input.organizationId);
     return { ok: true };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -2685,6 +2986,7 @@ export async function updateWorkout(input: {
       return { ok: false, error: 'Workout was not found in your organization.' };
     }
     await pool.query(`DELETE FROM workout_exercises WHERE workout_id = $1`, [input.workoutId]);
+    _invalidateTrainingReadCacheForOrganization(input.organizationId);
     return { ok: true };
   }
 
@@ -2770,6 +3072,7 @@ export async function updateWorkout(input: {
     }
 
     await client.query('COMMIT');
+    _invalidateTrainingReadCacheForOrganization(input.organizationId);
     return { ok: true };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -3513,29 +3816,31 @@ export async function listExerciseLoadHistoryForPlayer(input: {
   beforeDate?: string;
   perExerciseLimit?: number;
 }): Promise<Record<number, ExerciseLoadHistoryEntry[]>> {
-  const resultMap: Record<number, ExerciseLoadHistoryEntry[]> = {};
   const exerciseIds = Array.from(new Set(input.exerciseIds.filter((id) => Number.isFinite(id) && id > 0)));
-  if (exerciseIds.length === 0) return resultMap;
-  if (!isDatabaseConfigured()) return resultMap;
+  if (exerciseIds.length === 0) return {};
+  if (!isDatabaseConfigured()) return {};
   await ensureTrainingDbReady();
   const pool = getDbPool();
 
   const beforeDate = (input.beforeDate ?? '').trim();
   const hasBeforeDate = /^\d{4}-\d{2}-\d{2}$/.test(beforeDate);
   const perExerciseLimit = Math.max(1, Math.min(500, input.perExerciseLimit ?? 100));
+  const cacheKey = `exercise_history:${input.playerId}:${hasBeforeDate ? beforeDate : '-'}:${perExerciseLimit}:${exerciseIds.join(',')}`;
+  return _withTrainingReadCache(cacheKey, 10_000, async () => {
+    const resultMap: Record<number, ExerciseLoadHistoryEntry[]> = {};
 
-  const rows = await pool.query<{
-    day_date: string;
-    source_name: string;
-    exercise_id: number | null;
-    prescribed_reps: string | null;
-    rep_measure: 'reps' | 'seconds' | 'distance';
-    tracking_type: string | null;
-    reps_per_side: boolean;
-    performed_load: string | null;
-    workout_exercise_json: unknown;
-  }>(
-    `
+    const rows = await pool.query<{
+      day_date: string;
+      source_name: string;
+      exercise_id: number | null;
+      prescribed_reps: string | null;
+      rep_measure: 'reps' | 'seconds' | 'distance';
+      tracking_type: string | null;
+      reps_per_side: boolean;
+      performed_load: string | null;
+      workout_exercise_json: unknown;
+    }>(
+      `
       WITH history_rows AS (
         SELECT
           COALESCE(d.day_date, h.logged_at::date)::text AS day_date,
@@ -3684,18 +3989,18 @@ export async function listExerciseLoadHistoryForPlayer(input: {
       ORDER BY day_date DESC
       LIMIT 500
     `,
-    [input.playerId, exerciseIds, hasBeforeDate ? beforeDate : null]
-  );
+      [input.playerId, exerciseIds, hasBeforeDate ? beforeDate : null]
+    );
 
-  const limitReached = new Map<number, number>();
-  for (const exerciseId of exerciseIds) {
-    resultMap[exerciseId] = [];
-    limitReached.set(exerciseId, 0);
-  }
+    const limitReached = new Map<number, number>();
+    for (const exerciseId of exerciseIds) {
+      resultMap[exerciseId] = [];
+      limitReached.set(exerciseId, 0);
+    }
 
-  for (const row of rows.rows) {
-    const rowLoads = parseLoadValues(row.performed_load);
-    if (rowLoads.length === 0) continue;
+    for (const row of rows.rows) {
+      const rowLoads = parseLoadValues(row.performed_load);
+      if (rowLoads.length === 0) continue;
 
     if (row.exercise_id && exerciseIds.includes(row.exercise_id)) {
       const current = limitReached.get(row.exercise_id) ?? 0;
@@ -3752,10 +4057,11 @@ export async function listExerciseLoadHistoryForPlayer(input: {
       limitReached.set(exId, current + 1);
     }
 
-    if (Array.from(limitReached.values()).every((count) => count >= perExerciseLimit)) break;
-  }
+      if (Array.from(limitReached.values()).every((count) => count >= perExerciseLimit)) break;
+    }
 
-  return resultMap;
+    return resultMap;
+  });
 }
 
 export async function reorderProgramDayItems(input: {
@@ -4022,6 +4328,7 @@ export async function upsertExerciseLog(input: {
       `,
       [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
     );
+    _invalidateTrainingReadCacheForPlayer(input.playerId);
     return;
   }
 
@@ -4085,6 +4392,7 @@ export async function upsertExerciseLog(input: {
     `,
     [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
   );
+  _invalidateTrainingReadCacheForPlayer(input.playerId);
 }
 
 export async function getPlayerByIdInOrganization(input: {
@@ -4346,6 +4654,7 @@ export async function updatePlayerProfile(input: {
   );
 
   if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
+  _invalidateTrainingReadCacheForOrganization(input.organizationId);
   return { ok: true };
 }
 
@@ -5146,10 +5455,11 @@ export async function listExerciseTrendForPlayer(input: { playerId: number; exer
 export async function listTrackedExercisesForPlayer(input: { playerId: number }): Promise<TrackedExerciseRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
-  const pool = getDbPool();
-
-  const result = await pool.query<{ exercise_id: number; name: string; category: string; tracking_type: string | null }>(
-    `
+  const cacheKey = `tracked_exercises:${input.playerId}`;
+  return _withTrainingReadCache(cacheKey, 20_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{ exercise_id: number; name: string; category: string; tracking_type: string | null }>(
+      `
       WITH history_direct AS (
         SELECT DISTINCT i.exercise_id
         FROM exercise_log_history h
@@ -5228,16 +5538,17 @@ export async function listTrackedExercisesForPlayer(input: { playerId: number })
       FROM all_exercises a
       JOIN exercise_library e ON e.id = a.exercise_id
       ORDER BY e.name ASC
-    `,
-    [input.playerId]
-  );
+      `,
+      [input.playerId]
+    );
 
-  return result.rows.map((row) => ({
-    exerciseId: row.exercise_id,
-    name: row.name,
-    category: row.category,
-    trackingType: normalizeTrackingType(row.tracking_type),
-  }));
+    return result.rows.map((row) => ({
+      exerciseId: row.exercise_id,
+      name: row.name,
+      category: row.category,
+      trackingType: normalizeTrackingType(row.tracking_type),
+    }));
+  });
 }
 
 export async function listAssessmentWorkoutScoresForPlayer(input: {

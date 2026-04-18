@@ -10,7 +10,7 @@ import {
   listAssessmentWorkoutScoresForPlayer,
   listCoachesByOrganization,
   listBodyWeightLogsForPlayer,
-  listClientsByOrganization,
+  listPlayerChoicesByOrganization,
   listPlayerPlanGoalsForPlayer,
   listProgramItemsForPlayerByDateRange,
 } from '../../../lib/training-db';
@@ -167,8 +167,15 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
       []
     ),
     session.role === 'admin' || session.role === 'coach'
-      ? listClientsByOrganization(programmingOrganizationId).then((clients) =>
-          session.role === 'coach' ? clients.filter((client) => client.assignedCoachUserId === session.userId) : clients
+      ? listPlayerChoicesByOrganization({
+          organizationId: programmingOrganizationId,
+          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+        }).then((players) =>
+          players.map((player) => ({
+            playerId: player.playerId,
+            fullName: player.fullName,
+            assignedCoachUserId: player.assignedCoachUserId,
+          }))
         )
       : Promise.resolve([]),
     session.role === 'admin' || session.role === 'coach'

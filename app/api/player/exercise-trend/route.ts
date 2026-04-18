@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { listExerciseTrendForPlayer } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
+import { logApiTiming } from '../../../../lib/request-timing';
 
 async function ensurePlayerAccess(session: { role?: string; organizationId?: number; userId?: number; playerId?: number | null } | null, playerId: number) {
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
@@ -12,25 +13,30 @@ async function ensurePlayerAccess(session: { role?: string; organizationId?: num
 }
 
 export async function GET(request: Request) {
+  const startedAtMs = Date.now();
+  const finish = (status: number, payload: Record<string, unknown>, meta?: Record<string, unknown>) => {
+    logApiTiming({ route: 'player.exercise-trend.GET', startedAtMs, status, meta });
+    return NextResponse.json(payload, { status });
+  };
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session) return finish(401, { error: 'Unauthorized' });
 
   const url = new URL(request.url);
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
   const exerciseId = Number(url.searchParams.get('exerciseId') ?? '0');
 
   if (!Number.isFinite(playerId) || playerId <= 0 || !Number.isFinite(exerciseId) || exerciseId <= 0) {
-    return NextResponse.json({ error: 'Valid playerId and exerciseId are required.' }, { status: 400 });
+    return finish(400, { error: 'Valid playerId and exerciseId are required.' });
   }
 
   const allowed = await ensurePlayerAccess(session, playerId);
-  if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+  if (!allowed.ok) return finish(allowed.status, { error: allowed.error });
 
   const trend = await listExerciseTrendForPlayer({
     playerId: allowed.playerId,
     exerciseId,
   });
 
-  return NextResponse.json({ trend });
+  return finish(200, { trend }, { playerId, exerciseId, points: Array.isArray(trend) ? trend.length : 0 });
 }

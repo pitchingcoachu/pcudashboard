@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getSessionFromCookies } from '../../../../../lib/auth';
+import { canManagePlayer } from '../../../../../lib/portal-access';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
+import { logApiTiming } from '../../../../../lib/request-timing';
 import {
   type ExerciseLoadHistoryEntry,
+  getPlayerByIdInOrganization,
   listBodyWeightLogsForPlayer,
-  listClientsByOrganization,
   listExerciseLoadHistoryForPlayer,
   listTrackedExercisesForPlayer,
 } from '../../../../../lib/training-db';
@@ -49,14 +51,19 @@ function withinRange(day: string, startDate: string, endDate: string): boolean {
 }
 
 export async function GET(request: Request) {
+  const startedAtMs = Date.now();
+  const finish = (status: number, payload: Record<string, unknown>, meta?: Record<string, unknown>) => {
+    logApiTiming({ route: 'admin.testing.data.GET', startedAtMs, status, meta });
+    return NextResponse.json(payload, { status });
+  };
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (!session) return finish(401, { error: 'Unauthorized' });
+  if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
   const organizationId = resolveProgrammingOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
-    return NextResponse.json({ metrics: [], seriesByKey: {} });
+    return finish(200, { metrics: [], seriesByKey: {} });
   }
 
   const url = new URL(request.url);
@@ -71,14 +78,13 @@ export async function GET(request: Request) {
     .filter(Boolean);
 
   if (!Number.isFinite(playerId) || playerId <= 0) {
-    return NextResponse.json({ error: 'Valid playerId is required.' }, { status: 400 });
+    return finish(400, { error: 'Valid playerId is required.' });
   }
 
-  const clients = await listClientsByOrganization(organizationId);
-  const visibleClients =
-    session.role === 'coach' ? clients.filter((client) => client.assignedCoachUserId === (session.userId ?? 0)) : clients;
-  const player = visibleClients.find((client) => client.playerId === playerId);
-  if (!player) return NextResponse.json({ error: 'Player not found.' }, { status: 404 });
+  const allowed = await canManagePlayer(session, playerId);
+  if (!allowed) return finish(404, { error: 'Player not found.' });
+  const player = await getPlayerByIdInOrganization({ organizationId, playerId });
+  if (!player) return finish(404, { error: 'Player not found.' });
 
   const tracked = await listTrackedExercisesForPlayer({ playerId });
   const exerciseMetrics: MetricOption[] = tracked.map((exercise) => ({
@@ -142,9 +148,17 @@ export async function GET(request: Request) {
     seriesByKey[`exercise:${exerciseId}`] = points;
   }
 
-  return NextResponse.json({
-    playerName: player.fullName,
-    metrics,
-    seriesByKey,
-  });
+  return finish(
+    200,
+    {
+      playerName: player.fullName,
+      metrics,
+      seriesByKey,
+    },
+    {
+      playerId,
+      metricKeysCount: metricKeys.length,
+      seriesCount: Object.keys(seriesByKey).length,
+    }
+  );
 }

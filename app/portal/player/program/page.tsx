@@ -7,7 +7,7 @@ import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-
 import {
   getPlayerByIdInOrganization,
   getPlayerForUser,
-  listClientsByOrganization,
+  listPlayerChoicesByOrganization,
   listProgramItemsForPlayerByMonth,
 } from '../../../../lib/training-db';
 import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
@@ -200,9 +200,10 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
 
   const previewClients =
     session.role === 'admin' || session.role === 'coach'
-      ? (await listClientsByOrganization(programmingOrganizationId)).filter(
-          (client) => session.role === 'admin' || client.assignedCoachUserId === session.userId
-        )
+      ? await listPlayerChoicesByOrganization({
+          organizationId: programmingOrganizationId,
+          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+        })
       : [];
   const initialRange = monthRange(month);
 

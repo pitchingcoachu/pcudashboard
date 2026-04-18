@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { deleteScheduleTemplate, listScheduleTemplatesByOrganization, saveScheduleTemplate } from '../../../../../lib/training-db';
+import { logApiTiming } from '../../../../../lib/request-timing';
 
 type TemplateItemInput = {
   workoutId?: number;
@@ -18,35 +19,45 @@ type TemplateDayInput = {
 };
 
 export async function GET() {
+  const startedAtMs = Date.now();
+  const finish = (status: number, payload: Record<string, unknown>, meta?: Record<string, unknown>) => {
+    logApiTiming({ route: 'admin.schedule.templates.GET', startedAtMs, status, meta });
+    return NextResponse.json(payload, { status });
+  };
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (!session) return finish(401, { error: 'Unauthorized' });
+  if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
   const organizationId = resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) {
-    return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });
+    return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }
 
   const templates = await listScheduleTemplatesByOrganization(organizationId);
-  return NextResponse.json({ templates });
+  return finish(200, { templates }, { organizationId, count: Array.isArray(templates) ? templates.length : 0 });
 }
 
 export async function POST(request: Request) {
+  const startedAtMs = Date.now();
+  const finish = (status: number, payload: Record<string, unknown>, meta?: Record<string, unknown>) => {
+    logApiTiming({ route: 'admin.schedule.templates.POST', startedAtMs, status, meta });
+    return NextResponse.json(payload, { status });
+  };
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (!session) return finish(401, { error: 'Unauthorized' });
+  if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
   const body = (await request.json().catch(() => null)) as
     | { templateId?: number; name?: string; days?: TemplateDayInput[] }
     | null;
-  if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+  if (!body) return finish(400, { error: 'Invalid JSON body.' });
 
   const organizationId = resolveProgrammingOrganizationId(session);
   const userId = Number(session.userId ?? 0);
   if (organizationId <= 0 || userId <= 0) {
-    return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });
+    return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }
 
   const result = await saveScheduleTemplate({
@@ -66,28 +77,33 @@ export async function POST(request: Request) {
     })),
   });
 
-  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
-  return NextResponse.json({ ok: true, templateId: result.templateId });
+  if (!result.ok) return finish(400, { error: result.error });
+  return finish(200, { ok: true, templateId: result.templateId }, { organizationId, templateId: result.templateId });
 }
 
 export async function DELETE(request: Request) {
+  const startedAtMs = Date.now();
+  const finish = (status: number, payload: Record<string, unknown>, meta?: Record<string, unknown>) => {
+    logApiTiming({ route: 'admin.schedule.templates.DELETE', startedAtMs, status, meta });
+    return NextResponse.json(payload, { status });
+  };
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (!session) return finish(401, { error: 'Unauthorized' });
+  if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
   const url = new URL(request.url);
   const templateId = Number(url.searchParams.get('templateId') ?? '0');
   if (!Number.isFinite(templateId) || templateId <= 0) {
-    return NextResponse.json({ error: 'templateId is required.' }, { status: 400 });
+    return finish(400, { error: 'templateId is required.' });
   }
 
   const organizationId = resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) {
-    return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });
+    return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }
 
   const result = await deleteScheduleTemplate({ organizationId, templateId });
-  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
-  return NextResponse.json({ ok: true });
+  if (!result.ok) return finish(400, { error: result.error });
+  return finish(200, { ok: true }, { organizationId, templateId });
 }

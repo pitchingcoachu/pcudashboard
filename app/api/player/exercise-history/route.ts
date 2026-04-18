@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { listExerciseLoadHistoryForPlayer } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
+import { logApiTiming } from '../../../../lib/request-timing';
 
 function parseDate(value: string): string | null {
   const trimmed = value.trim();
@@ -11,9 +12,14 @@ function parseDate(value: string): string | null {
 }
 
 export async function GET(request: Request) {
+  const startedAtMs = Date.now();
+  const finish = (status: number, payload: Record<string, unknown>, meta?: Record<string, unknown>) => {
+    logApiTiming({ route: 'player.exercise-history.GET', startedAtMs, status, meta });
+    return NextResponse.json(payload, { status });
+  };
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session) return finish(401, { error: 'Unauthorized' });
 
   const url = new URL(request.url);
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
@@ -24,11 +30,11 @@ export async function GET(request: Request) {
     .filter((value) => Number.isFinite(value) && value > 0);
 
   if (!Number.isFinite(playerId) || playerId <= 0 || exerciseIds.length === 0) {
-    return NextResponse.json({ error: 'playerId and exerciseIds are required.' }, { status: 400 });
+    return finish(400, { error: 'playerId and exerciseIds are required.' });
   }
 
   const allowed = await canManagePlayer(session, playerId);
-  if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  if (!allowed) return finish(403, { error: 'Forbidden' });
 
   const history = await listExerciseLoadHistoryForPlayer({
     playerId,
@@ -37,5 +43,5 @@ export async function GET(request: Request) {
     perExerciseLimit: 500,
   });
 
-  return NextResponse.json({ history });
+  return finish(200, { history }, { playerId, exerciseCount: exerciseIds.length });
 }

@@ -1,5 +1,5 @@
 import { requirePortalSession } from '../../../../lib/portal-session';
-import { listClientsByOrganization } from '../../../../lib/training-db';
+import { listPlayerChoicesByOrganization } from '../../../../lib/training-db';
 import { resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { resolveSchoolBrand } from '../../../../lib/school-brand';
 import TestingBuilder from './testing-builder';
@@ -9,14 +9,17 @@ export default async function AdminTestingPage() {
   const programmingOrganizationId = resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const brand = resolveSchoolBrand(programmingSchoolCode);
-  const clients =
-    programmingOrganizationId > 0 ? await listClientsByOrganization(programmingOrganizationId) : [];
-  const visibleClients =
-    session.role === 'coach' ? clients.filter((client) => client.assignedCoachUserId === session.userId) : clients;
+  const playersRaw =
+    programmingOrganizationId > 0
+      ? await listPlayerChoicesByOrganization({
+          organizationId: programmingOrganizationId,
+          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+        })
+      : [];
 
-  const players = visibleClients.map((client) => ({
-    id: client.playerId,
-    name: client.fullName,
+  const players = playersRaw.map((player) => ({
+    id: player.playerId,
+    name: player.fullName,
   }));
 
   return (
