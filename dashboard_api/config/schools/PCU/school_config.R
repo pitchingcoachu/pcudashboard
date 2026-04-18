@@ -127,6 +127,8 @@ school_config <- list(
   "Knight, Tyler",
   "Zuber, Tyler",
   "Quattrocchi, Anthony",
+  "Zuniga, Guillermo",
+  "Kaufman, Rylan",
   "Allison, Chris" 
     
   ),
@@ -250,7 +252,9 @@ school_config <- list(
   "Saucedo, Taylor",
   "Knight, Tyler",
   "Zuber, Tyler",
-  "Quattrocchi, Anthony" 
+  "Quattrocchi, Anthony",
+  "Zuniga, Guillermo",
+  "Kaufman, Rylan" 
   ),
   allowed_campers = character(0),
   colors = list(

@@ -2257,20 +2257,23 @@ export default function HittingSuite({
     if (pcMax.trim()) params.set('pc_max', pcMax.trim());
     const isSummaryPage = dashboardPage === 'Summary';
     const isGameLogPage = dashboardPage === 'Game Log';
+    const shouldDeferCharts = isSummaryPage;
     const shouldForceProFastSummary = isPro && isSummaryPage;
     const shouldIncludeCharts = dashboardPage !== 'Leaderboard' && !shouldForceProFastSummary && !shouldForceLeagueFastTable;
-    params.set('include_chart_points', shouldIncludeCharts ? '1' : '0');
+    const shouldScheduleCompanionCharts = shouldForceProFastSummary || (shouldDeferCharts && shouldIncludeCharts);
+    params.set('include_chart_points', shouldDeferCharts && shouldIncludeCharts ? '0' : (shouldIncludeCharts ? '1' : '0'));
     if (isGameLogPage) {
       params.set('include_chart_points', '1');
       params.set('chart_only', '1');
       params.set('chart_points_limit', isPro ? '6000' : '5000');
     }
     const requestKey = `/api/dashboard/hitting/overview?${params.toString()}`;
-    const chartRequestKey = shouldForceProFastSummary
+    const chartRequestKey = shouldScheduleCompanionCharts
       ? (() => {
           const chartParams = new URLSearchParams(params);
           chartParams.set('include_chart_points', '1');
           chartParams.set('chart_only', '1');
+          chartParams.set('chart_points_limit', shouldForceProFastSummary ? '350' : (isPro ? '500' : '1000'));
           return `/api/dashboard/hitting/overview?${chartParams.toString()}`;
         })()
       : null;

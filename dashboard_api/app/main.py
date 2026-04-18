@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -157,6 +157,15 @@ _FILTERS_CACHE_TTL_SECONDS = max(0, int(os.getenv("DASHBOARD_FILTERS_CACHE_TTL_S
 _FILTERS_CACHE_MAX_ENTRIES = max(32, int(os.getenv("DASHBOARD_FILTERS_CACHE_MAX_ENTRIES", "128")))
 _FILTERS_CACHE: Dict[str, tuple[float, Any]] = {}
 _FILTERS_CACHE_LOCK = threading.Lock()
+_FILTERS_SNAPSHOT_SCHEMA_READY = False
+_FILTERS_SNAPSHOT_SCHEMA_LOCK = threading.Lock()
+_FILTERS_SNAPSHOT_MAX_AGE_SECONDS = max(60, int(os.getenv("DASHBOARD_FILTERS_SNAPSHOT_MAX_AGE_SECONDS", "900")))
+_FILTERS_SNAPSHOT_REFRESH_COOLDOWN_SECONDS = max(
+    15.0, float(os.getenv("DASHBOARD_FILTERS_SNAPSHOT_REFRESH_COOLDOWN_SECONDS", "45"))
+)
+_FILTERS_SNAPSHOT_REFRESH_LOCK = threading.Lock()
+_FILTERS_SNAPSHOT_REFRESH_RUNNING: set[str] = set()
+_FILTERS_SNAPSHOT_REFRESH_LAST_AT: Dict[str, float] = {}
 _PERF_LOG_ENABLED = str(os.getenv("DASHBOARD_PERF_LOG_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 
@@ -308,6 +317,208 @@ def _filters_cache_invalidate_school(school_code: str) -> None:
         keys = [key for key in _FILTERS_CACHE.keys() if key.endswith(token)]
         for key in keys:
             _FILTERS_CACHE.pop(key, None)
+
+
+def _ensure_filters_snapshot_schema() -> None:
+    global _FILTERS_SNAPSHOT_SCHEMA_READY
+    if _FILTERS_SNAPSHOT_SCHEMA_READY:
+        return
+    with _FILTERS_SNAPSHOT_SCHEMA_LOCK:
+        if _FILTERS_SNAPSHOT_SCHEMA_READY:
+            return
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute("SET LOCAL lock_timeout = '2s'")
+                cur.execute("SET LOCAL statement_timeout = '30s'")
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS public.dashboard_filters_snapshot (
+                      school_code TEXT NOT NULL,
+                      domain TEXT NOT NULL,
+                      level_bucket TEXT NOT NULL DEFAULT 'All',
+                      payload_json JSONB NOT NULL,
+                      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      PRIMARY KEY (school_code, domain, level_bucket)
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_dashboard_filters_snapshot_updated_at
+                    ON public.dashboard_filters_snapshot (updated_at DESC)
+                    """
+                )
+            _FILTERS_SNAPSHOT_SCHEMA_READY = True
+        except Exception:
+            # Non-fatal: request path can proceed without persistent snapshots.
+            return
+
+
+def _save_filters_snapshot(
+    *,
+    school_code: str,
+    domain: str,
+    payload: Any,
+    level_bucket: str = "All",
+) -> None:
+    _ensure_filters_snapshot_schema()
+    school = (school_code or "").strip().upper()
+    lvl = (level_bucket or "All").strip() or "All"
+    dom = (domain or "").strip().lower()
+    if not school or not dom:
+        return
+    try:
+        payload_json = json.loads(json.dumps(_json_stable(payload), default=str))
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.dashboard_filters_snapshot (
+                  school_code, domain, level_bucket, payload_json, updated_at
+                )
+                VALUES (%(school_code)s, %(domain)s, %(level_bucket)s, %(payload_json)s::jsonb, NOW())
+                ON CONFLICT (school_code, domain, level_bucket)
+                DO UPDATE
+                  SET payload_json = EXCLUDED.payload_json,
+                      updated_at = NOW()
+                """,
+                {
+                    "school_code": school,
+                    "domain": dom,
+                    "level_bucket": lvl,
+                    "payload_json": json.dumps(payload_json),
+                },
+            )
+    except Exception:
+        return
+
+
+def _load_filters_snapshot(
+    *,
+    school_code: str,
+    domain: str,
+    level_bucket: str = "All",
+) -> Optional[Dict[str, Any]]:
+    payload, _ = _load_filters_snapshot_with_meta(
+        school_code=school_code,
+        domain=domain,
+        level_bucket=level_bucket,
+    )
+    return payload
+
+
+def _load_filters_snapshot_with_meta(
+    *,
+    school_code: str,
+    domain: str,
+    level_bucket: str = "All",
+) -> tuple[Optional[Dict[str, Any]], Optional[datetime]]:
+    _ensure_filters_snapshot_schema()
+    school = (school_code or "").strip().upper()
+    lvl = (level_bucket or "All").strip() or "All"
+    dom = (domain or "").strip().lower()
+    if not school or not dom:
+        return None, None
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT payload_json, updated_at
+                FROM public.dashboard_filters_snapshot
+                WHERE school_code = %(school_code)s
+                  AND domain = %(domain)s
+                  AND level_bucket = %(level_bucket)s
+                LIMIT 1
+                """,
+                {
+                    "school_code": school,
+                    "domain": dom,
+                    "level_bucket": lvl,
+                },
+            )
+            row = cur.fetchone() or {}
+            payload = row.get("payload_json")
+            updated_at = row.get("updated_at")
+            if isinstance(payload, dict):
+                return payload, updated_at if isinstance(updated_at, datetime) else None
+            if isinstance(payload, str) and payload.strip():
+                try:
+                    loaded = json.loads(payload)
+                    if isinstance(loaded, dict):
+                        return loaded, updated_at if isinstance(updated_at, datetime) else None
+                    return None, updated_at if isinstance(updated_at, datetime) else None
+                except Exception:
+                    return None, None
+            return None, updated_at if isinstance(updated_at, datetime) else None
+    except Exception:
+        return None, None
+
+
+def _filters_snapshot_is_stale(updated_at: Optional[datetime]) -> bool:
+    if not isinstance(updated_at, datetime):
+        return True
+    try:
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - updated_at.astimezone(timezone.utc)).total_seconds()
+        return age_seconds > float(_FILTERS_SNAPSHOT_MAX_AGE_SECONDS)
+    except Exception:
+        return True
+
+
+def _kick_filters_snapshot_refresh_background(
+    *,
+    school_code: str,
+    domain: str,
+    level_bucket: str = "All",
+) -> None:
+    school = (school_code or "").strip().upper()
+    dom = (domain or "").strip().lower()
+    lvl = (level_bucket or "All").strip() or "All"
+    if not school or dom not in {"pitching", "hitting", "catching"}:
+        return
+    key = f"{school}|{dom}|{lvl}"
+    now = time.monotonic()
+    with _FILTERS_SNAPSHOT_REFRESH_LOCK:
+        if key in _FILTERS_SNAPSHOT_REFRESH_RUNNING:
+            return
+        last_at = float(_FILTERS_SNAPSHOT_REFRESH_LAST_AT.get(key, 0.0))
+        if (now - last_at) < _FILTERS_SNAPSHOT_REFRESH_COOLDOWN_SECONDS:
+            return
+        _FILTERS_SNAPSHOT_REFRESH_RUNNING.add(key)
+        _FILTERS_SNAPSHOT_REFRESH_LAST_AT[key] = now
+
+    def _worker() -> None:
+        try:
+            if dom == "pitching":
+                pitching_filters(
+                    school_code=school,
+                    level=lvl if school == "PRO" else None,
+                    force_refresh=True,
+                )
+            elif dom == "hitting":
+                hitting_filters(
+                    school_code=school,
+                    level=lvl if school == "PRO" else None,
+                    force_refresh=True,
+                )
+            else:
+                catching_filters(
+                    school_code=school,
+                    level=lvl if school == "PRO" else None,
+                    force_refresh=True,
+                )
+        except Exception:
+            return
+        finally:
+            with _FILTERS_SNAPSHOT_REFRESH_LOCK:
+                _FILTERS_SNAPSHOT_REFRESH_RUNNING.discard(key)
+
+    try:
+        thread = threading.Thread(target=_worker, name=f"filters-snapshot-refresh-{dom}-{school.lower()}-{lvl.lower()}", daemon=True)
+        thread.start()
+    except Exception:
+        with _FILTERS_SNAPSHOT_REFRESH_LOCK:
+            _FILTERS_SNAPSHOT_REFRESH_RUNNING.discard(key)
 
 
 def _downsample_rows_for_chart_points(rows: List[Dict[str, Any]], max_points: int = _CHART_POINTS_MAX) -> List[Dict[str, Any]]:
@@ -4643,7 +4854,7 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
     allowed_hitters = _extract_r_vector(text, "allowed_hitters")
     allowed_campers = _extract_r_vector(text, "allowed_campers")
     if school_code.upper() == "PCU":
-        pcu_additions = ["Heather, Connor", "Carr, Jordan", "King, Stan", "Jones, Grady", "Birt, Henry"]
+        pcu_additions = ["Heather, Connor", "Carr, Jordan", "King, Stan", "Jones, Grady", "Birt, Henry", "Zuniga, Guillermo", "Kaufman, Rylan"]
         allowed_pitchers = sorted({*allowed_pitchers, *pcu_additions})
         allowed_hitters = sorted({*allowed_hitters, *pcu_additions})
     team_code = _extract_r_scalar(text, "team_code")
@@ -5233,6 +5444,26 @@ def _ensure_performance_indexes() -> None:
         ON public.pitch_events_daily_rollup_league_split (school_code, session_date, split_group, pitcher_team_norm)
         """,
         """
+        CREATE TABLE IF NOT EXISTS public.pitch_events_game_rollup_league
+        (LIKE public.pitch_events_daily_rollup_league_split INCLUDING DEFAULTS INCLUDING GENERATED INCLUDING STORAGE INCLUDING COMMENTS)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date
+        ON public.pitch_events_game_rollup_league (school_code, session_date)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date_pitcher
+        ON public.pitch_events_game_rollup_league (school_code, session_date, pitcher_norm)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date_team
+        ON public.pitch_events_game_rollup_league (school_code, session_date, pitcher_team_norm)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date_value
+        ON public.pitch_events_game_rollup_league (school_code, session_date, split_value)
+        """,
+        """
         CREATE TABLE IF NOT EXISTS public.pro_pitch_events_daily_rollup (
           school_code TEXT NOT NULL,
           session_date DATE NOT NULL,
@@ -5643,6 +5874,44 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
                 """,
                 {"school_code": school_filter, "refresh_start": refresh_start},
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS public.pitch_events_game_rollup_league
+                (LIKE public.pitch_events_daily_rollup_league_split INCLUDING DEFAULTS INCLUDING GENERATED INCLUDING STORAGE INCLUDING COMMENTS)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date
+                ON public.pitch_events_game_rollup_league (school_code, session_date)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date_pitcher
+                ON public.pitch_events_game_rollup_league (school_code, session_date, pitcher_norm)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date_team
+                ON public.pitch_events_game_rollup_league (school_code, session_date, pitcher_team_norm)
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date_value
+                ON public.pitch_events_game_rollup_league (school_code, session_date, split_value)
+                """
+            )
+            cur.execute(
+                """
+                DELETE FROM public.pitch_events_game_rollup_league
+                WHERE school_code = %(school_code)s
+                  AND session_date >= %(refresh_start)s::date
+                """,
+                {"school_code": school_filter, "refresh_start": refresh_start},
+            )
 
             try:
                 cur.execute("SAVEPOINT league_split_refresh")
@@ -5974,6 +6243,56 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
                       NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameforeignid', to_jsonb(pe)->>'GameForeignID', '')), ''),
                       'g'
                     ) AS game_key,
+                    lower(
+                      COALESCE(
+                        NULLIF(
+                          TRIM(
+                            COALESCE(
+                              to_jsonb(pe)->>'inningtopbot',
+                              to_jsonb(pe)->>'inning_topbot',
+                              to_jsonb(pe)->>'half_inning',
+                              to_jsonb(pe)->>'inninghalf',
+                              to_jsonb(pe)->>'half',
+                              ''
+                            )
+                          ),
+                          ''
+                        ),
+                        ''
+                      )
+                    ) AS inning_half_norm,
+                    UPPER(
+                      COALESCE(
+                        NULLIF(
+                          TRIM(
+                            COALESCE(
+                              to_jsonb(pe)->>'home_team_code',
+                              to_jsonb(pe)->>'hometeam',
+                              to_jsonb(pe)->>'home_team',
+                              ''
+                            )
+                          ),
+                          ''
+                        ),
+                        ''
+                      )
+                    ) AS home_team_code,
+                    UPPER(
+                      COALESCE(
+                        NULLIF(
+                          TRIM(
+                            COALESCE(
+                              to_jsonb(pe)->>'away_team_code',
+                              to_jsonb(pe)->>'awayteam',
+                              to_jsonb(pe)->>'away_team',
+                              ''
+                            )
+                          ),
+                          ''
+                        ),
+                        ''
+                      )
+                    ) AS away_team_code,
                     COALESCE(
                       NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'playid', to_jsonb(pe)->>'play_id', pe.playid::text, '')), ''),
                       pe.id::text
@@ -6087,6 +6406,34 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
                    AND p.pa_seq_idx >= af.start_idx
                   UNION ALL
                   SELECT *,
+                    'Game'::text AS split_group,
+                    (
+                      session_date::text || '||' ||
+                      COALESCE(NULLIF(TRIM(pitcher_team_norm), ''), 'Unknown') || '||' ||
+                      COALESCE(NULLIF(TRIM(batter_team_norm_eff), ''), 'Unknown') || '||' ||
+                      COALESCE(NULLIF(TRIM(game_key), ''), '-') || '||' ||
+                      (
+                        CASE
+                          WHEN inning_half_norm LIKE 'top%%' THEN 'vs.'
+                          WHEN inning_half_norm LIKE 'bottom%%' THEN '@'
+                          WHEN home_team_code <> '' AND away_team_code <> '' AND pitcher_team_norm = home_team_code AND batter_team_norm_eff = away_team_code THEN 'vs.'
+                          WHEN home_team_code <> '' AND away_team_code <> '' AND pitcher_team_norm = away_team_code AND batter_team_norm_eff = home_team_code THEN '@'
+                          ELSE '?'
+                        END
+                      ) || '||' ||
+                      (
+                        CASE
+                          WHEN inning_half_norm LIKE 'top%%' THEN '@'
+                          WHEN inning_half_norm LIKE 'bottom%%' THEN 'vs.'
+                          WHEN home_team_code <> '' AND away_team_code <> '' AND pitcher_team_norm = home_team_code AND batter_team_norm_eff = away_team_code THEN '@'
+                          WHEN home_team_code <> '' AND away_team_code <> '' AND pitcher_team_norm = away_team_code AND batter_team_norm_eff = home_team_code THEN 'vs.'
+                          ELSE '?'
+                        END
+                      )
+                    ) AS split_value
+                  FROM pa_ord
+                  UNION ALL
+                  SELECT *,
                     'Zone Location'::text AS split_group,
                     CASE
                       WHEN plate_side IS NULL OR plate_height IS NULL THEN 'Unknown'
@@ -6167,7 +6514,7 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
                   e.session_date,
                   e.split_group,
                   e.split_value,
-                  CASE WHEN e.split_group = 'After Count' THEN 'All' ELSE e.pitch_type END AS pitch_type,
+                  CASE WHEN e.split_group IN ('After Count', 'Game') THEN 'All' ELSE e.pitch_type END AS pitch_type,
                   MIN(e.pitcher_name) AS pitcher_name,
                   MIN(e.batter_name) AS batter_name,
                   MIN(e.catcher_name) AS catcher_name,
@@ -6270,7 +6617,7 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
                   SUM(CASE WHEN e.strikes_num < 2 THEN 1 ELSE 0 END)::int AS count_lt2k_n,
                   SUM(CASE WHEN e.strikes_num = 2 THEN 1 ELSE 0 END)::int AS count_2k_n,
                   COUNT(DISTINCT CASE
-                    WHEN e.split_group = 'After Count' THEN (e.game_key || '|' || e.pa_key)
+                    WHEN e.split_group IN ('After Count', 'Game') THEN (e.game_key || '|' || e.pa_key)
                     WHEN e.balls_num = 0 AND e.strikes_num = 0 THEN (e.game_key || '|' || e.pa_key)
                     ELSE NULL
                   END)::int AS bf_n,
@@ -6300,7 +6647,7 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
                   COALESCE(MIN(NULLIF(e.release_tilt, '')), '') AS r_tilt_sample
                 FROM expanded e
                 GROUP BY
-                  e.session_date, e.split_group, e.split_value, (CASE WHEN e.split_group = 'After Count' THEN 'All' ELSE e.pitch_type END), e.pitcher_norm, e.batter_norm, e.catcher_norm,
+                  e.session_date, e.split_group, e.split_value, (CASE WHEN e.split_group IN ('After Count', 'Game') THEN 'All' ELSE e.pitch_type END), e.pitcher_norm, e.batter_norm, e.catcher_norm,
                   e.pitcher_team_norm, e.batter_team_norm_eff, e.pitcherthrows_norm, e.batterside_norm, e.session_bucket
                 """,
                     {
@@ -6315,6 +6662,17 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
                         "zone_mid_y": ZONE_MID_Y,
                     },
                 )
+                cur.execute(
+                    """
+                    INSERT INTO public.pitch_events_game_rollup_league
+                    SELECT *
+                    FROM public.pitch_events_daily_rollup_league_split
+                    WHERE school_code = %(school_code)s
+                      AND split_group = 'Game'
+                      AND session_date >= %(refresh_start)s::date
+                    """,
+                    {"school_code": school_filter, "refresh_start": refresh_start},
+                )
                 cur.execute("RELEASE SAVEPOINT league_split_refresh")
             except Exception as split_exc:
                 logger.warning("league split rollup refresh failed: %s", split_exc)
@@ -6326,6 +6684,9 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
         _LEAGUE_DAILY_ROLLUP_LAST_AT[school_filter] = now
         _overview_cache_invalidate_school(school_filter)
         _filters_cache_invalidate_school(school_filter)
+        _kick_filters_snapshot_refresh_background(school_code=school_filter, domain="pitching", level_bucket="All")
+        _kick_filters_snapshot_refresh_background(school_code=school_filter, domain="hitting", level_bucket="All")
+        _kick_filters_snapshot_refresh_background(school_code=school_filter, domain="catching", level_bucket="All")
     except Exception as exc:
         logger.warning("league daily rollup refresh failed: %s", exc)
         return
@@ -6378,6 +6739,74 @@ def _kick_school_rollup_refresh_background(school_code: str) -> None:
     except Exception:
         with _SCHOOL_ROLLUP_REFRESH_LOCK:
             _SCHOOL_ROLLUP_REFRESH_RUNNING.discard(school)
+
+
+def _warm_filters_snapshots(force: bool = False) -> None:
+    school_codes: List[str] = []
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT UPPER(TRIM(school_code)) AS school_code
+                FROM public.pitch_events
+                WHERE school_code IS NOT NULL
+                  AND TRIM(school_code) <> ''
+                ORDER BY 1
+                """
+            )
+            school_codes = [str(row.get("school_code") or "").strip().upper() for row in cur.fetchall() if str(row.get("school_code") or "").strip()]
+            cur.execute("SELECT to_regclass('public.pro_pitch_events')::text AS t")
+            has_pro = bool((cur.fetchone() or {}).get("t"))
+            if has_pro and "PRO" not in school_codes:
+                school_codes.append("PRO")
+    except Exception:
+        school_codes = ["PRO", "LEAGUE"]
+
+    for school in sorted({code for code in school_codes if code}):
+        levels = ["All", "AAA", "MLB"] if school == "PRO" else ["All"]
+        for level_bucket in levels:
+            if force:
+                try:
+                    if school == "PRO":
+                        pitching_filters(school_code=school, level=level_bucket, force_refresh=True)
+                        hitting_filters(school_code=school, level=level_bucket, force_refresh=True)
+                        catching_filters(school_code=school, level=level_bucket, force_refresh=True)
+                    else:
+                        pitching_filters(school_code=school, force_refresh=True)
+                        hitting_filters(school_code=school, force_refresh=True)
+                        catching_filters(school_code=school, force_refresh=True)
+                except Exception:
+                    continue
+            else:
+                _kick_filters_snapshot_refresh_background(
+                    school_code=school,
+                    domain="pitching",
+                    level_bucket=level_bucket,
+                )
+                _kick_filters_snapshot_refresh_background(
+                    school_code=school,
+                    domain="hitting",
+                    level_bucket=level_bucket,
+                )
+                _kick_filters_snapshot_refresh_background(
+                    school_code=school,
+                    domain="catching",
+                    level_bucket=level_bucket,
+                )
+
+
+def _start_filters_snapshot_warmer_background() -> None:
+    def _worker() -> None:
+        try:
+            _warm_filters_snapshots(force=False)
+        except Exception:
+            return
+
+    try:
+        thread = threading.Thread(target=_worker, name="filters-snapshot-warmer", daemon=True)
+        thread.start()
+    except Exception:
+        return
 
 
 def _try_pitching_overview_daily_rollup(
@@ -6443,6 +6872,7 @@ def _try_pitching_overview_daily_rollup(
         "Pitcher Team": ("pitcher_team_norm", "Pitcher Team"),
         "Count": ("split_value", "Count"),
         "After Count": ("split_value", "After Count"),
+        "Game": ("split_value", "Game"),
         "Zone Location": ("split_value", "Zone Location"),
         "Times Through Order": ("split_value", "Times Through Order"),
         "Inning": ("split_value", "Inning of Appearance"),
@@ -6455,7 +6885,7 @@ def _try_pitching_overview_daily_rollup(
     if split_conf is None:
         return None
     split_rollup_col, split_col_name = split_conf
-    use_split_rollup = split_clean in {"Count", "After Count", "Zone Location", "Times Through Order", "Pitch Count", "Velocity", "IVB", "HB"}
+    use_split_rollup = split_clean in {"Count", "After Count", "Game", "Zone Location", "Times Through Order", "Pitch Count", "Velocity", "IVB", "HB"}
     if split_clean == "After Count" and selected_pitch_types:
         return None
     selected_opp_hitters = [v for v in selected_opp_hitters if str(v or "").strip().lower() != "all"]
@@ -6523,7 +6953,10 @@ def _try_pitching_overview_daily_rollup(
             else "(%(after_count_filters_count)s::int = 0)"
         )
     where_sql = " AND ".join(where_parts)
-    rollup_source = "public.pitch_events_daily_rollup_league_split" if use_split_rollup else "public.pitch_events_daily_rollup_league"
+    if split_clean == "Game":
+        rollup_source = "public.pitch_events_game_rollup_league"
+    else:
+        rollup_source = "public.pitch_events_daily_rollup_league_split" if use_split_rollup else "public.pitch_events_daily_rollup_league"
 
     # Aggregate rows by split + pitch type.
     try:
@@ -6702,6 +7135,9 @@ def _try_pitching_overview_daily_rollup(
             return None
 
     if not grouped_rows:
+        if split_clean == "Game":
+            # Keep Game Log working on cold rollup starts by falling back to raw path.
+            return None
         mode_columns_map: Dict[str, List[str]] = {
             "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
             "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
@@ -7337,9 +7773,17 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
         return
     try:
         with get_conn() as conn, conn.cursor() as cur:
-            cur.execute("SELECT pg_try_advisory_lock(%(k)s) AS locked", {"k": _PRO_ROLLUP_ADVISORY_LOCK_KEY})
-            lock_row = cur.fetchone() or {}
-            if not bool(lock_row.get("locked")):
+            got_lock = False
+            lock_attempts = 120 if force else 1
+            for _ in range(lock_attempts):
+                cur.execute("SELECT pg_try_advisory_xact_lock(%(k)s) AS locked", {"k": _PRO_ROLLUP_ADVISORY_LOCK_KEY})
+                lock_row = cur.fetchone() or {}
+                if bool(lock_row.get("locked")):
+                    got_lock = True
+                    break
+                if force:
+                    time.sleep(1.0)
+            if not got_lock:
                 return
             cur.execute("SET LOCAL lock_timeout = '2s'")
             cur.execute("SET LOCAL statement_timeout = '1800s'")
@@ -7446,6 +7890,12 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_pro_rollup_split_school_date_group ON public.pro_pitch_events_daily_rollup_split (school_code, session_date, split_group)",
                 "CREATE INDEX IF NOT EXISTS idx_pro_rollup_split_school_date_group_pitcher ON public.pro_pitch_events_daily_rollup_split (school_code, session_date, split_group, pitcher_norm)",
                 "CREATE INDEX IF NOT EXISTS idx_pro_rollup_split_school_date_group_team ON public.pro_pitch_events_daily_rollup_split (school_code, session_date, split_group, pitcher_team_code)",
+                "CREATE TABLE IF NOT EXISTS public.pro_pitch_events_game_rollup (LIKE public.pro_pitch_events_daily_rollup_split INCLUDING DEFAULTS INCLUDING GENERATED INCLUDING STORAGE INCLUDING COMMENTS)",
+                "CREATE INDEX IF NOT EXISTS idx_pro_rollup_game_school_date ON public.pro_pitch_events_game_rollup (school_code, session_date)",
+                "CREATE INDEX IF NOT EXISTS idx_pro_rollup_game_school_date_pitcher ON public.pro_pitch_events_game_rollup (school_code, session_date, pitcher_norm)",
+                "CREATE INDEX IF NOT EXISTS idx_pro_rollup_game_school_date_batter ON public.pro_pitch_events_game_rollup (school_code, session_date, batter_norm)",
+                "CREATE INDEX IF NOT EXISTS idx_pro_rollup_game_school_date_team ON public.pro_pitch_events_game_rollup (school_code, session_date, pitcher_team_code)",
+                "CREATE INDEX IF NOT EXISTS idx_pro_rollup_game_school_date_value ON public.pro_pitch_events_game_rollup (school_code, session_date, split_value)",
                 "ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS sf_n INT NOT NULL DEFAULT 0",
                 "ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS rel_height_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0",
                 "ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS rel_height_n INT NOT NULL DEFAULT 0",
@@ -7532,6 +7982,14 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
             )
             cur.execute(
                 """
+                DELETE FROM public.pro_pitch_events_game_rollup
+                WHERE school_code = 'PRO'
+                  AND session_date >= %(refresh_start)s::date
+                """,
+                {"refresh_start": refresh_start},
+            )
+            cur.execute(
+                """
                 WITH base AS (
                   SELECT
                     'PRO'::text AS school_code,
@@ -7597,6 +8055,58 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                     regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), '')), '[^a-z0-9]+', '_', 'g') AS tagged_hit_type_norm,
                     NULLIF((regexp_match(COALESCE(pe.delta_run_exp::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS delta_run_exp,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'zone', ''), '[-+]?[0-9]+'))[1], '')::int AS zone_num,
+                    COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'game_pk', to_jsonb(pe)->>'gameid', to_jsonb(pe)->>'gameuid', to_jsonb(pe)->>'gameforeignid', '')), ''), 'g') AS game_key,
+                    lower(
+                      COALESCE(
+                        NULLIF(
+                          TRIM(
+                            COALESCE(
+                              to_jsonb(pe)->>'inningtopbot',
+                              to_jsonb(pe)->>'inning_topbot',
+                              to_jsonb(pe)->>'half_inning',
+                              to_jsonb(pe)->>'inninghalf',
+                              to_jsonb(pe)->>'half',
+                              ''
+                            )
+                          ),
+                          ''
+                        ),
+                        ''
+                      )
+                    ) AS inning_half_norm,
+                    UPPER(
+                      COALESCE(
+                        NULLIF(
+                          TRIM(
+                            COALESCE(
+                              to_jsonb(pe)->>'home_team_code',
+                              to_jsonb(pe)->>'hometeam',
+                              to_jsonb(pe)->>'home_team',
+                              ''
+                            )
+                          ),
+                          ''
+                        ),
+                        ''
+                      )
+                    ) AS home_team_code,
+                    UPPER(
+                      COALESCE(
+                        NULLIF(
+                          TRIM(
+                            COALESCE(
+                              to_jsonb(pe)->>'away_team_code',
+                              to_jsonb(pe)->>'awayteam',
+                              to_jsonb(pe)->>'away_team',
+                              ''
+                            )
+                          ),
+                          ''
+                        ),
+                        ''
+                      )
+                    ) AS away_team_code,
+                    COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'at_bat_index', to_jsonb(pe)->>'atbatindex', to_jsonb(pe)->>'playid', pe.id::text)), ''), pe.id::text) AS pa_key,
                     COALESCE((regexp_match(COALESCE(to_jsonb(pe)->>'outs', ''), '[-+]?[0-9]+'))[1]::int, 0) AS outs_num,
                     COALESCE((regexp_match(COALESCE(pe.outsonplay::text, ''), '[-+]?[0-9]+'))[1]::int, 0) AS outs_on_play_num,
                     estimated_woba_using_speedangle,
@@ -7705,7 +8215,6 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND angle IS NOT NULL THEN angle ELSE 0.0 END)::double precision AS la_sum,
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND angle IS NOT NULL THEN 1 ELSE 0 END)::int AS la_n,
                   COUNT(DISTINCT CASE
-                    WHEN split_group = 'After Count' THEN (game_key || '|' || pa_key)
                     WHEN balls_num = 0 AND strikes_num = 0 THEN (game_key || '|' || pa_key)
                     ELSE NULL
                   END)::int AS bf_n,
@@ -7837,6 +8346,56 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                     NULLIF((regexp_match(COALESCE(pe.delta_run_exp::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS delta_run_exp,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'zone', ''), '[-+]?[0-9]+'))[1], '')::int AS zone_num,
                     COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'game_pk', to_jsonb(pe)->>'gameid', to_jsonb(pe)->>'gameuid', to_jsonb(pe)->>'gameforeignid', '')), ''), 'g') AS game_key,
+                    lower(
+                      COALESCE(
+                        NULLIF(
+                          TRIM(
+                            COALESCE(
+                              to_jsonb(pe)->>'inningtopbot',
+                              to_jsonb(pe)->>'inning_topbot',
+                              to_jsonb(pe)->>'half_inning',
+                              to_jsonb(pe)->>'inninghalf',
+                              to_jsonb(pe)->>'half',
+                              ''
+                            )
+                          ),
+                          ''
+                        ),
+                        ''
+                      )
+                    ) AS inning_half_norm,
+                    UPPER(
+                      COALESCE(
+                        NULLIF(
+                          TRIM(
+                            COALESCE(
+                              to_jsonb(pe)->>'home_team_code',
+                              to_jsonb(pe)->>'hometeam',
+                              to_jsonb(pe)->>'home_team',
+                              ''
+                            )
+                          ),
+                          ''
+                        ),
+                        ''
+                      )
+                    ) AS home_team_code,
+                    UPPER(
+                      COALESCE(
+                        NULLIF(
+                          TRIM(
+                            COALESCE(
+                              to_jsonb(pe)->>'away_team_code',
+                              to_jsonb(pe)->>'awayteam',
+                              to_jsonb(pe)->>'away_team',
+                              ''
+                            )
+                          ),
+                          ''
+                        ),
+                        ''
+                      )
+                    ) AS away_team_code,
                     COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'at_bat_index', to_jsonb(pe)->>'atbatindex', to_jsonb(pe)->>'playid', pe.id::text)), ''), pe.id::text) AS pa_key,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'inning', ''), '[-+]?[0-9]+'))[1], '')::int AS inning_num,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'pitchid', to_jsonb(pe)->>'pitchno', to_jsonb(pe)->>'event_index', ''), '[-+]?[0-9]+'))[1], '')::int AS pitch_no,
@@ -7954,6 +8513,34 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                    AND p.pa_key = af.pa_key
                    AND p.pa_seq_idx >= af.start_idx
                   UNION ALL
+                  SELECT *,
+                    'Game'::text AS split_group,
+                    (
+                      session_date::text || '||' ||
+                      COALESCE(NULLIF(TRIM(pitcher_team_code), ''), 'Unknown') || '||' ||
+                      COALESCE(NULLIF(TRIM(batter_team_code), ''), 'Unknown') || '||' ||
+                      COALESCE(NULLIF(TRIM(game_key), ''), '-') || '||' ||
+                      (
+                        CASE
+                          WHEN inning_half_norm LIKE 'top%%' THEN 'vs.'
+                          WHEN inning_half_norm LIKE 'bottom%%' THEN '@'
+                          WHEN home_team_code <> '' AND away_team_code <> '' AND pitcher_team_code = home_team_code AND batter_team_code = away_team_code THEN 'vs.'
+                          WHEN home_team_code <> '' AND away_team_code <> '' AND pitcher_team_code = away_team_code AND batter_team_code = home_team_code THEN '@'
+                          ELSE '?'
+                        END
+                      ) || '||' ||
+                      (
+                        CASE
+                          WHEN inning_half_norm LIKE 'top%%' THEN '@'
+                          WHEN inning_half_norm LIKE 'bottom%%' THEN 'vs.'
+                          WHEN home_team_code <> '' AND away_team_code <> '' AND pitcher_team_code = home_team_code AND batter_team_code = away_team_code THEN '@'
+                          WHEN home_team_code <> '' AND away_team_code <> '' AND pitcher_team_code = away_team_code AND batter_team_code = home_team_code THEN 'vs.'
+                          ELSE '?'
+                        END
+                      )
+                    ) AS split_value
+                  FROM pa_ord
+                  UNION ALL
                   SELECT *, 'Zone Location'::text AS split_group,
                     CASE
                       WHEN plate_side IS NULL OR plate_height IS NULL THEN 'Unknown'
@@ -8013,11 +8600,11 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                 )
                 SELECT
                   school_code, session_date, sport_id, level_bucket, split_group, split_value,
-                  CASE WHEN split_group = 'After Count' THEN 'All' ELSE pitch_type END AS pitch_type,
+                  CASE WHEN split_group IN ('After Count', 'Game') THEN 'All' ELSE pitch_type END AS pitch_type,
                   MIN(pitcher_name), MIN(batter_name), MIN(catcher_name), pitcher_norm, batter_norm, catcher_norm,
                   pitcher_team_code, batter_team_code, pitcherthrows_norm, batterside_norm,
-                  CASE WHEN split_group = 'After Count' THEN NULL ELSE balls_num END AS balls_num,
-                  CASE WHEN split_group = 'After Count' THEN NULL ELSE strikes_num END AS strikes_num,
+                  CASE WHEN split_group IN ('After Count', 'Game') THEN -1 ELSE balls_num END AS balls_num,
+                  CASE WHEN split_group IN ('After Count', 'Game') THEN -1 ELSE strikes_num END AS strikes_num,
                   COUNT(*)::int AS pitches,
                   COALESCE(SUM(rel_speed), 0.0)::double precision AS velo_sum,
                   COUNT(rel_speed)::int AS velo_n,
@@ -8108,11 +8695,11 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                 FROM expanded e
                 GROUP BY
                   school_code, session_date, sport_id, level_bucket, split_group, split_value,
-                  (CASE WHEN split_group = 'After Count' THEN 'All' ELSE pitch_type END),
+                  (CASE WHEN split_group IN ('After Count', 'Game') THEN 'All' ELSE pitch_type END),
                   pitcher_norm, batter_norm, catcher_norm, pitcher_team_code, batter_team_code,
                   pitcherthrows_norm, batterside_norm,
-                  (CASE WHEN split_group = 'After Count' THEN NULL ELSE balls_num END),
-                  (CASE WHEN split_group = 'After Count' THEN NULL ELSE strikes_num END)
+                  (CASE WHEN split_group IN ('After Count', 'Game') THEN -1 ELSE balls_num END),
+                  (CASE WHEN split_group IN ('After Count', 'Game') THEN -1 ELSE strikes_num END)
                 """,
                 {
                     "refresh_start": refresh_start,
@@ -8128,9 +8715,24 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                     "mlb_only_team_codes": PRO_MLB_ONLY_TEAM_CODES,
                 },
             )
+            cur.execute(
+                """
+                INSERT INTO public.pro_pitch_events_game_rollup
+                SELECT *
+                FROM public.pro_pitch_events_daily_rollup_split
+                WHERE school_code = 'PRO'
+                  AND split_group = 'Game'
+                  AND session_date >= %(refresh_start)s::date
+                """,
+                {"refresh_start": refresh_start},
+            )
         _PRO_DAILY_ROLLUP_LAST_AT = now
         _overview_cache_invalidate_school("PRO")
         _filters_cache_invalidate_school("PRO")
+        for lvl in ("All", "AAA", "MLB"):
+            _kick_filters_snapshot_refresh_background(school_code="PRO", domain="pitching", level_bucket=lvl)
+            _kick_filters_snapshot_refresh_background(school_code="PRO", domain="hitting", level_bucket=lvl)
+            _kick_filters_snapshot_refresh_background(school_code="PRO", domain="catching", level_bucket=lvl)
     except Exception as exc:
         logger.warning("pro rollup refresh failed: %s", exc)
         return
@@ -8200,6 +8802,7 @@ def _start_rollup_scheduler_background() -> None:
 @app.on_event("startup")
 def _dashboard_api_startup() -> None:
     _start_rollup_scheduler_background()
+    _start_filters_snapshot_warmer_background()
 
 
 def _try_pro_pitching_overview_rollup(
@@ -8284,6 +8887,7 @@ def _try_pro_pitching_overview_rollup(
         "Pitcher Team": ("pitcher_team_code", "Pitcher Team"),
         "Count": ("CASE WHEN balls_num >= 0 AND strikes_num >= 0 THEN (balls_num::text || '-' || strikes_num::text) ELSE 'Unknown' END", "Count"),
         "After Count": ("split_value", "After Count"),
+        "Game": ("split_value", "Game"),
         "Zone Location": ("split_value", "Zone Location"),
         "Times Through Order": ("split_value", "Times Through Order"),
         "Velocity": ("split_value", "Velocity"),
@@ -8293,7 +8897,7 @@ def _try_pro_pitching_overview_rollup(
     split_conf = split_to_expr.get(split_clean)
     if split_conf is None:
         return None
-    use_split_rollup = split_clean in {"Count", "After Count", "Zone Location", "Times Through Order", "Velocity", "IVB", "HB"}
+    use_split_rollup = split_clean in {"Count", "After Count", "Game", "Zone Location", "Times Through Order", "Velocity", "IVB", "HB"}
     if split_clean == "After Count" and selected_pitch_types:
         return None
     if selected_count_filters and split_clean != "Count":
@@ -8347,7 +8951,10 @@ def _try_pro_pitching_overview_rollup(
         where.append("(" + split_expr + ") = ANY(%(after_count_filters)s::text[])")
         params["after_count_filters"] = selected_after_count_filters
     where_sql = " AND ".join(where)
-    rollup_source = "public.pro_pitch_events_daily_rollup_split" if use_split_rollup else "public.pro_pitch_events_daily_rollup"
+    if split_clean == "Game":
+        rollup_source = "public.pro_pitch_events_game_rollup"
+    else:
+        rollup_source = "public.pro_pitch_events_daily_rollup_split" if use_split_rollup else "public.pro_pitch_events_daily_rollup"
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -8447,6 +9054,10 @@ def _try_pro_pitching_overview_rollup(
         "Batted Ball Data": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "FPS(FB)%", "FPS(OS)%", "Barrel%"],
     }
     if not grouped_rows:
+        if split_clean == "Game":
+            # If Game rollup rows are temporarily missing (for example while a stale
+            # worker refreshes old split groups), fall back to the raw overview path.
+            return None
         _kick_pro_rollup_refresh_background()
         return PitchingOverviewResponse(
             school_code=school_code,
@@ -8886,16 +9497,18 @@ def _try_pro_hitting_overview_rollup(
         return None
     if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max, parsed_pc_min, parsed_pc_max]):
         return None
-    split_to_expr: Dict[str, str] = {
-        "Pitch Types": "pitch_type",
-        "Pitcher Hand": "pitcherthrows_norm",
-        "Pitcher": "pitcher_name",
-        "Catcher": "catcher_name",
-        "Count": "CASE WHEN balls_num >= 0 AND strikes_num >= 0 THEN (balls_num::text || '-' || strikes_num::text) ELSE 'Unknown' END",
+    split_to_expr: Dict[str, tuple[str, bool]] = {
+        "Pitch Types": ("pitch_type", False),
+        "Pitcher Hand": ("pitcherthrows_norm", False),
+        "Pitcher": ("pitcher_name", False),
+        "Catcher": ("catcher_name", False),
+        "Count": ("CASE WHEN balls_num >= 0 AND strikes_num >= 0 THEN (balls_num::text || '-' || strikes_num::text) ELSE 'Unknown' END", False),
+        "Game": ("split_value", True),
     }
-    split_expr = split_to_expr.get(split_by)
-    if not split_expr:
+    split_conf = split_to_expr.get(split_by)
+    if not split_conf:
         return None
+    split_expr, use_split_rollup = split_conf
     if selected_count_filters and split_by != "Count":
         return None
 
@@ -8934,10 +9547,16 @@ def _try_pro_hitting_overview_rollup(
     if (batter_side or "").strip() and batter_side != "All":
         where.append("batterside_norm = %(batterside_norm)s::text")
         params["batterside_norm"] = batter_side
+    if use_split_rollup:
+        where.append("split_group = 'Game'")
     if selected_count_filters:
         where.append("(" + split_expr + ") = ANY(%(count_filters)s::text[])")
         params["count_filters"] = selected_count_filters
     where_sql = " AND ".join(where)
+    if split_by == "Game":
+        rollup_source = "public.pro_pitch_events_game_rollup"
+    else:
+        rollup_source = "public.pro_pitch_events_daily_rollup_split" if use_split_rollup else "public.pro_pitch_events_daily_rollup"
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -8973,7 +9592,7 @@ def _try_pro_hitting_overview_rollup(
                   SUM(xwoba_n)::int AS xwoba_n,
                   SUM(woba_sum)::double precision AS woba_sum,
                   SUM(woba_n)::int AS woba_n
-                FROM public.pro_pitch_events_daily_rollup
+                FROM {rollup_source}
                 WHERE {where_sql}
                 GROUP BY {split_expr}, pitch_type
                 """,
@@ -8983,6 +9602,9 @@ def _try_pro_hitting_overview_rollup(
     except Exception:
         return None
     if not grouped_rows:
+        if split_by == "Game":
+            # Keep Game Log functional even when rollup game splits are not populated.
+            return None
         _kick_pro_rollup_refresh_background()
         return None
 
@@ -9546,6 +10168,12 @@ PRO_STATSAPI_GAME_FEED_BASE = "https://statsapi.mlb.com/api/v1.1"
 _PRO_API_TIMEOUT_SECONDS = max(5, int(os.getenv("PRO_API_TIMEOUT_SECONDS", "20")))
 _PRO_API_LIVE_LOOKBACK_DAYS = max(0, int(os.getenv("PRO_API_LIVE_LOOKBACK_DAYS", "1")))
 _PRO_API_ROWS_CACHE_TTL_SECONDS = max(5, int(os.getenv("PRO_API_ROWS_CACHE_TTL_SECONDS", "300")))
+_PRO_ENABLE_LIVE_API_MERGE = str(os.getenv("PRO_ENABLE_LIVE_API_MERGE", "0")).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 _PRO_ENABLE_AAA_API_FALLBACK = str(os.getenv("PRO_ENABLE_AAA_API_FALLBACK", "1")).strip().lower() not in {
     "0",
     "false",
@@ -10024,6 +10652,9 @@ def _pro_fetch_api_live_tail_rows(
     min_date_exclusive: Optional[date] = None,
     prefer_cached: bool = False,
 ) -> List[Dict[str, Any]]:
+    if not _PRO_ENABLE_LIVE_API_MERGE:
+        # Neon-only mode for PRO: skip StatsAPI live-tail augmentation entirely.
+        return []
     if not _PRO_ENABLE_AAA_API_FALLBACK:
         return []
     win = _pro_live_tail_window(start_date, end_date)
@@ -10613,6 +11244,37 @@ def _pro_rollup_filters_pitching(level_norm: str) -> Optional[PitchingFiltersRes
             max_date_raw = str(date_row.get("max_date") or "").strip()
             if not max_date_raw:
                 return None
+            # Rollup snapshots can lag newest synced raw rows. Keep default
+            # filter bounds aligned to latest raw Neon dates so suite defaults
+            # always land on the most recent available data.
+            try:
+                raw_sport_ids = _pro_level_sport_ids(level_norm)
+                cur.execute(
+                    """
+                    SELECT
+                      MIN(session_date)::text AS raw_min_date,
+                      MAX(session_date)::text AS raw_max_date
+                    FROM public.pro_pitch_events
+                    WHERE school_code = 'PRO'
+                      AND (%(sport_ids_count)s::int = 0 OR sport_id = ANY(%(sport_ids)s::int[]))
+                    """,
+                    {
+                        "sport_ids": raw_sport_ids,
+                        "sport_ids_count": len(raw_sport_ids),
+                    },
+                )
+                raw_bounds = cur.fetchone() or {}
+                raw_min = str(raw_bounds.get("raw_min_date") or "").strip()
+                raw_max = str(raw_bounds.get("raw_max_date") or "").strip()
+                rollup_min = str(date_row.get("min_date") or "").strip()
+                rollup_max = str(date_row.get("max_date") or "").strip()
+                if raw_min and (not rollup_min or raw_min < rollup_min):
+                    date_row["min_date"] = raw_min
+                if raw_max and (not rollup_max or raw_max > rollup_max):
+                    date_row["max_date"] = raw_max
+                max_date_raw = str(date_row.get("max_date") or "").strip()
+            except Exception:
+                pass
 
             cur.execute(
                 """
@@ -10799,6 +11461,37 @@ def _pro_rollup_filters_hitting(level_norm: str) -> Optional[Dict[str, Any]]:
             max_date_raw = str(date_row.get("max_date") or "").strip()
             if not max_date_raw:
                 return None
+            # Rollup snapshots can lag newest synced raw rows. Keep default
+            # filter bounds aligned to latest raw Neon dates so suite defaults
+            # always land on the most recent available data.
+            try:
+                raw_sport_ids = _pro_level_sport_ids(level_norm)
+                cur.execute(
+                    """
+                    SELECT
+                      MIN(session_date)::text AS raw_min_date,
+                      MAX(session_date)::text AS raw_max_date
+                    FROM public.pro_pitch_events
+                    WHERE school_code = 'PRO'
+                      AND (%(sport_ids_count)s::int = 0 OR sport_id = ANY(%(sport_ids)s::int[]))
+                    """,
+                    {
+                        "sport_ids": raw_sport_ids,
+                        "sport_ids_count": len(raw_sport_ids),
+                    },
+                )
+                raw_bounds = cur.fetchone() or {}
+                raw_min = str(raw_bounds.get("raw_min_date") or "").strip()
+                raw_max = str(raw_bounds.get("raw_max_date") or "").strip()
+                rollup_min = str(date_row.get("min_date") or "").strip()
+                rollup_max = str(date_row.get("max_date") or "").strip()
+                if raw_min and (not rollup_min or raw_min < rollup_min):
+                    date_row["min_date"] = raw_min
+                if raw_max and (not rollup_max or raw_max > rollup_max):
+                    date_row["max_date"] = raw_max
+                max_date_raw = str(date_row.get("max_date") or "").strip()
+            except Exception:
+                pass
 
             cur.execute(
                 """
@@ -13926,6 +14619,7 @@ def _pro_hitting_overview(
 def pitching_filters(
     school_code: str = Query(..., min_length=1),
     level: Optional[str] = Query(default=None),
+    force_refresh: bool = False,
 ) -> PitchingFiltersResponse:
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
@@ -13936,12 +14630,38 @@ def pitching_filters(
         f"pitching_filters:{level_norm}" if school_code == "PRO" else "pitching_filters",
         school_code,
     )
-    cached_filters = _filters_cache_get(filters_cache_key)
-    if cached_filters is not None:
-        return cached_filters
+    snapshot_level = level_norm if school_code == "PRO" else "All"
+    if not force_refresh:
+        cached_filters = _filters_cache_get(filters_cache_key)
+        if cached_filters is not None:
+            return cached_filters
+        snapshot_payload, snapshot_updated_at = _load_filters_snapshot_with_meta(
+            school_code=school_code,
+            domain="pitching",
+            level_bucket=snapshot_level,
+        )
+        if isinstance(snapshot_payload, dict):
+            try:
+                snapshot_response = PitchingFiltersResponse(**snapshot_payload)
+                _filters_cache_set(filters_cache_key, snapshot_response)
+                if _filters_snapshot_is_stale(snapshot_updated_at):
+                    _kick_filters_snapshot_refresh_background(
+                        school_code=school_code,
+                        domain="pitching",
+                        level_bucket=snapshot_level,
+                    )
+                return snapshot_response
+            except Exception:
+                pass
     if school_code == "PRO":
         response = _pro_pitching_filters(school_code, level_norm)
         _filters_cache_set(filters_cache_key, response)
+        _save_filters_snapshot(
+            school_code=school_code,
+            domain="pitching",
+            level_bucket=snapshot_level,
+            payload=response.model_dump(),
+        )
         return response
     roster = _load_school_roster(school_code)
     team_norm = set(roster.get("team_only_norm", []) or [])
@@ -14223,6 +14943,12 @@ def pitching_filters(
         opp_hitters_by_team_code=opp_hitters_by_team_code or None,
     )
     _filters_cache_set(filters_cache_key, response)
+    _save_filters_snapshot(
+        school_code=school_code,
+        domain="pitching",
+        level_bucket="All",
+        payload=response.model_dump(),
+    )
     return response
 
 
@@ -17188,11 +17914,44 @@ def _zone_location_match(token: str, row: Dict[str, Any]) -> bool:
 def hitting_filters(
     school_code: str = Query(..., min_length=1),
     level: Optional[str] = Query(default=None),
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
+    level_norm = _pro_level_norm(level)
+    filters_cache_key = _filters_cache_key(
+        f"hitting_filters:{level_norm}" if school_code == "PRO" else "hitting_filters",
+        school_code,
+    )
+    snapshot_level = level_norm if school_code == "PRO" else "All"
+    if not force_refresh:
+        cached_filters = _filters_cache_get(filters_cache_key)
+        if cached_filters is not None:
+            return cached_filters
+        snapshot_payload, snapshot_updated_at = _load_filters_snapshot_with_meta(
+            school_code=school_code,
+            domain="hitting",
+            level_bucket=snapshot_level,
+        )
+        if isinstance(snapshot_payload, dict):
+            _filters_cache_set(filters_cache_key, snapshot_payload)
+            if _filters_snapshot_is_stale(snapshot_updated_at):
+                _kick_filters_snapshot_refresh_background(
+                    school_code=school_code,
+                    domain="hitting",
+                    level_bucket=snapshot_level,
+                )
+            return snapshot_payload
     if school_code == "PRO":
-        return _pro_hitting_filters(school_code, _pro_level_norm(level))
+        response = _pro_hitting_filters(school_code, level_norm)
+        _filters_cache_set(filters_cache_key, response)
+        _save_filters_snapshot(
+            school_code=school_code,
+            domain="hitting",
+            level_bucket=snapshot_level,
+            payload=response,
+        )
+        return response
     roster = _load_school_roster(school_code)
     campers_norm = set(roster.get("campers_norm", []) or [])
     hitter_norm_set = set(roster.get("hitter_norm", []) or [])
@@ -17293,7 +18052,7 @@ def hitting_filters(
     if allowed_hitter_keys:
         hitters = [name for name in hitters if _normalize_name_key(name) in allowed_hitter_keys]
 
-    return {
+    response = {
         "school_code": school_code,
         "min_date": date_row.get("min_date"),
         "max_date": date_row.get("max_date"),
@@ -17330,6 +18089,14 @@ def hitting_filters(
             "Catcher",
         ],
     }
+    _filters_cache_set(filters_cache_key, response)
+    _save_filters_snapshot(
+        school_code=school_code,
+        domain="hitting",
+        level_bucket="All",
+        payload=response,
+    )
+    return response
 
 
 @app.get("/v1/hitting/overview")
@@ -18200,14 +18967,39 @@ def catching_filters(
     end_date: Optional[date] = Query(default=None),
     session_type: Optional[str] = Query(default=None),
     level: Optional[str] = Query(default=None),
+    force_refresh: bool = False,
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
     _ensure_performance_indexes()
     level_filter = _pro_level_norm(level)
+    filters_cache_key = _filters_cache_key(
+        f"catching_filters:{level_filter}" if school_code == "PRO" else "catching_filters",
+        school_code,
+    )
+    snapshot_level = level_filter if school_code == "PRO" else "All"
+    can_use_snapshot = start_date is None and end_date is None and not (session_type or "").strip()
+    if can_use_snapshot and not force_refresh:
+        cached_filters = _filters_cache_get(filters_cache_key)
+        if cached_filters is not None:
+            return cached_filters
+        snapshot_payload, snapshot_updated_at = _load_filters_snapshot_with_meta(
+            school_code=school_code,
+            domain="catching",
+            level_bucket=snapshot_level,
+        )
+        if isinstance(snapshot_payload, dict):
+            _filters_cache_set(filters_cache_key, snapshot_payload)
+            if _filters_snapshot_is_stale(snapshot_updated_at):
+                _kick_filters_snapshot_refresh_background(
+                    school_code=school_code,
+                    domain="catching",
+                    level_bucket=snapshot_level,
+                )
+            return snapshot_payload
     if school_code == "PRO":
         source_table = _pro_pitch_source_table()
         if not source_table:
-            return {
+            response = {
                 "school_code": school_code,
                 "min_date": None,
                 "max_date": None,
@@ -18223,6 +19015,15 @@ def catching_filters(
                 "count_options": COUNT_CHOICES,
                 "after_count_options": COUNT_CHOICES,
             }
+            if can_use_snapshot:
+                _filters_cache_set(filters_cache_key, response)
+                _save_filters_snapshot(
+                    school_code=school_code,
+                    domain="catching",
+                    level_bucket=snapshot_level,
+                    payload=response,
+                )
+            return response
         sport_ids = _pro_level_sport_ids(level_filter)
         where_clauses = [
             "school_code = 'PRO'",
@@ -18328,7 +19129,7 @@ def catching_filters(
                     team_types = ["All", *[_pro_team_label(code, level_filter) for code in team_codes]]
             except Exception:
                 pass
-        return {
+        response = {
             "school_code": school_code,
             "min_date": date_row.get("min_date"),
             "max_date": date_row.get("max_date"),
@@ -18344,6 +19145,15 @@ def catching_filters(
             "count_options": COUNT_CHOICES,
             "after_count_options": COUNT_CHOICES,
         }
+        if can_use_snapshot:
+            _filters_cache_set(filters_cache_key, response)
+            _save_filters_snapshot(
+                school_code=school_code,
+                domain="catching",
+                level_bucket=snapshot_level,
+                payload=response,
+            )
+        return response
     roster = _load_school_roster(school_code)
     campers_norm = set(roster.get("campers_norm", []) or [])
     team_catcher_norm = set(roster.get("hitter_norm", []) or []) - campers_norm
@@ -18455,7 +19265,7 @@ def catching_filters(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"catching filters query failed: {exc}") from exc
 
-    return {
+    response = {
         "school_code": school_code,
         "min_date": date_row.get("min_date"),
         "max_date": date_row.get("max_date"),
@@ -18471,6 +19281,15 @@ def catching_filters(
         "after_count_options": COUNT_CHOICES,
         "catchers_by_team_code": catchers_by_team_code,
     }
+    if can_use_snapshot:
+        _filters_cache_set(filters_cache_key, response)
+        _save_filters_snapshot(
+            school_code=school_code,
+            domain="catching",
+            level_bucket=snapshot_level,
+            payload=response,
+        )
+    return response
 
 
 @app.get("/v1/catching/overview")

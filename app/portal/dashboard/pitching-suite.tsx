@@ -1421,6 +1421,7 @@ export default function PitchingSuite({
   const [customTableName, setCustomTableName] = useState('');
   const [selectedCustomTableId, setSelectedCustomTableId] = useState<number | null>(null);
   const proDefaultTableAppliedRef = useRef(false);
+  const gcuDefaultTableAppliedRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2104,17 +2105,25 @@ export default function PitchingSuite({
     const isGameLogPage = dashboardPage === 'Game Log';
     const isSummaryPage = dashboardPage === 'Summary';
     const isHeatMapsPage = dashboardPage === 'HeatMaps';
+    const shouldDeferCharts = isSummaryPage || isTrendPage;
     const shouldLoadLeagueCharts = isLeague && !isLeagueAllSelection && !shouldForceLeagueFastTable;
     const shouldIncludeRowPitches =
       (!isLeague && !isPro) || (isLeague && !hideLeagueSummaryCharts && !shouldForceLeagueFastTable && leagueWindowDays <= 14);
     const shouldForceProFastSummary = isPro && isSummaryPage;
+    let shouldScheduleCompanionCharts = false;
     if (shouldForceProFastSummary) {
       params.set('include_chart_points', '0');
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
+      shouldScheduleCompanionCharts = true;
     } else if (isPlayerRole) {
-      params.set('include_chart_points', '1');
-      params.set('chart_points_limit', '300');
+      if (shouldDeferCharts) {
+        params.set('include_chart_points', '0');
+        shouldScheduleCompanionCharts = true;
+      } else {
+        params.set('include_chart_points', '1');
+        params.set('chart_points_limit', '300');
+      }
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', isTrendPage ? '1' : '0');
     } else if (isLeaderboard) {
@@ -2145,18 +2154,24 @@ export default function PitchingSuite({
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
     } else {
-      params.set('include_chart_points', shouldLoadLeagueCharts ? '1' : (isLeague ? '0' : '1'));
-      if (shouldLoadLeagueCharts || !isLeague) params.set('chart_points_limit', isPro ? '500' : '1000');
+      const baselineShouldIncludeCharts = shouldLoadLeagueCharts || !isLeague;
+      if (shouldDeferCharts && baselineShouldIncludeCharts) {
+        params.set('include_chart_points', '0');
+        shouldScheduleCompanionCharts = true;
+      } else {
+        params.set('include_chart_points', baselineShouldIncludeCharts ? '1' : '0');
+        if (baselineShouldIncludeCharts) params.set('chart_points_limit', isPro ? '500' : '1000');
+      }
       params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
       params.set('include_trend_rows', isLeague ? '0' : (isTrendPage ? '1' : '0'));
     }
     const requestKey = `/api/dashboard/pitching/overview?${params.toString()}`;
     const shouldSkipProCompanionChart = isPro && isSummaryPage && isProAllSelection && proWindowDays > 14;
-    const chartRequestKey = (shouldForceProFastSummary && !shouldSkipProCompanionChart)
+    const chartRequestKey = ((shouldForceProFastSummary || shouldScheduleCompanionCharts) && !shouldSkipProCompanionChart)
       ? (() => {
           const chartParams = new URLSearchParams(params);
           chartParams.set('include_chart_points', '1');
-          chartParams.set('chart_points_limit', '350');
+          chartParams.set('chart_points_limit', shouldForceProFastSummary ? '350' : (isPlayerRole ? '300' : (isPro ? '500' : '1000')));
           chartParams.set('chart_only', '1');
           chartParams.set('include_row_pitches', '0');
           chartParams.set('include_trend_rows', '0');
@@ -2174,9 +2189,9 @@ export default function PitchingSuite({
         if (!previous) return payload;
         return {
           ...previous,
-          chart_points: payload.chart_points ?? [],
-          heatmap_points: payload.heatmap_points ?? [],
-          trend_rows: payload.trend_rows ?? [],
+          chart_points: Array.isArray(payload.chart_points) ? payload.chart_points : (previous.chart_points ?? []),
+          heatmap_points: Array.isArray(payload.heatmap_points) ? payload.heatmap_points : (previous.heatmap_points ?? []),
+          trend_rows: Array.isArray(payload.trend_rows) ? payload.trend_rows : (previous.trend_rows ?? []),
         };
       });
     };
@@ -2702,6 +2717,22 @@ export default function PitchingSuite({
     setCustomTableColumns(preferred.columns ?? []);
     setAppliedFilterVersion((current) => current + 1);
   }, [isPro, customTablesLoaded, customTables, tableMode, selectedCustomTableId]);
+
+  useEffect(() => {
+    if (!isGcu) {
+      gcuDefaultTableAppliedRef.current = false;
+      return;
+    }
+    if (!customTablesLoaded || gcuDefaultTableAppliedRef.current) return;
+    const canApplyDefault = selectedCustomTableId === null && (tableMode === 'Live' || tableMode === 'Custom');
+    if (!canApplyDefault) return;
+    setTableMode('Banny');
+    setSelectedCustomTableId(null);
+    setCustomTableName('');
+    setCustomTableColumns([]);
+    setAppliedFilterVersion((current) => current + 1);
+    gcuDefaultTableAppliedRef.current = true;
+  }, [isGcu, customTablesLoaded, selectedCustomTableId, tableMode]);
 
   useEffect(() => {
     setAbGameKey('');
