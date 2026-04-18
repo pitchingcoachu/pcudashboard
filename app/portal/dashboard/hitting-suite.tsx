@@ -3720,7 +3720,7 @@ export default function HittingSuite({
                   ))}
                 </div>
               </div>
-              {dashboardPage === 'Summary' || dashboardPage === 'Leaderboard' ? (
+              {dashboardPage === 'Summary' ? (
                 <div className="dashboard-panel">
                   <h4 style={{ margin: '0 0 10px 0', textAlign: 'center' }}>Spray Results</h4>
                   <div style={{ display: 'grid', gap: 8 }}>
