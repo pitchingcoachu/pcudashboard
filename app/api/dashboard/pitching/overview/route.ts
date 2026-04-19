@@ -12,6 +12,75 @@ const RESPONSE_CACHE_HEADERS = {
 } as const;
 const SLOW_ROUTE_MS = 5000;
 
+function parseSortableNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const cleaned = value.replace(/[%\s,]/g, '');
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseInningsToDecimal(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  const parts = raw.split('.');
+  if (parts.length > 2) return null;
+  const whole = Number(parts[0] || '0');
+  if (!Number.isFinite(whole)) return null;
+  if (parts.length === 1) return whole;
+  const outs = Number(parts[1] || '0');
+  if (!Number.isFinite(outs)) return null;
+  return whole + outs / 3;
+}
+
+function deriveFallbackEra(row: Record<string, unknown>): number | null {
+  const ip = parseInningsToDecimal(row.IP);
+  if (!ip || ip <= 0) return null;
+  const hr = parseSortableNumber(row.HR) ?? 0;
+  const bb = parseSortableNumber(row.BB) ?? 0;
+  const hbp = parseSortableNumber(row.HBP) ?? 0;
+  const k = parseSortableNumber(row.K) ?? 0;
+  const h2 = parseSortableNumber(row['2B']) ?? 0;
+  const h3 = parseSortableNumber(row['3B']) ?? 0;
+  const h = parseSortableNumber(row.H) ?? 0;
+  const h1Raw = parseSortableNumber(row['1B']);
+  const h1 = h1Raw ?? Math.max(0, h - h2 - h3 - hr);
+  const erEstimate =
+    (0.47 * h1) +
+    (0.78 * h2) +
+    (1.09 * h3) +
+    (1.4 * hr) +
+    (0.33 * (bb + hbp)) -
+    (0.1 * k);
+  if (!Number.isFinite(erEstimate)) return null;
+  return Math.max(0, (9 * erEstimate) / ip);
+}
+
+function withEraBackfill(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object') return payload;
+  const data = payload as { table_rows?: unknown[] };
+  if (!Array.isArray(data.table_rows)) return payload;
+  let changed = false;
+  const nextRows = data.table_rows.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const rowObj = row as Record<string, unknown>;
+    const eraRaw = rowObj.ERA;
+    const hasEra =
+      (typeof eraRaw === 'number' && Number.isFinite(eraRaw)) ||
+      (typeof eraRaw === 'string' && eraRaw.trim().length > 0);
+    if (hasEra) return row;
+    const fallback = deriveFallbackEra(rowObj);
+    if (fallback === null) return row;
+    changed = true;
+    return { ...rowObj, ERA: Number(fallback.toFixed(2)) };
+  });
+  if (!changed) return payload;
+  return { ...(payload as Record<string, unknown>), table_rows: nextRows };
+}
+
 function resolveOverviewTimeoutMs(schoolCode: string): number {
   return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 300000 : 120000;
 }
@@ -40,6 +109,46 @@ function parseIsoDate(value: string): Date | null {
 function isTruthy(value: string): boolean {
   const raw = String(value ?? '').trim().toLowerCase();
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function hasNonEmptyTableRows(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false;
+  const rows = (payload as { table_rows?: unknown }).table_rows;
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+async function fetchProSafePitchingLeaderboard(params: {
+  apiBase: string;
+  schoolCode: string;
+  level: string;
+  startDate: string;
+  endDate: string;
+  splitBy: string;
+  cachePolicy: { ttlMs: number; staleTtlMs: number };
+  timeoutMs: number;
+  retries: number;
+}) {
+  const { apiBase, schoolCode, level, startDate, endDate, splitBy, cachePolicy, timeoutMs, retries } = params;
+  const fallbackUrl = new URL(`${apiBase}/v1/pitching/overview`);
+  fallbackUrl.searchParams.set('school_code', schoolCode);
+  if (startDate) fallbackUrl.searchParams.set('start_date', startDate);
+  if (endDate) fallbackUrl.searchParams.set('end_date', endDate);
+  fallbackUrl.searchParams.set('team_type', 'All');
+  if (level && level !== 'All') fallbackUrl.searchParams.set('level', level);
+  fallbackUrl.searchParams.set('table_mode', 'Live');
+  fallbackUrl.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
+  fallbackUrl.searchParams.set('include_chart_points', '0');
+  fallbackUrl.searchParams.set('include_row_pitches', '0');
+  fallbackUrl.searchParams.set('include_trend_rows', '0');
+  const fallback = await fetchDashboardJsonWithCache({
+    cacheKey: `pitching:overview:pro-safe-leaderboard:${fallbackUrl.toString()}`,
+    ttlMs: cachePolicy.ttlMs,
+    staleTtlMs: cachePolicy.staleTtlMs,
+    timeoutMs,
+    retries,
+    fetcher: () => fetch(fallbackUrl.toString(), { cache: 'no-store' }),
+  });
+  return fallback;
 }
 
 export async function GET(request: Request) {
@@ -85,6 +194,7 @@ export async function GET(request: Request) {
   const includeChartPoints = inputUrl.searchParams.get('include_chart_points')?.trim() ?? '';
   const chartPointsLimit = inputUrl.searchParams.get('chart_points_limit')?.trim() ?? '';
   const chartOnly = inputUrl.searchParams.get('chart_only')?.trim() ?? '';
+  const forceRaw = inputUrl.searchParams.get('force_raw')?.trim() ?? '';
   const includeRowPitches = inputUrl.searchParams.get('include_row_pitches')?.trim() ?? '';
   const includeTrendRows = inputUrl.searchParams.get('include_trend_rows')?.trim() ?? '';
   const schoolCode = resolveDashboardSchoolCode({
@@ -151,6 +261,9 @@ export async function GET(request: Request) {
   if (pcMax) url.searchParams.set('pc_max', pcMax);
   const isLeague = String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE';
   const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
+  const normalizedTableMode = tableMode.toLowerCase();
+  const proLeaderboardDefaultModeRequested = !normalizedTableMode || normalizedTableMode === 'live';
+  const customModeRequested = tableMode.toLowerCase() === 'custom' || customColumns.length > 0;
   const start = parseIsoDate(startDate);
   const end = parseIsoDate(endDate);
   const daySpan = start && end ? Math.floor((end.getTime() - start.getTime()) / 86400000) + 1 : 0;
@@ -164,6 +277,7 @@ export async function GET(request: Request) {
   if (includeChartPoints) url.searchParams.set('include_chart_points', includeChartPoints);
   if (chartPointsLimit) url.searchParams.set('chart_points_limit', chartPointsLimit);
   if (chartOnly) url.searchParams.set('chart_only', chartOnly);
+  if (forceRaw) url.searchParams.set('force_raw', forceRaw);
   if (includeRowPitches) url.searchParams.set('include_row_pitches', includeRowPitches);
   if (includeTrendRows) url.searchParams.set('include_trend_rows', includeTrendRows);
   if (forceLeagueLight) {
@@ -203,11 +317,12 @@ export async function GET(request: Request) {
     isProLeaderboardSplit &&
     proBroadScope &&
     daySpan >= 14 &&
+    proLeaderboardDefaultModeRequested &&
+    !customModeRequested &&
     !isTruthy(chartOnly);
   if (shouldForceProLeaderboardRollupShape) {
     // Match league broad-window behavior: keep this request strictly rollup-safe.
     url.searchParams.set('team_type', 'All');
-    url.searchParams.set('level', 'MLB');
     url.searchParams.set('table_mode', 'Live');
     url.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
     url.searchParams.set('include_chart_points', '0');
@@ -245,44 +360,98 @@ export async function GET(request: Request) {
   const cachePolicy = resolveOverviewCachePolicy(schoolCode);
   const isGameSplit = splitBy === 'Game';
   const gameSplitCacheBuster = isGameSplit ? `:game:${Date.now()}` : '';
+  const customShapeCacheBuster = customModeRequested ? ':custom-shape-v2' : '';
+  const shouldPreferProSafeLeaderboard =
+    isPro &&
+    !shouldScopePlayer &&
+    proBroadScope &&
+    (splitBy === 'Pitcher' || splitBy === 'Pitcher Team') &&
+    proLeaderboardDefaultModeRequested &&
+    !customModeRequested &&
+    !isTruthy(chartOnly);
+
+  if (shouldPreferProSafeLeaderboard) {
+    try {
+      const fallback = await fetchProSafePitchingLeaderboard({
+        apiBase,
+        schoolCode,
+        level,
+        startDate,
+        endDate,
+        splitBy,
+        cachePolicy,
+        timeoutMs: 25000,
+        retries: 0,
+      });
+      if (fallback.status >= 200 && fallback.status < 300 && hasNonEmptyTableRows(fallback.payload)) {
+        return NextResponse.json(withEraBackfill(fallback.payload), {
+          headers: {
+            ...RESPONSE_CACHE_HEADERS,
+            'x-dashboard-cache': fallback.cached ? 'HIT' : 'MISS',
+            'x-dashboard-cache-source': fallback.source,
+            'x-dashboard-upstream-ms': String(fallback.durationMs),
+            'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
+            'x-dashboard-fallback': 'pro-leaderboard-safe-primary',
+          },
+        });
+      }
+    } catch {
+      // Continue to primary route logic below.
+    }
+  }
 
   try {
     const result = await fetchDashboardJsonWithCache({
-      cacheKey: `pitching:overview:${url.toString()}${gameSplitCacheBuster}`,
+      cacheKey: `pitching:overview:${url.toString()}${gameSplitCacheBuster}${customShapeCacheBuster}`,
       ttlMs: cachePolicy.ttlMs,
       staleTtlMs: cachePolicy.staleTtlMs,
       timeoutMs: resolveOverviewTimeoutMs(schoolCode),
       retries: resolveOverviewRetries(schoolCode),
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
     });
+    if (
+      result.status >= 200 &&
+      result.status < 300 &&
+      shouldPreferProSafeLeaderboard &&
+      !hasNonEmptyTableRows(result.payload)
+    ) {
+      const uncachedResponse = await fetch(url.toString(), { cache: 'no-store' });
+      const uncachedPayload = (await uncachedResponse.json().catch(() => ({}))) as Record<string, unknown>;
+      if (uncachedResponse.ok && hasNonEmptyTableRows(uncachedPayload)) {
+        return NextResponse.json(withEraBackfill(uncachedPayload), {
+          headers: {
+            ...RESPONSE_CACHE_HEADERS,
+            'x-dashboard-cache': 'MISS',
+            'x-dashboard-cache-source': 'MISS',
+            'x-dashboard-upstream-ms': String(result.durationMs),
+            'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
+            'x-dashboard-fallback': 'pro-empty-cache-bypass',
+          },
+        });
+      }
+    }
     if (result.status < 200 || result.status >= 300) {
       const leaderboardLikeSplit = splitBy === 'Pitcher' || splitBy === 'Pitcher Team';
       const shouldFallbackToLeanProLeaderboard =
         isPro &&
         leaderboardLikeSplit &&
+        proLeaderboardDefaultModeRequested &&
+        !customModeRequested &&
         !isTruthy(chartOnly);
       if (shouldFallbackToLeanProLeaderboard && result.status >= 500) {
-        const fallbackUrl = new URL(`${apiBase}/v1/pitching/overview`);
-        fallbackUrl.searchParams.set('school_code', schoolCode);
-        if (startDate) fallbackUrl.searchParams.set('start_date', startDate);
-        if (endDate) fallbackUrl.searchParams.set('end_date', endDate);
-        fallbackUrl.searchParams.set('team_type', 'All');
-        fallbackUrl.searchParams.set('level', 'MLB');
-        fallbackUrl.searchParams.set('table_mode', 'Live');
-        fallbackUrl.searchParams.set('split_by', 'Pitcher');
-        fallbackUrl.searchParams.set('include_chart_points', '0');
-        fallbackUrl.searchParams.set('include_row_pitches', '0');
-        fallbackUrl.searchParams.set('include_trend_rows', '0');
-        const fallback = await fetchDashboardJsonWithCache({
-          cacheKey: `pitching:overview:pro-safe-leaderboard:${fallbackUrl.toString()}`,
-          ttlMs: cachePolicy.ttlMs,
-          staleTtlMs: cachePolicy.staleTtlMs,
+        const fallback = await fetchProSafePitchingLeaderboard({
+          apiBase,
+          schoolCode,
+          level,
+          startDate,
+          endDate,
+          splitBy,
+          cachePolicy,
           timeoutMs: resolveOverviewTimeoutMs(schoolCode),
           retries: resolveOverviewRetries(schoolCode),
-          fetcher: () => fetch(fallbackUrl.toString(), { cache: 'no-store' }),
         });
         if (fallback.status >= 200 && fallback.status < 300) {
-          return NextResponse.json(fallback.payload, {
+          return NextResponse.json(withEraBackfill(fallback.payload), {
             headers: {
               ...RESPONSE_CACHE_HEADERS,
               'x-dashboard-cache': fallback.cached ? 'HIT' : 'MISS',
@@ -301,7 +470,7 @@ export async function GET(request: Request) {
           : `Dashboard API request failed (HTTP ${result.status}).`;
       return NextResponse.json({ error: message }, { status: result.status });
     }
-    return NextResponse.json(result.payload, {
+    return NextResponse.json(withEraBackfill(result.payload), {
       headers: {
         ...RESPONSE_CACHE_HEADERS,
         'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',
@@ -311,6 +480,42 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    const leaderboardLikeSplit = splitBy === 'Pitcher' || splitBy === 'Pitcher Team';
+    const shouldFallbackToLeanProLeaderboard =
+      isPro &&
+      leaderboardLikeSplit &&
+      proLeaderboardDefaultModeRequested &&
+      !customModeRequested &&
+      !isTruthy(chartOnly);
+    if (shouldFallbackToLeanProLeaderboard) {
+      try {
+        const fallback = await fetchProSafePitchingLeaderboard({
+          apiBase,
+          schoolCode,
+          level,
+          startDate,
+          endDate,
+          splitBy,
+          cachePolicy,
+          timeoutMs: resolveOverviewTimeoutMs(schoolCode),
+          retries: resolveOverviewRetries(schoolCode),
+        });
+        if (fallback.status >= 200 && fallback.status < 300) {
+          return NextResponse.json(withEraBackfill(fallback.payload), {
+            headers: {
+              ...RESPONSE_CACHE_HEADERS,
+              'x-dashboard-cache': fallback.cached ? 'HIT' : 'MISS',
+              'x-dashboard-cache-source': fallback.source,
+              'x-dashboard-upstream-ms': String(fallback.durationMs),
+              'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
+              'x-dashboard-fallback': 'pro-leaderboard-safe-catch',
+            },
+          });
+        }
+      } catch {
+        // Fall through to route-level 502 below.
+      }
+    }
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : 'Failed to reach dashboard API.',

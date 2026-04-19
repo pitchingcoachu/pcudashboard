@@ -6,6 +6,8 @@ import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
+import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
+import { resolveSchoolBrand } from '../../../lib/school-brand';
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
@@ -436,6 +438,36 @@ function parseNumber(value: unknown): number | null {
     return Number.isFinite(n) ? n : null;
   }
   return null;
+}
+
+function normalizeColumnToken(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9%+]/g, '');
+}
+
+function normalizeTableRowsForColumns(
+  columns: string[],
+  rows: Array<Record<string, string | number | null>>
+): Array<Record<string, string | number | null>> {
+  if (!Array.isArray(columns) || !columns.length || !Array.isArray(rows) || !rows.length) return rows;
+  return rows.map((row) => {
+    const out = { ...row };
+    const keyByToken = new Map<string, string>();
+    for (const key of Object.keys(row)) {
+      const token = normalizeColumnToken(key);
+      if (!token || keyByToken.has(token)) continue;
+      keyByToken.set(token, key);
+    }
+    for (const column of columns) {
+      if (Object.prototype.hasOwnProperty.call(out, column)) continue;
+      const matchKey = keyByToken.get(normalizeColumnToken(column));
+      if (!matchKey) continue;
+      out[column] = row[matchKey];
+    }
+    return out;
+  });
 }
 
 function formatNameFirstLast(name: string): string {
@@ -1899,6 +1931,7 @@ export default function HittingSuite({
   const [pinnedGameLogKeys, setPinnedGameLogKeys] = useState<Set<string>>(new Set());
   const [enableTableColors, setEnableTableColors] = useState(false);
   const [enableGameLogColors, setEnableGameLogColors] = useState(true);
+  const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
   const autoFallbackAppliedRef = useRef(false);
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: HittingFiltersPayload }>());
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: HittingOverviewPayload }>());
@@ -2008,6 +2041,10 @@ export default function HittingSuite({
   const canLoadOverview = useMemo(() => !!filters && !!startDate && !!endDate, [filters, startDate, endDate]);
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
   const isPro = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
+  const activeSchoolBrand = useMemo(
+    () => resolveSchoolBrand(String(filters?.school_code ?? selectedSchoolCode ?? 'PCU')),
+    [filters?.school_code, selectedSchoolCode]
+  );
   const isLeagueAllSelection = isLeague && teamType === 'All' && hitter === 'All' && oppPitcher === 'All';
   const leagueWindowDays = useMemo(() => {
     if (!isLeague || !startDate || !endDate) return 0;
@@ -2251,7 +2288,10 @@ export default function HittingSuite({
     setLoadingOverview(true);
     setError(null);
     const isLeaderboardPage = dashboardPage === 'Leaderboard';
-    const strictProLeaderboard = isPro && isLeaderboardPage;
+    const normalizedTableMode = String(tableMode ?? '').trim().toLowerCase();
+    const proLeaderboardDefaultMode =
+      normalizedTableMode.length === 0 || normalizedTableMode === 'results';
+    const strictProLeaderboard = isPro && isLeaderboardPage && proLeaderboardDefaultMode;
     const params = new URLSearchParams();
     if (startDate) params.set('start_date', startDate);
     if (endDate) params.set('end_date', endDate);
@@ -2260,12 +2300,8 @@ export default function HittingSuite({
       ? resolveLeagueTeamTypeForApi(teamType, [filters?.hitters_by_team_code, filters?.opp_pitchers_by_team_code])
       : teamType;
     if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
-    if (isPro) {
-      if (strictProLeaderboard) {
-        params.set('level', 'MLB');
-      } else if (level && level !== 'All') {
-        params.set('level', level);
-      }
+    if (isPro && level && level !== 'All') {
+      params.set('level', level);
     }
     if (oppPitcher && oppPitcher !== 'All' && !strictProLeaderboard) params.set('opp_pitcher', oppPitcher);
     if (hand && hand !== 'All' && !strictProLeaderboard) params.set('hand', hand);
@@ -2275,6 +2311,9 @@ export default function HittingSuite({
     params.set('split_by', effectiveSplitBy);
     if (!strictProLeaderboard && tableMode === 'Custom' && customTableColumns.length) {
       params.set('custom_columns', customTableColumns.join(','));
+    }
+    if (isPro && tableMode === 'Custom') {
+      params.set('force_raw', '1');
     }
     if (!strictProLeaderboard) {
       if (pitchTypes.length) params.set('pitch_types', pitchTypes.join(';'));
@@ -2317,11 +2356,21 @@ export default function HittingSuite({
       : null;
     const overviewTtlMs = isPro ? 90000 : 30000;
     const applyOverviewPayload = (payload: HittingOverviewPayload) => {
-      const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
+      const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+      const tableRows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+      const normalizedRows = normalizeTableRowsForColumns(tableColumns, tableRows);
+      const normalizedPayload =
+        normalizedRows === tableRows
+          ? payload
+          : ({
+              ...payload,
+              table_rows: normalizedRows,
+            } as HittingOverviewPayload);
+      const noRows = !Array.isArray(normalizedPayload.table_rows) || normalizedPayload.table_rows.length === 0;
       if (noRows && !autoFallbackAppliedRef.current) {
         autoFallbackAppliedRef.current = true;
       }
-      setOverview(payload);
+      setOverview(normalizedPayload);
     };
     const applyChartPayload = (payload: HittingOverviewPayload) => {
       setOverview((previous) => {
@@ -2353,9 +2402,66 @@ export default function HittingSuite({
       })();
     if (!inflightOverview) overviewInflightRef.current.set(requestKey, overviewPromise);
     overviewPromise
-      .then((payload) => {
+      .then(async (payload) => {
         if (cancelled) return;
         overviewCacheRef.current.set(requestKey, { at: Date.now(), payload });
+        const shouldTryLeaderboardFallback =
+          isPro &&
+          isLeaderboardPage &&
+          (!Array.isArray(payload.table_rows) || payload.table_rows.length === 0) &&
+          !autoFallbackAppliedRef.current;
+        if (shouldTryLeaderboardFallback) {
+          autoFallbackAppliedRef.current = true;
+          const fallbackParams = new URLSearchParams(params);
+          fallbackParams.set('team_type', 'All');
+          if (level && level !== 'All') fallbackParams.set('level', level);
+          else fallbackParams.delete('level');
+          fallbackParams.set('table_mode', 'Results');
+          fallbackParams.set('split_by', leaderboardViewBy === 'Team' ? 'Batter Team' : 'Batter');
+          fallbackParams.set('include_chart_points', '0');
+          const dropKeys = [
+            'opp_pitcher',
+            'hand',
+            'batter_side',
+            'venue',
+            'custom_columns',
+            'in_zone',
+            'pitch_types',
+            'zone_locations',
+            'pitch_results',
+            'count_filter',
+            'after_count_filter',
+            'bip_result',
+            'velo_min',
+            'velo_max',
+            'ivb_min',
+            'ivb_max',
+            'hb_min',
+            'hb_max',
+            'pc_min',
+            'pc_max',
+            'chart_only',
+            'chart_points_limit',
+            'recent_pa_mode',
+            'recent_pa_count',
+            'recent_pa_ignore_dates',
+          ] as const;
+          for (const key of dropKeys) fallbackParams.delete(key);
+          const fallbackKey = `/api/dashboard/hitting/overview?${fallbackParams.toString()}`;
+          try {
+            const fallbackResponse = await fetch(fallbackKey, { signal: controller.signal });
+            const fallbackPayload = (await fallbackResponse.json().catch(() => ({}))) as HittingOverviewPayload & { error?: string };
+            if (fallbackResponse.ok && !fallbackPayload.error && Array.isArray(fallbackPayload.table_rows) && fallbackPayload.table_rows.length > 0) {
+              overviewCacheRef.current.set(fallbackKey, { at: Date.now(), payload: fallbackPayload });
+              applyOverviewPayload(fallbackPayload);
+              return;
+            }
+          } catch (fallbackErr) {
+            if (!(fallbackErr instanceof DOMException && fallbackErr.name === 'AbortError')) {
+              // Keep primary payload below if fallback request fails.
+            }
+          }
+        }
         applyOverviewPayload(payload);
         if (!chartRequestKey) return;
         const cachedChart = overviewCacheRef.current.get(chartRequestKey);
@@ -2850,11 +2956,14 @@ export default function HittingSuite({
   }, [customTables]);
   const displayedTableColumns = useMemo(() => {
     const splitColumn = overview?.table_columns?.[0] ?? 'Pitch';
+    if (isPro && isLeaderboardPage && tableMode !== 'Custom') {
+      return overview?.table_columns?.length ? overview.table_columns : [splitColumn];
+    }
     if (tableMode === 'Custom') {
       return customTableColumns.length ? [splitColumn, ...customTableColumns] : [splitColumn];
     }
     return overview?.table_columns?.length ? overview.table_columns : [splitColumn];
-  }, [overview?.table_columns, tableMode, customTableColumns]);
+  }, [overview?.table_columns, tableMode, customTableColumns, isPro, isLeaderboardPage]);
   const leaderboardBaseColumns = useMemo(() => displayedTableColumns, [displayedTableColumns]);
   useEffect(() => {
     if (!isLeaderboardPage) return;
@@ -2884,6 +2993,23 @@ export default function HittingSuite({
       pinnedLeaderboardKeys
     ) as Array<Record<string, string | number | null>>;
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
+  const isGameLogPage = dashboardPage === 'Game Log';
+  const correlationColumns = useMemo(
+    () => {
+      if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage)) return [] as string[];
+      return isGameLogPage ? gameLogColumns : displayedTableColumns;
+    },
+    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, gameLogColumns, displayedTableColumns]
+  );
+  const correlationRows = useMemo(
+    () => {
+      if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage)) return [] as Array<Record<string, string | number | null | undefined>>;
+      return isGameLogPage
+        ? (gameLogRowsWithPins as Array<Record<string, string | number | null | undefined>>)
+        : (leaderboardRowsWithPins as Array<Record<string, string | number | null | undefined>>);
+    },
+    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, gameLogRowsWithPins, leaderboardRowsWithPins]
+  );
   const leaderboardColumnRanges = useMemo(() => {
     if (!isLeaderboardPage) return new Map<string, { min: number; max: number }>();
     const ranges = new Map<string, { min: number; max: number }>();
@@ -3871,7 +3997,7 @@ export default function HittingSuite({
             style={{
               marginBottom: '0.8rem',
               gridTemplateColumns: isLeaderboardPage
-                ? ((isLeague || isPro) ? 'repeat(2, minmax(160px, 260px))' : 'minmax(160px, 260px)')
+                ? ((isLeague || isPro) ? 'repeat(3, minmax(160px, 260px))' : 'repeat(2, minmax(160px, 260px))')
                 : 'repeat(2, minmax(160px, 260px))',
             }}
           >
@@ -3899,16 +4025,34 @@ export default function HittingSuite({
               </label>
             ) : null}
             {isLeaderboardPage ? (
-              <div className="portal-color-toggle">
-                <span className="portal-color-toggle-label">Color Code</span>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'nowrap', justifySelf: 'end' }}>
+                <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
+                  <span className="portal-color-toggle-label">Color Code</span>
+                  <button
+                    type="button"
+                    className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
+                    aria-label="Toggle table color coding"
+                    aria-pressed={enableTableColors}
+                    title={enableTableColors ? 'Color code on' : 'Color code off'}
+                    onClick={() => setEnableTableColors((current) => !current)}
+                  />
+                </div>
                 <button
                   type="button"
-                  className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
-                  aria-label="Toggle table color coding"
-                  aria-pressed={enableTableColors}
-                  title={enableTableColors ? 'Color code on' : 'Color code off'}
-                  onClick={() => setEnableTableColors((current) => !current)}
-                />
+                  className="btn btn-ghost"
+                  style={{
+                    whiteSpace: 'nowrap',
+                    height: '2.22rem',
+                    minHeight: '2.22rem',
+                    padding: '0 1.05rem',
+                    alignSelf: 'end',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                  }}
+                  onClick={() => setShowLeaderboardCorrelation(true)}
+                >
+                  View Chart
+                </button>
               </div>
             ) : null}
             {!isLeaderboardPage ? (
@@ -4312,16 +4456,33 @@ export default function HittingSuite({
                       placeholder={TABLE_MODE_DEFAULT}
                     />
                   </label>
-                  <div className="portal-color-toggle">
-                    <span className="portal-color-toggle-label">Color Code</span>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'nowrap', justifySelf: 'end' }}>
+                    <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
+                      <span className="portal-color-toggle-label">Color Code</span>
+                      <button
+                        type="button"
+                        className={`portal-color-toggle-btn${enableGameLogColors ? ' is-on' : ''}`}
+                        aria-label="Toggle game log color coding"
+                        aria-pressed={enableGameLogColors}
+                        title={enableGameLogColors ? 'Color code on' : 'Color code off'}
+                        onClick={() => setEnableGameLogColors((current) => !current)}
+                      />
+                    </div>
                     <button
                       type="button"
-                      className={`portal-color-toggle-btn${enableGameLogColors ? ' is-on' : ''}`}
-                      aria-label="Toggle game log color coding"
-                      aria-pressed={enableGameLogColors}
-                      title={enableGameLogColors ? 'Color code on' : 'Color code off'}
-                      onClick={() => setEnableGameLogColors((current) => !current)}
-                    />
+                      className="btn btn-ghost"
+                      style={{
+                        whiteSpace: 'nowrap',
+                        height: '2.22rem',
+                        minHeight: '2.22rem',
+                        padding: '0 1.05rem',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                      }}
+                      onClick={() => setShowLeaderboardCorrelation(true)}
+                    >
+                      View Chart
+                    </button>
                   </div>
                 </div>
                 {!canRunGameLog ? (
@@ -5292,6 +5453,25 @@ export default function HittingSuite({
             </div>
         </article>
       </div>
+      {showLeaderboardCorrelation && (isLeaderboardPage || isGameLogPage) ? (
+        <LeaderboardCorrelationModal
+          open
+          onClose={() => setShowLeaderboardCorrelation(false)}
+          title={isGameLogPage ? 'Hitting Game Log Correlation' : 'Hitting Leaderboard Correlation'}
+          columns={correlationColumns}
+          rows={correlationRows}
+          viewByLabel={isLeaderboardPage ? leaderboardViewBy : 'Player'}
+          primaryColumnName={correlationColumns[0] ?? ''}
+          siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
+          siteLogoAlt={activeSchoolBrand.logoAlt}
+          pointLogoSrcForLabel={(label) => {
+            if (!isPro || leaderboardViewBy !== 'Team') return '';
+            const code = inferProTeamCode(label);
+            const logo = code ? (getProTeamLogoUrl(code) || '') : '';
+            return logo ? `/api/dashboard/image-proxy?url=${encodeURIComponent(logo)}` : '';
+          }}
+        />
+      ) : null}
     </section>
   );
 }

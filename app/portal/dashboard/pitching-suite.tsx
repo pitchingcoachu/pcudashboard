@@ -6,6 +6,8 @@ import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
+import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
+import { resolveSchoolBrand } from '../../../lib/school-brand';
 
 type FiltersPayload = {
   school_code: string;
@@ -386,6 +388,44 @@ function parseInningNumber(value: string | null | undefined): number | null {
   return Math.trunc(parsed);
 }
 
+function parseInningsToDecimal(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  const parts = raw.split('.');
+  if (parts.length > 2) return null;
+  const whole = Number(parts[0] || '0');
+  if (!Number.isFinite(whole)) return null;
+  if (parts.length === 1) return whole;
+  const outs = Number(parts[1] || '0');
+  if (!Number.isFinite(outs)) return null;
+  return whole + outs / 3;
+}
+
+function deriveFallbackEra(row: Record<string, string | number | null>): number | null {
+  const ip = parseInningsToDecimal(row.IP);
+  if (!ip || ip <= 0) return null;
+  const hr = parseSortableNumber(row.HR) ?? 0;
+  const bb = parseSortableNumber(row.BB) ?? 0;
+  const hbp = parseSortableNumber(row.HBP) ?? 0;
+  const k = parseSortableNumber(row.K) ?? 0;
+  const h2 = parseSortableNumber(row['2B']) ?? 0;
+  const h3 = parseSortableNumber(row['3B']) ?? 0;
+  const h = parseSortableNumber(row.H) ?? 0;
+  const h1Raw = parseSortableNumber(row['1B']);
+  const h1 = h1Raw ?? Math.max(0, h - h2 - h3 - hr);
+  const erEstimate =
+    (0.47 * h1) +
+    (0.78 * h2) +
+    (1.09 * h3) +
+    (1.4 * hr) +
+    (0.33 * (bb + hbp)) -
+    (0.1 * k);
+  if (!Number.isFinite(erEstimate)) return null;
+  return Math.max(0, (9 * erEstimate) / ip);
+}
+
 function formatTiltClock(value: string | null | undefined): string {
   const raw = (value ?? '').trim();
   if (!raw) return '—';
@@ -491,6 +531,36 @@ function normalizeMulti(values: string[]): string[] {
   if (unique.length === 0) return ['All'];
   if (unique.includes('All')) return ['All'];
   return unique;
+}
+
+function normalizeColumnToken(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9%+]/g, '');
+}
+
+function normalizeTableRowsForColumns(
+  columns: string[],
+  rows: Array<Record<string, string | number | null>>
+): Array<Record<string, string | number | null>> {
+  if (!Array.isArray(columns) || !columns.length || !Array.isArray(rows) || !rows.length) return rows;
+  return rows.map((row) => {
+    const out = { ...row };
+    const keyByToken = new Map<string, string>();
+    for (const key of Object.keys(row)) {
+      const token = normalizeColumnToken(key);
+      if (!token || keyByToken.has(token)) continue;
+      keyByToken.set(token, key);
+    }
+    for (const column of columns) {
+      if (Object.prototype.hasOwnProperty.call(out, column)) continue;
+      const matchKey = keyByToken.get(normalizeColumnToken(column));
+      if (!matchKey) continue;
+      out[column] = row[matchKey];
+    }
+    return out;
+  });
 }
 
 function normalizeLeagueTeamToken(value: string): string {
@@ -1415,6 +1485,7 @@ export default function PitchingSuite({
   const [visualOption, setVisualOption] = useState('Play Video');
   const [pitchEditSelectMode, setPitchEditSelectMode] = useState<PitchEditSelectMode>('single');
   const [enableTableColors, setEnableTableColors] = useState(true);
+  const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [loadingCustomTables, setLoadingCustomTables] = useState(false);
   const [customTablesLoaded, setCustomTablesLoaded] = useState(false);
@@ -1422,6 +1493,8 @@ export default function PitchingSuite({
   const [selectedCustomTableId, setSelectedCustomTableId] = useState<number | null>(null);
   const proDefaultTableAppliedRef = useRef(false);
   const gcuDefaultTableAppliedRef = useRef(false);
+  const proLeaderboardDefaultAppliedRef = useRef(false);
+  const proLeaderboardDateDefaultAppliedRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1464,6 +1537,11 @@ export default function PitchingSuite({
   const [pcMax, setPcMax] = useState('');
 
   const [appliedFilterVersion, setAppliedFilterVersion] = useState(0);
+  const jaredDashboardTable = useMemo(() => {
+    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const preferred = customTables.find((item) => normalize(item.name) === 'jaredsdashboard');
+    return preferred ?? null;
+  }, [customTables]);
   const lastAppliedHomeRequestRef = useRef<number>(0);
   const pcuSearchPlayerDatePendingRef = useRef(false);
   const [releaseView, setReleaseView] = useState('Averages Only');
@@ -1579,6 +1657,10 @@ export default function PitchingSuite({
     String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
     String(filters?.school_code ?? '').toUpperCase() === 'PRO' ||
     String(filters?.school_code ?? '').toUpperCase() === 'MLB';
+  const activeSchoolBrand = useMemo(
+    () => resolveSchoolBrand(String(filters?.school_code ?? selectedSchoolCode ?? 'PCU')),
+    [filters?.school_code, selectedSchoolCode]
+  );
   const isGcu =
     String(selectedSchoolCode ?? '').toUpperCase() === 'GCU' ||
     String(filters?.school_code ?? '').toUpperCase() === 'GCU';
@@ -2074,10 +2156,24 @@ export default function PitchingSuite({
     if (!canLoadOverview) return;
     let active = true;
     const controller = new AbortController();
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, isPro ? 120000 : 90000);
     setLoadingOverview(true);
     setError('');
     const isLeaderboardPage = dashboardPage === 'Leaderboard';
-    const strictProLeaderboard = isPro && isLeaderboardPage;
+    const isJaredDashboardSelection =
+      tableMode === 'Custom' &&
+      !!jaredDashboardTable &&
+      Number(selectedCustomTableId ?? 0) > 0 &&
+      Number(selectedCustomTableId) === Number(jaredDashboardTable.id);
+    const normalizedTableMode = String(tableMode ?? '').trim().toLowerCase();
+    const proLeaderboardDefaultMode = normalizedTableMode.length === 0 || normalizedTableMode === 'live';
+    const strictProLeaderboard =
+      isPro && isLeaderboardPage && proLeaderboardDefaultMode && !isJaredDashboardSelection;
+    const proLeaderboardLeanFilters = strictProLeaderboard;
 
     const params = new URLSearchParams();
     params.set('start_date', startDate);
@@ -2087,29 +2183,28 @@ export default function PitchingSuite({
       ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
       : teamType;
     if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
-    if (isPro) {
-      if (strictProLeaderboard) {
-        params.set('level', 'MLB');
-      } else if (level && level !== 'All') {
-        params.set('level', level);
-      }
+    if (isPro && level && level !== 'All') {
+      params.set('level', level);
     }
-    if (withVideo && withVideo !== 'All' && !strictProLeaderboard) params.set('with_video', withVideo);
-    if (breakLines && breakLines !== 'None' && !strictProLeaderboard) params.set('break_lines', breakLines);
+    if (withVideo && withVideo !== 'All' && !proLeaderboardLeanFilters) params.set('with_video', withVideo);
+    if (breakLines && breakLines !== 'None' && !proLeaderboardLeanFilters) params.set('break_lines', breakLines);
     if (stuffLevel) params.set('stuff_level', stuffLevel);
     if (stuffBase) params.set('stuff_base', stuffBase);
-    if (hand && hand !== 'All' && !strictProLeaderboard) params.set('hand', hand);
-    if (batterSide && batterSide !== 'All' && !strictProLeaderboard) params.set('batter_side', batterSide);
-    if (venue && venue !== 'All' && !strictProLeaderboard) params.set('venue', venue);
+    if (hand && hand !== 'All' && !proLeaderboardLeanFilters) params.set('hand', hand);
+    if (batterSide && batterSide !== 'All' && !proLeaderboardLeanFilters) params.set('batter_side', batterSide);
+    if (venue && venue !== 'All' && !proLeaderboardLeanFilters) params.set('venue', venue);
     if (!isPro && sessionType) params.set('session_type', sessionType);
-    if (qpLocations && qpLocations !== 'All' && !strictProLeaderboard) params.set('qp_locations', qpLocations);
+    if (qpLocations && qpLocations !== 'All' && !proLeaderboardLeanFilters) params.set('qp_locations', qpLocations);
     if (tableMode && !strictProLeaderboard) params.set('table_mode', tableMode);
     if (strictProLeaderboard) params.set('table_mode', 'Live');
     if (effectiveSplitBy) params.set('split_by', effectiveSplitBy);
     if (!strictProLeaderboard && tableMode === 'Custom' && customTableColumns.length > 0) {
       params.set('custom_columns', customTableColumns.join(','));
     }
-    if (visualOption && visualOption !== 'All' && !strictProLeaderboard) params.set('visual_option', visualOption);
+    if (isPro && tableMode === 'Custom') {
+      params.set('force_raw', '1');
+    }
+    if (visualOption && visualOption !== 'All' && !proLeaderboardLeanFilters) params.set('visual_option', visualOption);
 
     const pitchersParam = toParamValue(selectedPitchers);
     const hittersParam = toParamValue(selectedHitters);
@@ -2122,7 +2217,7 @@ export default function PitchingSuite({
 
     if (pitchersParam) params.set('pitcher', pitchersParam);
     if (hittersParam) params.set('opp_hitter', hittersParam);
-    if (!strictProLeaderboard) {
+    if (!proLeaderboardLeanFilters) {
       if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
       if (zoneParam) params.set('zone_locations', zoneParam);
       if (resultsParam) params.set('pitch_results', resultsParam);
@@ -2218,9 +2313,19 @@ export default function PitchingSuite({
       : null;
     const overviewTtlMs = isPro ? 90000 : 30000;
     const applyOverviewPayload = (payload: OverviewPayload) => {
-      const noRows = !Array.isArray(payload.table_rows) || payload.table_rows.length === 0;
+      const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+      const tableRows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+      const normalizedRows = normalizeTableRowsForColumns(tableColumns, tableRows);
+      const normalizedPayload =
+        normalizedRows === tableRows
+          ? payload
+          : ({
+              ...payload,
+              table_rows: normalizedRows,
+            } as OverviewPayload);
+      const noRows = !Array.isArray(normalizedPayload.table_rows) || normalizedPayload.table_rows.length === 0;
       if (noRows && !autoFallbackAppliedRef.current) autoFallbackAppliedRef.current = true;
-      setOverview(payload);
+      setOverview(normalizedPayload);
     };
     const applyChartPayload = (payload: OverviewPayload) => {
       setOverview((previous) => {
@@ -2239,6 +2344,7 @@ export default function PitchingSuite({
       setLoadingOverview(false);
       return () => {
         active = false;
+        window.clearTimeout(timeoutId);
         controller.abort();
       };
     }
@@ -2253,9 +2359,68 @@ export default function PitchingSuite({
       })();
     if (!inflightOverview) overviewInflightRef.current.set(requestKey, overviewPromise);
     overviewPromise
-      .then((payload) => {
+      .then(async (payload) => {
         if (!active) return;
         overviewCacheRef.current.set(requestKey, { at: Date.now(), payload });
+        const shouldTryLeaderboardFallback =
+          isPro &&
+          isLeaderboard &&
+          (!Array.isArray(payload.table_rows) || payload.table_rows.length === 0) &&
+          !autoFallbackAppliedRef.current;
+        if (shouldTryLeaderboardFallback) {
+          autoFallbackAppliedRef.current = true;
+          const fallbackParams = new URLSearchParams(params);
+          fallbackParams.set('team_type', 'All');
+          if (level && level !== 'All') fallbackParams.set('level', level);
+          else fallbackParams.delete('level');
+          fallbackParams.set('table_mode', 'Live');
+          fallbackParams.set('split_by', leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Pitcher');
+          fallbackParams.set('include_chart_points', '0');
+          fallbackParams.set('include_row_pitches', '0');
+          fallbackParams.set('include_trend_rows', '0');
+          const dropKeys = [
+            'with_video',
+            'break_lines',
+            'hand',
+            'batter_side',
+            'venue',
+            'session_type',
+            'qp_locations',
+            'custom_columns',
+            'visual_option',
+            'in_zone',
+            'pitch_types',
+            'zone_locations',
+            'pitch_results',
+            'count_filter',
+            'after_count_filter',
+            'velo_min',
+            'velo_max',
+            'ivb_min',
+            'ivb_max',
+            'hb_min',
+            'hb_max',
+            'pc_min',
+            'pc_max',
+            'chart_only',
+            'chart_points_limit',
+          ] as const;
+          for (const key of dropKeys) fallbackParams.delete(key);
+          const fallbackKey = `/api/dashboard/pitching/overview?${fallbackParams.toString()}`;
+          try {
+            const fallbackResponse = await fetch(fallbackKey, { signal: controller.signal });
+            const fallbackPayload = (await fallbackResponse.json().catch(() => ({}))) as OverviewPayload & { error?: string };
+            if (fallbackResponse.ok && !fallbackPayload.error && Array.isArray(fallbackPayload.table_rows) && fallbackPayload.table_rows.length > 0) {
+              overviewCacheRef.current.set(fallbackKey, { at: Date.now(), payload: fallbackPayload });
+              applyOverviewPayload(fallbackPayload);
+              return;
+            }
+          } catch (fallbackErr) {
+            if (!(fallbackErr instanceof DOMException && fallbackErr.name === 'AbortError')) {
+              // Keep primary payload below if fallback request fails.
+            }
+          }
+        }
         applyOverviewPayload(payload);
         if (!chartRequestKey) return;
 
@@ -2292,6 +2457,10 @@ export default function PitchingSuite({
       })
       .catch((requestError) => {
         if (!active) return;
+        if (timedOut) {
+          setError('Pitching overview request timed out. Please retry.');
+          return;
+        }
         if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
         setError(requestError instanceof Error ? requestError.message : 'Failed to load pitching overview.');
       })
@@ -2302,6 +2471,7 @@ export default function PitchingSuite({
 
     return () => {
       active = false;
+      window.clearTimeout(timeoutId);
       controller.abort();
     };
   }, [
@@ -2326,6 +2496,8 @@ export default function PitchingSuite({
     proWindowDays,
     isProAllSelection,
     customTableColumns,
+    selectedCustomTableId,
+    jaredDashboardTable,
     visualOption,
     selectedAfterCountFilters,
     selectedCountFilters,
@@ -2723,26 +2895,15 @@ export default function PitchingSuite({
 
   useEffect(() => {
     if (!isPro || !customTablesLoaded || proDefaultTableAppliedRef.current) return;
-    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
-    const preferred = customTables.find((item) => normalize(item.name) === 'jaredsdashboard');
-    if (!preferred) {
-      proDefaultTableAppliedRef.current = true;
-      return;
-    }
-    const alreadyApplied = tableMode === 'Custom' && selectedCustomTableId === preferred.id;
-    if (alreadyApplied) {
-      proDefaultTableAppliedRef.current = true;
-      return;
-    }
     const canApplyDefault = selectedCustomTableId === null && (tableMode === 'Live' || tableMode === 'Custom');
     if (!canApplyDefault) return;
-    setTableMode('Custom');
-    setSelectedCustomTableId(preferred.id);
-    setCustomTableName(preferred.name);
-    setCustomTableColumns(preferred.columns ?? []);
+    setTableMode('Live');
+    setSelectedCustomTableId(null);
+    setCustomTableName('');
+    setCustomTableColumns([]);
     setAppliedFilterVersion((current) => current + 1);
     proDefaultTableAppliedRef.current = true;
-  }, [isPro, customTablesLoaded, customTables, selectedCustomTableId, tableMode]);
+  }, [isPro, customTablesLoaded, selectedCustomTableId, tableMode]);
 
   useEffect(() => {
     if (!isPro || !customTablesLoaded) return;
@@ -2755,6 +2916,47 @@ export default function PitchingSuite({
     setCustomTableColumns(preferred.columns ?? []);
     setAppliedFilterVersion((current) => current + 1);
   }, [isPro, customTablesLoaded, customTables, tableMode, selectedCustomTableId]);
+
+  useEffect(() => {
+    if (dashboardPage !== 'Leaderboard') {
+      proLeaderboardDefaultAppliedRef.current = false;
+      proLeaderboardDateDefaultAppliedRef.current = false;
+      return;
+    }
+    if (!isPro || proLeaderboardDefaultAppliedRef.current) return;
+    if (tableMode === 'Live') {
+      proLeaderboardDefaultAppliedRef.current = true;
+      return;
+    }
+    setTableMode('Live');
+    setShowCustomEditor(false);
+    setSelectedCustomTableId(null);
+    setCustomTableName('');
+    setCustomTableColumns([]);
+    setCustomSaveState('idle');
+    setCustomSaveMessage('');
+    setAppliedFilterVersion((current) => current + 1);
+    proLeaderboardDefaultAppliedRef.current = true;
+  }, [dashboardPage, isPro, tableMode]);
+
+  useEffect(() => {
+    if (dashboardPage !== 'Leaderboard') {
+      proLeaderboardDateDefaultAppliedRef.current = false;
+      return;
+    }
+    if (!isPro || proLeaderboardDateDefaultAppliedRef.current) return;
+    const todayYmd = toYmdNow();
+    const needsStartReset = !startDate || startDate < PRO_SEASON_START;
+    const needsEndReset = !endDate || endDate > todayYmd;
+    if (!needsStartReset && !needsEndReset) {
+      proLeaderboardDateDefaultAppliedRef.current = true;
+      return;
+    }
+    if (needsStartReset) setStartDate(PRO_SEASON_START);
+    if (needsEndReset) setEndDate(todayYmd);
+    setAppliedFilterVersion((current) => current + 1);
+    proLeaderboardDateDefaultAppliedRef.current = true;
+  }, [dashboardPage, isPro, startDate, endDate]);
 
   useEffect(() => {
     if (!isGcu) {
@@ -5715,6 +5917,12 @@ export default function PitchingSuite({
     setDashboardPage('Summary');
     setAppliedFilterVersion((current) => current + 1);
   }, [isPro, level]);
+  const customSavedModeOptions = useMemo(() => {
+    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    return customTables
+      .filter((item) => normalize(item.name) !== 'jaredsdashboard')
+      .map((item) => ({ value: `custom_saved:${item.id}`, label: item.name }));
+  }, [customTables]);
   const tableModeOptions = useMemo(
     () =>
       (isLeague
@@ -5724,7 +5932,8 @@ export default function PitchingSuite({
             { value: 'Process', label: 'Process' },
             { value: 'Results', label: 'Results' },
             { value: 'Bullpen', label: 'Bullpen' },
-            { value: 'Banny', label: "Jared's Dashboard" },
+            ...(isGcu ? [{ value: 'Banny', label: 'Banny' }] : []),
+            ...(jaredDashboardTable ? [{ value: 'jared_dashboard', label: "Jared's Dashboard" }] : []),
             { value: 'Usage', label: 'Usage' },
             { value: 'Raw Data', label: 'Raw Data' },
             { value: 'Batted Ball Data', label: 'Batted Ball Data' },
@@ -5735,13 +5944,14 @@ export default function PitchingSuite({
             { value: 'Results', label: 'Results' },
             { value: 'Bullpen', label: 'Bullpen' },
             { value: 'Live', label: 'Live' },
-            { value: 'Banny', label: "Jared's Dashboard" },
+            ...(isGcu ? [{ value: 'Banny', label: 'Banny' }] : []),
+            ...(jaredDashboardTable ? [{ value: 'jared_dashboard', label: "Jared's Dashboard" }] : []),
             { value: 'Usage', label: 'Usage' },
             { value: 'Raw Data', label: 'Raw Data' },
             { value: 'Batted Ball Data', label: 'Batted Ball Data' },
           ]
-      ).concat([...customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: item.name })), { value: 'Custom', label: 'Custom' }]),
-    [customTables, isLeague]
+      ).concat([...customSavedModeOptions, { value: 'Custom', label: 'Custom' }]),
+    [customSavedModeOptions, isGcu, isLeague, jaredDashboardTable]
   );
   const splitByOptions = useMemo(
     () =>
@@ -5786,10 +5996,25 @@ export default function PitchingSuite({
     [isLeague]
   );
   const tableModeSelectValue = useMemo(
-    () => (tableMode === 'Custom' && selectedCustomTableId ? `custom_saved:${selectedCustomTableId}` : tableMode),
-    [tableMode, selectedCustomTableId]
+    () =>
+      tableMode === 'Custom' && selectedCustomTableId
+        ? (jaredDashboardTable && selectedCustomTableId === jaredDashboardTable.id ? 'jared_dashboard' : `custom_saved:${selectedCustomTableId}`)
+        : tableMode,
+    [tableMode, selectedCustomTableId, jaredDashboardTable]
   );
   const handleTableModeSelection = useCallback((next: string) => {
+    if (next === 'jared_dashboard') {
+      if (!jaredDashboardTable) return;
+      setTableMode('Custom');
+      setShowCustomEditor(false);
+      setSelectedCustomTableId(jaredDashboardTable.id);
+      setCustomTableName(jaredDashboardTable.name);
+      setCustomTableColumns(jaredDashboardTable.columns ?? []);
+      setCustomSaveState('idle');
+      setCustomSaveMessage('');
+      setAppliedFilterVersion((current) => current + 1);
+      return;
+    }
     if (next.startsWith('custom_saved:')) {
       const id = Number(next.replace('custom_saved:', ''));
       const found = customTables.find((row) => Number(row.id) === id);
@@ -5816,16 +6041,26 @@ export default function PitchingSuite({
     } else {
       setShowCustomEditor(false);
     }
-  }, [customTables]);
+  }, [customTables, jaredDashboardTable]);
   const displayedTableColumns = useMemo(() => {
     const splitColumn = overview?.table_columns?.[0] ?? 'Pitch';
+    const isJaredDashboardSelection =
+      tableMode === 'Custom' &&
+      !!jaredDashboardTable &&
+      Number(selectedCustomTableId ?? 0) > 0 &&
+      Number(selectedCustomTableId) === Number(jaredDashboardTable.id);
+    if (isPro && isLeaderboardPage && tableMode !== 'Custom' && !isJaredDashboardSelection) {
+      return overview?.table_columns?.length
+        ? overview.table_columns
+        : [splitColumn];
+    }
     if (tableMode === 'Custom') {
       return customTableColumns.length ? [splitColumn, ...customTableColumns] : [splitColumn];
     }
     return overview?.table_columns?.length
       ? overview.table_columns
       : ['Pitch Type', 'Pitches', 'Usage %', 'Avg Velo', 'Max Velo', 'Avg Spin', 'Avg IVB', 'Avg HB', 'Stuff+'];
-  }, [overview?.table_columns, tableMode, customTableColumns]);
+  }, [overview?.table_columns, tableMode, customTableColumns, isPro, isLeaderboardPage, selectedCustomTableId, jaredDashboardTable]);
   const leaderboardBaseColumns = useMemo(() => displayedTableColumns, [displayedTableColumns]);
   useEffect(() => {
     if (!isLeaderboardPage) return;
@@ -5839,7 +6074,19 @@ export default function PitchingSuite({
   // Keep PV/100 source-of-truth on the backend/rollups so reloads cannot switch
   // between mixed client fallback and server-calculated values.
   // Pitch-count min/max filtering is enforced server-side for consistency.
-  const tableRowsWithPv = useMemo(() => overview?.table_rows ?? [], [overview?.table_rows]);
+  const tableRowsWithPv = useMemo(() => {
+    const rows = overview?.table_rows ?? [];
+    return rows.map((row) => {
+      const eraRaw = row.ERA;
+      const hasEra =
+        (typeof eraRaw === 'number' && Number.isFinite(eraRaw)) ||
+        (typeof eraRaw === 'string' && eraRaw.trim() !== '');
+      if (hasEra) return row;
+      const fallbackEra = deriveFallbackEra(row as Record<string, string | number | null>);
+      if (fallbackEra === null) return row;
+      return { ...row, ERA: Number(fallbackEra.toFixed(2)) };
+    });
+  }, [overview?.table_rows]);
   const leaderboardRows = useMemo(() => {
     const rows = tableRowsWithPv;
     if (!isLeaderboardPage) return rows;
@@ -5860,6 +6107,23 @@ export default function PitchingSuite({
       pinnedLeaderboardKeys
     ) as Array<Record<string, string | number | null>>;
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
+  const isGameLogPage = dashboardPage === 'Game Log';
+  const correlationColumns = useMemo(
+    () => {
+      if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage)) return [] as string[];
+      return isGameLogPage ? gameLogColumns : displayedTableColumns;
+    },
+    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, gameLogColumns, displayedTableColumns]
+  );
+  const correlationRows = useMemo(
+    () => {
+      if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage)) return [] as Array<Record<string, string | number | null | undefined>>;
+      return isGameLogPage
+        ? (gameLogRowsWithPins as Array<Record<string, string | number | null | undefined>>)
+        : (leaderboardRowsWithPins as Array<Record<string, string | number | null | undefined>>);
+    },
+    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, gameLogRowsWithPins, leaderboardRowsWithPins]
+  );
   const latestTeamByPitcher = useMemo(() => {
     const points = overview?.chart_points ?? [];
     const latestTsByName: Record<string, number> = {};
@@ -6638,7 +6902,7 @@ export default function PitchingSuite({
                   style={{
                     marginBottom: '0.8rem',
                     gridTemplateColumns: isLeaderboardPage
-                      ? (isLeague ? 'repeat(2, minmax(160px, 260px))' : 'minmax(160px, 260px)')
+                      ? ((isLeague || isPro) ? 'repeat(3, minmax(160px, 260px))' : 'repeat(2, minmax(160px, 260px))')
                       : 'repeat(2, minmax(160px, 260px))',
                   }}
                 >
@@ -6666,16 +6930,34 @@ export default function PitchingSuite({
                     </label>
                   ) : null}
                   {isLeaderboardPage ? (
-                    <div className="portal-color-toggle">
-                      <span className="portal-color-toggle-label">Color Code</span>
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'nowrap', justifySelf: 'end' }}>
+                      <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
+                        <span className="portal-color-toggle-label">Color Code</span>
+                        <button
+                          type="button"
+                          className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
+                          aria-label="Toggle table color coding"
+                          aria-pressed={enableTableColors}
+                          title={enableTableColors ? 'Color code on' : 'Color code off'}
+                          onClick={() => setEnableTableColors((current) => !current)}
+                        />
+                      </div>
                       <button
                         type="button"
-                        className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
-                        aria-label="Toggle table color coding"
-                        aria-pressed={enableTableColors}
-                        title={enableTableColors ? 'Color code on' : 'Color code off'}
-                        onClick={() => setEnableTableColors((current) => !current)}
-                      />
+                        className="btn btn-ghost"
+                        style={{
+                          whiteSpace: 'nowrap',
+                          height: '2.22rem',
+                          minHeight: '2.22rem',
+                          padding: '0 1.05rem',
+                          alignSelf: 'end',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                        }}
+                        onClick={() => setShowLeaderboardCorrelation(true)}
+                      >
+                        View Chart
+                      </button>
                     </div>
                   ) : null}
                   {!isLeaderboardPage ? (
@@ -7105,16 +7387,33 @@ export default function PitchingSuite({
                     placeholder="Stuff"
                   />
                 </label>
-                <div className="portal-color-toggle">
-                  <span className="portal-color-toggle-label">Color Code</span>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'nowrap', justifySelf: 'end' }}>
+                  <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
+                    <span className="portal-color-toggle-label">Color Code</span>
+                    <button
+                      type="button"
+                      className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
+                      aria-label="Toggle table color coding"
+                      aria-pressed={enableTableColors}
+                      title={enableTableColors ? 'Color code on' : 'Color code off'}
+                      onClick={() => setEnableTableColors((current) => !current)}
+                    />
+                  </div>
                   <button
                     type="button"
-                    className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
-                    aria-label="Toggle table color coding"
-                    aria-pressed={enableTableColors}
-                    title={enableTableColors ? 'Color code on' : 'Color code off'}
-                    onClick={() => setEnableTableColors((current) => !current)}
-                  />
+                    className="btn btn-ghost"
+                    style={{
+                      whiteSpace: 'nowrap',
+                      height: '2.22rem',
+                      minHeight: '2.22rem',
+                      padding: '0 1.05rem',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                    }}
+                    onClick={() => setShowLeaderboardCorrelation(true)}
+                  >
+                    View Chart
+                  </button>
                 </div>
               </div>
               {!canRunGameLog ? (
@@ -9221,6 +9520,25 @@ export default function PitchingSuite({
             )}
           </div>
         </div>
+      ) : null}
+      {showLeaderboardCorrelation && (isLeaderboardPage || isGameLogPage) ? (
+        <LeaderboardCorrelationModal
+          open
+          onClose={() => setShowLeaderboardCorrelation(false)}
+          title={isGameLogPage ? 'Pitching Game Log Correlation' : 'Pitching Leaderboard Correlation'}
+          columns={correlationColumns}
+          rows={correlationRows}
+          viewByLabel={isLeaderboardPage ? leaderboardViewBy : 'Player'}
+          primaryColumnName={correlationColumns[0] ?? ''}
+          siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
+          siteLogoAlt={activeSchoolBrand.logoAlt}
+          pointLogoSrcForLabel={(label) => {
+            if (!isPro || leaderboardViewBy !== 'Team') return '';
+            const code = inferProTeamCode(label);
+            const logo = code ? (getProTeamLogoUrl(code) || '') : '';
+            return logo ? `/api/dashboard/image-proxy?url=${encodeURIComponent(logo)}` : '';
+          }}
+        />
       ) : null}
       {showTargetSettings ? (
         <div className="portal-modal-backdrop" onClick={() => setShowTargetSettings(false)}>

@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { getProTeamLogoUrl } from './pro-team-logos';
+import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
+import { resolveSchoolBrand } from '../../../lib/school-brand';
 
 type OptionItem = { value: string; label: string };
 type CatchingFiltersPayload = {
@@ -431,6 +433,7 @@ export default function CatchingSuite() {
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
+  const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
 
   const [hmChartType, setHmChartType] = useState<'Heat' | 'Pitch'>('Heat');
   const [hmStat, setHmStat] = useState('Frequency');
@@ -442,6 +445,10 @@ export default function CatchingSuite() {
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Catcher') : splitBy;
   const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
   const isPro = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
+  const activeSchoolBrand = useMemo(
+    () => resolveSchoolBrand(String(filters?.school_code ?? 'PCU')),
+    [filters?.school_code]
+  );
   const isLeagueAllSelection = isLeague && teamType === 'All' && catcher === 'All';
   const leagueWindowDays = useMemo(() => {
     if (!isLeague || !dateStart || !dateEnd) return 0;
@@ -1200,7 +1207,7 @@ export default function CatchingSuite() {
                   style={{
                     marginBottom: '0.8rem',
                     gridTemplateColumns: page === 'Leaderboard'
-                      ? (isLeague ? 'repeat(2, minmax(160px, 260px))' : 'minmax(160px, 260px)')
+                      ? (isLeague ? 'repeat(3, minmax(160px, 260px))' : 'repeat(2, minmax(160px, 260px))')
                       : 'repeat(2, minmax(160px, 260px))',
                   }}
                 >
@@ -1252,6 +1259,13 @@ export default function CatchingSuite() {
                         placeholder="Player"
                       />
                     </label>
+                  ) : null}
+                  {page === 'Leaderboard' ? (
+                    <div style={{ display: 'grid', alignContent: 'end', justifySelf: 'end' }}>
+                      <button type="button" className="btn btn-ghost" onClick={() => setShowLeaderboardCorrelation(true)}>
+                        View Chart
+                      </button>
+                    </div>
                   ) : null}
                   {page !== 'Leaderboard' ? (
                     <label>
@@ -1750,6 +1764,19 @@ export default function CatchingSuite() {
             ) : null}
           </article>
       </div>
+      {showLeaderboardCorrelation && isLeaderboardPage ? (
+        <LeaderboardCorrelationModal
+          open
+          onClose={() => setShowLeaderboardCorrelation(false)}
+          title="Catching Leaderboard Correlation"
+          columns={overview?.table_columns ?? []}
+          rows={leaderboardRowsWithPins}
+          viewByLabel={leaderboardViewBy}
+          primaryColumnName={(overview?.table_columns ?? [])[0] ?? ''}
+          siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
+          siteLogoAlt={activeSchoolBrand.logoAlt}
+        />
+      ) : null}
     </section>
   );
 }
