@@ -1,4 +1,4 @@
-import { ensureAuthDbReady, getDbPool, isDatabaseConfigured, listActiveStaffOrganizationsByEmail } from './auth-db';
+import { getDbPool, isDatabaseConfigured, listActiveStaffOrganizationsByEmail } from './auth-db';
 import type { PortalSession } from './portal-session';
 import { resolveAllowedDashboardSchoolCodes, resolveDashboardSchoolCode } from './dashboard-access';
 
@@ -146,7 +146,6 @@ async function resolveSchoolCodeByOrganizationId(organizationId: number): Promis
   }
 
   try {
-    await ensureAuthDbReady();
     const pool = getDbPool();
     const result = await pool.query<{ name: string | null }>(
       `SELECT name FROM organizations WHERE id = $1 LIMIT 1`,

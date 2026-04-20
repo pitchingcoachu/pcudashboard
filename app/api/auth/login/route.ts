@@ -10,6 +10,7 @@ import {
 } from '../../../../lib/auth';
 import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
 import { resolveHomeDashboardSchoolCode } from '../../../../lib/dashboard-home-school';
+import { canUseProgrammingData } from '../../../../lib/programming-scope';
 
 type LoginPayload = {
   email?: string;
@@ -103,7 +104,17 @@ export async function POST(request: Request) {
     const hostname = requestUrl.hostname;
 
     if (isWebMode) {
-      const destination = '/portal';
+      const destination =
+        normalizedRole === 'player'
+          ? canUseProgrammingData({
+              role: normalizedRole,
+              organizationId: user.organizationId ?? 0,
+              email: user.email,
+              dashboardSchoolCode: resolvedDashboardSchoolCode,
+            })
+            ? '/portal/player'
+            : '/portal/dashboard'
+          : '/portal/admin';
       const response = NextResponse.redirect(new URL(destination, request.url), 303);
       response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
       const domainOptions = getDomainSessionCookieOptions(hostname);

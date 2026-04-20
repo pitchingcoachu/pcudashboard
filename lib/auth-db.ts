@@ -25,22 +25,45 @@ export type SessionUser = {
   playerId: number | null;
 };
 
+function isMissingSchemaError(error: unknown): boolean {
+  const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code ?? '') : '';
+  if (code === '42P01' || code === '42703') return true; // undefined_table / undefined_column
+  const message =
+    typeof error === 'object' && error && 'message' in error
+      ? String((error as { message?: unknown }).message ?? '').toLowerCase()
+      : '';
+  return message.includes('relation') && message.includes('does not exist');
+}
+
+async function queryWithLazyAuthBootstrap<T>(
+  run: () => Promise<T>
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!isMissingSchemaError(error)) throw error;
+    await ensureAuthDbReady();
+    return await run();
+  }
+}
+
 export async function listActiveStaffOrganizationIdsByEmail(email: string): Promise<number[]> {
   if (!isDatabaseConfigured()) return [];
-  await ensureAuthDbReady();
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail) return [];
   const pool = getDbPool();
-  const result = await pool.query<{ organization_id: number | null }>(
-    `
-      SELECT DISTINCT organization_id
-      FROM auth_users
-      WHERE LOWER(email) = LOWER($1)
-        AND COALESCE(is_active, TRUE) = TRUE
-        AND role IN ('admin', 'coach')
-        AND organization_id IS NOT NULL
-    `,
-    [normalizedEmail]
+  const result = await queryWithLazyAuthBootstrap(() =>
+    pool.query<{ organization_id: number | null }>(
+      `
+        SELECT DISTINCT organization_id
+        FROM auth_users
+        WHERE LOWER(email) = LOWER($1)
+          AND COALESCE(is_active, TRUE) = TRUE
+          AND role IN ('admin', 'coach')
+          AND organization_id IS NOT NULL
+      `,
+      [normalizedEmail]
+    )
   );
   return Array.from(
     new Set(
@@ -55,23 +78,24 @@ export async function listActiveStaffOrganizationsByEmail(
   email: string
 ): Promise<Array<{ organizationId: number; organizationName: string | null }>> {
   if (!isDatabaseConfigured()) return [];
-  await ensureAuthDbReady();
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail) return [];
   const pool = getDbPool();
-  const result = await pool.query<{ organization_id: number | null; organization_name: string | null }>(
-    `
-      SELECT DISTINCT
-        u.organization_id,
-        o.name AS organization_name
-      FROM auth_users u
-      LEFT JOIN organizations o ON o.id = u.organization_id
-      WHERE LOWER(u.email) = LOWER($1)
-        AND COALESCE(u.is_active, TRUE) = TRUE
-        AND u.role IN ('admin', 'coach')
-        AND u.organization_id IS NOT NULL
-    `,
-    [normalizedEmail]
+  const result = await queryWithLazyAuthBootstrap(() =>
+    pool.query<{ organization_id: number | null; organization_name: string | null }>(
+      `
+        SELECT DISTINCT
+          u.organization_id,
+          o.name AS organization_name
+        FROM auth_users u
+        LEFT JOIN organizations o ON o.id = u.organization_id
+        WHERE LOWER(u.email) = LOWER($1)
+          AND COALESCE(u.is_active, TRUE) = TRUE
+          AND u.role IN ('admin', 'coach')
+          AND u.organization_id IS NOT NULL
+      `,
+      [normalizedEmail]
+    )
   );
   return result.rows
     .map((row) => ({
@@ -719,41 +743,42 @@ export async function ensureAuthDbReady(): Promise<void> {
 
 export async function validateLoginWithDatabase(email: string, password: string): Promise<SessionUser | null> {
   if (!isDatabaseConfigured()) return null;
-  await ensureAuthDbReady();
 
   const normalizedEmail = email.trim().toLowerCase();
   const pool = getDbPool();
-  const result = await pool.query<{
-    id: number;
-    email: string;
-    name: string | null;
-    password_hash: string;
-    app_url: string | null;
-    role: string | null;
-    is_active: boolean | null;
-    organization_id: number | null;
-    player_id: number | null;
-    }>(
-    `
-      SELECT
-        u.id,
-        u.email,
-        u.name,
-        u.password_hash,
-        u.app_url,
-        u.role,
-        u.is_active,
-        u.organization_id,
-        p.id AS player_id
-      FROM auth_users u
-      LEFT JOIN players p ON p.user_id = u.id
-      WHERE LOWER(u.email) = LOWER($1)
-      ORDER BY
-        CASE WHEN COALESCE(u.is_active, TRUE) = TRUE THEN 0 ELSE 1 END,
-        CASE WHEN u.role = 'admin' THEN 0 WHEN u.role = 'coach' THEN 1 WHEN u.role = 'player' THEN 2 ELSE 3 END,
-        u.id DESC
-    `,
-    [normalizedEmail]
+  const result = await queryWithLazyAuthBootstrap(() =>
+    pool.query<{
+      id: number;
+      email: string;
+      name: string | null;
+      password_hash: string;
+      app_url: string | null;
+      role: string | null;
+      is_active: boolean | null;
+      organization_id: number | null;
+      player_id: number | null;
+      }>(
+      `
+        SELECT
+          u.id,
+          u.email,
+          u.name,
+          u.password_hash,
+          u.app_url,
+          u.role,
+          u.is_active,
+          u.organization_id,
+          p.id AS player_id
+        FROM auth_users u
+        LEFT JOIN players p ON p.user_id = u.id
+        WHERE LOWER(u.email) = LOWER($1)
+        ORDER BY
+          CASE WHEN COALESCE(u.is_active, TRUE) = TRUE THEN 0 ELSE 1 END,
+          CASE WHEN u.role = 'admin' THEN 0 WHEN u.role = 'coach' THEN 1 WHEN u.role = 'player' THEN 2 ELSE 3 END,
+          u.id DESC
+      `,
+      [normalizedEmail]
+    )
   );
 
   if ((result.rowCount ?? 0) < 1) return null;
@@ -777,40 +802,41 @@ export async function validateLoginWithDatabase(email: string, password: string)
 
 export async function getSessionUserByEmail(email: string): Promise<SessionUser | null> {
   if (!isDatabaseConfigured()) return null;
-  await ensureAuthDbReady();
 
   const normalizedEmail = email.trim().toLowerCase();
   const pool = getDbPool();
-  const result = await pool.query<{
-    id: number;
-    email: string;
-    name: string | null;
-    app_url: string | null;
-    role: string | null;
-    is_active: boolean | null;
-    organization_id: number | null;
-    player_id: number | null;
-    }>(
-    `
-      SELECT
-        u.id,
-        u.email,
-        u.name,
-        u.app_url,
-        u.role,
-        u.is_active,
-        u.organization_id,
-        p.id AS player_id
-      FROM auth_users u
-      LEFT JOIN players p ON p.user_id = u.id
-      WHERE LOWER(u.email) = LOWER($1)
-        AND COALESCE(u.is_active, TRUE) = TRUE
-      ORDER BY
-        CASE WHEN u.role = 'admin' THEN 0 WHEN u.role = 'coach' THEN 1 WHEN u.role = 'player' THEN 2 ELSE 3 END,
-        u.id DESC
-      LIMIT 1
-    `,
-    [normalizedEmail]
+  const result = await queryWithLazyAuthBootstrap(() =>
+    pool.query<{
+      id: number;
+      email: string;
+      name: string | null;
+      app_url: string | null;
+      role: string | null;
+      is_active: boolean | null;
+      organization_id: number | null;
+      player_id: number | null;
+      }>(
+      `
+        SELECT
+          u.id,
+          u.email,
+          u.name,
+          u.app_url,
+          u.role,
+          u.is_active,
+          u.organization_id,
+          p.id AS player_id
+        FROM auth_users u
+        LEFT JOIN players p ON p.user_id = u.id
+        WHERE LOWER(u.email) = LOWER($1)
+          AND COALESCE(u.is_active, TRUE) = TRUE
+        ORDER BY
+          CASE WHEN u.role = 'admin' THEN 0 WHEN u.role = 'coach' THEN 1 WHEN u.role = 'player' THEN 2 ELSE 3 END,
+          u.id DESC
+        LIMIT 1
+      `,
+      [normalizedEmail]
+    )
   );
 
   if ((result.rowCount ?? 0) !== 1) return null;

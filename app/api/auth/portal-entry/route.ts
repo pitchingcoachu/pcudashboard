@@ -46,29 +46,33 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL('/login', request.url), 303);
   }
 
-  let homeSchoolCode = resolveHomeDashboardSchoolCode({
-    email: session.email,
-    organizationId: session.organizationId ?? null,
-    dashboardSchoolCode: session.dashboardSchoolCode ?? null,
-  });
-  const role: 'admin' | 'coach' | 'player' =
-    session.role === 'player' ? 'player' : session.role === 'coach' ? 'coach' : 'admin';
-  const allowed = await resolveSessionDashboardSchoolOptions({
-    userId: session.userId ?? 0,
-    email: session.email,
-    name: session.name,
-    role,
-    organizationId: session.organizationId ?? 0,
-    playerId: session.playerId ?? null,
-    dashboardSchoolCode: session.dashboardSchoolCode ?? null,
-    appUrl: session.appUrl,
-    apps: session.apps,
-  });
-  homeSchoolCode = choosePreferredSchoolCode(homeSchoolCode, allowed);
-
   const normalizedCurrent = String(session.dashboardSchoolCode ?? '').trim().toUpperCase();
-  const normalizedHome = String(homeSchoolCode ?? '').trim().toUpperCase();
-  const shouldResetSchool = Boolean(normalizedHome) && normalizedCurrent !== normalizedHome;
+  let normalizedHome = normalizedCurrent;
+  let shouldResetSchool = false;
+
+  if (!normalizedHome) {
+    let homeSchoolCode = resolveHomeDashboardSchoolCode({
+      email: session.email,
+      organizationId: session.organizationId ?? null,
+      dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+    });
+    const role: 'admin' | 'coach' | 'player' =
+      session.role === 'player' ? 'player' : session.role === 'coach' ? 'coach' : 'admin';
+    const allowed = await resolveSessionDashboardSchoolOptions({
+      userId: session.userId ?? 0,
+      email: session.email,
+      name: session.name,
+      role,
+      organizationId: session.organizationId ?? 0,
+      playerId: session.playerId ?? null,
+      dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+      appUrl: session.appUrl,
+      apps: session.apps,
+    });
+    homeSchoolCode = choosePreferredSchoolCode(homeSchoolCode, allowed);
+    normalizedHome = String(homeSchoolCode ?? '').trim().toUpperCase();
+    shouldResetSchool = Boolean(normalizedHome) && normalizedCurrent !== normalizedHome;
+  }
 
   const destination =
     session.role === 'player'
