@@ -84,7 +84,8 @@ export async function GET(request: Request) {
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const schoolCode = resolveDashboardSchoolCode({
+  const requestedPercentileBaseline = isTruthy(new URL(request.url).searchParams.get('percentile_baseline')?.trim() ?? '');
+  const resolvedSchoolCode = resolveDashboardSchoolCode({
     userId: session.userId ?? 0,
     email: session.email,
     name: session.name,
@@ -95,6 +96,9 @@ export async function GET(request: Request) {
     appUrl: session.appUrl,
     apps: session.apps,
   });
+  const schoolCode = requestedPercentileBaseline
+    ? (String(resolvedSchoolCode).trim().toUpperCase() === 'PRO' ? 'PRO' : 'LEAGUE')
+    : resolvedSchoolCode;
 
   const inputUrl = new URL(request.url);
   const splitBy = inputUrl.searchParams.get('split_by')?.trim() ?? '';
@@ -112,7 +116,7 @@ export async function GET(request: Request) {
   const start = parseIsoDate(startDate);
   const end = parseIsoDate(endDate);
   const daySpan = start && end ? Math.floor((end.getTime() - start.getTime()) / 86400000) + 1 : 0;
-  const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+  const shouldScopePlayer = !requestedPercentileBaseline && shouldScopeDashboardPlayer(session.role, schoolCode);
   const playerIdentity = shouldScopePlayer
     ? await resolveDashboardPlayerIdentity({
         role: session.role,
@@ -160,6 +164,7 @@ export async function GET(request: Request) {
     'recent_pa_mode',
     'recent_pa_count',
     'recent_pa_ignore_dates',
+    'percentile_baseline',
   ] as const;
 
   const apiBase = resolveDashboardApiBaseUrl();
@@ -170,12 +175,16 @@ export async function GET(request: Request) {
       url.searchParams.set('hitter', scopedHitter);
       continue;
     }
+    if (key === 'hitter' && requestedPercentileBaseline) {
+      continue;
+    }
     const value = inputUrl.searchParams.get(key)?.trim() ?? '';
     if (value) url.searchParams.set(key, value);
   }
+  const requestedHitter = requestedPercentileBaseline ? '' : hitterParam;
   const broadScope =
     !scopedHitter &&
-    !hitterParam &&
+    !requestedHitter &&
     !oppPitcher &&
     (!teamType || teamType.toLowerCase() === 'all');
   const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';

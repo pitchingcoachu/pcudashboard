@@ -195,9 +195,10 @@ export async function GET(request: Request) {
   const chartPointsLimit = inputUrl.searchParams.get('chart_points_limit')?.trim() ?? '';
   const chartOnly = inputUrl.searchParams.get('chart_only')?.trim() ?? '';
   const forceRaw = inputUrl.searchParams.get('force_raw')?.trim() ?? '';
+  const percentileBaseline = isTruthy(inputUrl.searchParams.get('percentile_baseline')?.trim() ?? '');
   const includeRowPitches = inputUrl.searchParams.get('include_row_pitches')?.trim() ?? '';
   const includeTrendRows = inputUrl.searchParams.get('include_trend_rows')?.trim() ?? '';
-  const schoolCode = resolveDashboardSchoolCode({
+  const resolvedSchoolCode = resolveDashboardSchoolCode({
     userId: session.userId ?? 0,
     email: session.email,
     name: session.name,
@@ -208,7 +209,10 @@ export async function GET(request: Request) {
     appUrl: session.appUrl,
     apps: session.apps,
   });
-  const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+  const schoolCode = percentileBaseline
+    ? (String(resolvedSchoolCode).trim().toUpperCase() === 'PRO' ? 'PRO' : 'LEAGUE')
+    : resolvedSchoolCode;
+  const shouldScopePlayer = !percentileBaseline && shouldScopeDashboardPlayer(session.role, schoolCode);
   const playerIdentity = shouldScopePlayer
     ? await resolveDashboardPlayerIdentity({
         role: session.role,
@@ -228,7 +232,7 @@ export async function GET(request: Request) {
   if (startDate) url.searchParams.set('start_date', startDate);
   if (endDate) url.searchParams.set('end_date', endDate);
   if (scopedPitcher) url.searchParams.set('pitcher', scopedPitcher);
-  else if (pitcher) url.searchParams.set('pitcher', pitcher);
+  else if (!percentileBaseline && pitcher) url.searchParams.set('pitcher', pitcher);
   if (teamType) url.searchParams.set('team_type', teamType);
   if (oppHitter) url.searchParams.set('opp_hitter', oppHitter);
   if (withVideo) url.searchParams.set('with_video', withVideo);
@@ -268,9 +272,10 @@ export async function GET(request: Request) {
   const end = parseIsoDate(endDate);
   const daySpan = start && end ? Math.floor((end.getTime() - start.getTime()) / 86400000) + 1 : 0;
   const forceLeagueLight = isLeague && daySpan >= 14;
+  const requestedPitcher = percentileBaseline ? '' : pitcher;
   const broadScope =
     !scopedPitcher &&
-    !pitcher &&
+    !requestedPitcher &&
     !oppHitter &&
     (!teamType || teamType.toLowerCase() === 'all');
 
@@ -278,6 +283,7 @@ export async function GET(request: Request) {
   if (chartPointsLimit) url.searchParams.set('chart_points_limit', chartPointsLimit);
   if (chartOnly) url.searchParams.set('chart_only', chartOnly);
   if (forceRaw) url.searchParams.set('force_raw', forceRaw);
+  if (percentileBaseline) url.searchParams.set('percentile_baseline', '1');
   if (includeRowPitches) url.searchParams.set('include_row_pitches', includeRowPitches);
   if (includeTrendRows) url.searchParams.set('include_trend_rows', includeTrendRows);
   if (forceLeagueLight) {
@@ -310,7 +316,7 @@ export async function GET(request: Request) {
   const proBroadScope =
     isPro &&
     !scopedPitcher &&
-    !pitcher &&
+    !requestedPitcher &&
     !oppHitter &&
     (!teamType || teamType.toLowerCase() === 'all');
   const shouldForceProLeaderboardRollupShape =

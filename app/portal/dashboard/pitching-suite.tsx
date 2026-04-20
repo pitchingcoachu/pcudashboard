@@ -255,6 +255,9 @@ const PITCH_TYPE_DISPLAY_ORDER = [
 ] as const;
 const LEAGUE_SEASON_START = '2026-02-13';
 const PRO_SEASON_START = '2026-03-25';
+const HANDED_MOVEMENT_PERCENTILE_COLUMNS = new Set(
+  ['IVB', 'HB', 'Side', 'rTilt', 'bTilt'].map((column) => normalizePercentileColumnToken(column))
+);
 
 
 function fmtNum(value: number | null | undefined, digits = 1): string {
@@ -561,6 +564,46 @@ function normalizeTableRowsForColumns(
     }
     return out;
   });
+}
+
+function isAllLikeRowValue(value: unknown): boolean {
+  const text = String(value ?? '').trim().toLowerCase();
+  return text === 'all' || text === 'all (pinned)';
+}
+
+function percentileForValue(value: number, distribution: number[]): number | null {
+  if (!Number.isFinite(value) || !distribution.length) return null;
+  let less = 0;
+  let equal = 0;
+  for (const point of distribution) {
+    if (point < value) less += 1;
+    else if (point === value) equal += 1;
+  }
+  const rank = ((less + (equal * 0.5) + 0.5) / (distribution.length + 1)) * 100;
+  return Math.max(0, Math.min(100, rank));
+}
+
+function percentileRowKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function normalizePercentileColumnToken(value: string): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function normalizeHandednessCode(value: unknown): 'R' | 'L' | '' {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return '';
+  if (raw.startsWith('r')) return 'R';
+  if (raw.startsWith('l')) return 'L';
+  return '';
+}
+
+function percentileTextColor(value: number): string {
+  return value <= 30 || value >= 70 ? '#f8fafc' : '#0b1220';
 }
 
 function normalizeLeagueTeamToken(value: string): string {
@@ -1462,6 +1505,7 @@ export default function PitchingSuite({
   const [splitBy, setSplitBy] = useState('Pitch Types');
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
+  const [leaderboardStatView, setLeaderboardStatView] = useState<'Stats' | 'Percentile'>('Stats');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
   const [gameLogRows, setGameLogRows] = useState<Array<Record<string, unknown>>>([]);
@@ -1475,6 +1519,8 @@ export default function PitchingSuite({
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: FiltersPayload }>());
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: OverviewPayload }>());
   const overviewInflightRef = useRef(new Map<string, Promise<OverviewPayload>>());
+  const percentileBaselineCacheRef = useRef(new Map<string, { at: number; rows: Array<Record<string, string | number | null>> }>());
+  const percentileBaselineHandedCacheRef = useRef(new Map<string, { at: number; rows: Array<Record<string, string | number | null>> }>());
   const [abSortColumn, setAbSortColumn] = useState('Pitch #');
   const [abSortDirection, setAbSortDirection] = useState<SortDirection>('asc');
   const suppressNextFilterDateAutofillRef = useRef(false);
@@ -1485,6 +1531,11 @@ export default function PitchingSuite({
   const [visualOption, setVisualOption] = useState('Play Video');
   const [pitchEditSelectMode, setPitchEditSelectMode] = useState<PitchEditSelectMode>('single');
   const [enableTableColors, setEnableTableColors] = useState(true);
+  const [showCellPercentiles, setShowCellPercentiles] = useState(true);
+  const [percentileBaselineRequestKey, setPercentileBaselineRequestKey] = useState('');
+  const [percentileBaselineRows, setPercentileBaselineRows] = useState<Array<Record<string, string | number | null>>>([]);
+  const [percentileBaselineHandedRequestKey, setPercentileBaselineHandedRequestKey] = useState('');
+  const [percentileBaselineHandedRows, setPercentileBaselineHandedRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [loadingCustomTables, setLoadingCustomTables] = useState(false);
@@ -1991,6 +2042,36 @@ export default function PitchingSuite({
     const selected = selectedPitchers.filter((value) => value !== 'All');
     return selected.length === 1 ? selected[0] : '';
   }, [selectedPitchers]);
+  const selectedSinglePitcherHandCode = useMemo<'R' | 'L' | ''>(() => {
+    const handFromFilter = normalizeHandednessCode(hand);
+    if (!selectedSinglePitcher) return '';
+    const points = overview?.chart_points ?? [];
+    if (!points.length) return handFromFilter;
+    const selectedNorm = String(selectedSinglePitcher).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const selectedFirstLastNorm = formatNameFirstLast(selectedSinglePitcher).toLowerCase().replace(/[^a-z0-9]/g, '');
+    let right = 0;
+    let left = 0;
+    for (const point of points) {
+      const pointName = String(point.pitcher ?? '').trim();
+      if (!pointName) continue;
+      const pointNorm = pointName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const pointFirstLastNorm = formatNameFirstLast(pointName).toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (
+        pointNorm !== selectedNorm &&
+        pointNorm !== selectedFirstLastNorm &&
+        pointFirstLastNorm !== selectedNorm &&
+        pointFirstLastNorm !== selectedFirstLastNorm
+      ) {
+        continue;
+      }
+      const code = normalizeHandednessCode(point.pitcherthrows);
+      if (code === 'R') right += 1;
+      if (code === 'L') left += 1;
+    }
+    if (right > left && right > 0) return 'R';
+    if (left > right && left > 0) return 'L';
+    return handFromFilter;
+  }, [hand, overview?.chart_points, selectedSinglePitcher]);
   const hasSpecificPitcherSelection = useMemo(
     () => selectedPitchers.some((value) => String(value ?? '').trim() !== '' && value !== 'All'),
     [selectedPitchers]
@@ -2298,6 +2379,34 @@ export default function PitchingSuite({
       params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
       params.set('include_trend_rows', isLeague ? '0' : (isTrendPage ? '1' : '0'));
     }
+
+    const shouldLoadPercentileBaseline = isSummaryPage || isLeaderboard;
+    if (shouldLoadPercentileBaseline) {
+      const baselineParams = new URLSearchParams(params);
+      baselineParams.set('percentile_baseline', '1');
+      baselineParams.set('include_chart_points', '0');
+      baselineParams.set('include_row_pitches', '0');
+      baselineParams.set('include_trend_rows', '0');
+      baselineParams.delete('chart_only');
+      baselineParams.delete('chart_points_limit');
+      baselineParams.delete('pitcher');
+      if (isPro) {
+        baselineParams.set('start_date', '2026-01-01');
+        baselineParams.set('end_date', '2026-12-31');
+        baselineParams.set('level', 'MLB');
+      }
+      setPercentileBaselineRequestKey(`/api/dashboard/pitching/overview?${baselineParams.toString()}`);
+      if (selectedSinglePitcher && selectedSinglePitcherHandCode) {
+        const handedParams = new URLSearchParams(baselineParams);
+        handedParams.set('hand', selectedSinglePitcherHandCode);
+        setPercentileBaselineHandedRequestKey(`/api/dashboard/pitching/overview?${handedParams.toString()}`);
+      } else {
+        setPercentileBaselineHandedRequestKey('');
+      }
+    } else {
+      setPercentileBaselineRequestKey('');
+      setPercentileBaselineHandedRequestKey('');
+    }
     const requestKey = `/api/dashboard/pitching/overview?${params.toString()}`;
     const shouldSkipProCompanionChart = isPro && isSummaryPage && isProAllSelection && proWindowDays > 14;
     const chartRequestKey = ((shouldForceProFastSummary || shouldScheduleCompanionCharts) && !shouldSkipProCompanionChart)
@@ -2338,9 +2447,40 @@ export default function PitchingSuite({
         };
       });
     };
+    const loadCompanionChart = (key: string) => {
+      const cachedChart = overviewCacheRef.current.get(key);
+      if (cachedChart && Date.now() - cachedChart.at < overviewTtlMs) {
+        applyChartPayload(cachedChart.payload);
+        return;
+      }
+      const inflightChart = overviewInflightRef.current.get(key);
+      const chartPromise =
+        inflightChart ??
+        (async () => {
+          const response = await fetch(key, { signal: controller.signal });
+          const chartPayload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
+          if (!response.ok) throw new Error(chartPayload.error ?? 'Failed to load pitching chart data.');
+          return chartPayload;
+        })();
+      if (!inflightChart) overviewInflightRef.current.set(key, chartPromise);
+      chartPromise
+        .then((chartPayload) => {
+          if (!active) return;
+          overviewCacheRef.current.set(key, { at: Date.now(), payload: chartPayload });
+          applyChartPayload(chartPayload);
+        })
+        .catch((chartError) => {
+          if (!active) return;
+          if (chartError instanceof DOMException && chartError.name === 'AbortError') return;
+        })
+        .finally(() => {
+          overviewInflightRef.current.delete(key);
+        });
+    };
     const cachedOverview = overviewCacheRef.current.get(requestKey);
     if (cachedOverview && Date.now() - cachedOverview.at < overviewTtlMs) {
       applyOverviewPayload(cachedOverview.payload);
+      if (chartRequestKey) loadCompanionChart(chartRequestKey);
       setLoadingOverview(false);
       return () => {
         active = false;
@@ -2423,37 +2563,7 @@ export default function PitchingSuite({
         }
         applyOverviewPayload(payload);
         if (!chartRequestKey) return;
-
-        const cachedChart = overviewCacheRef.current.get(chartRequestKey);
-        if (cachedChart && Date.now() - cachedChart.at < overviewTtlMs) {
-          applyChartPayload(cachedChart.payload);
-          return;
-        }
-
-        const inflightChart = overviewInflightRef.current.get(chartRequestKey);
-        const chartPromise =
-          inflightChart ??
-          (async () => {
-            const response = await fetch(chartRequestKey, { signal: controller.signal });
-            const chartPayload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
-            if (!response.ok) throw new Error(chartPayload.error ?? 'Failed to load pitching chart data.');
-            return chartPayload;
-          })();
-        if (!inflightChart) overviewInflightRef.current.set(chartRequestKey, chartPromise);
-
-        chartPromise
-          .then((chartPayload) => {
-            if (!active) return;
-            overviewCacheRef.current.set(chartRequestKey, { at: Date.now(), payload: chartPayload });
-            applyChartPayload(chartPayload);
-          })
-          .catch((chartError) => {
-            if (!active) return;
-            if (chartError instanceof DOMException && chartError.name === 'AbortError') return;
-          })
-          .finally(() => {
-            overviewInflightRef.current.delete(chartRequestKey);
-          });
+        loadCompanionChart(chartRequestKey);
       })
       .catch((requestError) => {
         if (!active) return;
@@ -2519,7 +2629,73 @@ export default function PitchingSuite({
     veloMax,
     veloMin,
     withVideo,
+    selectedSinglePitcher,
+    selectedSinglePitcherHandCode,
   ]);
+
+  useEffect(() => {
+    if (!percentileBaselineRequestKey) {
+      setPercentileBaselineRows([]);
+      return;
+    }
+    const cached = percentileBaselineCacheRef.current.get(percentileBaselineRequestKey);
+    if (cached && Date.now() - cached.at < 90_000) {
+      setPercentileBaselineRows(cached.rows);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    fetch(percentileBaselineRequestKey, { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { table_rows?: Array<Record<string, string | number | null>>; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed percentile baseline request.');
+        const baselineRows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+        if (!active) return;
+        percentileBaselineCacheRef.current.set(percentileBaselineRequestKey, { at: Date.now(), rows: baselineRows });
+        setPercentileBaselineRows(baselineRows);
+      })
+      .catch((error) => {
+        if (!active) return;
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setPercentileBaselineRows([]);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [percentileBaselineRequestKey]);
+
+  useEffect(() => {
+    if (!percentileBaselineHandedRequestKey) {
+      setPercentileBaselineHandedRows([]);
+      return;
+    }
+    const cached = percentileBaselineHandedCacheRef.current.get(percentileBaselineHandedRequestKey);
+    if (cached && Date.now() - cached.at < 90_000) {
+      setPercentileBaselineHandedRows(cached.rows);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    fetch(percentileBaselineHandedRequestKey, { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { table_rows?: Array<Record<string, string | number | null>>; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed handedness percentile baseline request.');
+        const baselineRows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+        if (!active) return;
+        percentileBaselineHandedCacheRef.current.set(percentileBaselineHandedRequestKey, { at: Date.now(), rows: baselineRows });
+        setPercentileBaselineHandedRows(baselineRows);
+      })
+      .catch((error) => {
+        if (!active) return;
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setPercentileBaselineHandedRows([]);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [percentileBaselineHandedRequestKey]);
 
   const sortedGameLogRows = useMemo(
     () => sortTableRows(gameLogRows, gameLogSortColumn, gameLogSortDirection),
@@ -6107,6 +6283,68 @@ export default function PitchingSuite({
       pinnedLeaderboardKeys
     ) as Array<Record<string, string | number | null>>;
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
+  const percentileDistributionsByKey = useMemo(() => {
+    const splitColumn = displayedTableColumns[0] ?? '';
+    const scoped = new Map<string, number[]>();
+    const globalByColumn = new Map<string, number[]>();
+    const scopedHanded = new Map<string, number[]>();
+    const globalByColumnHanded = new Map<string, number[]>();
+    if (!splitColumn || !percentileBaselineRows.length) {
+      return { splitColumn, scoped, globalByColumn, scopedHanded, globalByColumnHanded };
+    }
+    const accumulate = (
+      rows: Array<Record<string, string | number | null>>,
+      scopedTarget: Map<string, number[]>,
+      globalTarget: Map<string, number[]>
+    ) => {
+      for (const column of displayedTableColumns.slice(1)) {
+        for (const row of rows) {
+          if (isAllLikeRowValue(row[splitColumn])) continue;
+          const rowKey = percentileRowKey(row[splitColumn]);
+          if (!rowKey) continue;
+          const numeric = parseSortableNumber(row[column]);
+          if (numeric === null) continue;
+          const scopedKey = `${rowKey}::${column}`;
+          if (!scopedTarget.has(scopedKey)) scopedTarget.set(scopedKey, []);
+          scopedTarget.get(scopedKey)?.push(numeric);
+          if (!globalTarget.has(column)) globalTarget.set(column, []);
+          globalTarget.get(column)?.push(numeric);
+        }
+      }
+    };
+    accumulate(percentileBaselineRows, scoped, globalByColumn);
+    if (percentileBaselineHandedRows.length) {
+      accumulate(percentileBaselineHandedRows, scopedHanded, globalByColumnHanded);
+    }
+    [scoped, globalByColumn, scopedHanded, globalByColumnHanded].forEach((map) => {
+      map.forEach((values, key) => {
+        map.set(key, values.sort((a, b) => a - b));
+      });
+    });
+    return { splitColumn, scoped, globalByColumn, scopedHanded, globalByColumnHanded };
+  }, [displayedTableColumns, percentileBaselineRows, percentileBaselineHandedRows]);
+  const getCellPercentile = useCallback((
+    row: Record<string, string | number | null>,
+    column: string,
+    rawValue: unknown
+  ): number | null => {
+    const { splitColumn, scoped, globalByColumn, scopedHanded, globalByColumnHanded } = percentileDistributionsByKey;
+    const rowSplitKey = splitColumn ? percentileRowKey(row[splitColumn]) : '';
+    const useHandedMovementDistribution = HANDED_MOVEMENT_PERCENTILE_COLUMNS.has(normalizePercentileColumnToken(column));
+    const scopedDistribution =
+      rowSplitKey && !isAllLikeRowValue(row[splitColumn])
+        ? (
+            useHandedMovementDistribution
+              ? (scopedHanded.get(`${rowSplitKey}::${column}`) ?? scoped.get(`${rowSplitKey}::${column}`) ?? [])
+              : (scoped.get(`${rowSplitKey}::${column}`) ?? [])
+          )
+        : [];
+    const distribution = scopedDistribution;
+    if (!distribution.length) return null;
+    const numeric = parseSortableNumber(rawValue);
+    if (numeric === null) return null;
+    return percentileForValue(numeric, distribution);
+  }, [percentileDistributionsByKey]);
   const isGameLogPage = dashboardPage === 'Game Log';
   const correlationColumns = useMemo(
     () => {
@@ -6902,7 +7140,7 @@ export default function PitchingSuite({
                   style={{
                     marginBottom: '0.8rem',
                     gridTemplateColumns: isLeaderboardPage
-                      ? ((isLeague || isPro) ? 'repeat(3, minmax(160px, 260px))' : 'repeat(2, minmax(160px, 260px))')
+                      ? ((isLeague || isPro) ? 'repeat(4, minmax(160px, 260px))' : 'repeat(3, minmax(160px, 260px))')
                       : 'repeat(2, minmax(160px, 260px))',
                   }}
                 >
@@ -6926,6 +7164,20 @@ export default function PitchingSuite({
                         value={leaderboardViewBy}
                         onChange={(next) => setLeaderboardViewBy(next as 'Player' | 'Team')}
                         placeholder="Player"
+                      />
+                    </label>
+                  ) : null}
+                  {isLeaderboardPage ? (
+                    <label>
+                      Stat View
+                      <SearchableSingleSelect
+                        options={[
+                          { value: 'Stats', label: 'Stats' },
+                          { value: 'Percentile', label: 'Percentile' },
+                        ]}
+                        value={leaderboardStatView}
+                        onChange={(next) => setLeaderboardStatView(next as 'Stats' | 'Percentile')}
+                        placeholder="Stats"
                       />
                     </label>
                   ) : null}
@@ -6980,6 +7232,17 @@ export default function PitchingSuite({
                           aria-pressed={enableTableColors}
                           title={enableTableColors ? 'Color code on' : 'Color code off'}
                           onClick={() => setEnableTableColors((current) => !current)}
+                        />
+                      </div>
+                      <div className="portal-color-toggle">
+                        <span className="portal-color-toggle-label">Show Percentile</span>
+                        <button
+                          type="button"
+                          className={`portal-color-toggle-btn${showCellPercentiles ? ' is-on' : ''}`}
+                          aria-label="Toggle percentile labels in table cells"
+                          aria-pressed={showCellPercentiles}
+                          title={showCellPercentiles ? 'Percentile labels on' : 'Percentile labels off'}
+                          onClick={() => setShowCellPercentiles((current) => !current)}
                         />
                       </div>
                     </>
@@ -7192,8 +7455,16 @@ export default function PitchingSuite({
                                     isLeaderboardPage && colIndex === 0 && (leaderboardViewBy === 'Player' || leaderboardViewBy === 'Team')
                                       ? (isAllRow ? 'center' : 'left')
                                       : 'center',
-                                  background: leaderboardSortColumn === column ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
-                                  color: leaderboardSortColumn === column ? '#fff' : undefined,
+                                  background:
+                                    leaderboardSortColumn === column &&
+                                    !(isLeaderboardPage && leaderboardStatView === 'Percentile' && colIndex > 0)
+                                      ? 'rgb(var(--portal-accent-rgb, 59,130,246))'
+                                      : undefined,
+                                  color:
+                                    leaderboardSortColumn === column &&
+                                    !(isLeaderboardPage && leaderboardStatView === 'Percentile' && colIndex > 0)
+                                      ? '#fff'
+                                      : undefined,
                                   cursor:
                                     (column === '#' && rowPitches.length)
                                     || (isLeaderboardPage && column === leaderboardPrimaryColumn && !isAllRow)
@@ -7216,6 +7487,13 @@ export default function PitchingSuite({
                                 {(() => {
                                   const cellStyle = getTableCellStyle(row, column);
                                   const rawValue = row[column] ?? '-';
+                                  const percentileValue = getCellPercentile(row, column, rawValue);
+                                  const showLeaderboardPercentile =
+                                    isLeaderboardPage &&
+                                    leaderboardStatView === 'Percentile' &&
+                                    colIndex > 0 &&
+                                    !isAllRow &&
+                                    !isPinnedAllRow;
                                   const value =
                                     isLeaderboardPage && column === displayedTableColumns[0] && typeof rawValue === 'string'
                                       ? (() => {
@@ -7285,6 +7563,10 @@ export default function PitchingSuite({
                                     typeof value === 'string' || typeof value === 'number' || value === null || value === undefined
                                       ? formatTableDisplayValue(column, value)
                                       : value;
+                                  const renderedCellValue =
+                                    showLeaderboardPercentile && percentileValue !== null
+                                      ? `${percentileValue.toFixed(1)}%`
+                                      : displayValue;
                                   const canPinRow = isLeaderboardPage && column === displayedTableColumns[0] && !isAllRow && !isPinnedAllRow;
                                   const pinKey = canPinRow
                                     ? pinKeyFromRow(
@@ -7324,12 +7606,32 @@ export default function PitchingSuite({
                                       </button>
                                       <span>{displayValue}</span>
                                     </span>
-                                  ) : displayValue;
-                                  if (!cellStyle) return displayValueWithPin;
+                                  ) : renderedCellValue;
+                                  const percentileCellStyle =
+                                    showLeaderboardPercentile && enableTableColors && percentileValue !== null
+                                      ? {
+                                          backgroundColor: divergingColor(percentileValue, 0, 50, 100),
+                                          color: percentileTextColor(percentileValue),
+                                        }
+                                      : null;
+                                  const activeCellStyle = percentileCellStyle ?? cellStyle;
+                                  const summaryPercentileText =
+                                    !isLeaderboardPage && showCellPercentiles && colIndex > 0 && percentileValue !== null
+                                      ? `${percentileValue.toFixed(1)}%`
+                                      : null;
+                                  if (!activeCellStyle) {
+                                    if (!summaryPercentileText) return displayValueWithPin;
+                                    return (
+                                      <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15 }}>
+                                        <span>{displayValueWithPin}</span>
+                                        <span style={{ fontSize: '0.66rem', opacity: 0.78, marginTop: 2 }}>{summaryPercentileText}</span>
+                                      </span>
+                                    );
+                                  }
                                   return (
                                     <span
                                       style={{
-                                        ...cellStyle,
+                                        ...activeCellStyle,
                                         padding: '2px 4px',
                                         borderRadius: 3,
                                         display: 'inline-block',
@@ -7337,7 +7639,14 @@ export default function PitchingSuite({
                                         textAlign: 'center',
                                       }}
                                     >
-                                      {displayValueWithPin}
+                                      {summaryPercentileText ? (
+                                        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15 }}>
+                                          <span>{displayValueWithPin}</span>
+                                          <span style={{ fontSize: '0.66rem', opacity: 0.88, marginTop: 2 }}>{summaryPercentileText}</span>
+                                        </span>
+                                      ) : (
+                                        displayValueWithPin
+                                      )}
                                     </span>
                                   );
                                 })()}

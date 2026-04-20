@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import CatchingSuite from './catching-suite';
 import ComparisonToolSuite from './comparison-tool-suite';
 import CustomReportsSuite from './custom-reports-suite';
@@ -119,6 +119,7 @@ async function fetchHomePayload(signal?: AbortSignal): Promise<SearchPayload> {
 export default function DashboardShell({ role, selectedSchoolCode }: DashboardShellProps) {
   const [suite, setSuite] = useState<SuiteName>('Home');
   const [homeNavigateRequest, setHomeNavigateRequest] = useState<HomeNavigateRequest | null>(null);
+  const appliedHomeNavigateSuiteRef = useRef<number | null>(null);
   const [navSearchPayload, setNavSearchPayload] = useState<SearchPayload | null>(null);
   const [navSearchInput, setNavSearchInput] = useState('');
   const [navSearchQuery, setNavSearchQuery] = useState('');
@@ -179,9 +180,19 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
       ...input,
       requestId: Date.now(),
     };
+    appliedHomeNavigateSuiteRef.current = null;
     setHomeNavigateRequest(nextRequest);
     activateSuite(input.suite);
   };
+  useEffect(() => {
+    if (!homeNavigateRequest) return;
+    if (appliedHomeNavigateSuiteRef.current === homeNavigateRequest.requestId) return;
+    if (activeSuite !== homeNavigateRequest.suite) {
+      activateSuite(homeNavigateRequest.suite);
+      return;
+    }
+    appliedHomeNavigateSuiteRef.current = homeNavigateRequest.requestId;
+  }, [homeNavigateRequest, activeSuite]);
   useEffect(() => {
     if (activeSuite === 'Home') return;
     const cachedSchoolCode = String(navSearchPayload?.school_code ?? '').trim().toUpperCase();

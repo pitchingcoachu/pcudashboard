@@ -10775,6 +10775,68 @@ def _try_pro_hitting_overview_rollup(
             }
         )
     split_col_name = split_by if split_by else "Pitch Types"
+    if table_rows:
+        rows_for_split = grouped_rows
+        pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
+        bf = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
+        bb = int(sum(int(r.get("bb_n") or 0) for r in rows_for_split))
+        hbp = int(sum(int(r.get("hbp_n") or 0) for r in rows_for_split))
+        k = int(sum(int(r.get("k_n") or 0) for r in rows_for_split))
+        one = int(sum(int(r.get("single_n") or 0) for r in rows_for_split))
+        two = int(sum(int(r.get("double_n") or 0) for r in rows_for_split))
+        three = int(sum(int(r.get("triple_n") or 0) for r in rows_for_split))
+        hr = int(sum(int(r.get("hr_n") or 0) for r in rows_for_split))
+        hits = one + two + three + hr
+        ab = max(0, bf - bb - hbp)
+        tb = one + (2 * two) + (3 * three) + (4 * hr)
+        obp_den = ab + bb + hbp
+        obp = ((hits + bb + hbp) / obp_den) if obp_den > 0 else None
+        avg = (hits / ab) if ab > 0 else None
+        slg = (tb / ab) if ab > 0 else None
+        fps_fb_num = sum(
+            int(r.get("fps_num") or 0)
+            for r in rows_for_split
+            if _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_fb_den = sum(
+            int(r.get("fps_den") or 0)
+            for r in rows_for_split
+            if _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_os_num = sum(
+            int(r.get("fps_num") or 0)
+            for r in rows_for_split
+            if not _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_os_den = sum(
+            int(r.get("fps_den") or 0)
+            for r in rows_for_split
+            if not _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        all_row = {
+            split_col_name: "All",
+            "#": pitches,
+            "PA": bf,
+            "AVG": round(avg, 3) if avg is not None else None,
+            "SLG": round(slg, 3) if slg is not None else None,
+            "OPS": round((obp or 0.0) + (slg or 0.0), 3) if obp is not None or slg is not None else None,
+            "K%": _safe_pct(k, bf),
+            "BB%": _safe_pct(bb, bf),
+            "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
+            "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), sum(int(r.get("swing_n") or 0) for r in rows_for_split)),
+            "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
+            "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+            "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
+            "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
+            "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
+            "GB%": _safe_pct(sum(int(r.get("gb_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
+            "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
+            "EV": round(sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("ev_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("ev_n") or 0) for r in rows_for_split) > 0 else None,
+            "LA": round(sum(float(r.get("la_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("la_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("la_n") or 0) for r in rows_for_split) > 0 else None,
+            "xWOBA": round(sum(float(r.get("xwoba_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("xwoba_n") or 0) for r in rows_for_split)), 3) if sum(int(r.get("xwoba_n") or 0) for r in rows_for_split) > 0 else None,
+            "wOBA": round(sum(float(r.get("woba_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("woba_n") or 0) for r in rows_for_split)), 3) if sum(int(r.get("woba_n") or 0) for r in rows_for_split) > 0 else None,
+        }
+        table_rows.append(all_row)
     table_columns = [split_col_name, "#", "PA", "AVG", "SLG", "OPS", "K%", "BB%", "FPS(FB)%", "FPS(OS)%", "Whiff%", "GB%", "Barrel%", "EV", "LA", "xWOBA", "wOBA"]
     if mode_raw == "Custom":
         table_columns = [split_col_name, *normalized_custom_columns]
@@ -10782,6 +10844,427 @@ def _try_pro_hitting_overview_rollup(
         table_columns = [split_col_name, "#", "Swing%", "Whiff%", "CSW%", "FPS%", "FPS(FB)%", "FPS(OS)%", "InZone%"]
     elif mode_raw == "Batted Ball Data":
         table_columns = [split_col_name, "#", "AVG", "SLG", "FPS(FB)%", "FPS(OS)%", "GB%", "Barrel%", "EV", "LA", "xWOBA", "wOBA"]
+    pitch_type_legend = sorted({str(r.get("pitch_type") or "Undefined") for r in grouped_rows}, key=lambda n: (_pitch_type_sort_rank(n), n))
+    return {
+        "school_code": school_code,
+        "hitter": selected_hitter_values[0] if len(selected_hitter_values) == 1 else None,
+        "opp_pitcher": selected_opp_pitcher_values[0] if len(selected_opp_pitcher_values) == 1 else None,
+        "hand": hand or None,
+        "batter_side": batter_side or None,
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
+        "total_pitches": total_pitches,
+        "selected_pitch_types": selected_pitch_types,
+        "selected_zone_locations": selected_zone_locations,
+        "selected_pitch_results": selected_pitch_results,
+        "selected_count_filters": selected_count_filters,
+        "selected_after_count_filters": selected_after_count_filters,
+        "selected_bip_results": selected_bip_results,
+        "table_mode": mode_raw,
+        "split_by": split_by,
+        "pitch_type_legend": pitch_type_legend,
+        "table_columns": table_columns,
+        "available_table_columns": ALL_TABLE_COLUMNS,
+        "table_rows": table_rows,
+        "chart_points": [],
+        "heatmap_points": [],
+    }
+
+
+def _try_league_hitting_overview_rollup(
+    *,
+    school_code: str,
+    start_date: Optional[date],
+    end_date: Optional[date],
+    team_type_value: str,
+    selected_hitter_values: List[str],
+    selected_hitter_keys: set[str],
+    selected_opp_pitcher_values: List[str],
+    selected_opp_pitcher_keys: set[str],
+    hand: Optional[str],
+    batter_side: Optional[str],
+    mode_raw: str,
+    split_by: str,
+    selected_pitch_types: List[str],
+    selected_count_filters: List[str],
+    include_chart_points: bool,
+    selected_zone_locations: List[str],
+    selected_pitch_results: List[str],
+    selected_after_count_filters: List[str],
+    selected_bip_results: List[str],
+    selected_in_zone: List[str],
+    parsed_velo_min: Optional[float],
+    parsed_velo_max: Optional[float],
+    parsed_ivb_min: Optional[float],
+    parsed_ivb_max: Optional[float],
+    parsed_hb_min: Optional[float],
+    parsed_hb_max: Optional[float],
+    parsed_pc_min: Optional[int],
+    parsed_pc_max: Optional[int],
+    venue_filter: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if school_code == "PRO":
+        return None
+    if include_chart_points:
+        return None
+    if venue_filter:
+        return None
+    # Keep league fast-path strict so schema is stable and metrics are safe.
+    if mode_raw not in {"Results", "Swing Decisions", "Batted Ball Data"}:
+        return None
+    if selected_zone_locations or selected_pitch_results or selected_after_count_filters or selected_bip_results or selected_in_zone:
+        return None
+    if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max, parsed_pc_min, parsed_pc_max]):
+        return None
+    split_to_expr: Dict[str, tuple[str, bool]] = {
+        "Pitch Types": ("pitch_type", False),
+        "Batter": ("batter_name", False),
+        "Batter Team": ("batter_team_norm_eff", False),
+        "Batter Hand": ("batterside_norm", False),
+        "Pitcher Hand": ("pitcherthrows_norm", False),
+        "Pitcher": ("pitcher_name", False),
+        "Catcher": ("catcher_name", False),
+        "Count": ("split_value", True),
+        "Game": ("split_value", True),
+    }
+    split_conf = split_to_expr.get(split_by)
+    if not split_conf:
+        return None
+    split_expr, use_split_rollup = split_conf
+    if selected_count_filters and split_by != "Count":
+        return None
+    if split_by == "Count" and not selected_count_filters:
+        # Only use split rollup when count scope is explicit.
+        return None
+
+    where = [
+        "school_code = %(school_code)s::text",
+        "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
+        "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
+        "(%(hitters_count)s::int = 0 OR batter_norm = ANY(%(hitters_norm)s::text[]))",
+        "(%(opp_pitchers_count)s::int = 0 OR pitcher_norm = ANY(%(opp_pitchers_norm)s::text[]))",
+        "(%(pitch_types_count)s::int = 0 OR pitch_type = ANY(%(pitch_types)s::text[]))",
+    ]
+    params: Dict[str, Any] = {
+        "school_code": school_code,
+        "start_date": start_date,
+        "end_date": end_date,
+        "hitters_norm": sorted(selected_hitter_keys),
+        "hitters_count": len(selected_hitter_keys),
+        "opp_pitchers_norm": sorted(selected_opp_pitcher_keys),
+        "opp_pitchers_count": len(selected_opp_pitcher_keys),
+        "pitch_types": selected_pitch_types,
+        "pitch_types_count": len(selected_pitch_types),
+    }
+    team_type_norm = _normalize_team_code(
+        _league_team_code_from_value(team_type_value or "") if school_code == "LEAGUE" else (team_type_value or "")
+    )
+    if team_type_norm and team_type_norm != "ALL":
+        where.append("batter_team_norm_eff = %(team_type_norm)s::text")
+        params["team_type_norm"] = team_type_norm
+    if (hand or "").strip() and hand != "All":
+        where.append("pitcherthrows_norm = %(pitcherthrows_norm)s::text")
+        params["pitcherthrows_norm"] = hand
+    if (batter_side or "").strip() and batter_side != "All":
+        where.append("batterside_norm = %(batterside_norm)s::text")
+        params["batterside_norm"] = batter_side
+    if split_by == "Count":
+        where.append("split_group = 'Count'")
+        params["count_filters"] = selected_count_filters
+        params["count_filters_count"] = len(selected_count_filters)
+        where.append("(%(count_filters_count)s::int = 0 OR split_value = ANY(%(count_filters)s::text[]))")
+    elif split_by == "Game":
+        where.append("split_group = 'Game'")
+    where_sql = " AND ".join(where)
+    if split_by == "Game":
+        rollup_source = "public.pitch_events_game_rollup_league"
+    else:
+        rollup_source = "public.pitch_events_daily_rollup_league_split" if use_split_rollup else "public.pitch_events_daily_rollup_league"
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                  {split_expr} AS split_value,
+                  pitch_type,
+                  SUM(pitches)::int AS pitches,
+                  SUM(strike_n)::int AS strike_n,
+                  SUM(swing_n)::int AS swing_n,
+                  SUM(whiff_n)::int AS whiff_n,
+                  SUM(csw_n)::int AS csw_n,
+                  SUM(fps_num)::int AS fps_num,
+                  SUM(fps_den)::int AS fps_den,
+                  SUM(in_zone_n)::int AS in_zone_n,
+                  SUM(loc_n)::int AS loc_n,
+                  SUM(in_play_n)::int AS in_play_n,
+                  SUM(gb_n)::int AS gb_n,
+                  SUM(barrel_n)::int AS barrel_n,
+                  SUM(ev_sum)::double precision AS ev_sum,
+                  SUM(ev_n)::int AS ev_n,
+                  SUM(la_sum)::double precision AS la_sum,
+                  SUM(la_n)::int AS la_n,
+                  SUM(bf_n)::int AS bf_n,
+                  SUM(k_n)::int AS k_n,
+                  SUM(bb_n)::int AS bb_n,
+                  SUM(hbp_n)::int AS hbp_n,
+                  SUM(hr_n)::int AS hr_n,
+                  SUM(single_n)::int AS single_n,
+                  SUM(double_n)::int AS double_n,
+                  SUM(triple_n)::int AS triple_n,
+                  SUM(sf_n)::int AS sf_n
+                FROM {rollup_source}
+                WHERE {where_sql}
+                GROUP BY {split_expr}, pitch_type
+                """,
+                params,
+            )
+            grouped_rows = [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return None
+    if not grouped_rows:
+        return None
+
+    def _safe_pct(num: Any, den: Any) -> Optional[str]:
+        try:
+            n = float(num or 0.0)
+            d = float(den or 0.0)
+            if d <= 0:
+                return None
+            return f"{round((100.0 * n) / d, 1)}%"
+        except Exception:
+            return None
+
+    grouped_by_split: Dict[str, List[Dict[str, Any]]] = {}
+    for row in grouped_rows:
+        grouped_by_split.setdefault(str(row.get("split_value") or "Unknown"), []).append(row)
+    total_pitches = int(sum(int(r.get("pitches") or 0) for r in grouped_rows))
+    table_rows: List[Dict[str, Any]] = []
+    for split_value, rows_for_split in sorted(grouped_by_split.items(), key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0]))):
+        pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
+        pa = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
+        bb = int(sum(int(r.get("bb_n") or 0) for r in rows_for_split))
+        hbp = int(sum(int(r.get("hbp_n") or 0) for r in rows_for_split))
+        k = int(sum(int(r.get("k_n") or 0) for r in rows_for_split))
+        sf = int(sum(int(r.get("sf_n") or 0) for r in rows_for_split))
+        one = int(sum(int(r.get("single_n") or 0) for r in rows_for_split))
+        two = int(sum(int(r.get("double_n") or 0) for r in rows_for_split))
+        three = int(sum(int(r.get("triple_n") or 0) for r in rows_for_split))
+        hr = int(sum(int(r.get("hr_n") or 0) for r in rows_for_split))
+        hits = one + two + three + hr
+        ab = max(0, pa - bb - hbp - sf)
+        tb = one + (2 * two) + (3 * three) + (4 * hr)
+        obp_den = ab + bb + hbp + sf
+        obp = ((hits + bb + hbp) / obp_den) if obp_den > 0 else None
+        avg = (hits / ab) if ab > 0 else None
+        slg = (tb / ab) if ab > 0 else None
+        iso = ((slg or 0.0) - (avg or 0.0)) if (slg is not None and avg is not None) else None
+        babip_den = max(0, ab - k - hr + sf)
+        babip = ((hits - hr) / babip_den) if babip_den > 0 else None
+        fps_fb_num = sum(
+            int(r.get("fps_num") or 0)
+            for r in rows_for_split
+            if _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_fb_den = sum(
+            int(r.get("fps_den") or 0)
+            for r in rows_for_split
+            if _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_os_num = sum(
+            int(r.get("fps_num") or 0)
+            for r in rows_for_split
+            if not _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_os_den = sum(
+            int(r.get("fps_den") or 0)
+            for r in rows_for_split
+            if not _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        woba_num = (
+            (0.69 * bb)
+            + (0.72 * hbp)
+            + (0.89 * one)
+            + (1.27 * two)
+            + (1.62 * three)
+            + (2.10 * hr)
+        )
+        woba_den = float(ab + bb + hbp + sf)
+        woba = (woba_num / woba_den) if woba_den > 0 else None
+        xwoba_num = (
+            (0.69 * bb)
+            + (0.90 * one)
+            + (1.24 * two)
+            + (1.56 * three)
+            + (1.95 * hr)
+        )
+        xwoba = (xwoba_num / float(pa)) if pa > 0 else None
+        ev_n = int(sum(int(r.get("ev_n") or 0) for r in rows_for_split))
+        ev_avg = (sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / ev_n) if ev_n > 0 else None
+        gb_rate = (float(sum(int(r.get("gb_n") or 0) for r in rows_for_split)) / float(sum(int(r.get("in_play_n") or 0) for r in rows_for_split))) if sum(int(r.get("in_play_n") or 0) for r in rows_for_split) > 0 else None
+        xiso = None
+        if gb_rate is not None and _is_num(ev_avg):
+            evf = float(ev_avg)
+            xiso = round((-0.358973 * gb_rate) - (0.108255 * evf) + (0.00066305 * (evf ** 2)) + 4.66285, 3)
+        table_rows.append(
+            {
+                split_by if split_by else "Pitch Types": split_value,
+                "#": pitches,
+                "PA": pa,
+                "AB": ab,
+                "AVG": round(avg, 3) if avg is not None else None,
+                "SLG": round(slg, 3) if slg is not None else None,
+                "OBP": round(obp, 3) if obp is not None else None,
+                "OPS": round((obp or 0.0) + (slg or 0.0), 3) if obp is not None or slg is not None else None,
+                "wOBA": round(woba, 3) if woba is not None else None,
+                "xWOBA": round(xwoba, 3) if xwoba is not None else None,
+                "ISO": round(iso, 3) if iso is not None else None,
+                "xISO": xiso,
+                "BABIP": round(babip, 3) if babip is not None else None,
+                "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
+                "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+                "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
+                "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
+                "Called-S%": _safe_pct(max(0, sum(int(r.get("csw_n") or 0) for r in rows_for_split) - sum(int(r.get("whiff_n") or 0) for r in rows_for_split)), pitches),
+                "Take%": _safe_pct(max(0, pitches - sum(int(r.get("swing_n") or 0) for r in rows_for_split)), pitches),
+                "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), sum(int(r.get("swing_n") or 0) for r in rows_for_split)),
+                "GB%": _safe_pct(sum(int(r.get("gb_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
+                "K%": _safe_pct(k, pa),
+                "BB%": _safe_pct(bb, pa),
+                "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
+                "EV": round(sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("ev_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("ev_n") or 0) for r in rows_for_split) > 0 else None,
+                "LA": round(sum(float(r.get("la_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("la_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("la_n") or 0) for r in rows_for_split) > 0 else None,
+                "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
+                "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
+            }
+        )
+    split_col_name = split_by if split_by else "Pitch Types"
+    if table_rows:
+        rows_for_split = grouped_rows
+        pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
+        pa = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
+        bb = int(sum(int(r.get("bb_n") or 0) for r in rows_for_split))
+        hbp = int(sum(int(r.get("hbp_n") or 0) for r in rows_for_split))
+        k = int(sum(int(r.get("k_n") or 0) for r in rows_for_split))
+        sf = int(sum(int(r.get("sf_n") or 0) for r in rows_for_split))
+        one = int(sum(int(r.get("single_n") or 0) for r in rows_for_split))
+        two = int(sum(int(r.get("double_n") or 0) for r in rows_for_split))
+        three = int(sum(int(r.get("triple_n") or 0) for r in rows_for_split))
+        hr = int(sum(int(r.get("hr_n") or 0) for r in rows_for_split))
+        hits = one + two + three + hr
+        ab = max(0, pa - bb - hbp - sf)
+        tb = one + (2 * two) + (3 * three) + (4 * hr)
+        obp_den = ab + bb + hbp + sf
+        obp = ((hits + bb + hbp) / obp_den) if obp_den > 0 else None
+        avg = (hits / ab) if ab > 0 else None
+        slg = (tb / ab) if ab > 0 else None
+        iso = ((slg or 0.0) - (avg or 0.0)) if (slg is not None and avg is not None) else None
+        babip_den = max(0, ab - k - hr + sf)
+        babip = ((hits - hr) / babip_den) if babip_den > 0 else None
+        fps_fb_num = sum(
+            int(r.get("fps_num") or 0)
+            for r in rows_for_split
+            if _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_fb_den = sum(
+            int(r.get("fps_den") or 0)
+            for r in rows_for_split
+            if _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_os_num = sum(
+            int(r.get("fps_num") or 0)
+            for r in rows_for_split
+            if not _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        fps_os_den = sum(
+            int(r.get("fps_den") or 0)
+            for r in rows_for_split
+            if not _is_fastball_or_sinker_pitch_type(r.get("pitch_type"))
+        )
+        woba_num = (
+            (0.69 * bb)
+            + (0.72 * hbp)
+            + (0.89 * one)
+            + (1.27 * two)
+            + (1.62 * three)
+            + (2.10 * hr)
+        )
+        woba_den = float(ab + bb + hbp + sf)
+        woba = (woba_num / woba_den) if woba_den > 0 else None
+        xwoba_num = (
+            (0.69 * bb)
+            + (0.90 * one)
+            + (1.24 * two)
+            + (1.56 * three)
+            + (1.95 * hr)
+        )
+        xwoba = (xwoba_num / float(pa)) if pa > 0 else None
+        ev_n = int(sum(int(r.get("ev_n") or 0) for r in rows_for_split))
+        ev_avg = (sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / ev_n) if ev_n > 0 else None
+        gb_rate = (float(sum(int(r.get("gb_n") or 0) for r in rows_for_split)) / float(sum(int(r.get("in_play_n") or 0) for r in rows_for_split))) if sum(int(r.get("in_play_n") or 0) for r in rows_for_split) > 0 else None
+        xiso = None
+        if gb_rate is not None and _is_num(ev_avg):
+            evf = float(ev_avg)
+            xiso = round((-0.358973 * gb_rate) - (0.108255 * evf) + (0.00066305 * (evf ** 2)) + 4.66285, 3)
+        all_row = {
+            split_col_name: "All",
+            "#": pitches,
+            "PA": pa,
+            "AB": ab,
+            "AVG": round(avg, 3) if avg is not None else None,
+            "SLG": round(slg, 3) if slg is not None else None,
+            "OBP": round(obp, 3) if obp is not None else None,
+            "OPS": round((obp or 0.0) + (slg or 0.0), 3) if obp is not None or slg is not None else None,
+            "wOBA": round(woba, 3) if woba is not None else None,
+            "xWOBA": round(xwoba, 3) if xwoba is not None else None,
+            "ISO": round(iso, 3) if iso is not None else None,
+            "xISO": xiso,
+            "BABIP": round(babip, 3) if babip is not None else None,
+            "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
+            "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
+            "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
+            "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
+            "Called-S%": _safe_pct(max(0, sum(int(r.get("csw_n") or 0) for r in rows_for_split) - sum(int(r.get("whiff_n") or 0) for r in rows_for_split)), pitches),
+            "Take%": _safe_pct(max(0, pitches - sum(int(r.get("swing_n") or 0) for r in rows_for_split)), pitches),
+            "Whiff%": _safe_pct(sum(int(r.get("whiff_n") or 0) for r in rows_for_split), sum(int(r.get("swing_n") or 0) for r in rows_for_split)),
+            "GB%": _safe_pct(sum(int(r.get("gb_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
+            "K%": _safe_pct(k, pa),
+            "BB%": _safe_pct(bb, pa),
+            "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
+            "EV": round(sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("ev_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("ev_n") or 0) for r in rows_for_split) > 0 else None,
+            "LA": round(sum(float(r.get("la_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("la_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("la_n") or 0) for r in rows_for_split) > 0 else None,
+            "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
+            "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
+        }
+        table_rows.append(all_row)
+    table_columns = [
+        split_col_name,
+        "PA",
+        "AB",
+        "AVG",
+        "SLG",
+        "OBP",
+        "OPS",
+        "wOBA",
+        "xWOBA",
+        "ISO",
+        "xISO",
+        "BABIP",
+        "Swing%",
+        "FPS(FB)%",
+        "FPS(OS)%",
+        "Whiff%",
+        "GB%",
+        "K%",
+        "BB%",
+        "Barrel%",
+        "EV",
+        "LA",
+    ]
+    if mode_raw == "Swing Decisions":
+        table_columns = [split_col_name, "#", "Swing%", "Whiff%", "CSW%", "FPS%", "FPS(FB)%", "FPS(OS)%", "Called-S%", "Take%", "InZone%"]
+    elif mode_raw == "Batted Ball Data":
+        table_columns = [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "FPS(FB)%", "FPS(OS)%", "Barrel%"]
     pitch_type_legend = sorted({str(r.get("pitch_type") or "Undefined") for r in grouped_rows}, key=lambda n: (_pitch_type_sort_rank(n), n))
     return {
         "school_code": school_code,
@@ -19541,8 +20024,11 @@ def hitting_overview(
             and (not selected_opp_pitcher_keys)
             and (not team_type_value or str(team_type_value).strip().lower() == "all")
         )
-        large_window = bool(span_days and span_days > 14)
-        league_rollup_candidate = large_window and league_all_selection and (not chart_only)
+        league_rollup_candidate = (
+            league_all_selection
+            and (not chart_only)
+            and mode_raw in {"Results", "Swing Decisions", "Batted Ball Data"}
+        )
         if force_raw_custom:
             league_rollup_candidate = False
         if league_rollup_candidate:
@@ -19561,8 +20047,6 @@ def hitting_overview(
             parsed_hb_max = None
             parsed_pc_min = None
             parsed_pc_max = None
-            if mode_raw not in {"Results", "Batted Ball Data"}:
-                mode_raw = "Results"
             table_mode_mapped = mode_map.get(mode_raw, "Hitting Results")
             if split_by not in {
                 "All",
@@ -19810,70 +20294,40 @@ def hitting_overview(
             total_pitches=int(response_payload.get("total_pitches") or 0),
         )
         return response_payload
-    if school_code != "PRO" and league_rollup_candidate:
-        rollup_fast_response = _try_pitching_overview_daily_rollup(
+    if school_code != "PRO" and league_rollup_candidate and not force_raw:
+        league_rollup_payload = _try_league_hitting_overview_rollup(
             school_code=school_code,
             start_date=start_date,
             end_date=end_date,
-            selected_pitchers=[],
-            selected_pitcher_keys=[],
-            team_type=team_type_value,
-            selected_opp_hitters=[],
-            with_video=None,
+            team_type_value=team_type_value,
+            selected_hitter_values=selected_hitter_values,
+            selected_hitter_keys=selected_hitter_keys,
+            selected_opp_pitcher_values=selected_opp_pitcher_values,
+            selected_opp_pitcher_keys=selected_opp_pitcher_keys,
             hand=hand,
             batter_side=batter_side,
-            session_type_filter=session_type_filter,
-            stuff_level=None,
-            stuff_base=None,
-            table_mode="Batted Ball Data" if mode_raw == "Batted Ball Data" else "Results",
+            mode_raw=mode_raw,
             split_by=split_by,
-            selected_in_zone=[],
-            qp_locations=None,
             selected_pitch_types=selected_pitch_types,
-            selected_zone_locations=[],
-            selected_pitch_results=[],
-            selected_count_filters=[],
-            selected_after_count_filters=[],
-            parsed_velo_min=None,
-            parsed_velo_max=None,
-            parsed_ivb_min=None,
-            parsed_ivb_max=None,
-            parsed_hb_min=None,
-            parsed_hb_max=None,
-            parsed_pc_min=None,
-            parsed_pc_max=None,
+            selected_count_filters=selected_count_filters,
+            include_chart_points=include_chart_points,
+            selected_zone_locations=selected_zone_locations,
+            selected_pitch_results=selected_pitch_results,
+            selected_after_count_filters=selected_after_count_filters,
+            selected_bip_results=selected_bip_results,
+            selected_in_zone=selected_in_zone,
+            parsed_velo_min=parsed_velo_min,
+            parsed_velo_max=parsed_velo_max,
+            parsed_ivb_min=parsed_ivb_min,
+            parsed_ivb_max=parsed_ivb_max,
+            parsed_hb_min=parsed_hb_min,
+            parsed_hb_max=parsed_hb_max,
+            parsed_pc_min=parsed_pc_min,
+            parsed_pc_max=parsed_pc_max,
             venue_filter=venue_filter,
-            include_chart_points=False,
-            chart_points_limit=None,
-            include_row_pitches=False,
-            include_trend_rows=False,
         )
-        if rollup_fast_response is not None:
-            rollup_payload: Dict[str, Any] = {
-                "school_code": school_code,
-                "hitter": selected_hitter_values[0] if len(selected_hitter_values) == 1 else None,
-                "opp_pitcher": selected_opp_pitcher_values[0] if len(selected_opp_pitcher_values) == 1 else None,
-                "hand": hand or None,
-                "batter_side": batter_side or None,
-                "start_date": start_date.isoformat() if start_date else None,
-                "end_date": end_date.isoformat() if end_date else None,
-                "total_pitches": int(rollup_fast_response.total_pitches or 0),
-                "selected_pitch_types": selected_pitch_types,
-                "selected_zone_locations": selected_zone_locations,
-                "selected_pitch_results": selected_pitch_results,
-                "selected_count_filters": selected_count_filters,
-                "selected_after_count_filters": selected_after_count_filters,
-                "selected_bip_results": selected_bip_results,
-                "table_mode": mode_raw,
-                "split_by": split_by,
-                "pitch_type_legend": [str(p.pitch_type) for p in (rollup_fast_response.pitch_types or []) if str(getattr(p, "pitch_type", "")).strip()],
-                "table_columns": rollup_fast_response.table_columns or [],
-                "available_table_columns": rollup_fast_response.available_table_columns or ALL_TABLE_COLUMNS,
-                "table_rows": rollup_fast_response.table_rows or [],
-                "chart_points": [],
-                "heatmap_points": [],
-            }
-            _overview_cache_set(overview_cache_key, rollup_payload)
+        if league_rollup_payload is not None:
+            _overview_cache_set(overview_cache_key, league_rollup_payload)
             _perf_log(
                 "hitting_overview",
                 school_code,
@@ -19882,9 +20336,9 @@ def hitting_overview(
                 cache_hit=False,
                 chart_only=chart_only,
                 include_chart_points=include_chart_points,
-                total_pitches=int(rollup_payload.get("total_pitches") or 0),
+                total_pitches=int(league_rollup_payload.get("total_pitches") or 0),
             )
-            return rollup_payload
+            return league_rollup_payload
     need_prev_counts = bool(selected_after_count_filters) or (split_by == "After Count")
     need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
 
