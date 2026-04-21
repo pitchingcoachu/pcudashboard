@@ -524,6 +524,111 @@ function normalizePercentileColumnToken(value: string): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
+function parseRangeLabel(value: string): { min?: string; max?: string } | null {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const plusMatch = text.match(/^(-?\d+(?:\.\d+)?)\+$/);
+  if (plusMatch) return { min: plusMatch[1] };
+  const rangeMatch = text.match(/^(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)$/);
+  if (rangeMatch) return { min: rangeMatch[1], max: rangeMatch[2] };
+  const ltMatch = text.match(/^<\s*(-?\d+(?:\.\d+)?)$/);
+  if (ltMatch) return { max: ltMatch[1] };
+  const gtMatch = text.match(/^>\s*(-?\d+(?:\.\d+)?)$/);
+  if (gtMatch) return { min: gtMatch[1] };
+  return null;
+}
+
+function applyHittingSummarySplitFilter(params: URLSearchParams, splitBy: string, rowLabel: string): boolean {
+  const clearKeys = [
+    'pitch_types',
+    'hand',
+    'batter_side',
+    'count_filter',
+    'after_count_filter',
+    'venue',
+    'zone_locations',
+    'pitch_results',
+    'bip_result',
+    'opp_pitcher',
+    'team_type',
+    'velo_min',
+    'velo_max',
+    'ivb_min',
+    'ivb_max',
+    'hb_min',
+    'hb_max',
+    'pc_min',
+    'pc_max',
+  ] as const;
+  for (const key of clearKeys) params.delete(key);
+  if (isAllLikeRowValue(rowLabel)) return true;
+  switch (splitBy) {
+    case 'Pitch Types':
+      params.set('pitch_types', rowLabel);
+      return true;
+    case 'Pitcher Hand':
+      params.set('hand', rowLabel);
+      return true;
+    case 'Batter Hand':
+      params.set('batter_side', rowLabel);
+      return true;
+    case 'Count':
+      params.set('count_filter', rowLabel);
+      return true;
+    case 'After Count':
+      params.set('after_count_filter', rowLabel);
+      return true;
+    case 'Venue':
+      params.set('venue', rowLabel);
+      return true;
+    case 'Zone Location':
+      params.set('zone_locations', rowLabel);
+      return true;
+    case 'Pitch Result':
+      params.set('pitch_results', rowLabel);
+      return true;
+    case 'BIP Result':
+      params.set('bip_result', rowLabel);
+      return true;
+    case 'Opp Pitcher':
+      params.set('opp_pitcher', rowLabel);
+      return true;
+    case 'Batter Team':
+      params.set('team_type', rowLabel);
+      return true;
+    case 'Pitch Count': {
+      const range = parseRangeLabel(rowLabel);
+      if (!range) return false;
+      if (range.min) params.set('pc_min', range.min);
+      if (range.max) params.set('pc_max', range.max);
+      return true;
+    }
+    case 'Velocity': {
+      const range = parseRangeLabel(rowLabel);
+      if (!range) return false;
+      if (range.min) params.set('velo_min', range.min);
+      if (range.max) params.set('velo_max', range.max);
+      return true;
+    }
+    case 'IVB': {
+      const range = parseRangeLabel(rowLabel);
+      if (!range) return false;
+      if (range.min) params.set('ivb_min', range.min);
+      if (range.max) params.set('ivb_max', range.max);
+      return true;
+    }
+    case 'HB': {
+      const range = parseRangeLabel(rowLabel);
+      if (!range) return false;
+      if (range.min) params.set('hb_min', range.min);
+      if (range.max) params.set('hb_max', range.max);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
 function adjustPercentileDirection(column: string, percentile: number): number {
   const token = normalizePercentileColumnToken(column);
   if (!LOWER_IS_BETTER_PERCENTILE_COLUMNS.has(token)) return percentile;
@@ -2029,6 +2134,7 @@ export default function HittingSuite({
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardStatView, setLeaderboardStatView] = useState<'Stats' | 'Percentile'>('Stats');
   const [leaderboardPercentileScope, setLeaderboardPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
+  const [summaryPercentileScope, setSummaryPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
   const [gameLogRows, setGameLogRows] = useState<Array<Record<string, unknown>>>([]);
@@ -2043,6 +2149,8 @@ export default function HittingSuite({
   const [percentileBaselineRequestKey, setPercentileBaselineRequestKey] = useState('');
   const [percentileBaselineRows, setPercentileBaselineRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [loadingPercentileBaseline, setLoadingPercentileBaseline] = useState(false);
+  const [loadingSummaryPitchTypePercentiles, setLoadingSummaryPitchTypePercentiles] = useState(false);
+  const [summaryPitchTypeDistributions, setSummaryPitchTypeDistributions] = useState<Map<string, number[]>>(new Map());
   const [enableGameLogColors, setEnableGameLogColors] = useState(true);
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
   const autoFallbackAppliedRef = useRef(false);
@@ -2449,8 +2557,11 @@ export default function HittingSuite({
     }
     const isSummaryPage = dashboardPage === 'Summary';
     const isGameLogPage = dashboardPage === 'Game Log';
+    if (isPro && isSummaryPage && summarySelectedHitter) {
+      params.set('force_raw', '1');
+    }
     const shouldDeferCharts = isSummaryPage;
-    const shouldForceProFastSummary = isPro && isSummaryPage;
+    const shouldForceProFastSummary = isPro && isSummaryPage && !summarySelectedHitter;
     const shouldIncludeCharts = dashboardPage !== 'Leaderboard' && !shouldForceProFastSummary && !shouldForceLeagueFastTable;
     const shouldScheduleCompanionCharts = shouldForceProFastSummary || (shouldDeferCharts && shouldIncludeCharts);
     params.set('include_chart_points', shouldDeferCharts && shouldIncludeCharts ? '0' : (shouldIncludeCharts ? '1' : '0'));
@@ -2466,14 +2577,27 @@ export default function HittingSuite({
       baselineParams.set('include_chart_points', '0');
       baselineParams.delete('chart_only');
       baselineParams.delete('chart_points_limit');
+      baselineParams.delete('force_raw');
       baselineParams.delete('hitter');
-      if (!isPro && isLeaderboardPage) baselineParams.set('team_type', 'All');
-      if (!isPro && isLeaderboardPage && leaderboardPercentileScope === 'MLB') {
-        baselineParams.set('percentile_pool', 'mlb');
-      } else {
-        baselineParams.delete('percentile_pool');
+      const activePercentileScope =
+        isPro
+          ? 'MLB'
+          : (isLeaderboardPage ? leaderboardPercentileScope : (isSummaryPage ? summaryPercentileScope : 'NCAA'));
+      if (!isPro) {
+        if (activePercentileScope === 'TEAM') {
+          const schoolTeamCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+          if (teamType && teamType !== 'All') {
+            baselineParams.set('team_type', apiTeamType);
+          } else if (schoolTeamCode && schoolTeamCode !== 'PRO' && schoolTeamCode !== 'LEAGUE') {
+            baselineParams.set('team_type', schoolTeamCode);
+          }
+        } else {
+          baselineParams.set('team_type', 'All');
+        }
       }
-      const useMlbPercentileScope = isPro || (!isPro && isLeaderboardPage && leaderboardPercentileScope === 'MLB');
+      if (!isPro && activePercentileScope === 'MLB') baselineParams.set('percentile_pool', 'mlb');
+      else baselineParams.delete('percentile_pool');
+      const useMlbPercentileScope = isPro || (!isPro && activePercentileScope === 'MLB');
       if (useMlbPercentileScope) {
         baselineParams.set('start_date', '2026-01-01');
         baselineParams.set('end_date', '2026-12-31');
@@ -2717,7 +2841,7 @@ export default function HittingSuite({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, venue, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, leaderboardPercentileScope]);
+  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, venue, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, leaderboardPercentileScope, summaryPercentileScope, filters?.school_code, selectedSchoolCode]);
 
   useEffect(() => {
     if (!percentileBaselineRequestKey) {
@@ -2755,6 +2879,87 @@ export default function HittingSuite({
       controller.abort();
     };
   }, [percentileBaselineRequestKey]);
+
+  useEffect(() => {
+    if (dashboardPage !== 'Summary' || !showCellPercentiles || !percentileBaselineRequestKey) {
+      setSummaryPitchTypeDistributions(new Map());
+      setLoadingSummaryPitchTypePercentiles(false);
+      return;
+    }
+    const tableColumns = Array.isArray(overview?.table_columns) ? overview.table_columns : [];
+    const splitColumn = tableColumns[0] ?? '';
+    const tableRows = Array.isArray(overview?.table_rows) ? overview.table_rows : [];
+    if (!splitColumn || !tableRows.length) {
+      setSummaryPitchTypeDistributions(new Map());
+      setLoadingSummaryPitchTypePercentiles(false);
+      return;
+    }
+    const baseQuery = percentileBaselineRequestKey.split('?')[1] ?? '';
+    if (!baseQuery) {
+      setSummaryPitchTypeDistributions(new Map());
+      setLoadingSummaryPitchTypePercentiles(false);
+      return;
+    }
+    const rowsByKey = new Map<string, string>();
+    for (const row of tableRows) {
+      const raw = String(row[splitColumn] ?? '').trim();
+      if (!raw) continue;
+      const key = percentileRowKey(raw);
+      if (!key || rowsByKey.has(key)) continue;
+      rowsByKey.set(key, raw);
+    }
+    if (!rowsByKey.size) {
+      setSummaryPitchTypeDistributions(new Map());
+      setLoadingSummaryPitchTypePercentiles(false);
+      return;
+    }
+    let active = true;
+    setLoadingSummaryPitchTypePercentiles(true);
+    const run = async () => {
+      const entries = await Promise.all(
+        Array.from(rowsByKey.entries()).map(async ([rowKey, rowLabel]) => {
+          const params = new URLSearchParams(baseQuery);
+          params.set('split_by', 'Batter');
+          params.delete('hitter');
+          params.delete('force_raw');
+          if (!applyHittingSummarySplitFilter(params, splitBy, rowLabel)) return [] as Array<[string, number[]]>;
+          const url = `/api/dashboard/hitting/overview?${params.toString()}`;
+          const response = await fetch(url, { cache: 'no-store' });
+          const payload = (await response.json().catch(() => ({}))) as { table_rows?: Array<Record<string, string | number | null>>; table_columns?: string[] };
+          if (!response.ok) return [] as Array<[string, number[]]>;
+          const rows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+          const rowSplitColumn = String((payload.table_columns ?? [])[0] ?? 'Batter');
+          const cols = tableColumns.slice(1);
+          const out: Array<[string, number[]]> = [];
+          for (const column of cols) {
+            const values = rows
+              .filter((r) => !isAllLikeRowValue(r[rowSplitColumn]))
+              .map((r) => parseSortableNumber(r[column]))
+              .filter((v): v is number => v !== null)
+              .sort((a, b) => a - b);
+            if (!values.length) continue;
+            out.push([`${rowKey}::${column}`, values]);
+          }
+          return out;
+        })
+      );
+      if (!active) return;
+      const next = new Map<string, number[]>();
+      for (const chunk of entries) {
+        for (const [key, values] of chunk) next.set(key, values);
+      }
+      setSummaryPitchTypeDistributions(next);
+      setLoadingSummaryPitchTypePercentiles(false);
+    };
+    run().catch(() => {
+      if (!active) return;
+      setSummaryPitchTypeDistributions(new Map());
+      setLoadingSummaryPitchTypePercentiles(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [dashboardPage, splitBy, showCellPercentiles, percentileBaselineRequestKey, overview?.table_rows, overview?.table_columns]);
 
   const sortedGameLogRows = useMemo(
     () => sortTableRows(gameLogRows, gameLogSortColumn, gameLogSortDirection),
@@ -3295,14 +3500,15 @@ export default function HittingSuite({
     }
     for (const column of displayedTableColumns.slice(1)) {
       for (const row of percentileBaselineRows) {
-        if (isAllLikeRowValue(row[splitColumn])) continue;
         const rowKey = percentileRowKey(row[splitColumn]);
         if (!rowKey) continue;
+        const isAllRow = isAllLikeRowValue(row[splitColumn]);
         const numeric = parseSortableNumber(row[column]);
         if (numeric === null) continue;
         const scopedKey = `${rowKey}::${column}`;
         if (!scoped.has(scopedKey)) scoped.set(scopedKey, []);
         scoped.get(scopedKey)?.push(numeric);
+        if (isAllRow) continue;
         if (!globalByColumn.has(column)) globalByColumn.set(column, []);
         globalByColumn.get(column)?.push(numeric);
       }
@@ -3325,9 +3531,25 @@ export default function HittingSuite({
       rowSplitKey && !isAllLikeRowValue(row[splitColumn])
         ? (scoped.get(`${rowSplitKey}::${column}`) ?? [])
         : [];
-    const useTeamScope = isLeaderboardPage && !isPro && leaderboardPercentileScope === 'TEAM';
-    const distribution = isLeaderboardPage
-      ? (useTeamScope ? (leaderboardTeamDistributions.get(column) ?? []) : (globalByColumn.get(column) ?? []))
+    const isSummaryPage = dashboardPage === 'Summary';
+    const useTeamScope =
+      !isPro &&
+      (
+        (isLeaderboardPage && leaderboardPercentileScope === 'TEAM') ||
+        (isSummaryPage && summaryPercentileScope === 'TEAM')
+      );
+    const distribution = isSummaryPage
+      ? (
+          splitBy === 'Pitch Types'
+            ? (() => {
+                const pitchTypeDistribution = summaryPitchTypeDistributions.get(`${rowSplitKey}::${column}`) ?? [];
+                if (pitchTypeDistribution.length) return pitchTypeDistribution;
+                return scopedDistribution.length ? scopedDistribution : (globalByColumn.get(column) ?? []);
+              })()
+            : (scopedDistribution.length ? scopedDistribution : (globalByColumn.get(column) ?? []))
+        )
+      : isLeaderboardPage
+      ? (isLeaderboardPage && useTeamScope ? (leaderboardTeamDistributions.get(column) ?? []) : (globalByColumn.get(column) ?? []))
       : scopedDistribution;
     if (!distribution.length) return null;
     const numeric = parseSortableNumber(rawValue);
@@ -3335,7 +3557,7 @@ export default function HittingSuite({
     const percentile = percentileForValue(numeric, distribution);
     if (percentile === null) return null;
     return adjustPercentileDirection(column, percentile);
-  }, [isLeaderboardPage, isPro, leaderboardPercentileScope, leaderboardTeamDistributions, percentileDistributionsByKey]);
+  }, [isLeaderboardPage, isPro, dashboardPage, splitBy, leaderboardPercentileScope, summaryPercentileScope, leaderboardTeamDistributions, percentileDistributionsByKey, summaryPitchTypeDistributions]);
   const isGameLogPage = dashboardPage === 'Game Log';
   const correlationColumns = useMemo(
     () => {
@@ -4448,6 +4670,21 @@ export default function HittingSuite({
                     placeholder={SPLIT_BY_DEFAULT}
                   />
                 </label>
+                {dashboardPage === 'Summary' && !isPro ? (
+                  <label>
+                    Percentile By
+                    <SearchableSingleSelect
+                      options={[
+                        { value: 'NCAA', label: 'NCAA' },
+                        { value: 'MLB', label: 'MLB' },
+                        { value: 'TEAM', label: percentileTeamLabel },
+                      ]}
+                      value={summaryPercentileScope}
+                      onChange={(next) => setSummaryPercentileScope(next as 'NCAA' | 'TEAM' | 'MLB')}
+                      placeholder="NCAA"
+                    />
+                  </label>
+                ) : null}
                 <div className="portal-color-toggle">
                   <span className="portal-color-toggle-label">Show Percentile</span>
                   <button
@@ -4601,7 +4838,10 @@ export default function HittingSuite({
               </div>
             </div>
           ) : null}
-          {isLeaderboardPage && leaderboardStatView === 'Percentile' && loadingPercentileBaseline ? (
+          {(loadingPercentileBaseline || loadingSummaryPitchTypePercentiles) && (
+            (isLeaderboardPage && leaderboardStatView === 'Percentile') ||
+            (dashboardPage === 'Summary' && showCellPercentiles)
+          ) ? (
             <p className="portal-muted-text" style={{ margin: '0 0 0.6rem 0' }}>Loading percentiles...</p>
           ) : null}
           {loadingOverview ? <p className="portal-muted-text">Loading summary table...</p> : null}
