@@ -204,14 +204,14 @@ function extractSummaryMetrics(row: Record<string, unknown> | null | undefined):
   return out;
 }
 
-async function fetchJsonWithCache(url: URL, cacheKey: string, timeoutMs = 90000, retries = 1) {
+async function fetchJsonWithCache(url: URL, cacheKey: string, timeoutMs = 20000, retries = 0) {
   return fetchDashboardJsonWithCache({
     cacheKey,
     ttlMs: 45000,
     staleTtlMs: 180000,
     timeoutMs,
     retries,
-    fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
+    fetcher: (signal) => fetch(url.toString(), { cache: 'no-store', signal }),
   });
 }
 
@@ -222,8 +222,8 @@ async function fetchFilters(apiBase: string, schoolCode: string): Promise<{ pitc
   hittingUrl.searchParams.set('school_code', schoolCode);
 
   const [pitchingResult, hittingResult] = await Promise.all([
-    fetchJsonWithCache(pitchingUrl, `home:filters:pitching:${pitchingUrl.toString()}`, 120000, 1),
-    fetchJsonWithCache(hittingUrl, `home:filters:hitting:${hittingUrl.toString()}`, 120000, 1),
+    fetchJsonWithCache(pitchingUrl, `home:filters:pitching:${pitchingUrl.toString()}`, 15000, 0),
+    fetchJsonWithCache(hittingUrl, `home:filters:hitting:${hittingUrl.toString()}`, 15000, 0),
   ]);
 
   if (pitchingResult.status < 200 || pitchingResult.status >= 300) {
@@ -266,8 +266,8 @@ async function fetchSuiteSummary(input: {
   else hittingUrl.searchParams.set('team_type', input.targetValue);
 
   const [pitchingResult, hittingResult] = await Promise.all([
-    fetchJsonWithCache(pitchingUrl, `home:overview:pitching:${pitchingUrl.toString()}`, 120000, 1),
-    fetchJsonWithCache(hittingUrl, `home:overview:hitting:${hittingUrl.toString()}`, 120000, 1),
+    fetchJsonWithCache(pitchingUrl, `home:overview:pitching:${pitchingUrl.toString()}`, 20000, 0),
+    fetchJsonWithCache(hittingUrl, `home:overview:hitting:${hittingUrl.toString()}`, 20000, 0),
   ]);
 
   const pitchingPayload = pitchingResult.status >= 200 && pitchingResult.status < 300

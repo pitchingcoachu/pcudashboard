@@ -58,14 +58,14 @@ function rowMetric(row: Record<string, unknown>, key: string): number | null {
   return parseNumber(row[foundKey]);
 }
 
-function fetchCachedJson(url: URL, cacheKey: string, timeoutMs = 120000, retries = 1) {
+function fetchCachedJson(url: URL, cacheKey: string, timeoutMs = 25000, retries = 0) {
   return fetchDashboardJsonWithCache({
     cacheKey,
     ttlMs: 45000,
     staleTtlMs: 180000,
     timeoutMs,
     retries,
-    fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
+    fetcher: (signal) => fetch(url.toString(), { cache: 'no-store', signal }),
   });
 }
 
@@ -76,8 +76,8 @@ async function fetchFilters(apiBase: string, schoolCode: string): Promise<{ pitc
   hittingUrl.searchParams.set('school_code', schoolCode);
 
   const [pitchingResult, hittingResult] = await Promise.all([
-    fetchCachedJson(pitchingUrl, `home:alerts:filters:pitching:${pitchingUrl.toString()}`, 120000, 1),
-    fetchCachedJson(hittingUrl, `home:alerts:filters:hitting:${hittingUrl.toString()}`, 120000, 1),
+    fetchCachedJson(pitchingUrl, `home:alerts:filters:pitching:${pitchingUrl.toString()}`, 15000, 0),
+    fetchCachedJson(hittingUrl, `home:alerts:filters:hitting:${hittingUrl.toString()}`, 15000, 0),
   ]);
   if (pitchingResult.status < 200 || pitchingResult.status >= 300) {
     throw new Error(String(pitchingResult.payload.error ?? pitchingResult.payload.detail ?? 'Failed to load pitching filters.'));
@@ -373,7 +373,7 @@ export async function GET() {
     trendsUrl.searchParams.set('recent_end', dates.recentEnd);
     if (scopedPitcher) trendsUrl.searchParams.set('scoped_pitcher', scopedPitcher);
     if (scopedHitter) trendsUrl.searchParams.set('scoped_hitter', scopedHitter);
-    const trendsResult = await fetchCachedJson(trendsUrl, `home:alerts:trends:${trendsUrl.toString()}`, 120000, 1);
+    const trendsResult = await fetchCachedJson(trendsUrl, `home:alerts:trends:${trendsUrl.toString()}`, 20000, 0);
     if (trendsResult.status >= 200 && trendsResult.status < 300) {
       const payload = trendsResult.payload as {
         school_code?: string;

@@ -196,6 +196,8 @@ export async function GET(request: Request) {
   const chartOnly = inputUrl.searchParams.get('chart_only')?.trim() ?? '';
   const forceRaw = inputUrl.searchParams.get('force_raw')?.trim() ?? '';
   const percentileBaseline = isTruthy(inputUrl.searchParams.get('percentile_baseline')?.trim() ?? '');
+  const percentilePool = inputUrl.searchParams.get('percentile_pool')?.trim().toLowerCase() ?? '';
+  const useMlbPercentilePool = percentileBaseline && percentilePool === 'mlb';
   const includeRowPitches = inputUrl.searchParams.get('include_row_pitches')?.trim() ?? '';
   const includeTrendRows = inputUrl.searchParams.get('include_trend_rows')?.trim() ?? '';
   const resolvedSchoolCode = resolveDashboardSchoolCode({
@@ -210,7 +212,7 @@ export async function GET(request: Request) {
     apps: session.apps,
   });
   const schoolCode = percentileBaseline
-    ? (String(resolvedSchoolCode).trim().toUpperCase() === 'PRO' ? 'PRO' : 'LEAGUE')
+    ? (useMlbPercentilePool ? 'PRO' : (String(resolvedSchoolCode).trim().toUpperCase() === 'PRO' ? 'PRO' : 'LEAGUE'))
     : resolvedSchoolCode;
   const shouldScopePlayer = !percentileBaseline && shouldScopeDashboardPlayer(session.role, schoolCode);
   const playerIdentity = shouldScopePlayer

@@ -3,11 +3,11 @@
 import Link from 'next/link';
 import { Fragment } from 'react';
 import { useMemo, useState } from 'react';
-import type { ClientRow, CoachRow } from '../../../../lib/training-db';
+import type { CoachAssignedPlayerRow, CoachRow } from '../../../../lib/training-db';
 
 type Props = {
   coaches: CoachRow[];
-  clients: ClientRow[];
+  clients: CoachAssignedPlayerRow[];
   currentUserId: number;
 };
 
@@ -15,13 +15,17 @@ export function CoachesTable({ coaches, clients, currentUserId }: Props) {
   const [expandedCoachId, setExpandedCoachId] = useState<number | null>(null);
 
   const playersByCoach = useMemo(() => {
-    const map = new Map<number, ClientRow[]>();
+    const map = new Map<number, CoachAssignedPlayerRow[]>();
     for (const coach of coaches) {
       const coachId = Number(coach.userId);
-      map.set(
-        coach.userId,
-        clients.filter((client) => Number(client.assignedCoachUserId ?? 0) === coachId)
-      );
+      map.set(coachId, []);
+    }
+    for (const client of clients) {
+      const coachId = Number(client.assignedCoachUserId ?? 0);
+      if (coachId <= 0) continue;
+      const bucket = map.get(coachId);
+      if (!bucket) continue;
+      bucket.push(client);
     }
     return map;
   }, [coaches, clients]);

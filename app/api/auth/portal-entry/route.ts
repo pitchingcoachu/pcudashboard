@@ -74,8 +74,10 @@ export async function GET(request: Request) {
     shouldResetSchool = Boolean(normalizedHome) && normalizedCurrent !== normalizedHome;
   }
 
-  const destination =
-    session.role === 'player'
+  const selectedSchoolCode = String(normalizedHome || session.dashboardSchoolCode || '').trim().toUpperCase();
+  const isPcuSchool = selectedSchoolCode === 'PCU';
+  const destination = isPcuSchool
+    ? session.role === 'player'
       ? canUseProgrammingData({
           role: session.role,
           organizationId: session.organizationId ?? 0,
@@ -84,7 +86,8 @@ export async function GET(request: Request) {
         })
         ? '/portal/player'
         : '/portal/dashboard'
-      : '/portal/admin';
+      : '/portal/admin'
+    : '/portal/dashboard';
 
   const response = NextResponse.redirect(new URL(destination, request.url), 303);
   if (shouldResetSchool) {

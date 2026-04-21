@@ -119,6 +119,19 @@ declare global {
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
+const DB_POOL_MAX = Number.parseInt(String(process.env.AUTH_DB_POOL_MAX ?? '12'), 10);
+const DB_CONNECT_TIMEOUT_MS = Number.parseInt(String(process.env.AUTH_DB_CONNECT_TIMEOUT_MS ?? '5000'), 10);
+const DB_IDLE_TIMEOUT_MS = Number.parseInt(String(process.env.AUTH_DB_IDLE_TIMEOUT_MS ?? '10000'), 10);
+const DB_QUERY_TIMEOUT_MS = Number.parseInt(String(process.env.AUTH_DB_QUERY_TIMEOUT_MS ?? '20000'), 10);
+const DB_STATEMENT_TIMEOUT_MS = Number.parseInt(String(process.env.AUTH_DB_STATEMENT_TIMEOUT_MS ?? '20000'), 10);
+
+function boundedPositiveInt(value: number, fallback: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  const rounded = Math.round(value);
+  if (rounded < min) return min;
+  if (rounded > max) return max;
+  return rounded;
+}
 
 function normalizePgConnectionString(raw: string): string {
   const value = String(raw ?? '').trim();
@@ -148,9 +161,21 @@ export function getDbPool(): Pool {
   const connectionString = normalizePgConnectionString(DATABASE_URL);
 
   if (!global.__pcuPool) {
+    const max = boundedPositiveInt(DB_POOL_MAX, 12, 2, 50);
+    const connectionTimeoutMillis = boundedPositiveInt(DB_CONNECT_TIMEOUT_MS, 5000, 1000, 30000);
+    const idleTimeoutMillis = boundedPositiveInt(DB_IDLE_TIMEOUT_MS, 10000, 5000, 60000);
+    const queryTimeoutMs = boundedPositiveInt(DB_QUERY_TIMEOUT_MS, 20000, 3000, 120000);
+    const statementTimeoutMs = boundedPositiveInt(DB_STATEMENT_TIMEOUT_MS, 20000, 3000, 120000);
     global.__pcuPool = new Pool({
       connectionString,
       ssl: connectionString.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
+      max,
+      connectionTimeoutMillis,
+      idleTimeoutMillis,
+      query_timeout: queryTimeoutMs,
+      statement_timeout: statementTimeoutMs,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 0,
     });
   }
 

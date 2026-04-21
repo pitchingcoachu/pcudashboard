@@ -84,7 +84,10 @@ export async function GET(request: Request) {
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const requestedPercentileBaseline = isTruthy(new URL(request.url).searchParams.get('percentile_baseline')?.trim() ?? '');
+  const inputUrl = new URL(request.url);
+  const requestedPercentileBaseline = isTruthy(inputUrl.searchParams.get('percentile_baseline')?.trim() ?? '');
+  const percentilePool = inputUrl.searchParams.get('percentile_pool')?.trim().toLowerCase() ?? '';
+  const useMlbPercentilePool = requestedPercentileBaseline && percentilePool === 'mlb';
   const resolvedSchoolCode = resolveDashboardSchoolCode({
     userId: session.userId ?? 0,
     email: session.email,
@@ -97,10 +100,8 @@ export async function GET(request: Request) {
     apps: session.apps,
   });
   const schoolCode = requestedPercentileBaseline
-    ? (String(resolvedSchoolCode).trim().toUpperCase() === 'PRO' ? 'PRO' : 'LEAGUE')
+    ? (useMlbPercentilePool ? 'PRO' : (String(resolvedSchoolCode).trim().toUpperCase() === 'PRO' ? 'PRO' : 'LEAGUE'))
     : resolvedSchoolCode;
-
-  const inputUrl = new URL(request.url);
   const splitBy = inputUrl.searchParams.get('split_by')?.trim() ?? '';
   const level = inputUrl.searchParams.get('level')?.trim() ?? '';
   const tableMode = inputUrl.searchParams.get('table_mode')?.trim() ?? '';

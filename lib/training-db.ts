@@ -34,6 +34,14 @@ export type ClientListPage = {
   pageSize: number;
 };
 
+export type CoachAssignedPlayerRow = {
+  playerId: number;
+  fullName: string;
+  email: string;
+  status: string;
+  assignedCoachUserId: number | null;
+};
+
 export type CoachRow = {
   userId: number;
   name: string;
@@ -377,6 +385,8 @@ export async function ensureTrainingDbReady(): Promise<void> {
     );
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_assigned_coach ON players (assigned_coach_user_id);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_org_full_name ON players (organization_id, full_name);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_org_assigned_full_name ON players (organization_id, assigned_coach_user_id, full_name);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_users_org_role_name ON auth_users (organization_id, role, name);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_library_org_name ON exercise_library (organization_id, name);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_library_org_name ON workout_library (organization_id, name);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_exercises_workout_sort ON workout_exercises (workout_id, sort_order);`);
@@ -660,6 +670,9 @@ function _invalidateTrainingReadCacheForOrganization(organizationId: number) {
     `player_summaries:${org}:`,
     `client_count:${org}:`,
     `client_status_counts:${org}:`,
+    `clients_paged:${org}:`,
+    `coaches_list:${org}`,
+    `coach_assigned_players:${org}`,
     `exercise_count:${org}`,
     `workout_count:${org}`,
     `workout_choices:${org}`,
@@ -695,7 +708,6 @@ export async function listClientsByOrganizationPaged(input: {
 }): Promise<ClientListPage> {
   if (!isDatabaseConfigured()) return { rows: [], totalCount: 0, page: 1, pageSize: 100 };
   await ensureTrainingDbReady();
-  const pool = getDbPool();
   const rawPage = Number(input.page);
   const rawPageSize = Number(input.pageSize);
   const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
@@ -704,156 +716,200 @@ export async function listClientsByOrganizationPaged(input: {
   const query = String(input.query ?? '').trim();
   const coachUserId = Number(input.coachUserId ?? 0);
   const assignedCoachOnlyUserId = Number(input.assignedCoachOnlyUserId ?? 0);
+  const cacheKey = `clients_paged:${input.organizationId}:${page}:${pageSize}:${query.toLowerCase()}:${Number.isFinite(coachUserId) ? coachUserId : 0}:${Number.isFinite(assignedCoachOnlyUserId) ? assignedCoachOnlyUserId : 0}`;
 
-  const filters: string[] = ['p.organization_id = $1'];
-  const params: Array<number | string> = [input.organizationId];
-  let nextParamIndex = 2;
-  if (Number.isFinite(coachUserId) && coachUserId > 0) {
-    filters.push(`p.assigned_coach_user_id = $${nextParamIndex}`);
-    params.push(coachUserId);
-    nextParamIndex += 1;
-  }
-  if (Number.isFinite(assignedCoachOnlyUserId) && assignedCoachOnlyUserId > 0) {
-    filters.push(`p.assigned_coach_user_id = $${nextParamIndex}`);
-    params.push(assignedCoachOnlyUserId);
-    nextParamIndex += 1;
-  }
-  if (query) {
-    filters.push(`(p.full_name ILIKE $${nextParamIndex} OR p.email ILIKE $${nextParamIndex} OR COALESCE(coach.name, '') ILIKE $${nextParamIndex})`);
-    params.push(`%${query}%`);
-    nextParamIndex += 1;
-  }
-  const whereSql = filters.join(' AND ');
+  return _withTrainingReadCache(cacheKey, 12_000, async () => {
+    const pool = getDbPool();
 
-  const countResult = await pool.query<{ total_count: string }>(
-    `
-      SELECT COUNT(*)::text AS total_count
-      FROM players p
-      LEFT JOIN auth_users coach ON coach.id = p.assigned_coach_user_id
-      WHERE ${whereSql}
-    `,
-    params
-  );
-  const totalCount = Number(countResult.rows[0]?.total_count ?? '0') || 0;
+    const filters: string[] = ['p.organization_id = $1'];
+    const params: Array<number | string> = [input.organizationId];
+    let nextParamIndex = 2;
+    if (Number.isFinite(coachUserId) && coachUserId > 0) {
+      filters.push(`p.assigned_coach_user_id = $${nextParamIndex}`);
+      params.push(coachUserId);
+      nextParamIndex += 1;
+    }
+    if (Number.isFinite(assignedCoachOnlyUserId) && assignedCoachOnlyUserId > 0) {
+      filters.push(`p.assigned_coach_user_id = $${nextParamIndex}`);
+      params.push(assignedCoachOnlyUserId);
+      nextParamIndex += 1;
+    }
+    const hasQuery = query.length > 0;
+    if (hasQuery) {
+      filters.push(`(p.full_name ILIKE $${nextParamIndex} OR p.email ILIKE $${nextParamIndex} OR COALESCE(coach.name, '') ILIKE $${nextParamIndex})`);
+      params.push(`%${query}%`);
+      nextParamIndex += 1;
+    }
+    const whereSql = filters.join(' AND ');
 
-  const result = await pool.query<{
-    player_id: number;
-    user_id: number | null;
-    full_name: string;
-    email: string;
-    date_of_birth: string | null;
-    school_team: string | null;
-    phone: string | null;
-    college_commitment: string | null;
-    grad_year: string | null;
-    position: string | null;
-    bats_hand: string | null;
-    throws_hand: string | null;
-    assigned_coach_user_id: number | null;
-    assigned_coach_name: string | null;
-    status: string;
-    user_role: string | null;
-  }>(
-    `
-      SELECT
-        p.id AS player_id,
-        p.user_id,
-        p.full_name,
-        p.email,
-        p.date_of_birth::text,
-        p.school_team,
-        p.phone,
-        p.college_commitment,
-        p.grad_year,
-        p.position,
-        p.bats_hand,
-        p.throws_hand,
-        p.assigned_coach_user_id,
-        coach.name AS assigned_coach_name,
-        p.status,
-        u.role AS user_role
-      FROM players p
-      LEFT JOIN auth_users u ON u.id = p.user_id
-      LEFT JOIN auth_users coach ON coach.id = p.assigned_coach_user_id
-      WHERE ${whereSql}
-      ORDER BY p.full_name ASC
-      LIMIT $${nextParamIndex}
-      OFFSET $${nextParamIndex + 1}
-    `,
-    [...params, pageSize, offset]
-  );
+    const countResult = await pool.query<{ total_count: string }>(
+      `
+        SELECT COUNT(*)::text AS total_count
+        FROM players p
+        ${hasQuery ? 'LEFT JOIN auth_users coach ON coach.id = p.assigned_coach_user_id' : ''}
+        WHERE ${whereSql}
+      `,
+      params
+    );
+    const totalCount = Number(countResult.rows[0]?.total_count ?? '0') || 0;
 
-  return {
-    rows: result.rows.map((row) => ({
-      playerId: row.player_id,
-      userId: row.user_id,
-      fullName: row.full_name,
-      email: row.email,
-      dateOfBirth: row.date_of_birth,
-      schoolTeam: row.school_team,
-      phone: row.phone,
-      collegeCommitment: row.college_commitment,
-      gradYear: row.grad_year,
-      position: row.position,
-      batsHand: row.bats_hand,
-      throwsHand: row.throws_hand,
-      assignedCoachUserId: row.assigned_coach_user_id,
-      assignedCoachName: row.assigned_coach_name,
-      status: row.status,
-      userRole: row.user_role === 'admin' || row.user_role === 'coach' || row.user_role === 'player' ? row.user_role : null,
-    })),
-    totalCount,
-    page,
-    pageSize,
-  };
+    const result = await pool.query<{
+      player_id: number;
+      user_id: number | null;
+      full_name: string;
+      email: string;
+      date_of_birth: string | null;
+      school_team: string | null;
+      phone: string | null;
+      college_commitment: string | null;
+      grad_year: string | null;
+      position: string | null;
+      bats_hand: string | null;
+      throws_hand: string | null;
+      assigned_coach_user_id: number | null;
+      assigned_coach_name: string | null;
+      status: string;
+      user_role: string | null;
+    }>(
+      `
+        SELECT
+          p.id AS player_id,
+          p.user_id,
+          p.full_name,
+          p.email,
+          p.date_of_birth::text,
+          p.school_team,
+          p.phone,
+          p.college_commitment,
+          p.grad_year,
+          p.position,
+          p.bats_hand,
+          p.throws_hand,
+          p.assigned_coach_user_id,
+          coach.name AS assigned_coach_name,
+          p.status,
+          u.role AS user_role
+        FROM players p
+        LEFT JOIN auth_users u ON u.id = p.user_id
+        LEFT JOIN auth_users coach ON coach.id = p.assigned_coach_user_id
+        WHERE ${whereSql}
+        ORDER BY p.full_name ASC
+        LIMIT $${nextParamIndex}
+        OFFSET $${nextParamIndex + 1}
+      `,
+      [...params, pageSize, offset]
+    );
+
+    return {
+      rows: result.rows.map((row) => ({
+        playerId: row.player_id,
+        userId: row.user_id,
+        fullName: row.full_name,
+        email: row.email,
+        dateOfBirth: row.date_of_birth,
+        schoolTeam: row.school_team,
+        phone: row.phone,
+        collegeCommitment: row.college_commitment,
+        gradYear: row.grad_year,
+        position: row.position,
+        batsHand: row.bats_hand,
+        throwsHand: row.throws_hand,
+        assignedCoachUserId: row.assigned_coach_user_id,
+        assignedCoachName: row.assigned_coach_name,
+        status: row.status,
+        userRole: row.user_role === 'admin' || row.user_role === 'coach' || row.user_role === 'player' ? row.user_role : null,
+      })),
+      totalCount,
+      page,
+      pageSize,
+    };
+  });
 }
 
 export async function listCoachesByOrganization(organizationId: number): Promise<CoachRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
-  const pool = getDbPool();
+  const cacheKey = `coaches_list:${organizationId}`;
+  return _withTrainingReadCache(cacheKey, 12_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{
+      user_id: number;
+      name: string | null;
+      email: string;
+      phone: string | null;
+      role: string;
+      is_active: boolean | null;
+      assigned_player_count: string;
+    }>(
+      `
+        SELECT
+          u.id AS user_id,
+          u.name,
+          u.email,
+          u.phone,
+          u.role,
+          u.is_active,
+          COUNT(p.id)::text AS assigned_player_count
+        FROM auth_users u
+        LEFT JOIN players p ON p.assigned_coach_user_id = u.id
+        WHERE u.organization_id = $1
+          AND u.role IN ('admin', 'coach')
+        GROUP BY u.id, u.name, u.email, u.phone, u.role, u.is_active
+        ORDER BY
+          CASE WHEN u.role = 'admin' THEN 0 ELSE 1 END,
+          COALESCE(u.name, u.email) ASC
+      `,
+      [organizationId]
+    );
 
-  const result = await pool.query<{
-    user_id: number;
-    name: string | null;
-    email: string;
-    phone: string | null;
-    role: string;
-    is_active: boolean | null;
-    assigned_player_count: string;
-  }>(
-    `
-      SELECT
-        u.id AS user_id,
-        u.name,
-        u.email,
-        u.phone,
-        u.role,
-        u.is_active,
-        COUNT(p.id)::text AS assigned_player_count
-      FROM auth_users u
-      LEFT JOIN players p ON p.assigned_coach_user_id = u.id
-      WHERE u.organization_id = $1
-        AND u.role IN ('admin', 'coach')
-      GROUP BY u.id, u.name, u.email, u.phone, u.role, u.is_active
-      ORDER BY
-        CASE WHEN u.role = 'admin' THEN 0 ELSE 1 END,
-        COALESCE(u.name, u.email) ASC
-    `,
-    [organizationId]
-  );
+    return result.rows
+      .map((row): CoachRow => ({
+        userId: row.user_id,
+        name: (row.name ?? '').trim() || row.email,
+        email: row.email,
+        phone: row.phone,
+        role: row.role === 'coach' ? 'coach' : 'admin',
+        isActive: row.is_active !== false,
+        assignedPlayerCount: Number(row.assigned_player_count ?? '0') || 0,
+      }))
+      .filter((row) => row.role === 'admin' || row.role === 'coach');
+  });
+}
 
-  return result.rows
-    .map((row): CoachRow => ({
-      userId: row.user_id,
-      name: (row.name ?? '').trim() || row.email,
+export async function listCoachAssignedPlayersByOrganization(organizationId: number): Promise<CoachAssignedPlayerRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const cacheKey = `coach_assigned_players:${organizationId}`;
+  return _withTrainingReadCache(cacheKey, 12_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{
+      player_id: number;
+      full_name: string;
+      email: string;
+      status: string;
+      assigned_coach_user_id: number | null;
+    }>(
+      `
+        SELECT
+          p.id AS player_id,
+          p.full_name,
+          p.email,
+          p.status,
+          p.assigned_coach_user_id
+        FROM players p
+        WHERE p.organization_id = $1
+        ORDER BY p.full_name ASC
+      `,
+      [organizationId]
+    );
+    return result.rows.map((row) => ({
+      playerId: row.player_id,
+      fullName: row.full_name,
       email: row.email,
-      phone: row.phone,
-      role: row.role === 'coach' ? 'coach' : 'admin',
-      isActive: row.is_active !== false,
-      assignedPlayerCount: Number(row.assigned_player_count ?? '0') || 0,
-    }))
-    .filter((row) => row.role === 'admin' || row.role === 'coach');
+      status: row.status,
+      assignedCoachUserId: row.assigned_coach_user_id,
+    }));
+  });
 }
 
 export async function listPlayerChoicesByOrganization(input: {

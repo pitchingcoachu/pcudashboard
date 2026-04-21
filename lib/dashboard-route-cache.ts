@@ -72,7 +72,7 @@ export async function fetchDashboardJsonWithCache(options: {
   staleTtlMs?: number;
   timeoutMs?: number;
   retries?: number;
-  fetcher: () => Promise<Response>;
+  fetcher: (signal?: AbortSignal) => Promise<Response>;
 }): Promise<DashboardFetchResult> {
   const store = getCacheStore();
   const inflight = getInflightStore();
@@ -108,13 +108,21 @@ export async function fetchDashboardJsonWithCache(options: {
       while (attempt <= retries) {
         attempt += 1;
         try {
-          const timed = await Promise.race([
-            options.fetcher(),
-            new Promise<Response>((_, reject) =>
-              setTimeout(() => reject(new Error(`Dashboard API timeout after ${timeoutMs}ms`)), timeoutMs)
-            ),
-          ]);
-          response = timed;
+          const controller = new AbortController();
+          const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            response = await options.fetcher(controller.signal);
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              (error.name === 'AbortError' || error.message.toLowerCase().includes('aborted'))
+            ) {
+              throw new Error(`Dashboard API timeout after ${timeoutMs}ms`);
+            }
+            throw error;
+          } finally {
+            clearTimeout(timeoutHandle);
+          }
           break;
         } catch (error) {
           if (attempt > retries) throw error;

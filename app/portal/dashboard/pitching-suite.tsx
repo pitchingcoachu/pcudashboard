@@ -258,6 +258,9 @@ const PRO_SEASON_START = '2026-03-25';
 const HANDED_MOVEMENT_PERCENTILE_COLUMNS = new Set(
   ['IVB', 'HB', 'Side', 'rTilt', 'bTilt'].map((column) => normalizePercentileColumnToken(column))
 );
+const LOWER_IS_BETTER_PERCENTILE_COLUMNS = new Set(
+  ['BB%', 'HR%', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP'].map((column) => normalizePercentileColumnToken(column))
+);
 
 
 function fmtNum(value: number | null | undefined, digits = 1): string {
@@ -573,13 +576,12 @@ function isAllLikeRowValue(value: unknown): boolean {
 
 function percentileForValue(value: number, distribution: number[]): number | null {
   if (!Number.isFinite(value) || !distribution.length) return null;
+  if (distribution.length === 1) return 100;
   let less = 0;
-  let equal = 0;
   for (const point of distribution) {
     if (point < value) less += 1;
-    else if (point === value) equal += 1;
   }
-  const rank = ((less + (equal * 0.5) + 0.5) / (distribution.length + 1)) * 100;
+  const rank = (less / (distribution.length - 1)) * 100;
   return Math.max(0, Math.min(100, rank));
 }
 
@@ -592,6 +594,12 @@ function normalizePercentileColumnToken(value: string): string {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
+}
+
+function adjustPercentileDirection(column: string, percentile: number): number {
+  const token = normalizePercentileColumnToken(column);
+  if (!LOWER_IS_BETTER_PERCENTILE_COLUMNS.has(token)) return percentile;
+  return Math.max(0, Math.min(100, 100 - percentile));
 }
 
 function normalizeHandednessCode(value: unknown): 'R' | 'L' | '' {
@@ -1506,6 +1514,7 @@ export default function PitchingSuite({
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardStatView, setLeaderboardStatView] = useState<'Stats' | 'Percentile'>('Stats');
+  const [leaderboardPercentileScope, setLeaderboardPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
   const [gameLogRows, setGameLogRows] = useState<Array<Record<string, unknown>>>([]);
@@ -1534,6 +1543,7 @@ export default function PitchingSuite({
   const [showCellPercentiles, setShowCellPercentiles] = useState(true);
   const [percentileBaselineRequestKey, setPercentileBaselineRequestKey] = useState('');
   const [percentileBaselineRows, setPercentileBaselineRows] = useState<Array<Record<string, string | number | null>>>([]);
+  const [loadingPercentileBaseline, setLoadingPercentileBaseline] = useState(false);
   const [percentileBaselineHandedRequestKey, setPercentileBaselineHandedRequestKey] = useState('');
   const [percentileBaselineHandedRows, setPercentileBaselineHandedRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
@@ -2390,7 +2400,14 @@ export default function PitchingSuite({
       baselineParams.delete('chart_only');
       baselineParams.delete('chart_points_limit');
       baselineParams.delete('pitcher');
-      if (isPro) {
+      if (!isPro && isLeaderboard) baselineParams.set('team_type', 'All');
+      if (!isPro && isLeaderboard && leaderboardPercentileScope === 'MLB') {
+        baselineParams.set('percentile_pool', 'mlb');
+      } else {
+        baselineParams.delete('percentile_pool');
+      }
+      const useMlbPercentileScope = isPro || (!isPro && isLeaderboard && leaderboardPercentileScope === 'MLB');
+      if (useMlbPercentileScope) {
         baselineParams.set('start_date', '2026-01-01');
         baselineParams.set('end_date', '2026-12-31');
         baselineParams.set('level', 'MLB');
@@ -2478,7 +2495,12 @@ export default function PitchingSuite({
         });
     };
     const cachedOverview = overviewCacheRef.current.get(requestKey);
-    if (cachedOverview && Date.now() - cachedOverview.at < overviewTtlMs) {
+    const shouldBypassCachedEmptySummary =
+      isPro &&
+      isSummaryPage &&
+      Boolean(selectedSinglePitcher) &&
+      (!Array.isArray(cachedOverview?.payload?.table_rows) || (cachedOverview?.payload?.table_rows?.length ?? 0) === 0);
+    if (cachedOverview && Date.now() - cachedOverview.at < overviewTtlMs && !shouldBypassCachedEmptySummary) {
       applyOverviewPayload(cachedOverview.payload);
       if (chartRequestKey) loadCompanionChart(chartRequestKey);
       setLoadingOverview(false);
@@ -2507,6 +2529,65 @@ export default function PitchingSuite({
           isLeaderboard &&
           (!Array.isArray(payload.table_rows) || payload.table_rows.length === 0) &&
           !autoFallbackAppliedRef.current;
+        const shouldTrySummaryPlayerFallback =
+          isPro &&
+          isSummaryPage &&
+          Boolean(selectedSinglePitcher) &&
+          (!Array.isArray(payload.table_rows) || payload.table_rows.length === 0);
+        if (shouldTrySummaryPlayerFallback) {
+          const fallbackParams = new URLSearchParams(params);
+          fallbackParams.set('team_type', 'All');
+          fallbackParams.set('table_mode', 'Live');
+          fallbackParams.set('split_by', 'Pitch Types');
+          fallbackParams.set('include_chart_points', '0');
+          fallbackParams.set('include_row_pitches', '0');
+          fallbackParams.set('include_trend_rows', '0');
+          fallbackParams.set('pitcher', selectedSinglePitcher);
+          const dropKeys = [
+            'opp_hitter',
+            'with_video',
+            'break_lines',
+            'hand',
+            'batter_side',
+            'venue',
+            'session_type',
+            'qp_locations',
+            'custom_columns',
+            'visual_option',
+            'in_zone',
+            'pitch_types',
+            'zone_locations',
+            'pitch_results',
+            'count_filter',
+            'after_count_filter',
+            'velo_min',
+            'velo_max',
+            'ivb_min',
+            'ivb_max',
+            'hb_min',
+            'hb_max',
+            'pc_min',
+            'pc_max',
+            'chart_only',
+            'chart_points_limit',
+          ] as const;
+          for (const key of dropKeys) fallbackParams.delete(key);
+          const fallbackKey = `/api/dashboard/pitching/overview?${fallbackParams.toString()}`;
+          try {
+            const fallbackResponse = await fetch(fallbackKey, { signal: controller.signal });
+            const fallbackPayload = (await fallbackResponse.json().catch(() => ({}))) as OverviewPayload & { error?: string };
+            if (fallbackResponse.ok && !fallbackPayload.error && Array.isArray(fallbackPayload.table_rows) && fallbackPayload.table_rows.length > 0) {
+              overviewCacheRef.current.set(fallbackKey, { at: Date.now(), payload: fallbackPayload });
+              applyOverviewPayload(fallbackPayload);
+              if (chartRequestKey) loadCompanionChart(chartRequestKey);
+              return;
+            }
+          } catch (fallbackErr) {
+            if (!(fallbackErr instanceof DOMException && fallbackErr.name === 'AbortError')) {
+              // Keep primary payload below if summary fallback request fails.
+            }
+          }
+        }
         if (shouldTryLeaderboardFallback) {
           autoFallbackAppliedRef.current = true;
           const fallbackParams = new URLSearchParams(params);
@@ -2631,20 +2712,24 @@ export default function PitchingSuite({
     withVideo,
     selectedSinglePitcher,
     selectedSinglePitcherHandCode,
+    leaderboardPercentileScope,
   ]);
 
   useEffect(() => {
     if (!percentileBaselineRequestKey) {
       setPercentileBaselineRows([]);
+      setLoadingPercentileBaseline(false);
       return;
     }
     const cached = percentileBaselineCacheRef.current.get(percentileBaselineRequestKey);
     if (cached && Date.now() - cached.at < 90_000) {
       setPercentileBaselineRows(cached.rows);
+      setLoadingPercentileBaseline(false);
       return;
     }
     let active = true;
     const controller = new AbortController();
+    setLoadingPercentileBaseline(true);
     fetch(percentileBaselineRequestKey, { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as { table_rows?: Array<Record<string, string | number | null>>; error?: string };
@@ -2653,11 +2738,13 @@ export default function PitchingSuite({
         if (!active) return;
         percentileBaselineCacheRef.current.set(percentileBaselineRequestKey, { at: Date.now(), rows: baselineRows });
         setPercentileBaselineRows(baselineRows);
+        setLoadingPercentileBaseline(false);
       })
       .catch((error) => {
         if (!active) return;
         if (error instanceof DOMException && error.name === 'AbortError') return;
         setPercentileBaselineRows([]);
+        setLoadingPercentileBaseline(false);
       });
     return () => {
       active = false;
@@ -6283,6 +6370,31 @@ export default function PitchingSuite({
       pinnedLeaderboardKeys
     ) as Array<Record<string, string | number | null>>;
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
+  const percentileTeamLabel = useMemo(() => {
+    const school = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+    if (school && school !== 'PRO' && school !== 'LEAGUE') return school;
+    const teamRaw = String(teamType ?? '').trim();
+    if (teamRaw && teamRaw !== 'All' && isLikelyLeagueTeamCode(teamRaw)) return teamRaw.toUpperCase();
+    return 'Team';
+  }, [filters?.school_code, selectedSchoolCode, teamType]);
+  const leaderboardTeamDistributions = useMemo(() => {
+    const byColumn = new Map<string, number[]>();
+    if (!isLeaderboardPage || isPro || leaderboardPercentileScope !== 'TEAM') return byColumn;
+    const splitColumn = displayedTableColumns[0] ?? '';
+    for (const column of displayedTableColumns.slice(1)) {
+      for (const row of leaderboardRowsWithPins) {
+        if (splitColumn && isAllLikeRowValue(row[splitColumn])) continue;
+        const numeric = parseSortableNumber(row[column]);
+        if (numeric === null) continue;
+        if (!byColumn.has(column)) byColumn.set(column, []);
+        byColumn.get(column)?.push(numeric);
+      }
+    }
+    byColumn.forEach((values, key) => {
+      byColumn.set(key, values.sort((a, b) => a - b));
+    });
+    return byColumn;
+  }, [isLeaderboardPage, isPro, leaderboardPercentileScope, displayedTableColumns, leaderboardRowsWithPins]);
   const percentileDistributionsByKey = useMemo(() => {
     const splitColumn = displayedTableColumns[0] ?? '';
     const scoped = new Map<string, number[]>();
@@ -6339,12 +6451,20 @@ export default function PitchingSuite({
               : (scoped.get(`${rowSplitKey}::${column}`) ?? [])
           )
         : [];
-    const distribution = scopedDistribution;
+    const globalDistribution = useHandedMovementDistribution
+      ? (globalByColumnHanded.get(column) ?? globalByColumn.get(column) ?? [])
+      : (globalByColumn.get(column) ?? []);
+    const useTeamScope = isLeaderboardPage && !isPro && leaderboardPercentileScope === 'TEAM';
+    const distribution = isLeaderboardPage
+      ? (useTeamScope ? (leaderboardTeamDistributions.get(column) ?? []) : globalDistribution)
+      : scopedDistribution;
     if (!distribution.length) return null;
     const numeric = parseSortableNumber(rawValue);
     if (numeric === null) return null;
-    return percentileForValue(numeric, distribution);
-  }, [percentileDistributionsByKey]);
+    const percentile = percentileForValue(numeric, distribution);
+    if (percentile === null) return null;
+    return adjustPercentileDirection(column, percentile);
+  }, [isLeaderboardPage, isPro, leaderboardPercentileScope, leaderboardTeamDistributions, percentileDistributionsByKey]);
   const isGameLogPage = dashboardPage === 'Game Log';
   const correlationColumns = useMemo(
     () => {
@@ -7181,6 +7301,21 @@ export default function PitchingSuite({
                       />
                     </label>
                   ) : null}
+                  {isLeaderboardPage && !isPro ? (
+                    <label>
+                      Percentile By
+                      <SearchableSingleSelect
+                        options={[
+                          { value: 'NCAA', label: 'NCAA' },
+                          { value: 'MLB', label: 'MLB' },
+                          { value: 'TEAM', label: percentileTeamLabel },
+                        ]}
+                        value={leaderboardPercentileScope}
+                        onChange={(next) => setLeaderboardPercentileScope(next as 'NCAA' | 'TEAM' | 'MLB')}
+                        placeholder="NCAA"
+                      />
+                    </label>
+                  ) : null}
                   {isLeaderboardPage ? (
                     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'nowrap', justifySelf: 'end' }}>
                       <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
@@ -7386,6 +7521,9 @@ export default function PitchingSuite({
                       ) : null}
                     </div>
                   </div>
+                ) : null}
+                {isLeaderboardPage && leaderboardStatView === 'Percentile' && loadingPercentileBaseline ? (
+                  <p className="portal-muted-text" style={{ margin: '0 0 0.6rem 0' }}>Loading percentiles...</p>
                 ) : null}
                 <table className="portal-table">
                   <thead>

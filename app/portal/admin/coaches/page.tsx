@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requirePortalSession } from '../../../../lib/portal-session';
-import { listClientsByOrganization, listCoachesByOrganization, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
+import { listCoachAssignedPlayersByOrganization, listCoachesByOrganization, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 import {
   canUseClientManagement,
   resolveProgrammingSchoolCode,
@@ -31,9 +31,9 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
     createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
   });
 
-  const [coaches, clients, params] = await Promise.all([
+  const [coaches, assignedPlayers, params] = await Promise.all([
     clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
-    clientManagementOrganizationId > 0 ? listClientsByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
+    clientManagementOrganizationId > 0 ? listCoachAssignedPlayersByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
     searchParams,
   ]);
   const { ok, error } = readMessage(params);
@@ -137,7 +137,7 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
         {coaches.length === 0 ? (
           <p>No coaches yet.</p>
         ) : (
-          <CoachesTable coaches={coaches} clients={clients} currentUserId={session.userId} />
+          <CoachesTable coaches={coaches} clients={assignedPlayers} currentUserId={session.userId} />
         )}
       </article>
     </div>

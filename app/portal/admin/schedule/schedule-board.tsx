@@ -73,6 +73,23 @@ const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low' | 'mobility' | 's_an
   { key: 'mobility', label: 'Mobility' },
   { key: 's_and_c', label: 'S&C' },
 ];
+const SCHEDULE_REQUEST_TIMEOUT_MS = 20000;
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = SCHEDULE_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const mergedInit: RequestInit = { ...init, signal: controller.signal };
+    return await fetch(input, mergedInit);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
 
 function toIsoDate(date: Date): string {
   const year = date.getUTCFullYear();
@@ -220,7 +237,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     try {
       if (view === 'cycle') {
         const params = new URLSearchParams({ playerId: String(playerId) });
-        const response = await fetch(`/api/admin/schedule/cycle?${params.toString()}`, { cache: 'no-store' });
+        const response = await fetchWithTimeout(`/api/admin/schedule/cycle?${params.toString()}`, { cache: 'no-store' });
         const payload = (await response.json().catch(() => ({}))) as { items?: ProgramItemRow[]; error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load 3-Day Cycle.');
         setItems(Array.isArray(payload.items) ? payload.items : []);
@@ -231,7 +248,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         startDate: visibleRange.startDate,
         endDate: visibleRange.endDate,
       });
-      const response = await fetch(`/api/admin/schedule/assignments?${params.toString()}`, { cache: 'no-store' });
+      const response = await fetchWithTimeout(`/api/admin/schedule/assignments?${params.toString()}`, { cache: 'no-store' });
       const payload = (await response.json().catch(() => ({}))) as { items?: ProgramItemRow[]; error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to load schedule.');
       setItems(Array.isArray(payload.items) ? payload.items : []);
@@ -249,7 +266,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   const loadTemplates = useCallback(async () => {
     setTemplatesLoading(true);
     try {
-      const response = await fetch('/api/admin/schedule/templates', { cache: 'no-store' });
+      const response = await fetchWithTimeout('/api/admin/schedule/templates', { cache: 'no-store' });
       const payload = (await response.json().catch(() => ({}))) as { templates?: TemplateChoice[]; error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to load templates.');
       setTemplates(Array.isArray(payload.templates) ? payload.templates : []);
@@ -351,7 +368,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     if (!playerId) return;
     setError('');
     try {
-      const response = await fetch('/api/admin/schedule/templates/apply', {
+      const response = await fetchWithTimeout('/api/admin/schedule/templates/apply', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ playerId, templateId, startDate, programName: 'Current Program' }),
@@ -380,7 +397,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         }))
         .filter((day) => Number.isFinite(day.dayOffset) && day.dayOffset >= 0 && day.items.length > 0)
         .sort((a, b) => a.dayOffset - b.dayOffset);
-      const response = await fetch('/api/admin/schedule/templates', {
+      const response = await fetchWithTimeout('/api/admin/schedule/templates', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -406,7 +423,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     if (!confirmed) return;
     setError('');
     try {
-      const response = await fetch(`/api/admin/schedule/templates?templateId=${selectedTemplateId}`, {
+      const response = await fetchWithTimeout(`/api/admin/schedule/templates?templateId=${selectedTemplateId}`, {
         method: 'DELETE',
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -441,7 +458,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     if (!playerId) return;
     setError('');
     try {
-      const response = await fetch('/api/admin/schedule/assignments', {
+      const response = await fetchWithTimeout('/api/admin/schedule/assignments', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ playerId, dayDate, workoutId }),
@@ -458,7 +475,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     if (!playerId) return;
     setError('');
     try {
-      const response = await fetch('/api/admin/schedule/cycle', {
+      const response = await fetchWithTimeout('/api/admin/schedule/cycle', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ playerId, workoutId, cycleSlot }),
@@ -475,7 +492,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     if (!playerId) return;
     setError('');
     try {
-      const response = await fetch('/api/admin/schedule/cycle', {
+      const response = await fetchWithTimeout('/api/admin/schedule/cycle', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ playerId, itemId, cycleSlot }),
@@ -497,7 +514,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
       return [...other, ...daySorted].sort((a, b) => (a.dayDate === b.dayDate ? 0 : a.dayDate.localeCompare(b.dayDate)));
     });
 
-    const response = await fetch('/api/admin/schedule/reorder', {
+    const response = await fetchWithTimeout('/api/admin/schedule/reorder', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ playerId, dayDate, orderedItemIds }),
@@ -523,7 +540,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
       if (sourceDate === dayDate) return;
       setError('');
       try {
-        const response = await fetch('/api/admin/schedule/move', {
+        const response = await fetchWithTimeout('/api/admin/schedule/move', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -608,7 +625,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         dayDate: addDays(targetDate, day.offset),
         items: day.items,
       }));
-      const response = await fetch('/api/admin/schedule/copy-paste', {
+      const response = await fetchWithTimeout('/api/admin/schedule/copy-paste', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -628,7 +645,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   const deleteCalendarItem = async (itemId: number) => {
     if (!playerId) return;
     setError('');
-    const response = await fetch('/api/admin/schedule/delete', {
+    const response = await fetchWithTimeout('/api/admin/schedule/delete', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ playerId, itemId, mode: 'item' }),
@@ -642,7 +659,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     if (!playerId) return;
     setError('');
     try {
-      const response = await fetch('/api/admin/schedule/delete', {
+      const response = await fetchWithTimeout('/api/admin/schedule/delete', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ playerId, dayDate, mode: 'day' }),
