@@ -17760,9 +17760,9 @@ def pitching_overview(
     try:
         with get_conn() as conn, conn.cursor() as cur:
             video_map_table = None
-            # Prefer the shared canonical video_map table first.
-            # Some legacy school-specific tables may contain stale/unmatched play_ids.
-            table_candidates = ["public.video_map", f"public.video_map_{school_code.lower()}"]
+            # Prefer school-scoped table first so sites like PCU read their dedicated
+            # mappings (video_map_pcu). Fall back to shared canonical table.
+            table_candidates = [f"public.video_map_{school_code.lower()}", "public.video_map"]
             for candidate in table_candidates:
                 cur.execute("SELECT to_regclass(%(tbl)s)::text AS reg", {"tbl": candidate})
                 reg = (cur.fetchone() or {}).get("reg")
