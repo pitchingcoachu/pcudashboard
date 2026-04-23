@@ -59,6 +59,41 @@ function deriveFallbackEra(row: Record<string, unknown>): number | null {
   return Math.max(0, (9 * erEstimate) / ip);
 }
 
+function deriveFallbackFip(row: Record<string, unknown>): number | null {
+  const ip = parseInningsToDecimal(row.IP);
+  if (!ip || ip <= 0) return null;
+  const hr = parseSortableNumber(row.HR) ?? 0;
+  const bb = parseSortableNumber(row.BB) ?? 0;
+  const hbp = parseSortableNumber(row.HBP) ?? 0;
+  const k = parseSortableNumber(row.K) ?? 0;
+  const fip = ((13 * hr) + (3 * (bb + hbp)) - (2 * k)) / ip + 3.2;
+  return Number.isFinite(fip) ? fip : null;
+}
+
+function deriveFallbackXFip(row: Record<string, unknown>): number | null {
+  const ip = parseInningsToDecimal(row.IP);
+  if (!ip || ip <= 0) return null;
+  const bb = parseSortableNumber(row.BB) ?? 0;
+  const hbp = parseSortableNumber(row.HBP) ?? 0;
+  const k = parseSortableNumber(row.K) ?? 0;
+  const hits = parseSortableNumber(row.H) ?? 0;
+  const babip = parseSortableNumber(row.BABIP);
+  const gbPctRaw = parseSortableNumber(row['GB%']);
+  if (babip === null || babip <= 0 || gbPctRaw === null) return null;
+  const inPlay = hits / babip;
+  if (!Number.isFinite(inPlay) || inPlay <= 0) return null;
+  const gbRate = Math.max(0, Math.min(1, gbPctRaw / 100));
+  const fb = Math.max(0, inPlay * (1 - gbRate));
+  const xHr = fb * 0.12;
+  const xfip = ((13 * xHr) + (3 * (bb + hbp)) - (2 * k)) / ip + 3.2;
+  return Number.isFinite(xfip) ? xfip : null;
+}
+
+function isAllLikeRowValue(value: unknown): boolean {
+  const text = String(value ?? '').trim().toLowerCase();
+  return text === 'all' || text === 'all (pinned)';
+}
+
 function withEraBackfill(payload: unknown): unknown {
   if (!payload || typeof payload !== 'object') return payload;
   const data = payload as { table_rows?: unknown[] };
@@ -79,6 +114,44 @@ function withEraBackfill(payload: unknown): unknown {
   });
   if (!changed) return payload;
   return { ...(payload as Record<string, unknown>), table_rows: nextRows };
+}
+
+function withAdvancedAllRowBackfill(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object') return payload;
+  const data = payload as { table_rows?: unknown[]; table_columns?: unknown[] };
+  if (!Array.isArray(data.table_rows) || !Array.isArray(data.table_columns)) return payload;
+  const splitColumn = String(data.table_columns[0] ?? '').trim();
+  if (!splitColumn) return payload;
+  let changed = false;
+  const nextRows = data.table_rows.map((row) => {
+    if (!row || typeof row !== 'object') return row;
+    const rowObj = row as Record<string, unknown>;
+    if (!isAllLikeRowValue(rowObj[splitColumn])) return row;
+    const era = parseSortableNumber(rowObj.ERA);
+    const fip = parseSortableNumber(rowObj.FIP);
+    const xfip = parseSortableNumber(rowObj.xFIP);
+    let next = rowObj;
+    if ((fip === null || (era !== null && Math.abs(fip - era) < 0.005))) {
+      const fallbackFip = deriveFallbackFip(rowObj);
+      if (fallbackFip !== null) {
+        next = { ...next, FIP: Number(fallbackFip.toFixed(2)) };
+      }
+    }
+    if ((xfip === null || (era !== null && Math.abs(xfip - era) < 0.005))) {
+      const fallbackXFip = deriveFallbackXFip(rowObj);
+      if (fallbackXFip !== null) {
+        next = { ...next, xFIP: Number(fallbackXFip.toFixed(2)) };
+      }
+    }
+    if (next !== rowObj) changed = true;
+    return next;
+  });
+  if (!changed) return payload;
+  return { ...(payload as Record<string, unknown>), table_rows: nextRows };
+}
+
+function applyOverviewBackfills(payload: unknown): unknown {
+  return withAdvancedAllRowBackfill(withEraBackfill(payload));
 }
 
 function resolveOverviewTimeoutMs(schoolCode: string): number {
@@ -115,6 +188,10 @@ function hasNonEmptyTableRows(payload: unknown): boolean {
   if (!payload || typeof payload !== 'object') return false;
   const rows = (payload as { table_rows?: unknown }).table_rows;
   return Array.isArray(rows) && rows.length > 0;
+}
+
+function hasValue(value: string): boolean {
+  return String(value ?? '').trim().length > 0;
 }
 
 async function fetchProSafePitchingLeaderboard(params: {
@@ -321,12 +398,41 @@ export async function GET(request: Request) {
     !requestedPitcher &&
     !oppHitter &&
     (!teamType || teamType.toLowerCase() === 'all');
+  const hasProLeaderboardNarrowingFilters =
+    hasValue(withVideo) ||
+    hasValue(breakLines) ||
+    hasValue(stuffLevel) ||
+    hasValue(stuffBase) ||
+    hasValue(hand) ||
+    hasValue(batterSide) ||
+    hasValue(venue) ||
+    hasValue(sessionType) ||
+    hasValue(qpLocations) ||
+    hasValue(visualOption) ||
+    hasValue(inZone) ||
+    hasValue(pitchTypes) ||
+    hasValue(zoneLocations) ||
+    hasValue(pitchResults) ||
+    hasValue(countFilter) ||
+    hasValue(afterCountFilter) ||
+    hasValue(veloMin) ||
+    hasValue(veloMax) ||
+    hasValue(ivbMin) ||
+    hasValue(ivbMax) ||
+    hasValue(hbMin) ||
+    hasValue(hbMax) ||
+    hasValue(pcMin) ||
+    hasValue(pcMax) ||
+    hasValue(chartOnly) ||
+    hasValue(forceRaw);
   const shouldForceProLeaderboardRollupShape =
     isProLeaderboardSplit &&
     proBroadScope &&
     daySpan >= 14 &&
     proLeaderboardDefaultModeRequested &&
+    !hasProLeaderboardNarrowingFilters &&
     !customModeRequested &&
+    !(percentileBaseline && splitBy === 'Pitcher' && !!pitchTypes) &&
     !isTruthy(chartOnly);
   if (shouldForceProLeaderboardRollupShape) {
     // Match league broad-window behavior: keep this request strictly rollup-safe.
@@ -368,14 +474,16 @@ export async function GET(request: Request) {
   const cachePolicy = resolveOverviewCachePolicy(schoolCode);
   const isGameSplit = splitBy === 'Game';
   const gameSplitCacheBuster = isGameSplit ? `:game:${Date.now()}` : '';
-  const customShapeCacheBuster = customModeRequested ? ':custom-shape-v2' : '';
+  const customShapeCacheBuster = customModeRequested ? ':custom-shape-v3' : '';
   const shouldPreferProSafeLeaderboard =
     isPro &&
     !shouldScopePlayer &&
     proBroadScope &&
     (splitBy === 'Pitcher' || splitBy === 'Pitcher Team') &&
     proLeaderboardDefaultModeRequested &&
+    !hasProLeaderboardNarrowingFilters &&
     !customModeRequested &&
+    !(percentileBaseline && splitBy === 'Pitcher' && !!pitchTypes) &&
     !isTruthy(chartOnly);
 
   if (shouldPreferProSafeLeaderboard) {
@@ -392,7 +500,7 @@ export async function GET(request: Request) {
         retries: 0,
       });
       if (fallback.status >= 200 && fallback.status < 300 && hasNonEmptyTableRows(fallback.payload)) {
-        return NextResponse.json(withEraBackfill(fallback.payload), {
+        return NextResponse.json(applyOverviewBackfills(fallback.payload), {
           headers: {
             ...RESPONSE_CACHE_HEADERS,
             'x-dashboard-cache': fallback.cached ? 'HIT' : 'MISS',
@@ -426,7 +534,7 @@ export async function GET(request: Request) {
       const uncachedResponse = await fetch(url.toString(), { cache: 'no-store' });
       const uncachedPayload = (await uncachedResponse.json().catch(() => ({}))) as Record<string, unknown>;
       if (uncachedResponse.ok && hasNonEmptyTableRows(uncachedPayload)) {
-        return NextResponse.json(withEraBackfill(uncachedPayload), {
+        return NextResponse.json(applyOverviewBackfills(uncachedPayload), {
           headers: {
             ...RESPONSE_CACHE_HEADERS,
             'x-dashboard-cache': 'MISS',
@@ -444,6 +552,7 @@ export async function GET(request: Request) {
         isPro &&
         leaderboardLikeSplit &&
         proLeaderboardDefaultModeRequested &&
+        !hasProLeaderboardNarrowingFilters &&
         !customModeRequested &&
         !isTruthy(chartOnly);
       if (shouldFallbackToLeanProLeaderboard && result.status >= 500) {
@@ -459,7 +568,7 @@ export async function GET(request: Request) {
           retries: resolveOverviewRetries(schoolCode),
         });
         if (fallback.status >= 200 && fallback.status < 300) {
-          return NextResponse.json(withEraBackfill(fallback.payload), {
+          return NextResponse.json(applyOverviewBackfills(fallback.payload), {
             headers: {
               ...RESPONSE_CACHE_HEADERS,
               'x-dashboard-cache': fallback.cached ? 'HIT' : 'MISS',
@@ -478,7 +587,7 @@ export async function GET(request: Request) {
           : `Dashboard API request failed (HTTP ${result.status}).`;
       return NextResponse.json({ error: message }, { status: result.status });
     }
-    return NextResponse.json(withEraBackfill(result.payload), {
+    return NextResponse.json(applyOverviewBackfills(result.payload), {
       headers: {
         ...RESPONSE_CACHE_HEADERS,
         'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',
@@ -493,6 +602,7 @@ export async function GET(request: Request) {
       isPro &&
       leaderboardLikeSplit &&
       proLeaderboardDefaultModeRequested &&
+      !hasProLeaderboardNarrowingFilters &&
       !customModeRequested &&
       !isTruthy(chartOnly);
     if (shouldFallbackToLeanProLeaderboard) {
@@ -509,7 +619,7 @@ export async function GET(request: Request) {
           retries: resolveOverviewRetries(schoolCode),
         });
         if (fallback.status >= 200 && fallback.status < 300) {
-          return NextResponse.json(withEraBackfill(fallback.payload), {
+          return NextResponse.json(applyOverviewBackfills(fallback.payload), {
             headers: {
               ...RESPONSE_CACHE_HEADERS,
               'x-dashboard-cache': fallback.cached ? 'HIT' : 'MISS',

@@ -46,6 +46,10 @@ function hasNonEmptyTableRows(payload: unknown): boolean {
   return Array.isArray(rows) && rows.length > 0;
 }
 
+function hasValue(value: string): boolean {
+  return String(value ?? '').trim().length > 0;
+}
+
 async function fetchProSafeHittingLeaderboard(params: {
   apiBase: string;
   schoolCode: string;
@@ -110,6 +114,9 @@ export async function GET(request: Request) {
   const endDate = inputUrl.searchParams.get('end_date')?.trim() ?? '';
   const teamType = inputUrl.searchParams.get('team_type')?.trim() ?? '';
   const oppPitcher = inputUrl.searchParams.get('opp_pitcher')?.trim() ?? '';
+  const hand = inputUrl.searchParams.get('hand')?.trim() ?? '';
+  const batterSide = inputUrl.searchParams.get('batter_side')?.trim() ?? '';
+  const venue = inputUrl.searchParams.get('venue')?.trim() ?? '';
   const hitterParam = inputUrl.searchParams.get('hitter')?.trim() ?? '';
   const includeChartPoints = inputUrl.searchParams.get('include_chart_points')?.trim() ?? '';
   const chartPointsLimit = inputUrl.searchParams.get('chart_points_limit')?.trim() ?? '';
@@ -193,12 +200,39 @@ export async function GET(request: Request) {
   const proLeaderboardDefaultModeRequested = !normalizedTableMode || normalizedTableMode === 'results';
   const customModeRequested = tableMode.toLowerCase() === 'custom' || customColumns.length > 0;
   const isProLeaderboardSplit = isPro && (splitBy === 'Batter' || splitBy === 'Batter Team');
+  const hasProLeaderboardNarrowingFilters =
+    hasValue(oppPitcher) ||
+    hasValue(hand) ||
+    hasValue(batterSide) ||
+    hasValue(venue) ||
+    hasValue(inputUrl.searchParams.get('in_zone')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('pitch_types')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('zone_locations')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('pitch_results')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('count_filter')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('after_count_filter')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('bip_result')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('velo_min')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('velo_max')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('ivb_min')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('ivb_max')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('hb_min')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('hb_max')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('pc_min')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('pc_max')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('recent_pa_mode')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('recent_pa_count')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('recent_pa_ignore_dates')?.trim() ?? '') ||
+    hasValue(inputUrl.searchParams.get('force_raw')?.trim() ?? '') ||
+    hasValue(chartOnly);
   const shouldForceProLeaderboardRollupShape =
     isProLeaderboardSplit &&
     broadScope &&
     daySpan >= 14 &&
     proLeaderboardDefaultModeRequested &&
+    !hasProLeaderboardNarrowingFilters &&
     !customModeRequested &&
+    !(requestedPercentileBaseline && splitBy === 'Batter' && !!inputUrl.searchParams.get('pitch_types')?.trim()) &&
     !isTruthy(chartOnly);
   if (!includeChartPoints && broadScope && daySpan >= 21 && !chartOnly) {
     url.searchParams.set('include_chart_points', '0');
@@ -257,7 +291,9 @@ export async function GET(request: Request) {
     broadScope &&
     (splitBy === 'Batter' || splitBy === 'Batter Team') &&
     proLeaderboardDefaultModeRequested &&
+    !hasProLeaderboardNarrowingFilters &&
     !customModeRequested &&
+    !(requestedPercentileBaseline && splitBy === 'Batter' && !!inputUrl.searchParams.get('pitch_types')?.trim()) &&
     !isTruthy(chartOnly);
 
   if (shouldPreferProSafeLeaderboard) {
@@ -325,6 +361,7 @@ export async function GET(request: Request) {
         isPro &&
         (splitBy === 'Batter' || splitBy === 'Batter Team') &&
         proLeaderboardDefaultModeRequested &&
+        !hasProLeaderboardNarrowingFilters &&
         !customModeRequested &&
         !isTruthy(chartOnly);
       if (shouldFallbackToLeanProLeaderboard && result.status >= 500) {
@@ -373,6 +410,7 @@ export async function GET(request: Request) {
       isPro &&
       (splitBy === 'Batter' || splitBy === 'Batter Team') &&
       proLeaderboardDefaultModeRequested &&
+      !hasProLeaderboardNarrowingFilters &&
       !customModeRequested &&
       !isTruthy(chartOnly);
     if (shouldFallbackToLeanProLeaderboard) {

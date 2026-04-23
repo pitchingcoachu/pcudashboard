@@ -57,6 +57,12 @@ function getAuthSecret(): string {
   return secret;
 }
 
+function getAuthSecretIfAvailable(): string | null {
+  const secret = process.env.AUTH_SECRET;
+  if (!secret || secret.length < 16) return null;
+  return secret;
+}
+
 function getConfiguredUsers(): UserRecord[] {
   const rawJson = process.env.APP_USERS_JSON;
   if (rawJson) {
@@ -160,7 +166,8 @@ export function verifySessionToken(token: string): SessionPayload | null {
   const [encodedPayload, providedSignature] = token.split('.');
   if (!encodedPayload || !providedSignature) return null;
 
-  const secret = getAuthSecret();
+  const secret = getAuthSecretIfAvailable();
+  if (!secret) return null;
   const expectedSignature = createHmac('sha256', secret).update(encodedPayload).digest('base64url');
 
   const providedBuffer = Buffer.from(providedSignature);
@@ -202,7 +209,12 @@ export function getSessionFromCookies(cookieStore: CookieStoreLike): SessionPayl
   for (const cookieName of cookieNames) {
     const token = cookieStore.get(cookieName)?.value;
     if (!token) continue;
-    const parsed = verifySessionToken(token);
+    let parsed: SessionPayload | null = null;
+    try {
+      parsed = verifySessionToken(token);
+    } catch {
+      parsed = null;
+    }
     if (parsed) return parsed;
   }
   return null;

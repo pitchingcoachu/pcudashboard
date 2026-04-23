@@ -504,12 +504,21 @@ function isAllLikeRowValue(value: unknown): boolean {
 
 function percentileForValue(value: number, distribution: number[]): number | null {
   if (!Number.isFinite(value) || !distribution.length) return null;
-  if (distribution.length === 1) return 100;
-  let less = 0;
+  if (distribution.length === 1) return null;
+  const min = distribution[0];
+  const max = distribution[distribution.length - 1];
+  // When the pool has no variance, percentile is not meaningful.
+  if (Math.abs(max - min) < 1e-9) return null;
+  const rankValue = value < min ? min : (value > max ? max : value);
+  let lessCount = 0;
+  let equal = 0;
   for (const point of distribution) {
-    if (point < value) less += 1;
+    if (point < rankValue) lessCount += 1;
+    else if (point === rankValue) equal += 1;
   }
-  const rank = (less / (distribution.length - 1)) * 100;
+  // Endpoint-inclusive mid-rank percentile:
+  // min/max map to 0/100 while ties remain centered.
+  const rank = ((lessCount + (0.5 * equal) - 0.5) / (distribution.length - 1)) * 100;
   return Math.max(0, Math.min(100, rank));
 }
 
@@ -521,6 +530,8 @@ function normalizePercentileColumnToken(value: string): string {
   return String(value ?? '')
     .trim()
     .toLowerCase()
+    .replace(/%/g, 'pct')
+    .replace(/\+/g, 'plus')
     .replace(/[^a-z0-9]/g, '');
 }
 
@@ -2133,6 +2144,7 @@ export default function HittingSuite({
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardStatView, setLeaderboardStatView] = useState<'Stats' | 'Percentile'>('Stats');
+  const [summaryStatView, setSummaryStatView] = useState<'Stats' | 'Percentile'>('Stats');
   const [leaderboardPercentileScope, setLeaderboardPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
   const [summaryPercentileScope, setSummaryPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
@@ -2145,7 +2157,7 @@ export default function HittingSuite({
   const [gameLogSortDirection, setGameLogSortDirection] = useState<SortDirection>('desc');
   const [pinnedGameLogKeys, setPinnedGameLogKeys] = useState<Set<string>>(new Set());
   const [enableTableColors, setEnableTableColors] = useState(false);
-  const [showCellPercentiles, setShowCellPercentiles] = useState(true);
+  const [showCellPercentiles, setShowCellPercentiles] = useState(false);
   const [percentileBaselineRequestKey, setPercentileBaselineRequestKey] = useState('');
   const [percentileBaselineRows, setPercentileBaselineRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [loadingPercentileBaseline, setLoadingPercentileBaseline] = useState(false);
@@ -2158,6 +2170,9 @@ export default function HittingSuite({
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: HittingOverviewPayload }>());
   const overviewInflightRef = useRef(new Map<string, Promise<HittingOverviewPayload>>());
   const percentileBaselineCacheRef = useRef(new Map<string, { at: number; rows: Array<Record<string, string | number | null>> }>());
+  const summaryPercentileDistributionCacheRef = useRef(
+    new Map<string, { at: number; base: Map<string, number[]> }>()
+  );
   const [abSortColumn, setAbSortColumn] = useState('Pitch #');
   const [abSortDirection, setAbSortDirection] = useState<SortDirection>('asc');
   const suppressNextFilterDateAutofillRef = useRef(false);
@@ -2510,10 +2525,6 @@ export default function HittingSuite({
     setLoadingOverview(true);
     setError(null);
     const isLeaderboardPage = dashboardPage === 'Leaderboard';
-    const normalizedTableMode = String(tableMode ?? '').trim().toLowerCase();
-    const proLeaderboardDefaultMode =
-      normalizedTableMode.length === 0 || normalizedTableMode === 'results';
-    const strictProLeaderboard = isPro && isLeaderboardPage && proLeaderboardDefaultMode;
     const summarySelectedHitter = hitter && hitter !== 'All' ? hitter : '';
     const params = new URLSearchParams();
     if (startDate) params.set('start_date', startDate);
@@ -2526,40 +2537,32 @@ export default function HittingSuite({
     if (isPro && level && level !== 'All') {
       params.set('level', level);
     }
-    if (oppPitcher && oppPitcher !== 'All' && !strictProLeaderboard) params.set('opp_pitcher', oppPitcher);
-    if (hand && hand !== 'All' && !strictProLeaderboard) params.set('hand', hand);
-    if (batterSide && batterSide !== 'All' && !strictProLeaderboard) params.set('batter_side', batterSide);
-    if (venue && venue !== 'All' && !strictProLeaderboard) params.set('venue', venue);
-    params.set('table_mode', strictProLeaderboard ? 'Results' : tableMode);
+    if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
+    if (hand && hand !== 'All') params.set('hand', hand);
+    if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
+    if (venue && venue !== 'All') params.set('venue', venue);
+    params.set('table_mode', tableMode);
     params.set('split_by', effectiveSplitBy);
-    if (!strictProLeaderboard && tableMode === 'Custom' && customTableColumns.length) {
+    if (tableMode === 'Custom' && customTableColumns.length) {
       params.set('custom_columns', customTableColumns.join(','));
     }
-    if (isPro && tableMode === 'Custom') {
-      params.set('force_raw', '1');
-    }
-    if (!strictProLeaderboard) {
-      if (pitchTypes.length) params.set('pitch_types', pitchTypes.join(';'));
-      if (zoneLocations.length) params.set('zone_locations', zoneLocations.join(';'));
-      if (pitchResults.length) params.set('pitch_results', pitchResults.join(';'));
-      if (countFilter.length) params.set('count_filter', countFilter.join(';'));
-      if (afterCountFilter.length) params.set('after_count_filter', afterCountFilter.join(';'));
-      if (bipResult.length) params.set('bip_result', bipResult.join(';'));
-      if (inZone.length) params.set('in_zone', inZone.join(';'));
-      if (veloMin.trim()) params.set('velo_min', veloMin.trim());
-      if (veloMax.trim()) params.set('velo_max', veloMax.trim());
-      if (ivbMin.trim()) params.set('ivb_min', ivbMin.trim());
-      if (ivbMax.trim()) params.set('ivb_max', ivbMax.trim());
-      if (hbMin.trim()) params.set('hb_min', hbMin.trim());
-      if (hbMax.trim()) params.set('hb_max', hbMax.trim());
-      if (pcMin.trim()) params.set('pc_min', pcMin.trim());
-      if (pcMax.trim()) params.set('pc_max', pcMax.trim());
-    }
+    if (pitchTypes.length) params.set('pitch_types', pitchTypes.join(';'));
+    if (zoneLocations.length) params.set('zone_locations', zoneLocations.join(';'));
+    if (pitchResults.length) params.set('pitch_results', pitchResults.join(';'));
+    if (countFilter.length) params.set('count_filter', countFilter.join(';'));
+    if (afterCountFilter.length) params.set('after_count_filter', afterCountFilter.join(';'));
+    if (bipResult.length) params.set('bip_result', bipResult.join(';'));
+    if (inZone.length) params.set('in_zone', inZone.join(';'));
+    if (veloMin.trim()) params.set('velo_min', veloMin.trim());
+    if (veloMax.trim()) params.set('velo_max', veloMax.trim());
+    if (ivbMin.trim()) params.set('ivb_min', ivbMin.trim());
+    if (ivbMax.trim()) params.set('ivb_max', ivbMax.trim());
+    if (hbMin.trim()) params.set('hb_min', hbMin.trim());
+    if (hbMax.trim()) params.set('hb_max', hbMax.trim());
+    if (pcMin.trim()) params.set('pc_min', pcMin.trim());
+    if (pcMax.trim()) params.set('pc_max', pcMax.trim());
     const isSummaryPage = dashboardPage === 'Summary';
     const isGameLogPage = dashboardPage === 'Game Log';
-    if (isPro && isSummaryPage && summarySelectedHitter) {
-      params.set('force_raw', '1');
-    }
     const shouldDeferCharts = isSummaryPage;
     const shouldForceProFastSummary = isPro && isSummaryPage && !summarySelectedHitter;
     const shouldIncludeCharts = dashboardPage !== 'Leaderboard' && !shouldForceProFastSummary && !shouldForceLeagueFastTable;
@@ -2570,7 +2573,10 @@ export default function HittingSuite({
       params.set('chart_only', '1');
       params.set('chart_points_limit', isPro ? '6000' : '5000');
     }
-    const shouldLoadPercentileBaseline = isSummaryPage || isLeaderboardPage;
+    const useLegacySummaryTeamColorMode = !isPro && isSummaryPage && summaryPercentileScope === 'TEAM';
+    const shouldLoadPercentileBaseline =
+      isLeaderboardPage ||
+      (isSummaryPage && (showCellPercentiles || summaryStatView === 'Percentile' || (enableTableColors && !useLegacySummaryTeamColorMode)));
     if (shouldLoadPercentileBaseline) {
       const baselineParams = new URLSearchParams(params);
       baselineParams.set('percentile_baseline', '1');
@@ -2633,7 +2639,16 @@ export default function HittingSuite({
       if (noRows && !autoFallbackAppliedRef.current) {
         autoFallbackAppliedRef.current = true;
       }
-      setOverview(normalizedPayload);
+      setOverview((previous) => {
+        if (!previous) return normalizedPayload;
+        const incomingChartPoints = Array.isArray(normalizedPayload.chart_points) ? normalizedPayload.chart_points : [];
+        const incomingHeatmapPoints = Array.isArray(normalizedPayload.heatmap_points) ? normalizedPayload.heatmap_points : [];
+        return {
+          ...normalizedPayload,
+          chart_points: incomingChartPoints.length ? incomingChartPoints : (previous.chart_points ?? []),
+          heatmap_points: incomingHeatmapPoints.length ? incomingHeatmapPoints : (previous.heatmap_points ?? []),
+        };
+      });
     };
     const applyChartPayload = (payload: HittingOverviewPayload) => {
       setOverview((previous) => {
@@ -2841,7 +2856,7 @@ export default function HittingSuite({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, venue, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, leaderboardPercentileScope, summaryPercentileScope, filters?.school_code, selectedSchoolCode]);
+  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, venue, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, enableTableColors, leaderboardPercentileScope, summaryPercentileScope, showCellPercentiles, summaryStatView, filters?.school_code, selectedSchoolCode]);
 
   useEffect(() => {
     if (!percentileBaselineRequestKey) {
@@ -2881,7 +2896,12 @@ export default function HittingSuite({
   }, [percentileBaselineRequestKey]);
 
   useEffect(() => {
-    if (dashboardPage !== 'Summary' || !showCellPercentiles || !percentileBaselineRequestKey) {
+    const useLegacySummaryTeamColorMode = !isPro && summaryPercentileScope === 'TEAM';
+    const shouldLoadSummaryPercentiles =
+      showCellPercentiles ||
+      summaryStatView === 'Percentile' ||
+      (enableTableColors && !useLegacySummaryTeamColorMode);
+    if (dashboardPage !== 'Summary' || !shouldLoadSummaryPercentiles || !percentileBaselineRequestKey) {
       setSummaryPitchTypeDistributions(new Map());
       setLoadingSummaryPitchTypePercentiles(false);
       return;
@@ -2913,53 +2933,113 @@ export default function HittingSuite({
       setLoadingSummaryPitchTypePercentiles(false);
       return;
     }
-    let active = true;
-    setLoadingSummaryPitchTypePercentiles(true);
-    const run = async () => {
-      const entries = await Promise.all(
-        Array.from(rowsByKey.entries()).map(async ([rowKey, rowLabel]) => {
-          const params = new URLSearchParams(baseQuery);
-          params.set('split_by', 'Batter');
-          params.delete('hitter');
-          params.delete('force_raw');
-          if (!applyHittingSummarySplitFilter(params, splitBy, rowLabel)) return [] as Array<[string, number[]]>;
-          const url = `/api/dashboard/hitting/overview?${params.toString()}`;
-          const response = await fetch(url, { cache: 'no-store' });
-          const payload = (await response.json().catch(() => ({}))) as { table_rows?: Array<Record<string, string | number | null>>; table_columns?: string[] };
-          if (!response.ok) return [] as Array<[string, number[]]>;
-          const rows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
-          const rowSplitColumn = String((payload.table_columns ?? [])[0] ?? 'Batter');
-          const cols = tableColumns.slice(1);
-          const out: Array<[string, number[]]> = [];
-          for (const column of cols) {
-            const values = rows
-              .filter((r) => !isAllLikeRowValue(r[rowSplitColumn]))
-              .map((r) => parseSortableNumber(r[column]))
-              .filter((v): v is number => v !== null)
-              .sort((a, b) => a - b);
-            if (!values.length) continue;
-            out.push([`${rowKey}::${column}`, values]);
-          }
-          return out;
-        })
-      );
-      if (!active) return;
+    if (splitBy === 'Batter') {
+      const cols = tableColumns.slice(1);
+      const valuesByColumn = new Map<string, number[]>();
+      for (const column of cols) {
+        const values = tableRows
+          .filter((r) => !isAllLikeRowValue(r[splitColumn]))
+          .map((r) => parseSortableNumber(r[column]))
+          .filter((v): v is number => v !== null)
+          .sort((a, b) => a - b);
+        if (values.length) valuesByColumn.set(column, values);
+      }
       const next = new Map<string, number[]>();
-      for (const chunk of entries) {
-        for (const [key, values] of chunk) next.set(key, values);
+      for (const rowKey of rowsByKey.keys()) {
+        for (const [column, values] of valuesByColumn.entries()) {
+          next.set(`${rowKey}::${column}`, values);
+        }
       }
       setSummaryPitchTypeDistributions(next);
       setLoadingSummaryPitchTypePercentiles(false);
-    };
-    run().catch(() => {
-      if (!active) return;
-      setSummaryPitchTypeDistributions(new Map());
+      return;
+    }
+    const cacheKey = [
+      splitBy,
+      baseQuery,
+      Array.from(rowsByKey.keys()).sort().join('|'),
+    ].join('::');
+    const cached = summaryPercentileDistributionCacheRef.current.get(cacheKey);
+    if (cached && Date.now() - cached.at < 300000) {
+      setSummaryPitchTypeDistributions(new Map(cached.base));
       setLoadingSummaryPitchTypePercentiles(false);
-    });
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    const run = async () => {
+      const requests: Array<{ rowKey: string; query: string }> = [];
+      for (const [rowKey, rowLabel] of rowsByKey.entries()) {
+        const params = new URLSearchParams(baseQuery);
+        params.set('split_by', 'Batter');
+        params.delete('hitter');
+        params.delete('force_raw');
+        params.set('include_chart_points', '0');
+        params.delete('chart_points_limit');
+        params.delete('chart_only');
+        if (!applyHittingSummarySplitFilter(params, splitBy, rowLabel)) continue;
+        requests.push({ rowKey, query: params.toString() });
+      }
+      if (!requests.length) {
+        if (!active) return;
+        setSummaryPitchTypeDistributions(new Map());
+        setLoadingSummaryPitchTypePercentiles(false);
+        return;
+      }
+      const allCandidateColumns = Array.from(
+        new Set(
+          [
+            ...(Array.isArray(overview?.available_table_columns) ? overview.available_table_columns : []),
+            ...tableColumns.slice(1),
+          ]
+            .map((value) => String(value ?? '').trim())
+            .filter(Boolean)
+        )
+      ).filter((column) => normalizePercentileColumnToken(column) !== normalizePercentileColumnToken(splitColumn));
+      const cols = allCandidateColumns.length ? allCandidateColumns : tableColumns.slice(1);
+      if (controller.signal.aborted || !active) return;
+      setLoadingSummaryPitchTypePercentiles(true);
+      const response = await fetch('/api/dashboard/hitting/summary-percentiles', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        cache: 'no-store',
+        signal: controller.signal,
+        body: JSON.stringify({
+          requests,
+          columns: cols,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        distributions?: Record<string, number[]>;
+      };
+      if (!response.ok) throw new Error('Failed summary percentile distributions.');
+      if (!active) return;
+      const next = new Map<string, number[]>();
+      const base = payload.distributions ?? {};
+      Object.entries(base).forEach(([key, values]) => {
+        if (Array.isArray(values) && values.length) next.set(key, values);
+      });
+      summaryPercentileDistributionCacheRef.current.set(cacheKey, {
+        at: Date.now(),
+        base: new Map(next),
+      });
+      setSummaryPitchTypeDistributions(next);
+      setLoadingSummaryPitchTypePercentiles(false);
+    };
+    const timer = window.setTimeout(() => {
+      void run().catch((error) => {
+        if (!active) return;
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setSummaryPitchTypeDistributions(new Map());
+        setLoadingSummaryPitchTypePercentiles(false);
+      });
+    }, 140);
     return () => {
       active = false;
+      window.clearTimeout(timer);
+      controller.abort();
     };
-  }, [dashboardPage, splitBy, showCellPercentiles, percentileBaselineRequestKey, overview?.table_rows, overview?.table_columns]);
+  }, [dashboardPage, splitBy, isPro, summaryPercentileScope, enableTableColors, showCellPercentiles, summaryStatView, percentileBaselineRequestKey, overview?.table_rows, overview?.table_columns, overview?.available_table_columns]);
 
   const sortedGameLogRows = useMemo(
     () => sortTableRows(gameLogRows, gameLogSortColumn, gameLogSortDirection),
@@ -3460,11 +3540,22 @@ export default function HittingSuite({
   }, [overview?.table_rows, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
   const leaderboardRowsWithPins = useMemo(() => {
     if (!isLeaderboardPage) return leaderboardRows;
-    return sortRowsWithPins(
+    const sorted = sortRowsWithPins(
       leaderboardRows as Array<Record<string, string | number | null | undefined>>,
       leaderboardBaseColumns,
       pinnedLeaderboardKeys
     ) as Array<Record<string, string | number | null>>;
+    const splitColumn = leaderboardBaseColumns[0] ?? '';
+    if (!splitColumn || !sorted.length) return sorted;
+    const hasAll = sorted.some((row) => isAllLikeRowValue(row[splitColumn]));
+    if (hasAll) return sorted;
+    const syntheticAll = buildPinnedAllRow(
+      leaderboardBaseColumns,
+      sorted as Array<Record<string, string | number | null | undefined>>
+    );
+    if (!syntheticAll) return sorted;
+    syntheticAll[splitColumn] = 'All';
+    return [syntheticAll as Record<string, string | number | null>, ...sorted];
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
   const percentileTeamLabel = useMemo(() => {
     const school = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
@@ -3527,6 +3618,7 @@ export default function HittingSuite({
   ): number | null => {
     const { splitColumn, scoped, globalByColumn } = percentileDistributionsByKey;
     const rowSplitKey = splitColumn ? percentileRowKey(row[splitColumn]) : '';
+    const isAllSummaryRow = splitColumn ? isAllLikeRowValue(row[splitColumn]) : false;
     const scopedDistribution =
       rowSplitKey && !isAllLikeRowValue(row[splitColumn])
         ? (scoped.get(`${rowSplitKey}::${column}`) ?? [])
@@ -3540,13 +3632,12 @@ export default function HittingSuite({
       );
     const distribution = isSummaryPage
       ? (
-          splitBy === 'Pitch Types'
-            ? (() => {
-                const pitchTypeDistribution = summaryPitchTypeDistributions.get(`${rowSplitKey}::${column}`) ?? [];
-                if (pitchTypeDistribution.length) return pitchTypeDistribution;
-                return scopedDistribution.length ? scopedDistribution : (globalByColumn.get(column) ?? []);
-              })()
-            : (scopedDistribution.length ? scopedDistribution : (globalByColumn.get(column) ?? []))
+          (() => {
+            const rowDistribution = summaryPitchTypeDistributions.get(`${rowSplitKey}::${column}`) ?? [];
+            if (rowDistribution.length) return rowDistribution;
+            if (isAllSummaryRow) return globalByColumn.get(column) ?? [];
+            return scopedDistribution.length ? scopedDistribution : (globalByColumn.get(column) ?? []);
+          })()
         )
       : isLeaderboardPage
       ? (isLeaderboardPage && useTeamScope ? (leaderboardTeamDistributions.get(column) ?? []) : (globalByColumn.get(column) ?? []))
@@ -4570,7 +4661,7 @@ export default function HittingSuite({
               marginBottom: '0.8rem',
               gridTemplateColumns: isLeaderboardPage
                 ? ((isLeague || isPro) ? 'repeat(4, minmax(160px, 260px))' : 'repeat(3, minmax(160px, 260px))')
-                : 'repeat(2, minmax(160px, 260px))',
+                : 'repeat(4, minmax(160px, 260px))',
             }}
           >
             <label>
@@ -4670,6 +4761,20 @@ export default function HittingSuite({
                     placeholder={SPLIT_BY_DEFAULT}
                   />
                 </label>
+                {dashboardPage === 'Summary' ? (
+                  <label>
+                    Stat View
+                    <SearchableSingleSelect
+                      options={[
+                        { value: 'Stats', label: 'Stats' },
+                        { value: 'Percentile', label: 'Percentile' },
+                      ]}
+                      value={summaryStatView}
+                      onChange={(next) => setSummaryStatView(next as 'Stats' | 'Percentile')}
+                      placeholder="Stats"
+                    />
+                  </label>
+                ) : null}
                 {dashboardPage === 'Summary' && !isPro ? (
                   <label>
                     Percentile By
@@ -4685,16 +4790,29 @@ export default function HittingSuite({
                     />
                   </label>
                 ) : null}
-                <div className="portal-color-toggle">
-                  <span className="portal-color-toggle-label">Show Percentile</span>
-                  <button
-                    type="button"
-                    className={`portal-color-toggle-btn${showCellPercentiles ? ' is-on' : ''}`}
-                    aria-label="Toggle percentile labels in table cells"
-                    aria-pressed={showCellPercentiles}
-                    title={showCellPercentiles ? 'Percentile labels on' : 'Percentile labels off'}
-                    onClick={() => setShowCellPercentiles((current) => !current)}
-                  />
+                <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <div className="portal-color-toggle">
+                    <span className="portal-color-toggle-label">Color Code</span>
+                    <button
+                      type="button"
+                      className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
+                      aria-label="Toggle table color coding"
+                      aria-pressed={enableTableColors}
+                      title={enableTableColors ? 'Color code on' : 'Color code off'}
+                      onClick={() => setEnableTableColors((current) => !current)}
+                    />
+                  </div>
+                  <div className="portal-color-toggle">
+                    <span className="portal-color-toggle-label">Show Percentile</span>
+                    <button
+                      type="button"
+                      className={`portal-color-toggle-btn${showCellPercentiles ? ' is-on' : ''}`}
+                      aria-label="Toggle percentile labels in table cells"
+                      aria-pressed={showCellPercentiles}
+                      title={showCellPercentiles ? 'Percentile labels on' : 'Percentile labels off'}
+                      onClick={() => setShowCellPercentiles((current) => !current)}
+                    />
+                  </div>
                 </div>
               </>
             ) : null}
@@ -4840,7 +4958,15 @@ export default function HittingSuite({
           ) : null}
           {(loadingPercentileBaseline || loadingSummaryPitchTypePercentiles) && (
             (isLeaderboardPage && leaderboardStatView === 'Percentile') ||
-            (dashboardPage === 'Summary' && showCellPercentiles)
+            (
+              dashboardPage === 'Summary' &&
+              (loadingPercentileBaseline || loadingSummaryPitchTypePercentiles) &&
+              (
+                summaryStatView === 'Percentile' ||
+                showCellPercentiles ||
+                (enableTableColors && (isPro || summaryPercentileScope !== 'TEAM'))
+              )
+            )
           ) ? (
             <p className="portal-muted-text" style={{ margin: '0 0 0.6rem 0' }}>Loading percentiles...</p>
           ) : null}
@@ -4917,7 +5043,10 @@ export default function HittingSuite({
                           : null;
                       const isSortHighlight =
                         leaderboardSortColumn === col &&
-                        !(isLeaderboardPage && leaderboardStatView === 'Percentile' && colIndex > 0);
+                        !(
+                          (isLeaderboardPage && leaderboardStatView === 'Percentile' && colIndex > 0) ||
+                          (!isLeaderboardPage && dashboardPage === 'Summary' && summaryStatView === 'Percentile' && colIndex > 0)
+                        );
                       const displayValue =
                         isLeaderboardPage && colIndex === 0 && typeof rawValue === 'string'
                           ? (() => {
@@ -5003,12 +5132,29 @@ export default function HittingSuite({
                         >
                           {(() => {
                             const percentileValue = getCellPercentile(row, col, rawValue);
+                            const percentilesReady =
+                              dashboardPage === 'Summary'
+                                ? !loadingSummaryPitchTypePercentiles
+                                : !loadingPercentileBaseline;
                             const showLeaderboardPercentile =
                               isLeaderboardPage &&
                               leaderboardStatView === 'Percentile' &&
+                              percentilesReady &&
                               colIndex > 0 &&
                               !isAllRow &&
                               !isPinnedAllRow;
+                            const showSummaryPercentile =
+                              !isLeaderboardPage &&
+                              dashboardPage === 'Summary' &&
+                              summaryStatView === 'Percentile' &&
+                              percentilesReady &&
+                              colIndex > 0;
+                            const useLegacyTableColorParams =
+                              !isPro &&
+                              (
+                                (isLeaderboardPage && leaderboardPercentileScope === 'TEAM') ||
+                                (!isLeaderboardPage && dashboardPage === 'Summary' && summaryPercentileScope === 'TEAM')
+                              );
                             const canPinRow = isLeaderboardPage && colIndex === 0 && !isAllRow && !isPinnedAllRow;
                             const pinKey = canPinRow
                               ? pinKeyFromRow(
@@ -5018,7 +5164,7 @@ export default function HittingSuite({
                               : '';
                             const isPinnedRow = canPinRow && pinnedLeaderboardKeys.has(pinKey);
                             const renderedPercentileValue =
-                              showLeaderboardPercentile && percentileValue !== null
+                              (showLeaderboardPercentile || showSummaryPercentile) && percentileValue !== null
                                 ? `${percentileValue.toFixed(1)}%`
                                 : renderedValue;
                             const content = displayValue === null || displayValue === undefined ? '—' : renderedPercentileValue;
@@ -5042,17 +5188,27 @@ export default function HittingSuite({
                                 range &&
                                 numericValue !== null;
                               const summaryPercentileText =
-                                !isLeaderboardPage && showCellPercentiles && colIndex > 0 && percentileValue !== null
+                                !isLeaderboardPage &&
+                                dashboardPage === 'Summary' &&
+                                summaryStatView === 'Stats' &&
+                                showCellPercentiles &&
+                                percentilesReady &&
+                                colIndex > 0 &&
+                                percentileValue !== null
                                   ? `${percentileValue.toFixed(1)}%`
                                   : null;
                               const percentileCellStyle =
-                                showLeaderboardPercentile && enableTableColors && percentileValue !== null
+                                enableTableColors &&
+                                colIndex > 0 &&
+                                percentileValue !== null &&
+                                !useLegacyTableColorParams
                                   ? {
                                       background: divergingColor(percentileValue, 0, 50, 100),
                                       color: percentileTextColor(percentileValue),
                                     }
                                   : null;
-                              if (!canColorCell && !percentileCellStyle) {
+                              const canUseLegacyColorCell = useLegacyTableColorParams && canColorCell;
+                              if (!canUseLegacyColorCell && !percentileCellStyle) {
                                 if (!summaryPercentileText) return contentWithPitchStyle;
                                 return (
                                   <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15 }}>

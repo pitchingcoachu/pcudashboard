@@ -144,7 +144,17 @@ export function sortRowsWithPins(
 ): TableRow[] {
   if (!rows.length || !columns.length) return rows;
   const first = columns[0];
-  const allRow = rows.find((row) => normalizeKey(row[first]) === 'all') ?? null;
+  const existingAllRow = rows.find((row) => normalizeKey(row[first]) === 'all') ?? null;
+  const syntheticAllRow = existingAllRow
+    ? null
+    : (() => {
+        const sourceRows = rows.filter((row) => normalizeKey(row[first]) !== 'all');
+        const built = buildPinnedAllRow(columns, sourceRows);
+        if (!built) return null;
+        built[first] = 'All';
+        return built;
+      })();
+  const allRow = existingAllRow ?? syntheticAllRow;
   const pinnedRows = rows.filter((row) => {
     const key = normalizeKey(row[first]);
     return key !== 'all' && pinnedKeys.has(key);
@@ -156,9 +166,9 @@ export function sortRowsWithPins(
   });
   const pinnedAll = buildPinnedAllRow(columns, pinnedRows);
   return [
+    ...(allRow ? [allRow] : []),
     ...pinnedRows,
     ...(pinnedAll ? [pinnedAll] : []),
-    ...(allRow ? [allRow] : []),
     ...unpinnedRows,
   ];
 }

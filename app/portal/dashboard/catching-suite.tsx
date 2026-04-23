@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
-import { pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
+import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { getProTeamLogoUrl } from './pro-team-logos';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
@@ -119,6 +119,11 @@ function toYmdNow(): string {
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function isAllLikeRowValue(value: unknown): boolean {
+  const text = String(value ?? '').trim().toLowerCase();
+  return text === 'all' || text === 'all (pinned)';
 }
 
 function clampYmdToToday(value: string): string {
@@ -1011,11 +1016,22 @@ export default function CatchingSuite() {
   }, [overview?.table_rows, isLeaderboardPage, leaderboardBaseColumns, leaderboardSortColumn, leaderboardSortDirection]);
   const leaderboardRowsWithPins = useMemo(() => {
     if (!isLeaderboardPage) return leaderboardRows;
-    return sortRowsWithPins(
+    const sorted = sortRowsWithPins(
       leaderboardRows as Array<Record<string, string | number | null | undefined>>,
       leaderboardBaseColumns,
       pinnedLeaderboardKeys
     ) as Array<Record<string, string | number | null>>;
+    const splitColumn = leaderboardBaseColumns[0] ?? '';
+    if (!splitColumn || !sorted.length) return sorted;
+    const hasAll = sorted.some((row) => isAllLikeRowValue(row[splitColumn]));
+    if (hasAll) return sorted;
+    const syntheticAll = buildPinnedAllRow(
+      leaderboardBaseColumns,
+      sorted as Array<Record<string, string | number | null | undefined>>
+    );
+    if (!syntheticAll) return sorted;
+    syntheticAll[splitColumn] = 'All';
+    return [syntheticAll as Record<string, string | number | null>, ...sorted];
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
   const latestTeamByCatcher = useMemo(() => {
     const points = overview?.chart_points ?? [];

@@ -58,6 +58,18 @@ type HomeNavigateRequest = {
   navigationSource?: 'search' | 'home_leaderboard';
 };
 
+const ALL_SUITE_NAMES: SuiteName[] = [
+  'Home',
+  'Pitching',
+  'Hitting',
+  'Catching',
+  'Custom Reports',
+  'Comparison Tool',
+  'Player Plans',
+  'Player Notes',
+  'Stuff+ Calculator',
+];
+
 function toFirstLast(value: string): string {
   const raw = String(value ?? '').trim();
   if (!raw) return '';
@@ -117,24 +129,49 @@ async function fetchHomePayload(signal?: AbortSignal): Promise<SearchPayload> {
 }
 
 export default function DashboardShell({ role, selectedSchoolCode }: DashboardShellProps) {
-  const [suite, setSuite] = useState<SuiteName>('Home');
-  const [homeNavigateRequest, setHomeNavigateRequest] = useState<HomeNavigateRequest | null>(null);
+  const storageSchoolToken = String(selectedSchoolCode ?? '').trim().toUpperCase() || 'DEFAULT';
+  const shellStorageKey = `portal_dashboard_shell_state:${storageSchoolToken}`;
+  const pendingHomeNavigateStorageKey = `portal_dashboard_home_nav:${storageSchoolToken}`;
+  const [homeNavigateRequest, setHomeNavigateRequest] = useState<HomeNavigateRequest | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const rawPendingNavigate = window.sessionStorage.getItem(pendingHomeNavigateStorageKey);
+      if (!rawPendingNavigate) return null;
+      const parsed = JSON.parse(rawPendingNavigate) as HomeNavigateRequest;
+      if (!parsed || !parsed.requestId || !parsed.suite || !parsed.targetType || !parsed.targetValue) return null;
+      if (Date.now() - parsed.requestId > 60000) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  });
+  const [suite, setSuite] = useState<SuiteName>(() => {
+    if (homeNavigateRequest?.suite) return homeNavigateRequest.suite;
+    if (typeof window === 'undefined') return 'Home';
+    try {
+      const storedSuite = window.sessionStorage.getItem(shellStorageKey);
+      if (storedSuite && ALL_SUITE_NAMES.includes(storedSuite as SuiteName)) return storedSuite as SuiteName;
+    } catch {
+      // Ignore client storage errors.
+    }
+    return 'Home';
+  });
   const appliedHomeNavigateSuiteRef = useRef<number | null>(null);
   const [navSearchPayload, setNavSearchPayload] = useState<SearchPayload | null>(null);
   const [navSearchInput, setNavSearchInput] = useState('');
   const [navSearchQuery, setNavSearchQuery] = useState('');
   const [navSearchError, setNavSearchError] = useState<string | null>(null);
-  const [mountedSuites, setMountedSuites] = useState<Record<SuiteName, boolean>>({
-    Home: true,
-    Pitching: false,
-    Hitting: false,
-    Catching: false,
-    'Custom Reports': false,
-    'Comparison Tool': false,
-    'Player Plans': false,
-    'Player Notes': false,
-    'Stuff+ Calculator': false,
-  });
+  const [mountedSuites, setMountedSuites] = useState<Record<SuiteName, boolean>>(() => ({
+    Home: suite === 'Home',
+    Pitching: suite === 'Pitching',
+    Hitting: suite === 'Hitting',
+    Catching: suite === 'Catching',
+    'Custom Reports': suite === 'Custom Reports',
+    'Comparison Tool': suite === 'Comparison Tool',
+    'Player Plans': suite === 'Player Plans',
+    'Player Notes': suite === 'Player Notes',
+    'Stuff+ Calculator': suite === 'Stuff+ Calculator',
+  }));
   const canAccessPlayerNotes = role === 'admin' || role === 'coach';
   const isLeague = String(selectedSchoolCode || '').toUpperCase() === 'LEAGUE';
   const isPro = String(selectedSchoolCode || '').toUpperCase() === 'PRO';
@@ -174,6 +211,13 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
     const resolved = suiteOptions.includes(name as SuiteName) ? (name as SuiteName) : 'Home';
     setSuite(resolved);
     setMountedSuites((current) => (current[resolved] ? current : { ...current, [resolved]: true }));
+    if (typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.setItem(shellStorageKey, resolved);
+      } catch {
+        // Ignore client storage errors.
+      }
+    }
   };
   const handleHomeNavigate = (input: Omit<HomeNavigateRequest, 'requestId'>) => {
     const nextRequest: HomeNavigateRequest = {
@@ -182,17 +226,28 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
     };
     appliedHomeNavigateSuiteRef.current = null;
     setHomeNavigateRequest(nextRequest);
+    if (typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.setItem(pendingHomeNavigateStorageKey, JSON.stringify(nextRequest));
+      } catch {
+        // Ignore client storage errors.
+      }
+    }
     activateSuite(input.suite);
   };
   useEffect(() => {
     if (!homeNavigateRequest) return;
     if (appliedHomeNavigateSuiteRef.current === homeNavigateRequest.requestId) return;
-    if (activeSuite !== homeNavigateRequest.suite) {
-      activateSuite(homeNavigateRequest.suite);
-      return;
-    }
+    if (activeSuite !== homeNavigateRequest.suite) return;
     appliedHomeNavigateSuiteRef.current = homeNavigateRequest.requestId;
-  }, [homeNavigateRequest, activeSuite]);
+    if (typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.removeItem(pendingHomeNavigateStorageKey);
+      } catch {
+        // Ignore client storage errors.
+      }
+    }
+  }, [homeNavigateRequest, activeSuite, pendingHomeNavigateStorageKey]);
   useEffect(() => {
     if (activeSuite === 'Home') return;
     const cachedSchoolCode = String(navSearchPayload?.school_code ?? '').trim().toUpperCase();
