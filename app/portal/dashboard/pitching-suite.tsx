@@ -1389,6 +1389,15 @@ function SearchableSingleSelect({
 
   const selected = options.find((option) => option.value === value);
   const filtered = options.filter((option) => option.label.toLowerCase().includes(query.toLowerCase()));
+  const commitSelection = (next: string) => {
+    setOpen(false);
+    setQuery('');
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => onChange(next), 0);
+      return;
+    }
+    onChange(next);
+  };
 
   return (
     <div className="portal-search-select" ref={rootRef}>
@@ -1423,11 +1432,7 @@ function SearchableSingleSelect({
                 type="button"
                 className="portal-search-select-option"
                 style={theme === 'light' ? { color: '#374151' } : undefined}
-                onClick={() => {
-                  onChange(option.value);
-                  setOpen(false);
-                  setQuery('');
-                }}
+                onClick={() => commitSelection(option.value)}
               >
                 {option.label}
               </button>
@@ -2642,16 +2647,10 @@ export default function PitchingSuite({
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', isTrendPage ? '1' : '0');
     } else if (isLeaderboard) {
-      if (isPro) {
-        params.set('include_chart_points', '0');
-        params.set('include_row_pitches', '0');
-        params.set('include_trend_rows', '0');
-      } else {
-        params.set('include_chart_points', '1');
-        params.set('chart_points_limit', '1000');
-        params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
-        params.set('include_trend_rows', '0');
-      }
+      // Match PRO behavior for leaderboard performance: table-only payload.
+      params.set('include_chart_points', '0');
+      params.set('include_row_pitches', '0');
+      params.set('include_trend_rows', '0');
     } else if (isHeatMapsPage) {
       params.set('include_chart_points', '1');
       params.set('chart_points_limit', isPro ? '1200' : '1000');
@@ -2682,8 +2681,9 @@ export default function PitchingSuite({
     }
 
     const useLegacySummaryTeamColorMode = !isPro && isSummaryPage && summaryPercentileScope === 'TEAM';
+    const shouldLoadLeaderboardBaseline = isLeaderboard && (leaderboardStatView === 'Percentile' || enableTableColors);
     const shouldLoadPercentileBaseline =
-      isLeaderboard ||
+      shouldLoadLeaderboardBaseline ||
       (isSummaryPage && (showCellPercentiles || summaryStatView === 'Percentile' || (enableTableColors && !useLegacySummaryTeamColorMode)));
     if (shouldLoadPercentileBaseline) {
       const baselineParams = new URLSearchParams(params);
@@ -6825,6 +6825,10 @@ export default function PitchingSuite({
     [tableMode, selectedCustomTableId, jaredDashboardTable]
   );
   const handleTableModeSelection = useCallback((next: string) => {
+    if (isLeague && isLeaderboardPage) {
+      setLoadingOverview(true);
+      setError('');
+    }
     if (next === 'jared_dashboard') {
       if (!jaredDashboardTable) return;
       setTableMode('Custom');
@@ -6863,7 +6867,28 @@ export default function PitchingSuite({
     } else {
       setShowCustomEditor(false);
     }
-  }, [customTables, jaredDashboardTable]);
+  }, [customTables, isLeague, isLeaderboardPage, jaredDashboardTable]);
+  const handleLeaderboardViewBySelection = useCallback((next: string) => {
+    if (isLeague && isLeaderboardPage) {
+      setLoadingOverview(true);
+      setError('');
+    }
+    setLeaderboardViewBy(next as 'Player' | 'Team');
+  }, [isLeague, isLeaderboardPage]);
+  const handleLeaderboardStatViewSelection = useCallback((next: string) => {
+    if (isLeague && isLeaderboardPage) {
+      setLoadingOverview(true);
+      setError('');
+    }
+    setLeaderboardStatView(next as 'Stats' | 'Percentile');
+  }, [isLeague, isLeaderboardPage]);
+  const handleLeaderboardPercentileScopeSelection = useCallback((next: string) => {
+    if (isLeague && isLeaderboardPage) {
+      setLoadingOverview(true);
+      setError('');
+    }
+    setLeaderboardPercentileScope(next as 'NCAA' | 'TEAM' | 'MLB');
+  }, [isLeague, isLeaderboardPage]);
   const displayedTableColumns = useMemo(() => {
     const splitColumn = overview?.table_columns?.[0] ?? 'Pitch';
     const isJaredDashboardSelection =
@@ -8175,7 +8200,7 @@ export default function PitchingSuite({
                           { value: 'Team', label: 'Team' },
                         ]}
                         value={leaderboardViewBy}
-                        onChange={(next) => setLeaderboardViewBy(next as 'Player' | 'Team')}
+                        onChange={handleLeaderboardViewBySelection}
                         placeholder="Player"
                       />
                     </label>
@@ -8189,7 +8214,7 @@ export default function PitchingSuite({
                           { value: 'Percentile', label: 'Percentile' },
                         ]}
                         value={leaderboardStatView}
-                        onChange={(next) => setLeaderboardStatView(next as 'Stats' | 'Percentile')}
+                        onChange={handleLeaderboardStatViewSelection}
                         placeholder="Stats"
                       />
                     </label>
@@ -8204,7 +8229,7 @@ export default function PitchingSuite({
                           { value: 'TEAM', label: percentileTeamLabel },
                         ]}
                         value={leaderboardPercentileScope}
-                        onChange={(next) => setLeaderboardPercentileScope(next as 'NCAA' | 'TEAM' | 'MLB')}
+                        onChange={handleLeaderboardPercentileScopeSelection}
                         placeholder="NCAA"
                       />
                     </label>
@@ -8460,6 +8485,12 @@ export default function PitchingSuite({
                 ) ? (
                   <p className="portal-muted-text" style={{ margin: '0 0 0.6rem 0' }}>Loading percentiles...</p>
                 ) : null}
+                {loadingOverview ? (
+                  <p className="portal-muted-text" style={{ margin: '0 0 0.6rem 0' }}>
+                    Loading leaderboard table...
+                  </p>
+                ) : null}
+                {!loadingOverview ? (
                 <table className="portal-table">
                   <thead>
                     <tr>
@@ -8811,6 +8842,7 @@ export default function PitchingSuite({
                         ))}
                   </tbody>
                 </table>
+                ) : null}
               </div>
                 </>
               ) : null}

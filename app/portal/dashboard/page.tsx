@@ -10,7 +10,16 @@ import DashboardShell from './dashboard-shell';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 import PortalThemeToggle from '../theme-toggle';
 
-export default async function PortalDashboardPage() {
+type PortalDashboardPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function PortalDashboardPage({ searchParams }: PortalDashboardPageProps) {
+  const resolvedSearchParams = (await searchParams) ?? {};
+  const forceHome =
+    (Array.isArray(resolvedSearchParams.home)
+      ? resolvedSearchParams.home[0]
+      : resolvedSearchParams.home) === '1';
   const session = await requirePortalSession();
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
@@ -107,7 +116,12 @@ export default async function PortalDashboardPage() {
       </header>
 
       {canAccessDashboard ? (
-        <DashboardShell key={`dashboard-shell-${selectedSchool}`} role={session.role} selectedSchoolCode={selectedSchool} />
+        <DashboardShell
+          key={`dashboard-shell-${selectedSchool}`}
+          role={session.role}
+          selectedSchoolCode={selectedSchool}
+          forceHome={forceHome}
+        />
       ) : (
         <section className="portal-panel">
           <h2>Dashboard Access</h2>

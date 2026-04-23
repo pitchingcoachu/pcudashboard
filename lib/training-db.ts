@@ -394,6 +394,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_days_program ON program_days (program_id);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_exercise ON program_day_items (exercise_id);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_workout ON program_day_items (workout_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_organizations_upper_trim_name ON organizations ((UPPER(TRIM(name))));`);
     await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
     await pool.query(`
     CREATE TABLE IF NOT EXISTS dashboard_custom_tables (
@@ -1198,45 +1199,48 @@ export async function resolveOrganizationIdForSchool(input: {
   const schoolCode = String(input.schoolCode ?? '').trim().toUpperCase();
   const fallbackOrganizationId = Number(input.fallbackOrganizationId ?? 0);
   if (!schoolCode) return Number.isFinite(fallbackOrganizationId) && fallbackOrganizationId > 0 ? fallbackOrganizationId : 0;
+  const normalizedFallback = Number.isFinite(fallbackOrganizationId) && fallbackOrganizationId > 0 ? fallbackOrganizationId : 0;
+  const cacheKey = `resolve_org_id_for_school:${schoolCode}:${normalizedFallback}:${input.createIfMissing ? 1 : 0}`;
+  return _withTrainingReadCache(cacheKey, 45_000, async () => {
+    const schoolByOrgId = parseOrgSchoolMap();
+    const mapped = Object.entries(schoolByOrgId).find(([, code]) => code === schoolCode);
+    if (mapped) {
+      const orgId = Number(mapped[0]);
+      if (Number.isFinite(orgId) && orgId > 0) return orgId;
+    }
 
-  const schoolByOrgId = parseOrgSchoolMap();
-  const mapped = Object.entries(schoolByOrgId).find(([, code]) => code === schoolCode);
-  if (mapped) {
-    const orgId = Number(mapped[0]);
-    if (Number.isFinite(orgId) && orgId > 0) return orgId;
-  }
-
-  const pool = getDbPool();
-  const byName = await pool.query<{ id: number }>(
-    `
-      SELECT id
-      FROM organizations
-      WHERE UPPER(TRIM(name)) = $1
-      ORDER BY id ASC
-      LIMIT 1
-    `,
-    [schoolCode]
-  );
-  if ((byName.rowCount ?? 0) > 0) {
-    const orgId = Number(byName.rows[0]?.id ?? 0);
-    if (Number.isFinite(orgId) && orgId > 0) return orgId;
-  }
-
-  if (input.createIfMissing) {
-    const created = await pool.query<{ id: number }>(
+    const pool = getDbPool();
+    const byName = await pool.query<{ id: number }>(
       `
-        INSERT INTO organizations (name)
-        VALUES ($1)
-        ON CONFLICT (name) DO UPDATE SET updated_at = NOW()
-        RETURNING id
+        SELECT id
+        FROM organizations
+        WHERE UPPER(TRIM(name)) = $1
+        ORDER BY id ASC
+        LIMIT 1
       `,
       [schoolCode]
     );
-    const orgId = Number(created.rows[0]?.id ?? 0);
-    if (Number.isFinite(orgId) && orgId > 0) return orgId;
-  }
+    if ((byName.rowCount ?? 0) > 0) {
+      const orgId = Number(byName.rows[0]?.id ?? 0);
+      if (Number.isFinite(orgId) && orgId > 0) return orgId;
+    }
 
-  return Number.isFinite(fallbackOrganizationId) && fallbackOrganizationId > 0 ? fallbackOrganizationId : 0;
+    if (input.createIfMissing) {
+      const created = await pool.query<{ id: number }>(
+        `
+          INSERT INTO organizations (name)
+          VALUES ($1)
+          ON CONFLICT (name) DO UPDATE SET updated_at = NOW()
+          RETURNING id
+        `,
+        [schoolCode]
+      );
+      const orgId = Number(created.rows[0]?.id ?? 0);
+      if (Number.isFinite(orgId) && orgId > 0) return orgId;
+    }
+
+    return normalizedFallback;
+  });
 }
 
 export async function isCoachAssignedToPlayer(input: {

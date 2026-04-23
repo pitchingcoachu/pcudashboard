@@ -85,9 +85,9 @@ export async function GET(request: Request) {
           dashboardSchoolCode: normalizedHome || session.dashboardSchoolCode || null,
         })
         ? '/portal/player'
-        : '/portal/dashboard'
+        : '/portal/dashboard?home=1'
       : '/portal/admin'
-    : '/portal/dashboard';
+    : '/portal/dashboard?home=1';
 
   const response = NextResponse.redirect(new URL(destination, request.url), 303);
   if (shouldResetSchool) {

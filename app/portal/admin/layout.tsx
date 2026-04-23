@@ -10,10 +10,24 @@ import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalThemeToggle from '../theme-toggle';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const timeoutPromise = new Promise<T>((resolve) => {
+      timeout = setTimeout(() => resolve(fallback), timeoutMs);
+    });
+    return await Promise.race([promise, timeoutPromise]);
+  } catch {
+    return fallback;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const session = await requirePortalSession();
-  const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
+  const schoolOptions = await withTimeout(resolveSessionDashboardSchoolOptions(session), 3_000, [selectedSchool, 'LEAGUE', 'PRO']);
   const brand = resolveSchoolBrand(selectedSchool);
   const canAccessProgramming = canUseProgrammingData(session);
   const canAccessClientManagement = canUseClientManagement(session);

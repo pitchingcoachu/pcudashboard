@@ -18,44 +18,85 @@ import {
   resolveProgrammingSchoolCode,
 } from '../../../lib/programming-scope';
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const timeoutPromise = new Promise<T>((resolve) => {
+      timeout = setTimeout(() => resolve(fallback), timeoutMs);
+    });
+    return await Promise.race([promise, timeoutPromise]);
+  } catch {
+    return fallback;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export default async function AdminHomePage() {
   const session = await requirePortalSession();
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
-  const schoolAccess = await getSchoolProductAccess(programmingSchoolCode);
+  const schoolAccess = await withTimeout(
+    getSchoolProductAccess(programmingSchoolCode),
+    3_000,
+    { dashboard: true, programming: false, clientManagement: true }
+  );
   const canAccessClientManagement =
     session.role === 'admin' ? schoolAccess.clientManagement : canUseClientManagement(session);
   const canAccessProgramming = session.role === 'admin' ? schoolAccess.programming : canUseProgrammingData(session);
   const [resolvedClientManagementOrganizationId, resolvedProgrammingOrganizationId] = await Promise.all([
-    resolveOrganizationIdForSchool({
-      schoolCode: programmingSchoolCode,
-      fallbackOrganizationId: resolveClientManagementOrganizationId(session),
-      createIfMissing: false,
-    }),
-    resolveOrganizationIdForSchool({
-      schoolCode: programmingSchoolCode,
-      fallbackOrganizationId: resolveProgrammingOrganizationId(session),
-      createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
-    }),
+    withTimeout(
+      resolveOrganizationIdForSchool({
+        schoolCode: programmingSchoolCode,
+        fallbackOrganizationId: resolveClientManagementOrganizationId(session),
+        createIfMissing: false,
+      }),
+      3_000,
+      resolveClientManagementOrganizationId(session)
+    ),
+    withTimeout(
+      resolveOrganizationIdForSchool({
+        schoolCode: programmingSchoolCode,
+        fallbackOrganizationId: resolveProgrammingOrganizationId(session),
+        createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
+      }),
+      3_000,
+      resolveProgrammingOrganizationId(session)
+    ),
   ]);
   const clientManagementOrganizationId = canAccessClientManagement ? resolvedClientManagementOrganizationId : 0;
   const programmingOrganizationId = canAccessProgramming ? resolvedProgrammingOrganizationId : 0;
-  const [visibleClientCount, coaches, exerciseCount, workoutCount, coachStatusCounts] = await Promise.all([
+  const [visibleClientCountResult, coachesResult, exerciseCountResult, workoutCountResult, coachStatusCountsResult] = await Promise.allSettled([
     clientManagementOrganizationId > 0
-      ? getClientCountByOrganization({
-          organizationId: clientManagementOrganizationId,
-          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
-        })
+      ? withTimeout(
+          getClientCountByOrganization({
+            organizationId: clientManagementOrganizationId,
+            assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+          }),
+          3_500,
+          0
+        )
       : Promise.resolve(0),
-    clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
-    programmingOrganizationId > 0 ? getExerciseCountByOrganization(programmingOrganizationId) : Promise.resolve(0),
-    programmingOrganizationId > 0 ? getWorkoutCountByOrganization(programmingOrganizationId) : Promise.resolve(0),
+    session.role === 'admin' && clientManagementOrganizationId > 0
+      ? withTimeout(listCoachesByOrganization(clientManagementOrganizationId), 3_500, [])
+      : Promise.resolve([]),
+    programmingOrganizationId > 0 ? withTimeout(getExerciseCountByOrganization(programmingOrganizationId), 3_500, 0) : Promise.resolve(0),
+    programmingOrganizationId > 0 ? withTimeout(getWorkoutCountByOrganization(programmingOrganizationId), 3_500, 0) : Promise.resolve(0),
     session.role === 'coach' && clientManagementOrganizationId > 0
-      ? listClientStatusCountsByOrganization({
-          organizationId: clientManagementOrganizationId,
-          assignedCoachUserId: session.userId ?? 0,
-        })
+      ? withTimeout(
+          listClientStatusCountsByOrganization({
+            organizationId: clientManagementOrganizationId,
+            assignedCoachUserId: session.userId ?? 0,
+          }),
+          3_500,
+          []
+        )
       : Promise.resolve([]),
   ]);
+  const visibleClientCount = visibleClientCountResult.status === 'fulfilled' ? visibleClientCountResult.value : 0;
+  const coaches = coachesResult.status === 'fulfilled' ? coachesResult.value : [];
+  const exerciseCount = exerciseCountResult.status === 'fulfilled' ? exerciseCountResult.value : 0;
+  const workoutCount = workoutCountResult.status === 'fulfilled' ? workoutCountResult.value : 0;
+  const coachStatusCounts = coachStatusCountsResult.status === 'fulfilled' ? coachStatusCountsResult.value : [];
   const statusSummary = coachStatusCounts
     .map(({ status, count }) => `${status}: ${count}`)
     .join(' | ');

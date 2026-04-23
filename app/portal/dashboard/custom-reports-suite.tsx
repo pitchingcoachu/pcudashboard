@@ -2300,7 +2300,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const hasCurrent = teamOptions.some((entry) => entry.value === reportTeam);
     const preferredTeam = teamOptions.find((entry) => String(entry.value).trim().toLowerCase() === PRO_DEFAULT_TEAM.toLowerCase())?.value;
     if (isProSchool && preferredTeam) {
-      if (!hasCurrent || reportTeam === 'All') {
+      if (!hasCurrent) {
         setReportTeam(preferredTeam);
       }
       return;

@@ -16,9 +16,13 @@ function resolveOverviewTimeoutMs(schoolCode: string): number {
   return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 300000 : 120000;
 }
 
-function resolveOverviewCachePolicy(schoolCode: string): { ttlMs: number; staleTtlMs: number } {
+function resolveOverviewCachePolicy(
+  schoolCode: string,
+  options?: { preferBroadLeaderboardCache?: boolean }
+): { ttlMs: number; staleTtlMs: number } {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
   if (upper === 'PRO') return { ttlMs: 90000, staleTtlMs: 600000 };
+  if (upper === 'LEAGUE' && options?.preferBroadLeaderboardCache) return { ttlMs: 90000, staleTtlMs: 600000 };
   if (upper === 'LEAGUE') return { ttlMs: 30000, staleTtlMs: 120000 };
   return { ttlMs: 45000, staleTtlMs: 180000 };
 }
@@ -80,6 +84,35 @@ async function fetchProSafeHittingLeaderboard(params: {
     fetcher: () => fetch(fallbackUrl.toString(), { cache: 'no-store' }),
   });
   return fallback;
+}
+
+async function fetchLeagueSafeHittingLeaderboard(params: {
+  apiBase: string;
+  schoolCode: string;
+  startDate: string;
+  endDate: string;
+  splitBy: string;
+  cachePolicy: { ttlMs: number; staleTtlMs: number };
+  timeoutMs: number;
+  retries: number;
+}) {
+  const { apiBase, schoolCode, startDate, endDate, splitBy, cachePolicy, timeoutMs, retries } = params;
+  const fallbackUrl = new URL(`${apiBase}/v1/hitting/overview`);
+  fallbackUrl.searchParams.set('school_code', schoolCode);
+  if (startDate) fallbackUrl.searchParams.set('start_date', startDate);
+  if (endDate) fallbackUrl.searchParams.set('end_date', endDate);
+  fallbackUrl.searchParams.set('team_type', 'All');
+  fallbackUrl.searchParams.set('table_mode', 'Results');
+  fallbackUrl.searchParams.set('split_by', splitBy === 'Batter Team' ? 'Batter Team' : 'Batter');
+  fallbackUrl.searchParams.set('include_chart_points', '0');
+  return fetchDashboardJsonWithCache({
+    cacheKey: `hitting:overview:league-safe-leaderboard:${fallbackUrl.toString()}`,
+    ttlMs: cachePolicy.ttlMs,
+    staleTtlMs: cachePolicy.staleTtlMs,
+    timeoutMs,
+    retries,
+    fetcher: () => fetch(fallbackUrl.toString(), { cache: 'no-store' }),
+  });
 }
 
 export async function GET(request: Request) {
@@ -195,6 +228,7 @@ export async function GET(request: Request) {
     !requestedHitter &&
     !oppPitcher &&
     (!teamType || teamType.toLowerCase() === 'all');
+  const isLeague = String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE';
   const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
   const normalizedTableMode = tableMode.toLowerCase();
   const proLeaderboardDefaultModeRequested = !normalizedTableMode || normalizedTableMode === 'results';
@@ -225,6 +259,50 @@ export async function GET(request: Request) {
     hasValue(inputUrl.searchParams.get('recent_pa_ignore_dates')?.trim() ?? '') ||
     hasValue(inputUrl.searchParams.get('force_raw')?.trim() ?? '') ||
     hasValue(chartOnly);
+  const hasLeagueLeaderboardNarrowingFilters = hasProLeaderboardNarrowingFilters;
+  const leagueBroadLeaderboard =
+    isLeague &&
+    !shouldScopePlayer &&
+    broadScope &&
+    (splitBy === 'Batter' || splitBy === 'Batter Team') &&
+    !customModeRequested &&
+    !hasLeagueLeaderboardNarrowingFilters &&
+    !isTruthy(chartOnly);
+  if (leagueBroadLeaderboard) {
+    // Keep League broad leaderboard requests on rollup-only payloads.
+    url.searchParams.set('team_type', 'All');
+    url.searchParams.set('table_mode', 'Results');
+    url.searchParams.set('split_by', splitBy === 'Batter Team' ? 'Batter Team' : 'Batter');
+    url.searchParams.set('include_chart_points', '0');
+    const dropKeys = [
+      'opp_pitcher',
+      'hand',
+      'batter_side',
+      'venue',
+      'custom_columns',
+      'in_zone',
+      'pitch_types',
+      'zone_locations',
+      'pitch_results',
+      'count_filter',
+      'after_count_filter',
+      'bip_result',
+      'velo_min',
+      'velo_max',
+      'ivb_min',
+      'ivb_max',
+      'hb_min',
+      'hb_max',
+      'pc_min',
+      'pc_max',
+      'chart_only',
+      'chart_points_limit',
+      'recent_pa_mode',
+      'recent_pa_count',
+      'recent_pa_ignore_dates',
+    ] as const;
+    for (const key of dropKeys) url.searchParams.delete(key);
+  }
   const shouldForceProLeaderboardRollupShape =
     isProLeaderboardSplit &&
     broadScope &&
@@ -282,7 +360,7 @@ export async function GET(request: Request) {
     ] as const;
     for (const key of dropKeys) url.searchParams.delete(key);
   }
-  const cachePolicy = resolveOverviewCachePolicy(schoolCode);
+  const cachePolicy = resolveOverviewCachePolicy(schoolCode, { preferBroadLeaderboardCache: leagueBroadLeaderboard });
   const isGameSplit = splitBy === 'Game';
   const gameSplitCacheBuster = isGameSplit ? `:game:${Date.now()}` : '';
   const shouldPreferProSafeLeaderboard =
@@ -295,6 +373,7 @@ export async function GET(request: Request) {
     !customModeRequested &&
     !(requestedPercentileBaseline && splitBy === 'Batter' && !!inputUrl.searchParams.get('pitch_types')?.trim()) &&
     !isTruthy(chartOnly);
+  const shouldPreferLeagueSafeLeaderboard = leagueBroadLeaderboard;
 
   if (shouldPreferProSafeLeaderboard) {
     try {
@@ -318,6 +397,34 @@ export async function GET(request: Request) {
             'x-dashboard-upstream-ms': String(fallback.durationMs),
             'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
             'x-dashboard-fallback': 'pro-leaderboard-safe-primary',
+          },
+        });
+      }
+    } catch {
+      // Continue to primary route logic below.
+    }
+  }
+  if (shouldPreferLeagueSafeLeaderboard) {
+    try {
+      const fallback = await fetchLeagueSafeHittingLeaderboard({
+        apiBase,
+        schoolCode,
+        startDate,
+        endDate,
+        splitBy,
+        cachePolicy,
+        timeoutMs: 20000,
+        retries: 0,
+      });
+      if (fallback.status >= 200 && fallback.status < 300 && hasNonEmptyTableRows(fallback.payload)) {
+        return NextResponse.json(fallback.payload, {
+          headers: {
+            ...RESPONSE_CACHE_HEADERS,
+            'x-dashboard-cache': fallback.cached ? 'HIT' : 'MISS',
+            'x-dashboard-cache-source': fallback.source,
+            'x-dashboard-upstream-ms': String(fallback.durationMs),
+            'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
+            'x-dashboard-fallback': 'league-leaderboard-safe-primary',
           },
         });
       }

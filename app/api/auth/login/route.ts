@@ -113,7 +113,7 @@ export async function POST(request: Request) {
               dashboardSchoolCode: resolvedDashboardSchoolCode,
             })
             ? '/portal/player'
-            : '/portal/dashboard'
+            : '/portal/dashboard?home=1'
           : '/portal/admin';
       const response = NextResponse.redirect(new URL(destination, request.url), 303);
       response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions());

@@ -949,6 +949,15 @@ function SearchableSingleSelect({
 
   const selected = options.find((option) => option.value === value);
   const filtered = options.filter((option) => option.label.toLowerCase().includes(query.toLowerCase()));
+  const commitSelection = (next: string) => {
+    setOpen(false);
+    setQuery('');
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => onChange(next), 0);
+      return;
+    }
+    onChange(next);
+  };
 
   return (
     <div className="portal-search-select" ref={rootRef}>
@@ -969,11 +978,7 @@ function SearchableSingleSelect({
                 key={option.value}
                 type="button"
                 className="portal-search-select-option"
-                onClick={() => {
-                  onChange(option.value);
-                  setOpen(false);
-                  setQuery('');
-                }}
+                onClick={() => commitSelection(option.value)}
               >
                 {option.label}
               </button>
@@ -2574,8 +2579,9 @@ export default function HittingSuite({
       params.set('chart_points_limit', isPro ? '6000' : '5000');
     }
     const useLegacySummaryTeamColorMode = !isPro && isSummaryPage && summaryPercentileScope === 'TEAM';
+    const shouldLoadLeaderboardBaseline = isLeaderboardPage && (leaderboardStatView === 'Percentile' || enableTableColors);
     const shouldLoadPercentileBaseline =
-      isLeaderboardPage ||
+      shouldLoadLeaderboardBaseline ||
       (isSummaryPage && (showCellPercentiles || summaryStatView === 'Percentile' || (enableTableColors && !useLegacySummaryTeamColorMode)));
     if (shouldLoadPercentileBaseline) {
       const baselineParams = new URLSearchParams(params);
@@ -3454,6 +3460,10 @@ export default function HittingSuite({
     [tableMode, selectedCustomTableId]
   );
   const handleTableModeSelection = useCallback((next: string) => {
+    if (isLeague && isLeaderboardPage) {
+      setLoadingOverview(true);
+      setError(null);
+    }
     if (next.startsWith('custom_saved:')) {
       const id = Number(next.replace('custom_saved:', ''));
       const found = customTables.find((row) => Number(row.id) === id);
@@ -3480,7 +3490,28 @@ export default function HittingSuite({
     } else {
       setShowCustomEditor(false);
     }
-  }, [customTables]);
+  }, [customTables, isLeague, isLeaderboardPage]);
+  const handleLeaderboardViewBySelection = useCallback((next: string) => {
+    if (isLeague && isLeaderboardPage) {
+      setLoadingOverview(true);
+      setError(null);
+    }
+    setLeaderboardViewBy(next as 'Player' | 'Team');
+  }, [isLeague, isLeaderboardPage]);
+  const handleLeaderboardStatViewSelection = useCallback((next: string) => {
+    if (isLeague && isLeaderboardPage) {
+      setLoadingOverview(true);
+      setError(null);
+    }
+    setLeaderboardStatView(next as 'Stats' | 'Percentile');
+  }, [isLeague, isLeaderboardPage]);
+  const handleLeaderboardPercentileScopeSelection = useCallback((next: string) => {
+    if (isLeague && isLeaderboardPage) {
+      setLoadingOverview(true);
+      setError(null);
+    }
+    setLeaderboardPercentileScope(next as 'NCAA' | 'TEAM' | 'MLB');
+  }, [isLeague, isLeaderboardPage]);
   const displayedTableColumns = useMemo(() => {
     const splitColumn = overview?.table_columns?.[0] ?? 'Pitch';
     if (isPro && isLeaderboardPage && tableMode !== 'Custom') {
@@ -4682,7 +4713,7 @@ export default function HittingSuite({
                     { value: 'Team', label: 'Team' },
                   ]}
                   value={leaderboardViewBy}
-                  onChange={(next) => setLeaderboardViewBy(next as 'Player' | 'Team')}
+                  onChange={handleLeaderboardViewBySelection}
                   placeholder="Player"
                 />
               </label>
@@ -4696,7 +4727,7 @@ export default function HittingSuite({
                     { value: 'Percentile', label: 'Percentile' },
                   ]}
                   value={leaderboardStatView}
-                  onChange={(next) => setLeaderboardStatView(next as 'Stats' | 'Percentile')}
+                  onChange={handleLeaderboardStatViewSelection}
                   placeholder="Stats"
                 />
               </label>
@@ -4711,7 +4742,7 @@ export default function HittingSuite({
                     { value: 'TEAM', label: percentileTeamLabel },
                   ]}
                   value={leaderboardPercentileScope}
-                  onChange={(next) => setLeaderboardPercentileScope(next as 'NCAA' | 'TEAM' | 'MLB')}
+                  onChange={handleLeaderboardPercentileScopeSelection}
                   placeholder="NCAA"
                 />
               </label>

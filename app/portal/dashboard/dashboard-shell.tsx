@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CatchingSuite from './catching-suite';
 import ComparisonToolSuite from './comparison-tool-suite';
 import CustomReportsSuite from './custom-reports-suite';
@@ -16,6 +16,7 @@ import StuffCalculatorSuite from './stuff-calculator-suite';
 type DashboardShellProps = {
   role: 'admin' | 'coach' | 'player';
   selectedSchoolCode: string;
+  forceHome?: boolean;
 };
 
 type Candidate = {
@@ -128,34 +129,12 @@ async function fetchHomePayload(signal?: AbortSignal): Promise<SearchPayload> {
   return payload;
 }
 
-export default function DashboardShell({ role, selectedSchoolCode }: DashboardShellProps) {
+export default function DashboardShell({ role, selectedSchoolCode, forceHome = false }: DashboardShellProps) {
   const storageSchoolToken = String(selectedSchoolCode ?? '').trim().toUpperCase() || 'DEFAULT';
   const shellStorageKey = `portal_dashboard_shell_state:${storageSchoolToken}`;
   const pendingHomeNavigateStorageKey = `portal_dashboard_home_nav:${storageSchoolToken}`;
-  const [homeNavigateRequest, setHomeNavigateRequest] = useState<HomeNavigateRequest | null>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const rawPendingNavigate = window.sessionStorage.getItem(pendingHomeNavigateStorageKey);
-      if (!rawPendingNavigate) return null;
-      const parsed = JSON.parse(rawPendingNavigate) as HomeNavigateRequest;
-      if (!parsed || !parsed.requestId || !parsed.suite || !parsed.targetType || !parsed.targetValue) return null;
-      if (Date.now() - parsed.requestId > 60000) return null;
-      return parsed;
-    } catch {
-      return null;
-    }
-  });
-  const [suite, setSuite] = useState<SuiteName>(() => {
-    if (homeNavigateRequest?.suite) return homeNavigateRequest.suite;
-    if (typeof window === 'undefined') return 'Home';
-    try {
-      const storedSuite = window.sessionStorage.getItem(shellStorageKey);
-      if (storedSuite && ALL_SUITE_NAMES.includes(storedSuite as SuiteName)) return storedSuite as SuiteName;
-    } catch {
-      // Ignore client storage errors.
-    }
-    return 'Home';
-  });
+  const [homeNavigateRequest, setHomeNavigateRequest] = useState<HomeNavigateRequest | null>(null);
+  const [suite, setSuite] = useState<SuiteName>('Home');
   const appliedHomeNavigateSuiteRef = useRef<number | null>(null);
   const [navSearchPayload, setNavSearchPayload] = useState<SearchPayload | null>(null);
   const [navSearchInput, setNavSearchInput] = useState('');
@@ -207,7 +186,7 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
 
   const activeSuite: SuiteName = suiteOptions.includes(suite) ? suite : 'Home';
   const showSuite = (name: SuiteName) => activeSuite === name;
-  const activateSuite = (name: string) => {
+  const activateSuite = useCallback((name: string) => {
     const resolved = suiteOptions.includes(name as SuiteName) ? (name as SuiteName) : 'Home';
     setSuite(resolved);
     setMountedSuites((current) => (current[resolved] ? current : { ...current, [resolved]: true }));
@@ -218,7 +197,46 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
         // Ignore client storage errors.
       }
     }
-  };
+  }, [shellStorageKey, suiteOptions]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (forceHome) {
+      try {
+        window.sessionStorage.removeItem(shellStorageKey);
+        window.sessionStorage.removeItem(pendingHomeNavigateStorageKey);
+      } catch {
+        // Ignore client storage errors.
+      }
+      return;
+    }
+    let restoredRequest: HomeNavigateRequest | null = null;
+    try {
+      const rawPendingNavigate = window.sessionStorage.getItem(pendingHomeNavigateStorageKey);
+      if (rawPendingNavigate) {
+        const parsed = JSON.parse(rawPendingNavigate) as HomeNavigateRequest;
+        if (
+          parsed &&
+          parsed.requestId &&
+          parsed.suite &&
+          parsed.targetType &&
+          parsed.targetValue &&
+          Date.now() - parsed.requestId <= 60000
+        ) {
+          restoredRequest = parsed;
+        }
+      }
+    } catch {
+      // Ignore client storage errors.
+    }
+    if (!restoredRequest) return;
+    const frameId = window.requestAnimationFrame(() => {
+      if (restoredRequest) setHomeNavigateRequest(restoredRequest);
+      activateSuite(restoredRequest.suite);
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [forceHome, shellStorageKey, pendingHomeNavigateStorageKey, activateSuite]);
   const handleHomeNavigate = (input: Omit<HomeNavigateRequest, 'requestId'>) => {
     const nextRequest: HomeNavigateRequest = {
       ...input,
@@ -248,6 +266,7 @@ export default function DashboardShell({ role, selectedSchoolCode }: DashboardSh
       }
     }
   }, [homeNavigateRequest, activeSuite, pendingHomeNavigateStorageKey]);
+
   useEffect(() => {
     if (activeSuite === 'Home') return;
     const cachedSchoolCode = String(navSearchPayload?.school_code ?? '').trim().toUpperCase();

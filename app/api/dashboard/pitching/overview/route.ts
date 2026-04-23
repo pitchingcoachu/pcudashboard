@@ -158,9 +158,13 @@ function resolveOverviewTimeoutMs(schoolCode: string): number {
   return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 300000 : 120000;
 }
 
-function resolveOverviewCachePolicy(schoolCode: string): { ttlMs: number; staleTtlMs: number } {
+function resolveOverviewCachePolicy(
+  schoolCode: string,
+  options?: { preferBroadLeaderboardCache?: boolean }
+): { ttlMs: number; staleTtlMs: number } {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
   if (upper === 'PRO') return { ttlMs: 90000, staleTtlMs: 600000 };
+  if (upper === 'LEAGUE' && options?.preferBroadLeaderboardCache) return { ttlMs: 90000, staleTtlMs: 600000 };
   if (upper === 'LEAGUE') return { ttlMs: 30000, staleTtlMs: 120000 };
   return { ttlMs: 45000, staleTtlMs: 180000 };
 }
@@ -226,6 +230,37 @@ async function fetchProSafePitchingLeaderboard(params: {
     fetcher: () => fetch(fallbackUrl.toString(), { cache: 'no-store' }),
   });
   return fallback;
+}
+
+async function fetchLeagueSafePitchingLeaderboard(params: {
+  apiBase: string;
+  schoolCode: string;
+  startDate: string;
+  endDate: string;
+  splitBy: string;
+  cachePolicy: { ttlMs: number; staleTtlMs: number };
+  timeoutMs: number;
+  retries: number;
+}) {
+  const { apiBase, schoolCode, startDate, endDate, splitBy, cachePolicy, timeoutMs, retries } = params;
+  const fallbackUrl = new URL(`${apiBase}/v1/pitching/overview`);
+  fallbackUrl.searchParams.set('school_code', schoolCode);
+  if (startDate) fallbackUrl.searchParams.set('start_date', startDate);
+  if (endDate) fallbackUrl.searchParams.set('end_date', endDate);
+  fallbackUrl.searchParams.set('team_type', 'All');
+  fallbackUrl.searchParams.set('table_mode', 'Live');
+  fallbackUrl.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
+  fallbackUrl.searchParams.set('include_chart_points', '0');
+  fallbackUrl.searchParams.set('include_row_pitches', '0');
+  fallbackUrl.searchParams.set('include_trend_rows', '0');
+  return fetchDashboardJsonWithCache({
+    cacheKey: `pitching:overview:league-safe-leaderboard:${fallbackUrl.toString()}`,
+    ttlMs: cachePolicy.ttlMs,
+    staleTtlMs: cachePolicy.staleTtlMs,
+    timeoutMs,
+    retries,
+    fetcher: () => fetch(fallbackUrl.toString(), { cache: 'no-store' }),
+  });
 }
 
 export async function GET(request: Request) {
@@ -344,6 +379,7 @@ export async function GET(request: Request) {
   if (pcMax) url.searchParams.set('pc_max', pcMax);
   const isLeague = String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE';
   const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
+  const isLeaderboardLikeSplit = splitBy === 'Pitcher' || splitBy === 'Pitcher Team';
   const normalizedTableMode = tableMode.toLowerCase();
   const proLeaderboardDefaultModeRequested = !normalizedTableMode || normalizedTableMode === 'live';
   const customModeRequested = tableMode.toLowerCase() === 'custom' || customColumns.length > 0;
@@ -351,6 +387,8 @@ export async function GET(request: Request) {
   const end = parseIsoDate(endDate);
   const daySpan = start && end ? Math.floor((end.getTime() - start.getTime()) / 86400000) + 1 : 0;
   const forceLeagueLight = isLeague && daySpan >= 14;
+  const includeChartsRequested = isTruthy(includeChartPoints);
+  const includeChartsExplicitlyDisabled = hasValue(includeChartPoints) && !includeChartsRequested;
   const requestedPitcher = percentileBaseline ? '' : pitcher;
   const broadScope =
     !scopedPitcher &&
@@ -366,15 +404,22 @@ export async function GET(request: Request) {
   if (includeRowPitches) url.searchParams.set('include_row_pitches', includeRowPitches);
   if (includeTrendRows) url.searchParams.set('include_trend_rows', includeTrendRows);
   if (forceLeagueLight) {
-    url.searchParams.set('include_chart_points', '1');
-    url.searchParams.set('chart_points_limit', '600');
+    if (!hasValue(includeChartPoints)) {
+      // Default large LEAGUE windows to light charts only when caller did not specify.
+      url.searchParams.set('include_chart_points', '1');
+      url.searchParams.set('chart_points_limit', '600');
+    } else if (includeChartsExplicitlyDisabled) {
+      // Respect explicit table-only requests (leaderboard fast-path).
+      url.searchParams.set('include_chart_points', '0');
+      url.searchParams.delete('chart_points_limit');
+    }
     url.searchParams.set('include_row_pitches', '0');
     url.searchParams.set('include_trend_rows', '0');
   } else if (isLeague && !includeRowPitches) {
     // Default League calls to lighter payload unless explicitly requested for short windows.
     url.searchParams.set('include_row_pitches', '0');
   }
-  if (!includeChartPoints && broadScope && daySpan >= 21 && !chartOnly) {
+  if (!includeChartsRequested && broadScope && daySpan >= 21 && !chartOnly) {
     url.searchParams.set('include_chart_points', '0');
     url.searchParams.set('include_row_pitches', '0');
     url.searchParams.set('include_trend_rows', '0');
@@ -385,7 +430,7 @@ export async function GET(request: Request) {
     url.searchParams.set('include_chart_points', '1');
     url.searchParams.set('chart_points_limit', String(cappedLimit));
     url.searchParams.set('include_row_pitches', '0');
-  } else if ((url.searchParams.get('include_chart_points') ?? '').trim() === '1') {
+  } else if (isTruthy(url.searchParams.get('include_chart_points') ?? '')) {
     const requestedLimit = Number(url.searchParams.get('chart_points_limit') ?? '0');
     const maxLimit = broadScope ? 600 : 2000;
     const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, maxLimit) : maxLimit;
@@ -425,6 +470,78 @@ export async function GET(request: Request) {
     hasValue(pcMax) ||
     hasValue(chartOnly) ||
     hasValue(forceRaw);
+  const hasLeagueLeaderboardNarrowingFilters =
+    hasValue(withVideo) ||
+    hasValue(breakLines) ||
+    hasValue(stuffLevel) ||
+    hasValue(stuffBase) ||
+    hasValue(hand) ||
+    hasValue(batterSide) ||
+    hasValue(venue) ||
+    hasValue(sessionType) ||
+    hasValue(qpLocations) ||
+    hasValue(visualOption) ||
+    hasValue(inZone) ||
+    hasValue(pitchTypes) ||
+    hasValue(zoneLocations) ||
+    hasValue(pitchResults) ||
+    hasValue(countFilter) ||
+    hasValue(afterCountFilter) ||
+    hasValue(veloMin) ||
+    hasValue(veloMax) ||
+    hasValue(ivbMin) ||
+    hasValue(ivbMax) ||
+    hasValue(hbMin) ||
+    hasValue(hbMax) ||
+    hasValue(pcMin) ||
+    hasValue(pcMax) ||
+    hasValue(chartOnly) ||
+    hasValue(forceRaw);
+  const leagueBroadLeaderboard =
+    isLeague &&
+    !shouldScopePlayer &&
+    broadScope &&
+    isLeaderboardLikeSplit &&
+    !customModeRequested &&
+    !hasLeagueLeaderboardNarrowingFilters &&
+    !isTruthy(chartOnly);
+  if (leagueBroadLeaderboard) {
+    // Keep League broad leaderboard requests on rollup-only payloads.
+    url.searchParams.set('team_type', 'All');
+    url.searchParams.set('table_mode', 'Live');
+    url.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
+    url.searchParams.set('include_chart_points', '0');
+    url.searchParams.set('include_row_pitches', '0');
+    url.searchParams.set('include_trend_rows', '0');
+    const dropKeys = [
+      'with_video',
+      'break_lines',
+      'hand',
+      'batter_side',
+      'venue',
+      'session_type',
+      'qp_locations',
+      'custom_columns',
+      'visual_option',
+      'in_zone',
+      'pitch_types',
+      'zone_locations',
+      'pitch_results',
+      'count_filter',
+      'after_count_filter',
+      'velo_min',
+      'velo_max',
+      'ivb_min',
+      'ivb_max',
+      'hb_min',
+      'hb_max',
+      'pc_min',
+      'pc_max',
+      'chart_only',
+      'chart_points_limit',
+    ] as const;
+    for (const key of dropKeys) url.searchParams.delete(key);
+  }
   const shouldForceProLeaderboardRollupShape =
     isProLeaderboardSplit &&
     proBroadScope &&
@@ -471,7 +588,7 @@ export async function GET(request: Request) {
     ] as const;
     for (const key of dropKeys) url.searchParams.delete(key);
   }
-  const cachePolicy = resolveOverviewCachePolicy(schoolCode);
+  const cachePolicy = resolveOverviewCachePolicy(schoolCode, { preferBroadLeaderboardCache: leagueBroadLeaderboard });
   const isGameSplit = splitBy === 'Game';
   const gameSplitCacheBuster = isGameSplit ? `:game:${Date.now()}` : '';
   const customShapeCacheBuster = customModeRequested ? ':custom-shape-v3' : '';
@@ -485,6 +602,7 @@ export async function GET(request: Request) {
     !customModeRequested &&
     !(percentileBaseline && splitBy === 'Pitcher' && !!pitchTypes) &&
     !isTruthy(chartOnly);
+  const shouldPreferLeagueSafeLeaderboard = leagueBroadLeaderboard;
 
   if (shouldPreferProSafeLeaderboard) {
     try {
@@ -508,6 +626,34 @@ export async function GET(request: Request) {
             'x-dashboard-upstream-ms': String(fallback.durationMs),
             'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
             'x-dashboard-fallback': 'pro-leaderboard-safe-primary',
+          },
+        });
+      }
+    } catch {
+      // Continue to primary route logic below.
+    }
+  }
+  if (shouldPreferLeagueSafeLeaderboard) {
+    try {
+      const fallback = await fetchLeagueSafePitchingLeaderboard({
+        apiBase,
+        schoolCode,
+        startDate,
+        endDate,
+        splitBy,
+        cachePolicy,
+        timeoutMs: 20000,
+        retries: 0,
+      });
+      if (fallback.status >= 200 && fallback.status < 300 && hasNonEmptyTableRows(fallback.payload)) {
+        return NextResponse.json(applyOverviewBackfills(fallback.payload), {
+          headers: {
+            ...RESPONSE_CACHE_HEADERS,
+            'x-dashboard-cache': fallback.cached ? 'HIT' : 'MISS',
+            'x-dashboard-cache-source': fallback.source,
+            'x-dashboard-upstream-ms': String(fallback.durationMs),
+            'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
+            'x-dashboard-fallback': 'league-leaderboard-safe-primary',
           },
         });
       }
