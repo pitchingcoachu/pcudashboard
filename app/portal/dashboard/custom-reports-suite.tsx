@@ -2512,15 +2512,30 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
 
   useEffect(() => {
     let active = true;
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        window.setTimeout(resolve, ms);
+      });
     async function loadCustomTables() {
-      try {
-        const response = await fetch('/api/dashboard/pitching/custom-tables', { cache: 'no-store' });
-        const payload = (await response.json().catch(() => ({}))) as { items?: CustomTableConfig[] };
-        if (!response.ok || !active) return;
-        setCustomTables(Array.isArray(payload.items) ? payload.items : []);
-      } catch {
+      const delaysMs = [0, 400, 1200];
+      for (let attempt = 0; attempt < delaysMs.length; attempt += 1) {
         if (!active) return;
-        // Preserve the previous list on transient failures so options do not disappear mid-session.
+        if (delaysMs[attempt] > 0) await sleep(delaysMs[attempt]);
+        try {
+          const response = await fetch('/api/dashboard/pitching/custom-tables', { cache: 'no-store' });
+          const payload = (await response.json().catch(() => ({}))) as { items?: CustomTableConfig[] };
+          if (!response.ok) {
+            if (attempt < delaysMs.length - 1) continue;
+            return;
+          }
+          if (!active) return;
+          setCustomTables(Array.isArray(payload.items) ? payload.items : []);
+          return;
+        } catch {
+          if (attempt < delaysMs.length - 1) continue;
+          if (!active) return;
+          // Preserve the previous list on transient failures so options do not disappear mid-session.
+        }
       }
     }
     loadCustomTables();
@@ -2667,17 +2682,35 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
 
   useEffect(() => {
     let active = true;
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        window.setTimeout(resolve, ms);
+      });
     async function loadReports() {
-      try {
-        const response = await fetch('/api/dashboard/custom-reports', { cache: 'no-store' });
-        const payload = (await response.json().catch(() => ({}))) as { items?: SavedReportItem[]; error?: string };
-        if (!response.ok) throw new Error(payload.error ?? 'Failed to load saved reports.');
+      const delaysMs = [0, 400, 1200];
+      let finalError: Error | null = null;
+      for (let attempt = 0; attempt < delaysMs.length; attempt += 1) {
         if (!active) return;
-        setSavedReports(payload.items ?? []);
-      } catch (err) {
-        if (!active) return;
-        setError(err instanceof Error ? err.message : 'Failed to load saved reports.');
+        if (delaysMs[attempt] > 0) await sleep(delaysMs[attempt]);
+        try {
+          const response = await fetch('/api/dashboard/custom-reports', { cache: 'no-store' });
+          const payload = (await response.json().catch(() => ({}))) as { items?: SavedReportItem[]; error?: string };
+          if (!response.ok) {
+            finalError = new Error(payload.error ?? 'Failed to load saved reports.');
+            if (attempt < delaysMs.length - 1) continue;
+            break;
+          }
+          if (!active) return;
+          setSavedReports(payload.items ?? []);
+          return;
+        } catch (err) {
+          finalError = err instanceof Error ? err : new Error('Failed to load saved reports.');
+          if (attempt < delaysMs.length - 1) continue;
+          break;
+        }
       }
+      if (!active || !finalError) return;
+      setError(finalError.message);
     }
     loadReports();
     return () => {

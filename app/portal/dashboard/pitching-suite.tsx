@@ -6922,34 +6922,8 @@ export default function PitchingSuite({
   // between mixed client fallback and server-calculated values.
   // Pitch-count min/max filtering is enforced server-side for consistency.
   const tableRowsWithPv = useMemo(() => {
-    const rows = overview?.table_rows ?? [];
-    const splitColumn = overview?.table_columns?.[0] ?? '';
-    return rows.map((row) => {
-      const eraRaw = row.ERA;
-      const hasEra =
-        (typeof eraRaw === 'number' && Number.isFinite(eraRaw)) ||
-        (typeof eraRaw === 'string' && eraRaw.trim() !== '');
-      let next = row as Record<string, string | number | null>;
-      if (!hasEra) {
-        const fallbackEra = deriveFallbackEra(next);
-        if (fallbackEra !== null) next = { ...next, ERA: Number(fallbackEra.toFixed(2)) };
-      }
-      const isAllRow = splitColumn ? isAllLikeRowValue(next[splitColumn]) : false;
-      if (!isAllRow) return next;
-      const eraNum = parseSortableNumber(next.ERA);
-      const fipNum = parseSortableNumber(next.FIP);
-      const xfipNum = parseSortableNumber(next.xFIP);
-      if (eraNum !== null && (fipNum === null || Math.abs(fipNum - eraNum) < 0.005)) {
-        const fallbackFip = deriveFallbackFip(next);
-        if (fallbackFip !== null) next = { ...next, FIP: Number(fallbackFip.toFixed(2)) };
-      }
-      if (eraNum !== null && (xfipNum === null || Math.abs(xfipNum - eraNum) < 0.005)) {
-        const fallbackXFip = deriveFallbackXFip(next);
-        if (fallbackXFip !== null) next = { ...next, xFIP: Number(fallbackXFip.toFixed(2)) };
-      }
-      return next;
-    });
-  }, [overview?.table_rows, overview?.table_columns]);
+    return overview?.table_rows ?? [];
+  }, [overview?.table_rows]);
   const leaderboardRows = useMemo(() => {
     const rows = tableRowsWithPv;
     if (!isLeaderboardPage) return rows;
@@ -6969,17 +6943,7 @@ export default function PitchingSuite({
       leaderboardBaseColumns,
       pinnedLeaderboardKeys
     ) as Array<Record<string, string | number | null>>;
-    const splitColumn = leaderboardBaseColumns[0] ?? '';
-    if (!splitColumn || !sorted.length) return sorted;
-    const hasAll = sorted.some((row) => isAllLikeRowValue(row[splitColumn]));
-    if (hasAll) return sorted;
-    const syntheticAll = buildPinnedAllRow(
-      leaderboardBaseColumns,
-      sorted as Array<Record<string, string | number | null | undefined>>
-    );
-    if (!syntheticAll) return sorted;
-    syntheticAll[splitColumn] = 'All';
-    return [syntheticAll as Record<string, string | number | null>, ...sorted];
+    return sorted;
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
   const percentileTeamLabel = useMemo(() => {
     const school = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();

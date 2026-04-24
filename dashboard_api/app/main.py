@@ -17892,10 +17892,34 @@ def pitching_overview(
         include_row_pitches = False
         include_trend_rows = False
         # Leaderboard requests should prefer rollup-first regardless of date span.
+        league_leaderboard_has_narrowing_filters = bool(
+            selected_opp_hitter_keys
+            or (with_video or "").strip()
+            or (venue_filter or "").strip()
+            or selected_in_zone
+            or (qp_locations or "").strip()
+            or selected_zone_locations
+            or selected_pitch_results
+            or selected_count_filters
+            or selected_after_count_filters
+            or parsed_velo_min is not None
+            or parsed_velo_max is not None
+            or parsed_ivb_min is not None
+            or parsed_ivb_max is not None
+            or parsed_hb_min is not None
+            or parsed_hb_max is not None
+            or parsed_pc_min is not None
+            or parsed_pc_max is not None
+            or parsed_bf_min is not None
+            or parsed_bf_max is not None
+            or parsed_ip_min is not None
+            or parsed_ip_max is not None
+        )
         league_leaderboard_rollup_candidate = (
             (not chart_only)
             and (not include_chart_points)
             and split_by in {"Pitcher", "Pitcher Team"}
+            and (not league_leaderboard_has_narrowing_filters)
         )
         # Long league windows can still time out when chart points trigger an
         # additional raw query; keep broad All/All requests on rollup-only payloads.
@@ -21138,11 +21162,30 @@ def hitting_overview(
             and (not chart_only)
             and mode_raw in {"Results", "Swing Decisions", "Batted Ball Data", "Custom"}
         )
+        league_leaderboard_has_narrowing_filters = bool(
+            selected_opp_pitcher_keys
+            or (venue_filter or "").strip()
+            or selected_in_zone
+            or selected_zone_locations
+            or selected_pitch_results
+            or selected_count_filters
+            or selected_after_count_filters
+            or selected_bip_results
+            or parsed_velo_min is not None
+            or parsed_velo_max is not None
+            or parsed_ivb_min is not None
+            or parsed_ivb_max is not None
+            or parsed_hb_min is not None
+            or parsed_hb_max is not None
+            or parsed_pc_min is not None
+            or parsed_pc_max is not None
+        )
         league_leaderboard_rollup_candidate = (
             (not chart_only)
             and (not include_chart_points)
             and split_by in {"Batter", "Batter Team"}
             and mode_raw in {"Results", "Swing Decisions", "Batted Ball Data", "Custom"}
+            and (not league_leaderboard_has_narrowing_filters)
         )
         if league_rollup_candidate:
             include_chart_points = False

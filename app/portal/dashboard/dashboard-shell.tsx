@@ -204,6 +204,12 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       try {
         window.sessionStorage.removeItem(shellStorageKey);
         window.sessionStorage.removeItem(pendingHomeNavigateStorageKey);
+        const url = new URL(window.location.href);
+        if (url.searchParams.get('home') === '1') {
+          url.searchParams.delete('home');
+          const next = `${url.pathname}${url.searchParams.toString() ? `?${url.searchParams.toString()}` : ''}${url.hash}`;
+          window.history.replaceState(window.history.state, '', next);
+        }
       } catch {
         // Ignore client storage errors.
       }

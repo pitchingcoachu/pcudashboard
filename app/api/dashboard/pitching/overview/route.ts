@@ -151,7 +151,8 @@ function withAdvancedAllRowBackfill(payload: unknown): unknown {
 }
 
 function applyOverviewBackfills(payload: unknown): unknown {
-  return withAdvancedAllRowBackfill(withEraBackfill(payload));
+  // Do not mutate ERA/FIP/xFIP in the gateway. Use upstream values as source-of-truth.
+  return payload;
 }
 
 function resolveOverviewTimeoutMs(schoolCode: string): number {
@@ -303,6 +304,10 @@ export async function GET(request: Request) {
   const hbMax = inputUrl.searchParams.get('hb_max')?.trim() ?? '';
   const pcMin = inputUrl.searchParams.get('pc_min')?.trim() ?? '';
   const pcMax = inputUrl.searchParams.get('pc_max')?.trim() ?? '';
+  const bfMin = inputUrl.searchParams.get('bf_min')?.trim() ?? '';
+  const bfMax = inputUrl.searchParams.get('bf_max')?.trim() ?? '';
+  const ipMin = inputUrl.searchParams.get('ip_min')?.trim() ?? '';
+  const ipMax = inputUrl.searchParams.get('ip_max')?.trim() ?? '';
   const includeChartPoints = inputUrl.searchParams.get('include_chart_points')?.trim() ?? '';
   const chartPointsLimit = inputUrl.searchParams.get('chart_points_limit')?.trim() ?? '';
   const chartOnly = inputUrl.searchParams.get('chart_only')?.trim() ?? '';
@@ -377,6 +382,10 @@ export async function GET(request: Request) {
   if (hbMax) url.searchParams.set('hb_max', hbMax);
   if (pcMin) url.searchParams.set('pc_min', pcMin);
   if (pcMax) url.searchParams.set('pc_max', pcMax);
+  if (bfMin) url.searchParams.set('bf_min', bfMin);
+  if (bfMax) url.searchParams.set('bf_max', bfMax);
+  if (ipMin) url.searchParams.set('ip_min', ipMin);
+  if (ipMax) url.searchParams.set('ip_max', ipMax);
   const isLeague = String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE';
   const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
   const isLeaderboardLikeSplit = splitBy === 'Pitcher' || splitBy === 'Pitcher Team';
@@ -468,6 +477,10 @@ export async function GET(request: Request) {
     hasValue(hbMax) ||
     hasValue(pcMin) ||
     hasValue(pcMax) ||
+    hasValue(bfMin) ||
+    hasValue(bfMax) ||
+    hasValue(ipMin) ||
+    hasValue(ipMax) ||
     hasValue(chartOnly) ||
     hasValue(forceRaw);
   const hasLeagueLeaderboardNarrowingFilters =
@@ -495,6 +508,10 @@ export async function GET(request: Request) {
     hasValue(hbMax) ||
     hasValue(pcMin) ||
     hasValue(pcMax) ||
+    hasValue(bfMin) ||
+    hasValue(bfMax) ||
+    hasValue(ipMin) ||
+    hasValue(ipMax) ||
     hasValue(chartOnly) ||
     hasValue(forceRaw);
   const leagueBroadLeaderboard =
@@ -537,6 +554,10 @@ export async function GET(request: Request) {
       'hb_max',
       'pc_min',
       'pc_max',
+      'bf_min',
+      'bf_max',
+      'ip_min',
+      'ip_max',
       'chart_only',
       'chart_points_limit',
     ] as const;
@@ -583,6 +604,10 @@ export async function GET(request: Request) {
       'hb_max',
       'pc_min',
       'pc_max',
+      'bf_min',
+      'bf_max',
+      'ip_min',
+      'ip_max',
       'chart_only',
       'chart_points_limit',
     ] as const;

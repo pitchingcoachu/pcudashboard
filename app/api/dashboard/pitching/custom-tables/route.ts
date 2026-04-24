@@ -357,11 +357,6 @@ export async function GET() {
     ])
   );
   const hasUserScope = effectiveUserIds.length > 0;
-  // Allow user-owned fallback reads when org scope is temporarily empty.
-  // This prevents saved tables from "disappearing" for valid logged-in users.
-  if (!scopedOrgIds.length && !isGlobalAdmin && !hasUserScope) {
-    return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
-  }
   const pool = getDbPool();
   try {
     await ensureDashboardCustomTableSchemaBestEffort(pool);
