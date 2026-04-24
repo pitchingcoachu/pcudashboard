@@ -282,6 +282,7 @@ const SUMMARY_STRICT_ROW_DISTRIBUTION_COLUMNS = new Set(
     'FPS(FB)%',
     'FPS(OS)%',
     'Whiff%',
+    'SwStrk%',
     'Chase%',
   ].map((column) => normalizePercentileColumnToken(column))
 );
@@ -295,7 +296,7 @@ const LEFTY_LOW_HB_BETTER_PITCH_TYPES = new Set(
   ['Fastball', 'Sinker', 'ChangeUp', 'Splitter', 'Forkball', 'Forkballs', 'Screwball', 'Screwballs'].map((value) => normalizeNameToken(value))
 );
 const LOWER_IS_BETTER_PERCENTILE_COLUMNS = new Set(
-  ['BB%', 'HR%', 'Barrel%', 'EV', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP'].map((column) => normalizePercentileColumnToken(column))
+  ['BB%', 'HR%', 'Barrel%', 'EV', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'].map((column) => normalizePercentileColumnToken(column))
 );
 
 
@@ -1051,6 +1052,7 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'Comp%',
   'QP%',
   'Whiff%',
+  'SwStrk%',
   'K%',
   'BB%',
   'GB%',
@@ -1078,6 +1080,7 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'ERA',
   'FIP',
   'xFIP',
+  'SIERA',
   '0-0',
   'Behind',
   'Even',
@@ -1116,6 +1119,7 @@ const TREND_METRIC_OPTIONS: OptionItem[] = [
   { value: '1-1W%', label: '1-1W%' },
   { value: 'QP%', label: 'QP%' },
   { value: 'Whiff%', label: 'Whiff%' },
+  { value: 'SwStrk%', label: 'SwStrk%' },
   { value: 'CSW%', label: 'CSW%' },
   { value: 'K%', label: 'K%' },
   { value: 'BB%', label: 'BB%' },
@@ -1162,6 +1166,7 @@ function normalizeColorColumnName(value: string): string {
   if (lower === '1-1w%') return '1-1W%';
   if (lower === 'qp%') return 'QP%';
   if (lower === 'whiff%') return 'Whiff%';
+  if (lower === 'swstrk%') return 'SwStrk%';
   if (lower === 'csw%') return 'CSW%';
   if (lower === 'k%') return 'K%';
   if (lower === 'bb%') return 'BB%';
@@ -1170,6 +1175,7 @@ function normalizeColorColumnName(value: string): string {
   if (lower === 'era') return 'ERA';
   if (lower === 'fip') return 'FIP';
   if (lower === 'xfip') return 'xFIP';
+  if (lower === 'siera') return 'SIERA';
   if (lower === 'barrel%') return 'Barrel%';
   if (lower === 'rv/100') return 'RV/100';
   if (lower === 'pv/100') return 'PV/100';
@@ -1243,7 +1249,7 @@ function getProcessThresholds(
     if (isPro) return { poor: 5.2, avg: 4.2, great: 3.2 };
     return null;
   }
-  if (metric === 'FIP' || metric === 'xFIP') {
+  if (metric === 'FIP' || metric === 'xFIP' || metric === 'SIERA') {
     if (isPro) return { poor: 5.2, avg: 4.2, great: 3.2 };
     return { poor: 5.9, avg: 4.9, great: 3.9 };
   }
@@ -1344,7 +1350,7 @@ function getCellColorScale(
   const thresholds = getProcessThresholds(metric, pitchType, schoolCode);
   if (!thresholds) return null;
   const { poor, avg, great } = thresholds;
-  const reverseScale = ['EV', 'Barrel%', 'BB%', 'HR%', 'ERA', 'FIP', 'xFIP'].includes(metric) || metric === 'RV/100' || metric === 'PV/100';
+  const reverseScale = ['EV', 'Barrel%', 'BB%', 'HR%', 'ERA', 'FIP', 'xFIP', 'SIERA'].includes(metric) || metric === 'RV/100' || metric === 'PV/100';
   if (reverseScale) {
     if (parsed >= poor) return { bg: '#0066CC', text: 'white' };
     if (parsed >= (poor + avg) / 2) return { bg: '#66B2FF', text: 'black' };
@@ -5087,6 +5093,7 @@ export default function PitchingSuite({
         '1-1W%': pct(agg.oneOneNum, agg.oneOneDen),
         'QP%': pct(agg.qpNum, agg.qpDen),
         'Whiff%': pct(agg.whiffN, agg.swingN),
+        'SwStrk%': pct(agg.whiffN, agg.pitches),
         'CSW%': pct(agg.cswN, agg.pitches),
         'K%': pct(k, bf),
         'BB%': pct(bb, bf),
@@ -6659,9 +6666,9 @@ export default function PitchingSuite({
 
   const colorColumnsByMode: Record<string, string[]> = {
     Stuff: ['Velo', 'Max', 'IVB', 'HB', 'rTilt', 'bTilt', 'SpinEff', 'Spin', 'Height', 'Side', 'Ext', 'VAA', 'HAA', 'Stuff+'],
-    Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP'],
-    Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'HR%', 'Whiff%', 'ERA', 'FIP', 'xFIP'],
-    Results: ['Whiff%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP'],
+    Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'],
+    Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'HR%', 'Whiff%', 'SwStrk%', 'ERA', 'FIP', 'xFIP', 'SIERA'],
+    Results: ['Whiff%', 'SwStrk%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
     Banny: ['Strike%', 'Whiff%', 'K%', 'BB%', 'QP+'],
     Custom: [
@@ -6698,6 +6705,7 @@ export default function PitchingSuite({
       'BB%',
       'HR%',
       'Whiff%',
+      'SwStrk%',
       'CSW%',
       'GB%',
       'Barrel%',
@@ -6705,6 +6713,7 @@ export default function PitchingSuite({
       'ERA',
       'FIP',
       'xFIP',
+      'SIERA',
     ],
   };
 
@@ -9286,7 +9295,7 @@ export default function PitchingSuite({
                     const m = { l: 64, r: 20, t: 18, b: 70 };
                     const pw = w - m.l - m.r;
                     const ph = h - m.t - m.b;
-                    const pctMetrics = new Set(['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Whiff%', 'CSW%', 'K%', 'BB%', 'GB%', 'Barrel%']);
+                    const pctMetrics = new Set(['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Whiff%', 'SwStrk%', 'CSW%', 'K%', 'BB%', 'GB%', 'Barrel%']);
                     const countMetrics = new Set(['P', 'BF', 'Whiffs', 'K', 'BB']);
                     const dateLevels = trendSeriesBySessionData.allDates;
                     const dateX = new Map(dateLevels.map((d, i) => [d, m.l + (i / Math.max(1, dateLevels.length - 1)) * pw]));

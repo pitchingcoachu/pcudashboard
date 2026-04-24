@@ -206,18 +206,21 @@ async function fetchProSafePitchingLeaderboard(params: {
   startDate: string;
   endDate: string;
   splitBy: string;
+  tableMode: string;
+  customColumns: string;
   cachePolicy: { ttlMs: number; staleTtlMs: number };
   timeoutMs: number;
   retries: number;
 }) {
-  const { apiBase, schoolCode, level, startDate, endDate, splitBy, cachePolicy, timeoutMs, retries } = params;
+  const { apiBase, schoolCode, level, startDate, endDate, splitBy, tableMode, customColumns, cachePolicy, timeoutMs, retries } = params;
   const fallbackUrl = new URL(`${apiBase}/v1/pitching/overview`);
   fallbackUrl.searchParams.set('school_code', schoolCode);
   if (startDate) fallbackUrl.searchParams.set('start_date', startDate);
   if (endDate) fallbackUrl.searchParams.set('end_date', endDate);
   fallbackUrl.searchParams.set('team_type', 'All');
   if (level && level !== 'All') fallbackUrl.searchParams.set('level', level);
-  fallbackUrl.searchParams.set('table_mode', 'Live');
+  fallbackUrl.searchParams.set('table_mode', tableMode || 'Live');
+  if (customColumns) fallbackUrl.searchParams.set('custom_columns', customColumns);
   fallbackUrl.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
   fallbackUrl.searchParams.set('include_chart_points', '0');
   fallbackUrl.searchParams.set('include_row_pitches', '0');
@@ -239,17 +242,20 @@ async function fetchLeagueSafePitchingLeaderboard(params: {
   startDate: string;
   endDate: string;
   splitBy: string;
+  tableMode: string;
+  customColumns: string;
   cachePolicy: { ttlMs: number; staleTtlMs: number };
   timeoutMs: number;
   retries: number;
 }) {
-  const { apiBase, schoolCode, startDate, endDate, splitBy, cachePolicy, timeoutMs, retries } = params;
+  const { apiBase, schoolCode, startDate, endDate, splitBy, tableMode, customColumns, cachePolicy, timeoutMs, retries } = params;
   const fallbackUrl = new URL(`${apiBase}/v1/pitching/overview`);
   fallbackUrl.searchParams.set('school_code', schoolCode);
   if (startDate) fallbackUrl.searchParams.set('start_date', startDate);
   if (endDate) fallbackUrl.searchParams.set('end_date', endDate);
   fallbackUrl.searchParams.set('team_type', 'All');
-  fallbackUrl.searchParams.set('table_mode', 'Live');
+  fallbackUrl.searchParams.set('table_mode', tableMode || 'Live');
+  if (customColumns) fallbackUrl.searchParams.set('custom_columns', customColumns);
   fallbackUrl.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
   fallbackUrl.searchParams.set('include_chart_points', '0');
   fallbackUrl.searchParams.set('include_row_pitches', '0');
@@ -446,6 +452,7 @@ export async function GET(request: Request) {
     url.searchParams.set('chart_points_limit', String(cappedLimit));
   }
   const isProLeaderboardSplit = isPro && (splitBy === 'Pitcher' || splitBy === 'Pitcher Team');
+  const proLeaderboardSafeModeRequested = proLeaderboardDefaultModeRequested || customModeRequested;
   const proBroadScope =
     isPro &&
     !scopedPitcher &&
@@ -519,13 +526,14 @@ export async function GET(request: Request) {
     !shouldScopePlayer &&
     broadScope &&
     isLeaderboardLikeSplit &&
-    !customModeRequested &&
     !hasLeagueLeaderboardNarrowingFilters &&
     !isTruthy(chartOnly);
   if (leagueBroadLeaderboard) {
     // Keep League broad leaderboard requests on rollup-only payloads.
     url.searchParams.set('team_type', 'All');
-    url.searchParams.set('table_mode', 'Live');
+    if (!customModeRequested) {
+      url.searchParams.set('table_mode', 'Live');
+    }
     url.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
     url.searchParams.set('include_chart_points', '0');
     url.searchParams.set('include_row_pitches', '0');
@@ -538,7 +546,6 @@ export async function GET(request: Request) {
       'venue',
       'session_type',
       'qp_locations',
-      'custom_columns',
       'visual_option',
       'in_zone',
       'pitch_types',
@@ -562,6 +569,9 @@ export async function GET(request: Request) {
       'chart_points_limit',
     ] as const;
     for (const key of dropKeys) url.searchParams.delete(key);
+    if (!customModeRequested) {
+      url.searchParams.delete('custom_columns');
+    }
   }
   const shouldForceProLeaderboardRollupShape =
     isProLeaderboardSplit &&
@@ -622,9 +632,8 @@ export async function GET(request: Request) {
     !shouldScopePlayer &&
     proBroadScope &&
     (splitBy === 'Pitcher' || splitBy === 'Pitcher Team') &&
-    proLeaderboardDefaultModeRequested &&
+    proLeaderboardSafeModeRequested &&
     !hasProLeaderboardNarrowingFilters &&
-    !customModeRequested &&
     !(percentileBaseline && splitBy === 'Pitcher' && !!pitchTypes) &&
     !isTruthy(chartOnly);
   const shouldPreferLeagueSafeLeaderboard = leagueBroadLeaderboard;
@@ -638,6 +647,8 @@ export async function GET(request: Request) {
         startDate,
         endDate,
         splitBy,
+        tableMode,
+        customColumns,
         cachePolicy,
         timeoutMs: 25000,
         retries: 0,
@@ -666,6 +677,8 @@ export async function GET(request: Request) {
         startDate,
         endDate,
         splitBy,
+        tableMode,
+        customColumns,
         cachePolicy,
         timeoutMs: 20000,
         retries: 0,
@@ -722,9 +735,8 @@ export async function GET(request: Request) {
       const shouldFallbackToLeanProLeaderboard =
         isPro &&
         leaderboardLikeSplit &&
-        proLeaderboardDefaultModeRequested &&
+        proLeaderboardSafeModeRequested &&
         !hasProLeaderboardNarrowingFilters &&
-        !customModeRequested &&
         !isTruthy(chartOnly);
       if (shouldFallbackToLeanProLeaderboard && result.status >= 500) {
         const fallback = await fetchProSafePitchingLeaderboard({
@@ -734,6 +746,8 @@ export async function GET(request: Request) {
           startDate,
           endDate,
           splitBy,
+          tableMode,
+          customColumns,
           cachePolicy,
           timeoutMs: resolveOverviewTimeoutMs(schoolCode),
           retries: resolveOverviewRetries(schoolCode),
@@ -772,9 +786,8 @@ export async function GET(request: Request) {
     const shouldFallbackToLeanProLeaderboard =
       isPro &&
       leaderboardLikeSplit &&
-      proLeaderboardDefaultModeRequested &&
+      proLeaderboardSafeModeRequested &&
       !hasProLeaderboardNarrowingFilters &&
-      !customModeRequested &&
       !isTruthy(chartOnly);
     if (shouldFallbackToLeanProLeaderboard) {
       try {
@@ -785,6 +798,8 @@ export async function GET(request: Request) {
           startDate,
           endDate,
           splitBy,
+          tableMode,
+          customColumns,
           cachePolicy,
           timeoutMs: resolveOverviewTimeoutMs(schoolCode),
           retries: resolveOverviewRetries(schoolCode),
