@@ -2900,35 +2900,37 @@ def _derive_pro_fip_context(rows: List[Dict[str, Any]]) -> tuple[float, float]:
             return "swinging_strike"
         return normalized
 
-    # League totals for FIP/xFIP components.
-    k_total = sum(
-        1
-        for r in pro_rows
-        if str(r.get("korbb") or "").strip() == "Strikeout"
-        or _norm_desc_local(r.get("play_result")) in {"strikeout", "strikeoutdoubleplay", "strikeout_double_play"}
-    )
-    bb_total = sum(
-        1
-        for r in pro_rows
-        if str(r.get("korbb") or "").strip() == "Walk"
-        or _canonical_play_result(r.get("play_result")) in {"Walk", "IntentionalWalk"}
-    )
-    hbp_total = sum(
-        1
-        for r in pro_rows
-        if str(r.get("pitch_call") or "").strip() == "HitByPitch"
-        or _canonical_play_result(r.get("play_result")) == "HitByPitch"
-    )
-    hr_total = sum(1 for r in pro_rows if _canonical_play_result(r.get("play_result")) == "HomeRun")
+    def _pa_key_local(r: Dict[str, Any]) -> str:
+        game_pk = str(r.get("game_pk") or r.get("game_id") or "").strip()
+        ab_idx = str(r.get("at_bat_index") or "").strip()
+        if game_pk and ab_idx:
+            return f"{game_pk}|ab|{ab_idx}"
+        fallback = str(r.get("id") or r.get("pitch_no") or r.get("pitch_number") or "").strip()
+        return f"{game_pk}|pitch|{fallback or 'unknown'}"
 
-    fb_total = sum(
-        1
-        for r in pro_rows
-        if (
-            ("fly" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " "))
-            or ("popup" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " "))
-        )
-    )
+    pa_result_by_key: Dict[str, str] = {}
+    pa_hbp_by_pitch_call: Set[str] = set()
+    for r in pro_rows:
+        key = _pa_key_local(r)
+        play_result = _canonical_play_result(r.get("play_result"))
+        if play_result:
+            pa_result_by_key[key] = play_result
+        if str(r.get("pitch_call") or "").strip() == "HitByPitch":
+            pa_hbp_by_pitch_call.add(key)
+
+    # League totals for FIP/xFIP components (PA-distinct terminal outcomes).
+    result_values = list(pa_result_by_key.values())
+    k_total = sum(1 for pr in result_values if pr == "Strikeout")
+    bb_total = sum(1 for pr in result_values if pr in {"Walk", "IntentionalWalk"})
+    hbp_total = max(sum(1 for pr in result_values if pr == "HitByPitch"), len(pa_hbp_by_pitch_call))
+    hr_total = sum(1 for pr in result_values if pr == "HomeRun")
+
+    pa_flyball_keys: Set[str] = set()
+    for r in pro_rows:
+        tagged = str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " ")
+        if ("fly" in tagged) or ("popup" in tagged):
+            pa_flyball_keys.add(_pa_key_local(r))
+    fb_total = len(pa_flyball_keys)
     lg_hr_fb = (float(hr_total) / float(fb_total)) if fb_total > 0 else fallback_lg_hr_fb
 
     # Prefer official boxscore totals for league ERA/IP.
@@ -2970,9 +2972,9 @@ def _derive_pro_fip_context(rows: List[Dict[str, Any]]) -> tuple[float, float]:
         )
         lg_outs = outs_on_play + max(0, k_total - k_with_out)
         lg_ip = lg_outs / 3.0 if lg_outs > 0 else 0.0
-        h1_total = sum(1 for r in pro_rows if _canonical_play_result(r.get("play_result")) == "Single")
-        h2_total = sum(1 for r in pro_rows if _canonical_play_result(r.get("play_result")) == "Double")
-        h3_total = sum(1 for r in pro_rows if _canonical_play_result(r.get("play_result")) == "Triple")
+        h1_total = sum(1 for pr in result_values if pr == "Single")
+        h2_total = sum(1 for pr in result_values if pr == "Double")
+        h3_total = sum(1 for pr in result_values if pr == "Triple")
         er_est = (
             (0.47 * h1_total)
             + (0.78 * h2_total)
@@ -9322,6 +9324,10 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                   SELECT
                     b.*,
                     COUNT(*) OVER (PARTITION BY b.session_date, b.game_key, b.pitcher_norm)::int AS pitcher_game_pitch_n,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY b.session_date, b.game_key, b.pitcher_norm, b.pa_key
+                      ORDER BY b.created_at DESC, b.id DESC
+                    )::int AS pa_rev_idx,
                     CASE
                       WHEN b.pitcher_team_code = ANY(%(overlap_team_codes)s::text[]) THEN
                         CASE WHEN b.sport_id = 11 THEN 'AAA' ELSE 'MLB' END
@@ -9441,19 +9447,31 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                     ELSE NULL
                   END)::int AS bf_n,
                   COUNT(DISTINCT CASE
-                    WHEN korbb_norm = 'strikeout' OR play_result_norm IN ('strikeout','strikeout_double_play','strikeoutdoubleplay')
+                    WHEN pa_rev_idx = 1
+                      AND (
+                        korbb_norm = 'strikeout'
+                        OR play_result_norm IN ('strikeout','strikeout_double_play','strikeoutdoubleplay')
+                      )
                     THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS k_n,
                   COUNT(DISTINCT CASE
-                    WHEN korbb_norm = 'walk' OR play_result_norm IN ('walk','intent_walk','intentional_walk','intentionalwalk')
+                    WHEN pa_rev_idx = 1
+                      AND (
+                        korbb_norm = 'walk'
+                        OR play_result_norm IN ('walk','intent_walk','intentional_walk','intentionalwalk')
+                      )
                     THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS bb_n,
                   COUNT(DISTINCT CASE
-                    WHEN pitch_call_norm IN ('hitbypitch','hit_by_pitch') OR play_result_norm IN ('hitbypitch','hit_by_pitch')
+                    WHEN pa_rev_idx = 1
+                      AND (
+                        pitch_call_norm IN ('hitbypitch','hit_by_pitch')
+                        OR play_result_norm IN ('hitbypitch','hit_by_pitch')
+                      )
                     THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS hbp_n,
-                  COUNT(DISTINCT CASE WHEN play_result_norm IN ('homerun','home_run') THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS hr_n,
-                  COUNT(DISTINCT CASE WHEN play_result_norm = 'single' THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS single_n,
-                  COUNT(DISTINCT CASE WHEN play_result_norm = 'double' THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS double_n,
-                  COUNT(DISTINCT CASE WHEN play_result_norm = 'triple' THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS triple_n,
-                  COUNT(DISTINCT CASE WHEN play_result_norm IN ('sacrifice','sac_fly','sacfly') THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS sf_n,
+                  COUNT(DISTINCT CASE WHEN pa_rev_idx = 1 AND play_result_norm IN ('homerun','home_run') THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS hr_n,
+                  COUNT(DISTINCT CASE WHEN pa_rev_idx = 1 AND play_result_norm = 'single' THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS single_n,
+                  COUNT(DISTINCT CASE WHEN pa_rev_idx = 1 AND play_result_norm = 'double' THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS double_n,
+                  COUNT(DISTINCT CASE WHEN pa_rev_idx = 1 AND play_result_norm = 'triple' THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS triple_n,
+                  COUNT(DISTINCT CASE WHEN pa_rev_idx = 1 AND play_result_norm IN ('sacrifice','sac_fly','sacfly') THEN (game_key || '|' || pa_key) ELSE NULL END)::int AS sf_n,
                   COALESCE(SUM(rel_height), 0.0)::double precision AS rel_height_sum,
                   COUNT(rel_height)::int AS rel_height_n,
                   COALESCE(SUM(rel_side), 0.0)::double precision AS rel_side_sum,
@@ -9716,7 +9734,11 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                     ROW_NUMBER() OVER (
                       PARTITION BY p.session_date, p.game_key, p.pitcher_norm, p.pa_key
                       ORDER BY p.created_at, p.id
-                    ) AS pa_seq_idx
+                    ) AS pa_seq_idx,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY p.session_date, p.game_key, p.pitcher_norm, p.pa_key
+                      ORDER BY p.created_at DESC, p.id DESC
+                    ) AS pa_seq_desc
                   FROM pa_first p
                 ),
                 after_count_first AS (
@@ -9943,14 +9965,14 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND angle IS NOT NULL THEN angle ELSE 0.0 END)::double precision AS la_sum,
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND angle IS NOT NULL THEN 1 ELSE 0 END)::int AS la_n,
                   SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS bf_n,
-                  SUM(CASE WHEN korbb_norm = 'strikeout' OR play_result_norm IN ('strikeout','strikeout_double_play','strikeoutdoubleplay') THEN 1 ELSE 0 END)::int AS k_n,
-                  SUM(CASE WHEN korbb_norm = 'walk' OR play_result_norm IN ('walk','intent_walk','intentional_walk','intentionalwalk') THEN 1 ELSE 0 END)::int AS bb_n,
-                  SUM(CASE WHEN pitch_call_norm IN ('hitbypitch','hit_by_pitch') OR play_result_norm IN ('hitbypitch','hit_by_pitch') THEN 1 ELSE 0 END)::int AS hbp_n,
-                  SUM(CASE WHEN play_result_norm IN ('homerun','home_run') THEN 1 ELSE 0 END)::int AS hr_n,
-                  SUM(CASE WHEN play_result_norm = 'single' THEN 1 ELSE 0 END)::int AS single_n,
-                  SUM(CASE WHEN play_result_norm = 'double' THEN 1 ELSE 0 END)::int AS double_n,
-                  SUM(CASE WHEN play_result_norm = 'triple' THEN 1 ELSE 0 END)::int AS triple_n,
-                  SUM(CASE WHEN play_result_norm IN ('sacrifice','sac_fly','sacfly') THEN 1 ELSE 0 END)::int AS sf_n,
+                  SUM(CASE WHEN pa_seq_desc = 1 AND (korbb_norm = 'strikeout' OR play_result_norm IN ('strikeout','strikeout_double_play','strikeoutdoubleplay')) THEN 1 ELSE 0 END)::int AS k_n,
+                  SUM(CASE WHEN pa_seq_desc = 1 AND (korbb_norm = 'walk' OR play_result_norm IN ('walk','intent_walk','intentional_walk','intentionalwalk')) THEN 1 ELSE 0 END)::int AS bb_n,
+                  SUM(CASE WHEN pa_seq_desc = 1 AND (pitch_call_norm IN ('hitbypitch','hit_by_pitch') OR play_result_norm IN ('hitbypitch','hit_by_pitch')) THEN 1 ELSE 0 END)::int AS hbp_n,
+                  SUM(CASE WHEN pa_seq_desc = 1 AND play_result_norm IN ('homerun','home_run') THEN 1 ELSE 0 END)::int AS hr_n,
+                  SUM(CASE WHEN pa_seq_desc = 1 AND play_result_norm = 'single' THEN 1 ELSE 0 END)::int AS single_n,
+                  SUM(CASE WHEN pa_seq_desc = 1 AND play_result_norm = 'double' THEN 1 ELSE 0 END)::int AS double_n,
+                  SUM(CASE WHEN pa_seq_desc = 1 AND play_result_norm = 'triple' THEN 1 ELSE 0 END)::int AS triple_n,
+                  SUM(CASE WHEN pa_seq_desc = 1 AND play_result_norm IN ('sacrifice','sac_fly','sacfly') THEN 1 ELSE 0 END)::int AS sf_n,
                   COALESCE(SUM(rel_height), 0.0)::double precision AS rel_height_sum,
                   COUNT(rel_height)::int AS rel_height_n,
                   COALESCE(SUM(rel_side), 0.0)::double precision AS rel_side_sum,
@@ -10823,6 +10845,11 @@ def _try_pro_pitching_overview_rollup(
     league_outs = total_outs_official if total_outs_official > 0 else float(total_outs_est)
     league_ip = (league_outs / 3.0) if league_outs > 0 else 0.0
     lg_hr_fb_rollup = (float(total_hr_n) / float(total_fb_n)) if total_fb_n > 0 else 0.12
+    if (not isfinite(lg_hr_fb_rollup)) or lg_hr_fb_rollup <= 0:
+        lg_hr_fb_rollup = 0.12
+    # Keep rollup-derived HR/FB in a realistic MLB range to avoid unstable
+    # xFIP swings from sparse/stale split snapshots.
+    lg_hr_fb_rollup = max(0.05, min(0.25, float(lg_hr_fb_rollup)))
     fip_const_rollup = 3.2
     if league_ip > 0:
         if total_outs_official > 0 and total_er_official >= 0:
@@ -10837,7 +10864,13 @@ def _try_pro_pitching_overview_rollup(
                 - (0.10 * total_k_n)
             )
             league_era = max(0.0, (9.0 * er_est_total) / league_ip)
-        fip_const_rollup = league_era - (((13.0 * total_hr_n) + (3.0 * (total_bb_n + total_hbp_n)) - (2.0 * total_k_n)) / league_ip)
+        computed_fip_const = league_era - (
+            ((13.0 * total_hr_n) + (3.0 * (total_bb_n + total_hbp_n)) - (2.0 * total_k_n)) / league_ip
+        )
+        # Summary/raw path stays in a narrow, sane band; keep rollup behavior
+        # aligned so leaderboard values cannot drift into impossible negatives.
+        if isfinite(computed_fip_const) and 1.5 <= float(computed_fip_const) <= 5.5:
+            fip_const_rollup = float(computed_fip_const)
 
     def _build_common_row(label: str, rows_for_split: List[Dict[str, Any]]) -> Dict[str, Any]:
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
@@ -15524,24 +15557,27 @@ def _pro_pitching_overview(
             if _is_num(pa_existing_raw)
             else (len(pa_keys) if pa_keys else _pro_bf_count(group_rows))
         )
-        k_val = sum(
-            1
-            for r in group_rows
-            if str(r.get("korbb") or "").strip() == "Strikeout"
-            or _norm_desc(r.get("play_result")) in {"strikeout", "strikeoutdoubleplay", "strikeout_double_play"}
-        )
-        bb_val = sum(
-            1
-            for r in group_rows
-            if str(r.get("korbb") or "").strip() == "Walk"
-            or _canonical_play_result(r.get("play_result")) in {"Walk", "IntentionalWalk"}
-        )
-        hbp_val = sum(
-            1
-            for r in group_rows
-            if _norm_desc(r.get("pitch_call")) == "hit_by_pitch"
-            or _canonical_play_result(r.get("play_result")) == "HitByPitch"
-        )
+        def _pa_outcome_key(r: Dict[str, Any]) -> str:
+            game_pk = str(r.get("game_pk") or r.get("game_id") or "").strip()
+            ab_idx = str(r.get("at_bat_index") or "").strip()
+            if game_pk and ab_idx:
+                return f"{game_pk}|ab|{ab_idx}"
+            fallback = str(r.get("id") or r.get("pitch_no") or r.get("pitch_number") or "").strip()
+            return f"{game_pk}|pitch|{fallback or 'unknown'}"
+
+        pa_result_by_key: Dict[str, str] = {}
+        pa_hbp_by_pitch_call: Set[str] = set()
+        for r in rows_sorted:
+            key = _pa_outcome_key(r)
+            play_result = _canonical_play_result(r.get("play_result"))
+            if play_result:
+                pa_result_by_key[key] = play_result
+            if _norm_desc(r.get("pitch_call")) == "hit_by_pitch":
+                pa_hbp_by_pitch_call.add(key)
+        pa_results = list(pa_result_by_key.values())
+        k_val = sum(1 for pr in pa_results if pr == "Strikeout")
+        bb_val = sum(1 for pr in pa_results if pr in {"Walk", "IntentionalWalk"})
+        hbp_val = max(sum(1 for pr in pa_results if pr == "HitByPitch"), len(pa_hbp_by_pitch_call))
         first_pitch_den = 0
         first_pitch_strike_num = 0
         seen_pa: set[tuple[str, str]] = set()
@@ -15748,7 +15784,7 @@ def _pro_pitching_overview(
             ip_num_local = official_ip_local
             if total_pitches_val > 0:
                 row_obj["P/IP"] = round(float(total_pitches_val) / ip_num_local, 2)
-        hr_local = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "HomeRun")
+        hr_local = sum(1 for pr in pa_results if pr == "HomeRun")
         if ip_num_local > 0:
             # Keep PRO custom-table FIP/xFIP aligned with the same league
             # context used by standard PRO tables so percentiles are consistent.
@@ -15763,9 +15799,9 @@ def _pro_pitching_overview(
             xhr_local = fb_local * lg_hr_fb_local
             xfip_local = ((13.0 * xhr_local) + (3.0 * (bb_val + hbp_val)) - (2.0 * k_val)) / ip_num_local + fip_const_local
             # Event-weight run estimate -> ERA scale.
-            h1_local = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "Single")
-            h2_local = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "Double")
-            h3_local = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "Triple")
+            h1_local = sum(1 for pr in pa_results if pr == "Single")
+            h2_local = sum(1 for pr in pa_results if pr == "Double")
+            h3_local = sum(1 for pr in pa_results if pr == "Triple")
             er_est_local = (
                 (0.47 * h1_local)
                 + (0.78 * h2_local)
@@ -15827,26 +15863,30 @@ def _pro_pitching_overview(
                 return float(ip_raw)
             return 0.0
 
-        # Count events directly from grouped rows.
-        k_n = sum(
-            1
-            for r in group_rows
-            if str(r.get("korbb") or "").strip() == "Strikeout"
-            or _canonical_play_result(r.get("play_result")) in {"Strikeout"}
-        )
-        bb_n = sum(
-            1
-            for r in group_rows
-            if str(r.get("korbb") or "").strip() == "Walk"
-            or _canonical_play_result(r.get("play_result")) in {"Walk", "IntentionalWalk"}
-        )
-        hbp_n = sum(
-            1
-            for r in group_rows
-            if _canonical_play_result(r.get("play_result")) == "HitByPitch"
-            or _norm_desc_local(r.get("pitch_call")) in {"hit_by_pitch", "hitbypitch"}
-        )
-        hr_n = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "HomeRun")
+        def _pa_outcome_key_local(r: Dict[str, Any]) -> str:
+            game_pk = str(r.get("game_pk") or r.get("game_id") or "").strip()
+            ab_idx = str(r.get("at_bat_index") or "").strip()
+            if game_pk and ab_idx:
+                return f"{game_pk}|ab|{ab_idx}"
+            fallback = str(r.get("id") or r.get("pitch_no") or r.get("pitch_number") or "").strip()
+            return f"{game_pk}|pitch|{fallback or 'unknown'}"
+
+        pa_result_by_key: Dict[str, str] = {}
+        pa_hbp_by_pitch_call: Set[str] = set()
+        for r in sorted(group_rows, key=_row_order_key):
+            key = _pa_outcome_key_local(r)
+            play_result = _canonical_play_result(r.get("play_result"))
+            if play_result:
+                pa_result_by_key[key] = play_result
+            if _norm_desc_local(r.get("pitch_call")) in {"hit_by_pitch", "hitbypitch"}:
+                pa_hbp_by_pitch_call.add(key)
+        pa_results = list(pa_result_by_key.values())
+
+        # Count PA-distinct terminal outcomes.
+        k_n = sum(1 for pr in pa_results if pr == "Strikeout")
+        bb_n = sum(1 for pr in pa_results if pr in {"Walk", "IntentionalWalk"})
+        hbp_n = max(sum(1 for pr in pa_results if pr == "HitByPitch"), len(pa_hbp_by_pitch_call))
+        hr_n = sum(1 for pr in pa_results if pr == "HomeRun")
 
         era_val: Optional[float] = None
         official_er = 0.0
@@ -15900,9 +15940,9 @@ def _pro_pitching_overview(
         x_fip_val = ((13.0 * x_hr) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + pro_fip_const
 
         if not _is_num(era_val):
-            h1 = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "Single")
-            h2 = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "Double")
-            h3 = sum(1 for r in group_rows if _canonical_play_result(r.get("play_result")) == "Triple")
+            h1 = sum(1 for pr in pa_results if pr == "Single")
+            h2 = sum(1 for pr in pa_results if pr == "Double")
+            h3 = sum(1 for pr in pa_results if pr == "Triple")
             er_est = (
                 (0.47 * h1)
                 + (0.78 * h2)
