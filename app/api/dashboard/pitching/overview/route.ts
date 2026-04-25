@@ -6,6 +6,7 @@ import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashb
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 export const maxDuration = 300;
+const PITCHING_OVERVIEW_CACHE_VERSION = 'adv-metrics-v5';
 
 const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=5, stale-while-revalidate=55',
@@ -627,15 +628,10 @@ export async function GET(request: Request) {
   const isGameSplit = splitBy === 'Game';
   const gameSplitCacheBuster = isGameSplit ? `:game:${Date.now()}` : '';
   const customShapeCacheBuster = customModeRequested ? ':custom-shape-v3' : '';
-  const shouldPreferProSafeLeaderboard =
-    isPro &&
-    !shouldScopePlayer &&
-    proBroadScope &&
-    (splitBy === 'Pitcher' || splitBy === 'Pitcher Team') &&
-    proLeaderboardSafeModeRequested &&
-    !hasProLeaderboardNarrowingFilters &&
-    !(percentileBaseline && splitBy === 'Pitcher' && !!pitchTypes) &&
-    !isTruthy(chartOnly);
+  // Accuracy-first: do not preemptively serve PRO leaderboard-safe rollup payloads.
+  // This avoids ERA/FIP/xFIP/SIERA drift versus summary/player views, which use
+  // the primary overview path.
+  const shouldPreferProSafeLeaderboard = false;
   const shouldPreferLeagueSafeLeaderboard = leagueBroadLeaderboard;
 
   if (shouldPreferProSafeLeaderboard) {
@@ -702,7 +698,7 @@ export async function GET(request: Request) {
 
   try {
     const result = await fetchDashboardJsonWithCache({
-      cacheKey: `pitching:overview:${url.toString()}${gameSplitCacheBuster}${customShapeCacheBuster}`,
+      cacheKey: `pitching:overview:${PITCHING_OVERVIEW_CACHE_VERSION}:${url.toString()}${gameSplitCacheBuster}${customShapeCacheBuster}`,
       ttlMs: cachePolicy.ttlMs,
       staleTtlMs: cachePolicy.staleTtlMs,
       timeoutMs: resolveOverviewTimeoutMs(schoolCode),
@@ -731,13 +727,7 @@ export async function GET(request: Request) {
       }
     }
     if (result.status < 200 || result.status >= 300) {
-      const leaderboardLikeSplit = splitBy === 'Pitcher' || splitBy === 'Pitcher Team';
-      const shouldFallbackToLeanProLeaderboard =
-        isPro &&
-        leaderboardLikeSplit &&
-        proLeaderboardSafeModeRequested &&
-        !hasProLeaderboardNarrowingFilters &&
-        !isTruthy(chartOnly);
+      const shouldFallbackToLeanProLeaderboard = false;
       if (shouldFallbackToLeanProLeaderboard && result.status >= 500) {
         const fallback = await fetchProSafePitchingLeaderboard({
           apiBase,
@@ -782,13 +772,7 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    const leaderboardLikeSplit = splitBy === 'Pitcher' || splitBy === 'Pitcher Team';
-    const shouldFallbackToLeanProLeaderboard =
-      isPro &&
-      leaderboardLikeSplit &&
-      proLeaderboardSafeModeRequested &&
-      !hasProLeaderboardNarrowingFilters &&
-      !isTruthy(chartOnly);
+    const shouldFallbackToLeanProLeaderboard = false;
     if (shouldFallbackToLeanProLeaderboard) {
       try {
         const fallback = await fetchProSafePitchingLeaderboard({

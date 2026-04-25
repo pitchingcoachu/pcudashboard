@@ -2882,6 +2882,40 @@ def _compute_siera_value(
     return round(float(siera), 2)
 
 
+def _normalize_batted_ball_tag(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _is_ground_ball_tag(value: Any) -> bool:
+    token = _normalize_batted_ball_tag(value)
+    return ("ground_ball" in token) or ("groundball" in token)
+
+
+def _is_popup_tag(value: Any) -> bool:
+    token = _normalize_batted_ball_tag(value)
+    return ("popup" in token) or ("pop_up" in token)
+
+
+def _is_xfip_fly_ball_tag(value: Any) -> bool:
+    token = _normalize_batted_ball_tag(value)
+    # xFIP should use fly balls only (exclude pop-ups and line drives).
+    return (
+        ("fly_ball" in token)
+        or ("flyball" in token)
+    )
+
+
+def _is_fly_ball_for_siera_tag(value: Any) -> bool:
+    token = _normalize_batted_ball_tag(value)
+    # Treat line drives as fly balls for SIERA/fly-ball family metrics.
+    return (
+        ("fly_ball" in token)
+        or ("flyball" in token)
+        or ("line_drive" in token)
+        or ("linedrive" in token)
+    )
+
+
 def _is_fastball_or_sinker_pitch_type(value: Any) -> bool:
     token = re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
     return token in {
@@ -2958,8 +2992,7 @@ def _derive_pro_fip_context(rows: List[Dict[str, Any]]) -> tuple[float, float]:
 
     pa_flyball_keys: Set[str] = set()
     for r in pro_rows:
-        tagged = str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " ")
-        if ("fly" in tagged) or ("popup" in tagged):
+        if _is_xfip_fly_ball_tag(r.get("tagged_hit_type")):
             pa_flyball_keys.add(_pa_key_local(r))
     fb_total = len(pa_flyball_keys)
     lg_hr_fb = (float(hr_total) / float(fb_total)) if fb_total > 0 else fallback_lg_hr_fb
@@ -3552,7 +3585,7 @@ def _build_dynamic_table(
                 or _pro_norm_token(r.get("description")) in {"in_play", "inplay"}
                 or _pro_norm_token(r.get("description")).startswith("hit_into_play")
             )
-            and "ground" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " ")
+            and _is_ground_ball_tag(r.get("tagged_hit_type"))
         )
         fb_n = sum(
             1
@@ -3562,7 +3595,7 @@ def _build_dynamic_table(
                 or _pro_norm_token(r.get("description")) in {"in_play", "inplay"}
                 or _pro_norm_token(r.get("description")).startswith("hit_into_play")
             )
-            and "fly" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " ")
+            and _is_fly_ball_for_siera_tag(r.get("tagged_hit_type"))
         )
         pu_n = sum(
             1
@@ -3572,7 +3605,7 @@ def _build_dynamic_table(
                 or _pro_norm_token(r.get("description")) in {"in_play", "inplay"}
                 or _pro_norm_token(r.get("description")).startswith("hit_into_play")
             )
-            and "popup" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " ")
+            and _is_popup_tag(r.get("tagged_hit_type"))
         )
         in_play_n = sum(
             1
@@ -4010,14 +4043,7 @@ def _build_dynamic_table(
         if ip_num > 0:
             fip_val = ((13.0 * hr) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + fip_const
             fb_source = live_rows if live_rows else grp
-            fb_n = sum(
-                1
-                for r in fb_source
-                if (
-                    ("fly" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " "))
-                    or ("popup" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " "))
-                )
-            )
+            fb_n = sum(1 for r in fb_source if _is_xfip_fly_ball_tag(r.get("tagged_hit_type")))
             x_hr = fb_n * lg_hr_fb
             x_fip_val = ((13.0 * x_hr) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + fip_const
             if not _is_num(era_val):
@@ -4646,7 +4672,7 @@ def _build_trend_rows(
             agg["in_play_n"] += 1
             tagged = str(row.get("tagged_hit_type") or "").lower()
             if is_pro_row:
-                if "ground_ball" in _pro_norm_desc(tagged):
+                if _is_ground_ball_tag(tagged):
                     agg["gb_n"] += 1
             elif "ground" in tagged:
                 agg["gb_n"] += 1
@@ -6978,7 +7004,9 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
                   )::int AS ea_den,
                   SUM(CASE WHEN b.pitch_call = 'InPlay' THEN 1 ELSE 0 END)::int AS in_play_n,
                   SUM(CASE WHEN b.pitch_call = 'InPlay' AND lower(b.tagged_hit_type) LIKE '%%ground%%' THEN 1 ELSE 0 END)::int AS gb_n,
-                  SUM(CASE WHEN b.pitch_call = 'InPlay' AND lower(b.tagged_hit_type) LIKE '%%fly%%' THEN 1 ELSE 0 END)::int AS fb_n,
+                  SUM(CASE WHEN b.pitch_call = 'InPlay'
+                             AND (lower(b.tagged_hit_type) LIKE '%%fly%%' OR lower(b.tagged_hit_type) LIKE '%%line%%')
+                           THEN 1 ELSE 0 END)::int AS fb_n,
                   SUM(CASE WHEN b.pitch_call = 'InPlay' AND lower(b.tagged_hit_type) LIKE '%%popup%%' THEN 1 ELSE 0 END)::int AS pu_n,
                   SUM(
                     CASE WHEN b.pitch_call = 'InPlay'
@@ -7473,7 +7501,9 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
                   )::int AS ea_den,
                   SUM(CASE WHEN e.pitch_call = 'InPlay' THEN 1 ELSE 0 END)::int AS in_play_n,
                   SUM(CASE WHEN e.pitch_call = 'InPlay' AND lower(e.tagged_hit_type) LIKE '%%ground%%' THEN 1 ELSE 0 END)::int AS gb_n,
-                  SUM(CASE WHEN e.pitch_call = 'InPlay' AND lower(e.tagged_hit_type) LIKE '%%fly%%' THEN 1 ELSE 0 END)::int AS fb_n,
+                  SUM(CASE WHEN e.pitch_call = 'InPlay'
+                             AND (lower(e.tagged_hit_type) LIKE '%%fly%%' OR lower(e.tagged_hit_type) LIKE '%%line%%')
+                           THEN 1 ELSE 0 END)::int AS fb_n,
                   SUM(CASE WHEN e.pitch_call = 'InPlay' AND lower(e.tagged_hit_type) LIKE '%%popup%%' THEN 1 ELSE 0 END)::int AS pu_n,
                   SUM(CASE WHEN e.pitch_call = 'InPlay' AND e.exit_speed IS NOT NULL AND e.angle IS NOT NULL AND e.exit_speed >= 95.0 AND e.angle BETWEEN 10.0 AND 35.0 THEN 1 ELSE 0 END)::int AS barrel_n,
                   SUM(CASE WHEN e.pitch_call = 'InPlay' AND e.exit_speed IS NOT NULL THEN e.exit_speed ELSE 0.0 END)::double precision AS ev_sum,
@@ -8821,7 +8851,7 @@ def _try_pitching_overview_daily_rollup(
         era_val = None
         if ip_num > 0:
             fip_val = ((13.0 * hr_n) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + 3.2
-            fb_for_xfip = max(0, in_play_n - gb_n)
+            fb_for_xfip = max(0, fb_n)
             x_fip_val = ((13.0 * (fb_for_xfip * 0.12)) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + 3.2
             er_est = (
                 (0.47 * single_n)
@@ -9560,7 +9590,7 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                              AND tagged_hit_type_norm LIKE '%%ground%%'
                            THEN 1 ELSE 0 END)::int AS gb_n,
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
-                             AND tagged_hit_type_norm LIKE '%%fly%%'
+                             AND (tagged_hit_type_norm LIKE '%%fly%%' OR tagged_hit_type_norm LIKE '%%line%%')
                            THEN 1 ELSE 0 END)::int AS fb_n,
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
                              AND tagged_hit_type_norm LIKE '%%popup%%'
@@ -10088,7 +10118,9 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                   SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS ea_den,
                   SUM(CASE WHEN pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%' THEN 1 ELSE 0 END)::int AS in_play_n,
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND tagged_hit_type_norm LIKE '%%ground%%' THEN 1 ELSE 0 END)::int AS gb_n,
-                  SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND tagged_hit_type_norm LIKE '%%fly%%' THEN 1 ELSE 0 END)::int AS fb_n,
+                  SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
+                             AND (tagged_hit_type_norm LIKE '%%fly%%' OR tagged_hit_type_norm LIKE '%%line%%')
+                           THEN 1 ELSE 0 END)::int AS fb_n,
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') AND tagged_hit_type_norm LIKE '%%popup%%' THEN 1 ELSE 0 END)::int AS pu_n,
                   SUM(CASE WHEN (pitch_call_norm = 'inplay' OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
                              AND exit_speed IS NOT NULL AND angle IS NOT NULL AND exit_speed >= 95.0 AND angle BETWEEN 10.0 AND 35.0 THEN 1 ELSE 0 END)::int AS barrel_n,
@@ -10980,31 +11012,115 @@ def _try_pro_pitching_overview_rollup(
     total_er_official = float(sum(float(r.get("official_er_w_sum") or 0.0) for r in grouped_rows))
     league_outs = total_outs_official if total_outs_official > 0 else float(total_outs_est)
     league_ip = (league_outs / 3.0) if league_outs > 0 else 0.0
+    # Keep PRO rollup FIP/xFIP constants stable so leaderboard rows align with
+    # player summary views across page modes.
     fallback_lg_hr_fb_rollup = 0.12
     fallback_fip_const_rollup = 3.2
-    lg_hr_fb_rollup = (float(total_hr_n) / float(total_fb_n)) if total_fb_n > 0 else fallback_lg_hr_fb_rollup
-    if (not isfinite(lg_hr_fb_rollup)) or lg_hr_fb_rollup <= 0:
-        lg_hr_fb_rollup = fallback_lg_hr_fb_rollup
-    lg_hr_fb_rollup = float(lg_hr_fb_rollup)
-    fip_const_rollup = fallback_fip_const_rollup
-    if league_ip > 0:
-        if total_outs_official > 0 and total_er_official >= 0:
-            league_era = max(0.0, (9.0 * total_er_official) / league_ip)
-        else:
-            er_est_total = (
-                (0.47 * total_single_n)
-                + (0.78 * total_double_n)
-                + (1.09 * total_triple_n)
-                + (1.40 * total_hr_n)
-                + (0.33 * (total_bb_n + total_hbp_n))
-                - (0.10 * total_k_n)
+    lg_hr_fb_rollup = float(fallback_lg_hr_fb_rollup)
+    fip_const_rollup = float(fallback_fip_const_rollup)
+    official_totals_by_split: Dict[str, Dict[str, float]] = {}
+    try:
+        official_where = ["pe.school_code = 'PRO'"]
+        official_params: Dict[str, Any] = {}
+        if start_date is not None:
+            official_where.append("pe.session_date >= %(official_start_date)s::date")
+            official_params["official_start_date"] = start_date
+        if end_date is not None:
+            official_where.append("pe.session_date <= %(official_end_date)s::date")
+            official_params["official_end_date"] = end_date
+        if selected_pitcher_keys:
+            official_where.append(
+                "LOWER(REGEXP_REPLACE(COALESCE(NULLIF(TRIM(pe.pitcher), ''), 'unknown'), '[^a-z0-9]+', '', 'g')) = ANY(%(official_pitchers_norm)s::text[])"
             )
-            league_era = max(0.0, (9.0 * er_est_total) / league_ip)
-        computed_fip_const = league_era - (
-            ((13.0 * total_hr_n) + (3.0 * (total_bb_n + total_hbp_n)) - (2.0 * total_k_n)) / league_ip
+            official_params["official_pitchers_norm"] = selected_pitcher_keys
+        if selected_opp_hitter_keys:
+            official_where.append(
+                "LOWER(REGEXP_REPLACE(COALESCE(NULLIF(TRIM(pe.batter), ''), 'unknown'), '[^a-z0-9]+', '', 'g')) = ANY(%(official_batters_norm)s::text[])"
+            )
+            official_params["official_batters_norm"] = selected_opp_hitter_keys
+        if selected_pitch_types:
+            official_where.append(
+                "COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'Undefined') = ANY(%(official_pitch_types)s::text[])"
+            )
+            official_params["official_pitch_types"] = selected_pitch_types
+        if level_norm != "All":
+            official_where.append(
+                _pro_level_sql_clause(level_norm, pitcher_col="pe.pitcherteam", batter_col="pe.batterteam", sport_col="pe.sport_id")
+            )
+            official_params["mlb_only_team_codes"] = PRO_MLB_ONLY_TEAM_CODES
+            official_params["aaa_only_team_codes"] = PRO_AAA_ONLY_TEAM_CODES
+            official_params["overlap_team_codes"] = PRO_TEAM_CODE_OVERLAP
+        if team_type_norm and team_type_norm != "ALL":
+            official_where.append(
+                "UPPER(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), NULLIF(TRIM(pe.batterteam), ''), '')) = %(official_team_type_norm)s::text"
+            )
+            official_params["official_team_type_norm"] = _normalize_team_code(team_type_norm)
+        if (hand or "").strip() and hand != "All":
+            official_where.append("COALESCE(NULLIF(TRIM(pe.pitcherthrows), ''), 'Unknown') = %(official_hand)s::text")
+            official_params["official_hand"] = hand
+        if (batter_side or "").strip() and batter_side != "All":
+            official_where.append("COALESCE(NULLIF(TRIM(pe.batterside), ''), 'Unknown') = %(official_batter_side)s::text")
+            official_params["official_batter_side"] = batter_side
+        official_where_sql = " AND ".join(official_where)
+        split_value_expr = (
+            "COALESCE(NULLIF(TRIM(pe.pitcher), ''), 'Unknown')"
+            if split_clean == "Pitcher"
+            else (
+                "UPPER(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), NULLIF(TRIM(pe.batterteam), ''), 'Unknown'))"
+                if split_clean == "Pitcher Team"
+                else "'All'"
+            )
         )
-        if isfinite(computed_fip_const):
-            fip_const_rollup = float(computed_fip_const)
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"""
+                WITH base AS (
+                  SELECT
+                    {split_value_expr} AS split_value,
+                    LOWER(REGEXP_REPLACE(COALESCE(NULLIF(TRIM(pe.pitcher), ''), 'unknown'), '[^a-z0-9]+', '', 'g')) AS pitcher_norm,
+                    COALESCE(
+                      NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'game_pk', '')), ''),
+                      NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'game_id', '')), ''),
+                      ('d:' || pe.session_date::text)
+                    ) AS game_key,
+                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'official_earned_runs', ''), '[-+]?[0-9]+'))[1], '')::double precision AS official_er,
+                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'official_outs_recorded', ''), '[-+]?[0-9]+'))[1], '')::double precision AS official_outs
+                  FROM public.pro_pitch_events pe
+                  WHERE {official_where_sql}
+                ),
+                per_game AS (
+                  SELECT
+                    split_value,
+                    pitcher_norm,
+                    game_key,
+                    MAX(official_er) AS official_er_game,
+                    MAX(official_outs) AS official_outs_game
+                  FROM base
+                  GROUP BY split_value, pitcher_norm, game_key
+                )
+                SELECT
+                  split_value,
+                  COALESCE(SUM(official_er_game), 0.0)::double precision AS official_er_total,
+                  COALESCE(SUM(official_outs_game), 0.0)::double precision AS official_outs_total
+                FROM per_game
+                GROUP BY split_value
+                """,
+                official_params,
+            )
+            for rec in cur.fetchall():
+                split_value = str(rec.get("split_value") or "").strip()
+                if not split_value:
+                    continue
+                official_totals_by_split[split_value] = {
+                    "er": float(rec.get("official_er_total") or 0.0),
+                    "outs": float(rec.get("official_outs_total") or 0.0),
+                }
+        if official_totals_by_split and "All" not in official_totals_by_split:
+            all_er = float(sum(float(v.get("er") or 0.0) for v in official_totals_by_split.values()))
+            all_outs = float(sum(float(v.get("outs") or 0.0) for v in official_totals_by_split.values()))
+            official_totals_by_split["All"] = {"er": all_er, "outs": all_outs}
+    except Exception:
+        official_totals_by_split = {}
 
     def _build_common_row(label: str, rows_for_split: List[Dict[str, Any]]) -> Dict[str, Any]:
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
@@ -11098,7 +11214,19 @@ def _try_pro_pitching_overview_rollup(
         outs_est = max(0, bf_n - hits_n - bb_n - hbp_n)
         official_outs_split = float(sum(float(r.get("official_outs_w_sum") or 0.0) for r in rows_for_split))
         official_er_split = float(sum(float(r.get("official_er_w_sum") or 0.0) for r in rows_for_split))
-        outs_for_ip = int(round(official_outs_split)) if official_outs_split > 0 else outs_est
+        official_totals_exact = official_totals_by_split.get(str(label))
+        if official_totals_exact and float(official_totals_exact.get("outs") or 0.0) > 0:
+            official_outs_exact = float(official_totals_exact.get("outs") or 0.0)
+            official_er_exact = float(official_totals_exact.get("er") or 0.0)
+            outs_for_ip = int(round(official_outs_exact))
+        else:
+            # Rollup official_outs_w_sum can be underweighted in some filtered slices
+            # (for example level-only leaderboard windows). Guard against IP
+            # collapse by preferring the larger of official and terminal-out
+            # estimates.
+            official_outs_exact = None
+            official_er_exact = None
+            outs_for_ip = max(int(round(official_outs_split)) if official_outs_split > 0 else 0, outs_est)
         ip_num = float(outs_for_ip) / 3.0 if outs_for_ip > 0 else 0.0
         ip_whole = outs_for_ip // 3
         ip_rem = outs_for_ip % 3
@@ -11106,14 +11234,17 @@ def _try_pro_pitching_overview_rollup(
         x_fip_val = None
         era_val = None
         if ip_num > 0:
-            is_all_like_row = str(label or "").strip().lower() in {"all", "all (pinned)"}
-            fip_const_for_row = fallback_fip_const_rollup if is_all_like_row else fip_const_rollup
-            lg_hr_fb_for_row = fallback_lg_hr_fb_rollup if is_all_like_row else lg_hr_fb_rollup
+            fip_const_for_row = fip_const_rollup
+            lg_hr_fb_for_row = lg_hr_fb_rollup
             fip_val = ((13.0 * hr_n) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + fip_const_for_row
-            fb_for_xfip = max(0, fb_n + pu_n)
+            # Keep xFIP on fly balls only (exclude pop-ups and line drives).
+            fb_for_xfip = max(0, fb_n)
             x_fip_val = ((13.0 * (fb_for_xfip * lg_hr_fb_for_row)) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + fip_const_for_row
-            if official_outs_split > 0:
-                era_val = max(0.0, (9.0 * official_er_split) / ip_num)
+            if official_outs_exact is not None and official_outs_exact > 0:
+                era_val = max(0.0, (9.0 * float(official_er_exact or 0.0)) / (official_outs_exact / 3.0))
+            elif official_outs_split > 0 and official_er_split > 0:
+                # Keep ERA scale-invariant when official_* values are weighted.
+                era_val = max(0.0, (27.0 * official_er_split) / official_outs_split)
             else:
                 er_est = (
                     (0.47 * single_n)
@@ -11129,7 +11260,7 @@ def _try_pro_pitching_overview_rollup(
             plate_appearances=bf_n,
             walks=bb_n,
             ground_balls=gb_n,
-            fly_balls=fb_n,
+            fly_balls=max(0, in_play_n - gb_n - pu_n),
             pop_ups=pu_n,
         )
         avg_val = (hits_n / ab_n) if ab_n > 0 else None
@@ -15776,9 +15907,9 @@ def _pro_pitching_overview(
                 if _is_ground_ball_row(r):
                     gb_num += 1
                 tagged_norm = _norm_desc(r.get("tagged_hit_type"))
-                if "fly" in tagged_norm:
+                if _is_fly_ball_for_siera_tag(tagged_norm):
                     fb_num += 1
-                if "popup" in tagged_norm:
+                if _is_popup_tag(tagged_norm):
                     pu_num += 1
             if c in {(0, 0), (1, 0), (1, 1), (0, 1)} and (
                 is_in_play_desc
@@ -15948,11 +16079,7 @@ def _pro_pitching_overview(
             fip_const_local = pro_fip_const
             lg_hr_fb_local = pro_lg_hr_fb
             fip_local = ((13.0 * hr_local) + (3.0 * (bb_val + hbp_val)) - (2.0 * k_val)) / ip_num_local + fip_const_local
-            fb_local = sum(
-                1
-                for r in group_rows
-                if ("fly" in _norm_desc(r.get("tagged_hit_type")) or "popup" in _norm_desc(r.get("tagged_hit_type")))
-            )
+            fb_local = sum(1 for r in group_rows if _is_xfip_fly_ball_tag(r.get("tagged_hit_type")))
             xhr_local = fb_local * lg_hr_fb_local
             xfip_local = ((13.0 * xhr_local) + (3.0 * (bb_val + hbp_val)) - (2.0 * k_val)) / ip_num_local + fip_const_local
             # Event-weight run estimate -> ERA scale.
@@ -16056,17 +16183,17 @@ def _pro_pitching_overview(
         fb_siera = sum(
             1
             for r in group_rows
-            if "fly" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " ")
+            if _is_fly_ball_for_siera_tag(r.get("tagged_hit_type"))
         )
         pu_siera = sum(
             1
             for r in group_rows
-            if "popup" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " ")
+            if _is_popup_tag(r.get("tagged_hit_type"))
         )
         gb_siera = sum(
             1
             for r in group_rows
-            if "ground" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " ")
+            if _is_ground_ball_tag(r.get("tagged_hit_type"))
         )
         siera_val = _compute_siera_value(
             strikeouts=k_n,
@@ -16118,14 +16245,7 @@ def _pro_pitching_overview(
             return
 
         fip_val = ((13.0 * hr_n) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + pro_fip_const
-        fb_n = sum(
-            1
-            for r in group_rows
-            if (
-                ("fly" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " "))
-                or ("popup" in str(r.get("tagged_hit_type") or "").strip().lower().replace("_", " "))
-            )
-        )
+        fb_n = sum(1 for r in group_rows if _is_xfip_fly_ball_tag(r.get("tagged_hit_type")))
         x_hr = fb_n * pro_lg_hr_fb
         x_fip_val = ((13.0 * x_hr) + (3.0 * (bb_n + hbp_n)) - (2.0 * k_n)) / ip_num + pro_fip_const
 
@@ -18445,6 +18565,7 @@ def pitching_overview(
             "include_row_pitches": include_row_pitches,
             "include_trend_rows": include_trend_rows,
             "force_raw": force_raw,
+            "metrics_version": "xfip-flyball-only-v2",
         },
     )
     use_pro_chart_cache = school_code == "PRO" and chart_only and include_chart_points

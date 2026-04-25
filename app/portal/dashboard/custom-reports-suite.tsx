@@ -12,6 +12,7 @@ import { calcPitchValue } from './pitch-value';
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching';
 type ReportScope = 'Single Player' | 'Multi-Player' | 'Team';
+type PercentileScope = 'NCAA' | 'TEAM' | 'MLB';
 type SprayViewMode = 'Batted Balls' | 'Bins';
 type PanelType =
   | ''
@@ -263,6 +264,8 @@ type ReportPayload = {
   showExitVelocityKey?: boolean;
   showBattedResultsKey?: boolean;
   enableTableColors?: boolean;
+  percentileScope?: PercentileScope;
+  showCellPercentiles?: boolean;
   globalStartDate: string;
   globalEndDate: string;
   useMostRecent200Pa?: boolean;
@@ -1074,6 +1077,38 @@ const divergingColor = (value: number, min: number, mid: number, max: number): s
   const t = Math.max(0, Math.min(1, (value - mid) / Math.max(1e-9, max - mid)));
   return rgb(lerp(248, 176, t), lerp(248, 11, t), lerp(248, 52, t));
 };
+const normalizePercentileColumnToken = (value: string): string =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+const LOWER_IS_BETTER_PERCENTILE_COLUMNS = new Set(
+  ['BB%', 'HR%', 'Barrel%', 'EV', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'].map((column) =>
+    normalizePercentileColumnToken(column)
+  )
+);
+const percentileForValue = (value: number, distribution: number[]): number | null => {
+  if (!Number.isFinite(value) || distribution.length < 2) return null;
+  const sorted = [...distribution].sort((a, b) => a - b);
+  if (!Number.isFinite(sorted[0]) || !Number.isFinite(sorted[sorted.length - 1])) return null;
+  if (Math.abs(sorted[sorted.length - 1] - sorted[0]) < 1e-9) return null;
+  let less = 0;
+  let equal = 0;
+  for (const point of sorted) {
+    if (point < value) less += 1;
+    else if (point === value) equal += 1;
+  }
+  return Math.max(0, Math.min(100, ((less + (equal * 0.5)) / sorted.length) * 100));
+};
+const adjustPercentileDirection = (column: string, percentile: number): number => {
+  const token = normalizePercentileColumnToken(column);
+  if (!LOWER_IS_BETTER_PERCENTILE_COLUMNS.has(token)) return percentile;
+  return Math.max(0, Math.min(100, 100 - percentile));
+};
+const percentileTextColor = (value: number): string => {
+  if (value <= 25 || value >= 75) return '#ffffff';
+  return '#111827';
+};
 const normalizePitchTypeName = (value: string): string => {
   const v = String(value ?? '').trim().toLowerCase();
   if (!v) return 'all';
@@ -1798,6 +1833,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [showExitVelocityKey, setShowExitVelocityKey] = useState(false);
   const [showBattedResultsKey, setShowBattedResultsKey] = useState(false);
   const [enableTableColors, setEnableTableColors] = useState(true);
+  const [percentileScope, setPercentileScope] = useState<PercentileScope>('NCAA');
+  const [showCellPercentiles, setShowCellPercentiles] = useState(false);
   const [globalStartDate, setGlobalStartDate] = useState('');
   const [globalEndDate, setGlobalEndDate] = useState('');
   const [rowPlayers, setRowPlayers] = useState<string[]>(Array.from({ length: MAX_REPORT_ROWS }, () => 'All'));
@@ -1836,6 +1873,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [teamCurrentRosterNameKeys, setTeamCurrentRosterNameKeys] = useState<string[] | null>(null);
   const [schoolCode, setSchoolCode] = useState(initialSchoolCode);
   const [cellsData, setCellsData] = useState<Record<string, OverviewLitePayload>>({});
+  const [cellPercentileBaselineRows, setCellPercentileBaselineRows] = useState<
+    Record<string, Array<Record<string, string | number | null>>>
+  >({});
   const [cellLoadStates, setCellLoadStates] = useState<Record<string, CellLoadState>>({});
   const [tableSorts, setTableSorts] = useState<Record<string, { column: string; direction: SortDirection }>>({});
   const cellsCacheRef = useRef<Map<string, { at: number; payload: OverviewLitePayload }>>(new Map());
@@ -1908,84 +1948,50 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const num = Number(String(value).replace(/[%+,]/g, '').trim());
     return Number.isFinite(num) ? num : null;
   };
-  const tableCellStyle = (column: string, rawValue: unknown, pitchTypeRaw = 'All'): Record<string, string | number> | null => {
-    if (!enableTableColors) return null;
-    const parsed = parseCellNumber(rawValue);
-    if (parsed === null) return null;
-    const metric = column.trim();
-    const pitchType = String(pitchTypeRaw || 'All').trim().toLowerCase().replace(/\s+/g, '');
-    const threshold = (() => {
-      const schoolCodeNorm = String(schoolCode || '').trim().toUpperCase();
-      const isProSchool = schoolCodeNorm === 'PRO' || schoolCodeNorm === 'MLB';
-      if (metric === 'InZone%') {
-        if (['fastball', 'sinker'].includes(pitchType)) return isProSchool ? { poor: 48, avg: 55, great: 62 } : { poor: 43, avg: 50, great: 57 };
-        if (['cutter', 'slider', 'sweeper', 'curveball'].includes(pitchType)) return { poor: 37, avg: 43, great: 49 };
-        if (['changeup', 'splitter', 'knuckleball'].includes(pitchType)) return { poor: 30, avg: 37, great: 44 };
-        return isProSchool ? { poor: 44, avg: 49, great: 54 } : { poor: 42, avg: 47, great: 52 };
+  const percentileDistributionsForCell = (
+    tableColumns: string[],
+    baselineRows: Array<Record<string, string | number | null>>
+  ): { splitColumn: string; scoped: Map<string, Map<string, number[]>>; globalByColumn: Map<string, number[]> } => {
+    const splitColumn = String(tableColumns[0] ?? '');
+    const scoped = new Map<string, Map<string, number[]>>();
+    const globalByColumn = new Map<string, number[]>();
+    if (!splitColumn || !tableColumns.length || !baselineRows.length) {
+      return { splitColumn, scoped, globalByColumn };
+    }
+    for (const row of baselineRows) {
+      const splitKey = String(row[splitColumn] ?? '').trim().toLowerCase();
+      for (const column of tableColumns) {
+        if (column === splitColumn) continue;
+        const num = parseCellNumber(row[column]);
+        if (num === null) continue;
+        if (!globalByColumn.has(column)) globalByColumn.set(column, []);
+        globalByColumn.get(column)!.push(num);
+        if (!splitKey) continue;
+        if (!scoped.has(splitKey)) scoped.set(splitKey, new Map());
+        const byColumn = scoped.get(splitKey)!;
+        if (!byColumn.has(column)) byColumn.set(column, []);
+        byColumn.get(column)!.push(num);
       }
-      if (metric === 'Comp%') return { poor: 76, avg: 79, great: 82 };
-      if (metric === 'Strike%') return isProSchool ? { poor: 59, avg: 64, great: 69 } : { poor: 57, avg: 62, great: 67 };
-      if (metric === 'Swing%') return { poor: 40, avg: 45, great: 50 };
-      if (metric === 'FPS%' || metric === 'FPS(FB)%' || metric === 'FPS(OS)%') {
-        return isProSchool ? { poor: 57, avg: 62, great: 67 } : { poor: 55, avg: 60, great: 65 };
-      }
-      if (metric === 'E+A%') return isProSchool ? { poor: 68, avg: 73, great: 78 } : { poor: 65, avg: 70, great: 75 };
-      if (metric === '1-1W%') return { poor: 58, avg: 63, great: 68 };
-      if (metric === 'Ahead%') return isProSchool ? { poor: 34, avg: 39, great: 44 } : { poor: 32, avg: 37, great: 42 };
-      if (metric === 'QP%') return { poor: 38, avg: 48, great: 58 };
-      if (metric === 'Ctrl+') return { poor: 75, avg: 85, great: 95 };
-      if (metric === 'QP+') return { poor: 75, avg: 90, great: 105 };
-      if (metric === 'Pitching+') return { poor: 80, avg: 95, great: 110 };
-      if (metric === 'K%') return { poor: 18, avg: 23, great: 28 };
-      if (metric === 'BB%') return { poor: 11, avg: 9, great: 7 };
-      if (metric === 'Whiff%') return { poor: 21, avg: 26, great: 31 };
-      if (metric === 'CSW%') return { poor: 26, avg: 29, great: 32 };
-      if (metric === 'GB%') return { poor: 38, avg: 43, great: 48 };
-      if (metric === 'ERA') {
-        if (!isProSchool) return null;
-        return { poor: 5.2, avg: 4.2, great: 3.2 };
-      }
-      if (metric === 'FIP' || metric === 'xFIP') {
-        if (isProSchool) return { poor: 5.2, avg: 4.2, great: 3.2 };
-        return { poor: 5.9, avg: 4.9, great: 3.9 };
-      }
-      if (metric === 'Barrel%') return { poor: 20, avg: 15, great: 10 };
-      if (metric === 'EV') return { poor: 95, avg: 85, great: 75 };
-      if (metric === 'Stuff+') return { poor: 90, avg: 100, great: 110 };
-      if (metric === 'RV/100') return { poor: 0.7, avg: 0, great: -0.7 };
-      return null;
-    })();
-    if (!threshold) return null;
-    const reverseScale =
-      ['EV', 'Barrel%', 'BB%', 'ERA', 'FIP', 'xFIP'].includes(metric) ||
-      (metric === 'RV/100' && reportType === 'Pitching');
-    const { poor, avg, great } = threshold;
-    const color = (() => {
-      if (reverseScale) {
-        if (parsed >= poor) return { bg: '#0066CC', text: '#ffffff' };
-        if (parsed >= (poor + avg) / 2) return { bg: '#66B2FF', text: '#111111' };
-        if (parsed >= avg) return { bg: '#FFFFFF', text: '#111111' };
-        if (parsed >= (avg + great) / 2) return { bg: '#FFB3B3', text: '#111111' };
-        if (parsed >= great) return { bg: '#FF6666', text: '#ffffff' };
-        return { bg: '#CC0000', text: '#ffffff' };
-      }
-      if (parsed <= poor) return { bg: '#0066CC', text: '#ffffff' };
-      if (parsed <= (poor + avg) / 2) return { bg: '#66B2FF', text: '#111111' };
-      if (parsed <= avg) return { bg: '#FFFFFF', text: '#111111' };
-      if (parsed <= (avg + great) / 2) return { bg: '#FFB3B3', text: '#111111' };
-      if (parsed <= great) return { bg: '#FF6666', text: '#ffffff' };
-      return { bg: '#CC0000', text: '#ffffff' };
-    })();
-    return {
-      background: color.bg,
-      color: color.text,
-      border: '1px solid rgba(255,255,255,0.28)',
-      borderRadius: 4,
-      padding: '2px 4px',
-      display: 'inline-block',
-      minWidth: '100%',
-      textAlign: 'center',
-    };
+    }
+    return { splitColumn, scoped, globalByColumn };
+  };
+  const tableCellPercentile = (
+    row: Record<string, string | number | null>,
+    column: string,
+    rawValue: unknown,
+    distributions: { splitColumn: string; scoped: Map<string, Map<string, number[]>>; globalByColumn: Map<string, number[]> }
+  ): number | null => {
+    const num = parseCellNumber(rawValue);
+    if (num === null) return null;
+    const { splitColumn, scoped, globalByColumn } = distributions;
+    if (!splitColumn || column === splitColumn) return null;
+    const splitKey = String(row[splitColumn] ?? '').trim().toLowerCase();
+    const scopedDistribution = splitKey ? scoped.get(splitKey)?.get(column) ?? [] : [];
+    const globalDistribution = globalByColumn.get(column) ?? [];
+    const distribution = scopedDistribution.length > 1 ? scopedDistribution : globalDistribution;
+    const percentileRaw = percentileForValue(num, distribution);
+    if (percentileRaw === null) return null;
+    return adjustPercentileDirection(column, percentileRaw);
   };
   const teamScopePlayers = useMemo(
     () => Array.from(new Set(teamScopeSelectedPlayers.map((entry) => String(entry ?? '').trim()).filter((entry) => entry && entry !== 'All'))),
@@ -2723,8 +2729,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const controller = new AbortController();
     const CACHE_TTL_MS = 90_000;
     async function loadCellsData() {
+      const resolvedSchoolCode = schoolCode || initialSchoolCode;
       if (reportScope === 'Team' && teamScopePlayers.length === 0) {
         setCellsData({});
+        setCellPercentileBaselineRows({});
         setCellLoadStates({});
         return;
       }
@@ -2740,10 +2748,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         .slice(0, 400);
       if (!requests.length) {
         setCellsData({});
+        setCellPercentileBaselineRows({});
         setCellLoadStates({});
         return;
       }
       const requestCellIds = requests.map(({ cellId }) => cellId);
+      setCellPercentileBaselineRows((current) => {
+        const next: Record<string, Array<Record<string, string | number | null>>> = {};
+        for (const [key, value] of Object.entries(current)) {
+          if (requestCellIds.includes(key)) next[key] = value;
+        }
+        return next;
+      });
       setCellLoadStates((current) => {
         const next: Record<string, CellLoadState> = {};
         for (const [key, value] of Object.entries(current)) {
@@ -2755,11 +2771,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         return next;
       });
       const out: Record<string, OverviewLitePayload> = {};
+      const outPercentileRows: Record<string, Array<Record<string, string | number | null>>> = {};
       const nextCellStates: Record<string, CellLoadState> = Object.fromEntries(
         requestCellIds.map((cellId) => [cellId, { status: 'loading' as const }])
       );
       let nextRequestIndex = 0;
-      const isProWorkload = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
+      const isProWorkload = String(resolvedSchoolCode || '').trim().toUpperCase() === 'PRO';
       const workerCount = isProWorkload ? (reportScope === 'Team' ? 1 : 3) : reportScope === 'Team' ? 1 : 5;
       const commitCellResult = (cellId: string, payload: OverviewLitePayload, state: CellLoadState) => {
         out[cellId] = payload;
@@ -2767,6 +2784,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         if (!active) return;
         setCellsData((current) => ({ ...current, [cellId]: payload }));
         setCellLoadStates((current) => ({ ...current, [cellId]: state }));
+      };
+      const commitCellPercentileRows = (cellId: string, rows: Array<Record<string, string | number | null>>) => {
+        outPercentileRows[cellId] = rows;
+        if (!active) return;
+        setCellPercentileBaselineRows((current) => ({ ...current, [cellId]: rows }));
       };
       type BatchResolver = {
         resolve: (value: OverviewLitePayload) => void;
@@ -2854,7 +2876,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const ignoreDateWindow = reportType === 'Hitting' && useMostRecent200Pa;
           const cellFilters = config.filterSelect ?? ['Dates', 'Session Type', 'Pitch Types'];
           const params = new URLSearchParams();
-          const isProSchool = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
+          const isProSchool = String(resolvedSchoolCode || '').trim().toUpperCase() === 'PRO';
           const normalizedPanelType = normalizePanelType(config.panelType);
           const isHeatmapPanel = normalizedPanelType === 'Heatmap';
           const isVelocityPanel =
@@ -2974,6 +2996,27 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 : '/api/dashboard/catching/overview';
           const query = params.toString();
           const key = `${endpoint}?${query}`;
+          const shouldLoadPercentileBaseline =
+            normalizedPanelType === 'Summary Table' && reportType !== 'Catching' && (enableTableColors || showCellPercentiles);
+          let percentileBaselineKey = '';
+          if (shouldLoadPercentileBaseline) {
+            const baselineParams = new URLSearchParams(params);
+            baselineParams.set('percentile_baseline', '1');
+            baselineParams.set('include_chart_points', '0');
+            baselineParams.delete('chart_only');
+            baselineParams.delete('chart_points_limit');
+            baselineParams.delete('pitcher');
+            baselineParams.delete('hitter');
+            baselineParams.delete('catcher');
+            const schoolNorm = String(resolvedSchoolCode || '').trim().toUpperCase();
+            const activeScope: PercentileScope = schoolNorm === 'PRO' ? 'MLB' : percentileScope;
+            if (activeScope === 'MLB') baselineParams.set('percentile_pool', 'mlb');
+            else baselineParams.delete('percentile_pool');
+            if (activeScope === 'TEAM' && reportTeam && reportTeam !== 'All') {
+              baselineParams.set('team_type', reportTeam);
+            }
+            percentileBaselineKey = `${endpoint}?${baselineParams.toString()}`;
+          }
           try {
             const now = Date.now();
             const cached = cellsCacheRef.current.get(key);
@@ -2995,6 +3038,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             inflightRef.current.set(key, requestPromise);
             try {
               const loadedPayload = await requestPromise;
+              if (percentileBaselineKey) {
+                try {
+                  const baselinePayload = await queueBatchedOverviewFetch(percentileBaselineKey);
+                  const baselineRowsRaw = Array.isArray(baselinePayload?.table_rows) ? baselinePayload.table_rows : [];
+                  const baselineRows = baselineRowsRaw as Array<Record<string, string | number | null>>;
+                  commitCellPercentileRows(cellId, baselineRows);
+                } catch {
+                  commitCellPercentileRows(cellId, []);
+                }
+              } else {
+                commitCellPercentileRows(cellId, []);
+              }
               commitCellResult(cellId, loadedPayload, { status: 'ready' });
             } finally {
               inflightRef.current.delete(key);
@@ -3024,6 +3079,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       }
       if (!active) return;
       setCellsData((current) => ({ ...current, ...out }));
+      setCellPercentileBaselineRows((current) => ({ ...current, ...outPercentileRows }));
       setCellLoadStates((current) => ({ ...current, ...nextCellStates }));
     }
     const timer = window.setTimeout(loadCellsData, 60);
@@ -3046,8 +3102,13 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     useMostRecent200Pa,
     globalStartDate,
     globalEndDate,
+    schoolCode,
+    initialSchoolCode,
     reportTeam,
     reportLevel,
+    enableTableColors,
+    percentileScope,
+    showCellPercentiles,
     customTables,
     defaultTableMode,
   ]);
@@ -3078,6 +3139,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setShowExitVelocityKey(Boolean(payload.showExitVelocityKey));
     setShowBattedResultsKey(Boolean(payload.showBattedResultsKey));
     setEnableTableColors(payload.enableTableColors !== false);
+    setPercentileScope(payload.percentileScope === 'TEAM' || payload.percentileScope === 'MLB' ? payload.percentileScope : 'NCAA');
+    setShowCellPercentiles(Boolean(payload.showCellPercentiles));
     setGlobalStartDate(payload.globalStartDate || '');
     setGlobalEndDate(payload.globalEndDate || '');
     setUseMostRecent200Pa(Boolean(payload.useMostRecent200Pa));
@@ -3116,6 +3179,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     showExitVelocityKey,
     showBattedResultsKey,
     enableTableColors,
+    percentileScope,
+    showCellPercentiles,
     globalStartDate,
     globalEndDate,
     useMostRecent200Pa,
@@ -3676,6 +3741,23 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   <input type="checkbox" checked={showBattedResultsKey} onChange={(event) => setShowBattedResultsKey(event.target.checked)} />
                   Show batted results key
                 </label>
+                {!isProSchool ? (
+                  <label>
+                    Percentile By
+                    <SearchableSingleSelect
+                      options={[
+                        { value: 'NCAA', label: 'NCAA' },
+                        { value: 'TEAM', label: reportTeam && reportTeam !== 'All' ? `${reportTeam} Team` : 'Team' },
+                        { value: 'MLB', label: 'MLB' },
+                      ]}
+                      value={percentileScope}
+                      onChange={(next) => {
+                        const selected = next === 'TEAM' || next === 'MLB' ? next : 'NCAA';
+                        setPercentileScope(selected);
+                      }}
+                    />
+                  </label>
+                ) : null}
                 <div className="portal-color-toggle">
                   <span className="portal-color-toggle-label">Color Code</span>
                   <button
@@ -3685,6 +3767,17 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     aria-pressed={enableTableColors}
                     title={enableTableColors ? 'Color code on' : 'Color code off'}
                     onClick={() => setEnableTableColors((current) => !current)}
+                  />
+                </div>
+                <div className="portal-color-toggle">
+                  <span className="portal-color-toggle-label">Show Percentile</span>
+                  <button
+                    type="button"
+                    className={`portal-color-toggle-btn${showCellPercentiles ? ' is-on' : ''}`}
+                    aria-label="Toggle percentile labels in table cells"
+                    aria-pressed={showCellPercentiles}
+                    title={showCellPercentiles ? 'Percentile labels on' : 'Percentile labels off'}
+                    onClick={() => setShowCellPercentiles((current) => !current)}
                   />
                 </div>
               </div>
@@ -3973,6 +4066,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const panelLoadMessage = cellLoadStates[cellId]?.message ?? '';
                   const tableColumns = payload.table_columns ?? [];
                   const tableRows = payload.table_rows ?? [];
+                  const baselineRows = cellPercentileBaselineRows[cellId] ?? [];
+                  const percentileDistributions = percentileDistributionsForCell(tableColumns, baselineRows);
                   const tableSort = tableSorts[cellId];
                   const sortedRowsBase =
                     tableSort?.column && tableColumns.includes(tableSort.column)
@@ -6144,21 +6239,41 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       }}
                                     >
                                       {(() => {
-                                        const splitValue = String(row[tableColumns[0]] ?? 'All');
-                                        const style = tableCellStyle(column, row[column], splitValue);
+                                        const percentileValue = tableCellPercentile(row, column, row[column], percentileDistributions);
                                         const val = formatTableDisplayValue(column, row[column]);
                                         const isAllRow = String(row[tableColumns[0]] ?? '').trim().toLowerCase() === 'all';
                                         const pitchStyle = !isAllRow && columnIndex === 0 ? pitchTypeCellStyle(val) : null;
                                         if (pitchStyle) return pitchStyle.label;
-                                        if (!style) return val;
+                                        const percentileCellStyle =
+                                          enableTableColors && percentileValue !== null
+                                            ? {
+                                                background: divergingColor(percentileValue, 0, 50, 100),
+                                                color: percentileTextColor(percentileValue),
+                                                border: '1px solid rgba(255,255,255,0.28)',
+                                                borderRadius: 4,
+                                                padding: '2px 4px',
+                                                display: 'inline-flex',
+                                                flexDirection: 'column' as const,
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                minWidth: '100%',
+                                                textAlign: 'center' as const,
+                                              }
+                                            : null;
+                                        if (!percentileCellStyle) return val;
                                         const compactStyle = useCompactSummaryTable
-                                          ? {
-                                              ...style,
-                                              minWidth: 'auto',
-                                              padding: '2px 3px',
-                                            }
-                                          : style;
-                                        return <span style={compactStyle}>{val}</span>;
+                                          ? { ...percentileCellStyle, minWidth: 'auto', padding: '2px 3px' }
+                                          : percentileCellStyle;
+                                        const percentileText =
+                                          showCellPercentiles && percentileValue !== null ? `${percentileValue.toFixed(1)}%` : '';
+                                        return (
+                                          <span style={compactStyle}>
+                                            <span>{val}</span>
+                                            {percentileText ? (
+                                              <span style={{ fontSize: '0.66rem', opacity: 0.88, marginTop: 2 }}>{percentileText}</span>
+                                            ) : null}
+                                          </span>
+                                        );
                                       })()}
                                     </td>
                                   ))}

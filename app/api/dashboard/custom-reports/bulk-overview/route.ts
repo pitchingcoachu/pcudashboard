@@ -105,7 +105,9 @@ export async function POST(request: Request) {
   }
 
   let nextIndex = 0;
-  const workerCount = Math.min(2, unresolved.length);
+  // Use bounded parallelism so multi-panel custom reports don't queue behind
+  // slow overview calls, while still avoiding an unbounded request burst.
+  const workerCount = Math.min(6, unresolved.length);
   const workers = Array.from({ length: Math.min(workerCount, unresolved.length) }, async () => {
     while (nextIndex < unresolved.length) {
       const current = unresolved[nextIndex];

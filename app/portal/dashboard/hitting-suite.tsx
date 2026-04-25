@@ -2580,8 +2580,10 @@ export default function HittingSuite({
     }
     const useLegacySummaryTeamColorMode = !isPro && isSummaryPage && summaryPercentileScope === 'TEAM';
     const shouldLoadLeaderboardBaseline = isLeaderboardPage && (leaderboardStatView === 'Percentile' || enableTableColors);
+    const shouldLoadGameLogBaseline = isGameLogPage && (showCellPercentiles || enableGameLogColors);
     const shouldLoadPercentileBaseline =
       shouldLoadLeaderboardBaseline ||
+      shouldLoadGameLogBaseline ||
       (isSummaryPage && (showCellPercentiles || summaryStatView === 'Percentile' || (enableTableColors && !useLegacySummaryTeamColorMode)));
     if (shouldLoadPercentileBaseline) {
       const baselineParams = new URLSearchParams(params);
@@ -2591,10 +2593,11 @@ export default function HittingSuite({
       baselineParams.delete('chart_points_limit');
       baselineParams.delete('force_raw');
       baselineParams.delete('hitter');
+      if (isGameLogPage) baselineParams.set('split_by', 'Game');
       const activePercentileScope =
         isPro
           ? 'MLB'
-          : (isLeaderboardPage ? leaderboardPercentileScope : (isSummaryPage ? summaryPercentileScope : 'NCAA'));
+          : (isLeaderboardPage || isGameLogPage ? leaderboardPercentileScope : (isSummaryPage ? summaryPercentileScope : 'NCAA'));
       if (!isPro) {
         if (activePercentileScope === 'TEAM') {
           const schoolTeamCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
@@ -2862,7 +2865,7 @@ export default function HittingSuite({
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, venue, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, enableTableColors, leaderboardPercentileScope, summaryPercentileScope, showCellPercentiles, summaryStatView, filters?.school_code, selectedSchoolCode]);
+  }, [appliedFilterVersion, canLoadOverview, startDate, endDate, hitter, teamType, level, oppPitcher, hand, batterSide, venue, tableMode, effectiveSplitBy, customTableColumns, pitchTypes, zoneLocations, pitchResults, countFilter, afterCountFilter, bipResult, inZone, veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax, pcMin, pcMax, dashboardPage, isPro, isPlayerRole, isLeague, enableTableColors, enableGameLogColors, leaderboardPercentileScope, summaryPercentileScope, showCellPercentiles, summaryStatView, filters?.school_code, selectedSchoolCode]);
 
   useEffect(() => {
     if (!percentileBaselineRequestKey) {
@@ -3084,22 +3087,14 @@ export default function HittingSuite({
       ...unpinned,
     ];
   }, [sortedGameLogRows, pinnedGameLogKeys, gameLogColumns]);
-  const gameLogColumnRanges = useMemo(() => {
-    const ranges = new Map<string, { min: number; max: number }>();
-    for (const column of gameLogColumns) {
-      if (column === 'Team' || column === 'Date' || column === 'Opponent') continue;
-      const values = gameLogRows
-        .map((entry) => parseSortableNumber(entry[column]))
-        .filter((entry): entry is number => entry !== null);
-      if (!values.length) continue;
-      const min = Math.min(...values);
-      const max = Math.max(...values);
-      if (max <= min) continue;
-      ranges.set(column, { min, max });
-    }
-    return ranges;
-  }, [gameLogColumns, gameLogRows]);
-
+  const gameLogDisplayColumns = useMemo(() => {
+    if (!gameLogColumns.length) return gameLogColumns;
+    const lead = ['Date', 'Team', 'Opponent'];
+    const leadSet = new Set(lead.map((column) => column.toLowerCase()));
+    const orderedLead = lead.filter((column) => gameLogColumns.some((value) => value.toLowerCase() === column.toLowerCase()));
+    const rest = gameLogColumns.filter((column) => !leadSet.has(column.toLowerCase()));
+    return [...orderedLead, ...rest];
+  }, [gameLogColumns]);
   useEffect(() => {
     if (dashboardPage !== 'Game Log') return;
     if (!canLoadOverview) return;
@@ -3147,6 +3142,7 @@ export default function HittingSuite({
       if (pcMin.trim()) params.set('pc_min', pcMin.trim());
       if (pcMax.trim()) params.set('pc_max', pcMax.trim());
       params.set('include_chart_points', '0');
+      params.set('force_raw', '1');
       const response = await fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
       const payload = (await response.json().catch(() => ({}))) as HittingOverviewPayload & { error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to load game log.');
@@ -3595,6 +3591,10 @@ export default function HittingSuite({
     if (teamRaw && teamRaw !== 'All' && isLikelyLeagueTeamCode(teamRaw)) return teamRaw.toUpperCase();
     return 'Team';
   }, [filters?.school_code, selectedSchoolCode, teamType]);
+  const percentileTableColumns = useMemo(
+    () => (dashboardPage === 'Game Log' ? gameLogColumns : displayedTableColumns),
+    [dashboardPage, gameLogColumns, displayedTableColumns]
+  );
   const leaderboardTeamDistributions = useMemo(() => {
     const byColumn = new Map<string, number[]>();
     if (!isLeaderboardPage || isPro || leaderboardPercentileScope !== 'TEAM') return byColumn;
@@ -3613,14 +3613,30 @@ export default function HittingSuite({
     });
     return byColumn;
   }, [isLeaderboardPage, isPro, leaderboardPercentileScope, displayedTableColumns, leaderboardRowsWithPins]);
+  const gameLogTeamDistributions = useMemo(() => {
+    const byColumn = new Map<string, number[]>();
+    if (dashboardPage !== 'Game Log' || isPro || leaderboardPercentileScope !== 'TEAM') return byColumn;
+    const splitColumn = gameLogColumns[0] ?? '';
+    for (const column of gameLogColumns.slice(1)) {
+      for (const row of gameLogRowsWithPins) {
+        if (splitColumn && isAllLikeRowValue(row[splitColumn])) continue;
+        const numeric = parseSortableNumber(row[column]);
+        if (numeric === null) continue;
+        if (!byColumn.has(column)) byColumn.set(column, []);
+        byColumn.get(column)?.push(numeric);
+      }
+    }
+    byColumn.forEach((values, key) => byColumn.set(key, values.sort((a, b) => a - b)));
+    return byColumn;
+  }, [dashboardPage, isPro, leaderboardPercentileScope, gameLogColumns, gameLogRowsWithPins]);
   const percentileDistributionsByKey = useMemo(() => {
-    const splitColumn = displayedTableColumns[0] ?? '';
+    const splitColumn = percentileTableColumns[0] ?? '';
     const scoped = new Map<string, number[]>();
     const globalByColumn = new Map<string, number[]>();
     if (!splitColumn || !percentileBaselineRows.length) {
       return { splitColumn, scoped, globalByColumn };
     }
-    for (const column of displayedTableColumns.slice(1)) {
+    for (const column of percentileTableColumns.slice(1)) {
       for (const row of percentileBaselineRows) {
         const rowKey = percentileRowKey(row[splitColumn]);
         if (!rowKey) continue;
@@ -3641,7 +3657,21 @@ export default function HittingSuite({
       });
     });
     return { splitColumn, scoped, globalByColumn };
-  }, [displayedTableColumns, percentileBaselineRows]);
+  }, [percentileTableColumns, percentileBaselineRows]);
+  const gameLogFallbackDistributions = useMemo(() => {
+    const byColumn = new Map<string, number[]>();
+    if (dashboardPage !== 'Game Log') return byColumn;
+    const splitColumn = gameLogColumns[0] ?? '';
+    const sourceRows = gameLogRowsWithPins.filter((row) => !splitColumn || !isAllLikeRowValue(row[splitColumn]));
+    for (const column of gameLogColumns.slice(1)) {
+      const values = sourceRows
+        .map((row) => parseSortableNumber(row[column]))
+        .filter((value): value is number => value !== null)
+        .sort((a, b) => a - b);
+      if (values.length) byColumn.set(column, values);
+    }
+    return byColumn;
+  }, [dashboardPage, gameLogColumns, gameLogRowsWithPins]);
   const getCellPercentile = useCallback((
     row: Record<string, string | number | null>,
     column: string,
@@ -3655,11 +3685,13 @@ export default function HittingSuite({
         ? (scoped.get(`${rowSplitKey}::${column}`) ?? [])
         : [];
     const isSummaryPage = dashboardPage === 'Summary';
+    const isGameLogPageLocal = dashboardPage === 'Game Log';
     const useTeamScope =
       !isPro &&
       (
         (isLeaderboardPage && leaderboardPercentileScope === 'TEAM') ||
-        (isSummaryPage && summaryPercentileScope === 'TEAM')
+        (isSummaryPage && summaryPercentileScope === 'TEAM') ||
+        (isGameLogPageLocal && leaderboardPercentileScope === 'TEAM')
       );
     const distribution = isSummaryPage
       ? (
@@ -3672,6 +3704,14 @@ export default function HittingSuite({
         )
       : isLeaderboardPage
       ? (isLeaderboardPage && useTeamScope ? (leaderboardTeamDistributions.get(column) ?? []) : (globalByColumn.get(column) ?? []))
+      : isGameLogPageLocal
+      ? (
+          (() => {
+            const scopedPool = useTeamScope ? (gameLogTeamDistributions.get(column) ?? []) : (globalByColumn.get(column) ?? []);
+            if (scopedPool.length > 1) return scopedPool;
+            return gameLogFallbackDistributions.get(column) ?? [];
+          })()
+        )
       : scopedDistribution;
     if (!distribution.length) return null;
     const numeric = parseSortableNumber(rawValue);
@@ -3679,7 +3719,7 @@ export default function HittingSuite({
     const percentile = percentileForValue(numeric, distribution);
     if (percentile === null) return null;
     return adjustPercentileDirection(column, percentile);
-  }, [isLeaderboardPage, isPro, dashboardPage, splitBy, leaderboardPercentileScope, summaryPercentileScope, leaderboardTeamDistributions, percentileDistributionsByKey, summaryPitchTypeDistributions]);
+  }, [isLeaderboardPage, isPro, dashboardPage, splitBy, leaderboardPercentileScope, summaryPercentileScope, leaderboardTeamDistributions, gameLogTeamDistributions, gameLogFallbackDistributions, percentileDistributionsByKey, summaryPitchTypeDistributions]);
   const isGameLogPage = dashboardPage === 'Game Log';
   const correlationColumns = useMemo(
     () => {
@@ -5330,7 +5370,15 @@ export default function HittingSuite({
                     <img src={gameLogHeader.logoUrl} alt="Team" style={{ width: 36, height: 36, objectFit: 'contain', flexShrink: 0 }} />
                   ) : null}
                 </div>
-                <div className="portal-form-grid" style={{ marginBottom: 10, gridTemplateColumns: 'repeat(2, minmax(160px, 260px))' }}>
+                <div
+                  className="portal-form-grid"
+                  style={{
+                    marginBottom: 10,
+                    gridTemplateColumns: !isPro
+                      ? 'minmax(170px, 240px) minmax(170px, 240px) auto'
+                      : 'minmax(170px, 240px) auto',
+                  }}
+                >
                   <label>
                     Table
                     <SearchableSingleSelect
@@ -5340,7 +5388,32 @@ export default function HittingSuite({
                       placeholder={TABLE_MODE_DEFAULT}
                     />
                   </label>
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'nowrap', justifySelf: 'end' }}>
+                  {!isPro ? (
+                    <label>
+                      Percentile By
+                      <SearchableSingleSelect
+                        options={[
+                          { value: 'NCAA', label: 'NCAA' },
+                          { value: 'MLB', label: 'MLB' },
+                          { value: 'TEAM', label: percentileTeamLabel },
+                        ]}
+                        value={leaderboardPercentileScope}
+                        onChange={handleLeaderboardPercentileScopeSelection}
+                        placeholder="NCAA"
+                      />
+                    </label>
+                  ) : null}
+                  <div
+                    style={{
+                      display: 'flex',
+                      minWidth: 0,
+                      justifySelf: 'start',
+                      alignItems: 'flex-end',
+                      justifyContent: 'flex-start',
+                      gap: 8,
+                      flexWrap: 'nowrap',
+                    }}
+                  >
                     <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
                       <span className="portal-color-toggle-label">Color Code</span>
                       <button
@@ -5350,6 +5423,17 @@ export default function HittingSuite({
                         aria-pressed={enableGameLogColors}
                         title={enableGameLogColors ? 'Color code on' : 'Color code off'}
                         onClick={() => setEnableGameLogColors((current) => !current)}
+                      />
+                    </div>
+                    <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
+                      <span className="portal-color-toggle-label">Show Percentile</span>
+                      <button
+                        type="button"
+                        className={`portal-color-toggle-btn${showCellPercentiles ? ' is-on' : ''}`}
+                        aria-label="Toggle percentile labels in table cells"
+                        aria-pressed={showCellPercentiles}
+                        title={showCellPercentiles ? 'Percentile labels on' : 'Percentile labels off'}
+                        onClick={() => setShowCellPercentiles((current) => !current)}
                       />
                     </div>
                     <button
@@ -5397,7 +5481,7 @@ export default function HittingSuite({
                           >
                             Pin
                           </th>
-                          {gameLogColumns.map((column) => {
+                          {gameLogDisplayColumns.map((column) => {
                             const activeSort = gameLogSortColumn === column;
                             return (
                               <th
@@ -5479,17 +5563,29 @@ export default function HittingSuite({
                                 </td>
                               );
                             })()}
-                            {gameLogColumns.map((column, colIndex) => {
+                            {gameLogDisplayColumns.map((column, colIndex) => {
                               const rawValue = row[column];
                               const cellValue = formatTableDisplayValue(column, rawValue);
+                              const rowKind = String(row._game_row_kind ?? '');
+                              const isSummaryRow = rowKind === 'all' || rowKind === 'all_pinned';
+                              const percentileValue = getCellPercentile(
+                                row as Record<string, string | number | null>,
+                                column,
+                                rawValue
+                              );
+                              const percentilesReady = !loadingPercentileBaseline;
+                              const showGameLogPercentileLabel =
+                                showCellPercentiles &&
+                                percentilesReady &&
+                                colIndex > 2 &&
+                                !isSummaryRow &&
+                                percentileValue !== null;
                               const mappedTeamLabel = (value: unknown): string => {
                                 const raw = String(value ?? '').trim();
                                 if (!raw) return '-';
                                 if (isPro) return raw;
                                 return leagueTeamLabelByCode[raw.toUpperCase()] ?? raw;
                               };
-                              const rowKind = String(row._game_row_kind ?? '');
-                              const isSummaryRow = rowKind === 'all' || rowKind === 'all_pinned';
                               return (
                                 <td
                                   key={`${rowIndex}-${column}`}
@@ -5541,22 +5637,28 @@ export default function HittingSuite({
                                   ) : (
                                     <span
                                       style={(() => {
-                                        if (!enableGameLogColors || colIndex <= 2) return undefined;
-                                        const range = gameLogColumnRanges.get(column);
-                                        if (!range) return undefined;
-                                        const value = parseSortableNumber(rawValue);
-                                        if (value === null) return undefined;
-                                        return {
-                                          background: divergingColor(value, range.min, (range.min + range.max) / 2, range.max),
-                                          color: '#ffffff',
-                                          borderRadius: 3,
-                                          padding: '2px 4px',
-                                          display: 'inline-block',
-                                          width: '100%',
-                                        };
+                                        if (!enableGameLogColors || colIndex <= 2 || isSummaryRow) return undefined;
+                                        if (percentilesReady && percentileValue !== null) {
+                                          return {
+                                            background: divergingColor(percentileValue, 0, 50, 100),
+                                            color: percentileTextColor(percentileValue),
+                                            borderRadius: 3,
+                                            padding: '2px 4px',
+                                            display: 'inline-block',
+                                            width: '100%',
+                                          };
+                                        }
+                                        return undefined;
                                       })()}
                                     >
-                                      {cellValue === null || cellValue === undefined ? '—' : cellValue}
+                                      {cellValue === null || cellValue === undefined ? '—' : (
+                                        showGameLogPercentileLabel ? (
+                                          <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15 }}>
+                                            <span>{cellValue}</span>
+                                            <span style={{ fontSize: '0.66rem', opacity: 0.78, marginTop: 2 }}>{percentileValue!.toFixed(1)}%</span>
+                                          </span>
+                                        ) : cellValue
+                                      )}
                                     </span>
                                   )}
                                 </td>

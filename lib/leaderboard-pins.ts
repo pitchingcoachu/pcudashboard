@@ -67,6 +67,30 @@ function parseNumeric(value: TableValue): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parseInningsToOuts(value: TableValue): number | null {
+  if (value === null || value === undefined) return null;
+  const asString = String(value).trim();
+  if (!asString) return null;
+  const match = asString.match(/^(-?\d+)(?:\.(\d+))?$/);
+  if (match) {
+    const whole = Number(match[1]);
+    const decimal = match[2] ?? '0';
+    const outsDigit = Number(decimal[0] ?? '0');
+    if (Number.isFinite(whole) && Number.isFinite(outsDigit) && outsDigit >= 0 && outsDigit <= 2) {
+      return whole * 3 + outsDigit;
+    }
+  }
+  const numeric = parseNumeric(value);
+  if (numeric === null) return null;
+  return Math.round(numeric * 3);
+}
+
+function formatOutsAsInnings(outs: number): string {
+  const whole = Math.floor(outs / 3);
+  const remainder = outs % 3;
+  return `${whole}.${remainder}`;
+}
+
 function roundForColumn(value: number, column: string): number {
   const upper = column.trim().toUpperCase();
   if (THREE_DECIMAL_COLUMNS.has(upper)) return Math.round(value * 1000) / 1000;
@@ -120,6 +144,18 @@ export function buildPinnedAllRow(columns: string[], pinnedRows: TableRow[]): Ta
     const lower = column.toLowerCase();
     if (lower === 'max' || lower.includes(' max')) {
       out[column] = roundForColumn(maxValue, column);
+      continue;
+    }
+    if (column.trim().toUpperCase() === 'IP') {
+      let totalOuts = 0;
+      let hasInnings = false;
+      for (const row of pinnedRows) {
+        const outs = parseInningsToOuts(row[column]);
+        if (outs === null) continue;
+        totalOuts += outs;
+        hasInnings = true;
+      }
+      out[column] = hasInnings ? formatOutsAsInnings(totalOuts) : null;
       continue;
     }
     if (TOTAL_COLUMNS.has(column) && !percentMode) {

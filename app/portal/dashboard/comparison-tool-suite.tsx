@@ -201,6 +201,38 @@ const PITCH_COLORS: Record<string, string> = {
   Knuckleball: 'darkblue',
   Undefined: '#9ca3af',
 };
+const COLOR_COLUMNS_BY_MODE: Record<string, string[]> = {
+  Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100'],
+  Live: ['InZone%', 'Strike%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'Whiff%'],
+  Results: ['FPS(FB)%', 'FPS(OS)%', 'Whiff%', 'K%', 'BB%', 'CSW%', 'GB%', 'Barrel%', 'EV'],
+  Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
+  Custom: [
+    'InZone%',
+    'Comp%',
+    'Strike%',
+    'Swing%',
+    'FPS%',
+    'FPS(FB)%',
+    'FPS(OS)%',
+    'Early%',
+    'Ahead%',
+    'E+A%',
+    '1-1W%',
+    'QP%',
+    'Ctrl+',
+    'QP+',
+    'Stuff+',
+    'Pitching+',
+    'RV/100',
+    'K%',
+    'BB%',
+    'Whiff%',
+    'CSW%',
+    'GB%',
+    'Barrel%',
+    'EV',
+  ],
+};
 const splitByLabel = (value: string): string => (value === 'Inning' ? 'Inning of Appearance' : value);
 
 function toNum(value: unknown): number | null {
@@ -292,6 +324,14 @@ function reorderPitchCountRows<T extends Record<string, unknown>>(rows: T[], spl
     return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
   });
   return [...allRows, ...nonAllRows];
+}
+function placeAllRowsAtBottom<T extends Record<string, unknown>>(rows: T[], splitColumn: string): T[] {
+  if (!splitColumn || rows.length <= 1) return rows;
+  const allRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() === 'all');
+  if (!allRows.length) return rows;
+  const nonAllRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() !== 'all');
+  if (!nonAllRows.length) return rows;
+  return [...nonAllRows, ...allRows];
 }
 function normalizePitchTypeName(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -519,12 +559,21 @@ function playerQueryKey(domain: Domain): 'pitcher' | 'hitter' | 'catcher' {
   if (domain === 'Hitting') return 'hitter';
   return 'catcher';
 }
-function normalizeNameForApi(value: string): string {
-  const trimmed = String(value ?? '').trim();
-  if (!trimmed || trimmed === 'All' || trimmed.includes(',')) return trimmed === 'All' ? '' : trimmed;
-  const parts = trimmed.split(/\s+/);
-  if (parts.length < 2) return trimmed;
-  return `${parts[parts.length - 1]}, ${parts.slice(0, -1).join(' ')}`;
+function baselineSplitByForDomain(domain: Domain): string {
+  if (domain === 'Pitching') return 'Pitcher';
+  if (domain === 'Hitting') return 'Hitter';
+  return 'Catcher';
+}
+function hasUsableChartPoints(payload: OverviewPayload | null | undefined): boolean {
+  const points = payload?.chart_points ?? payload?.heatmap_points ?? [];
+  if (!points.length) return false;
+  return points.some((point) => {
+    const hasPlate = Number.isFinite(toNum(point.plate_side)) && Number.isFinite(toNum(point.plate_height));
+    const hasMovement = Number.isFinite(toNum(point.hb)) && Number.isFinite(toNum(point.ivb));
+    const hasRelease = Number.isFinite(toNum(point.release_side)) && Number.isFinite(toNum(point.release_height));
+    const hasVelocity = Number.isFinite(toNum(point.rel_speed)) || Number.isFinite(toNum(point.velo));
+    return hasPlate || hasMovement || hasRelease || hasVelocity;
+  });
 }
 function emptyPaneState(): PaneState {
   return {
@@ -547,7 +596,7 @@ function emptyPaneState(): PaneState {
     pitcherHand: 'All',
     batterHand: 'All',
     tableMode: defaultTableMode('Pitching'),
-    splitBy: DOMAIN_SPLIT_BY.Pitching[0],
+    splitBy: 'Pitch Types',
     sortColumn: '',
     sortDirection: 'desc',
   };
@@ -559,6 +608,48 @@ function normalizeMultiSelect(values: string[]): string[] {
 }
 function selectedMultiValues(values: string[]): string[] {
   return normalizeMultiSelect(values).filter((value) => value !== 'All');
+}
+function normalizePercentileColumnToken(column: string): string {
+  return String(column ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+function percentileForValue(value: number, distribution: number[]): number | null {
+  if (!Number.isFinite(value) || !distribution.length) return null;
+  if (distribution.length < 2) return null;
+  const min = distribution[0];
+  const max = distribution[distribution.length - 1];
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+  let less = 0;
+  let equal = 0;
+  for (const sample of distribution) {
+    if (sample < value) less += 1;
+    else if (sample === value) equal += 1;
+  }
+  const rank = less + equal / 2;
+  const percentile = (rank / distribution.length) * 100;
+  return Math.max(0, Math.min(100, percentile));
+}
+const LOWER_IS_BETTER_PERCENTILE_COLUMNS = new Set([
+  'era',
+  'fip',
+  'xfip',
+  'siera',
+  'bb',
+  'barrel',
+  'ev',
+  'rv100',
+  'pv100',
+  'hr',
+]);
+function adjustPercentileDirection(column: string, percentile: number): number {
+  const token = normalizePercentileColumnToken(column);
+  if (!LOWER_IS_BETTER_PERCENTILE_COLUMNS.has(token)) return percentile;
+  return Math.max(0, Math.min(100, 100 - percentile));
+}
+function percentileTextColor(value: number): string {
+  return value >= 70 || value <= 30 ? '#f8fafc' : '#111827';
 }
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const rgb = (r: number, g: number, b: number) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
@@ -957,6 +1048,10 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [enableTableColors, setEnableTableColors] = useState(true);
+  const [showCellPercentiles, setShowCellPercentiles] = useState(false);
+  const [percentileScope, setPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
+  const [percentileBaselineRows, setPercentileBaselineRows] = useState<Array<Record<string, string | number | null>>>([]);
+  const [loadingPercentileBaseline, setLoadingPercentileBaseline] = useState(false);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [locationHover, setLocationHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: OverviewPayload }>());
@@ -1034,7 +1129,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     const params = new URLSearchParams();
     params.set('start_date', state.startDate);
     params.set('end_date', state.endDate);
-    const selectedPlayers = selectedMultiValues(state.player).map(normalizeNameForApi).filter(Boolean);
+    const selectedPlayers = selectedMultiValues(state.player).filter(Boolean);
     const selectedPitchTypes = selectedMultiValues(state.pitchType);
     const selectedPitchResults = selectedMultiValues(state.pitchResult);
     const selectedCountFilters = selectedMultiValues(state.countFilter);
@@ -1059,16 +1154,14 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       params.set('chart_points_limit', isProSchool ? '700' : '1000');
     }
     const requestKey = `${domainOverviewEndpoint(state.domain)}?${params.toString()}`;
-    const isLeagueSchool = String(filters?.school_code ?? '').trim().toUpperCase() === 'LEAGUE';
-    const chartRequestKey = (shouldForceProFastLoad || isLeagueSchool)
-      ? (() => {
-          const chartParams = new URLSearchParams(params);
-          chartParams.set('include_chart_points', '1');
-          chartParams.set('chart_points_limit', '350');
-          chartParams.set('chart_only', '1');
-          return `${domainOverviewEndpoint(state.domain)}?${chartParams.toString()}`;
-        })()
-      : null;
+    const chartRequestKey = (() => {
+      const chartParams = new URLSearchParams(params);
+      chartParams.set('include_chart_points', '1');
+      chartParams.set('chart_points_limit', '350');
+      chartParams.set('chart_only', '1');
+      if (!isProSchool && state.domain === 'Pitching') chartParams.set('force_raw', '1');
+      return `${domainOverviewEndpoint(state.domain)}?${chartParams.toString()}`;
+    })();
     const overviewTtlMs = isProSchool ? 90000 : 30000;
     const loadingTimer = window.setTimeout(() => {
       if (!active) return;
@@ -1117,7 +1210,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         overviewCacheRef.current.set(requestKey, { at: Date.now(), payload });
         applyOverviewPayload(payload);
         if (!chartRequestKey) return;
-        const hasMainChartPoints = (payload.chart_points?.length ?? 0) > 0 || (payload.heatmap_points?.length ?? 0) > 0;
+        const hasMainChartPoints = hasUsableChartPoints(payload);
         if (hasMainChartPoints) return;
         const cachedChart = overviewCacheRef.current.get(chartRequestKey);
         if (cachedChart && Date.now() - cachedChart.at < overviewTtlMs) {
@@ -1162,6 +1255,95 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     };
   }, [state.domain, state.startDate, state.endDate, state.player, state.sessionType, state.level, state.teamType, state.pitchType, state.pitchResult, state.countFilter, state.afterCountFilter, state.pitcherHand, state.batterHand, state.tableMode, state.splitBy, filters?.school_code, customTables]);
 
+  useEffect(() => {
+    let active = true;
+    if (!state.startDate || !state.endDate) return () => { active = false; };
+    const isProSchool = String(filters?.school_code ?? '').trim().toUpperCase() === 'PRO';
+    const activeScope = isProSchool ? 'MLB' : percentileScope;
+    if (activeScope === 'TEAM') return () => { active = false; };
+    const selectedCustomTable = String(state.tableMode).startsWith('custom_saved:')
+      ? customTables.find((item) => `custom_saved:${item.id}` === state.tableMode) ?? null
+      : null;
+    const effectiveTableMode = selectedCustomTable ? 'Custom' : state.tableMode;
+    const params = new URLSearchParams();
+    params.set('start_date', state.startDate);
+    params.set('end_date', state.endDate);
+    const selectedPitchTypes = selectedMultiValues(state.pitchType);
+    const selectedPitchResults = selectedMultiValues(state.pitchResult);
+    const selectedCountFilters = selectedMultiValues(state.countFilter);
+    const selectedAfterCountFilters = selectedMultiValues(state.afterCountFilter);
+    if (!isProSchool && state.sessionType !== 'All') params.set('session_type', state.sessionType);
+    if (isProSchool && state.level !== 'All') params.set('level', state.level);
+    params.delete(playerQueryKey(state.domain));
+    if (!isProSchool) params.set('team_type', 'All');
+    else params.set('team_type', 'All');
+    if (selectedPitchTypes.length) params.set('pitch_types', selectedPitchTypes.join(';'));
+    if (selectedPitchResults.length) params.set('pitch_results', selectedPitchResults.join(';'));
+    if (selectedCountFilters.length) params.set('count_filter', selectedCountFilters.join(';'));
+    if (selectedAfterCountFilters.length) params.set('after_count_filter', selectedAfterCountFilters.join(';'));
+    if (state.pitcherHand !== 'All') params.set('hand', state.pitcherHand);
+    if (state.batterHand !== 'All') params.set('batter_side', state.batterHand);
+    params.set('table_mode', effectiveTableMode);
+    if (selectedCustomTable?.columns?.length) params.set('custom_columns', selectedCustomTable.columns.join(','));
+    const baselineSplitBy = state.splitBy === 'All' ? baselineSplitByForDomain(state.domain) : state.splitBy;
+    params.set('split_by', baselineSplitBy);
+    params.set('percentile_baseline', '1');
+    params.set('include_chart_points', '0');
+    if (!isProSchool && activeScope === 'MLB') params.set('percentile_pool', 'mlb');
+    const useMlbPercentileScope = isProSchool || activeScope === 'MLB';
+    if (useMlbPercentileScope) {
+      params.set('start_date', '2026-01-01');
+      params.set('end_date', '2026-12-31');
+      params.set('level', 'MLB');
+    }
+    const requestKey = `${domainOverviewEndpoint(state.domain)}?${params.toString()}`;
+    const loadingTimer = window.setTimeout(() => {
+      if (!active) return;
+      setLoadingPercentileBaseline(true);
+    }, 0);
+    fetch(requestKey, { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed percentile baseline request.');
+        return Array.isArray(payload.table_rows) ? payload.table_rows : [];
+      })
+      .then((rows) => {
+        if (!active) return;
+        setPercentileBaselineRows(rows);
+      })
+      .catch(() => {
+        if (!active) return;
+        setPercentileBaselineRows([]);
+      })
+      .finally(() => {
+        if (!active) return;
+        setLoadingPercentileBaseline(false);
+      });
+    return () => {
+      window.clearTimeout(loadingTimer);
+      active = false;
+    };
+  }, [
+    state.domain,
+    state.startDate,
+    state.endDate,
+    state.player,
+    state.sessionType,
+    state.level,
+    state.teamType,
+    state.pitchType,
+    state.pitchResult,
+    state.countFilter,
+    state.afterCountFilter,
+    state.pitcherHand,
+    state.batterHand,
+    state.tableMode,
+    state.splitBy,
+    percentileScope,
+    filters?.school_code,
+    customTables,
+  ]);
+
   const playersByTeam = useMemo(() => {
     if (!filters || !state.teamType || state.teamType === 'All') return null;
     if (state.domain === 'Pitching') return filters.pitchers_by_team_code?.[state.teamType] ?? null;
@@ -1203,65 +1385,153 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
 
   const points = overview?.chart_points ?? [];
   const heatmapPoints = overview?.heatmap_points ?? points;
-  const tableColumns = overview?.table_columns ?? [];
+  const tableColumns = useMemo(() => overview?.table_columns ?? [], [overview?.table_columns]);
   const tableColorMode = useMemo(() => {
     if (!state.tableMode) return '';
     if (state.tableMode === 'Custom' || String(state.tableMode).startsWith('custom_saved:')) return 'Custom';
     return state.tableMode;
   }, [state.tableMode]);
-  const shouldColorTable = useMemo(
-    () => enableTableColors && ['Process', 'Live', 'Results', 'Bullpen', 'Custom'].includes(tableColorMode),
-    [enableTableColors, tableColorMode]
-  );
-  const colorColumnsByMode: Record<string, string[]> = {
-    Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100'],
-    Live: ['InZone%', 'Strike%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'Whiff%'],
-    Results: ['FPS(FB)%', 'FPS(OS)%', 'Whiff%', 'K%', 'BB%', 'CSW%', 'GB%', 'Barrel%', 'EV'],
-    Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
-    Custom: [
-      'InZone%',
-      'Comp%',
-      'Strike%',
-      'Swing%',
-      'FPS%',
-      'FPS(FB)%',
-      'FPS(OS)%',
-      'Early%',
-      'Ahead%',
-      'E+A%',
-      '1-1W%',
-      'QP%',
-      'Ctrl+',
-      'QP+',
-      'Stuff+',
-      'Pitching+',
-      'RV/100',
-      'K%',
-      'BB%',
-      'Whiff%',
-      'CSW%',
-      'GB%',
-      'Barrel%',
-      'EV',
-    ],
-  };
-  const tableColorColumns = useMemo(() => colorColumnsByMode[tableColorMode] ?? [], [tableColorMode]);
+  const shouldColorTable = useMemo(() => enableTableColors, [enableTableColors]);
+  const tableColorColumns = useMemo(() => COLOR_COLUMNS_BY_MODE[tableColorMode] ?? [], [tableColorMode]);
   const splitColName = tableColumns[0] ?? '';
   const sortedRows = useMemo(() => {
     const splitColumn = tableColumns[0] ?? '';
     const sortCol = state.sortColumn && tableColumns.includes(state.sortColumn) ? state.sortColumn : (tableColumns[1] ?? tableColumns[0] ?? '');
     const baseRows = sortTableRows(overview?.table_rows ?? [], sortCol, state.sortDirection, splitColumn);
-    if (state.splitBy === 'Times Through Order') {
-      return reorderTimesThroughOrderRows(baseRows, splitColumn);
-    }
-    if (state.splitBy === 'Inning') {
-      return reorderInningRows(baseRows, splitColumn);
-    }
-    if (state.splitBy === 'Pitch Count') {
-      return reorderPitchCountRows(baseRows, splitColumn);
-    }
-    return baseRows;
+    const orderedRows = state.splitBy === 'Times Through Order'
+      ? reorderTimesThroughOrderRows(baseRows, splitColumn)
+      : state.splitBy === 'Inning'
+        ? reorderInningRows(baseRows, splitColumn)
+        : state.splitBy === 'Pitch Count'
+          ? reorderPitchCountRows(baseRows, splitColumn)
+          : baseRows;
+    return placeAllRowsAtBottom(orderedRows, splitColumn);
   }, [overview?.table_rows, tableColumns, state.sortColumn, state.sortDirection, state.splitBy]);
+  const isProSchool = String(filters?.school_code ?? '').trim().toUpperCase() === 'PRO';
+  const percentileDistributionsByColumn = useMemo(() => {
+    const byColumn = new Map<string, number[]>();
+    const splitColumn = tableColumns[0] ?? '';
+    const sourceRows = percentileBaselineRows.filter((row) => {
+      if (!splitColumn) return true;
+      const splitValue = String(row[splitColumn] ?? '').trim().toLowerCase();
+      return splitValue !== 'all' && splitValue !== 'all (pinned)';
+    });
+    for (const column of tableColumns.slice(1)) {
+      const values = sourceRows
+        .map((row) => parseSortableNumber(row[column]))
+        .filter((value): value is number => value !== null)
+        .sort((a, b) => a - b);
+      if (values.length > 1) byColumn.set(column, values);
+    }
+    return byColumn;
+  }, [tableColumns, percentileBaselineRows]);
+  const percentileTeamDistributionsByColumn = useMemo(() => {
+    const byColumn = new Map<string, number[]>();
+    const splitColumn = tableColumns[0] ?? '';
+    const sourceRows = sortedRows.filter((row) => {
+      if (!splitColumn) return true;
+      const splitValue = String(row[splitColumn] ?? '').trim().toLowerCase();
+      return splitValue !== 'all' && splitValue !== 'all (pinned)';
+    });
+    for (const column of tableColumns.slice(1)) {
+      const values = sourceRows
+        .map((row) => parseSortableNumber(row[column]))
+        .filter((value): value is number => value !== null)
+        .sort((a, b) => a - b);
+      if (values.length > 1) byColumn.set(column, values);
+    }
+    return byColumn;
+  }, [tableColumns, sortedRows]);
+  const percentileFallbackDistributionsByColumn = useMemo(() => {
+    const byColumn = new Map<string, number[]>();
+    for (const column of tableColumns.slice(1)) {
+      const values = sortedRows
+        .map((row) => parseSortableNumber(row[column]))
+        .filter((value): value is number => value !== null)
+        .sort((a, b) => a - b);
+      if (values.length > 1) byColumn.set(column, values);
+    }
+    return byColumn;
+  }, [tableColumns, sortedRows]);
+  const percentileGlobalDistributionsByToken = useMemo(() => {
+    const byToken = new Map<string, number[]>();
+    for (const row of percentileBaselineRows) {
+      for (const [column, rawValue] of Object.entries(row)) {
+        const token = normalizePercentileColumnToken(column);
+        if (!token) continue;
+        const numeric = parseSortableNumber(rawValue);
+        if (numeric === null) continue;
+        const bucket = byToken.get(token) ?? [];
+        bucket.push(numeric);
+        byToken.set(token, bucket);
+      }
+    }
+    byToken.forEach((values, token) => {
+      if (values.length > 1) byToken.set(token, values.sort((a, b) => a - b));
+      else byToken.delete(token);
+    });
+    return byToken;
+  }, [percentileBaselineRows]);
+  const percentileTeamGlobalDistributionsByToken = useMemo(() => {
+    const byToken = new Map<string, number[]>();
+    for (const row of sortedRows) {
+      for (const [column, rawValue] of Object.entries(row)) {
+        const token = normalizePercentileColumnToken(column);
+        if (!token) continue;
+        const numeric = parseSortableNumber(rawValue);
+        if (numeric === null) continue;
+        const bucket = byToken.get(token) ?? [];
+        bucket.push(numeric);
+        byToken.set(token, bucket);
+      }
+    }
+    byToken.forEach((values, token) => {
+      if (values.length > 1) byToken.set(token, values.sort((a, b) => a - b));
+      else byToken.delete(token);
+    });
+    return byToken;
+  }, [sortedRows]);
+  const getDistributionByToken = (map: Map<string, number[]>, column: string): number[] => {
+    const direct = map.get(column);
+    if (direct && direct.length > 1) return direct;
+    const token = normalizePercentileColumnToken(column);
+    for (const [key, values] of map.entries()) {
+      if (values.length <= 1) continue;
+      if (normalizePercentileColumnToken(key) === token) return values;
+    }
+    return [];
+  };
+  const getCellPercentile = (column: string, rawValue: unknown): number | null => {
+    if (!tableColumns.length || column === tableColumns[0]) return null;
+    const useTeamScope = !isProSchool && percentileScope === 'TEAM';
+    const teamPool = getDistributionByToken(percentileTeamDistributionsByColumn, column);
+    const baselinePool = getDistributionByToken(percentileDistributionsByColumn, column);
+    const rowPool = getDistributionByToken(percentileFallbackDistributionsByColumn, column);
+    const token = normalizePercentileColumnToken(column);
+    const teamTokenPool = percentileTeamGlobalDistributionsByToken.get(token) ?? [];
+    const baselineTokenPool = percentileGlobalDistributionsByToken.get(token) ?? [];
+    const pool = useTeamScope
+      ? (
+          teamPool.length > 1
+            ? teamPool
+            : (teamTokenPool.length > 1
+              ? teamTokenPool
+              : (baselinePool.length > 1
+                ? baselinePool
+                : (baselineTokenPool.length > 1 ? baselineTokenPool : rowPool)))
+        )
+      : (
+          baselinePool.length > 1
+            ? baselinePool
+            : (baselineTokenPool.length > 1 ? baselineTokenPool : rowPool)
+        );
+    if (!pool.length) return null;
+    const numeric = parseSortableNumber(rawValue);
+    if (numeric === null) return null;
+    const percentile = percentileForValue(numeric, pool);
+    if (percentile === null) return null;
+    return adjustPercentileDirection(column, percentile);
+  };
   const pitchTypeForRow = (row: Record<string, string | number | null>): string => {
     if (state.splitBy !== 'Pitch Types') return 'all';
     const raw = row[splitColName];
@@ -1281,6 +1551,13 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       return { backgroundColor: bg, color: textColor };
     }
     if (!shouldColorTable) return null;
+    const percentileValue = getCellPercentile(column, row[column]);
+    if (percentileValue !== null) {
+      return {
+        backgroundColor: divergingColor(percentileValue, 0, 50, 100),
+        color: percentileTextColor(percentileValue),
+      };
+    }
     if (!tableColorColumns.includes(column)) return null;
     const effectiveSchoolCode = (overview?.school_code ?? filters?.school_code ?? '').trim();
     const colors = getCellColorScale(row[column], column, pitchTypeForRow(row), state.domain, effectiveSchoolCode);
@@ -2220,7 +2497,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
                   afterCountFilter: ['All'],
                   heatMetric: HEAT_METRICS_BY_DOMAIN[next as Domain][0],
                   tableMode: defaultTableMode(next as Domain),
-                  splitBy: DOMAIN_SPLIT_BY[next as Domain][0],
+                  splitBy: 'Pitch Types',
                 }))
               }
             />
@@ -2332,9 +2609,21 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
       </article>
 
       <article className="portal-admin-card dashboard-panel" style={{ padding: 12, overflowX: 'auto' }}>
-        <div className="portal-form-grid" style={{ marginBottom: 10, gridTemplateColumns: compact ? '1fr' : 'repeat(3, minmax(160px, 260px))' }}>
+        <div className="portal-form-grid" style={{ marginBottom: 10, gridTemplateColumns: compact ? '1fr' : (!isProSchool ? 'repeat(5, minmax(140px, 240px))' : 'repeat(4, minmax(140px, 240px))') }}>
           <ControlSelect label="Table" value={state.tableMode} options={tableModeOptions} onChange={(next) => setState((current) => ({ ...current, tableMode: next }))} />
           <ControlSelect label="Split By" value={state.splitBy} options={splitByOptions} onChange={(next) => setState((current) => ({ ...current, splitBy: next }))} />
+          {!isProSchool ? (
+            <ControlSelect
+              label="Percentile By"
+              value={percentileScope}
+              options={[
+                { value: 'NCAA', label: 'NCAA' },
+                { value: 'MLB', label: 'MLB' },
+                { value: 'TEAM', label: 'TEAM' },
+              ]}
+              onChange={(next) => setPercentileScope((next as 'NCAA' | 'TEAM' | 'MLB') || 'NCAA')}
+            />
+          ) : null}
           <div className="portal-color-toggle" style={{ alignSelf: 'end' }}>
             <span className="portal-color-toggle-label">Color Code</span>
             <button
@@ -2346,7 +2635,21 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
               onClick={() => setEnableTableColors((current) => !current)}
             />
           </div>
+          <div className="portal-color-toggle" style={{ alignSelf: 'end' }}>
+            <span className="portal-color-toggle-label">Show Percentile</span>
+            <button
+              type="button"
+              className={`portal-color-toggle-btn${showCellPercentiles ? ' is-on' : ''}`}
+              aria-label="Toggle percentile labels in table cells"
+              aria-pressed={showCellPercentiles}
+              title={showCellPercentiles ? 'Percentile labels on' : 'Percentile labels off'}
+              onClick={() => setShowCellPercentiles((current) => !current)}
+            />
+          </div>
         </div>
+        {loadingPercentileBaseline && (!isProSchool ? percentileScope !== 'TEAM' : true) ? (
+          <p className="portal-muted-text" style={{ margin: '0 0 0.5rem 0' }}>Loading percentiles...</p>
+        ) : null}
         <table className="portal-table">
           <thead>
             <tr>
@@ -2374,9 +2677,21 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
                   const baseText = formatTableDisplayValue(column, raw);
                   const text = ['Pitcher', 'Batter', 'Catcher'].includes(column) ? formatNameFirstLast(baseText) : baseText;
                   const cellStyle = getTableCellStyle(row, column);
+                  const percentileValue = getCellPercentile(column, raw);
+                  const showPercentileLabel =
+                    showCellPercentiles &&
+                    percentileValue !== null &&
+                    column !== tableColumns[0];
                   return (
                     <td key={`${rowIndex}-${column}`} style={cellStyle ? { ...cellStyle, fontWeight: 700, textAlign: 'center' } : { textAlign: 'center' }}>
-                      {text}
+                      {showPercentileLabel ? (
+                        <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15 }}>
+                          <span>{text}</span>
+                          <span style={{ fontSize: '0.66rem', opacity: 0.78, marginTop: 2 }}>{percentileValue!.toFixed(1)}%</span>
+                        </span>
+                      ) : (
+                        text
+                      )}
                     </td>
                   );
                 })}

@@ -18,6 +18,7 @@ const TWO_DECIMAL_STAT_COLUMNS = new Set([
   'ERA',
   'FIP',
   'XFIP',
+  'SIERA',
 ]);
 
 export function parseSortableNumber(value: unknown): number | null {
