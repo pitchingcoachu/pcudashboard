@@ -3012,8 +3012,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             const activeScope: PercentileScope = schoolNorm === 'PRO' ? 'MLB' : percentileScope;
             if (activeScope === 'MLB') baselineParams.set('percentile_pool', 'mlb');
             else baselineParams.delete('percentile_pool');
-            if (activeScope === 'TEAM' && reportTeam && reportTeam !== 'All') {
-              baselineParams.set('team_type', reportTeam);
+            if (activeScope === 'TEAM') {
+              if (reportTeam && reportTeam !== 'All') {
+                baselineParams.set('team_type', reportTeam);
+              } else if (schoolNorm && schoolNorm !== 'LEAGUE') {
+                baselineParams.set('team_type', schoolNorm);
+              }
             }
             percentileBaselineKey = `${endpoint}?${baselineParams.toString()}`;
           }

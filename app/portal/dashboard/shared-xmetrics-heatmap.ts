@@ -14,7 +14,36 @@ type SharedPoint = {
   plate_height?: number | null;
   estimated_woba_using_speedangle?: number | null;
   iso_value?: number | null;
+  xWOBA?: number | string | null;
+  xwoba?: number | string | null;
+  xISO?: number | string | null;
+  xiso?: number | string | null;
 };
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function pointXwoba(point: SharedPoint): number | null {
+  return (
+    toFiniteNumber(point.estimated_woba_using_speedangle) ??
+    toFiniteNumber(point.xWOBA) ??
+    toFiniteNumber(point.xwoba)
+  );
+}
+
+function pointXiso(point: SharedPoint): number | null {
+  return (
+    toFiniteNumber(point.iso_value) ??
+    toFiniteNumber(point.xISO) ??
+    toFiniteNumber(point.xiso)
+  );
+}
 
 export function buildSharedXMetricHeatCells<T extends SharedPoint>(
   points: T[],
@@ -42,23 +71,15 @@ export function buildSharedXMetricHeatCells<T extends SharedPoint>(
   if (!valid.length) return [];
 
   const xMetricShrinkStrength = 0;
-  const globalXwobaRows = valid.filter(
-    (row) =>
-      typeof row.p.estimated_woba_using_speedangle === 'number' &&
-      Number.isFinite(row.p.estimated_woba_using_speedangle)
-  );
-  const globalXisoRows = valid.filter(
-    (row) =>
-      typeof row.p.iso_value === 'number' &&
-      Number.isFinite(row.p.iso_value)
-  );
+  const globalXwobaRows = valid.filter((row) => pointXwoba(row.p) !== null);
+  const globalXisoRows = valid.filter((row) => pointXiso(row.p) !== null);
   const globalXwobaAvg =
     globalXwobaRows.length > 0
-      ? globalXwobaRows.reduce((sum, row) => sum + Number(row.p.estimated_woba_using_speedangle || 0), 0) / globalXwobaRows.length
+      ? globalXwobaRows.reduce((sum, row) => sum + Number(pointXwoba(row.p) || 0), 0) / globalXwobaRows.length
       : 0.35;
   const globalXisoAvg =
     globalXisoRows.length > 0
-      ? globalXisoRows.reduce((sum, row) => sum + Number(row.p.iso_value || 0), 0) / globalXisoRows.length
+      ? globalXisoRows.reduce((sum, row) => sum + Number(pointXiso(row.p) || 0), 0) / globalXisoRows.length
       : 0.17;
 
   const cells: SharedHeatCell[] = [];
@@ -78,18 +99,14 @@ export function buildSharedXMetricHeatCells<T extends SharedPoint>(
         const w = Math.exp(-0.5 * (dx * dx + dy * dy));
         if (w < 1e-6) continue;
         sumW += w;
-        if (
-          typeof rowPoint.p.estimated_woba_using_speedangle === 'number' &&
-          Number.isFinite(rowPoint.p.estimated_woba_using_speedangle)
-        ) {
-          xwobaWSum += w * rowPoint.p.estimated_woba_using_speedangle;
+        const xwoba = pointXwoba(rowPoint.p);
+        if (xwoba !== null) {
+          xwobaWSum += w * xwoba;
           xwobaW += w;
         }
-        if (
-          typeof rowPoint.p.iso_value === 'number' &&
-          Number.isFinite(rowPoint.p.iso_value)
-        ) {
-          xisoWSum += w * rowPoint.p.iso_value;
+        const xiso = pointXiso(rowPoint.p);
+        if (xiso !== null) {
+          xisoWSum += w * xiso;
           xisoW += w;
         }
       }
@@ -108,4 +125,3 @@ export function buildSharedXMetricHeatCells<T extends SharedPoint>(
 
   return cells;
 }
-

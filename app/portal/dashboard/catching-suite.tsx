@@ -1786,6 +1786,7 @@ export default function CatchingSuite() {
           onClose={() => setShowLeaderboardCorrelation(false)}
           title="Catching Leaderboard Correlation"
           columns={overview?.table_columns ?? []}
+          axisColumns={availableCustomColumns}
           rows={leaderboardRowsWithPins}
           viewByLabel={leaderboardViewBy}
           primaryColumnName={(overview?.table_columns ?? [])[0] ?? ''}

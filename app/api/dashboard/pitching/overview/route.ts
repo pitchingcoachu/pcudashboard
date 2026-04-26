@@ -6,7 +6,7 @@ import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashb
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 export const maxDuration = 300;
-const PITCHING_OVERVIEW_CACHE_VERSION = 'adv-metrics-v5';
+const PITCHING_OVERVIEW_CACHE_VERSION = 'adv-metrics-v9';
 
 const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=5, stale-while-revalidate=55',
@@ -398,6 +398,7 @@ export async function GET(request: Request) {
   const isLeaderboardLikeSplit = splitBy === 'Pitcher' || splitBy === 'Pitcher Team';
   const normalizedTableMode = tableMode.toLowerCase();
   const proLeaderboardDefaultModeRequested = !normalizedTableMode || normalizedTableMode === 'live';
+  const leagueLeaderboardDefaultModeRequested = !normalizedTableMode || normalizedTableMode === 'live';
   const customModeRequested = tableMode.toLowerCase() === 'custom' || customColumns.length > 0;
   const start = parseIsoDate(startDate);
   const end = parseIsoDate(endDate);
@@ -532,7 +533,7 @@ export async function GET(request: Request) {
   if (leagueBroadLeaderboard) {
     // Keep League broad leaderboard requests on rollup-only payloads.
     url.searchParams.set('team_type', 'All');
-    if (!customModeRequested) {
+    if (leagueLeaderboardDefaultModeRequested) {
       url.searchParams.set('table_mode', 'Live');
     }
     url.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');

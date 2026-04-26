@@ -2578,13 +2578,12 @@ export default function HittingSuite({
       params.set('chart_only', '1');
       params.set('chart_points_limit', isPro ? '6000' : '5000');
     }
-    const useLegacySummaryTeamColorMode = !isPro && isSummaryPage && summaryPercentileScope === 'TEAM';
     const shouldLoadLeaderboardBaseline = isLeaderboardPage && (leaderboardStatView === 'Percentile' || enableTableColors);
     const shouldLoadGameLogBaseline = isGameLogPage && (showCellPercentiles || enableGameLogColors);
     const shouldLoadPercentileBaseline =
       shouldLoadLeaderboardBaseline ||
       shouldLoadGameLogBaseline ||
-      (isSummaryPage && (showCellPercentiles || summaryStatView === 'Percentile' || (enableTableColors && !useLegacySummaryTeamColorMode)));
+      (isSummaryPage && (showCellPercentiles || summaryStatView === 'Percentile' || enableTableColors));
     if (shouldLoadPercentileBaseline) {
       const baselineParams = new URLSearchParams(params);
       baselineParams.set('percentile_baseline', '1');
@@ -2905,11 +2904,10 @@ export default function HittingSuite({
   }, [percentileBaselineRequestKey]);
 
   useEffect(() => {
-    const useLegacySummaryTeamColorMode = !isPro && summaryPercentileScope === 'TEAM';
     const shouldLoadSummaryPercentiles =
       showCellPercentiles ||
       summaryStatView === 'Percentile' ||
-      (enableTableColors && !useLegacySummaryTeamColorMode);
+      enableTableColors;
     if (dashboardPage !== 'Summary' || !shouldLoadSummaryPercentiles || !percentileBaselineRequestKey) {
       setSummaryPitchTypeDistributions(new Map());
       setLoadingSummaryPitchTypePercentiles(false);
@@ -2945,8 +2943,9 @@ export default function HittingSuite({
     if (splitBy === 'Batter') {
       const cols = tableColumns.slice(1);
       const valuesByColumn = new Map<string, number[]>();
+      const baselineRows = percentileBaselineRows;
       for (const column of cols) {
-        const values = tableRows
+        const values = baselineRows
           .filter((r) => !isAllLikeRowValue(r[splitColumn]))
           .map((r) => parseSortableNumber(r[column]))
           .filter((v): v is number => v !== null)
@@ -3048,7 +3047,7 @@ export default function HittingSuite({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [dashboardPage, splitBy, isPro, summaryPercentileScope, enableTableColors, showCellPercentiles, summaryStatView, percentileBaselineRequestKey, overview?.table_rows, overview?.table_columns, overview?.available_table_columns]);
+  }, [dashboardPage, splitBy, isPro, summaryPercentileScope, enableTableColors, showCellPercentiles, summaryStatView, percentileBaselineRequestKey, percentileBaselineRows, overview?.table_rows, overview?.table_columns, overview?.available_table_columns]);
 
   const sortedGameLogRows = useMemo(
     () => sortTableRows(gameLogRows, gameLogSortColumn, gameLogSortDirection),
@@ -3684,15 +3683,7 @@ export default function HittingSuite({
       rowSplitKey && !isAllLikeRowValue(row[splitColumn])
         ? (scoped.get(`${rowSplitKey}::${column}`) ?? [])
         : [];
-    const isSummaryPage = dashboardPage === 'Summary';
     const isGameLogPageLocal = dashboardPage === 'Game Log';
-    const useTeamScope =
-      !isPro &&
-      (
-        (isLeaderboardPage && leaderboardPercentileScope === 'TEAM') ||
-        (isSummaryPage && summaryPercentileScope === 'TEAM') ||
-        (isGameLogPageLocal && leaderboardPercentileScope === 'TEAM')
-      );
     const distribution = isSummaryPage
       ? (
           (() => {
@@ -3703,17 +3694,11 @@ export default function HittingSuite({
           })()
         )
       : isLeaderboardPage
-      ? (isLeaderboardPage && useTeamScope ? (leaderboardTeamDistributions.get(column) ?? []) : (globalByColumn.get(column) ?? []))
+      ? (globalByColumn.get(column) ?? [])
       : isGameLogPageLocal
-      ? (
-          (() => {
-            const scopedPool = useTeamScope ? (gameLogTeamDistributions.get(column) ?? []) : (globalByColumn.get(column) ?? []);
-            if (scopedPool.length > 1) return scopedPool;
-            return gameLogFallbackDistributions.get(column) ?? [];
-          })()
-        )
+      ? (globalByColumn.get(column) ?? [])
       : scopedDistribution;
-    if (!distribution.length) return null;
+    if (!distribution.length || distribution.length <= 1) return null;
     const numeric = parseSortableNumber(rawValue);
     if (numeric === null) return null;
     const percentile = percentileForValue(numeric, distribution);
@@ -5035,7 +5020,7 @@ export default function HittingSuite({
               (
                 summaryStatView === 'Percentile' ||
                 showCellPercentiles ||
-                (enableTableColors && (isPro || summaryPercentileScope !== 'TEAM'))
+                enableTableColors
               )
             )
           ) ? (
@@ -5220,12 +5205,6 @@ export default function HittingSuite({
                               summaryStatView === 'Percentile' &&
                               percentilesReady &&
                               colIndex > 0;
-                            const useLegacyTableColorParams =
-                              !isPro &&
-                              (
-                                (isLeaderboardPage && leaderboardPercentileScope === 'TEAM') ||
-                                (!isLeaderboardPage && dashboardPage === 'Summary' && summaryPercentileScope === 'TEAM')
-                              );
                             const canPinRow = isLeaderboardPage && colIndex === 0 && !isAllRow && !isPinnedAllRow;
                             const pinKey = canPinRow
                               ? pinKeyFromRow(
@@ -5248,16 +5227,6 @@ export default function HittingSuite({
                                 : null;
                             const contentWithPitchStyle = pitchLabel ?? content;
                             if (!canPinRow) {
-                              const numericValue = parseSortableNumber(rawValue);
-                              const range = leaderboardColumnRanges.get(col);
-                              const canColorCell =
-                                isLeaderboardPage &&
-                                enableTableColors &&
-                                colIndex > 0 &&
-                                !isAllRow &&
-                                !isPinnedAllRow &&
-                                range &&
-                                numericValue !== null;
                               const summaryPercentileText =
                                 !isLeaderboardPage &&
                                 dashboardPage === 'Summary' &&
@@ -5271,15 +5240,13 @@ export default function HittingSuite({
                               const percentileCellStyle =
                                 enableTableColors &&
                                 colIndex > 0 &&
-                                percentileValue !== null &&
-                                !useLegacyTableColorParams
+                                percentileValue !== null
                                   ? {
                                       background: divergingColor(percentileValue, 0, 50, 100),
                                       color: percentileTextColor(percentileValue),
                                     }
                                   : null;
-                              const canUseLegacyColorCell = useLegacyTableColorParams && canColorCell;
-                              if (!canUseLegacyColorCell && !percentileCellStyle) {
+                              if (!percentileCellStyle) {
                                 if (!summaryPercentileText) return contentWithPitchStyle;
                                 return (
                                   <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15 }}>
@@ -5288,10 +5255,7 @@ export default function HittingSuite({
                                   </span>
                                 );
                               }
-                              const style = percentileCellStyle ?? {
-                                background: divergingColor(numericValue!, range!.min, (range!.min + range!.max) / 2, range!.max),
-                                color: '#ffffff',
-                              };
+                              const style = percentileCellStyle;
                               return (
                                 <span
                                   style={{
@@ -6445,6 +6409,7 @@ export default function HittingSuite({
           onClose={() => setShowLeaderboardCorrelation(false)}
           title={isGameLogPage ? 'Hitting Game Log Correlation' : 'Hitting Leaderboard Correlation'}
           columns={correlationColumns}
+          axisColumns={availableCustomColumns}
           rows={correlationRows}
           viewByLabel={isLeaderboardPage ? leaderboardViewBy : 'Player'}
           primaryColumnName={correlationColumns[0] ?? ''}

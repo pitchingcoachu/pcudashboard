@@ -10,6 +10,7 @@ type Props = {
   onClose: () => void;
   title: string;
   columns: string[];
+  axisColumns?: string[];
   rows: LeaderboardRow[];
   viewByLabel: 'Player' | 'Team';
   primaryColumnName?: string;
@@ -99,11 +100,124 @@ function isAllSummaryLabel(value: string): boolean {
   return norm === 'all' || norm === 'all (pinned)';
 }
 
+function AxisSearchSelect({
+  options,
+  value,
+  onChange,
+  placeholder,
+  isLightTheme,
+}: {
+  options: string[];
+  value: string;
+  onChange: (next: string) => void;
+  placeholder: string;
+  isLightTheme: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onDocClick = (event: MouseEvent) => {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const filtered = useMemo(
+    () => options.filter((option) => option.toLowerCase().includes(query.toLowerCase())),
+    [options, query]
+  );
+
+  return (
+    <div ref={rootRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        className="portal-search-select-trigger"
+        style={{
+          width: '100%',
+          justifyContent: 'space-between',
+          background: isLightTheme ? '#fff' : 'rgba(15, 23, 42, 0.82)',
+          color: isLightTheme ? '#374151' : '#e5e7eb',
+          borderColor: isLightTheme ? '#cbd5e1' : 'rgba(255,255,255,0.2)',
+        }}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {value || placeholder}
+      </button>
+      {open ? (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            left: 0,
+            right: 0,
+            zIndex: 30,
+            borderRadius: 10,
+            border: isLightTheme ? '1px solid #cbd5e1' : '1px solid rgba(255,255,255,0.16)',
+            background: isLightTheme ? '#fff' : 'rgba(7, 15, 34, 0.98)',
+            boxShadow: isLightTheme ? '0 10px 24px rgba(15,23,42,0.12)' : '0 12px 26px rgba(2,6,23,0.42)',
+            padding: 8,
+          }}
+        >
+          <input
+            autoFocus
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search stat..."
+            style={{
+              width: '100%',
+              borderRadius: 8,
+              border: isLightTheme ? '1px solid #d1d5db' : '1px solid rgba(255,255,255,0.2)',
+              background: isLightTheme ? '#fff' : 'rgba(15, 23, 42, 0.82)',
+              color: isLightTheme ? '#374151' : '#f8fafc',
+              padding: '0.42rem 0.5rem',
+              marginBottom: 8,
+            }}
+          />
+          <div style={{ maxHeight: 220, overflowY: 'auto', display: 'grid', gap: 4 }}>
+            {filtered.length ? (
+              filtered.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => {
+                    onChange(option);
+                    setOpen(false);
+                  }}
+                  style={{
+                    border: 0,
+                    borderRadius: 8,
+                    textAlign: 'left',
+                    padding: '0.42rem 0.5rem',
+                    cursor: 'pointer',
+                    background: value === option
+                      ? (isLightTheme ? 'rgba(37,99,235,0.12)' : 'rgba(96,165,250,0.24)')
+                      : 'transparent',
+                    color: isLightTheme ? '#334155' : '#e2e8f0',
+                  }}
+                >
+                  {option}
+                </button>
+              ))
+            ) : (
+              <div style={{ fontSize: '0.8rem', opacity: 0.75, padding: '0.2rem 0.25rem' }}>No matching stats</div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function LeaderboardCorrelationModal({
   open,
   onClose,
   title,
   columns,
+  axisColumns,
   rows,
   viewByLabel,
   primaryColumnName,
@@ -194,36 +308,35 @@ export default function LeaderboardCorrelationModal({
 
   const labelColumn = useMemo(() => inferLabelColumn(columns, primaryColumnName), [columns, primaryColumnName]);
 
-  const numericColumns = useMemo(() => {
+  const selectableAxisColumns = useMemo(() => {
     if (!open) return [] as string[];
-    return columns.filter((column) => {
-      if (!column || column === labelColumn) return false;
-      let numericCount = 0;
-      for (const row of rows) {
-        const label = String(row[labelColumn] ?? '');
-        if (isAllSummaryLabel(label)) continue;
-        if (parseSortableNumber(row[column]) !== null) numericCount += 1;
-        if (numericCount >= 2) return true;
-      }
-      return false;
-    });
-  }, [open, columns, rows, labelColumn]);
+    const source = axisColumns?.length ? axisColumns : columns;
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const column of source) {
+      const value = String(column ?? '').trim();
+      if (!value || value === labelColumn || seen.has(value)) continue;
+      seen.add(value);
+      deduped.push(value);
+    }
+    return deduped;
+  }, [open, axisColumns, columns, labelColumn]);
 
   useEffect(() => {
     if (!open) return;
-    if (!numericColumns.length) {
+    if (!selectableAxisColumns.length) {
       setXColumn('');
       setYColumn('');
       return;
     }
-    if (!xColumn || !numericColumns.includes(xColumn)) {
-      setXColumn(numericColumns[0] ?? '');
+    if (!xColumn || !selectableAxisColumns.includes(xColumn)) {
+      setXColumn(selectableAxisColumns[0] ?? '');
     }
-    if (!yColumn || !numericColumns.includes(yColumn) || yColumn === (numericColumns[0] ?? '')) {
-      const fallback = numericColumns.find((column) => column !== (numericColumns[0] ?? '')) ?? numericColumns[0] ?? '';
+    if (!yColumn || !selectableAxisColumns.includes(yColumn) || yColumn === (selectableAxisColumns[0] ?? '')) {
+      const fallback = selectableAxisColumns.find((column) => column !== (selectableAxisColumns[0] ?? '')) ?? selectableAxisColumns[0] ?? '';
       setYColumn(fallback);
     }
-  }, [open, numericColumns, xColumn, yColumn]);
+  }, [open, selectableAxisColumns, xColumn, yColumn]);
 
   useEffect(() => {
     if (!open) return;
@@ -439,33 +552,23 @@ export default function LeaderboardCorrelationModal({
         <div className="portal-corr-column-grid">
           <div className="portal-corr-column-panel">
             <h4>X Axis</h4>
-            <div className="portal-corr-chip-list">
-              {numericColumns.map((column) => (
-                <button
-                  key={`x-${column}`}
-                  type="button"
-                  className={`portal-corr-chip${xColumn === column ? ' is-selected' : ''}`}
-                  onClick={() => setXColumn(column)}
-                >
-                  {column}
-                </button>
-              ))}
-            </div>
+            <AxisSearchSelect
+              options={selectableAxisColumns}
+              value={xColumn}
+              onChange={setXColumn}
+              placeholder="Select X axis stat"
+              isLightTheme={isLightTheme}
+            />
           </div>
           <div className="portal-corr-column-panel">
             <h4>Y Axis</h4>
-            <div className="portal-corr-chip-list">
-              {numericColumns.map((column) => (
-                <button
-                  key={`y-${column}`}
-                  type="button"
-                  className={`portal-corr-chip${yColumn === column ? ' is-selected' : ''}`}
-                  onClick={() => setYColumn(column)}
-                >
-                  {column}
-                </button>
-              ))}
-            </div>
+            <AxisSearchSelect
+              options={selectableAxisColumns}
+              value={yColumn}
+              onChange={setYColumn}
+              placeholder="Select Y axis stat"
+              isLightTheme={isLightTheme}
+            />
           </div>
         </div>
         <label style={{ display: 'grid', gap: 6, maxWidth: 420 }}>
@@ -489,9 +592,9 @@ export default function LeaderboardCorrelationModal({
             Select two different columns to build the chart.
           </p>
         ) : null}
-        {!numericColumns.length ? (
+        {!selectableAxisColumns.length ? (
           <p className="portal-muted-text" style={{ margin: 0 }}>
-            No numeric columns are available for correlation on this table.
+            No columns are available for correlation on this view.
           </p>
         ) : null}
 

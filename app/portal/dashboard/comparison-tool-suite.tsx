@@ -1260,7 +1260,6 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     if (!state.startDate || !state.endDate) return () => { active = false; };
     const isProSchool = String(filters?.school_code ?? '').trim().toUpperCase() === 'PRO';
     const activeScope = isProSchool ? 'MLB' : percentileScope;
-    if (activeScope === 'TEAM') return () => { active = false; };
     const selectedCustomTable = String(state.tableMode).startsWith('custom_saved:')
       ? customTables.find((item) => `custom_saved:${item.id}` === state.tableMode) ?? null
       : null;
@@ -1275,8 +1274,24 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     if (!isProSchool && state.sessionType !== 'All') params.set('session_type', state.sessionType);
     if (isProSchool && state.level !== 'All') params.set('level', state.level);
     params.delete(playerQueryKey(state.domain));
-    if (!isProSchool) params.set('team_type', 'All');
-    else params.set('team_type', 'All');
+    if (!isProSchool) {
+      if (activeScope === 'TEAM') {
+        if (state.teamType && state.teamType !== 'All') {
+          params.set('team_type', state.teamType);
+        } else {
+          const schoolTeamCode = String(filters?.school_code ?? '').trim().toUpperCase();
+          if (schoolTeamCode && schoolTeamCode !== 'PRO' && schoolTeamCode !== 'LEAGUE') {
+            params.set('team_type', schoolTeamCode);
+          } else {
+            params.set('team_type', 'All');
+          }
+        }
+      } else {
+        params.set('team_type', 'All');
+      }
+    } else {
+      params.set('team_type', 'All');
+    }
     if (selectedPitchTypes.length) params.set('pitch_types', selectedPitchTypes.join(';'));
     if (selectedPitchResults.length) params.set('pitch_results', selectedPitchResults.join(';'));
     if (selectedCountFilters.length) params.set('count_filter', selectedCountFilters.join(';'));
@@ -1425,34 +1440,6 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     }
     return byColumn;
   }, [tableColumns, percentileBaselineRows]);
-  const percentileTeamDistributionsByColumn = useMemo(() => {
-    const byColumn = new Map<string, number[]>();
-    const splitColumn = tableColumns[0] ?? '';
-    const sourceRows = sortedRows.filter((row) => {
-      if (!splitColumn) return true;
-      const splitValue = String(row[splitColumn] ?? '').trim().toLowerCase();
-      return splitValue !== 'all' && splitValue !== 'all (pinned)';
-    });
-    for (const column of tableColumns.slice(1)) {
-      const values = sourceRows
-        .map((row) => parseSortableNumber(row[column]))
-        .filter((value): value is number => value !== null)
-        .sort((a, b) => a - b);
-      if (values.length > 1) byColumn.set(column, values);
-    }
-    return byColumn;
-  }, [tableColumns, sortedRows]);
-  const percentileFallbackDistributionsByColumn = useMemo(() => {
-    const byColumn = new Map<string, number[]>();
-    for (const column of tableColumns.slice(1)) {
-      const values = sortedRows
-        .map((row) => parseSortableNumber(row[column]))
-        .filter((value): value is number => value !== null)
-        .sort((a, b) => a - b);
-      if (values.length > 1) byColumn.set(column, values);
-    }
-    return byColumn;
-  }, [tableColumns, sortedRows]);
   const percentileGlobalDistributionsByToken = useMemo(() => {
     const byToken = new Map<string, number[]>();
     for (const row of percentileBaselineRows) {
@@ -1472,25 +1459,6 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
     });
     return byToken;
   }, [percentileBaselineRows]);
-  const percentileTeamGlobalDistributionsByToken = useMemo(() => {
-    const byToken = new Map<string, number[]>();
-    for (const row of sortedRows) {
-      for (const [column, rawValue] of Object.entries(row)) {
-        const token = normalizePercentileColumnToken(column);
-        if (!token) continue;
-        const numeric = parseSortableNumber(rawValue);
-        if (numeric === null) continue;
-        const bucket = byToken.get(token) ?? [];
-        bucket.push(numeric);
-        byToken.set(token, bucket);
-      }
-    }
-    byToken.forEach((values, token) => {
-      if (values.length > 1) byToken.set(token, values.sort((a, b) => a - b));
-      else byToken.delete(token);
-    });
-    return byToken;
-  }, [sortedRows]);
   const getDistributionByToken = (map: Map<string, number[]>, column: string): number[] => {
     const direct = map.get(column);
     if (direct && direct.length > 1) return direct;
@@ -1503,28 +1471,12 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
   };
   const getCellPercentile = (column: string, rawValue: unknown): number | null => {
     if (!tableColumns.length || column === tableColumns[0]) return null;
-    const useTeamScope = !isProSchool && percentileScope === 'TEAM';
-    const teamPool = getDistributionByToken(percentileTeamDistributionsByColumn, column);
     const baselinePool = getDistributionByToken(percentileDistributionsByColumn, column);
-    const rowPool = getDistributionByToken(percentileFallbackDistributionsByColumn, column);
     const token = normalizePercentileColumnToken(column);
-    const teamTokenPool = percentileTeamGlobalDistributionsByToken.get(token) ?? [];
     const baselineTokenPool = percentileGlobalDistributionsByToken.get(token) ?? [];
-    const pool = useTeamScope
-      ? (
-          teamPool.length > 1
-            ? teamPool
-            : (teamTokenPool.length > 1
-              ? teamTokenPool
-              : (baselinePool.length > 1
-                ? baselinePool
-                : (baselineTokenPool.length > 1 ? baselineTokenPool : rowPool)))
-        )
-      : (
-          baselinePool.length > 1
-            ? baselinePool
-            : (baselineTokenPool.length > 1 ? baselineTokenPool : rowPool)
-        );
+    const pool = baselinePool.length > 1
+      ? baselinePool
+      : (baselineTokenPool.length > 1 ? baselineTokenPool : []);
     if (!pool.length) return null;
     const numeric = parseSortableNumber(rawValue);
     if (numeric === null) return null;
@@ -2647,7 +2599,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
             />
           </div>
         </div>
-        {loadingPercentileBaseline && (!isProSchool ? percentileScope !== 'TEAM' : true) ? (
+        {loadingPercentileBaseline ? (
           <p className="portal-muted-text" style={{ margin: '0 0 0.5rem 0' }}>Loading percentiles...</p>
         ) : null}
         <table className="portal-table">
