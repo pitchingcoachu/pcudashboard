@@ -3684,7 +3684,8 @@ export default function HittingSuite({
         ? (scoped.get(`${rowSplitKey}::${column}`) ?? [])
         : [];
     const isGameLogPageLocal = dashboardPage === 'Game Log';
-    const distribution = isSummaryPage
+    const isSummaryPageLocal = dashboardPage === 'Summary';
+    const distribution = isSummaryPageLocal
       ? (
           (() => {
             const rowDistribution = summaryPitchTypeDistributions.get(`${rowSplitKey}::${column}`) ?? [];
