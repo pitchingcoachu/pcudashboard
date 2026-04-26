@@ -5801,6 +5801,9 @@ _PERF_INDEX_SYNC_RUNNING = False
 _PRO_PE_COLUMNS_CACHE: set[str] = set()
 _PRO_PE_COLUMNS_LAST_AT: float = 0.0
 _PRO_PE_COLUMNS_TTL_SECONDS: float = 900.0
+_TABLE_COLUMNS_CACHE: Dict[str, tuple[float, set[str]]] = {}
+_TABLE_COLUMNS_CACHE_TTL_SECONDS: float = 300.0
+_TABLE_COLUMNS_CACHE_LOCK = threading.Lock()
 _LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS = max(
     60.0, float(os.getenv("DASHBOARD_LEAGUE_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS", "300"))
 )
@@ -6805,6 +6808,52 @@ def _pro_pitch_events_columns() -> set[str]:
     except Exception:
         pass
     return _PRO_PE_COLUMNS_CACHE
+
+
+def _table_columns_cached(table_fq: str) -> set[str]:
+    table_key = str(table_fq or "").strip()
+    if not table_key:
+        return set()
+    now = time.monotonic()
+    with _TABLE_COLUMNS_CACHE_LOCK:
+        cached = _TABLE_COLUMNS_CACHE.get(table_key)
+        if cached and (now - cached[0]) < _TABLE_COLUMNS_CACHE_TTL_SECONDS:
+            return cached[1]
+    if "." in table_key:
+        schema_name, table_name = table_key.split(".", 1)
+    else:
+        schema_name, table_name = "public", table_key
+    schema_name = schema_name.strip('"')
+    table_name = table_name.strip('"')
+    cols: set[str] = set()
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = %(schema)s
+                  AND table_name = %(table)s
+                """,
+                {"schema": schema_name, "table": table_name},
+            )
+            cols = {str(r.get("column_name") or "") for r in cur.fetchall() if str(r.get("column_name") or "").strip()}
+    except Exception:
+        cols = set()
+    with _TABLE_COLUMNS_CACHE_LOCK:
+        _TABLE_COLUMNS_CACHE[table_key] = (now, cols)
+    return cols
+
+
+def _sum_select_for_optional_column(
+    table_fq: str,
+    preferred_column: str,
+    alias: str,
+    fallback_column: str,
+) -> str:
+    cols = _table_columns_cached(table_fq)
+    column_name = preferred_column if preferred_column in cols else fallback_column
+    return f"SUM({column_name})::int AS {alias}"
 
 
 def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str] = None) -> None:
@@ -8375,6 +8424,12 @@ def _try_pitching_overview_daily_rollup(
         rollup_source = "public.pitch_events_game_rollup_league"
     else:
         rollup_source = "public.pitch_events_daily_rollup_league_split" if use_split_rollup else "public.pitch_events_daily_rollup_league"
+    fps_swing_sum_select = _sum_select_for_optional_column(
+        table_fq=rollup_source,
+        preferred_column="fps_swing_num",
+        alias="fps_swing_num",
+        fallback_column="fps_num",
+    )
 
     # Mirror the PRO critical leaderboard fast-path for LEAGUE requests.
     if school_code == "LEAGUE" and mode_clean == "Live" and split_clean in {"Pitcher", "Pitcher Team"} and not include_chart_points:
@@ -8400,7 +8455,7 @@ def _try_pitching_overview_daily_rollup(
                       SUM(whiff_n)::int AS whiff_n,
                       SUM(comp_n)::int AS comp_n,
                       SUM(fps_num)::int AS fps_num,
-                  SUM(fps_swing_num)::int AS fps_swing_num,
+                      {fps_swing_sum_select},
                   SUM(fps_den)::int AS fps_den,
                       SUM(ea_num)::int AS ea_num,
                       SUM(ea_den)::int AS ea_den,
@@ -8574,7 +8629,7 @@ def _try_pitching_overview_daily_rollup(
                   SUM(csw_n)::int AS csw_n,
                   SUM(comp_n)::int AS comp_n,
                   SUM(fps_num)::int AS fps_num,
-                  SUM(fps_swing_num)::int AS fps_swing_num,
+                  {fps_swing_sum_select},
                   SUM(fps_den)::int AS fps_den,
                   SUM(early_num)::int AS early_num,
                   SUM(early_den)::int AS early_den,
@@ -9700,9 +9755,11 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                         ''
                       )
                     ) AS away_team_code,
+                    pe.id AS id,
                     COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'at_bat_index', to_jsonb(pe)->>'atbatindex', to_jsonb(pe)->>'playid', pe.id::text)), ''), pe.id::text) AS pa_key,
                     COALESCE((regexp_match(COALESCE(to_jsonb(pe)->>'outs', ''), '[-+]?[0-9]+'))[1]::int, 0) AS outs_num,
                     COALESCE((regexp_match(COALESCE(pe.outsonplay::text, ''), '[-+]?[0-9]+'))[1]::int, 0) AS outs_on_play_num,
+                    COALESCE(pe.created_at, NOW()) AS created_at,
                     estimated_woba_using_speedangle,
                     woba_value,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'official_earned_runs', ''), '[-+]?[0-9]+'))[1], '')::double precision AS official_earned_runs,
@@ -10807,6 +10864,12 @@ def _try_pro_pitching_overview_rollup(
         rollup_source = "public.pro_pitch_events_game_rollup"
     else:
         rollup_source = "public.pro_pitch_events_daily_rollup_split" if use_split_rollup else "public.pro_pitch_events_daily_rollup"
+    fps_swing_sum_select = _sum_select_for_optional_column(
+        table_fq=rollup_source,
+        preferred_column="fps_swing_num",
+        alias="fps_swing_num",
+        fallback_column="fps_num",
+    )
 
     # Critical fast-path for PRO leaderboard on localhost/render:
     # avoid expensive per-pitch-type rollup aggregation when the page only needs
@@ -10833,7 +10896,7 @@ def _try_pro_pitching_overview_rollup(
                       SUM(whiff_n)::int AS whiff_n,
                       SUM(comp_n)::int AS comp_n,
                       SUM(fps_num)::int AS fps_num,
-                  SUM(fps_swing_num)::int AS fps_swing_num,
+                  {fps_swing_sum_select},
                   SUM(fps_den)::int AS fps_den,
                       SUM(ea_num)::int AS ea_num,
                       SUM(ea_den)::int AS ea_den,
@@ -10993,7 +11056,7 @@ def _try_pro_pitching_overview_rollup(
                   SUM(csw_n)::int AS csw_n,
                   SUM(comp_n)::int AS comp_n,
                   SUM(fps_num)::int AS fps_num,
-                  SUM(fps_swing_num)::int AS fps_swing_num,
+                  {fps_swing_sum_select},
                   SUM(fps_den)::int AS fps_den,
                   SUM(chase_num)::int AS chase_num,
                   SUM(chase_den)::int AS chase_den,
@@ -11964,6 +12027,12 @@ def _try_pro_hitting_overview_rollup(
         rollup_source = "public.pro_pitch_events_game_rollup"
     else:
         rollup_source = "public.pro_pitch_events_daily_rollup_split" if use_split_rollup else "public.pro_pitch_events_daily_rollup"
+    fps_swing_sum_select = _sum_select_for_optional_column(
+        table_fq=rollup_source,
+        preferred_column="fps_swing_num",
+        alias="fps_swing_num",
+        fallback_column="fps_num",
+    )
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -11977,7 +12046,7 @@ def _try_pro_hitting_overview_rollup(
                   SUM(whiff_n)::int AS whiff_n,
                   SUM(csw_n)::int AS csw_n,
                   SUM(fps_num)::int AS fps_num,
-                  SUM(fps_swing_num)::int AS fps_swing_num,
+                  {fps_swing_sum_select},
                   SUM(fps_den)::int AS fps_den,
                   SUM(in_zone_n)::int AS in_zone_n,
                   SUM(loc_n)::int AS loc_n,
@@ -12362,6 +12431,12 @@ def _try_league_hitting_overview_rollup(
         rollup_source = "public.pitch_events_game_rollup_league"
     else:
         rollup_source = "public.pitch_events_daily_rollup_league_split" if use_split_rollup else "public.pitch_events_daily_rollup_league"
+    fps_swing_sum_select = _sum_select_for_optional_column(
+        table_fq=rollup_source,
+        preferred_column="fps_swing_num",
+        alias="fps_swing_num",
+        fallback_column="fps_num",
+    )
 
     try:
         with get_conn() as conn, conn.cursor() as cur:
@@ -12376,7 +12451,7 @@ def _try_league_hitting_overview_rollup(
                   SUM(whiff_n)::int AS whiff_n,
                   SUM(csw_n)::int AS csw_n,
                   SUM(fps_num)::int AS fps_num,
-                  SUM(fps_swing_num)::int AS fps_swing_num,
+                  {fps_swing_sum_select},
                   SUM(fps_den)::int AS fps_den,
                   SUM(in_zone_n)::int AS in_zone_n,
                   SUM(loc_n)::int AS loc_n,
