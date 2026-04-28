@@ -200,6 +200,113 @@ function hasValue(value: string): boolean {
   return String(value ?? '').trim().length > 0;
 }
 
+async function maybeAttachPitchingHeatmapRollup(params: {
+  request: Request;
+  payload: unknown;
+  schoolCode: string;
+  startDate: string;
+  endDate: string;
+  sessionType: string;
+  hand: string;
+  pitcher: string;
+  teamType: string;
+  pitchTypes: string;
+  includeChartPoints: string;
+  inZone: string;
+  qpLocations: string;
+  zoneLocations: string;
+  pitchResults: string;
+  countFilter: string;
+  afterCountFilter: string;
+  veloMin: string;
+  veloMax: string;
+  ivbMin: string;
+  ivbMax: string;
+  hbMin: string;
+  hbMax: string;
+  pcMin: string;
+  pcMax: string;
+}): Promise<unknown> {
+  const {
+    request,
+    payload,
+    schoolCode,
+    startDate,
+    endDate,
+    sessionType,
+    hand,
+    pitcher,
+    teamType,
+    pitchTypes,
+    includeChartPoints,
+    inZone,
+    qpLocations,
+    zoneLocations,
+    pitchResults,
+    countFilter,
+    afterCountFilter,
+    veloMin,
+    veloMax,
+    ivbMin,
+    ivbMax,
+    hbMin,
+    hbMax,
+    pcMin,
+    pcMax,
+  } = params;
+  const includeChartsRequested = isTruthy(includeChartPoints);
+  if (!includeChartsRequested) return payload;
+  const hasUnsupportedFilters =
+    hasValue(inZone) ||
+    hasValue(qpLocations) ||
+    hasValue(zoneLocations) ||
+    hasValue(pitchResults) ||
+    hasValue(countFilter) ||
+    hasValue(afterCountFilter) ||
+    hasValue(veloMin) ||
+    hasValue(veloMax) ||
+    hasValue(ivbMin) ||
+    hasValue(ivbMax) ||
+    hasValue(hbMin) ||
+    hasValue(hbMax) ||
+    hasValue(pcMin) ||
+    hasValue(pcMax);
+  if (hasUnsupportedFilters) return payload;
+
+  try {
+    const requestUrl = new URL(request.url);
+    const origin = `${requestUrl.protocol}//${requestUrl.host}`;
+    const rollup = new URL('/api/dashboard/pitching/heatmap-rollup', origin);
+    rollup.searchParams.set('school_code', schoolCode);
+    if (startDate) rollup.searchParams.set('start_date', startDate);
+    if (endDate) rollup.searchParams.set('end_date', endDate);
+    if (sessionType) rollup.searchParams.set('session_type', sessionType);
+    if (hand) rollup.searchParams.set('hand', hand);
+    if (pitcher) rollup.searchParams.set('pitcher', pitcher);
+    if (teamType) rollup.searchParams.set('team_type', teamType);
+    if (pitchTypes) rollup.searchParams.set('pitch_types', pitchTypes);
+    const response = await fetch(rollup.toString(), {
+      cache: 'no-store',
+      headers: { cookie: request.headers.get('cookie') ?? '' },
+    });
+    if (!response.ok) return payload;
+    const rollupPayload = (await response.json().catch(() => ({}))) as { chart_points?: unknown[]; heatmap_points?: unknown[] };
+    const rollupPoints = Array.isArray(rollupPayload.chart_points) ? rollupPayload.chart_points : [];
+    if (!rollupPoints.length) return payload;
+    if (!payload || typeof payload !== 'object') return payload;
+    const next = payload as Record<string, unknown>;
+    return {
+      ...next,
+      chart_points: rollupPoints,
+      heatmap_points: Array.isArray(rollupPayload.heatmap_points) && rollupPayload.heatmap_points.length
+        ? rollupPayload.heatmap_points
+        : rollupPoints,
+    };
+  } catch {
+    return payload;
+  }
+}
+
 async function fetchProSafePitchingLeaderboard(params: {
   apiBase: string;
   schoolCode: string;
@@ -773,7 +880,35 @@ export async function GET(request: Request) {
           : `Dashboard API request failed (HTTP ${result.status}).`;
       return NextResponse.json({ error: message }, { status: result.status });
     }
-    return NextResponse.json(applyOverviewBackfills(result.payload), {
+    const payloadWithBackfills = applyOverviewBackfills(result.payload);
+    const payloadWithRollupHeatmaps = await maybeAttachPitchingHeatmapRollup({
+      request,
+      payload: payloadWithBackfills,
+      schoolCode,
+      startDate,
+      endDate,
+      sessionType,
+      hand,
+      pitcher: scopedPitcher || pitcher,
+      teamType,
+      pitchTypes,
+      includeChartPoints: url.searchParams.get('include_chart_points') ?? includeChartPoints,
+      inZone,
+      qpLocations,
+      zoneLocations,
+      pitchResults,
+      countFilter,
+      afterCountFilter,
+      veloMin,
+      veloMax,
+      ivbMin,
+      ivbMax,
+      hbMin,
+      hbMax,
+      pcMin,
+      pcMax,
+    });
+    return NextResponse.json(payloadWithRollupHeatmaps, {
       headers: {
         ...RESPONSE_CACHE_HEADERS,
         'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',

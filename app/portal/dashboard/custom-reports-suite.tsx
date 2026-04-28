@@ -3294,14 +3294,93 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               : reportType === 'Hitting'
                 ? '/api/dashboard/hitting/overview'
                 : '/api/dashboard/catching/overview';
+          const hasHittingRollupUnsupportedFilters =
+            reportType === 'Hitting' &&
+            (
+              (cellFilters.includes('Pitch Results') && selectedValues(config.pitchResults).length > 0) ||
+              (cellFilters.includes('In Zone') && config.inZone && config.inZone !== 'All') ||
+              (cellFilters.includes('Count') && selectedValues(config.countFilter).length > 0) ||
+              (cellFilters.includes('After Count') && selectedValues(config.afterCountFilter).length > 0) ||
+              (cellFilters.includes('Zone Location') && selectedValues(config.zoneLocations).length > 0) ||
+              (cellFilters.includes('Velo Min/Max') && (((config.veloMin ?? '').trim()) || ((config.veloMax ?? '').trim()))) ||
+              (cellFilters.includes('IVB Min/Max') && (((config.ivbMin ?? '').trim()) || ((config.ivbMax ?? '').trim()))) ||
+              (cellFilters.includes('HB Min/Max') && (((config.hbMin ?? '').trim()) || ((config.hbMax ?? '').trim())))
+            );
+          const hasPitchingRollupUnsupportedFilters =
+            reportType === 'Pitching' &&
+            (
+              (cellFilters.includes('Pitch Results') && selectedValues(config.pitchResults).length > 0) ||
+              (cellFilters.includes('QP Locations') && config.qpLocations && config.qpLocations !== 'All') ||
+              (cellFilters.includes('In Zone') && config.inZone && config.inZone !== 'All') ||
+              (cellFilters.includes('Count') && selectedValues(config.countFilter).length > 0) ||
+              (cellFilters.includes('After Count') && selectedValues(config.afterCountFilter).length > 0) ||
+              (cellFilters.includes('Zone Location') && selectedValues(config.zoneLocations).length > 0) ||
+              (cellFilters.includes('Velo Min/Max') && (((config.veloMin ?? '').trim()) || ((config.veloMax ?? '').trim()))) ||
+              (cellFilters.includes('IVB Min/Max') && (((config.ivbMin ?? '').trim()) || ((config.ivbMax ?? '').trim()))) ||
+              (cellFilters.includes('HB Min/Max') && (((config.hbMin ?? '').trim()) || ((config.hbMax ?? '').trim())))
+            );
           const heatmapRollupEndpoint =
-            reportType === 'Hitting' && isProSchool && reportScope === 'Multi-Player' && normalizedPanelType === 'Heatmap'
-              ? '/api/dashboard/hitting/heatmap-rollup'
+            normalizedPanelType === 'Heatmap'
+              ? (
+                reportType === 'Hitting'
+                  ? (!hasHittingRollupUnsupportedFilters ? '/api/dashboard/hitting/heatmap-rollup' : '')
+                  : (reportType === 'Pitching' && !hasPitchingRollupUnsupportedFilters
+                    ? '/api/dashboard/pitching/heatmap-rollup'
+                    : '')
+              )
               : '';
+          const pitchingTableRollupEndpoint =
+            (() => {
+              const supportedPitchingTableRollupColumns = new Set([
+                '#', 'P', 'PA', 'BF', 'AB', 'AVG', 'OBP', 'SLG', 'OPS', 'H', 'XBH', 'HR', 'HBP', 'BB', 'K', 'Whiffs',
+                'Velo', 'Max', 'IVB', 'HB', 'Spin', 'Height', 'Side', 'Ext', 'rTilt',
+                'Usage', 'Overall', 'InZone%', 'Comp%', 'Strike%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%',
+                'FPS(FB)%', 'FPS(OS)%',
+                'Swing%', 'Whiff%', 'SwStrk%', 'GB%', 'Barrel%', 'K%', 'BB%', 'K-BB%', 'CSW%', 'Called-S%', 'Take%', 'Chase%',
+                'EV', 'xWOBA', 'xISO', 'RV/100', 'PV/100',
+                'Stuff+', 'QP+', 'Ctrl+', 'Pitching+',
+                'ERA', 'FIP', 'xFIP', 'SIERA', 'WHIP',
+              ]);
+              const usesSupportedCustomColumnsOnly = matchedCustomTable
+                ? (matchedCustomTable.columns ?? []).every((col) => supportedPitchingTableRollupColumns.has(String(col ?? '').trim()))
+                : false;
+              if (
+                reportType === 'Pitching' &&
+                normalizedPanelType === 'Summary Table' &&
+                !hasPitchingRollupUnsupportedFilters &&
+                ['Pitch Types', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(config.splitBy || 'Pitch Types') &&
+                usesSupportedCustomColumnsOnly
+              ) {
+                return '/api/dashboard/pitching/table-rollup';
+              }
+              return '';
+            })();
+          const hittingTableRollupEndpoint =
+            (() => {
+              const supportedHittingTableRollupColumns = new Set([
+                '#', 'P', 'PA', 'BF', 'AB', 'AVG', 'OBP', 'SLG', 'OPS', 'H', 'XBH', 'HR', 'HBP', 'BB', 'K', 'Whiffs',
+                'Usage', 'Overall', 'InZone%', 'Strike%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%',
+                'Swing%', 'Swing Rate', 'Whiff%', 'Whiff Rate', 'SwStrk%', 'GB%', 'GB Rate', 'Barrel%', 'K%', 'BB%', 'K-BB%', 'CSW%', 'Called-S%', 'Take%', 'Chase%',
+                'EV', 'Exit Velocity', 'xWOBA', 'xISO', 'RV/100', 'PV/100',
+              ]);
+              const usesSupportedCustomColumnsOnly = matchedCustomTable
+                ? (matchedCustomTable.columns ?? []).every((col) => supportedHittingTableRollupColumns.has(String(col ?? '').trim()))
+                : false;
+              if (
+                reportType === 'Hitting' &&
+                normalizedPanelType === 'Summary Table' &&
+                !hasHittingRollupUnsupportedFilters &&
+                ['Pitch Types', 'Pitcher Hand', 'Batter Team', 'Count', 'After Count', 'Inning'].includes(config.splitBy || 'Pitch Types') &&
+                usesSupportedCustomColumnsOnly
+              ) {
+                return '/api/dashboard/hitting/table-rollup';
+              }
+              return '';
+            })();
           const query = params.toString();
           const key = `${endpoint}?${query}`;
           const canUseSharedHeatmapSource =
-            reportType === 'Hitting' &&
+            (reportType === 'Hitting' || reportType === 'Pitching') &&
             reportScope === 'Multi-Player' &&
             normalizedPanelType === 'Heatmap' &&
             cellFilters.includes('Pitch Types');
@@ -3314,7 +3393,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const fetchKey = (() => {
             if (heatmapRollupEndpoint) {
               const rollupParams = new URLSearchParams(params);
-              rollupParams.set('school_code', 'PRO');
+              rollupParams.set('school_code', String(resolvedSchoolCode || '').trim().toUpperCase());
+              if (canUseSharedHeatmapSource) rollupParams.delete('pitch_types');
               rollupParams.delete('table_mode');
               rollupParams.delete('split_by');
               rollupParams.delete('custom_columns');
@@ -3324,13 +3404,33 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               rollupParams.set('include_chart_points', '1');
               return `${heatmapRollupEndpoint}?${rollupParams.toString()}`;
             }
+            if (pitchingTableRollupEndpoint) {
+              const rollupParams = new URLSearchParams(params);
+              rollupParams.set('school_code', String(resolvedSchoolCode || '').trim().toUpperCase());
+              rollupParams.delete('include_chart_points');
+              rollupParams.delete('chart_points_limit');
+              rollupParams.delete('chart_only');
+              rollupParams.delete('include_row_pitches');
+              rollupParams.delete('include_trend_rows');
+              return `${pitchingTableRollupEndpoint}?${rollupParams.toString()}`;
+            }
+            if (hittingTableRollupEndpoint) {
+              const rollupParams = new URLSearchParams(params);
+              rollupParams.set('school_code', String(resolvedSchoolCode || '').trim().toUpperCase());
+              rollupParams.delete('include_chart_points');
+              rollupParams.delete('chart_points_limit');
+              rollupParams.delete('chart_only');
+              rollupParams.delete('include_row_pitches');
+              rollupParams.delete('include_trend_rows');
+              return `${hittingTableRollupEndpoint}?${rollupParams.toString()}`;
+            }
             return sharedHeatmapFetchKey || key;
           })();
           const shouldLoadPercentileBaseline =
             normalizedPanelType === 'Summary Table' && reportType !== 'Catching' && (enableTableColors || showCellPercentiles);
           let percentileBaselineKey = '';
           const skipPerCellBaselineFetch =
-            reportType === 'Hitting' &&
+            (reportType === 'Hitting' || reportType === 'Pitching') &&
             reportScope === 'Multi-Player' &&
             normalizedPanelType === 'Summary Table';
           if (shouldLoadPercentileBaseline) {
@@ -3381,10 +3481,22 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             const requestPromise = (async () => {
               try {
                 const normalized = await queueBatchedOverviewFetch(fetchKey);
+                if (heatmapRollupEndpoint && fetchKey !== key) {
+                  const points = Array.isArray(normalized?.chart_points) ? normalized.chart_points : [];
+                  if (!points.length) {
+                    throw new Error('Rollup returned no chart points');
+                  }
+                }
+                if (pitchingTableRollupEndpoint && fetchKey !== key) {
+                  const rows = Array.isArray(normalized?.table_rows) ? normalized.table_rows : [];
+                  if (!rows.length) {
+                    throw new Error('Rollup returned no table rows');
+                  }
+                }
                 cellsCacheRef.current.set(fetchKey, { at: Date.now(), payload: normalized });
                 return normalized;
               } catch (error) {
-                if (!heatmapRollupEndpoint || fetchKey === key) throw error;
+                if ((!heatmapRollupEndpoint && !pitchingTableRollupEndpoint) || fetchKey === key) throw error;
                 const fallback = await queueBatchedOverviewFetch(key);
                 cellsCacheRef.current.set(key, { at: Date.now(), payload: fallback });
                 return fallback;

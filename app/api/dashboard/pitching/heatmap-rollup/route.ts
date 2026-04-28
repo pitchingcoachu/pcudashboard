@@ -3,41 +3,31 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
 
-export const maxDuration = 120;
-
 function parseCsv(value: string | null): string[] {
   return String(value ?? '')
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
-
 function normalizeName(value: string): string {
   return String(value ?? '').trim().toLowerCase();
 }
-
 function normalizeHand(value: string): string {
   const raw = String(value ?? '').trim().toLowerCase();
   if (raw === 'right' || raw === 'r') return 'Right';
   if (raw === 'left' || raw === 'l') return 'Left';
   return '';
 }
-
-function normalizeLevel(value: string): string {
-  const raw = String(value ?? '').trim().toUpperCase();
-  return raw || 'ALL';
-}
 function normalizeSessionType(value: string): string {
   const raw = String(value ?? '').trim().toUpperCase();
   return raw && raw !== 'ALL' ? raw : '';
 }
-
 function maybeTeamCode(value: string): string {
   const raw = String(value ?? '').trim();
   if (!raw || raw.toLowerCase() === 'all') return '';
   const direct = raw.toUpperCase();
-  if (/^[A-Z0-9]{2,5}$/.test(direct)) return direct;
-  const paren = raw.match(/\(([A-Z0-9]{2,5})\)\s*$/i)?.[1];
+  if (/^[A-Z0-9]{2,8}$/.test(direct)) return direct;
+  const paren = raw.match(/\(([A-Z0-9]{2,8})\)\s*$/i)?.[1];
   if (paren) return String(paren).toUpperCase();
   return '';
 }
@@ -55,11 +45,10 @@ export async function GET(request: Request) {
 
   const startDate = String(url.searchParams.get('start_date') ?? '').trim();
   const endDate = String(url.searchParams.get('end_date') ?? '').trim();
-  const level = normalizeLevel(String(url.searchParams.get('level') ?? ''));
   const sessionType = normalizeSessionType(String(url.searchParams.get('session_type') ?? ''));
   const hand = normalizeHand(String(url.searchParams.get('hand') ?? ''));
-  const hitterList = parseCsv(url.searchParams.get('hitter'));
-  const hitterNorms = Array.from(new Set(hitterList.map(normalizeName).filter(Boolean)));
+  const pitcherList = parseCsv(url.searchParams.get('pitcher'));
+  const pitcherNorms = Array.from(new Set(pitcherList.map(normalizeName).filter(Boolean)));
   const teamCode = maybeTeamCode(String(url.searchParams.get('team_type') ?? ''));
   const pitchTypes = parseCsv(url.searchParams.get('pitch_types'));
   const pitchTypeSet = new Set(pitchTypes.map((value) => value.trim().toLowerCase()).filter(Boolean));
@@ -75,26 +64,13 @@ export async function GET(request: Request) {
     where.push(clause.replace('?', `$${values.length}`));
   };
 
-  if (schoolCode === 'PRO') {
-    if (startDate) add('session_date >= ?::date', startDate);
-    if (endDate) add('session_date <= ?::date', endDate);
-    if (level && level !== 'ALL') add('level_bucket = ?', level);
-    if (hand) add('pitcherthrows_norm = ?', hand);
-    if (teamCode) add('batter_team_code = ?', teamCode);
-    if (hitterNorms.length) add('batter_norm = ANY(?::text[])', hitterNorms);
-  } else {
-    if (startDate) add('session_date >= ?::date', startDate);
-    if (endDate) add('session_date <= ?::date', endDate);
-    add('school_code = ?', schoolCode);
-    if (sessionType) add('session_type_bucket = ?', sessionType);
-    if (hand) add('pitcherthrows_norm = ?', hand);
-    if (teamCode) add('batter_team_code = ?', teamCode);
-    if (hitterNorms.length) add('batter_norm = ANY(?::text[])', hitterNorms);
-  }
-
-  const tableRef = schoolCode === 'PRO'
-    ? 'public.pro_hitting_heatmap_daily_bins'
-    : 'public.hitting_heatmap_daily_bins';
+  add('school_code = ?', schoolCode);
+  if (startDate) add('session_date >= ?::date', startDate);
+  if (endDate) add('session_date <= ?::date', endDate);
+  if (sessionType) add('session_type_bucket = ?', sessionType);
+  if (hand) add('batterside_norm = ?', hand);
+  if (teamCode) add('pitcher_team_code = ?', teamCode);
+  if (pitcherNorms.length) add('pitcher_norm = ANY(?::text[])', pitcherNorms);
 
   const result = await pool.query<{
     plate_x_bin: number;
@@ -132,7 +108,7 @@ export async function GET(request: Request) {
         SUM(xwoba_n)::int AS xwoba_n,
         SUM(ev_sum)::double precision AS ev_sum,
         SUM(ev_n)::int AS ev_n
-      FROM ${tableRef}
+      FROM public.pitching_heatmap_daily_bins
       WHERE ${where.join(' AND ')}
       GROUP BY plate_x_bin, plate_z_bin, pitch_type
     `,

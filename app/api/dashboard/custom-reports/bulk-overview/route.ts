@@ -6,6 +6,9 @@ export const maxDuration = 300;
 
 const ALLOWED_PREFIXES = new Set([
   '/api/dashboard/pitching/overview',
+  '/api/dashboard/pitching/heatmap-rollup',
+  '/api/dashboard/pitching/table-rollup',
+  '/api/dashboard/hitting/table-rollup',
   '/api/dashboard/hitting/overview',
   '/api/dashboard/hitting/heatmap-rollup',
   '/api/dashboard/catching/overview',
@@ -45,7 +48,12 @@ function parseKeys(input: unknown): string[] {
   return Array.from(new Set(out));
 }
 
-async function fetchOverviewKey(baseUrl: string, cookieHeader: string, key: string): Promise<{ payload?: unknown; error?: string }> {
+async function fetchOverviewKey(
+  baseUrl: string,
+  cookieHeader: string,
+  key: string
+): Promise<{ payload?: unknown; error?: string; meta?: { duration_ms: number; source: string; fallback: string } }> {
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 90000);
   try {
@@ -59,7 +67,14 @@ async function fetchOverviewKey(baseUrl: string, cookieHeader: string, key: stri
     if (!response.ok) {
       return { error: String((payload as { error?: unknown })?.error ?? 'Request failed') };
     }
-    return { payload };
+    return {
+      payload,
+      meta: {
+        duration_ms: Date.now() - startedAt,
+        source: String(response.headers.get('x-dashboard-cache-source') || response.headers.get('x-dashboard-cache') || 'unknown'),
+        fallback: String(response.headers.get('x-dashboard-fallback') || ''),
+      },
+    };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       return { error: 'Request timeout' };
@@ -71,6 +86,7 @@ async function fetchOverviewKey(baseUrl: string, cookieHeader: string, key: stri
 }
 
 export async function POST(request: Request) {
+  const routeStartedAt = Date.now();
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -86,6 +102,7 @@ export async function POST(request: Request) {
   const cookieHeader = request.headers.get('cookie') ?? '';
   const items: Record<string, unknown> = {};
   const errors: Record<string, string> = {};
+  const meta: Record<string, { duration_ms: number; source: string; fallback: string }> = {};
   const cache = bulkOverviewCache();
   const now = Date.now();
   const userScope = String(session.userId ?? 0);
@@ -96,7 +113,10 @@ export async function POST(request: Request) {
     const cached = cache.get(scopedKey);
     if (cached && now - cached.at < BULK_OVERVIEW_TTL_MS) {
       if (cached.error) errors[key] = cached.error;
-      else items[key] = cached.payload ?? {};
+      else {
+        items[key] = cached.payload ?? {};
+        meta[key] = { duration_ms: 0, source: 'bulk-cache-hit', fallback: '' };
+      }
       continue;
     }
     unresolved.push(key);
@@ -122,10 +142,14 @@ export async function POST(request: Request) {
       } else {
         cache.set(scopedKey, { at: Date.now(), payload: result.payload });
         items[current] = result.payload ?? {};
+        if (result.meta) meta[current] = result.meta;
       }
     }
   });
   await Promise.all(workers);
 
-  return NextResponse.json({ items, errors });
+  return NextResponse.json(
+    { items, errors, meta },
+    { headers: { 'x-dashboard-bulk-route-ms': String(Date.now() - routeStartedAt) } }
+  );
 }

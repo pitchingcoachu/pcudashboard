@@ -54,6 +54,85 @@ function hasValue(value: string): boolean {
   return String(value ?? '').trim().length > 0;
 }
 
+async function maybeAttachHittingHeatmapRollup(params: {
+  requestOrigin: string;
+  schoolCode: string;
+  level: string;
+  startDate: string;
+  endDate: string;
+  sessionType: string;
+  hand: string;
+  hitter: string;
+  teamType: string;
+  pitchTypes: string;
+  includeChartPoints: string;
+  inputUrl: URL;
+  payload: unknown;
+}): Promise<unknown> {
+  const {
+    requestOrigin,
+    schoolCode,
+    level,
+    startDate,
+    endDate,
+    sessionType,
+    hand,
+    hitter,
+    teamType,
+    pitchTypes,
+    includeChartPoints,
+    inputUrl,
+    payload,
+  } = params;
+
+  if (!isTruthy(includeChartPoints)) return payload;
+  if (!payload || typeof payload !== 'object') return payload;
+
+  const hasUnsupportedFilters = [
+    'pitch_results',
+    'in_zone',
+    'count_filter',
+    'after_count_filter',
+    'zone_locations',
+    'bip_result',
+    'velo_min',
+    'velo_max',
+    'ivb_min',
+    'ivb_max',
+    'hb_min',
+    'hb_max',
+    'pc_min',
+    'pc_max',
+  ].some((key) => hasValue(inputUrl.searchParams.get(key)?.trim() ?? ''));
+  if (hasUnsupportedFilters) return payload;
+
+  try {
+    const rollup = new URL('/api/dashboard/hitting/heatmap-rollup', requestOrigin);
+    rollup.searchParams.set('school_code', schoolCode);
+    if (level) rollup.searchParams.set('level', level);
+    if (startDate) rollup.searchParams.set('start_date', startDate);
+    if (endDate) rollup.searchParams.set('end_date', endDate);
+    if (sessionType) rollup.searchParams.set('session_type', sessionType);
+    if (hand) rollup.searchParams.set('hand', hand);
+    if (hitter) rollup.searchParams.set('hitter', hitter);
+    if (teamType) rollup.searchParams.set('team_type', teamType);
+    if (pitchTypes) rollup.searchParams.set('pitch_types', pitchTypes);
+
+    const response = await fetch(rollup.toString(), { cache: 'no-store' });
+    if (!response.ok) return payload;
+    const rollupPayload = (await response.json().catch(() => ({}))) as { chart_points?: unknown[]; heatmap_points?: unknown[] };
+    const rollupPoints = Array.isArray(rollupPayload.chart_points) ? rollupPayload.chart_points : [];
+    if (!rollupPoints.length) return payload;
+    return {
+      ...(payload as Record<string, unknown>),
+      chart_points: rollupPoints,
+      heatmap_points: rollupPoints,
+    };
+  } catch {
+    return payload;
+  }
+}
+
 async function fetchProSafeHittingLeaderboard(params: {
   apiBase: string;
   schoolCode: string;
@@ -122,6 +201,7 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const inputUrl = new URL(request.url);
+  const requestOrigin = inputUrl.origin;
   const requestedPercentileBaseline = isTruthy(inputUrl.searchParams.get('percentile_baseline')?.trim() ?? '');
   const percentilePool = inputUrl.searchParams.get('percentile_pool')?.trim().toLowerCase() ?? '';
   const useMlbPercentilePool = requestedPercentileBaseline && percentilePool === 'mlb';
@@ -146,6 +226,7 @@ export async function GET(request: Request) {
   const startDate = inputUrl.searchParams.get('start_date')?.trim() ?? '';
   const endDate = inputUrl.searchParams.get('end_date')?.trim() ?? '';
   const teamType = inputUrl.searchParams.get('team_type')?.trim() ?? '';
+  const sessionType = inputUrl.searchParams.get('session_type')?.trim() ?? '';
   const oppPitcher = inputUrl.searchParams.get('opp_pitcher')?.trim() ?? '';
   const hand = inputUrl.searchParams.get('hand')?.trim() ?? '';
   const batterSide = inputUrl.searchParams.get('batter_side')?.trim() ?? '';
@@ -176,6 +257,7 @@ export async function GET(request: Request) {
     'end_date',
     'hitter',
     'team_type',
+    'session_type',
     'opp_pitcher',
     'hand',
     'batter_side',
@@ -503,7 +585,22 @@ export async function GET(request: Request) {
           : `Dashboard API request failed (HTTP ${result.status}).`;
       return NextResponse.json({ error: message }, { status: result.status });
     }
-    return NextResponse.json(result.payload, {
+    const payloadWithRollupHeatmaps = await maybeAttachHittingHeatmapRollup({
+      requestOrigin,
+      schoolCode,
+      level,
+      startDate,
+      endDate,
+      sessionType,
+      hand,
+      hitter: scopedHitter || requestedHitter,
+      teamType,
+      pitchTypes: inputUrl.searchParams.get('pitch_types')?.trim() ?? '',
+      includeChartPoints: url.searchParams.get('include_chart_points') ?? includeChartPoints,
+      inputUrl,
+      payload: result.payload,
+    });
+    return NextResponse.json(payloadWithRollupHeatmaps, {
       headers: {
         ...RESPONSE_CACHE_HEADERS,
         'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',
