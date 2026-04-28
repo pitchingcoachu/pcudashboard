@@ -2636,6 +2636,21 @@ body.theme-light .portal-theme-toggle-btn.active {
   gap: 0.2rem;
 }
 
+.portal-custom-reports-row-player-item input,
+.portal-custom-reports-row-player-item textarea,
+.portal-custom-reports-row-player-item select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  font: 500 0.84rem/1.2 Manrope, sans-serif;
+  color: var(--text-main);
+  background: rgba(10, 10, 10, 0.9);
+}
+
 .portal-custom-reports-team-player-drag-item {
   border: 1px dashed rgba(255, 255, 255, 0.2);
   border-radius: 10px;
@@ -3079,6 +3094,14 @@ body.theme-light .portal-custom-reports-notes {
 body.theme-light .portal-custom-reports-team-player-drag-item {
   border-color: rgba(15, 23, 42, 0.22);
   background: rgba(248, 250, 252, 0.96);
+}
+
+body.theme-light .portal-custom-reports-row-player-item input,
+body.theme-light .portal-custom-reports-row-player-item textarea,
+body.theme-light .portal-custom-reports-row-player-item select {
+  color: #0f172a;
+  border-color: rgba(15, 23, 42, 0.2);
+  background: rgba(255, 255, 255, 0.98);
 }
 
 body.theme-light .portal-custom-reports-legend-dot {

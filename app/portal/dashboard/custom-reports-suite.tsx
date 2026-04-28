@@ -465,6 +465,17 @@ function toFirstLast(name: string): string {
   return trimmed;
 }
 
+function toLastFirst(name: string): string {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) return '';
+  if (trimmed.includes(',')) return trimmed;
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return trimmed;
+  const last = parts[parts.length - 1];
+  const first = parts.slice(0, -1).join(' ');
+  return `${last}, ${first}`.trim();
+}
+
 function toYmd(value: string | null | undefined): string {
   if (!value) return '';
   const date = new Date(value);
@@ -480,9 +491,38 @@ function fmtShortDate(value: string | null | undefined): string {
 }
 
 function normalizeNameForApi(value: string): string {
-  const trimmed = (value ?? '').trim();
+  const trimmed = (value ?? '')
+    .replace(/\s+\(([RLS])\)\s*$/i, '')
+    .trim();
   if (!trimmed || trimmed === 'All') return '';
   return trimmed;
+}
+
+function hitterNameCandidatesForApi(value: string): string[] {
+  const base = normalizeNameForApi(value);
+  if (!base) return [];
+  const formatted = toFirstLast(base);
+  const lastFirstFromBase = toLastFirst(base);
+  const lastFirstFromFormatted = toLastFirst(formatted);
+  const candidates = [
+    base,
+    formatted,
+    lastFirstFromBase,
+    lastFirstFromFormatted,
+    base.replace(/\s+/g, ' ').trim(),
+    formatted.replace(/\s+/g, ' ').trim(),
+    lastFirstFromBase.replace(/\s+/g, ' ').trim(),
+    lastFirstFromFormatted.replace(/\s+/g, ' ').trim(),
+  ].filter(Boolean);
+  return Array.from(new Set(candidates));
+}
+
+function inferPitcherHandFromTitle(title: string): 'Right' | 'Left' | '' {
+  const normalized = String(title ?? '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (/\bvs\.\s*rhp\b/.test(normalized)) return 'Right';
+  if (/\bvs\.\s*lhp\b/.test(normalized)) return 'Left';
+  return '';
 }
 
 function subjectLabelForReportType(reportType: ReportType): string {
@@ -1086,10 +1126,16 @@ const normalizePercentileColumnToken = (value: string): string =>
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '');
-const LOWER_IS_BETTER_PERCENTILE_COLUMNS = new Set(
-  ['BB%', 'HR%', 'Barrel%', 'EV', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'].map((column) =>
+const LOWER_IS_BETTER_DEFAULT_COLUMNS = new Set(
+  ['HR%', 'EV', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'].map((column) =>
     normalizePercentileColumnToken(column)
   )
+);
+const LOWER_IS_BETTER_PITCHING_ONLY_COLUMNS = new Set(
+  ['BB%'].map((column) => normalizePercentileColumnToken(column))
+);
+const LOWER_IS_BETTER_HITTING_ONLY_COLUMNS = new Set(
+  ['K%', 'SwStrk%'].map((column) => normalizePercentileColumnToken(column))
 );
 const percentileForValue = (value: number, distribution: number[]): number | null => {
   if (!Number.isFinite(value) || distribution.length < 2) return null;
@@ -1104,14 +1150,99 @@ const percentileForValue = (value: number, distribution: number[]): number | nul
   }
   return Math.max(0, Math.min(100, ((less + (equal * 0.5)) / sorted.length) * 100));
 };
-const adjustPercentileDirection = (column: string, percentile: number): number => {
+const adjustPercentileDirection = (column: string, percentile: number, reportType: ReportType): number => {
   const token = normalizePercentileColumnToken(column);
-  if (!LOWER_IS_BETTER_PERCENTILE_COLUMNS.has(token)) return percentile;
+  const isLowerBetter =
+    LOWER_IS_BETTER_DEFAULT_COLUMNS.has(token) ||
+    (reportType === 'Pitching' && LOWER_IS_BETTER_PITCHING_ONLY_COLUMNS.has(token)) ||
+    (reportType === 'Hitting' && LOWER_IS_BETTER_HITTING_ONLY_COLUMNS.has(token));
+  if (!isLowerBetter) return percentile;
   return Math.max(0, Math.min(100, 100 - percentile));
 };
 const percentileTextColor = (value: number): string => {
   if (value <= 25 || value >= 75) return '#ffffff';
   return '#111827';
+};
+const isMeaningfulCellValue = (value: unknown): boolean =>
+  !(value === null || value === undefined || (typeof value === 'string' && value.trim() === ''));
+const resolveAliasTokens = (token: string): string[] => {
+  if (token === 'xwoba') return ['xwoba', 'estimatedwobausingspeedangle'];
+  return [token];
+};
+const getTableRowValue = (row: Record<string, unknown>, column: string): unknown => {
+  if (Object.prototype.hasOwnProperty.call(row, column)) return row[column];
+  const targetToken = normalizePercentileColumnToken(column);
+  if (!targetToken) return row[column];
+  const aliases = resolveAliasTokens(targetToken);
+  const entries = Object.entries(row);
+  for (const alias of aliases) {
+    for (const [key, raw] of entries) {
+      if (normalizePercentileColumnToken(key) === alias && isMeaningfulCellValue(raw)) return raw;
+    }
+  }
+  for (const alias of aliases) {
+    for (const [key] of entries) {
+      if (normalizePercentileColumnToken(key) === alias) return row[key];
+    }
+  }
+  return row[column];
+};
+const hasNonEmptyTableRows = (payload: OverviewLitePayload): boolean =>
+  Array.isArray(payload.table_rows) && payload.table_rows.length > 0;
+const hasChartPoints = (payload: OverviewLitePayload): boolean =>
+  Array.isArray(payload.chart_points) && payload.chart_points.length > 0;
+const isMissingMetricValue = (value: unknown): boolean => {
+  if (value === null || value === undefined) return true;
+  const text = String(value).trim().toLowerCase();
+  return !text || text === '-' || text === '—' || text === 'na' || text === 'n/a' || text === 'null';
+};
+const withXwobaBackfillFromChartPoints = (payload: OverviewLitePayload): OverviewLitePayload => {
+  const columns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+  const rows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+  const points = Array.isArray(payload.chart_points) ? payload.chart_points : [];
+  if (!columns.length || !rows.length || !points.length) return payload;
+  const xwobaColumn = columns.find((col) => normalizePercentileColumnToken(col) === 'xwoba');
+  if (!xwobaColumn) return payload;
+  const splitColumn = String(columns[0] ?? '');
+  if (!splitColumn) return payload;
+  const splitIsPitchLike = normalizePercentileColumnToken(splitColumn) === 'pitch';
+  const xwobaPoints = points
+    .map((point) => Number(point.estimated_woba_using_speedangle))
+    .filter((value) => Number.isFinite(value));
+  if (!xwobaPoints.length) return payload;
+  const globalAvg = xwobaPoints.reduce((sum, value) => sum + value, 0) / xwobaPoints.length;
+  const byPitch = new Map<string, number[]>();
+  if (splitIsPitchLike) {
+    for (const point of points) {
+      const xwoba = Number(point.estimated_woba_using_speedangle);
+      if (!Number.isFinite(xwoba)) continue;
+      const key = normalizePitchTypeName(canonicalPitchType(String(point.pitch_type ?? '').trim()) || String(point.pitch_type ?? '').trim());
+      if (!key || key === 'all') continue;
+      if (!byPitch.has(key)) byPitch.set(key, []);
+      byPitch.get(key)!.push(xwoba);
+    }
+  }
+  let changed = false;
+  const nextRows = rows.map((row) => {
+    const raw = getTableRowValue(row as Record<string, unknown>, xwobaColumn);
+    if (!isMissingMetricValue(raw)) return row;
+    const rowObj = { ...(row as Record<string, string | number | null>) };
+    const splitValue = String(getTableRowValue(rowObj as Record<string, unknown>, splitColumn) ?? '').trim();
+    let replacement: number | null = null;
+    if (!splitValue || splitValue.toLowerCase() === 'all') {
+      replacement = globalAvg;
+    } else if (splitIsPitchLike) {
+      const token = normalizePitchTypeName(canonicalPitchType(splitValue) || splitValue);
+      const values = byPitch.get(token) ?? [];
+      if (values.length) replacement = values.reduce((sum, value) => sum + value, 0) / values.length;
+    }
+    if (replacement === null || !Number.isFinite(replacement)) return row;
+    rowObj[xwobaColumn] = Number(replacement.toFixed(3));
+    changed = true;
+    return rowObj;
+  });
+  if (!changed) return payload;
+  return { ...payload, table_rows: nextRows };
 };
 const normalizePitchTypeName = (value: string): string => {
   const v = String(value ?? '').trim().toLowerCase();
@@ -1976,18 +2107,21 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       return { splitColumn, scoped, globalByColumn };
     }
     for (const row of baselineRows) {
-      const splitKey = String(row[splitColumn] ?? '').trim().toLowerCase();
+      const splitValue = getTableRowValue(row as Record<string, unknown>, splitColumn);
+      const splitKey = String(splitValue ?? '').trim().toLowerCase();
       for (const column of tableColumns) {
         if (column === splitColumn) continue;
-        const num = parseCellNumber(row[column]);
+        const columnToken = normalizePercentileColumnToken(column);
+        if (!columnToken) continue;
+        const num = parseCellNumber(getTableRowValue(row as Record<string, unknown>, column));
         if (num === null) continue;
-        if (!globalByColumn.has(column)) globalByColumn.set(column, []);
-        globalByColumn.get(column)!.push(num);
+        if (!globalByColumn.has(columnToken)) globalByColumn.set(columnToken, []);
+        globalByColumn.get(columnToken)!.push(num);
         if (!splitKey) continue;
         if (!scoped.has(splitKey)) scoped.set(splitKey, new Map());
         const byColumn = scoped.get(splitKey)!;
-        if (!byColumn.has(column)) byColumn.set(column, []);
-        byColumn.get(column)!.push(num);
+        if (!byColumn.has(columnToken)) byColumn.set(columnToken, []);
+        byColumn.get(columnToken)!.push(num);
       }
     }
     return { splitColumn, scoped, globalByColumn };
@@ -2002,13 +2136,16 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     if (num === null) return null;
     const { splitColumn, scoped, globalByColumn } = distributions;
     if (!splitColumn || column === splitColumn) return null;
-    const splitKey = String(row[splitColumn] ?? '').trim().toLowerCase();
-    const scopedDistribution = splitKey ? scoped.get(splitKey)?.get(column) ?? [] : [];
-    const globalDistribution = globalByColumn.get(column) ?? [];
+    const splitValue = getTableRowValue(row as Record<string, unknown>, splitColumn);
+    const splitKey = String(splitValue ?? '').trim().toLowerCase();
+    const columnToken = normalizePercentileColumnToken(column);
+    if (!columnToken) return null;
+    const scopedDistribution = splitKey ? scoped.get(splitKey)?.get(columnToken) ?? [] : [];
+    const globalDistribution = globalByColumn.get(columnToken) ?? [];
     const distribution = scopedDistribution.length > 1 ? scopedDistribution : globalDistribution;
     const percentileRaw = percentileForValue(num, distribution);
     if (percentileRaw === null) return null;
-    return adjustPercentileDirection(column, percentileRaw);
+    return adjustPercentileDirection(column, percentileRaw, reportType);
   };
   const teamScopePlayers = useMemo(
     () => Array.from(new Set(teamScopeSelectedPlayers.map((entry) => String(entry ?? '').trim()).filter((entry) => entry && entry !== 'All'))),
@@ -2763,6 +2900,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         })
         .filter(({ config }) => config && config.panelType !== 'Note Section')
         .slice(0, 400);
+      const prioritizedRequests = [...requests].sort((a, b) => {
+        const aType = normalizePanelType(a.config.panelType);
+        const bType = normalizePanelType(b.config.panelType);
+        const aPriority = aType === 'Summary Table' ? 0 : 1;
+        const bPriority = bType === 'Summary Table' ? 0 : 1;
+        if (aPriority !== bPriority) return aPriority - bPriority;
+        return a.cellId.localeCompare(b.cellId);
+      });
       if (!requests.length) {
         setCellsData({});
         setCellPercentileBaselineRows({});
@@ -2794,7 +2939,16 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       );
       let nextRequestIndex = 0;
       const isProWorkload = String(resolvedSchoolCode || '').trim().toUpperCase() === 'PRO';
-      const workerCount = isProWorkload ? (reportScope === 'Team' ? 1 : 3) : reportScope === 'Team' ? 1 : 5;
+      const workerCount =
+        isProWorkload
+          ? reportScope === 'Team'
+            ? 1
+            : reportScope === 'Multi-Player'
+              ? 5
+              : 3
+          : reportScope === 'Team'
+            ? 1
+            : 5;
       const commitCellResult = (cellId: string, payload: OverviewLitePayload, state: CellLoadState) => {
         out[cellId] = payload;
         nextCellStates[cellId] = state;
@@ -2892,6 +3046,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const endDate = useGlobalDates ? globalEndDate : config.dateEnd || globalEndDate;
           const ignoreDateWindow = reportType === 'Hitting' && useMostRecent200Pa;
           const cellFilters = config.filterSelect ?? ['Dates', 'Session Type', 'Pitch Types'];
+          const impliedPitcherHand = reportType === 'Hitting' ? inferPitcherHandFromTitle(reportTitle) : '';
           const params = new URLSearchParams();
           const isProSchool = String(resolvedSchoolCode || '').trim().toUpperCase() === 'PRO';
           const normalizedPanelType = normalizePanelType(config.panelType);
@@ -2909,12 +3064,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             if (isProSchool) {
               if (reportScope === 'Single Player' && isVelocityPanel) {
                 params.set('chart_points_limit', '6000');
+              } else if (reportScope === 'Multi-Player' && isHeatmapPanel) {
+                // Multi-player PRO reports can fan out dozens of heatmap calls.
+                // Keep enough samples for stable zone shapes while reducing latency.
+                params.set('chart_points_limit', '2200');
               } else {
                 params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '60' : '220'));
               }
             } else {
               if (reportScope === 'Single Player' && isVelocityPanel) {
                 params.set('chart_points_limit', '6000');
+              } else if (reportScope === 'Multi-Player' && isHeatmapPanel) {
+                params.set('chart_points_limit', '2500');
               } else {
                 params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '120' : '600'));
               }
@@ -2951,10 +3112,21 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             if (pitchTypes.length) params.set('pitch_types', pitchTypes.join(','));
           }
           if (cellFilters.includes('Batter Hand') && config.batterSide && config.batterSide !== 'All') {
-            params.set('batter_side', config.batterSide);
+            const hasExplicitPitcherHandFilter = cellFilters.includes('Pitcher Hand') && config.pitcherHand && config.pitcherHand !== 'All';
+            const looksLikeMisappliedVsHandFilter =
+              reportType === 'Hitting' &&
+              Boolean(impliedPitcherHand) &&
+              !hasExplicitPitcherHandFilter &&
+              (config.batterSide === 'Right' || config.batterSide === 'Left') &&
+              config.batterSide === impliedPitcherHand;
+            if (!looksLikeMisappliedVsHandFilter) {
+              params.set('batter_side', config.batterSide);
+            }
           }
           if (cellFilters.includes('Pitcher Hand') && config.pitcherHand && config.pitcherHand !== 'All') {
             params.set('hand', config.pitcherHand);
+          } else if (reportType === 'Hitting' && impliedPitcherHand) {
+            params.set('hand', impliedPitcherHand);
           }
           if (cellFilters.includes('Pitch Results')) {
             const pitchResults = selectedValues(config.pitchResults);
@@ -2994,7 +3166,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             if (normalizedPlayer) params.set('pitcher', normalizedPlayer);
             if (!normalizedPlayer && reportTeam && reportTeam !== 'All') params.set('team_type', reportTeam);
           } else if (reportType === 'Hitting') {
-            if (normalizedPlayer) params.set('hitter', normalizedPlayer);
+            const hitterCandidates = hitterNameCandidatesForApi(scopePlayer);
+            if (hitterCandidates.length) params.set('hitter', hitterCandidates[0]);
             if (!normalizedPlayer && reportTeam && reportTeam !== 'All') params.set('team_type', reportTeam);
             if (useMostRecent200Pa) {
               params.set('recent_pa_mode', 'auto_200');
@@ -3058,11 +3231,82 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             })();
             inflightRef.current.set(key, requestPromise);
             try {
-              const loadedPayload = await requestPromise;
+              let loadedPayload = await requestPromise;
+              if (reportType === 'Hitting' && normalizedPanelType === 'Summary Table') {
+                const hitterCandidates = hitterNameCandidatesForApi(scopePlayer);
+                if (!hasNonEmptyTableRows(loadedPayload) && hitterCandidates.length > 1) {
+                  for (const candidate of hitterCandidates.slice(1)) {
+                    try {
+                      const nameRetryParams = new URLSearchParams(params);
+                      nameRetryParams.set('hitter', candidate);
+                      const nameRetryPayload = await queueBatchedOverviewFetch(`${endpoint}?${nameRetryParams.toString()}`);
+                      if (hasNonEmptyTableRows(nameRetryPayload)) {
+                        loadedPayload = nameRetryPayload;
+                        break;
+                      }
+                    } catch {
+                      // continue to next candidate
+                    }
+                  }
+                }
+                if (!hasNonEmptyTableRows(loadedPayload)) {
+                  try {
+                    const pointsRetryParams = new URLSearchParams(params);
+                    pointsRetryParams.set('include_chart_points', '1');
+                    pointsRetryParams.delete('chart_only');
+                    pointsRetryParams.set('chart_points_limit', reportScope === 'Team' ? '1200' : '4000');
+                    const pointsPayload = await queueBatchedOverviewFetch(`${endpoint}?${pointsRetryParams.toString()}`);
+                    const patchedPointsPayload = withXwobaBackfillFromChartPoints(pointsPayload);
+                    if (hasNonEmptyTableRows(patchedPointsPayload)) {
+                      loadedPayload = patchedPointsPayload;
+                    } else if (hasChartPoints(patchedPointsPayload)) {
+                      loadedPayload = patchedPointsPayload;
+                    }
+                  } catch {
+                    // fall through to raw retry below
+                  }
+                }
+                loadedPayload = withXwobaBackfillFromChartPoints(loadedPayload);
+                if (!hasNonEmptyTableRows(loadedPayload) && hasChartPoints(loadedPayload)) {
+                  const rawRetryParams = new URLSearchParams(params);
+                  rawRetryParams.set('force_raw', '1');
+                  rawRetryParams.set('include_chart_points', '1');
+                  rawRetryParams.delete('chart_only');
+                  if (!rawRetryParams.get('chart_points_limit')) {
+                    rawRetryParams.set('chart_points_limit', reportScope === 'Team' ? '1200' : '4000');
+                  }
+                  try {
+                    const rawRetryPayload = await queueBatchedOverviewFetch(`${endpoint}?${rawRetryParams.toString()}`);
+                    const patchedRetryPayload = withXwobaBackfillFromChartPoints(rawRetryPayload);
+                    if (hasNonEmptyTableRows(patchedRetryPayload)) loadedPayload = patchedRetryPayload;
+                  } catch {
+                    // Keep initial payload if retry fails.
+                  }
+                }
+              }
               if (percentileBaselineKey) {
                 try {
-                  const baselinePayload = await queueBatchedOverviewFetch(percentileBaselineKey);
-                  const baselineRowsRaw = Array.isArray(baselinePayload?.table_rows) ? baselinePayload.table_rows : [];
+                  let baselinePayload = await queueBatchedOverviewFetch(percentileBaselineKey);
+                  let baselineRowsRaw = Array.isArray(baselinePayload?.table_rows) ? baselinePayload.table_rows : [];
+                  if (
+                    reportType === 'Hitting' &&
+                    normalizedPanelType === 'Summary Table' &&
+                    baselineRowsRaw.length === 0
+                  ) {
+                    try {
+                      const baselineRetryParams = new URLSearchParams(percentileBaselineKey.split('?')[1] ?? '');
+                      baselineRetryParams.set('force_raw', '1');
+                      baselineRetryParams.set('include_chart_points', '1');
+                      baselineRetryParams.delete('chart_only');
+                      if (!baselineRetryParams.get('chart_points_limit')) {
+                        baselineRetryParams.set('chart_points_limit', reportScope === 'Team' ? '1200' : '4000');
+                      }
+                      baselinePayload = await queueBatchedOverviewFetch(`${endpoint}?${baselineRetryParams.toString()}`);
+                      baselineRowsRaw = Array.isArray(baselinePayload?.table_rows) ? baselinePayload.table_rows : [];
+                    } catch {
+                      // Keep empty baseline rows if retry fails.
+                    }
+                  }
                   const baselineRows = baselineRowsRaw as Array<Record<string, string | number | null>>;
                   commitCellPercentileRows(cellId, baselineRows);
                 } catch {
@@ -3084,8 +3328,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           }
       };
       const workers = Array.from({ length: Math.min(workerCount, requests.length) }, async () => {
-        while (nextRequestIndex < requests.length) {
-          const current = requests[nextRequestIndex];
+        while (nextRequestIndex < prioritizedRequests.length) {
+          const current = prioritizedRequests[nextRequestIndex];
           nextRequestIndex += 1;
           await runRequest(current);
         }
@@ -6401,17 +6645,21 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       style={{
                                         textAlign: 'center',
                                         ...(() => {
-                                          const val = formatTableDisplayValue(column, row[column]);
-                                          const isAllRow = String(row[tableColumns[0]] ?? '').trim().toLowerCase() === 'all';
+                                          const rawValue = getTableRowValue(row as Record<string, unknown>, column);
+                                          const val = formatTableDisplayValue(column, rawValue);
+                                          const splitValue = getTableRowValue(row as Record<string, unknown>, tableColumns[0] ?? '');
+                                          const isAllRow = String(splitValue ?? '').trim().toLowerCase() === 'all';
                                           const pitchStyle = !isAllRow && columnIndex === 0 ? pitchTypeCellStyle(val) : null;
                                           return pitchStyle?.cellStyle ?? {};
                                         })(),
                                       }}
                                     >
                                       {(() => {
-                                        const percentileValue = tableCellPercentile(row, column, row[column], percentileDistributions);
-                                        const val = formatTableDisplayValue(column, row[column]);
-                                        const isAllRow = String(row[tableColumns[0]] ?? '').trim().toLowerCase() === 'all';
+                                        const rawValue = getTableRowValue(row as Record<string, unknown>, column);
+                                        const percentileValue = tableCellPercentile(row, column, rawValue, percentileDistributions);
+                                        const val = formatTableDisplayValue(column, rawValue);
+                                        const splitValue = getTableRowValue(row as Record<string, unknown>, tableColumns[0] ?? '');
+                                        const isAllRow = String(splitValue ?? '').trim().toLowerCase() === 'all';
                                         const pitchStyle = !isAllRow && columnIndex === 0 ? pitchTypeCellStyle(val) : null;
                                         if (pitchStyle) return pitchStyle.label;
                                         const percentileCellStyle =
