@@ -156,6 +156,19 @@ type OverviewLitePayload = {
     exchange_time?: number | null;
     pop_time?: number | null;
     result_label?: string | null;
+    pitch_n?: number | null;
+    swing_n?: number | null;
+    whiff_n?: number | null;
+    in_play_n?: number | null;
+    gb_n?: number | null;
+    cs_n?: number | null;
+    take_n?: number | null;
+    run_value_sum?: number | null;
+    pv_sum?: number | null;
+    xwoba_sum?: number | null;
+    xwoba_n?: number | null;
+    ev_sum?: number | null;
+    ev_n?: number | null;
   }>;
   heatmap_points?: Array<{
     session_date?: string | null;
@@ -1187,6 +1200,33 @@ const getTableRowValue = (row: Record<string, unknown>, column: string): unknown
   }
   return row[column];
 };
+const filterOverviewPointsByPitchTypes = (
+  payload: OverviewLitePayload,
+  pitchTypesRaw: string[]
+): OverviewLitePayload => {
+  const selected = Array.from(
+    new Set(
+      (pitchTypesRaw ?? [])
+        .map((value) => normalizePitchTypeName(canonicalPitchType(String(value ?? '').trim()) || String(value ?? '').trim()))
+        .filter((value) => value && value !== 'all')
+    )
+  );
+  if (!selected.length) return payload;
+  const selectedSet = new Set(selected);
+  const matches = (pitchTypeRaw: unknown): boolean => {
+    const canonical = normalizePitchTypeName(canonicalPitchType(String(pitchTypeRaw ?? '').trim()) || String(pitchTypeRaw ?? '').trim());
+    if (!canonical || canonical === 'all') return false;
+    return selectedSet.has(canonical);
+  };
+  const nextChartPoints = Array.isArray(payload.chart_points)
+    ? payload.chart_points.filter((point) => matches(point.pitch_type))
+    : payload.chart_points;
+  const nextHeatmapPoints = Array.isArray(payload.heatmap_points)
+    ? payload.heatmap_points.filter((point) => matches(point.pitch_type))
+    : payload.heatmap_points;
+  if (nextChartPoints === payload.chart_points && nextHeatmapPoints === payload.heatmap_points) return payload;
+  return { ...payload, chart_points: nextChartPoints, heatmap_points: nextHeatmapPoints };
+};
 const hasNonEmptyTableRows = (payload: OverviewLitePayload): boolean =>
   Array.isArray(payload.table_rows) && payload.table_rows.length > 0;
 const hasChartPoints = (payload: OverviewLitePayload): boolean =>
@@ -1555,6 +1595,75 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
     );
   if (!valid.length) return [] as Array<{ x: number; y: number; w: number; h: number; value: number; density: number }>;
 
+  const pointPitchCount = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).pitch_n);
+    return n !== null && n > 0 ? n : 1;
+  };
+  const pointSwingCount = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).swing_n);
+    if (n !== null && n >= 0) return n;
+    return isSwingCall(point) ? 1 : 0;
+  };
+  const pointWhiffCount = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).whiff_n);
+    if (n !== null && n >= 0) return n;
+    return isWhiffCall(point) ? 1 : 0;
+  };
+  const pointInPlayCount = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).in_play_n);
+    if (n !== null && n >= 0) return n;
+    return isInPlayCall(point) ? 1 : 0;
+  };
+  const pointGbCount = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).gb_n);
+    if (n !== null && n >= 0) return n;
+    return isInPlayCall(point) && isGroundBall(point) ? 1 : 0;
+  };
+  const pointTakeCount = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).take_n);
+    if (n !== null && n >= 0) return n;
+    const call = point.pitch_call || '';
+    return call === 'StrikeCalled' || call === 'BallCalled' || call === 'BallinDirt' ? 1 : 0;
+  };
+  const pointCsCount = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).cs_n);
+    if (n !== null && n >= 0) return n;
+    return (point.pitch_call || '') === 'StrikeCalled' ? 1 : 0;
+  };
+  const pointRvSum = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).run_value_sum);
+    if (n !== null) return n;
+    return runValue(point) * pointPitchCount(point);
+  };
+  const pointPvSum = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).pv_sum);
+    if (n !== null) return n;
+    const pv = pitchValue(point);
+    return Number.isFinite(pv) ? pv * pointPitchCount(point) : 0;
+  };
+  const pointEvSum = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).ev_sum);
+    if (n !== null) return n;
+    const ev = toNum(point.exit_speed);
+    return ev !== null ? ev : 0;
+  };
+  const pointEvCount = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).ev_n);
+    if (n !== null && n >= 0) return n;
+    return toNum(point.exit_speed) !== null ? 1 : 0;
+  };
+  const pointXwobaSum = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).xwoba_sum);
+    if (n !== null) return n;
+    const x = toNum(point.estimated_woba_using_speedangle);
+    return x !== null ? x : 0;
+  };
+  const pointXwobaCount = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
+    const n = toNum((point as Record<string, unknown>).xwoba_n);
+    if (n !== null && n >= 0) return n;
+    return toNum(point.estimated_woba_using_speedangle) !== null ? 1 : 0;
+  };
+
   const runValue = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => {
     if (typeof point.run_value === 'number' && Number.isFinite(point.run_value)) return point.run_value;
     if (isProSchool) return 0;
@@ -1577,25 +1686,27 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
   };
   const pitchValue = (point: NonNullable<OverviewLitePayload['chart_points']>[number]): number => calcPitchValue(point);
 
-  const globalSwingCount = valid.filter((row) => isSwingCall(row.point)).length;
-  const globalWhiffCount = valid.filter((row) => isWhiffCall(row.point)).length;
-  const globalInPlayCount = valid.filter((row) => isInPlayCall(row.point)).length;
-  const globalGbCount = valid.filter((row) => isInPlayCall(row.point) && isGroundBall(row.point)).length;
-  const globalEvRows = valid.filter((row) => isInPlayCall(row.point) && typeof row.point.exit_speed === 'number');
-  const globalXwobaRows = valid.filter(
-    (row) => typeof row.point.estimated_woba_using_speedangle === 'number' && Number.isFinite(row.point.estimated_woba_using_speedangle)
-  );
+  const globalSwingCount = valid.reduce((sum, row) => sum + pointSwingCount(row.point), 0);
+  const globalWhiffCount = valid.reduce((sum, row) => sum + pointWhiffCount(row.point), 0);
+  const globalInPlayCount = valid.reduce((sum, row) => sum + pointInPlayCount(row.point), 0);
+  const globalGbCount = valid.reduce((sum, row) => sum + pointGbCount(row.point), 0);
+  const globalEvSum = valid.reduce((sum, row) => sum + pointEvSum(row.point), 0);
+  const globalEvCount = valid.reduce((sum, row) => sum + pointEvCount(row.point), 0);
+  const globalXwobaSum = valid.reduce((sum, row) => sum + pointXwobaSum(row.point), 0);
+  const globalXwobaCount = valid.reduce((sum, row) => sum + pointXwobaCount(row.point), 0);
   const globalXisoRows = valid.filter(
     (row) => typeof row.point.iso_value === 'number' && Number.isFinite(row.point.iso_value)
   );
-  const globalTakeRows = valid.filter((row) => ['StrikeCalled', 'BallCalled', 'BallinDirt'].includes(row.point.pitch_call || ''));
-  const globalEvAvg = globalEvRows.length > 0 ? globalEvRows.reduce((sum, row) => sum + Number(row.point.exit_speed || 0), 0) / globalEvRows.length : 0;
-  const globalXwobaAvg = globalXwobaRows.length > 0 ? globalXwobaRows.reduce((sum, row) => sum + Number(row.point.estimated_woba_using_speedangle || 0), 0) / globalXwobaRows.length : 0.35;
+  const globalTakeCount = valid.reduce((sum, row) => sum + pointTakeCount(row.point), 0);
+  const globalCsCount = valid.reduce((sum, row) => sum + pointCsCount(row.point), 0);
+  const globalPitchCount = valid.reduce((sum, row) => sum + pointPitchCount(row.point), 0);
+  const globalEvAvg = globalEvCount > 0 ? globalEvSum / globalEvCount : 0;
+  const globalXwobaAvg = globalXwobaCount > 0 ? globalXwobaSum / globalXwobaCount : 0.35;
   const globalXisoAvg = globalXisoRows.length > 0 ? globalXisoRows.reduce((sum, row) => sum + Number(row.point.iso_value || 0), 0) / globalXisoRows.length : 0.17;
-  const globalRvAvg = valid.length > 0 ? valid.reduce((sum, row) => sum + runValue(row.point), 0) / valid.length : 0;
-  const globalPvAvg = valid.length > 0 ? valid.reduce((sum, row) => sum + pitchValue(row.point), 0) / valid.length : 0;
-  const globalCsRate = globalTakeRows.length > 0 ? globalTakeRows.filter((row) => row.point.pitch_call === 'StrikeCalled').length / globalTakeRows.length : 0;
-  const globalSwingRate = valid.length > 0 ? globalSwingCount / valid.length : 0;
+  const globalRvAvg = globalPitchCount > 0 ? valid.reduce((sum, row) => sum + pointRvSum(row.point), 0) / globalPitchCount : 0;
+  const globalPvAvg = globalPitchCount > 0 ? valid.reduce((sum, row) => sum + pointPvSum(row.point), 0) / globalPitchCount : 0;
+  const globalCsRate = globalTakeCount > 0 ? globalCsCount / globalTakeCount : 0;
+  const globalSwingRate = globalPitchCount > 0 ? globalSwingCount / globalPitchCount : 0;
   const globalWhiffRate = globalSwingCount > 0 ? globalWhiffCount / globalSwingCount : 0;
   const globalSwStrkRate = valid.length > 0 ? globalWhiffCount / valid.length : 0;
   const globalGbRate = globalInPlayCount > 0 ? globalGbCount / globalInPlayCount : 0;
@@ -1630,33 +1741,32 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
         const dy = (cy - rowPoint.y) / sigmaY;
         const weight = Math.exp(-0.5 * (dx * dx + dy * dy));
         if (weight < 1e-6) continue;
-        const call = rowPoint.point.pitch_call || '';
-        const swing = isSwingCall(rowPoint.point);
-        const inPlay = isInPlayCall(rowPoint.point);
-        const gb = isGroundBall(rowPoint.point);
-        const isTake = call === 'StrikeCalled' || call === 'BallCalled' || call === 'BallinDirt';
-        sumW += weight;
-        if (swing) swingW += weight;
-        if (isWhiffCall(rowPoint.point)) whiffW += weight;
-        if (inPlay) inPlayW += weight;
-        if (gb) gbW += weight;
-        if (isTake) {
-          takeW += weight;
-          if (call === 'StrikeCalled') csW += weight;
+        const pitchN = pointPitchCount(rowPoint.point);
+        const swingN = pointSwingCount(rowPoint.point);
+        const whiffN = pointWhiffCount(rowPoint.point);
+        const inPlayN = pointInPlayCount(rowPoint.point);
+        const gbN = pointGbCount(rowPoint.point);
+        const takeN = pointTakeCount(rowPoint.point);
+        const csN = pointCsCount(rowPoint.point);
+        sumW += weight * pitchN;
+        swingW += weight * swingN;
+        whiffW += weight * whiffN;
+        inPlayW += weight * inPlayN;
+        gbW += weight * gbN;
+        takeW += weight * takeN;
+        csW += weight * csN;
+        const evN = pointEvCount(rowPoint.point);
+        if (evN > 0) {
+          evWSum += weight * pointEvSum(rowPoint.point);
+          evW += weight * evN;
         }
-        if (inPlay && typeof rowPoint.point.exit_speed === 'number') {
-          evWSum += weight * rowPoint.point.exit_speed;
-          evW += weight;
-        }
-        rvWSum += weight * runValue(rowPoint.point);
-        const pv = pitchValue(rowPoint.point);
-        if (Number.isFinite(pv)) {
-          pvWSum += weight * pv;
-          pvW += weight;
-        }
-        if (typeof rowPoint.point.estimated_woba_using_speedangle === 'number' && Number.isFinite(rowPoint.point.estimated_woba_using_speedangle)) {
-          xwobaWSum += weight * rowPoint.point.estimated_woba_using_speedangle;
-          xwobaW += weight;
+        rvWSum += weight * pointRvSum(rowPoint.point);
+        pvWSum += weight * pointPvSum(rowPoint.point);
+        pvW += weight * pitchN;
+        const xwobaN = pointXwobaCount(rowPoint.point);
+        if (xwobaN > 0) {
+          xwobaWSum += weight * pointXwobaSum(rowPoint.point);
+          xwobaW += weight * xwobaN;
         }
         if (typeof rowPoint.point.iso_value === 'number' && Number.isFinite(rowPoint.point.iso_value)) {
           xisoWSum += weight * rowPoint.point.iso_value;
@@ -2944,7 +3054,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           ? reportScope === 'Team'
             ? 1
             : reportScope === 'Multi-Player'
-              ? 5
+              ? 3
               : 3
           : reportScope === 'Team'
             ? 1
@@ -2979,7 +3089,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         const chunkSize =
           reportScope === 'Team'
             ? (isProWorkload ? 6 : 10)
-            : (isProWorkload ? 24 : 48);
+            : reportScope === 'Multi-Player'
+              ? (isProWorkload ? 8 : 16)
+              : (isProWorkload ? 24 : 48);
         for (let i = 0; i < keys.length; i += chunkSize) {
           const chunk = keys.slice(i, i + chunkSize);
           try {
@@ -3065,9 +3177,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               if (reportScope === 'Single Player' && isVelocityPanel) {
                 params.set('chart_points_limit', '6000');
               } else if (reportScope === 'Multi-Player' && isHeatmapPanel) {
-                // Multi-player PRO reports can fan out dozens of heatmap calls.
-                // Keep enough samples for stable zone shapes while reducing latency.
-                params.set('chart_points_limit', '2200');
+                params.set('chart_points_limit', '6000');
               } else {
                 params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '60' : '220'));
               }
@@ -3075,7 +3185,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               if (reportScope === 'Single Player' && isVelocityPanel) {
                 params.set('chart_points_limit', '6000');
               } else if (reportScope === 'Multi-Player' && isHeatmapPanel) {
-                params.set('chart_points_limit', '2500');
+                params.set('chart_points_limit', '6000');
               } else {
                 params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '120' : '600'));
               }
@@ -3184,11 +3294,45 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               : reportType === 'Hitting'
                 ? '/api/dashboard/hitting/overview'
                 : '/api/dashboard/catching/overview';
+          const heatmapRollupEndpoint =
+            reportType === 'Hitting' && isProSchool && reportScope === 'Multi-Player' && normalizedPanelType === 'Heatmap'
+              ? '/api/dashboard/hitting/heatmap-rollup'
+              : '';
           const query = params.toString();
           const key = `${endpoint}?${query}`;
+          const canUseSharedHeatmapSource =
+            reportType === 'Hitting' &&
+            reportScope === 'Multi-Player' &&
+            normalizedPanelType === 'Heatmap' &&
+            cellFilters.includes('Pitch Types');
+          const sharedHeatmapFetchKey = (() => {
+            if (!canUseSharedHeatmapSource) return '';
+            const shared = new URLSearchParams(params);
+            shared.delete('pitch_types');
+            return `${endpoint}?${shared.toString()}`;
+          })();
+          const fetchKey = (() => {
+            if (heatmapRollupEndpoint) {
+              const rollupParams = new URLSearchParams(params);
+              rollupParams.set('school_code', 'PRO');
+              rollupParams.delete('table_mode');
+              rollupParams.delete('split_by');
+              rollupParams.delete('custom_columns');
+              rollupParams.delete('include_row_pitches');
+              rollupParams.delete('include_trend_rows');
+              rollupParams.delete('chart_only');
+              rollupParams.set('include_chart_points', '1');
+              return `${heatmapRollupEndpoint}?${rollupParams.toString()}`;
+            }
+            return sharedHeatmapFetchKey || key;
+          })();
           const shouldLoadPercentileBaseline =
             normalizedPanelType === 'Summary Table' && reportType !== 'Catching' && (enableTableColors || showCellPercentiles);
           let percentileBaselineKey = '';
+          const skipPerCellBaselineFetch =
+            reportType === 'Hitting' &&
+            reportScope === 'Multi-Player' &&
+            normalizedPanelType === 'Summary Table';
           if (shouldLoadPercentileBaseline) {
             const baselineParams = new URLSearchParams(params);
             baselineParams.set('percentile_baseline', '1');
@@ -3209,30 +3353,51 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 baselineParams.set('team_type', schoolNorm);
               }
             }
-            percentileBaselineKey = `${endpoint}?${baselineParams.toString()}`;
+            if (!skipPerCellBaselineFetch) {
+              percentileBaselineKey = `${endpoint}?${baselineParams.toString()}`;
+            }
           }
           try {
             const now = Date.now();
-            const cached = cellsCacheRef.current.get(key);
+            const cached = cellsCacheRef.current.get(fetchKey);
             if (cached && now - cached.at < CACHE_TTL_MS) {
-              commitCellResult(cellId, cached.payload, { status: 'ready' });
+              const normalizedCachedPayload =
+                canUseSharedHeatmapSource
+                  ? filterOverviewPointsByPitchTypes(cached.payload, selectedValues(config.pitchTypes))
+                  : cached.payload;
+              commitCellResult(cellId, normalizedCachedPayload, { status: 'ready' });
               return;
             }
-            const running = inflightRef.current.get(key);
+            const running = inflightRef.current.get(fetchKey);
             if (running) {
               const runningPayload = await running;
-              commitCellResult(cellId, runningPayload, { status: 'ready' });
+              const normalizedRunningPayload =
+                canUseSharedHeatmapSource
+                  ? filterOverviewPointsByPitchTypes(runningPayload, selectedValues(config.pitchTypes))
+                  : runningPayload;
+              commitCellResult(cellId, normalizedRunningPayload, { status: 'ready' });
               return;
             }
             const requestPromise = (async () => {
-              const normalized = await queueBatchedOverviewFetch(key);
-              cellsCacheRef.current.set(key, { at: Date.now(), payload: normalized });
-              return normalized;
+              try {
+                const normalized = await queueBatchedOverviewFetch(fetchKey);
+                cellsCacheRef.current.set(fetchKey, { at: Date.now(), payload: normalized });
+                return normalized;
+              } catch (error) {
+                if (!heatmapRollupEndpoint || fetchKey === key) throw error;
+                const fallback = await queueBatchedOverviewFetch(key);
+                cellsCacheRef.current.set(key, { at: Date.now(), payload: fallback });
+                return fallback;
+              }
             })();
-            inflightRef.current.set(key, requestPromise);
+            inflightRef.current.set(fetchKey, requestPromise);
             try {
               let loadedPayload = await requestPromise;
+              if (canUseSharedHeatmapSource) {
+                loadedPayload = filterOverviewPointsByPitchTypes(loadedPayload, selectedValues(config.pitchTypes));
+              }
               if (reportType === 'Hitting' && normalizedPanelType === 'Summary Table') {
+                const skipExpensiveFallbacks = reportScope === 'Multi-Player';
                 const hitterCandidates = hitterNameCandidatesForApi(scopePlayer);
                 if (!hasNonEmptyTableRows(loadedPayload) && hitterCandidates.length > 1) {
                   for (const candidate of hitterCandidates.slice(1)) {
@@ -3249,7 +3414,37 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     }
                   }
                 }
-                if (!hasNonEmptyTableRows(loadedPayload)) {
+                if (!hasNonEmptyTableRows(loadedPayload) && skipExpensiveFallbacks && normalizedPlayer) {
+                  try {
+                    // Multi-player reports can carry a team filter value that does not
+                    // exactly match the hitter's historical team code. Retry broad team scope.
+                    const teamRetryParams = new URLSearchParams(params);
+                    teamRetryParams.set('team_type', 'All');
+                    teamRetryParams.delete('chart_only');
+                    const teamRetryPayload = await queueBatchedOverviewFetch(`${endpoint}?${teamRetryParams.toString()}`);
+                    if (hasNonEmptyTableRows(teamRetryPayload)) {
+                      loadedPayload = teamRetryPayload;
+                    }
+                  } catch {
+                    // Keep current payload if team fallback fails.
+                  }
+                }
+                if (!hasNonEmptyTableRows(loadedPayload) && skipExpensiveFallbacks && normalizedPlayer && hasChartPoints(loadedPayload)) {
+                  try {
+                    const teamRawRetryParams = new URLSearchParams(params);
+                    teamRawRetryParams.set('team_type', 'All');
+                    teamRawRetryParams.set('force_raw', '1');
+                    teamRawRetryParams.set('include_chart_points', '1');
+                    teamRawRetryParams.delete('chart_only');
+                    const teamRawRetryPayload = await queueBatchedOverviewFetch(`${endpoint}?${teamRawRetryParams.toString()}`);
+                    if (hasNonEmptyTableRows(teamRawRetryPayload)) {
+                      loadedPayload = teamRawRetryPayload;
+                    }
+                  } catch {
+                    // Keep current payload if raw team fallback fails.
+                  }
+                }
+                if (!hasNonEmptyTableRows(loadedPayload) && !skipExpensiveFallbacks) {
                   try {
                     const pointsRetryParams = new URLSearchParams(params);
                     pointsRetryParams.set('include_chart_points', '1');
@@ -3267,7 +3462,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   }
                 }
                 loadedPayload = withXwobaBackfillFromChartPoints(loadedPayload);
-                if (!hasNonEmptyTableRows(loadedPayload) && hasChartPoints(loadedPayload)) {
+                if (!skipExpensiveFallbacks && !hasNonEmptyTableRows(loadedPayload) && hasChartPoints(loadedPayload)) {
                   const rawRetryParams = new URLSearchParams(params);
                   rawRetryParams.set('force_raw', '1');
                   rawRetryParams.set('include_chart_points', '1');
@@ -3291,7 +3486,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   if (
                     reportType === 'Hitting' &&
                     normalizedPanelType === 'Summary Table' &&
-                    baselineRowsRaw.length === 0
+                    baselineRowsRaw.length === 0 &&
+                    reportScope !== 'Multi-Player'
                   ) {
                     try {
                       const baselineRetryParams = new URLSearchParams(percentileBaselineKey.split('?')[1] ?? '');
@@ -3312,12 +3508,17 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 } catch {
                   commitCellPercentileRows(cellId, []);
                 }
+              } else if (skipPerCellBaselineFetch) {
+                // Multi-player hitting summary tables can trigger dozens of baseline
+                // calls (one per cell/player) and overwhelm backend pools. Reuse an
+                // empty baseline for now to prevent timeout storms; table values still load.
+                commitCellPercentileRows(cellId, []);
               } else {
                 commitCellPercentileRows(cellId, []);
               }
               commitCellResult(cellId, loadedPayload, { status: 'ready' });
             } finally {
-              inflightRef.current.delete(key);
+              inflightRef.current.delete(fetchKey);
             }
           } catch (requestError) {
             if (isAbortLikeError(requestError)) return;

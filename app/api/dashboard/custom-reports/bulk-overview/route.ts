@@ -7,6 +7,7 @@ export const maxDuration = 300;
 const ALLOWED_PREFIXES = new Set([
   '/api/dashboard/pitching/overview',
   '/api/dashboard/hitting/overview',
+  '/api/dashboard/hitting/heatmap-rollup',
   '/api/dashboard/catching/overview',
 ]);
 
