@@ -1607,28 +1607,31 @@ export async function createStaffUser(input: {
     input.role,
     input.organizationId,
   ];
-  try {
-    await pool.query(
-      `
-        INSERT INTO auth_users (
-          email, username, name, phone, password, password_hash, app_url, role, organization_id
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      `,
-      insertValues
-    );
-  } catch (error) {
-    if (!isAuthUsersPrimaryKeyViolation(error)) throw error;
-    await ensureAuthUsersIdSequence(pool);
-    await pool.query(
-      `
-        INSERT INTO auth_users (
-          email, username, name, phone, password, password_hash, app_url, role, organization_id
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      `,
-      insertValues
-    );
+  const insertSql = `
+    INSERT INTO auth_users (
+      email, username, name, phone, password, password_hash, app_url, role, organization_id
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+  `;
+  // Production can have occasional auth_users id sequence drift (manual imports,
+  // legacy bootstraps). Proactively sync before insert and retry on pkey conflicts.
+  await ensureAuthUsersIdSequence(pool);
+  let inserted = false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await pool.query(insertSql, insertValues);
+      inserted = true;
+      break;
+    } catch (error) {
+      if (!isAuthUsersPrimaryKeyViolation(error)) throw error;
+      await ensureAuthUsersIdSequence(pool);
+    }
+  }
+  if (!inserted) {
+    return {
+      ok: false,
+      error: 'Could not create coach/admin profile because user ID sequencing is out of sync. Please retry.',
+    };
   }
 
   return { ok: true, reusedExistingPassword };
