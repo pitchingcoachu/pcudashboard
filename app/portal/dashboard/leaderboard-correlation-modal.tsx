@@ -12,11 +12,13 @@ type Props = {
   columns: string[];
   axisColumns?: string[];
   rows: LeaderboardRow[];
+  minPointsRequired?: number;
   viewByLabel: 'Player' | 'Team';
   primaryColumnName?: string;
   siteLogoSrc?: string | null;
   siteLogoAlt?: string;
   pointLogoSrcForLabel?: (label: string) => string;
+  formatValue?: (column: string, value: unknown) => string;
 };
 
 type ScatterPoint = {
@@ -67,7 +69,12 @@ function decimalPlacesFromFormatted(value: string): number | null {
   return decimals.length;
 }
 
-function detectColumnDecimals(column: string, rows: LeaderboardRow[], labelColumn: string): number {
+function detectColumnDecimals(
+  column: string,
+  rows: LeaderboardRow[],
+  labelColumn: string,
+  formatter?: (column: string, value: unknown) => string
+): number {
   let maxDecimals = 0;
   let foundAny = false;
   for (const row of rows) {
@@ -76,7 +83,7 @@ function detectColumnDecimals(column: string, rows: LeaderboardRow[], labelColum
     const numeric = parseSortableNumber(row[column]);
     if (numeric === null) continue;
     foundAny = true;
-    const formatted = formatTableDisplayValue(column, row[column]);
+    const formatted = formatter ? formatter(column, row[column]) : formatTableDisplayValue(column, row[column]);
     const decimals = decimalPlacesFromFormatted(formatted);
     if (decimals === null) continue;
     if (decimals > maxDecimals) maxDecimals = decimals;
@@ -85,9 +92,40 @@ function detectColumnDecimals(column: string, rows: LeaderboardRow[], labelColum
   return Math.max(0, Math.min(4, maxDecimals));
 }
 
+function hasAnyNumericPoints(column: string, rows: LeaderboardRow[], labelColumn: string): boolean {
+  for (const row of rows) {
+    const label = String(row[labelColumn] ?? '').trim();
+    if (isAllSummaryLabel(label)) continue;
+    const numeric = parseSortableNumber(row[column]);
+    if (numeric !== null) return true;
+  }
+  return false;
+}
+
 function tableLikeTickValue(value: number, decimals: number): string {
   if (!Number.isFinite(value)) return '-';
   return value.toFixed(decimals);
+}
+
+function isLikelyPercentColumn(
+  column: string,
+  rows: LeaderboardRow[],
+  labelColumn: string,
+  formatter?: (column: string, value: unknown) => string
+): boolean {
+  const normalizedColumn = String(column ?? '').toLowerCase();
+  if (normalizedColumn.includes('%') || normalizedColumn.includes('pct') || normalizedColumn.includes('percent')) {
+    return true;
+  }
+  for (const row of rows) {
+    const label = String(row[labelColumn] ?? '').trim();
+    if (isAllSummaryLabel(label)) continue;
+    const numeric = parseSortableNumber(row[column]);
+    if (numeric === null) continue;
+    const formatted = formatter ? formatter(column, row[column]) : formatTableDisplayValue(column, row[column]);
+    if (String(formatted).includes('%')) return true;
+  }
+  return false;
 }
 
 function inferLabelColumn(columns: string[], primaryColumnName: string | undefined): string {
@@ -98,6 +136,46 @@ function inferLabelColumn(columns: string[], primaryColumnName: string | undefin
 function isAllSummaryLabel(value: string): boolean {
   const norm = value.trim().toLowerCase();
   return norm === 'all' || norm === 'all (pinned)';
+}
+
+/** Normalize token for fuzzy column-key matching (strip non-alphanumeric except % and +). */
+function normalizeColumnToken(value: string): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9%+]/g, '');
+}
+
+/**
+ * For each target column, ensure every row has a property keyed exactly by that
+ * column name.  If the row already has it, keep it; otherwise try a
+ * case-insensitive / punctuation-stripped match against the row's existing keys.
+ */
+function normalizeRowsForColumns(
+  targetColumns: string[],
+  rows: LeaderboardRow[]
+): LeaderboardRow[] {
+  if (!targetColumns.length || !rows.length) return rows;
+  let changed = false;
+  const result = rows.map((row) => {
+    // Build a lookup: normalizedToken → original key
+    const keyByToken = new Map<string, string>();
+    for (const key of Object.keys(row)) {
+      const token = normalizeColumnToken(key);
+      if (token && !keyByToken.has(token)) keyByToken.set(token, key);
+    }
+    let patched: LeaderboardRow | null = null;
+    for (const col of targetColumns) {
+      if (Object.prototype.hasOwnProperty.call(row, col)) continue;
+      const match = keyByToken.get(normalizeColumnToken(col));
+      if (!match) continue;
+      if (!patched) patched = { ...row };
+      patched[col] = row[match];
+    }
+    if (patched) {
+      changed = true;
+      return patched;
+    }
+    return row;
+  });
+  return changed ? result : rows;
 }
 
 function AxisSearchSelect({
@@ -139,6 +217,8 @@ function AxisSearchSelect({
         style={{
           width: '100%',
           justifyContent: 'space-between',
+          fontSize: '1rem',
+          fontWeight: 600,
           background: isLightTheme ? '#fff' : 'rgba(15, 23, 42, 0.82)',
           color: isLightTheme ? '#374151' : '#e5e7eb',
           borderColor: isLightTheme ? '#cbd5e1' : 'rgba(255,255,255,0.2)',
@@ -173,6 +253,7 @@ function AxisSearchSelect({
               border: isLightTheme ? '1px solid #d1d5db' : '1px solid rgba(255,255,255,0.2)',
               background: isLightTheme ? '#fff' : 'rgba(15, 23, 42, 0.82)',
               color: isLightTheme ? '#374151' : '#f8fafc',
+              fontSize: '0.98rem',
               padding: '0.42rem 0.5rem',
               marginBottom: 8,
             }}
@@ -191,6 +272,8 @@ function AxisSearchSelect({
                     border: 0,
                     borderRadius: 8,
                     textAlign: 'left',
+                    fontSize: '1rem',
+                    fontWeight: 600,
                     padding: '0.42rem 0.5rem',
                     cursor: 'pointer',
                     background: value === option
@@ -219,11 +302,13 @@ export default function LeaderboardCorrelationModal({
   columns,
   axisColumns,
   rows,
+  minPointsRequired = 2,
   viewByLabel,
   primaryColumnName,
   siteLogoSrc,
   siteLogoAlt,
   pointLogoSrcForLabel,
+  formatValue,
 }: Props) {
   const chartWrapRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -308,7 +393,7 @@ export default function LeaderboardCorrelationModal({
 
   const labelColumn = useMemo(() => inferLabelColumn(columns, primaryColumnName), [columns, primaryColumnName]);
 
-  const selectableAxisColumns = useMemo(() => {
+  const rawSelectableAxisColumns = useMemo(() => {
     if (!open) return [] as string[];
     const source = axisColumns?.length ? axisColumns : columns;
     const deduped: string[] = [];
@@ -321,6 +406,28 @@ export default function LeaderboardCorrelationModal({
     }
     return deduped;
   }, [open, axisColumns, columns, labelColumn]);
+
+  useEffect(() => {
+    if (!open) return;
+    setHover(null);
+  }, [open, xColumn, yColumn]);
+
+  // Normalize rows so every selectable axis column (and the label column) has a
+  // matching key, even if the original row data uses different casing / punctuation.
+  const allTargetColumns = useMemo(() => {
+    const set = new Set([...columns, ...rawSelectableAxisColumns]);
+    return Array.from(set);
+  }, [columns, rawSelectableAxisColumns]);
+
+  const normalizedRows = useMemo(
+    () => (open ? normalizeRowsForColumns(allTargetColumns, rows) : rows),
+    [open, allTargetColumns, rows]
+  );
+
+  const selectableAxisColumns = useMemo(
+    () => (open ? rawSelectableAxisColumns : ([] as string[])),
+    [open, rawSelectableAxisColumns]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -338,22 +445,28 @@ export default function LeaderboardCorrelationModal({
     }
   }, [open, selectableAxisColumns, xColumn, yColumn]);
 
-  useEffect(() => {
-    if (!open) return;
-    setHover(null);
-  }, [open, xColumn, yColumn]);
+  const xColumnHasAnyNumeric = useMemo(
+    () => (open && xColumn ? hasAnyNumericPoints(xColumn, normalizedRows, labelColumn) : false),
+    [open, xColumn, normalizedRows, labelColumn]
+  );
+  const yColumnHasAnyNumeric = useMemo(
+    () => (open && yColumn ? hasAnyNumericPoints(yColumn, normalizedRows, labelColumn) : false),
+    [open, yColumn, normalizedRows, labelColumn]
+  );
 
   const points = useMemo(() => {
     if (!open) return [] as ScatterPoint[];
     if (!xColumn || !yColumn || !labelColumn) return [] as ScatterPoint[];
     let rank = 0;
     const out: ScatterPoint[] = [];
-    for (const row of rows) {
+    for (const row of normalizedRows) {
       const labelRaw = String(row[labelColumn] ?? '').trim();
       if (!labelRaw || isAllSummaryLabel(labelRaw)) continue;
       rank += 1;
-      const xValue = parseSortableNumber(row[xColumn]);
-      const yValue = parseSortableNumber(row[yColumn]);
+      const xParsed = parseSortableNumber(row[xColumn]);
+      const yParsed = parseSortableNumber(row[yColumn]);
+      const xValue = xParsed ?? (xColumnHasAnyNumeric ? 0 : null);
+      const yValue = yParsed ?? (yColumnHasAnyNumeric ? 0 : null);
       if (xValue === null || yValue === null) continue;
       out.push({
         rank,
@@ -364,7 +477,7 @@ export default function LeaderboardCorrelationModal({
       });
     }
     return out;
-  }, [open, rows, xColumn, yColumn, labelColumn, viewByLabel]);
+  }, [open, normalizedRows, xColumn, yColumn, labelColumn, viewByLabel, xColumnHasAnyNumeric, yColumnHasAnyNumeric]);
 
   const pointLogoSrcByLabel = useMemo(() => {
     if (!open) return {} as Record<string, string>;
@@ -489,8 +602,22 @@ export default function LeaderboardCorrelationModal({
     return SVG_HEIGHT - PAD_BOTTOM - ((value - ranges.y0) / den) * height;
   }, [ranges.y0, ranges.y1]);
 
-  const xDecimals = useMemo(() => (open ? detectColumnDecimals(xColumn, rows, labelColumn) : 2), [open, xColumn, rows, labelColumn]);
-  const yDecimals = useMemo(() => (open ? detectColumnDecimals(yColumn, rows, labelColumn) : 2), [open, yColumn, rows, labelColumn]);
+  const xDecimals = useMemo(
+    () => (open ? detectColumnDecimals(xColumn, normalizedRows, labelColumn, formatValue) : 2),
+    [open, xColumn, normalizedRows, labelColumn, formatValue]
+  );
+  const yDecimals = useMemo(
+    () => (open ? detectColumnDecimals(yColumn, normalizedRows, labelColumn, formatValue) : 2),
+    [open, yColumn, normalizedRows, labelColumn, formatValue]
+  );
+  const xIsPercent = useMemo(
+    () => (open && xColumn ? isLikelyPercentColumn(xColumn, normalizedRows, labelColumn, formatValue) : false),
+    [open, xColumn, normalizedRows, labelColumn, formatValue]
+  );
+  const yIsPercent = useMemo(
+    () => (open && yColumn ? isLikelyPercentColumn(yColumn, normalizedRows, labelColumn, formatValue) : false),
+    [open, yColumn, normalizedRows, labelColumn, formatValue]
+  );
   const trendline = useMemo(() => {
     if (!showTrendline || stats.slope === null || stats.intercept === null || points.length < 2) return null;
     const xA = ranges.x0;
@@ -598,7 +725,7 @@ export default function LeaderboardCorrelationModal({
           </p>
         ) : null}
 
-        {xColumn && yColumn && xColumn !== yColumn && points.length >= 2 ? (
+        {xColumn && yColumn && xColumn !== yColumn && points.length >= minPointsRequired ? (
           <>
             <div className="portal-corr-stats">
               <span>{viewByLabel}s: {stats.count}</span>
@@ -694,10 +821,10 @@ export default function LeaderboardCorrelationModal({
                   return (
                     <g key={`grid-${idx}`}>
                       <text x={gx} y={SVG_HEIGHT - PAD_BOTTOM + 22} className="portal-corr-tick" textAnchor="middle" fill={tickFill} fontSize={11} fontWeight={600}>
-                        {tableLikeTickValue(xVal, xDecimals)}
+                        {tableLikeTickValue(xVal, xDecimals)}{xIsPercent ? '%' : ''}
                       </text>
                       <text x={PAD_LEFT - 8} y={gy + 4} className="portal-corr-tick" textAnchor="end" fill={tickFill} fontSize={11} fontWeight={600}>
-                        {tableLikeTickValue(yVal, yDecimals)}
+                        {tableLikeTickValue(yVal, yDecimals)}{yIsPercent ? '%' : ''}
                       </text>
                     </g>
                   );
@@ -848,15 +975,15 @@ export default function LeaderboardCorrelationModal({
                   }}
                 >
                   <div><strong>#{hover.point.rank}</strong> {hover.point.displayLabel}</div>
-                  <div>{xColumn}: {formatTableDisplayValue(xColumn, hover.point.x)}</div>
-                  <div>{yColumn}: {formatTableDisplayValue(yColumn, hover.point.y)}</div>
+                  <div>{xColumn}: {formatValue ? formatValue(xColumn, hover.point.x) : formatTableDisplayValue(xColumn, hover.point.x)}</div>
+                  <div>{yColumn}: {formatValue ? formatValue(yColumn, hover.point.y) : formatTableDisplayValue(yColumn, hover.point.y)}</div>
                 </div>
               ) : null}
             </div>
           </>
         ) : xColumn && yColumn && xColumn !== yColumn ? (
           <p className="portal-muted-text" style={{ margin: 0 }}>
-            Not enough valid rows for this column pair. At least 2 numeric points are required.
+            Not enough valid rows for this column pair. At least {minPointsRequired} numeric point{minPointsRequired === 1 ? '' : 's'} {minPointsRequired === 1 ? 'is' : 'are'} required.
           </p>
         ) : null}
       </div>

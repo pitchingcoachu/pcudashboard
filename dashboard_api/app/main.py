@@ -4490,6 +4490,8 @@ def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str
         "spin_eff": row.get("spin_eff"),
         "exit_speed": row.get("exit_speed"),
         "angle": row.get("angle"),
+        "vaa": row.get("vaa"),
+        "haa": row.get("haa"),
         "estimated_woba_using_speedangle": (
             float(row.get("estimated_woba_using_speedangle"))
             if _is_num(row.get("estimated_woba_using_speedangle"))

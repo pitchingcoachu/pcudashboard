@@ -1376,7 +1376,7 @@ export default function CatchingSuite() {
                   <table className="portal-table">
                     <thead>
                       <tr>
-                        {page === 'Leaderboard' ? <th style={{ textAlign: 'center', position: page === 'Leaderboard' ? 'sticky' : undefined, top: page === 'Leaderboard' ? 0 : undefined, zIndex: page === 'Leaderboard' ? 3 : undefined, background: page === 'Leaderboard' ? 'rgba(7,9,14,0.98)' : undefined }}>Rank</th> : null}
+                        {page === 'Leaderboard' ? <th style={{ textAlign: 'center', position: page === 'Leaderboard' ? 'sticky' : undefined, top: page === 'Leaderboard' ? 0 : undefined, zIndex: page === 'Leaderboard' ? 3 : undefined, background: page === 'Leaderboard' ? ((typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)') : undefined }}>Rank</th> : null}
                         {(overview?.table_columns ?? []).map((c, colIndex) => {
                           const isSortable = true;
                           const activeSort = leaderboardSortColumn === c;
@@ -1384,7 +1384,7 @@ export default function CatchingSuite() {
                           return (
                             <th
                               key={c}
-                              style={{ textAlign: 'center', cursor: isSortable ? 'pointer' : 'default', position: page === 'Leaderboard' ? 'sticky' : undefined, top: page === 'Leaderboard' ? 0 : undefined, zIndex: page === 'Leaderboard' ? 3 : undefined, background: page === 'Leaderboard' ? 'rgba(7,9,14,0.98)' : undefined }}
+                              style={{ textAlign: 'center', cursor: isSortable ? 'pointer' : 'default', position: page === 'Leaderboard' ? 'sticky' : undefined, top: page === 'Leaderboard' ? 0 : undefined, zIndex: page === 'Leaderboard' ? 3 : undefined, background: page === 'Leaderboard' ? ((typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)') : undefined }}
                               onClick={
                                 isSortable
                                   ? () => {

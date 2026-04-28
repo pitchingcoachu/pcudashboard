@@ -1189,6 +1189,19 @@ function parseOrgSchoolMap(): Record<number, string> {
   }
 }
 
+function orgNameLikelyMatchesSchoolCode(orgName: string, schoolCode: string): boolean {
+  const upperName = orgName.trim().toUpperCase();
+  if (!upperName) return false;
+  const compactName = upperName.replace(/[^A-Z0-9]/g, '');
+  const compactSchool = schoolCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!compactSchool) return false;
+  if (upperName === schoolCode || compactName === compactSchool) return true;
+  if (upperName.includes(schoolCode) || compactName.includes(compactSchool)) return true;
+  // Legacy primary PCU org name heuristic.
+  if (schoolCode === 'PCU' && upperName.includes('PITCHINGCOACHU')) return true;
+  return false;
+}
+
 export async function resolveOrganizationIdForSchool(input: {
   schoolCode: string;
   fallbackOrganizationId?: number;
@@ -1210,6 +1223,17 @@ export async function resolveOrganizationIdForSchool(input: {
     }
 
     const pool = getDbPool();
+    if (normalizedFallback > 0) {
+      const fallbackMappedSchool = String(schoolByOrgId[normalizedFallback] ?? '').trim().toUpperCase();
+      if (fallbackMappedSchool && fallbackMappedSchool === schoolCode) return normalizedFallback;
+      const fallbackOrg = await pool.query<{ name: string | null }>(
+        `SELECT name FROM organizations WHERE id = $1 LIMIT 1`,
+        [normalizedFallback]
+      );
+      const fallbackName = String(fallbackOrg.rows[0]?.name ?? '').trim();
+      if (orgNameLikelyMatchesSchoolCode(fallbackName, schoolCode)) return normalizedFallback;
+    }
+
     const byName = await pool.query<{ id: number }>(
       `
         SELECT id

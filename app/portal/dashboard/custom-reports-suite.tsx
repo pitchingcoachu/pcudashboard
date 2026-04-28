@@ -879,6 +879,10 @@ function Contact3DChart({
       );
 
       const traces: unknown[] = [];
+      const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+      const axisTextColor = isLightTheme ? '#0f172a' : '#e5e7eb';
+      const axisGridColor = isLightTheme ? 'rgba(15,23,42,0.16)' : 'rgba(255,255,255,0.15)';
+      const markerOutline = isLightTheme ? 'rgba(15,23,42,0.55)' : 'rgba(255,255,255,0.55)';
       traces.push({
         type: 'scatter3d',
         mode: 'markers',
@@ -891,7 +895,7 @@ function Contact3DChart({
           size: mode === 'average_pitch_type' ? 7 : 5,
           color: colors,
           opacity: 0.9,
-          line: { color: 'rgba(255,255,255,0.55)', width: 1 },
+          line: { color: markerOutline, width: 1 },
         },
         showlegend: false,
       });
@@ -929,9 +933,9 @@ function Contact3DChart({
         plot_bgcolor: 'rgba(0,0,0,0)',
         margin: { l: 0, r: 0, t: 0, b: 0 },
         scene: {
-          xaxis: { title: 'Forward (ft)', color: '#e5e7eb', gridcolor: 'rgba(255,255,255,0.15)', range: xRange },
-          yaxis: { title: 'Side (ft)', color: '#e5e7eb', gridcolor: 'rgba(255,255,255,0.15)', range: yRange },
-          zaxis: { title: 'Height (ft)', color: '#e5e7eb', gridcolor: 'rgba(255,255,255,0.15)', range: zRange },
+          xaxis: { title: 'Forward (ft)', color: axisTextColor, gridcolor: axisGridColor, range: xRange },
+          yaxis: { title: 'Side (ft)', color: axisTextColor, gridcolor: axisGridColor, range: yRange },
+          zaxis: { title: 'Height (ft)', color: axisTextColor, gridcolor: axisGridColor, range: zRange },
           dragmode: 'orbit',
           aspectmode: 'manual',
           aspectratio: { x: 1.45, y: 1.25, z: 1.1 },
@@ -1644,7 +1648,7 @@ function customTableModeValue(id: number): string {
   return `custom_saved:${id}`;
 }
 
-async function svgToPngDataUrl(svg: SVGSVGElement, exportScale = 1): Promise<string | null> {
+async function svgToPngDataUrl(svg: SVGSVGElement, exportScale = 1, forceLightContrast = false): Promise<string | null> {
   const rect = svg.getBoundingClientRect();
   const width = Math.max(1, Math.round(rect.width));
   const height = Math.max(1, Math.round(rect.height));
@@ -1657,6 +1661,18 @@ async function svgToPngDataUrl(svg: SVGSVGElement, exportScale = 1): Promise<str
   clone.setAttribute('width', String(width));
   clone.setAttribute('height', String(height));
   if (!clone.getAttribute('viewBox')) clone.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  if (forceLightContrast) {
+    const whiteStrokeNodes = clone.querySelectorAll<SVGElement>(
+      "[stroke='white'], [stroke='#fff'], [stroke='#ffffff'], [stroke^='rgba(255,255,255'], [stroke^='rgba(255, 255, 255']"
+    );
+    whiteStrokeNodes.forEach((node) => node.setAttribute('stroke', 'rgba(15,23,42,0.8)'));
+    const whiteFillNodes = clone.querySelectorAll<SVGElement>(
+      "[fill='white'], [fill='#fff'], [fill='#ffffff'], [fill^='rgba(255,255,255'], [fill^='rgba(255, 255, 255']"
+    );
+    whiteFillNodes.forEach((node) => node.setAttribute('fill', 'rgba(15,23,42,0.9)'));
+    const textNodes = clone.querySelectorAll<SVGTextElement>('text');
+    textNodes.forEach((node) => node.setAttribute('fill', 'rgba(15,23,42,0.95)'));
+  }
 
   const serialized = new XMLSerializer().serializeToString(clone);
   const blob = new Blob([serialized], { type: 'image/svg+xml;charset=utf-8' });
@@ -1689,9 +1705,10 @@ async function rasterizeHeatmapsForExport(reportNode: HTMLElement): Promise<() =
   const restores: Array<() => void> = [];
   const deviceScale = typeof window !== 'undefined' ? Math.max(1, window.devicePixelRatio || 1) : 1;
   const exportScale = Math.max(2, Math.round(deviceScale * 2));
+  const forceLightContrast = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
 
   for (const svg of targets) {
-    const dataUrl = await svgToPngDataUrl(svg, exportScale);
+    const dataUrl = await svgToPngDataUrl(svg, exportScale, forceLightContrast);
     if (!dataUrl) continue;
     const rect = svg.getBoundingClientRect();
     const img = document.createElement('img');
@@ -3302,6 +3319,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     if (!reportNode) return;
     let restoreHeatmaps: (() => void) | null = null;
     let restoreLogos: (() => void) | null = null;
+    const exportMarkerAttr = 'data-custom-report-export-root';
     try {
       setIsExportingPdf(true);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -3310,13 +3328,107 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       await waitForReportImages(reportNode);
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const isSinglePlayerScope = reportScope === 'Single Player';
+      const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+      reportNode.setAttribute(exportMarkerAttr, '1');
       const captureScale = Math.min(2, Math.max(1.5, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
       const baseCanvas = await html2canvas(reportNode, {
-        backgroundColor: isSinglePlayerScope ? null : '#000000',
+        backgroundColor: isLightTheme ? '#f8fafc' : (isSinglePlayerScope ? null : '#000000'),
         scale: captureScale,
         useCORS: true,
         logging: false,
         ignoreElements: (element) => element.getAttribute?.('data-export-ignore') === 'true',
+        onclone: (doc) => {
+          if (!isLightTheme) return;
+          doc.body.classList.add('theme-light');
+          const cloneRoot = doc.querySelector<HTMLElement>(`[${exportMarkerAttr}="1"]`);
+          if (!cloneRoot) return;
+          const parseRgba = (value: string): { r: number; g: number; b: number; a: number } | null => {
+            const normalized = String(value ?? '').trim().toLowerCase();
+            if (!normalized || normalized === 'transparent') return null;
+            const match = normalized.match(
+              /rgba?\(\s*([0-9.]+)(?:\s*,\s*|\s+)([0-9.]+)(?:\s*,\s*|\s+)([0-9.]+)(?:\s*[,/]\s*([0-9.]+))?\s*\)/i
+            );
+            if (!match) return null;
+            const r = Number(match[1]);
+            const g = Number(match[2]);
+            const b = Number(match[3]);
+            const a = match[4] === undefined ? 1 : Number(match[4]);
+            if (![r, g, b, a].every(Number.isFinite)) return null;
+            return { r, g, b, a };
+          };
+          const bgForNode = (node: HTMLElement): { r: number; g: number; b: number; a: number } | null => {
+            let current: HTMLElement | null = node;
+            while (current && current !== cloneRoot.parentElement) {
+              const computed = doc.defaultView?.getComputedStyle(current);
+              const parsed = parseRgba(computed?.backgroundColor || '');
+              if (parsed && parsed.a > 0.03) return parsed;
+              current = current.parentElement;
+            }
+            return null;
+          };
+          const candidates = Array.from(cloneRoot.querySelectorAll('td, th, td *, th *')) as HTMLElement[];
+          for (const node of candidates) {
+            const bg = bgForNode(node);
+            const luminance = bg ? ((0.2126 * bg.r) + (0.7152 * bg.g) + (0.0722 * bg.b)) : 255;
+            const nextColor = luminance >= 170 ? '#0f172a' : '#f8fafc';
+            node.style.setProperty('color', nextColor, 'important');
+            node.style.setProperty('-webkit-text-fill-color', nextColor, 'important');
+            node.style.setProperty('text-shadow', 'none', 'important');
+            node.style.setProperty('opacity', '1', 'important');
+            node.style.setProperty('visibility', 'visible', 'important');
+            // Color-coded table chips render as inline-flex spans; force their text
+            // and nested labels to stay visible in the export clone.
+            if (node.tagName === 'SPAN') {
+              const computed = doc.defaultView?.getComputedStyle(node);
+              if (computed && computed.display.includes('flex')) {
+                node.style.setProperty('font-weight', '700', 'important');
+                node.style.setProperty('line-height', computed.lineHeight || '1.2', 'important');
+                const childTextNodes = Array.from(node.querySelectorAll('span')) as HTMLElement[];
+                for (const child of childTextNodes) {
+                  child.style.setProperty('color', nextColor, 'important');
+                  child.style.setProperty('-webkit-text-fill-color', nextColor, 'important');
+                  child.style.setProperty('text-shadow', 'none', 'important');
+                  child.style.setProperty('opacity', '1', 'important');
+                  child.style.setProperty('visibility', 'visible', 'important');
+                }
+              }
+            }
+          }
+          const tableHeaders = Array.from(cloneRoot.querySelectorAll('.portal-custom-reports-table-wrap th')) as HTMLElement[];
+          for (const th of tableHeaders) {
+            th.style.setProperty('color', '#0f172a', 'important');
+            th.style.setProperty('-webkit-text-fill-color', '#0f172a', 'important');
+            th.style.setProperty('opacity', '1', 'important');
+            th.style.setProperty('visibility', 'visible', 'important');
+          }
+          // html2canvas can drop text inside inline-flex chip spans in some cases.
+          // Rewrite chip content in the clone to a simple block so values always render.
+          const tableCells = Array.from(cloneRoot.querySelectorAll('.portal-custom-reports-table-wrap td')) as HTMLElement[];
+          for (const td of tableCells) {
+            const chip = td.querySelector(':scope > span') as HTMLElement | null;
+            if (!chip) continue;
+            const chipBg = parseRgba(doc.defaultView?.getComputedStyle(chip).backgroundColor || '');
+            if (!chipBg || chipBg.a <= 0.03) continue;
+            const luminance = (0.2126 * chipBg.r) + (0.7152 * chipBg.g) + (0.0722 * chipBg.b);
+            const chipTextColor = luminance >= 170 ? '#0f172a' : '#f8fafc';
+            const mainValue =
+              (chip.querySelector(':scope > span') as HTMLElement | null)?.textContent?.trim()
+              ?? chip.textContent?.trim()
+              ?? '';
+            if (!mainValue) continue;
+            chip.innerHTML = '';
+            chip.textContent = mainValue;
+            chip.style.setProperty('display', 'inline-block', 'important');
+            chip.style.setProperty('width', '100%', 'important');
+            chip.style.setProperty('text-align', 'center', 'important');
+            chip.style.setProperty('line-height', '1.15', 'important');
+            chip.style.setProperty('font-weight', '700', 'important');
+            chip.style.setProperty('color', chipTextColor, 'important');
+            chip.style.setProperty('-webkit-text-fill-color', chipTextColor, 'important');
+            chip.style.setProperty('opacity', '1', 'important');
+            chip.style.setProperty('visibility', 'visible', 'important');
+          }
+        },
       });
       const trimTransparentEdges = (input: HTMLCanvasElement): HTMLCanvasElement => {
         const width = Math.max(1, input.width);
@@ -3374,7 +3486,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         const drawHeight = rawH * fitScale;
         const drawX = (pageWidth - drawWidth) / 2;
         const drawY = margin;
-        pdf.setFillColor(4, 5, 7);
+        if (isLightTheme) pdf.setFillColor(248, 250, 252);
+        else pdf.setFillColor(4, 5, 7);
         pdf.rect(0, 0, pageWidth, pageHeight, 'F');
         pdf.addImage(canvas.toDataURL('image/jpeg', 0.84), 'JPEG', drawX, drawY, drawWidth, drawHeight, undefined, 'FAST');
         const safeName = (reportHeaderTitle || 'custom-report').replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-');
@@ -3460,7 +3573,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
 
       for (let pageIndex = 0; pageIndex < pageSlices.length; pageIndex += 1) {
         if (pageIndex > 0) pdf.addPage('letter', orientation);
-        pdf.setFillColor(4, 5, 7);
+        if (isLightTheme) pdf.setFillColor(248, 250, 252);
+        else pdf.setFillColor(4, 5, 7);
         pdf.rect(0, 0, pageWidth, pageHeight, 'F');
 
         const slice = pageSlices[pageIndex];
@@ -3480,6 +3594,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     } catch (err) {
       setError(err instanceof Error ? err.message : 'PDF export failed.');
     } finally {
+      reportNode.removeAttribute(exportMarkerAttr);
       restoreLogos?.();
       restoreHeatmaps?.();
       setIsExportingPdf(false);
@@ -5226,6 +5341,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       ) : contentType === 'Movement Plot' ? (
                         <div className="portal-custom-reports-velocity">
                           {(() => {
+                            const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+                            const gridLineColor = isLightTheme ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.18)';
+                            const axisLineColor = isLightTheme ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.85)';
+                            const tickTextColor = isLightTheme ? 'rgba(15,23,42,0.9)' : 'rgba(255,255,255,0.78)';
                             const points = chartPoints
                               .map((point) => ({
                                 hb: toNum(point.hb),
@@ -5241,10 +5360,24 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             return (
                               <svg viewBox="0 0 520 360" role="img" aria-label="Movement plot" onMouseLeave={() => setChartHover(null)}>
                                 {[-20, -10, 0, 10, 20].map((tick) => (
-                                  <line key={`${cellId}-m-v-${tick}`} x1={52 + ((tick + 25) / 50) * 416} y1={22} x2={52 + ((tick + 25) / 50) * 416} y2={338} stroke="rgba(255,255,255,0.18)" />
+                                  <line
+                                    key={`${cellId}-m-v-${tick}`}
+                                    x1={52 + ((tick + 25) / 50) * 416}
+                                    y1={22}
+                                    x2={52 + ((tick + 25) / 50) * 416}
+                                    y2={338}
+                                    stroke={tick === 0 ? axisLineColor : gridLineColor}
+                                  />
                                 ))}
                                 {[-20, -10, 0, 10, 20].map((tick) => (
-                                  <line key={`${cellId}-m-h-${tick}`} x1={52} y1={22 + ((25 - tick) / 50) * 316} x2={468} y2={22 + ((25 - tick) / 50) * 316} stroke="rgba(255,255,255,0.18)" />
+                                  <line
+                                    key={`${cellId}-m-h-${tick}`}
+                                    x1={52}
+                                    y1={22 + ((25 - tick) / 50) * 316}
+                                    x2={468}
+                                    y2={22 + ((25 - tick) / 50) * 316}
+                                    stroke={tick === 0 ? axisLineColor : gridLineColor}
+                                  />
                                 ))}
                                 {[-20, -10, 0, 10, 20].map((tick) => (
                                   <text
@@ -5252,7 +5385,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     x={52 + ((tick + 25) / 50) * 416}
                                     y={352}
                                     textAnchor="middle"
-                                    fill="rgba(255,255,255,0.78)"
+                                    fill={tickTextColor}
                                     fontSize={11}
                                   >
                                     {tick}
@@ -5264,14 +5397,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     x={44}
                                     y={22 + ((25 - tick) / 50) * 316 + 4}
                                     textAnchor="end"
-                                    fill="rgba(255,255,255,0.78)"
+                                    fill={tickTextColor}
                                     fontSize={11}
                                   >
                                     {tick}
                                   </text>
                                 ))}
-                                <line x1={52} y1={180} x2={468} y2={180} stroke="rgba(255,255,255,0.85)" />
-                                <line x1={260} y1={22} x2={260} y2={338} stroke="rgba(255,255,255,0.85)" />
+                                <line x1={52} y1={180} x2={468} y2={180} stroke={axisLineColor} />
+                                <line x1={260} y1={22} x2={260} y2={338} stroke={axisLineColor} />
                                 {showPitches
                                   ? points.slice(0, 1200).map((point, idx) => (
                                       <circle
@@ -5325,6 +5458,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       ) : contentType === 'Release Plot' ? (
                         <div className="portal-custom-reports-velocity">
                           {(() => {
+                            const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+                            const gridLineColor = isLightTheme ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.18)';
+                            const axisLineColor = isLightTheme ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.85)';
+                            const tickTextColor = isLightTheme ? 'rgba(15,23,42,0.9)' : 'rgba(255,255,255,0.78)';
                             const points = chartPoints
                               .map((point) => ({
                                 x: (() => {
@@ -5351,10 +5488,24 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             return (
                               <svg viewBox="0 0 520 360" role="img" aria-label="Release plot" onMouseLeave={() => setChartHover(null)}>
                                 {[-4, -2, 0, 2, 4].map((tick) => (
-                                  <line key={`${cellId}-r-v-${tick}`} x1={52 + ((tick + 4) / 8) * 416} y1={22} x2={52 + ((tick + 4) / 8) * 416} y2={338} stroke="rgba(255,255,255,0.18)" />
+                                  <line
+                                    key={`${cellId}-r-v-${tick}`}
+                                    x1={52 + ((tick + 4) / 8) * 416}
+                                    y1={22}
+                                    x2={52 + ((tick + 4) / 8) * 416}
+                                    y2={338}
+                                    stroke={tick === 0 ? axisLineColor : gridLineColor}
+                                  />
                                 ))}
                                 {[0, 1, 2, 3, 4, 5, 6].map((tick) => (
-                                  <line key={`${cellId}-r-h-${tick}`} x1={52} y1={22 + ((6.5 - tick) / 6.5) * 316} x2={468} y2={22 + ((6.5 - tick) / 6.5) * 316} stroke="rgba(255,255,255,0.18)" />
+                                  <line
+                                    key={`${cellId}-r-h-${tick}`}
+                                    x1={52}
+                                    y1={22 + ((6.5 - tick) / 6.5) * 316}
+                                    x2={468}
+                                    y2={22 + ((6.5 - tick) / 6.5) * 316}
+                                    stroke={tick === 0 ? axisLineColor : gridLineColor}
+                                  />
                                 ))}
                                 {[-4, -2, 0, 2, 4].map((tick) => (
                                   <text
@@ -5362,7 +5513,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     x={52 + ((tick + 4) / 8) * 416}
                                     y={352}
                                     textAnchor="middle"
-                                    fill="rgba(255,255,255,0.78)"
+                                    fill={tickTextColor}
                                     fontSize={11}
                                   >
                                     {tick}
@@ -5374,7 +5525,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     x={44}
                                     y={22 + ((6.5 - tick) / 6.5) * 316 + 4}
                                     textAnchor="end"
-                                    fill="rgba(255,255,255,0.78)"
+                                    fill={tickTextColor}
                                     fontSize={11}
                                   >
                                     {tick}
@@ -5391,8 +5542,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   strokeWidth={1}
                                   rx={2}
                                 />
-                                <line x1={260} y1={22} x2={260} y2={338} stroke="rgba(255,255,255,0.85)" />
-                                <line x1={52} y1={338} x2={468} y2={338} stroke="rgba(255,255,255,0.85)" />
+                                <line x1={260} y1={22} x2={260} y2={338} stroke={axisLineColor} />
+                                <line x1={52} y1={338} x2={468} y2={338} stroke={axisLineColor} />
                                 {showPitches
                                   ? points.slice(0, 1200).map((point, idx) => (
                                       <circle
@@ -5749,6 +5900,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           <div style={{ display: 'grid', justifyItems: 'center', gap: 8 }}>
                             <svg viewBox="0 0 260 172" role="img" aria-label="Pitch usage pie" style={{ display: 'block' }}>
                               {(() => {
+                                const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+                                const pieStroke = isLightTheme ? 'rgba(15,23,42,0.24)' : 'rgba(255,255,255,0.25)';
                                 if (!pitchTypeCountList.length) return null;
                                 const total = pieTotal;
                                 let angle = -Math.PI / 2;
@@ -5765,20 +5918,20 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                   const large = sweep > Math.PI ? 1 : 0;
                                   const path = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`;
                                   angle = nextA;
-                                  return <path key={`${cellId}-pie-${pitchType}`} d={path} fill={PITCH_COLORS[pitchType] ?? '#9ca3af'} stroke="rgba(255,255,255,0.25)" />;
+                                  return <path key={`${cellId}-pie-${pitchType}`} d={path} fill={PITCH_COLORS[pitchType] ?? '#9ca3af'} stroke={pieStroke} />;
                                 });
                               })()}
                             </svg>
                             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
                               {pitchTypeCountList.slice(0, 8).map(([pitchType, count]) => (
-                                <span key={`${cellId}-pie-k-${pitchType}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'rgba(255,255,255,0.92)' }}>
+                                <span key={`${cellId}-pie-k-${pitchType}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: (typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(15,23,42,0.92)' : 'rgba(255,255,255,0.92)' }}>
                                   <span
                                     style={{
                                       width: 8,
                                       height: 8,
                                       borderRadius: 999,
                                       background: PITCH_COLORS[pitchType] ?? '#9ca3af',
-                                      border: '1px solid rgba(255,255,255,0.35)',
+                                      border: (typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? '1px solid rgba(15,23,42,0.28)' : '1px solid rgba(255,255,255,0.35)',
                                       flex: '0 0 auto',
                                     }}
                                   />
@@ -5792,6 +5945,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         <div className="portal-custom-reports-velocity">
                           <svg viewBox="0 0 620 360" role="img" aria-label="Pitch usage bars">
                             {(() => {
+                              const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+                              const tickColor = isLightTheme ? 'rgba(15,23,42,0.9)' : 'white';
                               if (!pitchTypeCountList.length) return null;
                               const max = Math.max(...pitchTypeCountList.map((entry) => entry[1]), 1);
                               const rows = pitchTypeCountList.slice(0, 10);
@@ -5806,10 +5961,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 return (
                                   <g key={`${cellId}-bar-${pitchType}`}>
                                     <rect x={x} y={y} width={34} height={barH} fill={PITCH_COLORS[pitchType] ?? '#9ca3af'} />
-                                    <text x={x + 17} y={y - 6} textAnchor="middle" fontSize={12} fill="white">
+                                    <text x={x + 17} y={y - 6} textAnchor="middle" fontSize={12} fill={tickColor}>
                                       {`${pct.toFixed(1)}%`}
                                     </text>
-                                    <text x={x + 17} y={334} textAnchor="middle" fontSize={11} fill="white">
+                                    <text x={x + 17} y={334} textAnchor="middle" fontSize={11} fill={tickColor}>
                                       {PITCH_ABBR[pitchType] ?? pitchType.slice(0, 2).toUpperCase()}
                                     </text>
                                   </g>
@@ -5822,6 +5977,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         <div className="portal-custom-reports-velocity">
                           <svg viewBox="0 0 620 360" role="img" aria-label="Velocity bars">
                             {(() => {
+                              const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+                              const tickColor = isLightTheme ? 'rgba(15,23,42,0.9)' : 'white';
                               const veloByType: Record<string, { sum: number; n: number }> = {};
                               for (const p of chartPoints) {
                                 const k = (p.pitch_type ?? '').trim() || 'Undefined';
@@ -5849,10 +6006,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 return (
                                   <g key={`${cellId}-vbar-${pitchType}`}>
                                     <rect x={x} y={y} width={34} height={barH} fill={PITCH_COLORS[pitchType] ?? '#9ca3af'} />
-                                    <text x={x + 17} y={y - 6} textAnchor="middle" fontSize={12} fill="white">
+                                    <text x={x + 17} y={y - 6} textAnchor="middle" fontSize={12} fill={tickColor}>
                                       {value.toFixed(1)}
                                     </text>
-                                    <text x={x + 17} y={334} textAnchor="middle" fontSize={11} fill="white">
+                                    <text x={x + 17} y={334} textAnchor="middle" fontSize={11} fill={tickColor}>
                                       {PITCH_ABBR[pitchType] ?? pitchType.slice(0, 2).toUpperCase()}
                                     </text>
                                   </g>
@@ -5865,6 +6022,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         <div className="portal-custom-reports-velocity">
                           <svg viewBox="0 0 860 520" role="img" aria-label="Velocity distribution">
                             {(() => {
+                              const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+                              const gridColor = isLightTheme ? 'rgba(15,23,42,0.22)' : 'rgba(255,255,255,0.12)';
+                              const tickColor = isLightTheme ? 'rgba(15,23,42,0.92)' : 'rgba(255,255,255,0.88)';
+                              const labelColor = isLightTheme ? 'rgba(15,23,42,0.96)' : 'rgba(255,255,255,0.96)';
                               const byType = new Map<string, number[]>();
                               for (const point of chartPoints) {
                                 const pitchType = ((point.pitch_type ?? '').trim() || 'Undefined') as string;
@@ -5909,7 +6070,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               return (
                                 <>
                                   {xTicks.map((tick) => (
-                                    <line key={`${cellId}-vd-x-${tick}`} x1={xFor(tick)} y1={top - 10} x2={xFor(tick)} y2={top + laneH * ordered.length} stroke="rgba(255,255,255,0.12)" />
+                                    <line key={`${cellId}-vd-x-${tick}`} x1={xFor(tick)} y1={top - 10} x2={xFor(tick)} y2={top + laneH * ordered.length} stroke={gridColor} />
                                   ))}
                                   {ordered.map(([pitchType], idx) => {
                                     const values = byType.get(pitchType) ?? [];
@@ -5918,7 +6079,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     const polygon = densityPath(values, yBase, laneH * 0.72);
                                     return (
                                       <g key={`${cellId}-vd-row-${pitchType}`}>
-                                        <text x={left - 14} y={yBase - laneH * 0.32} textAnchor="end" fontSize={22} fontWeight={800} fill="rgba(255,255,255,0.96)">
+                                        <text x={left - 14} y={yBase - laneH * 0.32} textAnchor="end" fontSize={22} fontWeight={800} fill={labelColor}>
                                           {PITCH_ABBR[pitchType] ?? pitchType.slice(0, 2).toUpperCase()}
                                         </text>
                                         <line x1={left} y1={yBase} x2={860 - right} y2={yBase} stroke={PITCH_COLORS[pitchType] ?? '#9ca3af'} strokeWidth={1.4} opacity={0.95} />
@@ -5930,7 +6091,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     );
                                   })}
                                   {xTicks.map((tick) => (
-                                    <text key={`${cellId}-vd-l-${tick}`} x={xFor(tick)} y={Math.min(506, top + laneH * ordered.length + 22)} textAnchor="middle" fontSize={13} fill="rgba(255,255,255,0.88)">
+                                    <text key={`${cellId}-vd-l-${tick}`} x={xFor(tick)} y={Math.min(506, top + laneH * ordered.length + 22)} textAnchor="middle" fontSize={13} fill={tickColor}>
                                       {tick}
                                     </text>
                                   ))}
@@ -6094,18 +6255,23 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const xTicks = Array.from(new Set(xTicksRaw));
                               const yTickCount = Math.max(2, Math.floor((yMax - yMin) / yStep) + 1);
                               const yTicks = Array.from({ length: yTickCount }, (_, idx) => yMin + idx * yStep);
+                              const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+                              const gridYColor = isLightTheme ? 'rgba(15,23,42,0.24)' : 'rgba(255,255,255,0.14)';
+                              const gridXColor = isLightTheme ? 'rgba(15,23,42,0.16)' : 'rgba(255,255,255,0.08)';
+                              const tickColor = isLightTheme ? 'rgba(15,23,42,0.92)' : 'rgba(255,255,255,0.8)';
+                              const boundaryColor = isLightTheme ? 'rgba(15,23,42,0.82)' : 'rgba(255,255,255,0.92)';
                               return (
                                 <>
                                   {yTicks.map((tick) => (
                                     <g key={`${cellId}-vv-y-${tick}`}>
-                                      <line x1={m.l} y1={py(tick)} x2={w - m.r} y2={py(tick)} stroke="rgba(255,255,255,0.14)" />
-                                      <text x={m.l - 8} y={py(tick) + 4} textAnchor="end" fill="rgba(255,255,255,0.78)" fontSize={11}>
+                                      <line x1={m.l} y1={py(tick)} x2={w - m.r} y2={py(tick)} stroke={gridYColor} />
+                                      <text x={m.l - 8} y={py(tick) + 4} textAnchor="end" fill={tickColor} fontSize={11}>
                                         {Number.isInteger(tick) ? tick : tick.toFixed(1)}
                                       </text>
                                     </g>
                                   ))}
                                   {xTicks.map((tick) => (
-                                    <line key={`${cellId}-vv-x-${tick}`} x1={px(tick)} y1={m.t} x2={px(tick)} y2={h - m.b} stroke="rgba(255,255,255,0.08)" />
+                                    <line key={`${cellId}-vv-x-${tick}`} x1={px(tick)} y1={m.t} x2={px(tick)} y2={h - m.b} stroke={gridXColor} />
                                   ))}
                                   {mode === 'Velocity Chart (Game/Inning)'
                                     ? inningBoundaries.map((value) => (
@@ -6115,7 +6281,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                           y1={m.t}
                                           x2={px(value)}
                                           y2={h - m.b}
-                                          stroke="rgba(255,255,255,0.92)"
+                                          stroke={boundaryColor}
                                           strokeDasharray="6,6"
                                           strokeWidth={1.5}
                                         />
@@ -6172,7 +6338,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     ))
                                   )}
                                   {xTicks.map((tick) => (
-                                    <text key={`${cellId}-vv-xlab-${tick}`} x={px(tick)} y={h - (mode === 'Average Velocity by Game' ? 24 : 14)} textAnchor="middle" fill="rgba(255,255,255,0.8)" fontSize={11}>
+                                    <text key={`${cellId}-vv-xlab-${tick}`} x={px(tick)} y={h - (mode === 'Average Velocity by Game' ? 24 : 14)} textAnchor="middle" fill={tickColor} fontSize={11}>
                                       {mode === 'Average Velocity by Inning'
                                         ? tick
                                         : mode === 'Velocity Chart (Game/Inning)'

@@ -49,9 +49,25 @@ export function resolveDashboardSchoolCode(session: PortalSession): string {
 }
 
 export function resolveDashboardApiBaseUrl(): string {
-  const configured =
-    (process.env.DASHBOARD_API_BASE_URL ?? process.env.DASHBOARD_API_URL ?? '').trim();
-  if (configured) return configured.replace(/\/+$/, '');
+  const configured = (process.env.DASHBOARD_API_BASE_URL ?? process.env.DASHBOARD_API_URL ?? '').trim();
+  if (configured) {
+    const normalized = configured.replace(/\/+$/, '');
+    const withScheme = (() => {
+      if (/^https?:\/\//i.test(normalized)) return normalized;
+      if (normalized.startsWith('//')) return `https:${normalized}`;
+      const hostOnly = normalized.replace(/^\/+/, '');
+      if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/.*)?$/i.test(hostOnly)) {
+        return `http://${hostOnly}`;
+      }
+      return `https://${hostOnly}`;
+    })();
+    try {
+      const parsed = new URL(withScheme);
+      return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, '');
+    } catch {
+      throw new Error('DASHBOARD_API_BASE_URL is invalid. Use a full URL like https://api.example.com');
+    }
+  }
   const isProdRuntime = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
   if (isProdRuntime) {
     throw new Error('DASHBOARD_API_BASE_URL is not set in production.');

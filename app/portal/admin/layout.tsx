@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
-import { canUseClientManagement, canUseProgrammingData } from '../../../lib/programming-scope';
+import { canUseClientManagement, canUseProgrammingData, getSchoolProductAccess } from '../../../lib/programming-scope';
 import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-brand';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
@@ -29,8 +29,16 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const selectedSchool = resolveDashboardSchoolCode(session);
   const schoolOptions = await withTimeout(resolveSessionDashboardSchoolOptions(session), 3_000, [selectedSchool, 'LEAGUE', 'PRO']);
   const brand = resolveSchoolBrand(selectedSchool);
-  const canAccessProgramming = canUseProgrammingData(session);
-  const canAccessClientManagement = canUseClientManagement(session);
+  const schoolAccess =
+    session.role === 'admin'
+      ? await withTimeout(
+          getSchoolProductAccess(selectedSchool),
+          3_000,
+          { dashboard: true, programming: canUseProgrammingData(session), clientManagement: canUseClientManagement(session) }
+        )
+      : null;
+  const canAccessProgramming = session.role === 'admin' ? schoolAccess?.programming === true : canUseProgrammingData(session);
+  const canAccessClientManagement = session.role === 'admin' ? schoolAccess?.clientManagement !== false : canUseClientManagement(session);
   const isProSchool = String(selectedSchool).trim().toUpperCase() === 'PRO';
   const showCoachClientTabs = canAccessClientManagement && !(session.role === 'coach' && isProSchool);
   const useCompactProgrammingNav = canAccessProgramming;

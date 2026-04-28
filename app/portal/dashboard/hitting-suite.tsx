@@ -2634,8 +2634,10 @@ export default function HittingSuite({
     const overviewTtlMs = isPro ? 90000 : 30000;
     const applyOverviewPayload = (payload: HittingOverviewPayload) => {
       const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+      const availableColumns = Array.isArray(payload.available_table_columns) ? payload.available_table_columns : [];
+      const allColumns = Array.from(new Set([...tableColumns, ...availableColumns]));
       const tableRows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
-      const normalizedRows = normalizeTableRowsForColumns(tableColumns, tableRows);
+      const normalizedRows = normalizeTableRowsForColumns(allColumns, tableRows);
       const normalizedPayload =
         normalizedRows === tableRows
           ? payload
@@ -5034,7 +5036,7 @@ export default function HittingSuite({
               <thead>
                 <tr>
                   {isLeaderboardPage ? (
-                    <th style={{ textAlign: 'center', padding: '8px 6px', borderBottom: '1px solid rgba(255,255,255,0.18)', whiteSpace: 'nowrap', position: isLeaderboardPage ? 'sticky' : undefined, top: isLeaderboardPage ? 0 : undefined, zIndex: isLeaderboardPage ? 3 : undefined, background: isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined }}>Rank</th>
+                    <th style={{ textAlign: 'center', padding: '8px 6px', borderBottom: '1px solid rgba(255,255,255,0.18)', whiteSpace: 'nowrap', position: isLeaderboardPage ? 'sticky' : undefined, top: isLeaderboardPage ? 0 : undefined, zIndex: isLeaderboardPage ? 3 : undefined, background: isLeaderboardPage ? ((typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)') : undefined }}>Rank</th>
                   ) : null}
                   {displayedTableColumns.map((col, colIndex) => {
                     const isSortable = true;
@@ -5054,7 +5056,7 @@ export default function HittingSuite({
                           zIndex: isLeaderboardPage ? 3 : undefined,
                           background: activeSort
                             ? 'rgb(var(--portal-accent-rgb, 59,130,246))'
-                            : (isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined),
+                            : (isLeaderboardPage ? ((typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)') : undefined),
                           color: activeSort ? '#fff' : undefined,
                         }}
                         onClick={
@@ -5440,7 +5442,7 @@ export default function HittingSuite({
                               position: 'sticky',
                               top: 0,
                               zIndex: 3,
-                              background: 'rgba(7,9,14,0.98)',
+                              background: (typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)',
                               width: 34,
                             }}
                           >
@@ -5460,7 +5462,7 @@ export default function HittingSuite({
                                   position: 'sticky',
                                   top: 0,
                                   zIndex: 3,
-                                  background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : 'rgba(7,9,14,0.98)',
+                                  background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : ((typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)'),
                                   color: activeSort ? '#fff' : undefined,
                                 }}
                                 onClick={() => {

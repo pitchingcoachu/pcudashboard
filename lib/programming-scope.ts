@@ -1,5 +1,5 @@
 import { resolveDashboardSchoolCode } from './dashboard-access';
-import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from './auth-db';
+import { getDbPool, isDatabaseConfigured } from './auth-db';
 import type { PortalSession } from './portal-session';
 
 type SessionLike = {
@@ -169,7 +169,6 @@ function mergeWithEnvDefaults(rows: Array<{ school_code: string; dashboard: bool
 
 async function ensureSchoolProductAccessTable(): Promise<void> {
   if (!isDatabaseConfigured()) return;
-  await ensureAuthDbReady();
   const pool = getDbPool();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS school_product_access (
@@ -178,7 +177,7 @@ async function ensureSchoolProductAccessTable(): Promise<void> {
       programming BOOLEAN NOT NULL DEFAULT FALSE,
       client_management BOOLEAN NOT NULL DEFAULT TRUE,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL
+      updated_by_user_id BIGINT
     );
   `);
 }
@@ -221,7 +220,11 @@ export async function getSchoolProductAccess(schoolCode: string): Promise<School
   const normalized = normalizeSchoolCode(schoolCode);
   const map = getCachedSchoolAccessMap();
   if (map[normalized]) return map[normalized];
-  const fallback = normalizeAccess({ dashboard: true, programming: false, clientManagement: true });
+  const fallback = normalizeAccess({
+    dashboard: true,
+    programming: parseProgrammingDataSchoolCodes().includes(normalized),
+    clientManagement: true,
+  });
   return fallback;
 }
 
@@ -239,8 +242,8 @@ export async function setSchoolProductAccess(
   if (isDatabaseConfigured()) {
     await ensureSchoolProductAccessTable();
     const pool = getDbPool();
-    await pool.query(
-      `
+    const params = [schoolCode, input.dashboard, input.programming, input.clientManagement, input.updatedByUserId ?? null];
+    const upsertSql = `
       INSERT INTO school_product_access (school_code, dashboard, programming, client_management, updated_at, updated_by_user_id)
       VALUES ($1, $2, $3, $4, NOW(), $5)
       ON CONFLICT (school_code)
@@ -250,9 +253,18 @@ export async function setSchoolProductAccess(
         client_management = EXCLUDED.client_management,
         updated_at = NOW(),
         updated_by_user_id = EXCLUDED.updated_by_user_id
-      `,
-      [schoolCode, input.dashboard, input.programming, input.clientManagement, input.updatedByUserId ?? null]
-    );
+    `;
+    try {
+      await pool.query(upsertSql, params);
+    } catch (error) {
+      const typed = error as { code?: string } | null;
+      if (typed?.code === '23503') {
+        // Allow access toggles to save even if the acting session user is not persisted in auth_users.
+        await pool.query(upsertSql, [schoolCode, input.dashboard, input.programming, input.clientManagement, null]);
+      } else {
+        throw error;
+      }
+    }
   }
   const map = getCachedSchoolAccessMap();
   map[schoolCode] = {

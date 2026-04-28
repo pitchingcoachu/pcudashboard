@@ -8,6 +8,7 @@ import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
+import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 
 type FiltersPayload = {
   school_code: string;
@@ -118,6 +119,8 @@ type OverviewPayload = {
     spin_eff: number | null;
     exit_speed: number | null;
     angle: number | null;
+    vaa?: number | null;
+    haa?: number | null;
     estimated_woba_using_speedangle?: number | null;
     estimated_ba_using_speedangle?: number | null;
     iso_value?: number | null;
@@ -158,6 +161,7 @@ type OverviewPayload = {
     outs_num: number | null;
     outs_on_play_num: number | null;
     run_value: number | null;
+    pitch_value?: number | null;
     release_side: number | null;
     release_height: number | null;
     extension: number | null;
@@ -172,6 +176,8 @@ type OverviewPayload = {
     spin_eff: number | null;
     exit_speed: number | null;
     angle: number | null;
+    vaa?: number | null;
+    haa?: number | null;
     estimated_woba_using_speedangle?: number | null;
     estimated_ba_using_speedangle?: number | null;
     iso_value?: number | null;
@@ -297,6 +303,57 @@ const LEFTY_LOW_HB_BETTER_PITCH_TYPES = new Set(
 );
 const LOWER_IS_BETTER_PERCENTILE_COLUMNS = new Set(
   ['BB%', 'HR%', 'Barrel%', 'EV', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'].map((column) => normalizePercentileColumnToken(column))
+);
+const PITCH_LOG_PERCENT_TOKENS = new Set([
+  'usage',
+  'inzonepct',
+  'comppct',
+  'strikepct',
+  'swingpct',
+  'fpspct',
+  'whiffpct',
+  'swstrkpct',
+  'cswpct',
+  'kpct',
+  'bbpct',
+  'hrpct',
+  'gbpct',
+  'barrelpct',
+]);
+const PITCH_LOG_ZERO_DECIMAL_TOKENS = new Set(['p', 'number', 'bf', 'spin']);
+const PITCH_LOG_ONE_DECIMAL_TOKENS = new Set([
+  'velo',
+  'max',
+  'ivb',
+  'hb',
+  'height',
+  'side',
+  'ext',
+  'spineff',
+  'stuffplus',
+  'qpplus',
+  'ev',
+  'la',
+  'vaa',
+  'haa',
+]);
+const PITCH_LOG_TWO_DECIMAL_TOKENS = new Set(['rv100', 'pv100', 'era', 'fip', 'xfip', 'siera']);
+const TEAM_CODE_PREFIX_LABELS: Record<string, string> = {
+  HAR: 'Harvard University',
+  PEN: 'University of Pennsylvania',
+  OSU: 'Oklahoma State',
+  LSU: 'LSU',
+  GCU: 'Grand Canyon',
+  CNU: 'CNU',
+  CBU: 'CBU',
+  GMU: 'GMU',
+  UNM: 'UNM',
+  SEMO: 'SEMO',
+  CRE: 'Creighton',
+  PCU: 'Pitching Coach U',
+};
+const LEAGUE_TEAM_CODE_BY_LABEL_TOKEN: Record<string, string> = Object.fromEntries(
+  Object.entries(LEAGUE_TEAM_NAME_BY_CODE).map(([code, label]) => [normalizeLeagueTeamToken(label), code])
 );
 
 
@@ -709,6 +766,173 @@ function normalizeHandednessCode(value: unknown): 'R' | 'L' | '' {
   return '';
 }
 
+function normalizePitchCallToken(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function isPitchInZone(plateSide: unknown, plateHeight: unknown): boolean {
+  const side = parseSortableNumber(plateSide);
+  const height = parseSortableNumber(plateHeight);
+  if (side === null || height === null) return false;
+  return side >= -0.85 && side <= 0.85 && height >= 1.5 && height <= 3.5;
+}
+
+function isPitchStrike(pitchCall: string, isPro: boolean): boolean {
+  if (!isPro) {
+    return (
+      pitchCall === 'StrikeCalled' ||
+      pitchCall === 'StrikeSwinging' ||
+      pitchCall === 'FoulBall' ||
+      pitchCall === 'FoulBallFieldable' ||
+      pitchCall === 'FoulBallNotFieldable' ||
+      pitchCall === 'InPlay'
+    );
+  }
+  const token = normalizePitchCallToken(pitchCall);
+  return (
+    token === 'called_strike' ||
+    token === 'swinging_strike' ||
+    token === 'swinging_strike_blocked' ||
+    token === 'swinging_strike_pitchout' ||
+    token === 'foul' ||
+    token === 'foul_tip' ||
+    token === 'foul_bunt' ||
+    token === 'foul_pitchout' ||
+    token === 'missed_bunt' ||
+    token.startsWith('foul') ||
+    token.startsWith('in_play') ||
+    token.startsWith('hit_into_play')
+  );
+}
+
+function isPitchSwing(pitchCall: string, isPro: boolean): boolean {
+  if (!isPro) {
+    return (
+      pitchCall === 'StrikeSwinging' ||
+      pitchCall === 'FoulBall' ||
+      pitchCall === 'FoulBallFieldable' ||
+      pitchCall === 'FoulBallNotFieldable' ||
+      pitchCall === 'InPlay'
+    );
+  }
+  const token = normalizePitchCallToken(pitchCall);
+  return (
+    token === 'swinging_strike' ||
+    token === 'swinging_strike_blocked' ||
+    token === 'swinging_strike_pitchout' ||
+    token === 'foul' ||
+    token === 'foul_tip' ||
+    token === 'foul_bunt' ||
+    token === 'foul_pitchout' ||
+    token === 'missed_bunt' ||
+    token.startsWith('foul') ||
+    token.startsWith('in_play') ||
+    token.startsWith('hit_into_play')
+  );
+}
+
+function isPitchWhiff(pitchCall: string, isPro: boolean): boolean {
+  if (!isPro) return pitchCall === 'StrikeSwinging';
+  const token = normalizePitchCallToken(pitchCall);
+  return token === 'swinging_strike' || token === 'swinging_strike_blocked' || token === 'foul_tip';
+}
+
+function pitchLogMetricValue(
+  column: string,
+  pitch: OverviewPayload['chart_points'][number],
+  isPro: boolean
+): string | number | null {
+  const token = normalizePercentileColumnToken(column);
+  const playResultToken = normalizePitchCallToken(pitch.play_result ?? '');
+  const taggedHitType = normalizePitchCallToken(pitch.tagged_hit_type ?? '');
+  const strike = isPitchStrike(String(pitch.pitch_call ?? ''), isPro);
+  const swing = isPitchSwing(String(pitch.pitch_call ?? ''), isPro);
+  const whiff = isPitchWhiff(String(pitch.pitch_call ?? ''), isPro);
+  const inZone = isPitchInZone(pitch.plate_side, pitch.plate_height);
+  const firstPitch = Number(pitch.balls_num ?? -1) === 0 && Number(pitch.strikes_num ?? -1) === 0;
+
+  if (token === 'pitch') return pitch.pitch_type || '-';
+  if (token === 'p' || token === 'number') return 1;
+  if (token === 'usage') return null;
+  if (token === 'bf') return firstPitch ? 1 : 0;
+  if (token === 'velo' || token === 'max') return pitch.velo ?? null;
+  if (token === 'ivb') return pitch.ivb ?? null;
+  if (token === 'hb') return pitch.hb ?? null;
+  if (token === 'spin') return pitch.spin ?? null;
+  if (token === 'height') return pitch.release_height ?? null;
+  if (token === 'side') return pitch.release_side ?? null;
+  if (token === 'ext') return pitch.extension ?? null;
+  if (token === 'rtilt' || token === 'releasetilt') return pitch.release_tilt || null;
+  if (token === 'btilt' || token === 'breaktilt') return pitch.break_tilt || null;
+  if (token === 'spineff') {
+    const value = parseSortableNumber(pitch.spin_eff);
+    if (value === null) return null;
+    return Math.abs(value) <= 1 ? value * 100 : value;
+  }
+  if (token === 'stuffplus') return pitch.stuff_plus ?? null;
+  if (token === 'qpplus') return pitch.qp_plus ?? null;
+  if (token === 'ev') return pitch.exit_speed ?? null;
+  if (token === 'la') return pitch.angle ?? null;
+  if (token === 'vaa') {
+    const pitchRow = pitch as unknown as Record<string, unknown>;
+    return parseSortableNumber(pitchRow.vaa ?? pitchRow.VAA ?? pitchRow.vertapprangle ?? pitchRow.vert_appr_angle);
+  }
+  if (token === 'haa') {
+    const pitchRow = pitch as unknown as Record<string, unknown>;
+    return parseSortableNumber(pitchRow.haa ?? pitchRow.HAA ?? pitchRow.horzapprangle ?? pitchRow.horz_appr_angle);
+  }
+  if (token === 'rv100') return typeof pitch.run_value === 'number' ? pitch.run_value * 100 : null;
+  if (token === 'pv100') return typeof pitch.pitch_value === 'number' ? pitch.pitch_value * 100 : null;
+  if (token === 'inzonepct') return inZone ? 100 : 0;
+  if (token === 'comppct') return inZone ? 100 : 0;
+  if (token === 'strikepct') return strike ? 100 : 0;
+  if (token === 'swingpct') return swing ? 100 : 0;
+  if (token === 'fpspct') return firstPitch ? (strike ? 100 : 0) : null;
+  if (token === 'whiffpct' || token === 'swstrkpct') return whiff ? 100 : 0;
+  if (token === 'cswpct') return strike ? 100 : 0;
+  if (token === 'kpct') return String(pitch.korbb ?? '').toLowerCase() === 'strikeout' || playResultToken === 'strikeout' ? 100 : 0;
+  if (token === 'bbpct') return String(pitch.korbb ?? '').toLowerCase() === 'walk' || playResultToken === 'walk' ? 100 : 0;
+  if (token === 'hrpct') return playResultToken === 'homerun' ? 100 : 0;
+  if (token === 'gbpct') return taggedHitType.includes('ground') ? 100 : 0;
+  if (token === 'barrelpct') return taggedHitType.includes('barrel') ? 100 : 0;
+  return null;
+}
+
+function parseGameSplitToken(raw: unknown): { date: string; team: string; opponent: string; gameKey: string; pitcherMarker: string } {
+  const token = String(raw ?? '').trim();
+  const parts = token.split('||');
+  if (parts.length >= 4) {
+    return {
+      date: String(parts[0] ?? '').trim(),
+      team: String(parts[1] ?? '').trim() || '-',
+      opponent: String(parts[2] ?? '').trim() || '-',
+      gameKey: String(parts[3] ?? '').trim() || token,
+      pitcherMarker: String(parts[4] ?? '').trim(),
+    };
+  }
+  const dateMatch = token.match(/\d{4}-\d{2}-\d{2}/);
+  return {
+    date: dateMatch ? dateMatch[0] : '',
+    team: '-',
+    opponent: '-',
+    gameKey: token || `${Date.now()}`,
+    pitcherMarker: '',
+  };
+}
+
+function getMetricValueFromRowByColumnToken(row: Record<string, unknown>, column: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(row, column)) return row[column];
+  const target = normalizePercentileColumnToken(column);
+  for (const [key, value] of Object.entries(row)) {
+    if (normalizePercentileColumnToken(key) === target) return value;
+  }
+  return null;
+}
+
 function percentileTextColor(value: number): string {
   return value <= 30 || value >= 70 ? '#f8fafc' : '#0b1220';
 }
@@ -819,6 +1043,40 @@ function buildLeagueTeamLabelByCode(
 
 function toParamValue(values: string[]): string {
   return values.filter((value) => value !== 'All').join(';');
+}
+
+function schoolNameFromCodeIfKnown(value: string): string {
+  const code = String(value ?? '').trim().toUpperCase();
+  if (!code) return '';
+  const brand = resolveSchoolBrand(code);
+  const logoAlt = String(brand.logoAlt ?? '').trim();
+  const cleaned = logoAlt.replace(/\s+logo$/i, '').trim();
+  if (!cleaned) return '';
+  if (cleaned.toLowerCase() === 'school') return '';
+  return cleaned;
+}
+
+function schoolNameFromTeamCodeFallback(value: string): string {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (!raw) return '';
+  const mapped = LEAGUE_TEAM_NAME_BY_CODE[raw];
+  if (mapped) return mapped;
+  const direct = TEAM_CODE_PREFIX_LABELS[raw];
+  if (direct) return direct;
+  const parts = raw.split('_').filter(Boolean);
+  if (!parts.length) return '';
+  const prefix = parts[0];
+  const knownFromBrand = schoolNameFromCodeIfKnown(prefix);
+  if (knownFromBrand) return knownFromBrand;
+  return TEAM_CODE_PREFIX_LABELS[prefix] ?? '';
+}
+
+function resolveLeagueTeamCodeFromValue(value: string): string {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (!raw) return '';
+  if (LEAGUE_TEAM_NAME_BY_CODE[raw]) return raw;
+  const token = normalizeLeagueTeamToken(raw);
+  return LEAGUE_TEAM_CODE_BY_LABEL_TOKEN[token] ?? '';
 }
 
 function isPitchLikeSplitColumn(value: string): boolean {
@@ -1791,13 +2049,13 @@ export default function PitchingSuite({
     targetValue: string;
     startDate: string;
     endDate: string;
-    page?: 'Summary' | 'Leaderboard' | 'Game Log';
+    page?: 'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log';
     navigationSource?: 'search' | 'home_leaderboard';
   } | null;
 }) {
   const canUsePitchEdits = role === 'admin' || role === 'coach';
   const isPlayerRole = role === 'player';
-  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry'>('Summary');
+  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
   const [filters, setFilters] = useState<FiltersPayload | null>(null);
@@ -1862,6 +2120,13 @@ export default function PitchingSuite({
   const [gameLogSortColumn, setGameLogSortColumn] = useState('Date');
   const [gameLogSortDirection, setGameLogSortDirection] = useState<SortDirection>('desc');
   const [pinnedGameLogKeys, setPinnedGameLogKeys] = useState<Set<string>>(new Set());
+  const [pitchLogRows, setPitchLogRows] = useState<Array<Record<string, unknown>>>([]);
+  const [pitchLogColumns, setPitchLogColumns] = useState<string[]>([]);
+  const [loadingPitchLog, setLoadingPitchLog] = useState(false);
+  const [pitchLogError, setPitchLogError] = useState('');
+  const [pitchLogSortColumn, setPitchLogSortColumn] = useState('Date');
+  const [pitchLogSortDirection, setPitchLogSortDirection] = useState<SortDirection>('desc');
+  const pitchLogDefaultTableAppliedRef = useRef(false);
   const autoFallbackAppliedRef = useRef(false);
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: FiltersPayload }>());
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: OverviewPayload }>());
@@ -2159,6 +2424,18 @@ export default function PitchingSuite({
     }
   }, [canShowLeagueHeavyPages, dashboardPage]);
   useEffect(() => {
+    if (dashboardPage !== 'Pitch Log') {
+      pitchLogDefaultTableAppliedRef.current = false;
+      return;
+    }
+    if (pitchLogDefaultTableAppliedRef.current) return;
+    if (tableMode !== 'Stuff') {
+      setTableMode('Stuff');
+      setAppliedFilterVersion((current) => current + 1);
+    }
+    pitchLogDefaultTableAppliedRef.current = true;
+  }, [dashboardPage, tableMode]);
+  useEffect(() => {
     if (!isLeague && !isPro && leaderboardViewBy !== 'Player') {
       setLeaderboardViewBy('Player');
     }
@@ -2441,9 +2718,10 @@ export default function PitchingSuite({
     [selectedPitchers]
   );
   const canRunGameLog = hasSpecificPitcherSelection || (teamType && teamType !== 'All');
+  const canRunPitchLog = canRunGameLog;
   const [selectedPitcherLastGameDate, setSelectedPitcherLastGameDate] = useState('');
   useEffect(() => {
-    if (dashboardPage !== 'Game Log') return;
+    if (dashboardPage !== 'Game Log' && dashboardPage !== 'Pitch Log') return;
     if (isPro) return;
     if (sessionType) return;
     setSessionType('Season');
@@ -2671,6 +2949,7 @@ export default function PitchingSuite({
     const isTrendPage = dashboardPage === 'Trend';
     const isLeaderboard = dashboardPage === 'Leaderboard';
     const isGameLogPage = dashboardPage === 'Game Log';
+    const isPitchLogPage = dashboardPage === 'Pitch Log';
     const isSummaryPage = dashboardPage === 'Summary';
     const isHeatMapsPage = dashboardPage === 'HeatMaps';
     const shouldDeferCharts = isSummaryPage || isTrendPage;
@@ -2705,7 +2984,7 @@ export default function PitchingSuite({
       params.set('chart_only', '1');
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
-    } else if (isGameLogPage) {
+    } else if (isGameLogPage || isPitchLogPage) {
       params.set('include_chart_points', '1');
       params.set('chart_points_limit', isPro ? '6000' : '5000');
       params.set('chart_only', '1');
@@ -2730,9 +3009,11 @@ export default function PitchingSuite({
 
     const shouldLoadLeaderboardBaseline = isLeaderboard && (leaderboardStatView === 'Percentile' || enableTableColors);
     const shouldLoadGameLogBaseline = isGameLogPage && (showCellPercentiles || enableTableColors);
+    const shouldLoadPitchLogBaseline = isPitchLogPage && (showCellPercentiles || enableTableColors);
     const shouldLoadPercentileBaseline =
       shouldLoadLeaderboardBaseline ||
       shouldLoadGameLogBaseline ||
+      shouldLoadPitchLogBaseline ||
       (isSummaryPage && (showCellPercentiles || summaryStatView === 'Percentile' || enableTableColors));
     if (shouldLoadPercentileBaseline) {
       const baselineParams = new URLSearchParams(params);
@@ -2749,11 +3030,11 @@ export default function PitchingSuite({
         // Row-specific split filters are applied in the summary-percentiles pass.
         baselineParams.set('split_by', 'Pitcher');
       }
-      if (isGameLogPage) baselineParams.set('split_by', 'Game');
+      if (isGameLogPage || isPitchLogPage) baselineParams.set('split_by', 'Game');
       const activePercentileScope =
         isPro
           ? 'MLB'
-          : (isLeaderboard || isGameLogPage ? leaderboardPercentileScope : (isSummaryPage ? summaryPercentileScope : 'NCAA'));
+          : (isLeaderboard || isGameLogPage || isPitchLogPage ? leaderboardPercentileScope : (isSummaryPage ? summaryPercentileScope : 'NCAA'));
       if (!isPro) {
         if (activePercentileScope === 'TEAM') {
           const schoolTeamCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
@@ -2808,8 +3089,10 @@ export default function PitchingSuite({
     const overviewTtlMs = isPro ? 90000 : 30000;
     const applyOverviewPayload = (payload: OverviewPayload) => {
       const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+      const availableColumns = Array.isArray(payload.available_table_columns) ? payload.available_table_columns : [];
+      const allColumns = Array.from(new Set([...tableColumns, ...availableColumns]));
       const tableRows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
-      const normalizedRows = normalizeTableRowsForColumns(tableColumns, tableRows);
+      const normalizedRows = normalizeTableRowsForColumns(allColumns, tableRows);
       const normalizedPayload =
         normalizedRows === tableRows
           ? payload
@@ -3415,6 +3698,18 @@ export default function PitchingSuite({
     const rest = gameLogColumns.filter((column) => !leadSet.has(column.toLowerCase()));
     return [...orderedLead, ...rest];
   }, [gameLogColumns]);
+  const sortedPitchLogRows = useMemo(
+    () => sortTableRows(pitchLogRows, pitchLogSortColumn, pitchLogSortDirection),
+    [pitchLogRows, pitchLogSortColumn, pitchLogSortDirection]
+  );
+  const pitchLogDisplayColumns = useMemo(() => {
+    if (!pitchLogColumns.length) return pitchLogColumns;
+    const lead = ['Date', 'Team', 'Opponent', 'Pitcher', 'Batter', 'Pitch Type', 'Count', 'Result'];
+    const leadSet = new Set(lead.map((column) => column.toLowerCase()));
+    const orderedLead = lead.filter((column) => pitchLogColumns.some((value) => value.toLowerCase() === column.toLowerCase()));
+    const rest = pitchLogColumns.filter((column) => !leadSet.has(column.toLowerCase()));
+    return [...orderedLead, ...rest];
+  }, [pitchLogColumns]);
 
   useEffect(() => {
     if (dashboardPage !== 'Game Log') return;
@@ -3493,33 +3788,17 @@ export default function PitchingSuite({
       const payload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to load game log.');
       const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
-      const tableRows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+      const availableColumns = Array.isArray(payload.available_table_columns) ? payload.available_table_columns : [];
+      const tableRowsRaw = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+      const tableRows = normalizeTableRowsForColumns(
+        Array.from(new Set([...tableColumns, ...availableColumns])),
+        tableRowsRaw
+      );
       const splitColumn = String(tableColumns[0] ?? 'Game').trim() || 'Game';
-      const parseGameSplit = (raw: unknown): { date: string; team: string; opponent: string; gameKey: string; pitcherMarker: string } => {
-        const token = String(raw ?? '').trim();
-        const parts = token.split('||');
-        if (parts.length >= 4) {
-          return {
-            date: String(parts[0] ?? '').trim(),
-            team: String(parts[1] ?? '').trim() || '-',
-            opponent: String(parts[2] ?? '').trim() || '-',
-            gameKey: String(parts[3] ?? '').trim() || token,
-            pitcherMarker: String(parts[4] ?? '').trim(),
-          };
-        }
-        const dateMatch = token.match(/\d{4}-\d{2}-\d{2}/);
-        return {
-          date: dateMatch ? dateMatch[0] : '',
-          team: '-',
-          opponent: '-',
-          gameKey: token || `${Date.now()}`,
-          pitcherMarker: '',
-        };
-      };
       const rows = tableRows
         .filter((row) => String((row as Record<string, unknown>)[splitColumn] ?? '').trim().toLowerCase() !== 'all')
         .map((row, rowIndex) => {
-          const parsed = parseGameSplit((row as Record<string, unknown>)[splitColumn]);
+          const parsed = parseGameSplitToken((row as Record<string, unknown>)[splitColumn]);
           return {
             ...(row as Record<string, unknown>),
             _game_pin_key: `${parsed.gameKey}|${parsed.date}|${rowIndex}`,
@@ -3602,6 +3881,308 @@ export default function PitchingSuite({
     dashboardPage,
     canLoadOverview,
     canRunGameLog,
+    startDate,
+    endDate,
+    isLeague,
+    teamType,
+    filters?.pitchers_by_team_code,
+    filters?.opp_hitters_by_team_code,
+    selectedPitchers,
+    selectedHitters,
+    selectedPitchTypes,
+    selectedZoneLocations,
+    selectedPitchResults,
+    selectedCountFilters,
+    selectedAfterCountFilters,
+    selectedInZone,
+    isPro,
+    level,
+    withVideo,
+    breakLines,
+    stuffLevel,
+    stuffBase,
+    hand,
+    batterSide,
+    venue,
+    sessionType,
+    qpLocations,
+    tableMode,
+    customTableColumns,
+    visualOption,
+    veloMin,
+    veloMax,
+    ivbMin,
+    ivbMax,
+    hbMin,
+    hbMax,
+    pcMin,
+    pcMax,
+    bfMin,
+    bfMax,
+    ipMin,
+    ipMax,
+  ]);
+
+  useEffect(() => {
+    if (dashboardPage !== 'Pitch Log') return;
+    if (!canLoadOverview) return;
+    if (!canRunPitchLog) {
+      setPitchLogRows([]);
+      setPitchLogColumns([]);
+      setPitchLogError('');
+      setLoadingPitchLog(false);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    setLoadingPitchLog(true);
+    setPitchLogError('');
+    const run = async () => {
+      const apiTeamType = isLeague
+        ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
+        : teamType;
+      const pitchersParam = toParamValue(selectedPitchers);
+      const hittersParam = toParamValue(selectedHitters);
+      const pitchTypesParam = toParamValue(selectedPitchTypes);
+      const zoneParam = toParamValue(selectedZoneLocations);
+      const resultsParam = toParamValue(selectedPitchResults);
+      const countParam = toParamValue(selectedCountFilters);
+      const afterCountParam = toParamValue(selectedAfterCountFilters);
+      const inZoneParam = toParamValue(selectedInZone);
+      const params = new URLSearchParams();
+      if (startDate) params.set('start_date', startDate);
+      if (endDate) params.set('end_date', endDate);
+      if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
+      if (isPro && level && level !== 'All') params.set('level', level);
+      if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
+      if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
+      if (stuffLevel) params.set('stuff_level', stuffLevel);
+      if (stuffBase) params.set('stuff_base', stuffBase);
+      if (hand && hand !== 'All') params.set('hand', hand);
+      if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
+      if (venue && venue !== 'All') params.set('venue', venue);
+      if (!isPro && sessionType) params.set('session_type', sessionType);
+      if (qpLocations && qpLocations !== 'All') params.set('qp_locations', qpLocations);
+      if (tableMode) params.set('table_mode', tableMode);
+      params.set('split_by', 'Game');
+      if (tableMode === 'Custom' && customTableColumns.length > 0) params.set('custom_columns', customTableColumns.join(','));
+      if (visualOption && visualOption !== 'All') params.set('visual_option', visualOption);
+      if (pitchersParam) params.set('pitcher', pitchersParam);
+      if (hittersParam) params.set('opp_hitter', hittersParam);
+      if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
+      if (zoneParam) params.set('zone_locations', zoneParam);
+      if (resultsParam) params.set('pitch_results', resultsParam);
+      if (countParam) params.set('count_filter', countParam);
+      if (afterCountParam) params.set('after_count_filter', afterCountParam);
+      if (inZoneParam) params.set('in_zone', inZoneParam);
+      if (veloMin) params.set('velo_min', veloMin);
+      if (veloMax) params.set('velo_max', veloMax);
+      if (ivbMin) params.set('ivb_min', ivbMin);
+      if (ivbMax) params.set('ivb_max', ivbMax);
+      if (hbMin) params.set('hb_min', hbMin);
+      if (hbMax) params.set('hb_max', hbMax);
+      if (pcMin) params.set('pc_min', pcMin);
+      if (pcMax) params.set('pc_max', pcMax);
+      if (bfMin) params.set('bf_min', bfMin);
+      if (bfMax) params.set('bf_max', bfMax);
+      if (ipMin) params.set('ip_min', ipMin);
+      if (ipMax) params.set('ip_max', ipMax);
+      params.set('include_chart_points', '1');
+      params.set('chart_points_limit', isPro ? '8000' : '7000');
+      params.set('include_row_pitches', '0');
+      params.set('include_trend_rows', '0');
+      params.set('force_raw', '1');
+      const response = await fetch(`/api/dashboard/pitching/overview?${params.toString()}`, {
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+      const payload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to load pitch log.');
+      const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+      const availableColumns = Array.isArray(payload.available_table_columns) ? payload.available_table_columns : [];
+      const tableRowsRaw = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+      const tableRows = normalizeTableRowsForColumns(
+        Array.from(new Set([...tableColumns, ...availableColumns])),
+        tableRowsRaw
+      );
+      const splitColumn = String(tableColumns[0] ?? 'Game').trim() || 'Game';
+      const metricColumns = tableColumns.filter((column) => {
+        const key = String(column ?? '').trim();
+        if (!key || key === splitColumn) return false;
+        const lower = key.toLowerCase();
+        return (
+          lower !== 'date' &&
+          lower !== 'team' &&
+          lower !== 'opponent' &&
+          lower !== 'pitcher' &&
+          lower !== 'batter' &&
+          lower !== 'pitch type' &&
+          lower !== 'pitch' &&
+          lower !== 'count' &&
+          lower !== 'result'
+        );
+      });
+      const leadColumns = ['Date', 'Team', 'Opponent', 'Pitcher', 'Batter', 'Pitch Type', 'Count', 'Result'];
+      const rows: Array<Record<string, unknown>> = [];
+      const rowPitchMap = payload.row_pitches_by_key ?? {};
+      const rowPitchCount = Object.values(rowPitchMap).reduce((sum, bucket) => sum + (Array.isArray(bucket) ? bucket.length : 0), 0);
+      const chartPoints = Array.isArray(payload.chart_points) ? payload.chart_points : [];
+      const useChartPointFallback = rowPitchCount === 0 && chartPoints.length > 0;
+      const buildGameMetaCompoundKey = (dateValue: string, teamValue: string, opponentValue: string): string =>
+        `${dateValue.trim()}|${normalizeLeagueTeamToken(teamValue)}|${normalizeLeagueTeamToken(opponentValue)}`;
+      const gameMetaByKey = new Map<string, { team: string; opponent: string; marker: string; rowMetrics: Record<string, unknown> }>();
+      for (const row of tableRows) {
+        const splitRaw = (row as Record<string, unknown>)[splitColumn];
+        if (String(splitRaw ?? '').trim().toLowerCase() === 'all') continue;
+        const parsed = parseGameSplitToken(splitRaw);
+        const splitToken = String(splitRaw ?? '').trim();
+        const gameKey = String(parsed.gameKey ?? '').trim();
+        const meta = {
+          team: parsed.team || '-',
+          opponent: parsed.opponent || '-',
+          marker: parsed.pitcherMarker || '',
+          rowMetrics: row as Record<string, unknown>,
+        };
+        if (splitToken) gameMetaByKey.set(splitToken, meta);
+        if (gameKey) gameMetaByKey.set(gameKey, meta);
+        if (parsed.date && parsed.team && parsed.opponent) {
+          gameMetaByKey.set(buildGameMetaCompoundKey(parsed.date, parsed.team, parsed.opponent), meta);
+          const teamCode = resolveLeagueTeamCodeFromValue(parsed.team);
+          const opponentCode = resolveLeagueTeamCodeFromValue(parsed.opponent);
+          if (teamCode && opponentCode) {
+            gameMetaByKey.set(buildGameMetaCompoundKey(parsed.date, teamCode, opponentCode), meta);
+          }
+        }
+      }
+      if (useChartPointFallback) {
+        for (const pitch of chartPoints) {
+          const gameKeyCandidates = [
+            String(pitch.game_uid ?? '').trim(),
+            String(pitch.game_id ?? '').trim(),
+            String(pitch.game_foreign_id ?? '').trim(),
+          ].filter(Boolean);
+          const dateValue = String(pitch.session_date ?? '').slice(0, 10) || '-';
+          const chartPitchTeamCode = String(pitch.pitcher_team_code ?? '').trim();
+          const chartBatterTeamCode = String(pitch.batter_team_code ?? '').trim();
+          const compoundCandidates = [
+            buildGameMetaCompoundKey(dateValue, chartPitchTeamCode, chartBatterTeamCode),
+            buildGameMetaCompoundKey(
+              dateValue,
+              LEAGUE_TEAM_NAME_BY_CODE[chartPitchTeamCode.toUpperCase()] ?? chartPitchTeamCode,
+              LEAGUE_TEAM_NAME_BY_CODE[chartBatterTeamCode.toUpperCase()] ?? chartBatterTeamCode
+            ),
+          ];
+          const matchedMeta = [
+            ...gameKeyCandidates.map((key) => gameMetaByKey.get(key)),
+            ...compoundCandidates.map((key) => gameMetaByKey.get(key)),
+          ].find((value) => !!value);
+          const item: Record<string, unknown> = {
+            Date: dateValue,
+            Team: matchedMeta?.team || String(pitch.pitcher_team_code ?? '').trim() || '-',
+            Opponent: matchedMeta?.opponent || String(pitch.batter_team_code ?? '').trim() || '-',
+            Pitcher: formatNameFirstLast(String(pitch.pitcher ?? '').trim()),
+            Batter: formatNameFirstLast(String(pitch.batter ?? '').trim()),
+            'Pitch Type': String(pitch.pitch_type ?? '').trim() || '-',
+            Count: Number.isFinite(Number(pitch.balls_num)) && Number.isFinite(Number(pitch.strikes_num))
+              ? `${Number(pitch.balls_num)}-${Number(pitch.strikes_num)}`
+              : '-',
+            Result: resolvePitchResultLabel(pitch.pitch_call, pitch.play_result),
+            _game_venue_marker: matchedMeta?.marker || '',
+            _pitch_sort_date: dateValue,
+            _pitch_sort_game: gameKeyCandidates[0] || '-',
+            _pitch_sort_no: Number(pitch.pitch_number ?? pitch.pitch_no ?? pitch.pitch_event_id ?? 0),
+            _pitch_sort_event_id: Number(pitch.pitch_event_id ?? 0),
+          };
+          for (const column of metricColumns) {
+            const pitchValue = pitchLogMetricValue(column, pitch, isPro);
+            if (pitchValue !== null && pitchValue !== undefined) {
+              item[column] = pitchValue;
+            } else {
+              const token = normalizePercentileColumnToken(column);
+              item[column] =
+                (token === 'vaa' || token === 'haa')
+                  ? (
+                      matchedMeta?.rowMetrics
+                        ? getMetricValueFromRowByColumnToken(matchedMeta.rowMetrics, column)
+                        : null
+                    )
+                  : pitchValue;
+            }
+          }
+          rows.push(item);
+        }
+      } else {
+      for (const row of tableRows) {
+        const splitRaw = (row as Record<string, unknown>)[splitColumn];
+        if (String(splitRaw ?? '').trim().toLowerCase() === 'all') continue;
+        const parsed = parseGameSplitToken(splitRaw);
+        const rowKey = String(splitRaw ?? '').trim();
+        const pitches = Array.isArray(payload.row_pitches_by_key?.[rowKey]) ? payload.row_pitches_by_key[rowKey] : [];
+        for (const pitch of pitches) {
+          const dateValue = String(pitch.session_date ?? '').slice(0, 10) || parsed.date || '-';
+          const item: Record<string, unknown> = {
+            Date: dateValue,
+            Team: parsed.team || String(pitch.pitcher_team_code ?? '').trim() || '-',
+            Opponent: parsed.opponent || String(pitch.batter_team_code ?? '').trim() || '-',
+            Pitcher: formatNameFirstLast(String(pitch.pitcher ?? '').trim()),
+            Batter: formatNameFirstLast(String(pitch.batter ?? '').trim()),
+            'Pitch Type': String(pitch.pitch_type ?? '').trim() || '-',
+            Count: Number.isFinite(Number(pitch.balls_num)) && Number.isFinite(Number(pitch.strikes_num))
+              ? `${Number(pitch.balls_num)}-${Number(pitch.strikes_num)}`
+              : '-',
+            Result: resolvePitchResultLabel(pitch.pitch_call, pitch.play_result),
+            _game_venue_marker: parsed.pitcherMarker,
+            _pitch_sort_date: dateValue,
+            _pitch_sort_game: parsed.gameKey || String(pitch.game_uid ?? '').trim() || String(pitch.game_id ?? '').trim(),
+            _pitch_sort_no: Number(pitch.pitch_number ?? pitch.pitch_no ?? pitch.pitch_event_id ?? 0),
+            _pitch_sort_event_id: Number(pitch.pitch_event_id ?? 0),
+          };
+          for (const column of metricColumns) {
+            const pitchValue = pitchLogMetricValue(column, pitch, isPro);
+            if (pitchValue !== null && pitchValue !== undefined) {
+              item[column] = pitchValue;
+            } else {
+              const token = normalizePercentileColumnToken(column);
+              item[column] =
+                (token === 'vaa' || token === 'haa')
+                  ? getMetricValueFromRowByColumnToken(row as Record<string, unknown>, column)
+                  : pitchValue;
+            }
+          }
+          rows.push(item);
+        }
+      }
+      }
+      rows.sort((a, b) => {
+        const dateCmp = String(b._pitch_sort_date ?? '').localeCompare(String(a._pitch_sort_date ?? ''));
+        if (dateCmp !== 0) return dateCmp;
+        const gameCmp = String(b._pitch_sort_game ?? '').localeCompare(String(a._pitch_sort_game ?? ''));
+        if (gameCmp !== 0) return gameCmp;
+        const noCmp = (parseSortableNumber(b._pitch_sort_no) ?? 0) - (parseSortableNumber(a._pitch_sort_no) ?? 0);
+        if (noCmp !== 0) return noCmp;
+        return (parseSortableNumber(b._pitch_sort_event_id) ?? 0) - (parseSortableNumber(a._pitch_sort_event_id) ?? 0);
+      });
+      if (!active) return;
+      setPitchLogColumns([...leadColumns, ...metricColumns]);
+      setPitchLogRows(rows);
+    };
+    run()
+      .catch((requestError) => {
+        if (!active) return;
+        if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
+        setPitchLogError(requestError instanceof Error ? requestError.message : 'Failed to load pitch log.');
+      })
+      .finally(() => {
+        if (active) setLoadingPitchLog(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [
+    dashboardPage,
+    canLoadOverview,
+    canRunPitchLog,
     startDate,
     endDate,
     isLeague,
@@ -4657,8 +5238,8 @@ export default function PitchingSuite({
       <div style={{ color: dark ? '#cbd5e1' : '#4b5563', fontWeight: 600 }}>{formatNameFirstLast(pitch.batter || '')}</div>
       <div style={{ marginTop: 6 }}>{pitch.pitch_type}</div>
       <div>{fmtNum(pitch.velo, 1)} mph</div>
-      <div>IVB: {fmtNum(pitch.ivb, 1)}"</div>
-      <div>HB: {fmtNum(pitch.hb, 1)}"</div>
+      <div>IVB: {fmtNum(pitch.ivb, 1)} in</div>
+      <div>HB: {fmtNum(pitch.hb, 1)} in</div>
       <div>{fmtNum(pitch.spin, 0)} rpm</div>
       <div>
         SpinEff:{' '}
@@ -6980,7 +7561,9 @@ export default function PitchingSuite({
       top: cell.style.top,
       zIndex: cell.style.zIndex,
       background: cell.style.background,
+      color: cell.style.color,
     }));
+    const originalColoredCellStyles: Array<{ node: HTMLElement; color: string; textShadow: string }> = [];
     const originalLogoAttrs: Array<{ node: HTMLImageElement; src: string | null; srcset: string | null }> = [];
     const imageBlobToPngDataUrl = async (blob: Blob, width: number, height: number): Promise<string | null> => {
       const objectUrl = URL.createObjectURL(blob);
@@ -7008,12 +7591,37 @@ export default function PitchingSuite({
     try {
       setError('');
       setIsExportingLeaderboardPdf(true);
+      const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
       wrapNode.style.maxHeight = 'none';
       wrapNode.style.overflowY = 'visible';
       for (const entry of originalHeaderStyles) {
         entry.node.style.position = 'static';
         entry.node.style.top = 'auto';
         entry.node.style.zIndex = 'auto';
+        if (isLightTheme) {
+          entry.node.style.background = 'rgba(248,250,252,0.98)';
+          entry.node.style.color = '#0f172a';
+        }
+      }
+      if (isLightTheme) {
+        const allCells = Array.from(tableNode.querySelectorAll('td, th')) as HTMLElement[];
+        for (const cell of allCells) {
+          const style = window.getComputedStyle(cell);
+          const bg = String(style.backgroundColor || '').trim();
+          const match = bg.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([0-9.]+))?\s*\)/i);
+          if (!match) continue;
+          const alpha = match[4] === undefined ? 1 : Number(match[4]);
+          if (!Number.isFinite(alpha) || alpha <= 0.03) continue;
+          const r = Number(match[1]);
+          const g = Number(match[2]);
+          const b = Number(match[3]);
+          if (![r, g, b].every(Number.isFinite)) continue;
+          const luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
+          const nextColor = luminance >= 170 ? '#0f172a' : '#f8fafc';
+          originalColoredCellStyles.push({ node: cell, color: cell.style.color, textShadow: cell.style.textShadow });
+          cell.style.color = nextColor;
+          cell.style.textShadow = 'none';
+        }
       }
       const logoNodes = Array.from(tableNode.querySelectorAll('img')) as HTMLImageElement[];
       for (const logoNode of logoNodes) {
@@ -7086,7 +7694,7 @@ export default function PitchingSuite({
       ]);
       const captureScale = Math.min(2, Math.max(1.4, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
       const canvas = await html2canvas(tableNode, {
-        backgroundColor: '#000000',
+        backgroundColor: isLightTheme ? '#f8fafc' : '#000000',
         scale: captureScale,
         useCORS: true,
         logging: false,
@@ -7112,7 +7720,8 @@ export default function PitchingSuite({
       }
       for (let pageIndex = 0; pageIndex < pageSlices.length; pageIndex += 1) {
         if (pageIndex > 0) pdf.addPage('letter', orientation);
-        pdf.setFillColor(4, 5, 7);
+        if (isLightTheme) pdf.setFillColor(248, 250, 252);
+        else pdf.setFillColor(4, 5, 7);
         pdf.rect(0, 0, pageWidth, pageHeight, 'F');
         const slice = pageSlices[pageIndex];
         const sourceHeight = Math.max(1, slice.end - slice.start);
@@ -7142,6 +7751,11 @@ export default function PitchingSuite({
         entry.node.style.top = entry.top;
         entry.node.style.zIndex = entry.zIndex;
         entry.node.style.background = entry.background;
+        entry.node.style.color = entry.color;
+      }
+      for (const entry of originalColoredCellStyles) {
+        entry.node.style.color = entry.color;
+        entry.node.style.textShadow = entry.textShadow;
       }
       wrapNode.style.maxHeight = originalWrapMaxHeight;
       wrapNode.style.overflowY = originalWrapOverflowY;
@@ -7212,8 +7826,8 @@ export default function PitchingSuite({
     return 'Team';
   }, [filters?.school_code, selectedSchoolCode, teamType]);
   const percentileTableColumns = useMemo(
-    () => (dashboardPage === 'Game Log' ? gameLogColumns : displayedTableColumns),
-    [dashboardPage, gameLogColumns, displayedTableColumns]
+    () => (dashboardPage === 'Game Log' ? gameLogColumns : (dashboardPage === 'Pitch Log' ? pitchLogColumns : displayedTableColumns)),
+    [dashboardPage, gameLogColumns, pitchLogColumns, displayedTableColumns]
   );
   const leaderboardTeamDistributions = useMemo(() => {
     const byColumn = new Map<string, number[]>();
@@ -7277,6 +7891,36 @@ export default function PitchingSuite({
     }
     return byColumn;
   }, [dashboardPage, gameLogColumns, gameLogRowsWithPins]);
+  const pitchLogTeamDistributions = useMemo(() => {
+    const byColumn = new Map<string, number[]>();
+    if (dashboardPage !== 'Pitch Log' || isPro || leaderboardPercentileScope !== 'TEAM') return byColumn;
+    const splitColumn = pitchLogColumns[0] ?? '';
+    for (const column of pitchLogColumns.slice(1)) {
+      for (const row of sortedPitchLogRows) {
+        if (splitColumn && isAllLikeRowValue(row[splitColumn])) continue;
+        const numeric = parseSortableNumber(row[column]);
+        if (numeric === null) continue;
+        if (!byColumn.has(column)) byColumn.set(column, []);
+        byColumn.get(column)?.push(numeric);
+      }
+    }
+    byColumn.forEach((values, key) => byColumn.set(key, values.sort((a, b) => a - b)));
+    return byColumn;
+  }, [dashboardPage, isPro, leaderboardPercentileScope, pitchLogColumns, sortedPitchLogRows]);
+  const pitchLogFallbackDistributions = useMemo(() => {
+    const byColumn = new Map<string, number[]>();
+    if (dashboardPage !== 'Pitch Log') return byColumn;
+    const splitColumn = pitchLogColumns[0] ?? '';
+    const sourceRows = sortedPitchLogRows.filter((row) => !splitColumn || !isAllLikeRowValue(row[splitColumn]));
+    for (const column of pitchLogColumns.slice(1)) {
+      const values = sourceRows
+        .map((row) => parseSortableNumber(row[column]))
+        .filter((value): value is number => value !== null)
+        .sort((a, b) => a - b);
+      if (values.length) byColumn.set(column, values);
+    }
+    return byColumn;
+  }, [dashboardPage, pitchLogColumns, sortedPitchLogRows]);
   const percentileDistributionsByKey = useMemo(() => {
     const splitColumn = percentileTableColumns[0] ?? '';
     const scoped = new Map<string, number[]>();
@@ -7476,6 +8120,10 @@ export default function PitchingSuite({
       : getColumnDistributionByToken(globalByColumn, column);
     const globalDistributionUsable = globalDistribution.length ? globalDistribution : tokenGlobalDistribution;
     const isGameLogPageLocal = dashboardPage === 'Game Log';
+    const isPitchLogPageLocal = dashboardPage === 'Pitch Log';
+    const pitchLogTeamDistribution = pitchLogTeamDistributions.get(column) ?? [];
+    const pitchLogFallbackDistribution = pitchLogFallbackDistributions.get(column) ?? [];
+    const pitchLogDistributionUsable = pitchLogTeamDistribution.length ? pitchLogTeamDistribution : pitchLogFallbackDistribution;
     const distribution = isSummaryPageLocal
       ? (
           (() => {
@@ -7501,8 +8149,8 @@ export default function PitchingSuite({
         )
       : isLeaderboardPage
       ? globalDistributionUsable
-      : isGameLogPageLocal
-      ? globalDistributionUsable
+      : (isGameLogPageLocal || isPitchLogPageLocal)
+      ? (isPitchLogPageLocal ? (pitchLogDistributionUsable.length ? pitchLogDistributionUsable : globalDistributionUsable) : globalDistributionUsable)
       : scopedDistributionUsable.length ? scopedDistributionUsable : globalDistributionUsable;
     const effectiveDistribution = isSummaryPageLocal && !distribution.length
       ? (
@@ -7584,23 +8232,28 @@ export default function PitchingSuite({
       adjusted = Math.max(0, Math.min(100, 100 - adjusted));
     }
     return adjusted;
-  }, [isLeaderboardPage, isPro, dashboardPage, splitBy, hand, selectedSinglePitcher, selectedSinglePitcherHandCode, pitcherHandByPitcher, leaderboardPercentileScope, summaryPercentileScope, leaderboardTeamDistributions, leaderboardFallbackDistributions, gameLogTeamDistributions, gameLogFallbackDistributions, percentileDistributionsByKey, percentileGlobalDistributionsByToken, summaryPitchTypeDistributions, summaryPitchTypeHandedDistributions, summaryFallbackDistributions, summaryGlobalDistributionsByToken]);
+  }, [isLeaderboardPage, isPro, dashboardPage, splitBy, hand, selectedSinglePitcher, selectedSinglePitcherHandCode, pitcherHandByPitcher, leaderboardPercentileScope, summaryPercentileScope, leaderboardTeamDistributions, leaderboardFallbackDistributions, gameLogTeamDistributions, gameLogFallbackDistributions, pitchLogTeamDistributions, pitchLogFallbackDistributions, percentileDistributionsByKey, percentileGlobalDistributionsByToken, summaryPitchTypeDistributions, summaryPitchTypeHandedDistributions, summaryFallbackDistributions, summaryGlobalDistributionsByToken]);
   const isGameLogPage = dashboardPage === 'Game Log';
+  const isPitchLogPage = dashboardPage === 'Pitch Log';
   const correlationColumns = useMemo(
     () => {
-      if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage)) return [] as string[];
-      return isGameLogPage ? gameLogColumns : displayedTableColumns;
+      if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage && !isPitchLogPage)) return [] as string[];
+      if (isGameLogPage) return gameLogColumns;
+      if (isPitchLogPage) return pitchLogColumns;
+      return displayedTableColumns;
     },
-    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, gameLogColumns, displayedTableColumns]
+    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, isPitchLogPage, gameLogColumns, pitchLogColumns, displayedTableColumns]
   );
   const correlationRows = useMemo(
     () => {
-      if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage)) return [] as Array<Record<string, string | number | null | undefined>>;
+      if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage && !isPitchLogPage)) return [] as Array<Record<string, string | number | null | undefined>>;
       return isGameLogPage
         ? (gameLogRowsWithPins as Array<Record<string, string | number | null | undefined>>)
+        : isPitchLogPage
+        ? (sortedPitchLogRows as Array<Record<string, string | number | null | undefined>>)
         : (leaderboardRowsWithPins as Array<Record<string, string | number | null | undefined>>);
     },
-    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, gameLogRowsWithPins, leaderboardRowsWithPins]
+    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, isPitchLogPage, gameLogRowsWithPins, sortedPitchLogRows, leaderboardRowsWithPins]
   );
   const latestTeamByPitcher = useMemo(() => {
     const points = overview?.chart_points ?? [];
@@ -7705,6 +8358,10 @@ export default function PitchingSuite({
       logoUrl: isPro ? (proxiedProTeamLogoUrl(teamCode) || '') : '',
     };
   }, [selectedPitchers, teamType, isPro, level, leagueTeamLabelByCode, latestTeamByPitcher, filterTeamByPitcher, proxiedProTeamLogoUrl]);
+  const pitchLogHeader = useMemo(() => ({
+    label: gameLogHeader.label.replace(/^Game Log:/, 'Pitch Log:'),
+    logoUrl: gameLogHeader.logoUrl,
+  }), [gameLogHeader]);
   const formatPitchingTableDisplayValue = useCallback(
     (column: string, value: unknown) => {
       if (isPro && normalizePercentileColumnToken(column) === normalizePercentileColumnToken('Side')) {
@@ -7715,6 +8372,38 @@ export default function PitchingSuite({
     },
     [isPro]
   );
+  const formatTeamLabel = useCallback((value: unknown): string => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '-';
+    if (isPro) return raw;
+    const upper = raw.toUpperCase();
+    const leagueLabel = leagueTeamLabelByCode[upper];
+    if (leagueLabel) return leagueLabel;
+    const knownSchool = schoolNameFromCodeIfKnown(upper);
+    if (knownSchool) return knownSchool;
+    const fromTeamCode = schoolNameFromTeamCodeFallback(upper);
+    if (fromTeamCode) return fromTeamCode;
+    return raw;
+  }, [isPro, leagueTeamLabelByCode]);
+  const formatPitchLogCellDisplayValue = useCallback((column: string, value: unknown): string => {
+    if (value === null || value === undefined || value === '') return '-';
+    const token = normalizePercentileColumnToken(column);
+    if (token === 'rtilt' || token === 'releasetilt' || token === 'btilt' || token === 'breaktilt') {
+      return formatTiltClock(String(value ?? ''));
+    }
+    const numeric = parseSortableNumber(value);
+    if (numeric === null) return formatPitchingTableDisplayValue(column, value);
+    const adjusted = (isPro && token === 'side') ? -numeric : numeric;
+    if (token === 'spineff') {
+      const normalizedSpinEff = Math.abs(adjusted) <= 1 ? adjusted * 100 : adjusted;
+      return `${normalizedSpinEff.toFixed(1)}%`;
+    }
+    if (PITCH_LOG_PERCENT_TOKENS.has(token)) return `${adjusted.toFixed(1)}%`;
+    if (PITCH_LOG_ZERO_DECIMAL_TOKENS.has(token)) return String(Math.round(adjusted));
+    if (PITCH_LOG_ONE_DECIMAL_TOKENS.has(token)) return adjusted.toFixed(1);
+    if (PITCH_LOG_TWO_DECIMAL_TOKENS.has(token)) return adjusted.toFixed(2);
+    return formatPitchingTableDisplayValue(column, value);
+  }, [formatPitchingTableDisplayValue, isPro]);
   const sortedManualEntries = useMemo(
     () =>
       sortTableRows(
@@ -8090,6 +8779,7 @@ export default function PitchingSuite({
                   <option value="Summary">Summary</option>
                   <option value="Leaderboard">Leaderboard</option>
                   <option value="Game Log">Game Log</option>
+                  <option value="Pitch Log">Pitch Log</option>
                   <option value="AB Report">AB Report</option>
                   {canShowLeagueHeavyPages ? <option value="Velocity">Velocity</option> : null}
                   {canShowLeagueHeavyPages ? <option value="Trend">Trend</option> : null}
@@ -8120,6 +8810,13 @@ export default function PitchingSuite({
                   onClick={() => setDashboardPage('Game Log')}
                 >
                   Game Log
+                </button>
+                <button
+                  type="button"
+                  className={dashboardPage === 'Pitch Log' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('Pitch Log')}
+                >
+                  Pitch Log
                 </button>
                 <button
                   type="button"
@@ -8747,7 +9444,7 @@ export default function PitchingSuite({
                 <table className="portal-table">
                   <thead>
                     <tr>
-                      {isLeaderboardPage ? <th style={{ textAlign: 'center', position: isLeaderboardPage ? 'sticky' : undefined, top: isLeaderboardPage ? 0 : undefined, zIndex: isLeaderboardPage ? 3 : undefined, background: isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined }}>Rank</th> : null}
+                      {isLeaderboardPage ? <th style={{ textAlign: 'center', position: isLeaderboardPage ? 'sticky' : undefined, top: isLeaderboardPage ? 0 : undefined, zIndex: isLeaderboardPage ? 3 : undefined, background: isLeaderboardPage ? ((typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)') : undefined }}>Rank</th> : null}
                       {displayedTableColumns.map((column, colIndex) => {
                         const isSortable = true;
                         const activeSort = leaderboardSortColumn === column;
@@ -8791,7 +9488,7 @@ export default function PitchingSuite({
                               zIndex: isLeaderboardPage ? 3 : undefined,
                               background: activeSort
                                 ? 'rgb(var(--portal-accent-rgb, 59,130,246))'
-                                : (isLeaderboardPage ? 'rgba(7,9,14,0.98)' : undefined),
+                                : (isLeaderboardPage ? ((typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)') : undefined),
                               color: activeSort ? '#fff' : undefined,
                             }}
                             onClick={
@@ -9264,7 +9961,7 @@ export default function PitchingSuite({
                             position: 'sticky',
                             top: 0,
                             zIndex: 3,
-                            background: 'rgba(7,9,14,0.98)',
+                            background: (typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)',
                             width: 34,
                           }}
                         >
@@ -9281,7 +9978,7 @@ export default function PitchingSuite({
                                 position: 'sticky',
                                 top: 0,
                                 zIndex: 3,
-                                background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : 'rgba(7,9,14,0.98)',
+                                background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : ((typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)'),
                                 color: activeSort ? '#fff' : undefined,
                               }}
                               onClick={() => {
@@ -9365,12 +10062,6 @@ export default function PitchingSuite({
                           {gameLogDisplayColumns.map((column) => {
                             const rawValue = row[column];
                             const displayValue = column === 'Date' ? formatShortDate(String(rawValue ?? '')) : formatPitchingTableDisplayValue(column, rawValue);
-                            const mappedTeamLabel = (value: unknown): string => {
-                              const raw = String(value ?? '').trim();
-                              if (!raw) return '-';
-                              if (isPro) return raw;
-                              return leagueTeamLabelByCode[raw.toUpperCase()] ?? raw;
-                            };
                             const rowKind = String(row._game_row_kind ?? '');
                             const isSummaryRow = rowKind === 'all' || rowKind === 'all_pinned';
                             const percentileValue = getCellPercentile(
@@ -9433,7 +10124,7 @@ export default function PitchingSuite({
                                     );
                                   })()
                                 ) : column === 'Team' && !isPro && !isSummaryRow ? (
-                                  mappedTeamLabel(rawValue)
+                                  formatTeamLabel(rawValue)
                                 ) : column === 'Opponent' && !isPro && !isSummaryRow ? (
                                   (() => {
                                     const markerRaw = String(row._game_venue_marker ?? '').trim().toLowerCase();
@@ -9442,7 +10133,7 @@ export default function PitchingSuite({
                                       : markerRaw === 'vs.' || markerRaw === 'vs' || markerRaw === 'home'
                                         ? 'vs. '
                                         : '';
-                                    return `${markerText}${mappedTeamLabel(rawValue)}`;
+                                    return `${markerText}${formatTeamLabel(rawValue)}`;
                                   })()
                                 ) : percentileCellStyle ? (
                                   <span
@@ -9466,6 +10157,267 @@ export default function PitchingSuite({
                                   </span>
                                 ) : (
                                   showGameLogPercentileLabel ? (
+                                    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15 }}>
+                                      <span>{displayValue}</span>
+                                      <span style={{ fontSize: '0.66rem', opacity: 0.78, marginTop: 2 }}>{percentileValue!.toFixed(1)}%</span>
+                                    </span>
+                                  ) : (
+                                    displayValue
+                                  )
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </>
+          ) : dashboardPage === 'Pitch Log' ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 0 }}>{pitchLogHeader.label}</h3>
+                {pitchLogHeader.logoUrl ? (
+                  <img src={pitchLogHeader.logoUrl} alt="Team" style={{ width: 36, height: 36, objectFit: 'contain', flexShrink: 0 }} />
+                ) : null}
+              </div>
+              <div
+                className="portal-form-grid"
+                style={{
+                  marginBottom: '0.8rem',
+                  gridTemplateColumns: !isPro
+                    ? 'minmax(170px, 240px) minmax(170px, 240px) auto'
+                    : 'minmax(170px, 240px) auto',
+                }}
+              >
+                <label>
+                  Tables
+                  <SearchableSingleSelect
+                    options={tableModeOptions}
+                    value={tableModeSelectValue}
+                    onChange={handleTableModeSelection}
+                    placeholder="Stuff"
+                  />
+                </label>
+                {!isPro ? (
+                  <label>
+                    Percentile By
+                    <SearchableSingleSelect
+                      options={[
+                        { value: 'NCAA', label: 'NCAA' },
+                        { value: 'MLB', label: 'MLB' },
+                        { value: 'TEAM', label: percentileTeamLabel },
+                      ]}
+                      value={leaderboardPercentileScope}
+                      onChange={handleLeaderboardPercentileScopeSelection}
+                      placeholder="NCAA"
+                    />
+                  </label>
+                ) : null}
+                <div
+                  style={{
+                    display: 'flex',
+                    minWidth: 0,
+                    justifySelf: 'start',
+                    alignItems: 'flex-end',
+                    justifyContent: 'flex-start',
+                    gap: 8,
+                    flexWrap: 'nowrap',
+                  }}
+                >
+                  <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
+                    <span className="portal-color-toggle-label">Color Code</span>
+                    <button
+                      type="button"
+                      className={`portal-color-toggle-btn${enableTableColors ? ' is-on' : ''}`}
+                      aria-label="Toggle table color coding"
+                      aria-pressed={enableTableColors}
+                      title={enableTableColors ? 'Color code on' : 'Color code off'}
+                      onClick={() => setEnableTableColors((current) => !current)}
+                    />
+                  </div>
+                  <div className="portal-color-toggle" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '0.32rem 0.55rem' }}>
+                    <span className="portal-color-toggle-label">Show Percentile</span>
+                    <button
+                      type="button"
+                      className={`portal-color-toggle-btn${showCellPercentiles ? ' is-on' : ''}`}
+                      aria-label="Toggle percentile labels in table cells"
+                      aria-pressed={showCellPercentiles}
+                      title={showCellPercentiles ? 'Percentile labels on' : 'Percentile labels off'}
+                      onClick={() => setShowCellPercentiles((current) => !current)}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{
+                      whiteSpace: 'nowrap',
+                      height: '2.22rem',
+                      minHeight: '2.22rem',
+                      padding: '0 1.05rem',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                    }}
+                    onClick={() => setShowLeaderboardCorrelation(true)}
+                  >
+                    View Chart
+                  </button>
+                </div>
+              </div>
+              {!canRunPitchLog ? (
+                <p className="portal-muted-text">
+                  Pitch Log requires a selected team or player. Choose a team (not `All`) or filter to one or more pitchers.
+                </p>
+              ) : null}
+              {canRunPitchLog && loadingPitchLog ? <p>Loading pitch log...</p> : null}
+              {canRunPitchLog && pitchLogError ? <p className="auth-error">{pitchLogError}</p> : null}
+              {canRunPitchLog && !loadingPitchLog && !pitchLogError && sortedPitchLogRows.length === 0 ? (
+                <p className="portal-muted-text">No pitch log rows found for the current filters.</p>
+              ) : null}
+              {canRunPitchLog && !loadingPitchLog && !pitchLogError && sortedPitchLogRows.length > 0 ? (
+                <div className="portal-table-wrap" style={{ maxHeight: '68vh', overflowY: 'auto' }}>
+                  <table className="portal-table">
+                    <thead>
+                      <tr>
+                        {pitchLogDisplayColumns.map((column) => {
+                          const activeSort = pitchLogSortColumn === column;
+                          return (
+                            <th
+                              key={`pitch-log-head-${column}`}
+                              style={{
+                                textAlign: 'center',
+                                cursor: 'pointer',
+                                position: 'sticky',
+                                top: 0,
+                                zIndex: 3,
+                                background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : ((typeof document !== 'undefined' && document.body.classList.contains('theme-light')) ? 'rgba(248,250,252,0.98)' : 'rgba(7,9,14,0.98)'),
+                                color: activeSort ? '#fff' : undefined,
+                              }}
+                              onClick={() => {
+                                if (activeSort) {
+                                  setPitchLogSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+                                } else {
+                                  setPitchLogSortColumn(column);
+                                  setPitchLogSortDirection(column === 'Date' ? 'desc' : 'asc');
+                                }
+                              }}
+                            >
+                              {column}
+                              {activeSort ? ` ${pitchLogSortDirection === 'asc' ? '↑' : '↓'}` : ''}
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedPitchLogRows.map((row, rowIndex) => (
+                        <tr key={`pitch-log-row-${rowIndex}`}>
+                          {pitchLogDisplayColumns.map((column) => {
+                            const rawValue = row[column];
+                            const displayValue = column === 'Date' ? formatShortDate(String(rawValue ?? '')) : formatPitchLogCellDisplayValue(column, rawValue);
+                            const percentileValue = getCellPercentile(
+                              row as Record<string, string | number | null>,
+                              column,
+                              rawValue
+                            );
+                            const percentilesReady = !loadingPercentileBaseline;
+                            const showPitchLogPercentileLabel =
+                              showCellPercentiles &&
+                              percentilesReady &&
+                              column !== 'Team' &&
+                              column !== 'Date' &&
+                              column !== 'Opponent' &&
+                              column !== 'Pitcher' &&
+                              column !== 'Batter' &&
+                              column !== 'Pitch Type' &&
+                              column !== 'Count' &&
+                              column !== 'Result' &&
+                              percentileValue !== null;
+                            const percentileCellStyle =
+                              enableTableColors &&
+                              percentilesReady &&
+                              percentileValue !== null &&
+                              column !== 'Team' &&
+                              column !== 'Date' &&
+                              column !== 'Opponent'
+                              && column !== 'Pitcher'
+                              && column !== 'Batter'
+                              && column !== 'Pitch Type'
+                              && column !== 'Count'
+                              && column !== 'Result'
+                                ? {
+                                    backgroundColor: divergingColor(percentileValue, 0, 50, 100),
+                                    color: percentileTextColor(percentileValue),
+                                  }
+                                : null;
+                            return (
+                              <td
+                                key={`pitch-log-cell-${rowIndex}-${column}`}
+                                style={{
+                                  textAlign: 'center',
+                                  background: pitchLogSortColumn === column ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                                  color: pitchLogSortColumn === column ? '#fff' : undefined,
+                                }}
+                              >
+                                {column === 'Team' && isPro ? (
+                                  (() => {
+                                    const code = inferProTeamCode(String(rawValue ?? ''));
+                                    const logo = proxiedProTeamLogoUrl(code);
+                                    return logo ? <img src={logo} alt={code || 'Team'} style={{ width: 18, height: 18, objectFit: 'contain' }} /> : <span>{displayValue}</span>;
+                                  })()
+                                ) : column === 'Opponent' && isPro ? (
+                                  (() => {
+                                    const code = inferProTeamCode(String(rawValue ?? ''));
+                                    const logo = proxiedProTeamLogoUrl(code);
+                                    const markerRaw = String(row._game_venue_marker ?? '').trim().toLowerCase();
+                                    const markerText = markerRaw === '@' || markerRaw === 'away'
+                                      ? '@'
+                                      : markerRaw === 'vs.' || markerRaw === 'vs' || markerRaw === 'home'
+                                        ? 'vs.'
+                                        : '';
+                                    return (
+                                      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                                        {markerText ? <span>{markerText}</span> : null}
+                                        {logo ? <img src={logo} alt={code || 'Opponent'} style={{ width: 18, height: 18, objectFit: 'contain' }} /> : <span>{displayValue}</span>}
+                                      </span>
+                                    );
+                                  })()
+                                ) : column === 'Team' && !isPro ? (
+                                  formatTeamLabel(rawValue)
+                                ) : column === 'Opponent' && !isPro ? (
+                                  (() => {
+                                    const markerRaw = String(row._game_venue_marker ?? '').trim().toLowerCase();
+                                    const markerText = markerRaw === '@' || markerRaw === 'away'
+                                      ? '@ '
+                                      : markerRaw === 'vs.' || markerRaw === 'vs' || markerRaw === 'home'
+                                        ? 'vs. '
+                                        : '';
+                                    return `${markerText}${formatTeamLabel(rawValue)}`;
+                                  })()
+                                ) : percentileCellStyle ? (
+                                  <span
+                                    style={{
+                                      ...percentileCellStyle,
+                                      padding: '2px 4px',
+                                      borderRadius: 3,
+                                      display: 'inline-block',
+                                      width: '100%',
+                                      textAlign: 'center',
+                                    }}
+                                  >
+                                    {showPitchLogPercentileLabel ? (
+                                      <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15 }}>
+                                        <span>{displayValue}</span>
+                                        <span style={{ fontSize: '0.66rem', opacity: 0.78, marginTop: 2 }}>{percentileValue!.toFixed(1)}%</span>
+                                      </span>
+                                    ) : (
+                                      displayValue
+                                    )}
+                                  </span>
+                                ) : (
+                                  showPitchLogPercentileLabel ? (
                                     <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', lineHeight: 1.15 }}>
                                       <span>{displayValue}</span>
                                       <span style={{ fontSize: '0.66rem', opacity: 0.78, marginTop: 2 }}>{percentileValue!.toFixed(1)}%</span>
@@ -11329,8 +12281,8 @@ export default function PitchingSuite({
                     <hr style={{ width: '100%', borderColor: '#d1d5db' }} />
                     <div>{currentActionPitch.pitch_type}</div>
                     <div>{fmtNum(currentActionPitch.velo, 1)} mph</div>
-                    <div>IVB: {fmtNum(currentActionPitch.ivb, 1)}"</div>
-                    <div>HB: {fmtNum(currentActionPitch.hb, 1)}"</div>
+                    <div>IVB: {fmtNum(currentActionPitch.ivb, 1)} in</div>
+                    <div>HB: {fmtNum(currentActionPitch.hb, 1)} in</div>
                     <div>{fmtNum(currentActionPitch.spin, 0)} rpm</div>
                     <div>
                       SpinEff:{' '}
@@ -11386,16 +12338,18 @@ export default function PitchingSuite({
           </div>
         </div>
       ) : null}
-      {showLeaderboardCorrelation && (isLeaderboardPage || isGameLogPage) ? (
+      {showLeaderboardCorrelation && (isLeaderboardPage || isGameLogPage || isPitchLogPage) ? (
         <LeaderboardCorrelationModal
           open
           onClose={() => setShowLeaderboardCorrelation(false)}
-          title={isGameLogPage ? 'Pitching Game Log Correlation' : 'Pitching Leaderboard Correlation'}
+          title={isGameLogPage ? 'Pitching Game Log Correlation' : (isPitchLogPage ? 'Pitching Pitch Log Correlation' : 'Pitching Leaderboard Correlation')}
           columns={correlationColumns}
           axisColumns={availableCustomColumns}
           rows={correlationRows}
+          minPointsRequired={isPitchLogPage ? 1 : 2}
           viewByLabel={isLeaderboardPage ? leaderboardViewBy : 'Player'}
           primaryColumnName={correlationColumns[0] ?? ''}
+          formatValue={isPitchLogPage ? formatPitchLogCellDisplayValue : formatPitchingTableDisplayValue}
           siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
           siteLogoAlt={activeSchoolBrand.logoAlt}
           pointLogoSrcForLabel={(label) => {

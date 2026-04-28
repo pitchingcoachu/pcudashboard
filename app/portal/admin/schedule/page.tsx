@@ -1,13 +1,25 @@
-import { listPlayerChoicesByOrganization, listWorkoutChoicesByOrganization } from '../../../../lib/training-db';
+import { listPlayerChoicesByOrganization, listWorkoutChoicesByOrganization, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 import { requirePortalSession } from '../../../../lib/portal-session';
-import { resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
+import { canUseProgrammingData, getSchoolProductAccess, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import ScheduleBoard from './schedule-board';
 
 export default async function AdminSchedulePage() {
   const session = await requirePortalSession();
-  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
-  const [players, workoutChoices] = await Promise.all([
+  const schoolAccess =
+    session.role === 'admin'
+      ? await getSchoolProductAccess(programmingSchoolCode)
+      : { dashboard: true, programming: canUseProgrammingData(session), clientManagement: true };
+  const canAccessProgramming = session.role === 'admin' ? schoolAccess.programming : canUseProgrammingData(session);
+  const fallbackOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingOrganizationId = canAccessProgramming
+    ? await resolveOrganizationIdForSchool({
+        schoolCode: programmingSchoolCode,
+        fallbackOrganizationId,
+        createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
+      })
+    : 0;
+  const [playersResult, workoutsResult] = await Promise.allSettled([
     programmingOrganizationId > 0
       ? listPlayerChoicesByOrganization({
           organizationId: programmingOrganizationId,
@@ -16,6 +28,12 @@ export default async function AdminSchedulePage() {
       : Promise.resolve([]),
     programmingOrganizationId > 0 ? listWorkoutChoicesByOrganization(programmingOrganizationId) : Promise.resolve([]),
   ]);
+  const players = playersResult.status === 'fulfilled' ? playersResult.value : [];
+  const workoutChoices = workoutsResult.status === 'fulfilled' ? workoutsResult.value : [];
+  const loadError =
+    playersResult.status === 'rejected' || workoutsResult.status === 'rejected'
+      ? 'Schedule data could not be loaded right now. Please refresh and try again.'
+      : '';
   const playerChoices = players.map((player) => ({ id: player.playerId, name: player.fullName }));
 
   return (
@@ -24,6 +42,12 @@ export default async function AdminSchedulePage() {
         <article className="portal-admin-card">
           <h3>Programming Data</h3>
           <p>No programming data is configured for {programmingSchoolCode} yet.</p>
+        </article>
+      ) : null}
+      {loadError ? (
+        <article className="portal-admin-card">
+          <h3>Schedule</h3>
+          <p>{loadError}</p>
         </article>
       ) : null}
       <div className="portal-admin-headline">
