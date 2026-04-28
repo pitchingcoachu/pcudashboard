@@ -79,7 +79,25 @@ export async function resolveDashboardPlayerIdentity(session: SessionLike): Prom
   if (session.role !== 'player') return null;
   const organizationId = session.organizationId ?? 0;
   const userId = session.userId ?? 0;
-  if (organizationId <= 0 || userId <= 0) return null;
+  if (organizationId <= 0 || userId <= 0) {
+    const fallbackSeed = unique([session.name ?? '']);
+    if (fallbackSeed.length === 0) return null;
+    const names = unique(
+      fallbackSeed.flatMap((value) => {
+        const firstLast = toFirstLast(value);
+        const lastFirst = toLastFirst(value);
+        return [value, firstLast, lastFirst];
+      })
+    );
+    const firstLast = toFirstLast(fallbackSeed[0]);
+    const lastFirst = toLastFirst(fallbackSeed[0]);
+    return {
+      firstLast,
+      lastFirst,
+      candidates: names,
+      candidateKeys: new Set(names.map((name) => normalizeNameKey(name)).filter(Boolean)),
+    };
+  }
 
   const cacheKey = `${organizationId}:${userId}`;
   const now = Date.now();
@@ -89,8 +107,12 @@ export async function resolveDashboardPlayerIdentity(session: SessionLike): Prom
   if (cached && cached.expiresAt > now) {
     ownFullName = cached.fullName;
   } else {
-    const own = await getPlayerForUser({ organizationId, userId });
-    ownFullName = own?.fullName ?? null;
+    try {
+      const own = await getPlayerForUser({ organizationId, userId });
+      ownFullName = own?.fullName ?? null;
+    } catch {
+      ownFullName = null;
+    }
     cache.set(cacheKey, {
       expiresAt: now + PLAYER_NAME_CACHE_TTL_MS,
       fullName: ownFullName,

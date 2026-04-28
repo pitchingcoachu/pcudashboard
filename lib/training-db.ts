@@ -1250,17 +1250,38 @@ export async function resolveOrganizationIdForSchool(input: {
     }
 
     if (input.createIfMissing) {
-      const created = await pool.query<{ id: number }>(
+      // Do not rely on a UNIQUE constraint existing on organizations.name.
+      // Some production environments were bootstrapped without that exact
+      // constraint, causing ON CONFLICT(...) to throw and crash admin pages.
+      try {
+        const created = await pool.query<{ id: number }>(
+          `
+            INSERT INTO organizations (name)
+            VALUES ($1)
+            RETURNING id
+          `,
+          [schoolCode]
+        );
+        const orgId = Number(created.rows[0]?.id ?? 0);
+        if (Number.isFinite(orgId) && orgId > 0) return orgId;
+      } catch {
+        // Concurrent create or schema mismatch; fall through to lookup.
+      }
+
+      const createdLookup = await pool.query<{ id: number }>(
         `
-          INSERT INTO organizations (name)
-          VALUES ($1)
-          ON CONFLICT (name) DO UPDATE SET updated_at = NOW()
-          RETURNING id
+          SELECT id
+          FROM organizations
+          WHERE UPPER(TRIM(name)) = $1
+          ORDER BY id ASC
+          LIMIT 1
         `,
         [schoolCode]
       );
-      const orgId = Number(created.rows[0]?.id ?? 0);
-      if (Number.isFinite(orgId) && orgId > 0) return orgId;
+      if ((createdLookup.rowCount ?? 0) > 0) {
+        const orgId = Number(createdLookup.rows[0]?.id ?? 0);
+        if (Number.isFinite(orgId) && orgId > 0) return orgId;
+      }
     }
 
     return normalizedFallback;

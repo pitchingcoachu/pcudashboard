@@ -339,14 +339,24 @@ export async function GET(request: Request) {
     ? (useMlbPercentilePool ? 'PRO' : (String(resolvedSchoolCode).trim().toUpperCase() === 'PRO' ? 'PRO' : 'LEAGUE'))
     : resolvedSchoolCode;
   const shouldScopePlayer = !percentileBaseline && shouldScopeDashboardPlayer(session.role, schoolCode);
-  const playerIdentity = shouldScopePlayer
-    ? await resolveDashboardPlayerIdentity({
+  let playerIdentity = null as Awaited<ReturnType<typeof resolveDashboardPlayerIdentity>>;
+  if (shouldScopePlayer) {
+    try {
+      playerIdentity = await resolveDashboardPlayerIdentity({
         role: session.role,
         organizationId: session.organizationId,
         userId: session.userId,
         name: session.name,
-      })
-    : null;
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error: error instanceof Error ? error.message : 'Failed to resolve player identity.',
+        },
+        { status: 502 }
+      );
+    }
+  }
   if (shouldScopePlayer && !playerIdentity) {
     return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
   }

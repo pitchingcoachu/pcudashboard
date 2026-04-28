@@ -279,6 +279,45 @@ function preferredDashboardUrl(): string {
   return DEFAULT_DASHBOARD_URL;
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function isAuthSchemaReady(pool: Pool): Promise<boolean> {
+  try {
+    const result = await pool.query<{
+      organizations_exists: string | null;
+      auth_users_exists: string | null;
+      players_exists: string | null;
+    }>(
+      `
+        SELECT
+          to_regclass('public.organizations') AS organizations_exists,
+          to_regclass('public.auth_users') AS auth_users_exists,
+          to_regclass('public.players') AS players_exists
+      `
+    );
+    const row = result.rows[0];
+    return Boolean(row?.organizations_exists && row?.auth_users_exists && row?.players_exists);
+  } catch {
+    return false;
+  }
+}
+
+async function waitForMigrationOrLock(pool: Pool, lockId: number): Promise<'lock' | 'ready' | 'pending'> {
+  const maxAttempts = 120; // ~30 seconds
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const lock = await pool.query<{ locked: boolean }>(`SELECT pg_try_advisory_lock($1) AS locked`, [lockId]);
+    if (lock.rows[0]?.locked) return 'lock';
+    if (await isAuthSchemaReady(pool)) return 'ready';
+    await delay(250);
+  }
+  if (await isAuthSchemaReady(pool)) return 'ready';
+  const finalLock = await pool.query<{ locked: boolean }>(`SELECT pg_try_advisory_lock($1) AS locked`, [lockId]);
+  if (finalLock.rows[0]?.locked) return 'lock';
+  return 'pending';
+}
+
 export async function ensureAuthDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
   if (global.__pcuAuthDbReady) return;
@@ -291,8 +330,16 @@ export async function ensureAuthDbReady(): Promise<void> {
   const migrationLockId = 14840321;
 
   global.__pcuAuthDbReadyPromise = (async () => {
-    // Prevent concurrent schema bootstrap from multiple requests/processes.
-    await pool.query(`SELECT pg_advisory_lock($1)`, [migrationLockId]);
+    // Prevent concurrent schema bootstrap from multiple requests/processes
+    // without blocking on a long lock wait that can trigger read timeouts.
+    const lockState = await waitForMigrationOrLock(pool, migrationLockId);
+    if (lockState === 'ready') {
+      global.__pcuAuthDbReady = true;
+      return;
+    }
+    if (lockState === 'pending') {
+      throw new Error('Database bootstrap is still running. Please retry in a few seconds.');
+    }
     try {
       if (global.__pcuAuthDbReady) return;
 
