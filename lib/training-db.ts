@@ -319,11 +319,13 @@ type Queryable = {
 function isAuthUsersPrimaryKeyViolation(error: unknown): boolean {
   const typed = error as { code?: string; constraint?: string; message?: string } | null;
   const message = String(typed?.message ?? '').toLowerCase();
+  const duplicatesIdValue = message.includes('(id)=') || message.includes(' key (id)=');
   return (
     typed?.code === '23505' &&
-    (typed?.constraint === 'auth_users_pkey' ||
-      message.includes('auth_users_pkey') ||
-      (message.includes('duplicate key') && message.includes('auth_users')))
+    (typed?.constraint === 'idx_auth_users_id_unique' ||
+      (typed?.constraint === 'auth_users_pkey' && duplicatesIdValue) ||
+      (message.includes('auth_users_pkey') && duplicatesIdValue) ||
+      (message.includes('duplicate key') && message.includes('auth_users') && duplicatesIdValue))
   );
 }
 
@@ -1623,6 +1625,13 @@ export async function createStaffUser(input: {
       inserted = true;
       break;
     } catch (error) {
+      const typed = error as { code?: string; constraint?: string; message?: string } | null;
+      if (typed?.code === '23505' && typed?.constraint === 'auth_users_pkey') {
+        return {
+          ok: false,
+          error: 'This coach/admin login already exists with this email. Edit the existing staff account instead of creating a duplicate.',
+        };
+      }
       if (!isAuthUsersPrimaryKeyViolation(error)) throw error;
       await ensureAuthUsersIdSequence(pool);
     }
