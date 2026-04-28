@@ -54,7 +54,7 @@ function parseGlobalAdminEmails(): string[] {
   return Array.from(new Set(values));
 }
 
-function isGlobalAdminSession(session: SessionLike): boolean {
+export function isGlobalAdminSession(session: SessionLike): boolean {
   if (session.role !== 'admin') return false;
   const email = String(session.email ?? '').trim().toLowerCase();
   if (!email) return false;

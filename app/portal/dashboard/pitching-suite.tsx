@@ -3727,6 +3727,8 @@ export default function PitchingSuite({
     setLoadingGameLog(true);
     setGameLogError('');
     const run = async () => {
+      const schoolCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+      const isPcuBullpenSelection = schoolCode === 'PCU' && !isPro && /bull/i.test(String(sessionType ?? ''));
       const apiTeamType = isLeague
         ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
         : teamType;
@@ -3777,7 +3779,8 @@ export default function PitchingSuite({
       if (bfMax) params.set('bf_max', bfMax);
       if (ipMin) params.set('ip_min', ipMin);
       if (ipMax) params.set('ip_max', ipMax);
-      params.set('include_chart_points', '0');
+      params.set('include_chart_points', isPcuBullpenSelection ? '1' : '0');
+      if (isPcuBullpenSelection) params.set('chart_points_limit', '9000');
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
       params.set('force_raw', '1');
@@ -3794,7 +3797,19 @@ export default function PitchingSuite({
         Array.from(new Set([...tableColumns, ...availableColumns])),
         tableRowsRaw
       );
+      const chartPoints = Array.isArray(payload.chart_points) ? payload.chart_points : [];
       const splitColumn = String(tableColumns[0] ?? 'Game').trim() || 'Game';
+      const leadingColumns = ['Team', 'Date', 'Opponent'];
+      const seen = new Set(leadingColumns.map((col) => col.toLowerCase()));
+      const metricColumns = tableColumns.filter((column) => {
+        const key = String(column ?? '').trim();
+        if (!key) return false;
+        if (key === splitColumn) return false;
+        const lower = key.toLowerCase();
+        if (seen.has(lower)) return false;
+        seen.add(lower);
+        return true;
+      });
       const rows = tableRows
         .filter((row) => String((row as Record<string, unknown>)[splitColumn] ?? '').trim().toLowerCase() !== 'all')
         .map((row, rowIndex) => {
@@ -3839,7 +3854,8 @@ export default function PitchingSuite({
         }
       }
       for (const key of ambiguousGameKey) opponentByGameKey.delete(key);
-      const rowsResolved = rows.map((row) => {
+      let rowsResolved = rows.map((row) => {
+        if (isPcuBullpenSelection) return { ...row, Opponent: '' };
         if (!isPlaceholderOpponent(row.Opponent)) return row;
         const gameKey = String(row._game_key ?? '').trim();
         const dateKey = String(row.Date ?? '').trim();
@@ -3849,18 +3865,83 @@ export default function PitchingSuite({
         if (byDate.length === 1) return { ...row, Opponent: byDate[0] };
         return row;
       });
+      if (isPcuBullpenSelection && rowsResolved.length === 0 && chartPoints.length > 0) {
+        const maxToken = normalizePercentileColumnToken('Max');
+        const countTokens = new Set(['p', 'number']);
+        const sumTokens = new Set(['bf']);
+        const grouped = new Map<
+          string,
+          {
+            date: string;
+            team: string;
+            sums: Record<string, number>;
+            counts: Record<string, number>;
+            maxes: Record<string, number>;
+            pitchCount: number;
+          }
+        >();
+        for (const pitch of chartPoints) {
+          const dateValue = String(pitch.session_date ?? '').slice(0, 10) || '-';
+          const teamValue = String(pitch.pitcher_team_code ?? '').trim() || schoolCode || '-';
+          const groupKey = `${dateValue}||${teamValue}`;
+          const bucket =
+            grouped.get(groupKey) ??
+            {
+              date: dateValue,
+              team: teamValue,
+              sums: {},
+              counts: {},
+              maxes: {},
+              pitchCount: 0,
+            };
+          bucket.pitchCount += 1;
+          for (const column of metricColumns) {
+            const token = normalizePercentileColumnToken(column);
+            const rawMetric = pitchLogMetricValue(column, pitch, isPro);
+            const numeric = parseSortableNumber(rawMetric);
+            if (numeric === null) continue;
+            if (token === maxToken) {
+              const prev = bucket.maxes[column];
+              bucket.maxes[column] = Number.isFinite(prev) ? Math.max(prev, numeric) : numeric;
+              continue;
+            }
+            bucket.sums[column] = (bucket.sums[column] ?? 0) + numeric;
+            bucket.counts[column] = (bucket.counts[column] ?? 0) + 1;
+          }
+          grouped.set(groupKey, bucket);
+        }
+        rowsResolved = Array.from(grouped.values())
+          .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+          .map((bucket, rowIndex) => {
+            const row: Record<string, unknown> = {
+              Team: bucket.team,
+              Date: bucket.date,
+              Opponent: '',
+              _game_pin_key: `bullpen|${bucket.date}|${bucket.team}|${rowIndex}`,
+              _game_key: `bullpen|${bucket.date}|${bucket.team}`,
+              _game_venue_marker: '',
+            };
+            for (const column of metricColumns) {
+              const token = normalizePercentileColumnToken(column);
+              if (countTokens.has(token)) {
+                row[column] = bucket.pitchCount;
+                continue;
+              }
+              if (sumTokens.has(token)) {
+                row[column] = bucket.sums[column] ?? 0;
+                continue;
+              }
+              if (token === maxToken) {
+                row[column] = bucket.maxes[column] ?? null;
+                continue;
+              }
+              const count = bucket.counts[column] ?? 0;
+              row[column] = count > 0 ? (bucket.sums[column] ?? 0) / count : null;
+            }
+            return row;
+          });
+      }
       if (!active) return;
-      const leadingColumns = ['Team', 'Date', 'Opponent'];
-      const seen = new Set(leadingColumns.map((col) => col.toLowerCase()));
-      const metricColumns = tableColumns.filter((column) => {
-        const key = String(column ?? '').trim();
-        if (!key) return false;
-        if (key === splitColumn) return false;
-        const lower = key.toLowerCase();
-        if (seen.has(lower)) return false;
-        seen.add(lower);
-        return true;
-      });
       setGameLogColumns([...leadingColumns, ...metricColumns]);
       setGameLogRows(rowsResolved);
     };
@@ -3921,6 +4002,8 @@ export default function PitchingSuite({
     bfMax,
     ipMin,
     ipMax,
+    filters?.school_code,
+    selectedSchoolCode,
   ]);
 
   useEffect(() => {
@@ -3938,6 +4021,8 @@ export default function PitchingSuite({
     setLoadingPitchLog(true);
     setPitchLogError('');
     const run = async () => {
+      const schoolCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+      const isPcuBullpenSelection = schoolCode === 'PCU' && !isPro && /bull/i.test(String(sessionType ?? ''));
       const apiTeamType = isLeague
         ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
         : teamType;
@@ -4026,8 +4111,26 @@ export default function PitchingSuite({
       const rows: Array<Record<string, unknown>> = [];
       const rowPitchMap = payload.row_pitches_by_key ?? {};
       const rowPitchCount = Object.values(rowPitchMap).reduce((sum, bucket) => sum + (Array.isArray(bucket) ? bucket.length : 0), 0);
-      const chartPoints = Array.isArray(payload.chart_points) ? payload.chart_points : [];
-      const useChartPointFallback = rowPitchCount === 0 && chartPoints.length > 0;
+      let chartPoints = Array.isArray(payload.chart_points) ? payload.chart_points : [];
+      let useChartPointFallback = rowPitchCount === 0 && chartPoints.length > 0;
+      if (isPcuBullpenSelection && rowPitchCount === 0 && chartPoints.length === 0) {
+        const fallbackParams = new URLSearchParams(params);
+        fallbackParams.set('split_by', 'Pitcher');
+        fallbackParams.set('include_chart_points', '1');
+        fallbackParams.set('chart_points_limit', '9000');
+        fallbackParams.set('include_row_pitches', '0');
+        fallbackParams.set('include_trend_rows', '0');
+        fallbackParams.set('chart_only', '1');
+        const fallbackResponse = await fetch(`/api/dashboard/pitching/overview?${fallbackParams.toString()}`, {
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        if (fallbackResponse.ok) {
+          const fallbackPayload = (await fallbackResponse.json().catch(() => ({}))) as OverviewPayload & { error?: string };
+          chartPoints = Array.isArray(fallbackPayload.chart_points) ? fallbackPayload.chart_points : [];
+          useChartPointFallback = chartPoints.length > 0;
+        }
+      }
       const buildGameMetaCompoundKey = (dateValue: string, teamValue: string, opponentValue: string): string =>
         `${dateValue.trim()}|${normalizeLeagueTeamToken(teamValue)}|${normalizeLeagueTeamToken(opponentValue)}`;
       const gameMetaByKey = new Map<string, { team: string; opponent: string; marker: string; rowMetrics: Record<string, unknown> }>();
@@ -4079,7 +4182,7 @@ export default function PitchingSuite({
           const item: Record<string, unknown> = {
             Date: dateValue,
             Team: matchedMeta?.team || String(pitch.pitcher_team_code ?? '').trim() || '-',
-            Opponent: matchedMeta?.opponent || String(pitch.batter_team_code ?? '').trim() || '-',
+            Opponent: isPcuBullpenSelection ? '' : (matchedMeta?.opponent || String(pitch.batter_team_code ?? '').trim() || '-'),
             Pitcher: formatNameFirstLast(String(pitch.pitcher ?? '').trim()),
             Batter: formatNameFirstLast(String(pitch.batter ?? '').trim()),
             'Pitch Type': String(pitch.pitch_type ?? '').trim() || '-',
@@ -4123,7 +4226,7 @@ export default function PitchingSuite({
           const item: Record<string, unknown> = {
             Date: dateValue,
             Team: parsed.team || String(pitch.pitcher_team_code ?? '').trim() || '-',
-            Opponent: parsed.opponent || String(pitch.batter_team_code ?? '').trim() || '-',
+            Opponent: isPcuBullpenSelection ? '' : (parsed.opponent || String(pitch.batter_team_code ?? '').trim() || '-'),
             Pitcher: formatNameFirstLast(String(pitch.pitcher ?? '').trim()),
             Batter: formatNameFirstLast(String(pitch.batter ?? '').trim()),
             'Pitch Type': String(pitch.pitch_type ?? '').trim() || '-',
@@ -4223,6 +4326,8 @@ export default function PitchingSuite({
     bfMax,
     ipMin,
     ipMax,
+    filters?.school_code,
+    selectedSchoolCode,
   ]);
 
   useEffect(() => {
@@ -10127,6 +10232,8 @@ export default function PitchingSuite({
                                   formatTeamLabel(rawValue)
                                 ) : column === 'Opponent' && !isPro && !isSummaryRow ? (
                                   (() => {
+                                    const rawOpponent = String(rawValue ?? '').trim();
+                                    if (!rawOpponent) return '';
                                     const markerRaw = String(row._game_venue_marker ?? '').trim().toLowerCase();
                                     const markerText = markerRaw === '@' || markerRaw === 'away'
                                       ? '@ '
@@ -10388,6 +10495,8 @@ export default function PitchingSuite({
                                   formatTeamLabel(rawValue)
                                 ) : column === 'Opponent' && !isPro ? (
                                   (() => {
+                                    const rawOpponent = String(rawValue ?? '').trim();
+                                    if (!rawOpponent) return '';
                                     const markerRaw = String(row._game_venue_marker ?? '').trim().toLowerCase();
                                     const markerText = markerRaw === '@' || markerRaw === 'away'
                                       ? '@ '

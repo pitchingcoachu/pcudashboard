@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
+import { isGlobalAdminSession, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { createStaffUser, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
       phone: String(form.get('phone') ?? ''),
       password: String(form.get('password') ?? ''),
       role,
-      allowCrossSchoolLinking: false,
+      allowCrossSchoolLinking: isGlobalAdminSession(session),
     });
     if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);
     return redirectWithMessage(request, redirectTo, 'ok', 'Coach profile created.');
