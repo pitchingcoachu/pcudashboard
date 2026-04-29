@@ -356,6 +356,17 @@ const FILTER_TOKENS: FilterToken[] = [
   'HB Min/Max',
 ];
 const splitByLabel = (value: string): string => (value === 'Inning' ? 'Inning of Appearance' : value);
+const normalizeSplitByForApi = (value: string): string => {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (raw === 'pitch type' || raw === 'pitch types') return 'Pitch Types';
+  if (raw === 'batter hand') return 'Batter Hand';
+  if (raw === 'pitcher hand') return 'Pitcher Hand';
+  if (raw === 'batter team') return 'Batter Team';
+  if (raw === 'count') return 'Count';
+  if (raw === 'after count') return 'After Count';
+  if (raw === 'inning' || raw === 'inning of appearance') return 'Inning';
+  return value || 'Pitch Types';
+};
 const UNIVERSAL_SPLIT_BY = [
   'All',
   'Pitch Types',
@@ -512,6 +523,25 @@ function normalizeNameForApi(value: string): string {
 }
 
 function hitterNameCandidatesForApi(value: string): string[] {
+  const base = normalizeNameForApi(value);
+  if (!base) return [];
+  const formatted = toFirstLast(base);
+  const lastFirstFromBase = toLastFirst(base);
+  const lastFirstFromFormatted = toLastFirst(formatted);
+  const candidates = [
+    base,
+    formatted,
+    lastFirstFromBase,
+    lastFirstFromFormatted,
+    base.replace(/\s+/g, ' ').trim(),
+    formatted.replace(/\s+/g, ' ').trim(),
+    lastFirstFromBase.replace(/\s+/g, ' ').trim(),
+    lastFirstFromFormatted.replace(/\s+/g, ' ').trim(),
+  ].filter(Boolean);
+  return Array.from(new Set(candidates));
+}
+
+function pitcherNameCandidatesForApi(value: string): string[] {
   const base = normalizeNameForApi(value);
   if (!base) return [];
   const formatted = toFirstLast(base);
@@ -1180,6 +1210,7 @@ const isMeaningfulCellValue = (value: unknown): boolean =>
   !(value === null || value === undefined || (typeof value === 'string' && value.trim() === ''));
 const resolveAliasTokens = (token: string): string[] => {
   if (token === 'xwoba') return ['xwoba', 'estimatedwobausingspeedangle'];
+  if (token === 'xiso') return ['xiso', 'isovalue'];
   return [token];
 };
 const getTableRowValue = (row: Record<string, unknown>, column: string): unknown => {
@@ -1231,6 +1262,20 @@ const hasNonEmptyTableRows = (payload: OverviewLitePayload): boolean =>
   Array.isArray(payload.table_rows) && payload.table_rows.length > 0;
 const hasChartPoints = (payload: OverviewLitePayload): boolean =>
   Array.isArray(payload.chart_points) && payload.chart_points.length > 0;
+const hasMissingXMetricTableValues = (payload: OverviewLitePayload): boolean => {
+  const columns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+  const rows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+  if (!columns.length || !rows.length) return false;
+  const xwobaColumn = columns.find((col) => normalizePercentileColumnToken(col) === 'xwoba');
+  const xisoColumn = columns.find((col) => normalizePercentileColumnToken(col) === 'xiso');
+  if (!xwobaColumn && !xisoColumn) return false;
+  return rows.some((rowRaw) => {
+    const row = rowRaw as Record<string, unknown>;
+    const xwobaMissing = xwobaColumn ? isMissingMetricValue(getTableRowValue(row, xwobaColumn)) : false;
+    const xisoMissing = xisoColumn ? isMissingMetricValue(getTableRowValue(row, xisoColumn)) : false;
+    return xwobaMissing || xisoMissing;
+  });
+};
 const isMissingMetricValue = (value: unknown): boolean => {
   if (value === null || value === undefined) return true;
   const text = String(value).trim().toLowerCase();
@@ -1242,44 +1287,101 @@ const withXwobaBackfillFromChartPoints = (payload: OverviewLitePayload): Overvie
   const points = Array.isArray(payload.chart_points) ? payload.chart_points : [];
   if (!columns.length || !rows.length || !points.length) return payload;
   const xwobaColumn = columns.find((col) => normalizePercentileColumnToken(col) === 'xwoba');
-  if (!xwobaColumn) return payload;
+  const xisoColumn = columns.find((col) => normalizePercentileColumnToken(col) === 'xiso');
+  if (!xwobaColumn && !xisoColumn) return payload;
   const splitColumn = String(columns[0] ?? '');
   if (!splitColumn) return payload;
   const splitIsPitchLike = normalizePercentileColumnToken(splitColumn) === 'pitch';
   const xwobaPoints = points
-    .map((point) => Number(point.estimated_woba_using_speedangle))
+    .map((point) => {
+      const direct = Number(point.estimated_woba_using_speedangle);
+      if (Number.isFinite(direct)) return direct;
+      const sum = Number((point as { xwoba_sum?: unknown }).xwoba_sum);
+      const n = Number((point as { xwoba_n?: unknown }).xwoba_n);
+      return Number.isFinite(sum) && Number.isFinite(n) && n > 0 ? sum / n : Number.NaN;
+    })
     .filter((value) => Number.isFinite(value));
-  if (!xwobaPoints.length) return payload;
-  const globalAvg = xwobaPoints.reduce((sum, value) => sum + value, 0) / xwobaPoints.length;
-  const byPitch = new Map<string, number[]>();
+  const xisoPoints = points
+    .map((point) => {
+      const direct = Number(point.iso_value);
+      if (Number.isFinite(direct)) return direct;
+      const sum = Number((point as { xiso_sum?: unknown; iso_sum?: unknown }).xiso_sum ?? (point as { iso_sum?: unknown }).iso_sum);
+      const n = Number((point as { xiso_n?: unknown; iso_n?: unknown }).xiso_n ?? (point as { iso_n?: unknown }).iso_n);
+      return Number.isFinite(sum) && Number.isFinite(n) && n > 0 ? sum / n : Number.NaN;
+    })
+    .filter((value) => Number.isFinite(value));
+  if (!xwobaPoints.length && !xisoPoints.length) return payload;
+  const globalXwobaAvg = xwobaPoints.length ? xwobaPoints.reduce((sum, value) => sum + value, 0) / xwobaPoints.length : null;
+  const globalXisoAvg = xisoPoints.length ? xisoPoints.reduce((sum, value) => sum + value, 0) / xisoPoints.length : null;
+  const xwobaByPitch = new Map<string, number[]>();
+  const xisoByPitch = new Map<string, number[]>();
   if (splitIsPitchLike) {
     for (const point of points) {
-      const xwoba = Number(point.estimated_woba_using_speedangle);
-      if (!Number.isFinite(xwoba)) continue;
+      const xwobaDirect = Number(point.estimated_woba_using_speedangle);
+      const xwobaSum = Number((point as { xwoba_sum?: unknown }).xwoba_sum);
+      const xwobaN = Number((point as { xwoba_n?: unknown }).xwoba_n);
+      const xwoba = Number.isFinite(xwobaDirect)
+        ? xwobaDirect
+        : (Number.isFinite(xwobaSum) && Number.isFinite(xwobaN) && xwobaN > 0 ? xwobaSum / xwobaN : Number.NaN);
+      const xisoDirect = Number(point.iso_value);
+      const xisoSum = Number((point as { xiso_sum?: unknown; iso_sum?: unknown }).xiso_sum ?? (point as { iso_sum?: unknown }).iso_sum);
+      const xisoN = Number((point as { xiso_n?: unknown; iso_n?: unknown }).xiso_n ?? (point as { iso_n?: unknown }).iso_n);
+      const xiso = Number.isFinite(xisoDirect)
+        ? xisoDirect
+        : (Number.isFinite(xisoSum) && Number.isFinite(xisoN) && xisoN > 0 ? xisoSum / xisoN : Number.NaN);
       const key = normalizePitchTypeName(canonicalPitchType(String(point.pitch_type ?? '').trim()) || String(point.pitch_type ?? '').trim());
       if (!key || key === 'all') continue;
-      if (!byPitch.has(key)) byPitch.set(key, []);
-      byPitch.get(key)!.push(xwoba);
+      if (Number.isFinite(xwoba)) {
+        if (!xwobaByPitch.has(key)) xwobaByPitch.set(key, []);
+        xwobaByPitch.get(key)!.push(xwoba);
+      }
+      if (Number.isFinite(xiso)) {
+        if (!xisoByPitch.has(key)) xisoByPitch.set(key, []);
+        xisoByPitch.get(key)!.push(xiso);
+      }
     }
   }
   let changed = false;
   const nextRows = rows.map((row) => {
-    const raw = getTableRowValue(row as Record<string, unknown>, xwobaColumn);
-    if (!isMissingMetricValue(raw)) return row;
+    let rowChanged = false;
     const rowObj = { ...(row as Record<string, string | number | null>) };
     const splitValue = String(getTableRowValue(rowObj as Record<string, unknown>, splitColumn) ?? '').trim();
-    let replacement: number | null = null;
-    if (!splitValue || splitValue.toLowerCase() === 'all') {
-      replacement = globalAvg;
-    } else if (splitIsPitchLike) {
-      const token = normalizePitchTypeName(canonicalPitchType(splitValue) || splitValue);
-      const values = byPitch.get(token) ?? [];
-      if (values.length) replacement = values.reduce((sum, value) => sum + value, 0) / values.length;
+    if (xwobaColumn) {
+      const rawXwoba = getTableRowValue(row as Record<string, unknown>, xwobaColumn);
+      if (isMissingMetricValue(rawXwoba)) {
+        let replacement: number | null = null;
+        if (!splitValue || splitValue.toLowerCase() === 'all') {
+          replacement = globalXwobaAvg;
+        } else if (splitIsPitchLike) {
+          const token = normalizePitchTypeName(canonicalPitchType(splitValue) || splitValue);
+          const values = xwobaByPitch.get(token) ?? [];
+          if (values.length) replacement = values.reduce((sum, value) => sum + value, 0) / values.length;
+        }
+        if (replacement !== null && Number.isFinite(replacement)) {
+          rowObj[xwobaColumn] = Number(replacement.toFixed(3));
+          rowChanged = true;
+        }
+      }
     }
-    if (replacement === null || !Number.isFinite(replacement)) return row;
-    rowObj[xwobaColumn] = Number(replacement.toFixed(3));
-    changed = true;
-    return rowObj;
+    if (xisoColumn) {
+      const rawXiso = getTableRowValue(row as Record<string, unknown>, xisoColumn);
+      if (isMissingMetricValue(rawXiso)) {
+        let replacement: number | null = null;
+        if (!splitValue || splitValue.toLowerCase() === 'all') {
+          replacement = globalXisoAvg;
+        } else if (splitIsPitchLike) {
+          const token = normalizePitchTypeName(canonicalPitchType(splitValue) || splitValue);
+          const values = xisoByPitch.get(token) ?? [];
+          if (values.length) replacement = values.reduce((sum, value) => sum + value, 0) / values.length;
+        }
+        if (replacement !== null && Number.isFinite(replacement)) {
+          rowObj[xisoColumn] = Number(replacement.toFixed(3));
+          rowChanged = true;
+        }
+      }
+    }
+    if (rowChanged) changed = true;
+    return rowChanged ? rowObj : row;
   });
   if (!changed) return payload;
   return { ...payload, table_rows: nextRows };
@@ -2221,7 +2323,6 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     for (const row of rows) {
       const splitValue = getTableRowValue(row as Record<string, unknown>, splitColumn);
       const splitKey = String(splitValue ?? '').trim().toLowerCase();
-      if (splitKey === 'all') continue;
       for (const column of tableColumns) {
         if (column === splitColumn) continue;
         const columnToken = normalizePercentileColumnToken(column);
@@ -2230,6 +2331,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         if (num === null) continue;
         if (!globalByColumn.has(columnToken)) globalByColumn.set(columnToken, []);
         globalByColumn.get(columnToken)!.push(num);
+        if (splitKey === 'all') continue;
         if (!splitKey) continue;
         if (!scoped.has(splitKey)) scoped.set(splitKey, new Map());
         const byColumn = scoped.get(splitKey)!;
@@ -3055,7 +3157,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       const workerCount =
         isProWorkload
           ? reportScope === 'Team'
-            ? 1
+            ? 2
             : reportScope === 'Multi-Player'
               ? 3
               : 3
@@ -3196,7 +3298,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           }
           params.set('include_row_pitches', '0');
           params.set('include_trend_rows', '0');
-          params.set('split_by', config.splitBy || 'Pitch Types');
+          const splitByApi = normalizeSplitByForApi(config.splitBy || 'Pitch Types');
+          params.set('split_by', splitByApi);
           const selectedTableMode = config.tableMode || defaultTableMode;
           const matchedCustomTable = String(selectedTableMode).startsWith('custom_saved:')
             ? (() => {
@@ -3211,6 +3314,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             }
           } else {
             params.set('table_mode', selectedTableMode);
+          }
+          if (isProSchool && reportLevel && reportLevel !== 'All') {
+            params.set('level', reportLevel);
           }
           if (cellFilters.includes('Session Type')) {
             const sessionType = (config.sessionType || 'All').trim();
@@ -3275,8 +3381,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             if ((config.hbMin ?? '').trim()) params.set('hb_min', String(config.hbMin).trim());
             if ((config.hbMax ?? '').trim()) params.set('hb_max', String(config.hbMax).trim());
           }
+          const pitcherCandidates = reportType === 'Pitching' ? pitcherNameCandidatesForApi(scopePlayer) : [];
           if (reportType === 'Pitching') {
-            if (normalizedPlayer) params.set('pitcher', normalizedPlayer);
+            if (pitcherCandidates.length) params.set('pitcher', pitcherCandidates[0]);
             if (!normalizedPlayer && reportTeam && reportTeam !== 'All') params.set('team_type', reportTeam);
           } else if (reportType === 'Hitting') {
             const hitterCandidates = hitterNameCandidatesForApi(scopePlayer);
@@ -3346,12 +3453,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               ]);
               const usesSupportedCustomColumnsOnly = matchedCustomTable
                 ? (matchedCustomTable.columns ?? []).every((col) => supportedPitchingTableRollupColumns.has(String(col ?? '').trim()))
-                : false;
+                : true;
               if (
                 reportType === 'Pitching' &&
                 normalizedPanelType === 'Summary Table' &&
                 !hasPitchingRollupUnsupportedFilters &&
-                ['Pitch Types', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(config.splitBy || 'Pitch Types') &&
+                ['Pitch Types', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(splitByApi) &&
                 usesSupportedCustomColumnsOnly
               ) {
                 return '/api/dashboard/pitching/table-rollup';
@@ -3368,12 +3475,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               ]);
               const usesSupportedCustomColumnsOnly = matchedCustomTable
                 ? (matchedCustomTable.columns ?? []).every((col) => supportedHittingTableRollupColumns.has(String(col ?? '').trim()))
-                : false;
+                : true;
               if (
                 reportType === 'Hitting' &&
                 normalizedPanelType === 'Summary Table' &&
                 !hasHittingRollupUnsupportedFilters &&
-                ['Pitch Types', 'Pitcher Hand', 'Batter Team', 'Count', 'After Count', 'Inning'].includes(config.splitBy || 'Pitch Types') &&
+                ['Pitch Types', 'Pitcher Hand', 'Batter Team', 'Count', 'After Count', 'Inning'].includes(splitByApi) &&
                 usesSupportedCustomColumnsOnly
               ) {
                 return '/api/dashboard/hitting/table-rollup';
@@ -3432,10 +3539,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const shouldLoadPercentileBaseline =
             normalizedPanelType === 'Summary Table' && reportType !== 'Catching' && (enableTableColors || showCellPercentiles);
           let percentileBaselineKey = '';
-          const skipPerCellBaselineFetch =
-            (reportType === 'Hitting' || reportType === 'Pitching') &&
-            reportScope === 'Multi-Player' &&
-            normalizedPanelType === 'Summary Table';
+          const skipPerCellBaselineFetch = false;
           if (shouldLoadPercentileBaseline) {
             const baselineParams = new URLSearchParams(params);
             baselineParams.set('percentile_baseline', '1');
@@ -3445,6 +3549,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             baselineParams.delete('pitcher');
             baselineParams.delete('hitter');
             baselineParams.delete('catcher');
+            if (String(baselineParams.get('split_by') ?? '').trim().toLowerCase() === 'all') {
+              baselineParams.set('split_by', 'Pitch Types');
+            }
             const schoolNorm = String(resolvedSchoolCode || '').trim().toUpperCase();
             const activeScope: PercentileScope = schoolNorm === 'PRO' ? 'MLB' : percentileScope;
             if (activeScope === 'MLB') baselineParams.set('percentile_pool', 'mlb');
@@ -3592,6 +3699,97 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   } catch {
                     // Keep initial payload if retry fails.
                   }
+                }
+              }
+              if (reportType === 'Pitching' && normalizedPanelType === 'Summary Table') {
+                if (!hasNonEmptyTableRows(loadedPayload) && pitcherCandidates.length > 1) {
+                  for (const candidate of pitcherCandidates.slice(1)) {
+                    try {
+                      const nameRetryParams = new URLSearchParams(params);
+                      nameRetryParams.set('pitcher', candidate);
+                      const nameRetryPayload = await queueBatchedOverviewFetch(`${endpoint}?${nameRetryParams.toString()}`);
+                      if (hasNonEmptyTableRows(nameRetryPayload)) {
+                        loadedPayload = nameRetryPayload;
+                        break;
+                      }
+                    } catch {
+                      // continue to next candidate
+                    }
+                  }
+                }
+              }
+              if ((reportType === 'Hitting' || reportType === 'Pitching') && normalizedPanelType === 'Summary Table') {
+                loadedPayload = withXwobaBackfillFromChartPoints(loadedPayload);
+              }
+              if (
+                reportType === 'Pitching' &&
+                reportScope === 'Single Player' &&
+                normalizedPanelType === 'Summary Table' &&
+                hasNonEmptyTableRows(loadedPayload) &&
+                hasMissingXMetricTableValues(loadedPayload)
+              ) {
+                try {
+                  const rollupParams = new URLSearchParams(params);
+                  rollupParams.set('school_code', String(resolvedSchoolCode || '').trim().toUpperCase());
+                  rollupParams.set('include_chart_points', '1');
+                  rollupParams.delete('table_mode');
+                  rollupParams.delete('split_by');
+                  rollupParams.delete('custom_columns');
+                  rollupParams.delete('include_row_pitches');
+                  rollupParams.delete('include_trend_rows');
+                  rollupParams.delete('chart_only');
+                  const rollupPayload = await queueBatchedOverviewFetch(
+                    `/api/dashboard/pitching/heatmap-rollup?${rollupParams.toString()}`
+                  );
+                  const rollupPoints = Array.isArray(rollupPayload?.chart_points) ? rollupPayload.chart_points : [];
+                  if (rollupPoints.length) {
+                    loadedPayload = withXwobaBackfillFromChartPoints({
+                      ...loadedPayload,
+                      chart_points: rollupPoints,
+                      heatmap_points: Array.isArray(rollupPayload?.heatmap_points)
+                        ? rollupPayload.heatmap_points
+                        : loadedPayload.heatmap_points,
+                    });
+                  }
+                } catch {
+                  // Keep existing payload if rollup enrichment fails.
+                }
+              }
+              if (
+                reportType === 'Pitching' &&
+                normalizedPanelType === 'Summary Table' &&
+                hasNonEmptyTableRows(loadedPayload) &&
+                hasMissingXMetricTableValues(loadedPayload)
+              ) {
+                try {
+                  const fallbackPitcherCandidates = pitcherCandidates.length ? pitcherCandidates : [normalizedPlayer].filter(Boolean);
+                  for (const candidate of (fallbackPitcherCandidates.length ? fallbackPitcherCandidates : [''])) {
+                    const rollupParams = new URLSearchParams(params);
+                    rollupParams.set('school_code', String(resolvedSchoolCode || '').trim().toUpperCase());
+                    rollupParams.set('split_by', splitByApi);
+                    if (candidate) rollupParams.set('pitcher', candidate);
+                    rollupParams.delete('include_chart_points');
+                    rollupParams.delete('chart_points_limit');
+                    rollupParams.delete('chart_only');
+                    rollupParams.delete('include_row_pitches');
+                    rollupParams.delete('include_trend_rows');
+                    const rollupTablePayload = await queueBatchedOverviewFetch(
+                      `/api/dashboard/pitching/table-rollup?${rollupParams.toString()}`
+                    );
+                    const rollupRows = Array.isArray(rollupTablePayload?.table_rows) ? rollupTablePayload.table_rows : [];
+                    const rollupCols = Array.isArray(rollupTablePayload?.table_columns) ? rollupTablePayload.table_columns : [];
+                    if (rollupRows.length && rollupCols.length) {
+                      loadedPayload = {
+                        ...loadedPayload,
+                        table_rows: rollupRows as Array<Record<string, string | number | null>>,
+                        table_columns: rollupCols as string[],
+                      };
+                      loadedPayload = withXwobaBackfillFromChartPoints(loadedPayload);
+                      break;
+                    }
+                  }
+                } catch {
+                  // Keep existing payload if direct rollup fallback fails.
                 }
               }
               if (percentileBaselineKey) {

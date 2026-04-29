@@ -14,6 +14,12 @@ type SharedPoint = {
   plate_height?: number | null;
   estimated_woba_using_speedangle?: number | null;
   iso_value?: number | null;
+  xwoba_sum?: number | string | null;
+  xwoba_n?: number | string | null;
+  xiso_sum?: number | string | null;
+  xiso_n?: number | string | null;
+  iso_sum?: number | string | null;
+  iso_n?: number | string | null;
   xWOBA?: number | string | null;
   xwoba?: number | string | null;
   xISO?: number | string | null;
@@ -30,7 +36,11 @@ function toFiniteNumber(value: unknown): number | null {
 }
 
 function pointXwoba(point: SharedPoint): number | null {
+  const xwobaSum = toFiniteNumber(point.xwoba_sum);
+  const xwobaN = toFiniteNumber(point.xwoba_n);
+  const aggregate = xwobaSum !== null && xwobaN !== null && xwobaN > 0 ? xwobaSum / xwobaN : null;
   return (
+    aggregate ??
     toFiniteNumber(point.estimated_woba_using_speedangle) ??
     toFiniteNumber(point.xWOBA) ??
     toFiniteNumber(point.xwoba)
@@ -38,7 +48,11 @@ function pointXwoba(point: SharedPoint): number | null {
 }
 
 function pointXiso(point: SharedPoint): number | null {
+  const xisoSum = toFiniteNumber(point.xiso_sum) ?? toFiniteNumber(point.iso_sum);
+  const xisoN = toFiniteNumber(point.xiso_n) ?? toFiniteNumber(point.iso_n);
+  const aggregate = xisoSum !== null && xisoN !== null && xisoN > 0 ? xisoSum / xisoN : null;
   return (
+    aggregate ??
     toFiniteNumber(point.iso_value) ??
     toFiniteNumber(point.xISO) ??
     toFiniteNumber(point.xiso)

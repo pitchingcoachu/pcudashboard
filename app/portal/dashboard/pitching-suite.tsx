@@ -357,9 +357,10 @@ const LEAGUE_TEAM_CODE_BY_LABEL_TOKEN: Record<string, string> = Object.fromEntri
 );
 
 
-function fmtNum(value: number | null | undefined, digits = 1): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '-';
-  return value.toFixed(digits);
+function fmtNum(value: unknown, digits = 1): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '-';
+  return n.toFixed(digits);
 }
 
 function formatNameFirstLast(name: string): string {
@@ -461,8 +462,8 @@ function manualVeloHoverText(entry: ManualVelocityEntry): string {
     `Throw Type: ${entry.throw_type}`,
   ];
   if (entry.throw_type === 'Plyo Velo' && entry.plyo_drill.trim()) lines.push(`Drill: ${entry.plyo_drill.trim()}`);
-  lines.push(`Velo: ${entry.velocity_mph.toFixed(1)} mph`);
-  lines.push(`Weight: ${entry.ball_weight_oz.toFixed(2)} oz`);
+  lines.push(`Velo: ${fmtNum(entry.velocity_mph, 1)} mph`);
+  lines.push(`Weight: ${fmtNum(entry.ball_weight_oz, 2)} oz`);
   return lines.join('\n');
 }
 
@@ -3007,7 +3008,10 @@ export default function PitchingSuite({
       params.set('include_trend_rows', isLeague ? '0' : (isTrendPage ? '1' : '0'));
     }
 
-    const shouldLoadLeaderboardBaseline = isLeaderboard && (leaderboardStatView === 'Percentile' || enableTableColors);
+    const shouldLoadLeaderboardBaseline =
+      isLeaderboard &&
+      !isLeague &&
+      (leaderboardStatView === 'Percentile' || enableTableColors);
     const shouldLoadGameLogBaseline = isGameLogPage && (showCellPercentiles || enableTableColors);
     const shouldLoadPitchLogBaseline = isPitchLogPage && (showCellPercentiles || enableTableColors);
     const shouldLoadPercentileBaseline =
@@ -4813,10 +4817,18 @@ export default function PitchingSuite({
     if (comp) return 'Competitive';
     return 'No';
   };
+  const fmt1 = (value: unknown): string => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(1) : '-';
+  };
+  const fmt2 = (value: unknown): string => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(2) : '-';
+  };
   const tooltipHtml = (point: OverviewPayload['chart_points'][number]): string =>
-    `Pitcher: ${formatNameFirstLast(String(point.pitcher || '')) || '-'}\nBatter: ${formatNameFirstLast(String(point.batter || '')) || '-'}\nSession: ${point.session_type || '-'}\nResult: ${resolvePitchResultLabel(point.pitch_call, point.play_result)}\nVelo: ${point.velo !== null ? point.velo.toFixed(1) : '-'} mph\nIVB: ${point.ivb !== null ? point.ivb.toFixed(1) : '-'} in\nHB: ${point.hb !== null ? point.hb.toFixed(1) : '-'} in\nEV: ${point.exit_speed !== null ? point.exit_speed.toFixed(1) : '-'} mph\nLA: ${point.angle !== null ? point.angle.toFixed(1) : '-'}°\nStuff+: ${point.stuff_plus !== null ? point.stuff_plus.toFixed(1) : '-'}\nIn Zone: ${inZoneLabel(point.plate_side, point.plate_height)}`;
+    `Pitcher: ${formatNameFirstLast(String(point.pitcher || '')) || '-'}\nBatter: ${formatNameFirstLast(String(point.batter || '')) || '-'}\nSession: ${point.session_type || '-'}\nResult: ${resolvePitchResultLabel(point.pitch_call, point.play_result)}\nVelo: ${fmt1(point.velo)} mph\nIVB: ${fmt1(point.ivb)} in\nHB: ${fmt1(point.hb)} in\nEV: ${fmt1(point.exit_speed)} mph\nLA: ${fmt1(point.angle)}°\nStuff+: ${fmt1(point.stuff_plus)}\nIn Zone: ${inZoneLabel(point.plate_side, point.plate_height)}`;
   const releaseTooltipHtml = (point: OverviewPayload['chart_points'][number]): string =>
-    `Session: ${point.session_type || '-'}\nHeight: ${point.release_height !== null ? point.release_height.toFixed(2) : '-'} ft\nSide: ${point.release_side !== null ? orientX(point.release_side).toFixed(2) : '-'} ft\nExtension: ${point.extension !== null ? point.extension.toFixed(2) : '-'} ft`;
+    `Session: ${point.session_type || '-'}\nHeight: ${fmt2(point.release_height)} ft\nSide: ${fmt2(Number.isFinite(Number(point.release_side)) ? orientX(Number(point.release_side)) : null)} ft\nExtension: ${fmt2(point.extension)} ft`;
   const parseTiltToDegrees = (tilt: string): number | null => {
     const raw = (tilt ?? '').trim();
     if (!raw) return null;
@@ -6540,7 +6552,9 @@ export default function PitchingSuite({
           </text>
         ))}
         {showPitches
-          ? plottedPitches.map((p, i) => (
+          ? plottedPitches
+              .filter((p) => Number.isFinite(Number(p.release_side)) && Number.isFinite(Number(p.release_height)))
+              .map((p, i) => (
                 <circle
                   key={`r-p-${i}`}
                   cx={px(orientX(Number(p.release_side)))}
@@ -6568,7 +6582,7 @@ export default function PitchingSuite({
           : null}
         {showAverages
           ? avgByType
-              .filter((p) => p.release_side !== null && p.release_height !== null)
+              .filter((p) => Number.isFinite(Number(p.release_side)) && Number.isFinite(Number(p.release_height)))
               .map((p) => (
                 <circle
                   key={`r-a-${p.pitch_type}`}
@@ -6583,7 +6597,7 @@ export default function PitchingSuite({
                     setReleaseHover({
                       x: event.clientX,
                       y: event.clientY,
-                      text: `${p.pitch_type}\nHeight: ${p.release_height?.toFixed(1) ?? '-'} ft\nSide: ${p.release_side !== null && p.release_side !== undefined ? orientX(Number(p.release_side)).toFixed(1) : '-'} ft\nExtension: ${p.extension?.toFixed(1) ?? '-'} ft`,
+                      text: `${p.pitch_type}\nHeight: ${fmt1(p.release_height)} ft\nSide: ${fmt1(Number.isFinite(Number(p.release_side)) ? orientX(Number(p.release_side)) : null)} ft\nExtension: ${fmt1(p.extension)} ft`,
                       bg: pitchColors[p.pitch_type] ?? '#0f172a',
                     })
                   }
@@ -6681,8 +6695,11 @@ export default function PitchingSuite({
       const maxY = Math.max(box.startY, box.endY);
       if (maxX - minX < 3 || maxY - minY < 3) return;
       const selected = plottedPitches.filter((pitch) => {
-        const x = px(Number(pitch.hb));
-        const y = py(Number(pitch.ivb));
+        const hb = Number(pitch.hb);
+        const ivb = Number(pitch.ivb);
+        if (!Number.isFinite(hb) || !Number.isFinite(ivb)) return false;
+        const x = px(hb);
+        const y = py(ivb);
         return x >= minX && x <= maxX && y >= minY && y <= maxY;
       });
       if (selected.length) openActionModal(selected);
@@ -6733,7 +6750,9 @@ export default function PitchingSuite({
           </text>
         ))}
         {showPitches
-          ? plottedPitches.map((p, i) => (
+          ? plottedPitches
+              .filter((p) => Number.isFinite(Number(p.hb)) && Number.isFinite(Number(p.ivb)))
+              .map((p, i) => (
                 <circle
                   key={`m-p-${i}`}
                   cx={px(Number(p.hb))}
@@ -6761,7 +6780,7 @@ export default function PitchingSuite({
           : null}
         {showAverages
           ? avgByType
-              .filter((p) => p.hb !== null && p.ivb !== null)
+              .filter((p) => Number.isFinite(Number(p.hb)) && Number.isFinite(Number(p.ivb)))
               .map((p) => (
                 <circle
                   key={`m-a-${p.pitch_type}`}
@@ -6776,7 +6795,7 @@ export default function PitchingSuite({
                     setMovementHover({
                       x: event.clientX,
                       y: event.clientY,
-                      text: `${p.pitch_type}\nVelo: ${p.velo?.toFixed(1) ?? '-'} mph\nIVB: ${p.ivb?.toFixed(1) ?? '-'} in\nHB: ${p.hb?.toFixed(1) ?? '-'} in\nStuff+: ${p.stuff_plus?.toFixed(1) ?? '-'}`,
+                      text: `${p.pitch_type}\nVelo: ${fmt1(p.velo)} mph\nIVB: ${fmt1(p.ivb)} in\nHB: ${fmt1(p.hb)} in\nStuff+: ${fmt1(p.stuff_plus)}`,
                       bg: pitchColors[p.pitch_type] ?? '#0f172a',
                     })
                   }
@@ -7028,7 +7047,7 @@ export default function PitchingSuite({
                       setLocationHover({
                         x: event.clientX,
                         y: event.clientY,
-                        text: `${locationView}: ${c.value.toFixed(locationView === 'xWOBA' || locationView === 'xISO' ? 3 : (isRvLikeMetric || locationView === 'Exit Velocity' ? 2 : 1))}`,
+                        text: `${locationView}: ${fmtNum(c.value, locationView === 'xWOBA' || locationView === 'xISO' ? 3 : (isRvLikeMetric || locationView === 'Exit Velocity' ? 2 : 1))}`,
                       })
                     }
                     onMouseLeave={() => setLocationHover(null)}
@@ -7055,7 +7074,7 @@ export default function PitchingSuite({
         <line x1={px(strikeLeft)} y1={py(strikeBottom + (((strikeTop - strikeBottom) * 2) / 3))} x2={px(strikeRight)} y2={py(strikeBottom + (((strikeTop - strikeBottom) * 2) / 3))} stroke="rgba(255,255,255,0.45)" />
         {locationView === 'Pitch'
           ? summaryPoints
-              .filter((p) => p.plate_side !== null && p.plate_height !== null)
+              .filter((p) => Number.isFinite(Number(p.plate_side)) && Number.isFinite(Number(p.plate_height)))
               .map((p, i) => {
                 const x = px(orientX(Number(p.plate_side)));
                 const y = py(Number(p.plate_height));
@@ -7357,7 +7376,7 @@ export default function PitchingSuite({
                       setLocationHover({
                         x: event.clientX,
                         y: event.clientY,
-                        text: `${heatmapDisplayView}: ${c.value.toFixed(heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO' ? 3 : (isRvLikeMetric || heatmapDisplayView === 'Exit Velocity' || heatmapDisplayView === 'QP+' ? 2 : 1))}`,
+                        text: `${heatmapDisplayView}: ${fmtNum(c.value, heatmapDisplayView === 'xWOBA' || heatmapDisplayView === 'xISO' ? 3 : (isRvLikeMetric || heatmapDisplayView === 'Exit Velocity' || heatmapDisplayView === 'QP+' ? 2 : 1))}`,
                       })
                     }
                     onMouseLeave={() => setLocationHover(null)}
@@ -7383,7 +7402,7 @@ export default function PitchingSuite({
           <line x1={px(strikeLeft)} y1={py(strikeBottom + (((strikeTop - strikeBottom) * 2) / 3))} x2={px(strikeRight)} y2={py(strikeBottom + (((strikeTop - strikeBottom) * 2) / 3))} stroke="rgba(255,255,255,0.45)" />
           {(heatmapDisplayView === 'Pitch' || heatmapDisplayView === 'QP+')
             ? summaryPoints
-                .filter((p) => p.plate_side !== null && p.plate_height !== null)
+                .filter((p) => Number.isFinite(Number(p.plate_side)) && Number.isFinite(Number(p.plate_height)))
                 .map((p, i) => {
                   const x = px(orientX(Number(p.plate_side)));
                   const y = py(Number(p.plate_height));
@@ -9903,7 +9922,7 @@ export default function PitchingSuite({
                         );
                         });
                         })()
-                      : overview.pitch_types.map((row) => (
+                      : (Array.isArray(overview?.pitch_types) ? overview.pitch_types : []).map((row) => (
                           <tr key={row.pitch_type}>
                             <td style={{ textAlign: 'center' }}>{row.pitch_type}</td>
                             <td style={{ textAlign: 'center' }}>{row.pitches}</td>
@@ -10861,7 +10880,7 @@ export default function PitchingSuite({
                                         x: event.clientX,
                                         y: event.clientY,
                                         bg: '#111827',
-                                        text: `${!isPro ? `${entry.session}\n` : ''}${formatShortDate(row.date)}\n${trendMetric}: ${row.value.toFixed(valueDigits)}${suffix}\nPitches: ${row.pitches ?? row.rowPitches.length}`,
+                                        text: `${!isPro ? `${entry.session}\n` : ''}${formatShortDate(row.date)}\n${trendMetric}: ${fmtNum(row.value, valueDigits)}${suffix}\nPitches: ${row.pitches ?? row.rowPitches.length}`,
                                       })
                                     }
                                     onClick={() => {
@@ -11168,8 +11187,8 @@ export default function PitchingSuite({
                                 <td>{formatNameFirstLast(entry.pitcher)}</td>
                                 <td>{entry.throw_type}</td>
                                 <td>{entry.throw_type === 'Plyo Velo' ? entry.plyo_drill : ''}</td>
-                                <td>{entry.ball_weight_oz.toFixed(2)}</td>
-                                <td>{entry.velocity_mph.toFixed(1)}</td>
+                                <td>{fmtNum(entry.ball_weight_oz, 2)}</td>
+                                <td>{fmtNum(entry.velocity_mph, 1)}</td>
                                 <td>{entry.notes}</td>
                               </tr>
                             ))}
@@ -11240,8 +11259,8 @@ export default function PitchingSuite({
                   <div style={{ display: 'grid', gap: 12 }}>
                     <div className="portal-admin-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(150px, 1fr))', gap: 10 }}>
                       <article className="portal-day-card"><div className="portal-muted-text">Entries</div><div style={{ fontSize: '1.6rem', fontWeight: 700 }}>{manualKpis?.entries ?? 0}</div></article>
-                      <article className="portal-day-card"><div className="portal-muted-text">Average Velo</div><div style={{ fontSize: '1.6rem', fontWeight: 700 }}>{manualKpis?.avg?.toFixed(1) ?? '-'}</div></article>
-                      <article className="portal-day-card"><div className="portal-muted-text">Peak Velo</div><div style={{ fontSize: '1.6rem', fontWeight: 700 }}>{manualKpis?.peak?.toFixed(1) ?? '-'}</div></article>
+                      <article className="portal-day-card"><div className="portal-muted-text">Average Velo</div><div style={{ fontSize: '1.6rem', fontWeight: 700 }}>{fmtNum(manualKpis?.avg, 1)}</div></article>
+                      <article className="portal-day-card"><div className="portal-muted-text">Peak Velo</div><div style={{ fontSize: '1.6rem', fontWeight: 700 }}>{fmtNum(manualKpis?.peak, 1)}</div></article>
                       <article className="portal-day-card"><div className="portal-muted-text">Data Points</div><div style={{ fontSize: '1.6rem', fontWeight: 700 }}>{manualKpis?.typeCount ?? 0}</div></article>
                     </div>
                     <article className="portal-day-card">
@@ -11506,8 +11525,8 @@ export default function PitchingSuite({
                                                       `Date: ${formatShortDate(point.date)}`,
                                                       `Throw Type: ${throwType.startsWith('Plyo: ') ? 'Plyo Velo' : throwType}`,
                                                       ...(throwType.startsWith('Plyo: ') ? [`Drill: ${throwType.replace(/^Plyo:\s*/, '')}`] : []),
-                                                      `Velo: ${point.mean.toFixed(1)} mph`,
-                                                      `Weight: ${point.weightAvg !== null ? point.weightAvg.toFixed(2) : '-'} oz`,
+                                                      `Velo: ${fmtNum(point.mean, 1)} mph`,
+                                                      `Weight: ${fmtNum(point.weightAvg, 2)} oz`,
                                                     ].join('\n'),
                                                   })
                                                 }
@@ -11525,8 +11544,8 @@ export default function PitchingSuite({
                                                       `Date: ${formatShortDate(point.date)}`,
                                                       `Throw Type: ${throwType.startsWith('Plyo: ') ? 'Plyo Velo' : throwType}`,
                                                       ...(throwType.startsWith('Plyo: ') ? [`Drill: ${throwType.replace(/^Plyo:\s*/, '')}`] : []),
-                                                      `Velo: ${point.peak.toFixed(1)} mph`,
-                                                      `Weight: ${point.weightAvg !== null ? point.weightAvg.toFixed(2) : '-'} oz`,
+                                                      `Velo: ${fmtNum(point.peak, 1)} mph`,
+                                                      `Weight: ${fmtNum(point.weightAvg, 2)} oz`,
                                                     ].join('\n'),
                                                   })
                                                 }
@@ -11599,8 +11618,8 @@ export default function PitchingSuite({
                                     <td>{formatNameFirstLast(entry.pitcher)}</td>
                                     <td>{entry.throw_type}</td>
                                     <td>{entry.throw_type === 'Plyo Velo' ? entry.plyo_drill : ''}</td>
-                                    <td>{entry.ball_weight_oz.toFixed(2)}</td>
-                                    <td>{entry.velocity_mph.toFixed(1)}</td>
+                                    <td>{fmtNum(entry.ball_weight_oz, 2)}</td>
+                                    <td>{fmtNum(entry.velocity_mph, 1)}</td>
                                   </tr>
                                 ))}
                               </tbody>

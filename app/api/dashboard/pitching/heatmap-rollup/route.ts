@@ -22,6 +22,10 @@ function normalizeSessionType(value: string): string {
   const raw = String(value ?? '').trim().toUpperCase();
   return raw && raw !== 'ALL' ? raw : '';
 }
+function normalizeLevel(value: string): string {
+  const raw = String(value ?? '').trim().toUpperCase();
+  return raw || 'ALL';
+}
 function maybeTeamCode(value: string): string {
   const raw = String(value ?? '').trim();
   if (!raw || raw.toLowerCase() === 'all') return '';
@@ -45,6 +49,7 @@ export async function GET(request: Request) {
 
   const startDate = String(url.searchParams.get('start_date') ?? '').trim();
   const endDate = String(url.searchParams.get('end_date') ?? '').trim();
+  const level = normalizeLevel(String(url.searchParams.get('level') ?? ''));
   const sessionType = normalizeSessionType(String(url.searchParams.get('session_type') ?? ''));
   const hand = normalizeHand(String(url.searchParams.get('hand') ?? ''));
   const batterSide = normalizeHand(String(url.searchParams.get('batter_side') ?? ''));
@@ -66,6 +71,7 @@ export async function GET(request: Request) {
   };
 
   add('school_code = ?', schoolCode);
+  if (schoolCode === 'PRO' && level !== 'ALL') add('level_bucket = ?', level);
   if (startDate) add('session_date >= ?::date', startDate);
   if (endDate) add('session_date <= ?::date', endDate);
   if (sessionType) add('session_type_bucket = ?', sessionType);
@@ -74,25 +80,54 @@ export async function GET(request: Request) {
   if (teamCode) add('pitcher_team_code = ?', teamCode);
   if (pitcherNorms.length) add('pitcher_norm = ANY(?::text[])', pitcherNorms);
 
-  const result = await pool.query<{
-    plate_x_bin: number;
-    plate_z_bin: number;
-    pitch_type: string;
-    pitch_n: number;
-    swing_n: number;
-    whiff_n: number;
-    in_play_n: number;
-    gb_n: number;
-    cs_n: number;
-    take_n: number;
-    rv_sum: number;
-    pv_sum: number;
-    xwoba_sum: number;
-    xwoba_n: number;
-    ev_sum: number;
-    ev_n: number;
-  }>(
-    `
+  const tableRef = schoolCode === 'PRO'
+    ? 'public.pro_pitching_heatmap_daily_bins'
+    : 'public.pitching_heatmap_daily_bins';
+
+  let result: {
+    rows: Array<{
+      plate_x_bin: number;
+      plate_z_bin: number;
+      pitch_type: string;
+      pitch_n: number;
+      swing_n: number;
+      whiff_n: number;
+      in_play_n: number;
+      gb_n: number;
+      cs_n: number;
+      take_n: number;
+      rv_sum: number;
+      pv_sum: number;
+      xwoba_sum: number;
+      xwoba_n: number;
+      xiso_sum: number;
+      xiso_n: number;
+      ev_sum: number;
+      ev_n: number;
+    }>;
+  };
+  try {
+    result = await pool.query<{
+      plate_x_bin: number;
+      plate_z_bin: number;
+      pitch_type: string;
+      pitch_n: number;
+      swing_n: number;
+      whiff_n: number;
+      in_play_n: number;
+      gb_n: number;
+      cs_n: number;
+      take_n: number;
+      rv_sum: number;
+      pv_sum: number;
+      xwoba_sum: number;
+      xwoba_n: number;
+      xiso_sum: number;
+      xiso_n: number;
+      ev_sum: number;
+      ev_n: number;
+    }>(
+      `
       SELECT
         plate_x_bin,
         plate_z_bin,
@@ -108,14 +143,66 @@ export async function GET(request: Request) {
         SUM(pv_sum)::double precision AS pv_sum,
         SUM(xwoba_sum)::double precision AS xwoba_sum,
         SUM(xwoba_n)::int AS xwoba_n,
+        SUM(xiso_sum)::double precision AS xiso_sum,
+        SUM(xiso_n)::int AS xiso_n,
+        SUM(ev_sum)::double precision AS ev_sum,
+        SUM(ev_n)::int AS ev_n
+      FROM ${tableRef}
+      WHERE ${where.join(' AND ')}
+      GROUP BY plate_x_bin, plate_z_bin, pitch_type
+    `,
+      values
+    );
+  } catch (error) {
+    const code = String((error as { code?: string } | null)?.code ?? '');
+    if (!(schoolCode === 'PRO' && code === '42P01')) throw error;
+    result = await pool.query<{
+      plate_x_bin: number;
+      plate_z_bin: number;
+      pitch_type: string;
+      pitch_n: number;
+      swing_n: number;
+      whiff_n: number;
+      in_play_n: number;
+      gb_n: number;
+      cs_n: number;
+      take_n: number;
+      rv_sum: number;
+      pv_sum: number;
+      xwoba_sum: number;
+      xwoba_n: number;
+      xiso_sum: number;
+      xiso_n: number;
+      ev_sum: number;
+      ev_n: number;
+    }>(
+      `
+      SELECT
+        plate_x_bin,
+        plate_z_bin,
+        pitch_type,
+        SUM(pitch_n)::int AS pitch_n,
+        SUM(swing_n)::int AS swing_n,
+        SUM(whiff_n)::int AS whiff_n,
+        SUM(in_play_n)::int AS in_play_n,
+        SUM(gb_n)::int AS gb_n,
+        SUM(cs_n)::int AS cs_n,
+        SUM(take_n)::int AS take_n,
+        SUM(rv_sum)::double precision AS rv_sum,
+        SUM(pv_sum)::double precision AS pv_sum,
+        SUM(xwoba_sum)::double precision AS xwoba_sum,
+        SUM(xwoba_n)::int AS xwoba_n,
+        SUM(xiso_sum)::double precision AS xiso_sum,
+        SUM(xiso_n)::int AS xiso_n,
         SUM(ev_sum)::double precision AS ev_sum,
         SUM(ev_n)::int AS ev_n
       FROM public.pitching_heatmap_daily_bins
       WHERE ${where.join(' AND ')}
       GROUP BY plate_x_bin, plate_z_bin, pitch_type
     `,
-    values
-  );
+      values
+    );
+  }
 
   const chartPoints = result.rows
     .filter((row) => row.pitch_n > 0)
@@ -141,6 +228,8 @@ export async function GET(request: Request) {
         pv_sum: Number(row.pv_sum),
         xwoba_sum: Number(row.xwoba_sum),
         xwoba_n: Number(row.xwoba_n),
+        xiso_sum: Number(row.xiso_sum),
+        xiso_n: Number(row.xiso_n),
         ev_sum: Number(row.ev_sum),
         ev_n: Number(row.ev_n),
       };

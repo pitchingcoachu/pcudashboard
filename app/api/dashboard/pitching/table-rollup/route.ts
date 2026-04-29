@@ -23,6 +23,10 @@ function normalizeSessionType(value: string): string {
   const raw = String(value ?? '').trim().toUpperCase();
   return raw && raw !== 'ALL' ? raw : '';
 }
+function normalizeLevel(value: string): string {
+  const raw = String(value ?? '').trim().toUpperCase();
+  return raw || 'ALL';
+}
 function maybeTeamCode(value: string): string {
   const raw = String(value ?? '').trim();
   if (!raw || raw.toLowerCase() === 'all') return '';
@@ -301,7 +305,7 @@ export async function GET(request: Request) {
 
   const splitBy = String(url.searchParams.get('split_by') ?? '').trim();
   const splitByNorm = splitBy || 'Pitch Types';
-  if (!['Pitch Types', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(splitByNorm)) {
+  if (!['Pitch Types', 'Pitcher Hand', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(splitByNorm)) {
     return NextResponse.json({ table_rows: [], table_columns: [] });
   }
 
@@ -309,6 +313,7 @@ export async function GET(request: Request) {
   if (!schoolCode) return NextResponse.json({ table_rows: [], table_columns: [] });
   const startDate = String(url.searchParams.get('start_date') ?? '').trim();
   const endDate = String(url.searchParams.get('end_date') ?? '').trim();
+  const level = normalizeLevel(String(url.searchParams.get('level') ?? ''));
   const sessionType = normalizeSessionType(String(url.searchParams.get('session_type') ?? ''));
   const hand = normalizeHand(String(url.searchParams.get('hand') ?? ''));
   const batterSide = normalizeHand(String(url.searchParams.get('batter_side') ?? ''));
@@ -344,6 +349,7 @@ export async function GET(request: Request) {
     where.push(clause.replace('?', `$${values.length}`));
   };
   add('school_code = ?', schoolCode);
+  if (schoolCode === 'PRO' && level !== 'ALL') add('level_bucket = ?', level);
   if (startDate) add('session_date >= ?::date', startDate);
   if (endDate) add('session_date <= ?::date', endDate);
   if (sessionType) add('session_type_bucket = ?', sessionType);
@@ -352,11 +358,110 @@ export async function GET(request: Request) {
   if (teamCode) add('pitcher_team_code = ?', teamCode);
   if (pitcherNorms.length) add('pitcher_norm = ANY(?::text[])', pitcherNorms);
 
-  const result = await pool.query<AggRow>(
-    `
+  const tableRef = schoolCode === 'PRO'
+    ? 'public.pro_pitching_heatmap_daily_bins'
+    : 'public.pitching_heatmap_daily_bins';
+
+  let result: { rows: AggRow[] };
+  try {
+    result = await pool.query<AggRow>(
+      `
       SELECT
         ${
-          splitByNorm === 'Batter Hand'
+          splitByNorm === 'Pitcher Hand'
+              ? "CASE WHEN pitcherhand_norm <> '' THEN pitcherhand_norm ELSE 'Unknown' END"
+              : splitByNorm === 'Batter Hand'
+              ? "CASE WHEN batterside_norm <> '' THEN batterside_norm ELSE 'Unknown' END"
+              : splitByNorm === 'Count'
+                ? "COALESCE(NULLIF(TRIM(count_bucket), ''), 'Unknown')"
+                : splitByNorm === 'After Count'
+                  ? "COALESCE(NULLIF(TRIM(after_count_bucket), ''), 'Unknown')"
+                : splitByNorm === 'Inning'
+                  ? "COALESCE(NULLIF(TRIM(inning_bucket), ''), 'Unknown')"
+              : "COALESCE(NULLIF(pitch_type,''), 'Unknown')"
+        } AS split_value,
+        pitch_type,
+        SUM(pitch_n)::int AS pitch_n,
+        SUM(swing_n)::int AS swing_n,
+        SUM(whiff_n)::int AS whiff_n,
+        SUM(in_play_n)::int AS in_play_n,
+        SUM(gb_n)::int AS gb_n,
+        SUM(cs_n)::int AS cs_n,
+        SUM(take_n)::int AS take_n,
+        SUM(pa_n)::int AS pa_n,
+        SUM(inzone_n)::int AS inzone_n,
+        SUM(comp_n)::int AS comp_n,
+        SUM(fps_den)::int AS fps_den,
+        SUM(fps_num)::int AS fps_num,
+        SUM(early_den)::int AS early_den,
+        SUM(early_num)::int AS early_num,
+        SUM(ahead_den)::int AS ahead_den,
+        SUM(ahead_num)::int AS ahead_num,
+        SUM(ea_den)::int AS ea_den,
+        SUM(ea_num)::int AS ea_num,
+        SUM(oneone_den)::int AS oneone_den,
+        SUM(oneone_num)::int AS oneone_num,
+        SUM(chase_n)::int AS chase_n,
+        SUM(h_n)::int AS h_n,
+        SUM(xbh_n)::int AS xbh_n,
+        SUM(hr_n)::int AS hr_n,
+        SUM(hbp_n)::int AS hbp_n,
+        SUM(fps_fb_den)::int AS fps_fb_den,
+        SUM(fps_fb_num)::int AS fps_fb_num,
+        SUM(fps_os_den)::int AS fps_os_den,
+        SUM(fps_os_num)::int AS fps_os_num,
+        SUM(barrel_n)::int AS barrel_n,
+        SUM(xiso_sum)::double precision AS xiso_sum,
+        SUM(xiso_n)::int AS xiso_n,
+        SUM(relspeed_sum)::double precision AS relspeed_sum,
+        SUM(relspeed_n)::int AS relspeed_n,
+        MAX(relspeed_max)::double precision AS relspeed_max,
+        SUM(ivb_sum)::double precision AS ivb_sum,
+        SUM(ivb_n)::int AS ivb_n,
+        SUM(hb_sum)::double precision AS hb_sum,
+        SUM(hb_n)::int AS hb_n,
+        SUM(spin_sum)::double precision AS spin_sum,
+        SUM(spin_n)::int AS spin_n,
+        SUM(relheight_sum)::double precision AS relheight_sum,
+        SUM(relheight_n)::int AS relheight_n,
+        SUM(relside_sum)::double precision AS relside_sum,
+        SUM(relside_n)::int AS relside_n,
+        SUM(extension_sum)::double precision AS extension_sum,
+        SUM(extension_n)::int AS extension_n,
+        SUM(releasetilt_sum)::double precision AS releasetilt_sum,
+        SUM(releasetilt_n)::int AS releasetilt_n,
+        SUM(stuff_plus_sum)::double precision AS stuff_plus_sum,
+        SUM(stuff_plus_n)::int AS stuff_plus_n,
+        SUM(qp_plus_sum)::double precision AS qp_plus_sum,
+        SUM(qp_plus_n)::int AS qp_plus_n,
+        SUM(ctrl_plus_sum)::double precision AS ctrl_plus_sum,
+        SUM(ctrl_plus_n)::int AS ctrl_plus_n,
+        SUM(pitching_plus_sum)::double precision AS pitching_plus_sum,
+        SUM(pitching_plus_n)::int AS pitching_plus_n,
+        SUM(k_n)::int AS k_n,
+        SUM(bb_n)::int AS bb_n,
+        SUM(rv_sum)::double precision AS rv_sum,
+        SUM(pv_sum)::double precision AS pv_sum,
+        SUM(xwoba_sum)::double precision AS xwoba_sum,
+        SUM(xwoba_n)::int AS xwoba_n,
+        SUM(ev_sum)::double precision AS ev_sum,
+        SUM(ev_n)::int AS ev_n
+      FROM ${tableRef}
+      WHERE ${where.join(' AND ')}
+      GROUP BY split_value, pitch_type
+    `,
+      values
+    );
+  } catch (error) {
+    const code = String((error as { code?: string } | null)?.code ?? '');
+    if (!(schoolCode === 'PRO' && code === '42P01')) throw error;
+    result = await pool.query<AggRow>(
+      `
+      SELECT
+        ${
+          splitByNorm === 'Pitcher Hand'
+              ? "CASE WHEN pitcherhand_norm <> '' THEN pitcherhand_norm ELSE 'Unknown' END"
+              : splitByNorm === 'Batter Hand'
               ? "CASE WHEN batterside_norm <> '' THEN batterside_norm ELSE 'Unknown' END"
               : splitByNorm === 'Count'
                 ? "COALESCE(NULLIF(TRIM(count_bucket), ''), 'Unknown')"
@@ -436,18 +541,21 @@ export async function GET(request: Request) {
       WHERE ${where.join(' AND ')}
       GROUP BY split_value, pitch_type
     `,
-    values
-  );
+      values
+    );
+  }
 
   const filtered = result.rows.filter((row) => {
-    if (splitByNorm === 'Batter Hand' || splitByNorm === 'Count' || splitByNorm === 'After Count' || splitByNorm === 'Inning') return true;
+    if (splitByNorm === 'Pitcher Hand' || splitByNorm === 'Batter Hand' || splitByNorm === 'Count' || splitByNorm === 'After Count' || splitByNorm === 'Inning') return true;
     if (!pitchTypeSet.size) return true;
     return pitchTypeSet.has(String(row.pitch_type ?? '').trim().toLowerCase());
   });
   if (!filtered.length) return NextResponse.json({ table_rows: [], table_columns: [] });
 
   const splitColumn =
-    splitByNorm === 'Batter Hand'
+    splitByNorm === 'Pitcher Hand'
+      ? 'Pitcher Hand'
+      : splitByNorm === 'Batter Hand'
       ? 'Batter Hand'
       : splitByNorm === 'Count'
         ? 'Count'

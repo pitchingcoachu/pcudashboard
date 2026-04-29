@@ -2578,7 +2578,10 @@ export default function HittingSuite({
       params.set('chart_only', '1');
       params.set('chart_points_limit', isPro ? '6000' : '5000');
     }
-    const shouldLoadLeaderboardBaseline = isLeaderboardPage && (leaderboardStatView === 'Percentile' || enableTableColors);
+    const shouldLoadLeaderboardBaseline =
+      isLeaderboardPage &&
+      !isLeague &&
+      (leaderboardStatView === 'Percentile' || enableTableColors);
     const shouldLoadGameLogBaseline = isGameLogPage && (showCellPercentiles || enableGameLogColors);
     const shouldLoadPercentileBaseline =
       shouldLoadLeaderboardBaseline ||

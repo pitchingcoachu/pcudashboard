@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import os
 import sys
@@ -44,6 +46,53 @@ def _json_get(url: str, timeout: int = 60) -> Dict[str, Any]:
     req = urllib.request.Request(url, headers={"User-Agent": "pcu-pro-sync/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _csv_get(url: str, timeout: int = 60) -> list[dict[str, str]]:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "pcu-pro-sync/1.0",
+            "Accept": "text/csv,application/download;q=0.9,*/*;q=0.8",
+            "Referer": "https://baseballsavant.mlb.com/",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        payload = resp.read().decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(payload))
+    return [dict(row) for row in reader]
+
+
+def _fetch_savant_game_xmetrics(game_pk: int) -> dict[tuple[int, int], dict[str, Optional[float]]]:
+    url = f"https://baseballsavant.mlb.com/statcast-search-minors/csv?all=true&type=details&game_pk={game_pk}"
+    out: dict[tuple[int, int], dict[str, Optional[float]]] = {}
+    try:
+        rows = _csv_get(url)
+    except Exception:
+        return out
+    for row in rows:
+        ab = _safe_int(row.get("at_bat_number"))
+        pn = _safe_int(row.get("pitch_number"))
+        if ab is None or pn is None:
+            continue
+        xwoba = _safe_num(row.get("estimated_woba_using_speedangle"))
+        woba_value = _safe_num(row.get("woba_value"))
+        iso_value = _safe_num(row.get("iso_value"))
+        if iso_value is None:
+            xslg = _safe_num(row.get("estimated_slg_using_speedangle"))
+            xba = _safe_num(row.get("estimated_ba_using_speedangle"))
+            if xslg is not None and xba is not None:
+                iso_value = xslg - xba
+        babip = _safe_num(row.get("babip_value"))
+        if xwoba is None and woba_value is None and iso_value is None and babip is None:
+            continue
+        out[(ab, pn)] = {
+            "estimated_woba_using_speedangle": xwoba,
+            "woba_value": woba_value,
+            "iso_value": iso_value,
+            "babip_value": babip,
+        }
+    return out
 
 
 def _daterange(start: date, end: date) -> Iterable[date]:
@@ -286,6 +335,10 @@ def _fetch_game_pitches(game_pk: int, fallback_sport_id: int) -> Tuple[Dict[str,
 
     stats_by_pitcher_id, stats_by_pitcher_name = _extract_pitcher_game_stats(feed)
     plays = (((feed.get("liveData") or {}).get("plays") or {}).get("allPlays") or [])
+    savant_map: dict[tuple[int, int], dict[str, Optional[float]]] = {}
+    if int(sport_id or 0) == 11:
+        savant_map = _fetch_savant_game_xmetrics(game_pk)
+
     rows: List[PitchEventRow] = []
     for play in plays:
         at_bat_index = int(play.get("atBatIndex") or 0)
@@ -371,6 +424,14 @@ def _fetch_game_pitches(game_pk: int, fallback_sport_id: int) -> Tuple[Dict[str,
                     strikes_after = min(2, state_strikes + 1)
                 # Unknown code -> leave unchanged.
 
+            savant_payload = None
+            if is_pitch and savant_map:
+                for off in (0, -1, 1, -2, 2):
+                    key = (at_bat_index + off, int(event.get("pitchNumber") or 0))
+                    if key in savant_map:
+                        savant_payload = savant_map[key]
+                        break
+
             row = PitchEventRow(
                 school_code="PRO",
                 sport_id=sport_id,
@@ -436,6 +497,7 @@ def _fetch_game_pitches(game_pk: int, fallback_sport_id: int) -> Tuple[Dict[str,
                     or _safe_num(event.get("estimatedWobaUsingSpeedangle"))
                     or _safe_num((event.get("details") or {}).get("estimated_woba_using_speedangle"))
                     or _safe_num((event.get("details") or {}).get("estimatedWobaUsingSpeedangle"))
+                    or _safe_num((savant_payload or {}).get("estimated_woba_using_speedangle"))
                 ),
                 woba_value=(
                     _safe_num(hdata.get("woba_value"))
@@ -444,6 +506,7 @@ def _fetch_game_pitches(game_pk: int, fallback_sport_id: int) -> Tuple[Dict[str,
                     or _safe_num(event.get("wobaValue"))
                     or _safe_num((event.get("details") or {}).get("woba_value"))
                     or _safe_num((event.get("details") or {}).get("wobaValue"))
+                    or _safe_num((savant_payload or {}).get("woba_value"))
                 ),
                 iso_value=(
                     _safe_num(hdata.get("iso_value"))
@@ -452,6 +515,7 @@ def _fetch_game_pitches(game_pk: int, fallback_sport_id: int) -> Tuple[Dict[str,
                     or _safe_num(event.get("isoValue"))
                     or _safe_num((event.get("details") or {}).get("iso_value"))
                     or _safe_num((event.get("details") or {}).get("isoValue"))
+                    or _safe_num((savant_payload or {}).get("iso_value"))
                 ),
                 babip_value=(
                     _safe_num(hdata.get("babip_value"))
@@ -460,6 +524,7 @@ def _fetch_game_pitches(game_pk: int, fallback_sport_id: int) -> Tuple[Dict[str,
                     or _safe_num(event.get("babipValue"))
                     or _safe_num((event.get("details") or {}).get("babip_value"))
                     or _safe_num((event.get("details") or {}).get("babipValue"))
+                    or _safe_num((savant_payload or {}).get("babip_value"))
                 ),
                 hit_distance=_safe_num(hdata.get("totalDistance")),
                 outs_on_play=(
@@ -720,10 +785,10 @@ ON CONFLICT (game_pk, play_id, event_index) DO UPDATE SET
   rel_z = EXCLUDED.rel_z,
   launch_speed = EXCLUDED.launch_speed,
   launch_angle = EXCLUDED.launch_angle,
-  estimated_woba_using_speedangle = EXCLUDED.estimated_woba_using_speedangle,
-  woba_value = EXCLUDED.woba_value,
-  iso_value = EXCLUDED.iso_value,
-  babip_value = EXCLUDED.babip_value,
+  estimated_woba_using_speedangle = COALESCE(EXCLUDED.estimated_woba_using_speedangle, public.pro_mlb_pitch_events_raw.estimated_woba_using_speedangle),
+  woba_value = COALESCE(EXCLUDED.woba_value, public.pro_mlb_pitch_events_raw.woba_value),
+  iso_value = COALESCE(EXCLUDED.iso_value, public.pro_mlb_pitch_events_raw.iso_value),
+  babip_value = COALESCE(EXCLUDED.babip_value, public.pro_mlb_pitch_events_raw.babip_value),
   hit_distance = EXCLUDED.hit_distance,
   raw_json = EXCLUDED.raw_json,
   updated_at = NOW();
@@ -800,10 +865,10 @@ ON CONFLICT (game_pk, play_id, event_index, session_date) DO UPDATE SET
   platelocheight = EXCLUDED.platelocheight,
   exitspeed = EXCLUDED.exitspeed,
   angle = EXCLUDED.angle,
-  estimated_woba_using_speedangle = EXCLUDED.estimated_woba_using_speedangle,
-  woba_value = EXCLUDED.woba_value,
-  iso_value = EXCLUDED.iso_value,
-  babip_value = EXCLUDED.babip_value,
+  estimated_woba_using_speedangle = COALESCE(EXCLUDED.estimated_woba_using_speedangle, public.pro_pitch_events.estimated_woba_using_speedangle),
+  woba_value = COALESCE(EXCLUDED.woba_value, public.pro_pitch_events.woba_value),
+  iso_value = COALESCE(EXCLUDED.iso_value, public.pro_pitch_events.iso_value),
+  babip_value = COALESCE(EXCLUDED.babip_value, public.pro_pitch_events.babip_value),
   hit_distance_sc = EXCLUDED.hit_distance_sc,
   hc_x = EXCLUDED.hc_x,
   hc_y = EXCLUDED.hc_y,
@@ -861,10 +926,10 @@ UPDATE public.pro_pitch_events SET
   platelocheight = %(platelocheight)s,
   exitspeed = %(exitspeed)s,
   angle = %(angle)s,
-  estimated_woba_using_speedangle = %(estimated_woba_using_speedangle)s,
-  woba_value = %(woba_value)s,
-  iso_value = %(iso_value)s,
-  babip_value = %(babip_value)s,
+  estimated_woba_using_speedangle = COALESCE(%(estimated_woba_using_speedangle)s, estimated_woba_using_speedangle),
+  woba_value = COALESCE(%(woba_value)s, woba_value),
+  iso_value = COALESCE(%(iso_value)s, iso_value),
+  babip_value = COALESCE(%(babip_value)s, babip_value),
   hit_distance_sc = %(hit_distance_sc)s,
   hc_x = %(hc_x)s,
   hc_y = %(hc_y)s,

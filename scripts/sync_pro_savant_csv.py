@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import psycopg
+from psycopg import errors as pg_errors
 
 
 def _require_env(name: str) -> str:
@@ -65,6 +66,10 @@ def _pick(row: Dict[str, object], *keys: str) -> object:
         if key in row:
             return row.get(key)
     return None
+
+
+def _pick_float(row: Dict[str, object], *keys: str) -> Optional[float]:
+    return _safe_float(_pick(row, *keys))
 
 
 @dataclass
@@ -133,14 +138,28 @@ def _iter_savant_rows(path: str) -> Iterable[SavantRow]:
             )
             if game_pk is None or at_bat_number is None or pitch_number is None:
                 continue
+            estimated_woba = _pick_float(
+                row,
+                "estimated_woba_using_speedangle",
+                "xwoba",
+                "estimated_woba",
+            )
+            woba_value = _pick_float(row, "woba_value", "woba")
+            iso_value = _pick_float(row, "iso_value", "xiso")
+            if iso_value is None:
+                estimated_slg = _pick_float(row, "estimated_slg_using_speedangle", "xslg")
+                estimated_ba = _pick_float(row, "estimated_ba_using_speedangle", "xba")
+                if estimated_slg is not None and estimated_ba is not None:
+                    iso_value = estimated_slg - estimated_ba
+
             yield SavantRow(
                 game_pk=game_pk,
                 at_bat_number=at_bat_number,
                 pitch_number=pitch_number,
-                estimated_woba_using_speedangle=_safe_float(row.get("estimated_woba_using_speedangle")),
-                woba_value=_safe_float(row.get("woba_value")),
-                iso_value=_safe_float(row.get("iso_value")),
-                babip_value=_safe_float(row.get("babip_value")),
+                estimated_woba_using_speedangle=estimated_woba,
+                woba_value=woba_value,
+                iso_value=iso_value,
+                babip_value=_pick_float(row, "babip_value"),
                 delta_run_exp=_safe_float(row.get("delta_run_exp")),
                 hit_distance_sc=_safe_float(row.get("hit_distance_sc")),
                 hc_x=_safe_float(row.get("hc_x")),
@@ -326,8 +345,14 @@ def main() -> int:
 
     with psycopg.connect(db_url) as conn:
         with conn.cursor() as cur:
-            cur.execute(DDL)
-        conn.commit()
+            try:
+                cur.execute("SET lock_timeout = '2s'")
+                cur.execute(DDL)
+                conn.commit()
+            except pg_errors.LockNotAvailable:
+                # Columns are already present in production; continue if DDL lock is contended.
+                conn.rollback()
+                print("ddl_lock_timeout: skipping DDL and continuing with enrichment")
 
         with conn.cursor() as cur:
             for path in files:

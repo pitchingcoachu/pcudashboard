@@ -213,6 +213,9 @@ async function maybeAttachPitchingHeatmapRollup(params: {
   teamType: string;
   pitchTypes: string;
   includeChartPoints: string;
+  chartOnly: string;
+  splitBy: string;
+  forceRaw: string;
   inZone: string;
   qpLocations: string;
   zoneLocations: string;
@@ -241,6 +244,9 @@ async function maybeAttachPitchingHeatmapRollup(params: {
     teamType,
     pitchTypes,
     includeChartPoints,
+    chartOnly,
+    splitBy,
+    forceRaw,
     inZone,
     qpLocations,
     zoneLocations,
@@ -258,6 +264,10 @@ async function maybeAttachPitchingHeatmapRollup(params: {
   } = params;
   const includeChartsRequested = isTruthy(includeChartPoints);
   if (!includeChartsRequested) return payload;
+  if (String(splitBy ?? '').trim().toLowerCase() === 'game') return payload;
+  if (isTruthy(forceRaw)) return payload;
+  const isChartOnly = isTruthy(chartOnly);
+  if (isChartOnly && String(schoolCode ?? '').trim().toUpperCase() !== 'LEAGUE') return payload;
   const hasUnsupportedFilters =
     hasValue(inZone) ||
     hasValue(qpLocations) ||
@@ -367,6 +377,7 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
     pcMax,
   } = params;
   if (!isTruthy(includeChartPoints) || !isTruthy(chartOnly)) return null;
+  if (String(schoolCode ?? '').trim().toUpperCase() !== 'LEAGUE') return null;
   const hasUnsupportedFilters =
     hasValue(inZone) ||
     hasValue(qpLocations) ||
@@ -1027,6 +1038,9 @@ export async function GET(request: Request) {
       teamType,
       pitchTypes,
       includeChartPoints: url.searchParams.get('include_chart_points') ?? includeChartPoints,
+      chartOnly: url.searchParams.get('chart_only') ?? chartOnly,
+      splitBy,
+      forceRaw,
       inZone,
       qpLocations,
       zoneLocations,

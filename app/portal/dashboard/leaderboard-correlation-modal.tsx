@@ -620,17 +620,41 @@ export default function LeaderboardCorrelationModal({
   );
   const trendline = useMemo(() => {
     if (!showTrendline || stats.slope === null || stats.intercept === null || points.length < 2) return null;
-    const xA = ranges.x0;
-    const xB = ranges.x1;
-    const yA = stats.slope * xA + stats.intercept;
-    const yB = stats.slope * xB + stats.intercept;
-    return {
-      x1: toChartX(xA),
-      y1: toChartY(yA),
-      x2: toChartX(xB),
-      y2: toChartY(yB),
+    const xMin = ranges.x0;
+    const xMax = ranges.x1;
+    const yMin = ranges.y0;
+    const yMax = ranges.y1;
+    const m = stats.slope;
+    const b = stats.intercept;
+    const candidates: Array<{ x: number; y: number }> = [];
+    const pushPoint = (x: number, y: number) => {
+      const eps = 1e-9;
+      if (x < xMin - eps || x > xMax + eps || y < yMin - eps || y > yMax + eps) return;
+      const clamped = {
+        x: Math.max(xMin, Math.min(xMax, x)),
+        y: Math.max(yMin, Math.min(yMax, y)),
+      };
+      if (!candidates.some((p) => Math.abs(p.x - clamped.x) < 1e-7 && Math.abs(p.y - clamped.y) < 1e-7)) {
+        candidates.push(clamped);
+      }
     };
-  }, [showTrendline, stats.slope, stats.intercept, points.length, ranges.x0, ranges.x1, toChartX, toChartY]);
+    pushPoint(xMin, (m * xMin) + b);
+    pushPoint(xMax, (m * xMax) + b);
+    if (Math.abs(m) > 1e-12) {
+      pushPoint((yMin - b) / m, yMin);
+      pushPoint((yMax - b) / m, yMax);
+    }
+    if (candidates.length < 2) return null;
+    const byX = [...candidates].sort((a, z) => a.x - z.x);
+    const first = byX[0];
+    const last = byX[byX.length - 1];
+    return {
+      x1: toChartX(first.x),
+      y1: toChartY(first.y),
+      x2: toChartX(last.x),
+      y2: toChartY(last.y),
+    };
+  }, [showTrendline, stats.slope, stats.intercept, points.length, ranges.x0, ranges.x1, ranges.y0, ranges.y1, toChartX, toChartY]);
 
   const handleDownload = useCallback(async () => {
     if (!chartWrapRef.current || isDownloading) return;
