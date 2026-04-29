@@ -208,6 +208,7 @@ async function maybeAttachPitchingHeatmapRollup(params: {
   endDate: string;
   sessionType: string;
   hand: string;
+  batterSide: string;
   pitcher: string;
   teamType: string;
   pitchTypes: string;
@@ -235,6 +236,7 @@ async function maybeAttachPitchingHeatmapRollup(params: {
     endDate,
     sessionType,
     hand,
+    batterSide,
     pitcher,
     teamType,
     pitchTypes,
@@ -282,6 +284,7 @@ async function maybeAttachPitchingHeatmapRollup(params: {
     if (endDate) rollup.searchParams.set('end_date', endDate);
     if (sessionType) rollup.searchParams.set('session_type', sessionType);
     if (hand) rollup.searchParams.set('hand', hand);
+    if (batterSide) rollup.searchParams.set('batter_side', batterSide);
     if (pitcher) rollup.searchParams.set('pitcher', pitcher);
     if (teamType) rollup.searchParams.set('team_type', teamType);
     if (pitchTypes) rollup.searchParams.set('pitch_types', pitchTypes);
@@ -304,6 +307,107 @@ async function maybeAttachPitchingHeatmapRollup(params: {
     };
   } catch {
     return payload;
+  }
+}
+
+async function maybeReturnPitchingHeatmapRollupDirect(params: {
+  request: Request;
+  schoolCode: string;
+  startDate: string;
+  endDate: string;
+  sessionType: string;
+  hand: string;
+  batterSide: string;
+  pitcher: string;
+  teamType: string;
+  pitchTypes: string;
+  includeChartPoints: string;
+  chartOnly: string;
+  inZone: string;
+  qpLocations: string;
+  zoneLocations: string;
+  pitchResults: string;
+  countFilter: string;
+  afterCountFilter: string;
+  veloMin: string;
+  veloMax: string;
+  ivbMin: string;
+  ivbMax: string;
+  hbMin: string;
+  hbMax: string;
+  pcMin: string;
+  pcMax: string;
+}): Promise<NextResponse | null> {
+  const {
+    request,
+    schoolCode,
+    startDate,
+    endDate,
+    sessionType,
+    hand,
+    batterSide,
+    pitcher,
+    teamType,
+    pitchTypes,
+    includeChartPoints,
+    chartOnly,
+    inZone,
+    qpLocations,
+    zoneLocations,
+    pitchResults,
+    countFilter,
+    afterCountFilter,
+    veloMin,
+    veloMax,
+    ivbMin,
+    ivbMax,
+    hbMin,
+    hbMax,
+    pcMin,
+    pcMax,
+  } = params;
+  if (!isTruthy(includeChartPoints) || !isTruthy(chartOnly)) return null;
+  const hasUnsupportedFilters =
+    hasValue(inZone) ||
+    hasValue(qpLocations) ||
+    hasValue(zoneLocations) ||
+    hasValue(pitchResults) ||
+    hasValue(countFilter) ||
+    hasValue(afterCountFilter) ||
+    hasValue(veloMin) ||
+    hasValue(veloMax) ||
+    hasValue(ivbMin) ||
+    hasValue(ivbMax) ||
+    hasValue(hbMin) ||
+    hasValue(hbMax) ||
+    hasValue(pcMin) ||
+    hasValue(pcMax);
+  if (hasUnsupportedFilters) return null;
+
+  try {
+    const requestUrl = new URL(request.url);
+    const origin = `${requestUrl.protocol}//${requestUrl.host}`;
+    const rollup = new URL('/api/dashboard/pitching/heatmap-rollup', origin);
+    rollup.searchParams.set('school_code', schoolCode);
+    if (startDate) rollup.searchParams.set('start_date', startDate);
+    if (endDate) rollup.searchParams.set('end_date', endDate);
+    if (sessionType) rollup.searchParams.set('session_type', sessionType);
+    if (hand) rollup.searchParams.set('hand', hand);
+    if (batterSide) rollup.searchParams.set('batter_side', batterSide);
+    if (pitcher) rollup.searchParams.set('pitcher', pitcher);
+    if (teamType) rollup.searchParams.set('team_type', teamType);
+    if (pitchTypes) rollup.searchParams.set('pitch_types', pitchTypes);
+    const response = await fetch(rollup.toString(), { cache: 'no-store' });
+    if (!response.ok) return null;
+    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    return NextResponse.json(payload, {
+      headers: {
+        ...RESPONSE_CACHE_HEADERS,
+        'x-dashboard-fallback': 'pitching-heatmap-rollup-direct',
+      },
+    });
+  } catch {
+    return null;
   }
 }
 
@@ -467,7 +571,36 @@ export async function GET(request: Request) {
   if (shouldScopePlayer && !playerIdentity) {
     return NextResponse.json({ error: 'Player account is not linked to a dashboard player.' }, { status: 403 });
   }
-  const scopedPitcher = shouldScopePlayer && playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Pitching') : '';
+    const scopedPitcher = shouldScopePlayer && playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Pitching') : '';
+    const directHeatmapRollup = await maybeReturnPitchingHeatmapRollupDirect({
+      request,
+      schoolCode,
+      startDate,
+      endDate,
+      sessionType,
+      hand,
+      batterSide,
+      pitcher: scopedPitcher || pitcher,
+      teamType,
+      pitchTypes,
+      includeChartPoints: includeChartPoints || '',
+      chartOnly: chartOnly || '',
+      inZone,
+      qpLocations,
+      zoneLocations,
+      pitchResults,
+      countFilter,
+      afterCountFilter,
+      veloMin,
+      veloMax,
+      ivbMin,
+      ivbMax,
+      hbMin,
+      hbMax,
+      pcMin,
+      pcMax,
+    });
+    if (directHeatmapRollup) return directHeatmapRollup;
 
   const apiBase = resolveDashboardApiBaseUrl();
   const url = new URL(`${apiBase}/v1/pitching/overview`);
@@ -889,6 +1022,7 @@ export async function GET(request: Request) {
       endDate,
       sessionType,
       hand,
+      batterSide,
       pitcher: scopedPitcher || pitcher,
       teamType,
       pitchTypes,

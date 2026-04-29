@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS public.pitching_heatmap_daily_bins (
   session_type_bucket text NOT NULL DEFAULT '',
   pitcher_norm text NOT NULL,
   pitcher_team_code text NOT NULL DEFAULT '',
+  pitcherhand_norm text NOT NULL DEFAULT '',
   batterside_norm text NOT NULL DEFAULT '',
   pitch_group text NOT NULL,
   pitch_type text NOT NULL,
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS public.pitching_heatmap_daily_bins (
     session_type_bucket,
     pitcher_norm,
     pitcher_team_code,
+    pitcherhand_norm,
     batterside_norm,
     pitch_group,
     pitch_type,
@@ -98,7 +100,7 @@ CREATE TABLE IF NOT EXISTS public.pitching_heatmap_daily_bins (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pitching_heatmap_daily_bins_lookup
-  ON public.pitching_heatmap_daily_bins (school_code, session_date, session_type_bucket, pitcher_team_code, batterside_norm);
+  ON public.pitching_heatmap_daily_bins (school_code, session_date, session_type_bucket, pitcher_team_code, pitcherhand_norm, batterside_norm);
 
 CREATE INDEX IF NOT EXISTS idx_pitching_heatmap_daily_bins_pitcher
   ON public.pitching_heatmap_daily_bins (school_code, pitcher_norm, session_date);
@@ -108,6 +110,8 @@ ALTER TABLE public.pitching_heatmap_daily_bins
 
 ALTER TABLE public.pitching_heatmap_daily_bins
   ADD COLUMN IF NOT EXISTS bb_n integer NOT NULL DEFAULT 0;
+ALTER TABLE public.pitching_heatmap_daily_bins
+  ADD COLUMN IF NOT EXISTS pitcherhand_norm text NOT NULL DEFAULT '';
 ALTER TABLE public.pitching_heatmap_daily_bins
   ADD COLUMN IF NOT EXISTS count_bucket text NOT NULL DEFAULT 'All';
 ALTER TABLE public.pitching_heatmap_daily_bins
@@ -223,6 +227,7 @@ ALTER TABLE public.pitching_heatmap_daily_bins
     session_type_bucket,
     pitcher_norm,
     pitcher_team_code,
+    pitcherhand_norm,
     batterside_norm,
     pitch_group,
     pitch_type,

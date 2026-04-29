@@ -311,6 +311,7 @@ export async function GET(request: Request) {
   const endDate = String(url.searchParams.get('end_date') ?? '').trim();
   const sessionType = normalizeSessionType(String(url.searchParams.get('session_type') ?? ''));
   const hand = normalizeHand(String(url.searchParams.get('hand') ?? ''));
+  const batterSide = normalizeHand(String(url.searchParams.get('batter_side') ?? ''));
   const pitcherList = parseCsv(url.searchParams.get('pitcher'));
   const pitcherNorms = Array.from(new Set(pitcherList.map(normalizeName).filter(Boolean)));
   const teamCode = maybeTeamCode(String(url.searchParams.get('team_type') ?? ''));
@@ -346,7 +347,8 @@ export async function GET(request: Request) {
   if (startDate) add('session_date >= ?::date', startDate);
   if (endDate) add('session_date <= ?::date', endDate);
   if (sessionType) add('session_type_bucket = ?', sessionType);
-  if (hand) add('batterside_norm = ?', hand);
+  if (hand) add('pitcherhand_norm = ?', hand);
+  if (batterSide) add('batterside_norm = ?', batterSide);
   if (teamCode) add('pitcher_team_code = ?', teamCode);
   if (pitcherNorms.length) add('pitcher_norm = ANY(?::text[])', pitcherNorms);
 

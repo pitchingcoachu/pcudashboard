@@ -2208,17 +2208,20 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   };
   const percentileDistributionsForCell = (
     tableColumns: string[],
-    baselineRows: Array<Record<string, string | number | null>>
+    baselineRows: Array<Record<string, string | number | null>>,
+    tableRows: Array<Record<string, string | number | null>>
   ): { splitColumn: string; scoped: Map<string, Map<string, number[]>>; globalByColumn: Map<string, number[]> } => {
     const splitColumn = String(tableColumns[0] ?? '');
     const scoped = new Map<string, Map<string, number[]>>();
     const globalByColumn = new Map<string, number[]>();
-    if (!splitColumn || !tableColumns.length || !baselineRows.length) {
+    if (!splitColumn || !tableColumns.length) {
       return { splitColumn, scoped, globalByColumn };
     }
-    for (const row of baselineRows) {
+    const rows = baselineRows.length ? baselineRows : tableRows;
+    for (const row of rows) {
       const splitValue = getTableRowValue(row as Record<string, unknown>, splitColumn);
       const splitKey = String(splitValue ?? '').trim().toLowerCase();
+      if (splitKey === 'all') continue;
       for (const column of tableColumns) {
         if (column === splitColumn) continue;
         const columnToken = normalizePercentileColumnToken(column);
@@ -4743,7 +4746,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const tableColumns = payload.table_columns ?? [];
                   const tableRows = payload.table_rows ?? [];
                   const baselineRows = cellPercentileBaselineRows[cellId] ?? [];
-                  const percentileDistributions = percentileDistributionsForCell(tableColumns, baselineRows);
+                  const percentileDistributions = percentileDistributionsForCell(tableColumns, baselineRows, tableRows);
                   const tableSort = tableSorts[cellId];
                   const sortedRowsBase =
                     tableSort?.column && tableColumns.includes(tableSort.column)
