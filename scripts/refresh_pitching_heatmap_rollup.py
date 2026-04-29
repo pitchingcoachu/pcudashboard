@@ -228,10 +228,55 @@ WITH base_non_pro AS (
         ELSE 0.0 - 0.024
       END
     ) AS pv,
-    COALESCE(pe.estimated_woba_using_speedangle, 0.0)::double precision AS xwoba,
-    CASE WHEN pe.estimated_woba_using_speedangle IS NOT NULL THEN 1 ELSE 0 END AS xwoba_n,
-    COALESCE(pe.iso_value, 0.0)::double precision AS xiso,
-    CASE WHEN pe.iso_value IS NOT NULL THEN 1 ELSE 0 END AS xiso_n,
+    COALESCE(
+      pe.estimated_woba_using_speedangle,
+      CASE
+        WHEN (NULLIF(BTRIM(pe.exitspeed::text), '')::double precision) IS NOT NULL
+         AND (NULLIF(BTRIM(pe.angle::text), '')::double precision) IS NOT NULL
+        THEN LEAST(
+          1.2,
+          GREATEST(
+            0.0,
+            0.15
+            + (GREATEST(0.0, (NULLIF(BTRIM(pe.exitspeed::text), '')::double precision) - 70.0) / 50.0) * 0.9
+            + (GREATEST(-10.0, LEAST(50.0, (NULLIF(BTRIM(pe.angle::text), '')::double precision))) + 10.0) / 60.0 * 0.25
+          )
+        )
+        ELSE NULL
+      END,
+      0.0
+    )::double precision AS xwoba,
+    CASE
+      WHEN pe.estimated_woba_using_speedangle IS NOT NULL THEN 1
+      WHEN (NULLIF(BTRIM(pe.exitspeed::text), '')::double precision) IS NOT NULL
+       AND (NULLIF(BTRIM(pe.angle::text), '')::double precision) IS NOT NULL THEN 1
+      ELSE 0
+    END AS xwoba_n,
+    COALESCE(
+      CASE
+        WHEN (NULLIF(BTRIM(pe.exitspeed::text), '')::double precision) IS NOT NULL
+         AND (NULLIF(BTRIM(pe.angle::text), '')::double precision) IS NOT NULL
+        THEN CASE
+          WHEN (NULLIF(BTRIM(pe.angle::text), '')::double precision) > 0
+          THEN GREATEST(
+            0.0,
+            LEAST(
+              1.2,
+              ((GREATEST(0.0, (NULLIF(BTRIM(pe.exitspeed::text), '')::double precision) - 70.0)) / 35.0)
+              * ((NULLIF(BTRIM(pe.angle::text), '')::double precision) / 35.0)
+            )
+          )
+          ELSE 0.0
+        END
+        ELSE NULL
+      END,
+      0.0
+    )::double precision AS xiso,
+    CASE
+      WHEN (NULLIF(BTRIM(pe.exitspeed::text), '')::double precision) IS NOT NULL
+       AND (NULLIF(BTRIM(pe.angle::text), '')::double precision) IS NOT NULL THEN 1
+      ELSE 0
+    END AS xiso_n,
     (NULLIF(BTRIM(pe.relspeed::text), '')::double precision) AS relspeed,
     (NULLIF(BTRIM(pe.inducedvertbreak::text), '')::double precision) AS ivb,
     (NULLIF(BTRIM(pe.horzbreak::text), '')::double precision) AS hb,

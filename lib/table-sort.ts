@@ -102,7 +102,7 @@ export function formatTableDisplayValue(column: string, value: unknown): string 
   if (upper.includes('%')) {
     const numericValue = parseSortableNumber(value);
     if (numericValue === null) return String(value);
-    return numericValue.toFixed(1);
+    return `${numericValue.toFixed(1)}%`;
   }
   if (upper === 'RTILT' || upper === 'BTILT') return formatTiltClock(String(value));
   if (ONE_DECIMAL_STAT_COLUMNS.has(upper)) {
