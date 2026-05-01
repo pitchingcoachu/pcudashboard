@@ -7463,9 +7463,9 @@ export default function PitchingSuite({
 
   const colorColumnsByMode: Record<string, string[]> = {
     Stuff: ['Velo', 'Max', 'IVB', 'HB', 'rTilt', 'bTilt', 'SpinEff', 'Spin', 'Height', 'Side', 'Ext', 'VAA', 'HAA', 'Stuff+'],
-    Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'],
+    Process: ['InZone%', '<2kInZone%', '2kInZone%', 'Strike%', '<2Kstrike%', '2Kstrike%', 'Comp%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'HR%', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'HR%', 'Whiff%', 'SwStrk%', 'ERA', 'FIP', 'xFIP', 'SIERA'],
-    Results: ['Whiff%', 'SwStrk%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP', 'SIERA'],
+    Results: ['Whiff%', 'SwStrk%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'FB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Bullpen: ['InZone%', 'Comp%', 'Ctrl+', 'Stuff+'],
     Banny: ['Strike%', 'Whiff%', 'K%', 'BB%', 'QP+'],
     Custom: [
@@ -7483,8 +7483,12 @@ export default function PitchingSuite({
       'VAA',
       'HAA',
       'InZone%',
+      '<2kInZone%',
+      '2kInZone%',
       'Comp%',
       'Strike%',
+      '<2Kstrike%',
+      '2Kstrike%',
       'Swing%',
       'FPS%',
       'Early%',
@@ -7505,6 +7509,7 @@ export default function PitchingSuite({
       'SwStrk%',
       'CSW%',
       'GB%',
+      'FB%',
       'Barrel%',
       'EV',
       'ERA',
@@ -10835,7 +10840,7 @@ export default function PitchingSuite({
                     const m = { l: 64, r: 20, t: 18, b: 70 };
                     const pw = w - m.l - m.r;
                     const ph = h - m.t - m.b;
-                    const pctMetrics = new Set(['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Whiff%', 'SwStrk%', 'CSW%', 'K%', 'BB%', 'GB%', 'Barrel%']);
+                    const pctMetrics = new Set(['InZone%', '<2kInZone%', '2kInZone%', 'Comp%', 'Strike%', '<2Kstrike%', '2Kstrike%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Whiff%', 'SwStrk%', 'CSW%', 'K%', 'BB%', 'GB%', 'FB%', 'Barrel%']);
                     const countMetrics = new Set(['P', 'BF', 'Whiffs', 'K', 'BB']);
                     const dateLevels = trendSeriesBySessionData.allDates;
                     const dateX = new Map(dateLevels.map((d, i) => [d, m.l + (i / Math.max(1, dateLevels.length - 1)) * pw]));

@@ -2785,15 +2785,24 @@ ALL_TABLE_COLUMNS: List[str] = [
     "QP%",
     "Whiff%",
     "SwStrk%",
+    "<2Kstrike%",
+    "2Kstrike%",
+    "<2kInZone%",
+    "2kInZone%",
     "K%",
     "BB%",
     "K-BB%",
     "HR%",
     "GB%",
+    "FB%",
     "Barrel%",
     "CSW%",
     "EV",
     "LA",
+    "VertAttack",
+    "HorzAttack",
+    "BatSpeed",
+    "MaxBatSpeed",
     "Stuff+",
     "Ctrl+",
     "QP+",
@@ -3719,6 +3728,50 @@ def _build_dynamic_table(
         count_ahead = sum(1 for r in grp if (r.get("balls_num"), r.get("strikes_num")) in {(0, 1), (0, 2), (1, 2)})
         count_lt2k = sum(1 for r in grp if (r.get("strikes_num") is not None and int(r.get("strikes_num")) < 2))
         count_2k = sum(1 for r in grp if r.get("strikes_num") == 2)
+        lt2k_strike_n = sum(
+            1
+            for r in grp
+            if _is_num(r.get("strikes_num"))
+            and int(float(r.get("strikes_num"))) < 2
+            and _effective_pitch_call_for_metrics(r) in strike_calls
+        )
+        k2_strike_n = sum(
+            1
+            for r in grp
+            if _is_num(r.get("strikes_num"))
+            and int(float(r.get("strikes_num"))) == 2
+            and _effective_pitch_call_for_metrics(r) in strike_calls
+        )
+        lt2k_loc_n = sum(
+            1
+            for r in grp
+            if _is_num(r.get("strikes_num"))
+            and int(float(r.get("strikes_num"))) < 2
+            and _is_num(r.get("plate_side"))
+            and _is_num(r.get("plate_height"))
+        )
+        k2_loc_n = sum(
+            1
+            for r in grp
+            if _is_num(r.get("strikes_num"))
+            and int(float(r.get("strikes_num"))) == 2
+            and _is_num(r.get("plate_side"))
+            and _is_num(r.get("plate_height"))
+        )
+        lt2k_in_zone_n = sum(
+            1
+            for r in grp
+            if _is_num(r.get("strikes_num"))
+            and int(float(r.get("strikes_num"))) < 2
+            and _in_zone_label(r.get("plate_side"), r.get("plate_height")) == "Yes"
+        )
+        k2_in_zone_n = sum(
+            1
+            for r in grp
+            if _is_num(r.get("strikes_num"))
+            and int(float(r.get("strikes_num"))) == 2
+            and _in_zone_label(r.get("plate_side"), r.get("plate_height")) == "Yes"
+        )
         pitch_usage_fastball = 0
         pitch_usage_sinker = 0
         pitch_usage_cutter = 0
@@ -4214,10 +4267,44 @@ def _build_dynamic_table(
             "K-BB%": f"{round(100.0 * (k_n - bb_n) / bf_starts, 1)}%" if bf_starts else None,
             "HR%": f"{round(100.0 * hr / bf_starts, 1)}%" if bf_starts else None,
             "GB%": f"{round(100.0 * gb_n / in_play_n, 1)}%" if in_play_n else None,
+            "FB%": f"{round(100.0 * fb_n / in_play_n, 1)}%" if in_play_n else None,
             "Barrel%": f"{round(100.0 * barrel_n_live / in_play_live_n, 1)}%" if in_play_live_n else (f"{round(100.0 * barrel_n_all / in_play_n, 1)}%" if in_play_n else None),
             "CSW%": f"{round(100.0 * csw_n / n, 1)}%" if n else None,
             "EV": round(sum(float(v) for v in ev_vals) / len(ev_vals), 1) if ev_vals else None,
+            "MaxEV": round(max(float(v) for v in ev_vals), 1) if ev_vals else None,
             "LA": round(sum(float(v) for v in la_vals) / len(la_vals), 1) if la_vals else None,
+            "VertAttack": (
+                round(
+                    sum(float(r.get("vertical_attack_angle")) for r in grp if _is_num(r.get("vertical_attack_angle")))
+                    / sum(1 for r in grp if _is_num(r.get("vertical_attack_angle"))),
+                    1,
+                )
+                if any(_is_num(r.get("vertical_attack_angle")) for r in grp)
+                else None
+            ),
+            "HorzAttack": (
+                round(
+                    sum(float(r.get("horizontal_attack_angle")) for r in grp if _is_num(r.get("horizontal_attack_angle")))
+                    / sum(1 for r in grp if _is_num(r.get("horizontal_attack_angle"))),
+                    1,
+                )
+                if any(_is_num(r.get("horizontal_attack_angle")) for r in grp)
+                else None
+            ),
+            "BatSpeed": (
+                round(
+                    sum(float(r.get("bat_speed")) for r in grp if _is_num(r.get("bat_speed")))
+                    / sum(1 for r in grp if _is_num(r.get("bat_speed"))),
+                    1,
+                )
+                if any(_is_num(r.get("bat_speed")) for r in grp)
+                else None
+            ),
+            "MaxBatSpeed": (
+                round(max(float(r.get("bat_speed")) for r in grp if _is_num(r.get("bat_speed"))), 1)
+                if any(_is_num(r.get("bat_speed")) for r in grp)
+                else None
+            ),
             "Stuff+": round(sum(float(v) for v in stuff_vals) / len(stuff_vals), 1) if stuff_vals else None,
             "Ctrl+": ctrl_plus,
             "QP+": round((qp_mean * 200.0), 1) if _is_num(qp_mean) else None,
@@ -4259,6 +4346,10 @@ def _build_dynamic_table(
             "Ahead": f"{round(100.0 * count_ahead / usage_count_ahead_total, 1)}%" if usage_count_ahead_total else None,
             "<2K": f"{round(100.0 * count_lt2k / usage_count_lt2k_total, 1)}%" if usage_count_lt2k_total else None,
             "2K": f"{round(100.0 * count_2k / usage_count_2k_total, 1)}%" if usage_count_2k_total else None,
+            "<2Kstrike%": f"{round(100.0 * lt2k_strike_n / count_lt2k, 1)}%" if count_lt2k else None,
+            "2Kstrike%": f"{round(100.0 * k2_strike_n / count_2k, 1)}%" if count_2k else None,
+            "<2kInZone%": f"{round(100.0 * lt2k_in_zone_n / lt2k_loc_n, 1)}%" if lt2k_loc_n else None,
+            "2kInZone%": f"{round(100.0 * k2_in_zone_n / k2_loc_n, 1)}%" if k2_loc_n else None,
             "Fastball%": f"{round(100.0 * pitch_usage_fastball / n, 1)}%" if n else None,
             "Sinker%": f"{round(100.0 * pitch_usage_sinker / n, 1)}%" if n else None,
             "Cutter%": f"{round(100.0 * pitch_usage_cutter / n, 1)}%" if n else None,
@@ -4381,10 +4472,11 @@ def _build_dynamic_table(
 
     column_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
-        "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
-        "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "SwStrk%", "CSW%", "EV", "LA", "ERA", "FIP", "xFIP", "SIERA"],
+        "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "<2kInZone%", "2kInZone%", "Strike%", "<2Kstrike%", "2Kstrike%", "Comp%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "HR%"],
+        "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "FB%", "Barrel%", "Whiff%", "SwStrk%", "CSW%", "EV", "LA", "ERA", "FIP", "xFIP", "SIERA"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
         "Hitting Results": [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Swing%", "FPS(FB)%", "FPS(OS)%", "Whiff%", "GB%", "K%", "BB%", "Barrel%", "EV", "LA"],
+        "Swing Metrics": [split_col_name, "VertAttack", "HorzAttack", "BatSpeed", "MaxBatSpeed", "EV", "MaxEV", "LA"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
@@ -8225,6 +8317,8 @@ def _try_pitching_overview_daily_rollup(
     mode_clean = (table_mode or "Live").strip()
     if mode_clean not in {"Live", "Process", "Results", "Usage", "Pitch Usage", "Stuff", "Bullpen", "Banny", "Raw Data", "Batted Ball Data", "Custom"}:
         return None
+    if mode_clean == "Process":
+        return None
     normalized_custom_columns = _normalize_custom_columns(selected_custom_columns)
     custom_rollup_supported_columns = {
         "#",
@@ -8740,8 +8834,8 @@ def _try_pitching_overview_daily_rollup(
             "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
             "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
             "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
-            "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
-            "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "SwStrk%", "CSW%", "EV", "LA", "ERA", "FIP", "xFIP", "SIERA"],
+            "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "<2kInZone%", "2kInZone%", "Strike%", "<2Kstrike%", "2Kstrike%", "Comp%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "HR%"],
+            "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "FB%", "Barrel%", "Whiff%", "SwStrk%", "CSW%", "EV", "LA", "ERA", "FIP", "xFIP", "SIERA"],
             "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
             "Pitch Usage": _pitch_usage_mode_columns(split_col_name),
             "Raw Data": [split_col_name, "IP", "P", "BF", "P/IP", "P/BF", "H", "1B", "2B", "3B", "HR", "XBH", "Barrels", "BB", "HBP", "K", "Whiffs"],
@@ -9221,6 +9315,7 @@ def _try_pitching_overview_daily_rollup(
             "HR%": _safe_pct(hr_n, bf_n),
             "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
             "GB%": _safe_pct(gb_n, in_play_n),
+            "FB%": _safe_pct(fb_n, in_play_n),
             "Barrel%": _safe_pct(barrel_n, in_play_n),
             "EV": round(ev_avg, 1) if _is_num(ev_avg) else None,
             "LA": round(sum(float(r.get("la_sum") or 0.0) for r in rows_for_split) / la_n, 1) if la_n > 0 else None,
@@ -9431,8 +9526,8 @@ def _try_pitching_overview_daily_rollup(
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
-        "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
-        "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "SwStrk%", "CSW%", "EV", "LA", "ERA", "FIP", "xFIP", "SIERA"],
+        "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "<2kInZone%", "2kInZone%", "Strike%", "<2Kstrike%", "2Kstrike%", "Comp%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "HR%"],
+        "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "FB%", "Barrel%", "Whiff%", "SwStrk%", "CSW%", "EV", "LA", "ERA", "FIP", "xFIP", "SIERA"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
         "Pitch Usage": _pitch_usage_mode_columns(split_col_name),
         "Raw Data": [split_col_name, "IP", "P", "BF", "P/IP", "P/BF", "H", "1B", "2B", "3B", "HR", "XBH", "Barrels", "BB", "HBP", "K", "Whiffs"],
@@ -10682,6 +10777,8 @@ def _try_pro_pitching_overview_rollup(
     mode_clean = (table_mode or "Live").strip()
     if mode_clean not in {"Stuff", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
         return None
+    if mode_clean == "Process":
+        return None
     normalized_custom_columns = _normalize_custom_columns(selected_custom_columns)
     custom_rollup_supported_columns = {
         "#",
@@ -11156,8 +11253,8 @@ def _try_pro_pitching_overview_rollup(
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
-        "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "Comp%", "Strike%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "QP%", "Ctrl+", "QP+", "Pitching+", "HR%"],
-        "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "Barrel%", "Whiff%", "SwStrk%", "CSW%", "EV", "LA", "ERA", "FIP", "xFIP", "SIERA"],
+        "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "<2kInZone%", "2kInZone%", "Strike%", "<2Kstrike%", "2Kstrike%", "Comp%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "HR%"],
+        "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "FB%", "Barrel%", "Whiff%", "SwStrk%", "CSW%", "EV", "LA", "ERA", "FIP", "xFIP", "SIERA"],
         "Usage": [split_col_name, "#", "Usage", "0-0", "Behind", "Even", "Ahead", "<2K", "2K"],
         "Pitch Usage": _pitch_usage_mode_columns(split_col_name),
         "Raw Data": [split_col_name, "IP", "P", "BF", "P/IP", "P/BF", "H", "1B", "2B", "3B", "HR", "XBH", "Barrels", "BB", "HBP", "K", "Whiffs"],
@@ -11678,6 +11775,7 @@ def _try_pro_pitching_overview_rollup(
             "HR%": _safe_pct(hr_n, bf_n),
             "CSW%": _safe_pct(sum(int(r.get("csw_n") or 0) for r in rows_for_split), pitches),
             "GB%": _safe_pct(gb_n, in_play_n),
+            "FB%": _safe_pct(fb_n, in_play_n),
             "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), in_play_n),
             "EV": round(ev_avg, 1) if _is_num(ev_avg) else None,
             "LA": round(sum(float(r.get("la_sum") or 0.0) for r in rows_for_split) / la_n, 1) if la_n > 0 else None,
@@ -14833,7 +14931,7 @@ def _pro_rollup_filters_hitting(level_norm: str) -> Optional[Dict[str, Any]]:
         "bip_results": ["All", "Single", "Double", "Triple", "HomeRun", "Out"],
         "hitters_by_team_code": labeled_hitters_by_team,
         "opp_pitchers_by_team_code": labeled_opp_pitchers_by_team,
-        "table_modes": ["Results", "Swing Decisions", "Batted Ball Data", "Custom"],
+        "table_modes": ["Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"],
         "split_by_options": [
             "All",
             "Pitch Types",
@@ -16834,7 +16932,7 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
             "bip_results": ["All", "Single", "Double", "Triple", "HomeRun", "Out"],
             "hitters_by_team_code": {},
             "opp_pitchers_by_team_code": {},
-            "table_modes": ["Results", "Swing Decisions", "Batted Ball Data", "Custom"],
+            "table_modes": ["Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"],
             "split_by_options": [
                 "All",
                 "Pitch Types",
@@ -17141,7 +17239,7 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
         "bip_results": ["All", "Single", "Double", "Triple", "HomeRun", "Out"],
         "hitters_by_team_code": hitters_by_team_code,
         "opp_pitchers_by_team_code": opp_pitchers_by_team_code,
-        "table_modes": ["Results", "Swing Decisions", "Batted Ball Data", "Custom"],
+        "table_modes": ["Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"],
         "split_by_options": [
             "All",
             "Pitch Types",
@@ -17396,6 +17494,66 @@ def _pro_hitting_overview(
       """ + hcy_select_expr + """,
       platelocside AS plate_side,
       platelocheight AS plate_height,
+      (regexp_match(
+        COALESCE(
+          to_jsonb(pe)->>'contactpositionx',
+          to_jsonb(pe)->>'ContactPositionX',
+          to_jsonb(pe)->>'contact_position_x',
+          to_jsonb(pe)->>'Contact_Position_X',
+          ''
+        ),
+        '[-+]?[0-9]*\\.?[0-9]+'
+      ))[1]::double precision AS contact_position_x,
+      (regexp_match(
+        COALESCE(
+          to_jsonb(pe)->>'contactpositiony',
+          to_jsonb(pe)->>'ContactPositionY',
+          to_jsonb(pe)->>'contact_position_y',
+          to_jsonb(pe)->>'Contact_Position_Y',
+          ''
+        ),
+        '[-+]?[0-9]*\\.?[0-9]+'
+      ))[1]::double precision AS contact_position_y,
+      (regexp_match(
+        COALESCE(
+          to_jsonb(pe)->>'contactpositionz',
+          to_jsonb(pe)->>'ContactPositionZ',
+          to_jsonb(pe)->>'contact_position_z',
+          to_jsonb(pe)->>'Contact_Position_Z',
+          ''
+        ),
+        '[-+]?[0-9]*\\.?[0-9]+'
+      ))[1]::double precision AS contact_position_z,
+      (regexp_match(
+        COALESCE(
+          to_jsonb(pe)->>'verticalattackangle',
+          to_jsonb(pe)->>'VerticalAttackAngle',
+          to_jsonb(pe)->>'vertical_attack_angle',
+          to_jsonb(pe)->>'Vertical_Attack_Angle',
+          ''
+        ),
+        '[-+]?[0-9]*\\.?[0-9]+'
+      ))[1]::double precision AS vertical_attack_angle,
+      (regexp_match(
+        COALESCE(
+          to_jsonb(pe)->>'horizontalattackangle',
+          to_jsonb(pe)->>'HorizontalAttackAngle',
+          to_jsonb(pe)->>'horizontal_attack_angle',
+          to_jsonb(pe)->>'Horizontal_Attack_Angle',
+          ''
+        ),
+        '[-+]?[0-9]*\\.?[0-9]+'
+      ))[1]::double precision AS horizontal_attack_angle,
+      (regexp_match(
+        COALESCE(
+          to_jsonb(pe)->>'batspeed',
+          to_jsonb(pe)->>'BatSpeed',
+          to_jsonb(pe)->>'bat_speed',
+          to_jsonb(pe)->>'Bat_Speed',
+          ''
+        ),
+        '[-+]?[0-9]*\\.?[0-9]+'
+      ))[1]::double precision AS bat_speed,
       balls AS balls_num,
       strikes AS strikes_num,
       zone AS zone_num,
@@ -17680,12 +17838,12 @@ def _pro_hitting_overview(
                     "hc_y": row.get("hc_y"),
                     "plate_side": row.get("plate_side"),
                     "plate_height": row.get("plate_height"),
-                    "contact_position_x": None,
-                    "contact_position_y": None,
-                    "contact_position_z": None,
-                    "vertical_attack_angle": None,
-                    "horizontal_attack_angle": None,
-                    "bat_speed": None,
+                    "contact_position_x": row.get("contact_position_x"),
+                    "contact_position_y": row.get("contact_position_y"),
+                    "contact_position_z": row.get("contact_position_z"),
+                    "vertical_attack_angle": row.get("vertical_attack_angle"),
+                    "horizontal_attack_angle": row.get("horizontal_attack_angle"),
+                    "bat_speed": row.get("bat_speed"),
                     "pitch_number": row.get("pitch_number"),
                 }
                 for row in chart_source_rows
@@ -17756,12 +17914,12 @@ def _pro_hitting_overview(
                     "hc_y": row.get("hc_y"),
                     "plate_side": row.get("plate_side"),
                     "plate_height": row.get("plate_height"),
-                    "contact_position_x": None,
-                    "contact_position_y": None,
-                    "contact_position_z": None,
-                    "vertical_attack_angle": None,
-                    "horizontal_attack_angle": None,
-                    "bat_speed": None,
+                    "contact_position_x": row.get("contact_position_x"),
+                    "contact_position_y": row.get("contact_position_y"),
+                    "contact_position_z": row.get("contact_position_z"),
+                    "vertical_attack_angle": row.get("vertical_attack_angle"),
+                    "horizontal_attack_angle": row.get("horizontal_attack_angle"),
+                    "bat_speed": row.get("bat_speed"),
                     "pitch_number": row.get("pitch_number"),
                 }
                 for row in heatmap_source_rows
@@ -17966,12 +18124,12 @@ def _pro_hitting_overview(
                 "hc_y": row.get("hc_y"),
                 "plate_side": row.get("plate_side"),
                 "plate_height": row.get("plate_height"),
-                "contact_position_x": None,
-                "contact_position_y": None,
-                "contact_position_z": None,
-                "vertical_attack_angle": None,
-                "horizontal_attack_angle": None,
-                "bat_speed": None,
+                "contact_position_x": row.get("contact_position_x"),
+                "contact_position_y": row.get("contact_position_y"),
+                "contact_position_z": row.get("contact_position_z"),
+                "vertical_attack_angle": row.get("vertical_attack_angle"),
+                "horizontal_attack_angle": row.get("horizontal_attack_angle"),
+                "bat_speed": row.get("bat_speed"),
                 "pitch_number": row.get("pitch_number"),
             }
             for row in chart_source_rows
@@ -18046,12 +18204,12 @@ def _pro_hitting_overview(
                 "hc_y": row.get("hc_y"),
                 "plate_side": row.get("plate_side"),
                 "plate_height": row.get("plate_height"),
-                "contact_position_x": None,
-                "contact_position_y": None,
-                "contact_position_z": None,
-                "vertical_attack_angle": None,
-                "horizontal_attack_angle": None,
-                "bat_speed": None,
+                "contact_position_x": row.get("contact_position_x"),
+                "contact_position_y": row.get("contact_position_y"),
+                "contact_position_z": row.get("contact_position_z"),
+                "vertical_attack_angle": row.get("vertical_attack_angle"),
+                "horizontal_attack_angle": row.get("horizontal_attack_angle"),
+                "bat_speed": row.get("bat_speed"),
                 "pitch_number": row.get("pitch_number"),
             }
             for row in heatmap_source_rows
@@ -21797,7 +21955,7 @@ def hitting_filters(
         "bip_results": ["All", "Single", "Double", "Triple", "HomeRun", "Out"],
         "hitters_by_team_code": hitters_by_team_code,
         "opp_pitchers_by_team_code": opp_pitchers_by_team_code,
-        "table_modes": ["Results", "Swing Decisions", "Batted Ball Data", "Custom"],
+        "table_modes": ["Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"],
         "split_by_options": [
             "All",
             "Pitch Types",
@@ -21911,7 +22069,7 @@ def hitting_overview(
     )
 
     mode_raw = (table_mode or "Results").strip()
-    mode_map = {"Results": "Hitting Results", "Swing Decisions": "Swing Decisions", "Batted Ball Data": "Batted Ball Data", "Custom": "Custom"}
+    mode_map = {"Results": "Hitting Results", "Swing Decisions": "Swing Decisions", "Swing Metrics": "Swing Metrics", "Batted Ball Data": "Batted Ball Data", "Custom": "Custom"}
     table_mode_mapped = mode_map.get(mode_raw, "Results")
     split_by = (split_by or "Pitch Types").strip() or "Pitch Types"
     custom_rollup_unsafe_columns = {
@@ -21956,7 +22114,7 @@ def hitting_overview(
         league_rollup_candidate = (
             league_all_selection
             and (not chart_only)
-            and mode_raw in {"Results", "Swing Decisions", "Batted Ball Data", "Custom"}
+            and mode_raw in {"Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"}
         )
         league_leaderboard_has_narrowing_filters = bool(
             selected_opp_pitcher_keys
@@ -21980,7 +22138,7 @@ def hitting_overview(
             (not chart_only)
             and (not include_chart_points)
             and split_by in {"Batter", "Batter Team"}
-            and mode_raw in {"Results", "Swing Decisions", "Batted Ball Data", "Custom"}
+            and mode_raw in {"Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"}
             and (not league_leaderboard_has_narrowing_filters)
         )
         if league_rollup_candidate:

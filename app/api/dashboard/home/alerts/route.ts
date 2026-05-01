@@ -58,6 +58,14 @@ function rowMetric(row: Record<string, unknown>, key: string): number | null {
   return parseNumber(row[foundKey]);
 }
 
+function rowMetricByAliases(row: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = rowMetric(row, key);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
 function fetchCachedJson(url: URL, cacheKey: string, timeoutMs = 25000, retries = 0) {
   return fetchDashboardJsonWithCache({
     cacheKey,
@@ -195,7 +203,8 @@ function buildHittingRows(
       metrics: {
         xWOBA: { season: rowMetric(row, 'xWOBA'), recent: null },
         'Barrel%': { season: rowMetric(row, 'Barrel%'), recent: null },
-        'GoZoneSw%': { season: rowMetric(row, 'GoZoneSw%'), recent: null },
+        'K%': { season: rowMetric(row, 'K%'), recent: null },
+        'BB%': { season: rowMetric(row, 'BB%'), recent: null },
       },
     });
   }
@@ -209,7 +218,8 @@ function buildHittingRows(
     current.recentSample = rowMetric(row, '#') ?? rowMetric(row, 'PA') ?? current.recentSample;
     current.metrics.xWOBA.recent = rowMetric(row, 'xWOBA');
     current.metrics['Barrel%'].recent = rowMetric(row, 'Barrel%');
-    current.metrics['GoZoneSw%'].recent = rowMetric(row, 'GoZoneSw%');
+    current.metrics['K%'].recent = rowMetric(row, 'K%');
+    current.metrics['BB%'].recent = rowMetric(row, 'BB%');
   }
   return Array.from(byName.values())
     .filter((entry) => entry.sample >= minSeasonSample)
@@ -305,7 +315,7 @@ async function fetchHittingAlerts(
     url.searchParams.set('end_date', endDate);
     url.searchParams.set('table_mode', 'Custom');
     url.searchParams.set('split_by', 'Batter');
-    url.searchParams.set('custom_columns', 'xWOBA,Barrel%,GoZoneSw%');
+    url.searchParams.set('custom_columns', 'xWOBA,Barrel%,K%,BB%');
     url.searchParams.set('include_chart_points', '0');
     if (scopedHitter) url.searchParams.set('hitter', scopedHitter);
     return url;

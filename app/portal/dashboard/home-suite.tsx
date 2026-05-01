@@ -24,7 +24,7 @@ type SearchPayload = {
 type AlertMetricPair = { season: number | null; recent: number | null };
 type AlertRow = { name: string; sample: number; metrics: Record<string, AlertMetricPair> };
 type PitchingAlertMetric = 'Velo' | 'K%' | 'BB%' | 'E+A%';
-type HittingAlertMetric = 'xWOBA' | 'Barrel%' | 'GoZoneSw%';
+type HittingAlertMetric = 'xWOBA' | 'Barrel%' | 'K%' | 'BB%';
 type SortMode = 'improvement' | 'struggle';
 type AlertsPayload = {
   school_code: string;
@@ -35,6 +35,10 @@ type AlertsPayload = {
   pitching: AlertRow[];
   hitting: AlertRow[];
 };
+
+function metricPairForRow(row: AlertRow, metric: string): AlertMetricPair | undefined {
+  return row.metrics?.[metric];
+}
 
 type HomeSuiteProps = {
   role: 'admin' | 'coach' | 'player';
@@ -314,8 +318,8 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
     const metric = pitchingSort.metric;
     if (!metric) return rows;
     rows.sort((a, b) => {
-      const aPair = a.metrics[metric];
-      const bPair = b.metrics[metric];
+      const aPair = metricPairForRow(a, metric);
+      const bPair = metricPairForRow(b, metric);
       const aScore = metricImprovementScore(metric, aPair?.season ?? null, aPair?.recent ?? null);
       const bScore = metricImprovementScore(metric, bPair?.season ?? null, bPair?.recent ?? null);
       if (aScore === null && bScore === null) return 0;
@@ -330,8 +334,8 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
     const metric = hittingSort.metric;
     if (!metric) return rows;
     rows.sort((a, b) => {
-      const aPair = a.metrics[metric];
-      const bPair = b.metrics[metric];
+      const aPair = metricPairForRow(a, metric);
+      const bPair = metricPairForRow(b, metric);
       const aScore = metricImprovementScore(metric, aPair?.season ?? null, aPair?.recent ?? null);
       const bScore = metricImprovementScore(metric, bPair?.season ?? null, bPair?.recent ?? null);
       if (aScore === null && bScore === null) return 0;
@@ -801,7 +805,7 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
                         </button>
                       </td>
                       {['Velo', 'K%', 'BB%', 'E+A%'].map((metric) => {
-                        const pair = row.metrics[metric];
+                        const pair = metricPairForRow(row, metric);
                         const delta = metricDelta(pair?.season ?? null, pair?.recent ?? null);
                         const up = typeof delta === 'number' && delta > 0;
                         const down = typeof delta === 'number' && delta < 0;
@@ -871,7 +875,7 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
                 <thead>
                   <tr>
                     <th>Name</th>
-                    {(['xWOBA', 'Barrel%', 'GoZoneSw%'] as HittingAlertMetric[]).map((metric) => (
+                    {(['xWOBA', 'Barrel%', 'K%', 'BB%'] as HittingAlertMetric[]).map((metric) => (
                       <th key={`h-header-${metric}`}>
                         <button
                           type="button"
@@ -907,8 +911,8 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
                           {row.name}
                         </button>
                       </td>
-                      {['xWOBA', 'Barrel%', 'GoZoneSw%'].map((metric) => {
-                        const pair = row.metrics[metric];
+                      {['xWOBA', 'Barrel%', 'K%', 'BB%'].map((metric) => {
+                        const pair = metricPairForRow(row, metric);
                         const delta = metricDelta(pair?.season ?? null, pair?.recent ?? null);
                         const up = typeof delta === 'number' && delta > 0;
                         const down = typeof delta === 'number' && delta < 0;

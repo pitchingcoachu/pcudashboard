@@ -3486,6 +3486,7 @@ export default function HittingSuite({
     () => [
       { value: 'Results', label: 'Results' },
       { value: 'Swing Decisions', label: 'Swing Decisions' },
+      { value: 'Swing Metrics', label: 'Swing Metrics' },
       { value: 'Batted Ball Data', label: 'Batted Ball Data' },
       ...customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: item.name })),
       { value: 'Custom', label: 'Custom' },
