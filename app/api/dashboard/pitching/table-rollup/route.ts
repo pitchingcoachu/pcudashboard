@@ -323,6 +323,7 @@ export async function GET(request: Request) {
   const pitchTypes = parseCsv(url.searchParams.get('pitch_types'));
   const pitchTypeSet = new Set(pitchTypes.map((value) => value.trim().toLowerCase()).filter(Boolean));
   const columns = parseCsv(url.searchParams.get('custom_columns'));
+  const defaultColumns = ['PA', 'Usage', 'InZone%', 'Strike%', 'FPS%', 'E+A%', 'SwStrk%', 'Whiff%', 'GB%', 'K%', 'BB%', 'CSW%', 'EV', 'PV/100', 'RV/100'];
   const plusMetrics: PlusMetricKey[] = ['Stuff+', 'QP+', 'Ctrl+', 'Pitching+'].filter((metric) => columns.includes(metric)) as PlusMetricKey[];
   const supportedColumns = new Set([
     '#', 'P', 'PA', 'BF', 'AB', 'AVG', 'OBP', 'SLG', 'OPS', 'H', 'XBH', 'HR', 'HBP', 'BB', 'K', 'Whiffs',
@@ -336,6 +337,108 @@ export async function GET(request: Request) {
   ]);
   if (columns.length && columns.some((col) => !supportedColumns.has(col))) {
     return NextResponse.json({ table_rows: [], table_columns: [] });
+  }
+
+  if (schoolCode === 'LEAGUE' && splitByNorm === 'Pitch Types' && columns.length === 0) {
+    try {
+      const where: string[] = ['school_code = $1'];
+      const values: unknown[] = [schoolCode];
+      if (startDate) {
+        values.push(startDate);
+        where.push(`session_date >= $${values.length}::date`);
+      }
+      if (endDate) {
+        values.push(endDate);
+        where.push(`session_date <= $${values.length}::date`);
+      }
+      if (sessionType) {
+        values.push(sessionType);
+        where.push(`session_type_bucket = $${values.length}`);
+      }
+      if (hand) {
+        values.push(hand);
+        where.push(`pitcherhand_norm = $${values.length}`);
+      }
+      if (batterSide) {
+        values.push(batterSide);
+        where.push(`batterside_norm = $${values.length}`);
+      }
+      if (teamCode) {
+        values.push(teamCode);
+        where.push(`pitcher_team_code = $${values.length}`);
+      }
+      if (pitcherNorms.length) {
+        values.push(pitcherNorms);
+        where.push(`pitcher_norm = ANY($${values.length}::text[])`);
+      }
+      if (pitchTypeSet.size) {
+        values.push(Array.from(pitchTypeSet));
+        where.push(`pitch_type = ANY($${values.length}::text[])`);
+      }
+      const q = `
+        SELECT
+          COALESCE(NULLIF(TRIM(pitch_type), ''), 'Unknown') AS pitch,
+          SUM(pitch_n)::int AS pitches,
+          SUM(pa_n)::int AS pa_n,
+          SUM(inzone_n)::int AS in_zone_n,
+          SUM(comp_n)::int AS loc_n,
+          SUM(strike_n)::int AS strike_n,
+          SUM(fps_num)::int AS fps_num,
+          SUM(fps_den)::int AS fps_den,
+          SUM(ea_num)::int AS ea_num,
+          SUM(ea_den)::int AS ea_den,
+          SUM(whiff_n)::int AS whiff_n,
+          SUM(swing_n)::int AS swing_n,
+          SUM(gb_n)::int AS gb_n,
+          SUM(in_play_n)::int AS in_play_n,
+          SUM(k_n)::int AS k_n,
+          SUM(bb_n)::int AS bb_n,
+          SUM(csw_n)::int AS csw_n,
+          SUM(ev_sum)::double precision AS ev_sum,
+          SUM(ev_n)::int AS ev_n,
+          SUM(pv_sum)::double precision AS pv_sum,
+          SUM(rv_sum)::double precision AS rv_sum
+        FROM public.pitching_heatmap_daily_bins
+        WHERE ${where.join(' AND ')}
+        GROUP BY 1
+      `;
+      const agg = await pool.query(q, values);
+      if (!agg.rows.length) return NextResponse.json({ table_rows: [], table_columns: [] });
+      const totalPitches = agg.rows.reduce((sum, row) => sum + Number(row.pitches || 0), 0);
+      const tableColumns = ['Pitch', ...defaultColumns];
+      const toPct = (n: number, d: number) => (d > 0 ? Number(((100 * n) / d).toFixed(1)) : '-');
+      const rows = agg.rows.map((row) => {
+        const pitches = Number(row.pitches || 0);
+        const pa = Number(row.pa_n || 0);
+        const inPlay = Number(row.in_play_n || 0);
+        const swing = Number(row.swing_n || 0);
+        const whiff = Number(row.whiff_n || 0);
+        return {
+          Pitch: String(row.pitch || 'Unknown'),
+          PA: pa,
+          Usage: totalPitches > 0 ? Number(((100 * pitches) / totalPitches).toFixed(1)) : '-',
+          'InZone%': toPct(Number(row.in_zone_n || 0), Number(row.loc_n || 0)),
+          'Strike%': toPct(Number(row.strike_n || 0), pitches),
+          'FPS%': toPct(Number(row.fps_num || 0), Number(row.fps_den || 0)),
+          'E+A%': toPct(Number(row.ea_num || 0), Number(row.ea_den || 0)),
+          'SwStrk%': toPct(whiff, pitches),
+          'Whiff%': toPct(whiff, swing),
+          'GB%': toPct(Number(row.gb_n || 0), inPlay),
+          'K%': toPct(Number(row.k_n || 0), pa),
+          'BB%': toPct(Number(row.bb_n || 0), pa),
+          'CSW%': toPct(Number(row.csw_n || 0), pitches),
+          EV: Number(row.ev_n || 0) > 0 ? Number((Number(row.ev_sum || 0) / Number(row.ev_n || 0)).toFixed(1)) : '-',
+          'PV/100': pitches > 0 ? Number(((100 * Number(row.pv_sum || 0)) / pitches).toFixed(1)) : '-',
+          'RV/100': pitches > 0 ? Number(((100 * Number(row.rv_sum || 0)) / pitches).toFixed(1)) : '-',
+        };
+      });
+      return NextResponse.json({ table_rows: rows, table_columns: tableColumns, chart_points: [], heatmap_points: [] });
+    } catch {
+      return NextResponse.json(
+        { error: 'League Pitch Types rollup timed out.', table_rows: [], table_columns: ['Pitch', ...defaultColumns], chart_points: [], heatmap_points: [] },
+        { status: 504 }
+      );
+    }
   }
 
   const where: string[] = ['1=1'];
@@ -564,7 +667,7 @@ export async function GET(request: Request) {
         : splitByNorm === 'Inning'
           ? 'Inning'
           : 'Pitch';
-  const tableColumns = [splitColumn, ...(columns.length ? columns : ['PA', 'Usage', 'InZone%', 'Strike%', 'FPS%', 'E+A%', 'SwStrk%', 'Whiff%', 'GB%', 'K%', 'BB%', 'CSW%', 'EV', 'PV/100', 'RV/100'])];
+  const tableColumns = [splitColumn, ...(columns.length ? columns : defaultColumns)];
   const totalPitches = filtered.reduce((sum, row) => sum + Number(row.pitch_n || 0), 0);
   const rows = filtered.map((row) => {
     const out: Record<string, string | number | null> = { [splitColumn]: row.split_value || (row.pitch_type || 'Unknown') };

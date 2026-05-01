@@ -19,6 +19,7 @@ type Props = {
   siteLogoAlt?: string;
   pointLogoSrcForLabel?: (label: string) => string;
   formatValue?: (column: string, value: unknown) => string;
+  correlationQueryBase?: string;
 };
 
 type ScatterPoint = {
@@ -80,7 +81,7 @@ function detectColumnDecimals(
   for (const row of rows) {
     const label = String(row[labelColumn] ?? '').trim();
     if (isAllSummaryLabel(label)) continue;
-    const numeric = parseSortableNumber(row[column]);
+    const numeric = numericByColumnAlias(row, column);
     if (numeric === null) continue;
     foundAny = true;
     const formatted = formatter ? formatter(column, row[column]) : formatTableDisplayValue(column, row[column]);
@@ -96,7 +97,7 @@ function hasAnyNumericPoints(column: string, rows: LeaderboardRow[], labelColumn
   for (const row of rows) {
     const label = String(row[labelColumn] ?? '').trim();
     if (isAllSummaryLabel(label)) continue;
-    const numeric = parseSortableNumber(row[column]);
+    const numeric = numericByColumnAlias(row, column);
     if (numeric !== null) return true;
   }
   return false;
@@ -120,7 +121,7 @@ function isLikelyPercentColumn(
   for (const row of rows) {
     const label = String(row[labelColumn] ?? '').trim();
     if (isAllSummaryLabel(label)) continue;
-    const numeric = parseSortableNumber(row[column]);
+    const numeric = numericByColumnAlias(row, column);
     if (numeric === null) continue;
     const formatted = formatter ? formatter(column, row[column]) : formatTableDisplayValue(column, row[column]);
     if (String(formatted).includes('%')) return true;
@@ -140,7 +141,158 @@ function isAllSummaryLabel(value: string): boolean {
 
 /** Normalize token for fuzzy column-key matching (strip non-alphanumeric except % and +). */
 function normalizeColumnToken(value: string): string {
-  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9%+]/g, '');
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/percent/g, 'pct')
+    .replace(/%/g, 'pct')
+    .replace(/[^a-z0-9+]/g, '');
+}
+
+function columnTokenCandidates(value: string): string[] {
+  const token = normalizeColumnToken(value);
+  if (!token) return [];
+  const out = new Set<string>([token]);
+  if (token.endsWith('pct')) out.add(token.slice(0, -3));
+  else out.add(`${token}pct`);
+  return Array.from(out);
+}
+
+function rowValuesByToken(row: LeaderboardRow, tokenCandidates: string[]): unknown[] {
+  const values: unknown[] = [];
+  for (const [key, value] of Object.entries(row)) {
+    const rowTokens = columnTokenCandidates(key);
+    if (rowTokens.some((token) => tokenCandidates.includes(token))) values.push(value);
+  }
+  return values;
+}
+
+function parseCorrelationNumber(value: unknown): number | null {
+  const direct = parseSortableNumber(value);
+  if (direct !== null) return direct;
+  if (!value || typeof value !== 'object') return null;
+  const obj = value as Record<string, unknown>;
+  const candidates: unknown[] = [
+    obj.value,
+    obj.raw,
+    obj.numeric,
+    obj.number,
+    obj.display,
+    obj.label,
+    obj.text,
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseSortableNumber(candidate);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+function numericByColumnAlias(row: LeaderboardRow, column: string): number | null {
+  const tokens = columnTokenCandidates(column);
+  const tokenSet = new Set(tokens);
+  const direct = parseCorrelationNumber(row[column]);
+  if (direct !== null && !tokenSet.has('usage') && !tokenSet.has('usagepct')) return direct;
+  const numericFromAliases = (aliasColumn: string): number | null => {
+    const values = rowValuesByToken(row, columnTokenCandidates(aliasColumn));
+    for (const value of values) {
+      const parsed = parseCorrelationNumber(value);
+      if (parsed !== null) return parsed;
+    }
+    return null;
+  };
+  const aliasValues = rowValuesByToken(row, tokens);
+  for (const value of aliasValues) {
+    const parsed = parseCorrelationNumber(value);
+    if (parsed !== null) return parsed;
+  }
+  const fuzzyNumericFromKeys = (match: (token: string) => boolean): number | null => {
+    for (const [key, value] of Object.entries(row)) {
+      const token = normalizeColumnToken(key);
+      if (!token || !match(token)) continue;
+      const parsed = parseCorrelationNumber(value);
+      if (parsed !== null) return parsed;
+    }
+    return null;
+  };
+
+  if (tokens.some((token) => token === 'fbvelo' || token === 'fastballvelo' || token === 'fourseamvelo')) {
+    const explicitFastballVeloAliases = ['FBvelo', 'FB Velo', 'Fastball Velo', 'Four-Seam Velo', 'FA Velo'];
+    for (const alias of explicitFastballVeloAliases) {
+      const parsedAlias = numericFromAliases(alias);
+      if (parsedAlias !== null) return parsedAlias;
+    }
+    const parsed = fuzzyNumericFromKeys((token) =>
+      token.includes('fbvelo') ||
+      token.includes('fastballvelo') ||
+      token.includes('fourseamvelo') ||
+      token.includes('favelo') ||
+      ((token.includes('velo') || token.includes('velocity')) &&
+        (token.includes('fb') || token.includes('fa') || token.includes('fastball') || token.includes('fourseam')))
+    );
+    if (parsed !== null) return parsed;
+    const fallbackVelo = numericFromAliases('Velo');
+    if (fallbackVelo !== null) return fallbackVelo;
+  }
+  if (tokens.some((token) => token === 'cswpct' || token === 'csw')) {
+    const parsed = fuzzyNumericFromKeys((token) => token.includes('csw'));
+    if (parsed !== null) return parsed;
+  }
+
+  if (tokenSet.has('usage') || tokenSet.has('usagepct')) {
+    const usageSource = (() => {
+      const aliasPriority = ['Usage', 'Usage%', 'Usage %'];
+      for (const alias of aliasPriority) {
+        const values = rowValuesByToken(row, columnTokenCandidates(alias));
+        for (const value of values) {
+          if (value !== null && value !== undefined && String(value).trim() !== '') return value;
+        }
+      }
+      if (row[column] !== null && row[column] !== undefined && String(row[column]).trim() !== '') return row[column];
+      for (const value of aliasValues) {
+        if (value !== null && value !== undefined && String(value).trim() !== '') return value;
+      }
+      return null;
+    })();
+    const usageRaw = parseCorrelationNumber(usageSource);
+    if (usageRaw !== null) {
+      return usageRaw;
+    }
+  }
+  if (tokenSet.has('kbbpct') || tokenSet.has('kbb')) {
+    const k = numericFromAliases('K%');
+    const bb = numericFromAliases('BB%');
+    if (k !== null && bb !== null) return k - bb;
+    const kCount = numericFromAliases('K');
+    const bbCount = numericFromAliases('BB');
+    const bfCount = numericFromAliases('BF');
+    if (kCount !== null && bbCount !== null && bfCount !== null && bfCount > 0) {
+      return ((kCount - bbCount) / bfCount) * 100;
+    }
+  }
+  if (tokenSet.has('cswpct') || tokenSet.has('csw')) {
+    const called = numericFromAliases('Called-S%');
+    const whiff = numericFromAliases('Whiff%');
+    if (called !== null && whiff !== null) return called + whiff;
+    const calledStrikes = numericFromAliases('CS');
+    const whiffs = numericFromAliases('Whiffs');
+    const pitches = numericFromAliases('P');
+    if (calledStrikes !== null && whiffs !== null && pitches !== null && pitches > 0) {
+      return ((calledStrikes + whiffs) / pitches) * 100;
+    }
+  }
+  return null;
+}
+
+function normalizeAxisNumericValue(column: string, numeric: number): number {
+  if (!Number.isFinite(numeric)) return numeric;
+  const tokenSet = new Set(columnTokenCandidates(column));
+  if (tokenSet.has('usage') || tokenSet.has('usagepct')) {
+    // Keep usage on native numeric scale to avoid artificial clumping from
+    // mixed upstream encodings (percent string vs fraction vs percent number).
+    return numeric;
+  }
+  return numeric;
 }
 
 /**
@@ -155,16 +307,19 @@ function normalizeRowsForColumns(
   if (!targetColumns.length || !rows.length) return rows;
   let changed = false;
   const result = rows.map((row) => {
-    // Build a lookup: normalizedToken → original key
+    // Build a lookup: normalizedToken (with aliases) → original key
     const keyByToken = new Map<string, string>();
     for (const key of Object.keys(row)) {
-      const token = normalizeColumnToken(key);
-      if (token && !keyByToken.has(token)) keyByToken.set(token, key);
+      for (const token of columnTokenCandidates(key)) {
+        if (!keyByToken.has(token)) keyByToken.set(token, key);
+      }
     }
     let patched: LeaderboardRow | null = null;
     for (const col of targetColumns) {
       if (Object.prototype.hasOwnProperty.call(row, col)) continue;
-      const match = keyByToken.get(normalizeColumnToken(col));
+      const match = columnTokenCandidates(col)
+        .map((token) => keyByToken.get(token))
+        .find((candidate): candidate is string => Boolean(candidate));
       if (!match) continue;
       if (!patched) patched = { ...row };
       patched[col] = row[match];
@@ -309,6 +464,7 @@ export default function LeaderboardCorrelationModal({
   siteLogoAlt,
   pointLogoSrcForLabel,
   formatValue,
+  correlationQueryBase,
 }: Props) {
   const chartWrapRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -321,6 +477,7 @@ export default function LeaderboardCorrelationModal({
   const [logoDataUrl, setLogoDataUrl] = useState('');
   const [siteLogoDataUrl, setSiteLogoDataUrl] = useState('');
   const [pointLogoDataUrls, setPointLogoDataUrls] = useState<Record<string, string>>({});
+  const [fetchedAxisRows, setFetchedAxisRows] = useState<LeaderboardRow[] | null>(null);
   const [isLightTheme, setIsLightTheme] = useState(false);
   const isProSiteLogo = String(siteLogoSrc ?? '').toLowerCase().includes('mlb-logo');
 
@@ -412,6 +569,83 @@ export default function LeaderboardCorrelationModal({
     setHover(null);
   }, [open, xColumn, yColumn]);
 
+  useEffect(() => {
+    if (!open || !correlationQueryBase || !xColumn || !yColumn || xColumn === yColumn) {
+      setFetchedAxisRows(null);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    const run = async () => {
+      const fetchRowsForColumns = async (columnsToFetch: string[]) => {
+        const params = new URLSearchParams(correlationQueryBase);
+        params.set('table_mode', 'Custom');
+        params.set('custom_columns', columnsToFetch.join(','));
+        params.set('force_raw', '1');
+        params.set('include_chart_points', '0');
+        params.set('include_row_pitches', '0');
+        params.set('include_trend_rows', '0');
+        params.delete('chart_only');
+        params.delete('chart_points_limit');
+        params.delete('visual_option');
+        const response = await fetch(`/api/dashboard/pitching/overview?${params.toString()}`, {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const payload = (await response.json().catch(() => ({}))) as {
+          table_rows?: Array<Record<string, string | number | null>>;
+          table_columns?: string[];
+          available_table_columns?: string[];
+        };
+        if (!response.ok || !active) return [] as LeaderboardRow[];
+        const rows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+        const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+        const availableColumns = Array.isArray(payload.available_table_columns) ? payload.available_table_columns : [];
+        return normalizeRowsForColumns(
+          Array.from(new Set([labelColumn, ...columnsToFetch, ...tableColumns, ...availableColumns].filter(Boolean))),
+          rows
+        );
+      };
+      try {
+        let normalized = await fetchRowsForColumns([xColumn, yColumn]);
+        const hasCombinedX = hasAnyNumericPoints(xColumn, normalized, labelColumn);
+        const hasCombinedY = hasAnyNumericPoints(yColumn, normalized, labelColumn);
+        if (!hasCombinedX || !hasCombinedY) {
+          const xRows = await fetchRowsForColumns([xColumn]);
+          const yRows = await fetchRowsForColumns([yColumn]);
+          const mergedByLabel = new Map<string, LeaderboardRow>();
+          for (const row of xRows) {
+            const key = String(row[labelColumn] ?? '').trim();
+            if (!key) continue;
+            mergedByLabel.set(key, { ...row });
+          }
+          for (const row of yRows) {
+            const key = String(row[labelColumn] ?? '').trim();
+            if (!key) continue;
+            const existing = mergedByLabel.get(key) ?? { [labelColumn]: row[labelColumn] };
+            existing[yColumn] = row[yColumn];
+            mergedByLabel.set(key, existing);
+          }
+          const merged = Array.from(mergedByLabel.values());
+          const hasMergedX = hasAnyNumericPoints(xColumn, merged, labelColumn);
+          const hasMergedY = hasAnyNumericPoints(yColumn, merged, labelColumn);
+          if (hasMergedX && hasMergedY) normalized = merged;
+        }
+        if (!active) return;
+        setFetchedAxisRows(normalized);
+      } catch (error) {
+        if (!active) return;
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setFetchedAxisRows(null);
+      }
+    };
+    void run();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [open, correlationQueryBase, xColumn, yColumn, labelColumn]);
+
   // Normalize rows so every selectable axis column (and the label column) has a
   // matching key, even if the original row data uses different casing / punctuation.
   const allTargetColumns = useMemo(() => {
@@ -422,6 +656,10 @@ export default function LeaderboardCorrelationModal({
   const normalizedRows = useMemo(
     () => (open ? normalizeRowsForColumns(allTargetColumns, rows) : rows),
     [open, allTargetColumns, rows]
+  );
+  const sourceRows = useMemo(
+    () => (open && fetchedAxisRows && fetchedAxisRows.length ? fetchedAxisRows : normalizedRows),
+    [open, fetchedAxisRows, normalizedRows]
   );
 
   const selectableAxisColumns = useMemo(
@@ -446,12 +684,12 @@ export default function LeaderboardCorrelationModal({
   }, [open, selectableAxisColumns, xColumn, yColumn]);
 
   const xColumnHasAnyNumeric = useMemo(
-    () => (open && xColumn ? hasAnyNumericPoints(xColumn, normalizedRows, labelColumn) : false),
-    [open, xColumn, normalizedRows, labelColumn]
+    () => (open && xColumn ? hasAnyNumericPoints(xColumn, sourceRows, labelColumn) : false),
+    [open, xColumn, sourceRows, labelColumn]
   );
   const yColumnHasAnyNumeric = useMemo(
-    () => (open && yColumn ? hasAnyNumericPoints(yColumn, normalizedRows, labelColumn) : false),
-    [open, yColumn, normalizedRows, labelColumn]
+    () => (open && yColumn ? hasAnyNumericPoints(yColumn, sourceRows, labelColumn) : false),
+    [open, yColumn, sourceRows, labelColumn]
   );
 
   const points = useMemo(() => {
@@ -459,14 +697,16 @@ export default function LeaderboardCorrelationModal({
     if (!xColumn || !yColumn || !labelColumn) return [] as ScatterPoint[];
     let rank = 0;
     const out: ScatterPoint[] = [];
-    for (const row of normalizedRows) {
+    for (const row of sourceRows) {
       const labelRaw = String(row[labelColumn] ?? '').trim();
       if (!labelRaw || isAllSummaryLabel(labelRaw)) continue;
       rank += 1;
-      const xParsed = parseSortableNumber(row[xColumn]);
-      const yParsed = parseSortableNumber(row[yColumn]);
-      const xValue = xParsed ?? (xColumnHasAnyNumeric ? 0 : null);
-      const yValue = yParsed ?? (yColumnHasAnyNumeric ? 0 : null);
+      const xParsed = numericByColumnAlias(row, xColumn);
+      const yParsed = numericByColumnAlias(row, yColumn);
+      const xValueRaw = xParsed ?? (xColumnHasAnyNumeric ? 0 : null);
+      const yValueRaw = yParsed ?? (yColumnHasAnyNumeric ? 0 : null);
+      const xValue = xValueRaw === null ? null : normalizeAxisNumericValue(xColumn, xValueRaw);
+      const yValue = yValueRaw === null ? null : normalizeAxisNumericValue(yColumn, yValueRaw);
       if (xValue === null || yValue === null) continue;
       out.push({
         rank,
@@ -477,7 +717,7 @@ export default function LeaderboardCorrelationModal({
       });
     }
     return out;
-  }, [open, normalizedRows, xColumn, yColumn, labelColumn, viewByLabel, xColumnHasAnyNumeric, yColumnHasAnyNumeric]);
+  }, [open, sourceRows, xColumn, yColumn, labelColumn, viewByLabel, xColumnHasAnyNumeric, yColumnHasAnyNumeric]);
 
   const pointLogoSrcByLabel = useMemo(() => {
     if (!open) return {} as Record<string, string>;
@@ -603,20 +843,20 @@ export default function LeaderboardCorrelationModal({
   }, [ranges.y0, ranges.y1]);
 
   const xDecimals = useMemo(
-    () => (open ? detectColumnDecimals(xColumn, normalizedRows, labelColumn, formatValue) : 2),
-    [open, xColumn, normalizedRows, labelColumn, formatValue]
+    () => (open ? detectColumnDecimals(xColumn, sourceRows, labelColumn, formatValue) : 2),
+    [open, xColumn, sourceRows, labelColumn, formatValue]
   );
   const yDecimals = useMemo(
-    () => (open ? detectColumnDecimals(yColumn, normalizedRows, labelColumn, formatValue) : 2),
-    [open, yColumn, normalizedRows, labelColumn, formatValue]
+    () => (open ? detectColumnDecimals(yColumn, sourceRows, labelColumn, formatValue) : 2),
+    [open, yColumn, sourceRows, labelColumn, formatValue]
   );
   const xIsPercent = useMemo(
-    () => (open && xColumn ? isLikelyPercentColumn(xColumn, normalizedRows, labelColumn, formatValue) : false),
-    [open, xColumn, normalizedRows, labelColumn, formatValue]
+    () => (open && xColumn ? isLikelyPercentColumn(xColumn, sourceRows, labelColumn, formatValue) : false),
+    [open, xColumn, sourceRows, labelColumn, formatValue]
   );
   const yIsPercent = useMemo(
-    () => (open && yColumn ? isLikelyPercentColumn(yColumn, normalizedRows, labelColumn, formatValue) : false),
-    [open, yColumn, normalizedRows, labelColumn, formatValue]
+    () => (open && yColumn ? isLikelyPercentColumn(yColumn, sourceRows, labelColumn, formatValue) : false),
+    [open, yColumn, sourceRows, labelColumn, formatValue]
   );
   const trendline = useMemo(() => {
     if (!showTrendline || stats.slope === null || stats.intercept === null || points.length < 2) return null;

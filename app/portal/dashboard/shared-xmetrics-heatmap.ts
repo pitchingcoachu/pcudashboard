@@ -81,7 +81,15 @@ export function buildSharedXMetricHeatCells<T extends SharedPoint>(
       x: typeof p.plate_side === 'number' && Number.isFinite(p.plate_side) ? p.plate_side : null,
       y: typeof p.plate_height === 'number' && Number.isFinite(p.plate_height) ? p.plate_height : null,
     }))
-    .filter((row): row is { p: T; x: number; y: number } => row.x !== null && row.y !== null);
+    .filter(
+      (row): row is { p: T; x: number; y: number } =>
+        row.x !== null &&
+        row.y !== null &&
+        row.x >= xMin &&
+        row.x <= xMax &&
+        row.y >= yMin &&
+        row.y <= yMax
+    );
   if (!valid.length) return [];
 
   const xMetricShrinkStrength = 0;

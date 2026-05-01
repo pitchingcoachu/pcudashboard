@@ -11931,10 +11931,10 @@ def _try_pro_hitting_overview_rollup(
         return None
     if venue_filter:
         return None
-    # FPS(FB)% / FPS(OS)% require row-level 0-0 swing classification by pitch type.
-    # Rollup rows do not preserve enough sequence detail for exact parity, so use
-    # the full overview path for correctness.
-    if mode_raw not in {"Results", "Swing Decisions", "Batted Ball Data"}:
+    # Swing Decisions requires row-level pitch context (for example GoZoneSw%,
+    # IZswing%, EdgeSwing%, PosSD%) that is not fully represented in PRO rollups.
+    # Route that mode to the full overview path for parity with league/school.
+    if mode_raw not in {"Results", "Batted Ball Data"}:
         return None
     if selected_zone_locations or selected_pitch_results or selected_after_count_filters or selected_bip_results or selected_in_zone:
         return None
@@ -12143,6 +12143,17 @@ def _try_pro_hitting_overview_rollup(
         obp = ((hits + bb + hbp) / obp_den) if obp_den > 0 else None
         avg = (hits / ab) if ab > 0 else None
         slg = (tb / ab) if ab > 0 else None
+        iso = (slg - avg) if (slg is not None and avg is not None) else None
+        in_play_n = int(sum(int(r.get("in_play_n") or 0) for r in rows_for_split))
+        gb_n = int(sum(int(r.get("gb_n") or 0) for r in rows_for_split))
+        babip = (hits / in_play_n) if in_play_n > 0 else None
+        ev_n = int(sum(int(r.get("ev_n") or 0) for r in rows_for_split))
+        ev_avg = (sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / ev_n) if ev_n > 0 else None
+        if in_play_n > 0 and ev_avg is not None:
+            gb_rate = float(gb_n) / float(in_play_n)
+            xiso = (-0.358973 * gb_rate) - (0.108255 * ev_avg) + (0.00066305 * (ev_avg ** 2)) + 4.66285
+        else:
+            xiso = None
         fps_fb_num = sum(
             _fps_swing_count_from_rollup_row(r)
             for r in rows_for_split
@@ -12168,9 +12179,14 @@ def _try_pro_hitting_overview_rollup(
                 split_by if split_by else "Pitch Types": split_value,
                 "#": pitches,
                 "PA": bf,
+                "AB": ab,
                 "AVG": round(avg, 3) if avg is not None else None,
                 "SLG": round(slg, 3) if slg is not None else None,
+                "OBP": round(obp, 3) if obp is not None else None,
                 "OPS": round((obp or 0.0) + (slg or 0.0), 3) if obp is not None or slg is not None else None,
+                "ISO": round(iso, 3) if iso is not None else None,
+                "xISO": round(xiso, 3) if xiso is not None else None,
+                "BABIP": round(babip, 3) if babip is not None else None,
                 "K%": _safe_pct(k, bf),
                 "BB%": _safe_pct(bb, bf),
                 "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
@@ -12180,9 +12196,9 @@ def _try_pro_hitting_overview_rollup(
                 "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
                 "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
                 "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
-                "GB%": _safe_pct(sum(int(r.get("gb_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
-                "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
-                "EV": round(sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("ev_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("ev_n") or 0) for r in rows_for_split) > 0 else None,
+                "GB%": _safe_pct(gb_n, in_play_n),
+                "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), in_play_n),
+                "EV": round(ev_avg, 1) if ev_avg is not None else None,
                 "LA": round(sum(float(r.get("la_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("la_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("la_n") or 0) for r in rows_for_split) > 0 else None,
                 "xWOBA": round(sum(float(r.get("xwoba_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("xwoba_n") or 0) for r in rows_for_split)), 3) if sum(int(r.get("xwoba_n") or 0) for r in rows_for_split) > 0 else None,
                 "wOBA": round(sum(float(r.get("woba_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("woba_n") or 0) for r in rows_for_split)), 3) if sum(int(r.get("woba_n") or 0) for r in rows_for_split) > 0 else None,
@@ -12207,6 +12223,17 @@ def _try_pro_hitting_overview_rollup(
         obp = ((hits + bb + hbp) / obp_den) if obp_den > 0 else None
         avg = (hits / ab) if ab > 0 else None
         slg = (tb / ab) if ab > 0 else None
+        iso = (slg - avg) if (slg is not None and avg is not None) else None
+        in_play_n = int(sum(int(r.get("in_play_n") or 0) for r in rows_for_split))
+        gb_n = int(sum(int(r.get("gb_n") or 0) for r in rows_for_split))
+        babip = (hits / in_play_n) if in_play_n > 0 else None
+        ev_n = int(sum(int(r.get("ev_n") or 0) for r in rows_for_split))
+        ev_avg = (sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / ev_n) if ev_n > 0 else None
+        if in_play_n > 0 and ev_avg is not None:
+            gb_rate = float(gb_n) / float(in_play_n)
+            xiso = (-0.358973 * gb_rate) - (0.108255 * ev_avg) + (0.00066305 * (ev_avg ** 2)) + 4.66285
+        else:
+            xiso = None
         fps_fb_num = sum(
             _fps_swing_count_from_rollup_row(r)
             for r in rows_for_split
@@ -12231,9 +12258,14 @@ def _try_pro_hitting_overview_rollup(
             split_col_name: "All",
             "#": pitches,
             "PA": bf,
+            "AB": ab,
             "AVG": round(avg, 3) if avg is not None else None,
             "SLG": round(slg, 3) if slg is not None else None,
+            "OBP": round(obp, 3) if obp is not None else None,
             "OPS": round((obp or 0.0) + (slg or 0.0), 3) if obp is not None or slg is not None else None,
+            "ISO": round(iso, 3) if iso is not None else None,
+            "xISO": round(xiso, 3) if xiso is not None else None,
+            "BABIP": round(babip, 3) if babip is not None else None,
             "K%": _safe_pct(k, bf),
             "BB%": _safe_pct(bb, bf),
             "Swing%": _safe_pct(sum(int(r.get("swing_n") or 0) for r in rows_for_split), pitches),
@@ -12243,21 +12275,21 @@ def _try_pro_hitting_overview_rollup(
             "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
             "FPS(OS)%": _safe_pct(fps_os_num, fps_os_den),
             "InZone%": _safe_pct(sum(int(r.get("in_zone_n") or 0) for r in rows_for_split), sum(int(r.get("loc_n") or 0) for r in rows_for_split)),
-            "GB%": _safe_pct(sum(int(r.get("gb_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
-            "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), sum(int(r.get("in_play_n") or 0) for r in rows_for_split)),
-            "EV": round(sum(float(r.get("ev_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("ev_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("ev_n") or 0) for r in rows_for_split) > 0 else None,
+            "GB%": _safe_pct(gb_n, in_play_n),
+            "Barrel%": _safe_pct(sum(int(r.get("barrel_n") or 0) for r in rows_for_split), in_play_n),
+            "EV": round(ev_avg, 1) if ev_avg is not None else None,
             "LA": round(sum(float(r.get("la_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("la_n") or 0) for r in rows_for_split)), 1) if sum(int(r.get("la_n") or 0) for r in rows_for_split) > 0 else None,
             "xWOBA": round(sum(float(r.get("xwoba_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("xwoba_n") or 0) for r in rows_for_split)), 3) if sum(int(r.get("xwoba_n") or 0) for r in rows_for_split) > 0 else None,
             "wOBA": round(sum(float(r.get("woba_sum") or 0.0) for r in rows_for_split) / max(1, sum(int(r.get("woba_n") or 0) for r in rows_for_split)), 3) if sum(int(r.get("woba_n") or 0) for r in rows_for_split) > 0 else None,
         }
         table_rows.append(all_row)
-    table_columns = [split_col_name, "#", "PA", "AVG", "SLG", "OPS", "K%", "BB%", "FPS(FB)%", "FPS(OS)%", "Whiff%", "GB%", "Barrel%", "EV", "LA", "xWOBA", "wOBA"]
+    table_columns = [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "Swing%", "FPS(FB)%", "FPS(OS)%", "Whiff%", "GB%", "K%", "BB%", "Barrel%", "EV", "LA"]
     if mode_raw == "Custom":
         table_columns = [split_col_name, *normalized_custom_columns]
     elif mode_raw == "Swing Decisions":
         table_columns = [split_col_name, "#", "Swing%", "Whiff%", "CSW%", "FPS%", "FPS(FB)%", "FPS(OS)%", "InZone%"]
     elif mode_raw == "Batted Ball Data":
-        table_columns = [split_col_name, "#", "AVG", "SLG", "FPS(FB)%", "FPS(OS)%", "GB%", "Barrel%", "EV", "LA", "xWOBA", "wOBA"]
+        table_columns = [split_col_name, "PA", "AB", "AVG", "SLG", "OBP", "OPS", "wOBA", "xWOBA", "ISO", "xISO", "BABIP", "FPS(FB)%", "FPS(OS)%", "Barrel%"]
     pitch_type_legend = sorted({str(r.get("pitch_type") or "Undefined") for r in grouped_rows}, key=lambda n: (_pitch_type_sort_rank(n), n))
     return {
         "school_code": school_code,
@@ -19969,13 +20001,22 @@ def pitching_overview(
                 )
                 for row in raw_pitch_type_rows
             ]
+            chart_source_rows = (
+                _latest_rows_for_chart_points(table_source_rows, parsed_chart_points_limit)
+                if parsed_chart_points_limit is not None
+                else _downsample_rows_for_chart_points(table_source_rows)
+            )
+            heatmap_limit = max(
+                100,
+                min(
+                    int(((parsed_chart_points_limit or 1000) * 3)),
+                    max(1000, len(table_source_rows)),
+                ),
+            )
+            heatmap_source_rows = _latest_rows_for_chart_points(table_source_rows, heatmap_limit)
             chart_points = (
                 _build_chart_points(
-                    (
-                        _latest_rows_for_chart_points(table_source_rows, parsed_chart_points_limit)
-                        if parsed_chart_points_limit is not None
-                        else _downsample_rows_for_chart_points(table_source_rows)
-                    ),
+                    chart_source_rows,
                     avg_stuff_by_pitch_type,
                 )
                 if include_chart_points
@@ -19983,9 +20024,9 @@ def pitching_overview(
             )
             heatmap_points = (
                 _build_chart_points(
-                    table_source_rows,
+                    heatmap_source_rows,
                     avg_stuff_by_pitch_type,
-                    max_points=max(1, len(table_source_rows)),
+                    max_points=max(1, len(heatmap_source_rows)),
                 )
                 if include_chart_points
                 else []
@@ -22042,6 +22083,13 @@ def hitting_overview(
             "recent_pa_mode": recent_pa_mode,
             "recent_pa_count": recent_pa_count,
             "recent_pa_ignore_dates": recent_pa_ignore_dates,
+            # Bust stale cached PRO Swing Decisions payloads that used the old
+            # rollup column shape.
+            "response_shape_rev": (
+                "pro_swing_decisions_v2"
+                if school_code == "PRO" and mode_raw == "Swing Decisions"
+                else ""
+            ),
         },
     )
     use_pro_chart_cache = school_code == "PRO" and chart_only and include_chart_points

@@ -230,6 +230,29 @@ const SPRAY_RESULT_COLORS: Record<(typeof SPRAY_RESULT_ORDER)[number], string> =
 };
 const SPLIT_BY_DEFAULT = 'Pitch Types';
 const TABLE_MODE_DEFAULT = 'Results';
+const RESULTS_TABLE_COLUMNS_TEMPLATE = [
+  'PA',
+  'AB',
+  'AVG',
+  'SLG',
+  'OBP',
+  'OPS',
+  'wOBA',
+  'xWOBA',
+  'ISO',
+  'xISO',
+  'BABIP',
+  'Swing%',
+  'FPS(FB)%',
+  'FPS(OS)%',
+  'Whiff%',
+  'GB%',
+  'K%',
+  'BB%',
+  'Barrel%',
+  'EV',
+  'LA',
+] as const;
 const LEAGUE_SEASON_START = '2026-02-13';
 const LOWER_IS_BETTER_PERCENTILE_COLUMNS = new Set(
   ['BB%', 'HR%'].map((column) =>
@@ -1848,7 +1871,15 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
       x: typeof p.plate_side === 'number' ? (strictRunValue ? -p.plate_side : p.plate_side) : p.plate_side,
       y: p.plate_height,
     }))
-    .filter((row): row is { p: ChartPoint; x: number; y: number } => row.x !== null && row.y !== null);
+    .filter(
+      (row): row is { p: ChartPoint; x: number; y: number } =>
+        row.x !== null &&
+        row.y !== null &&
+        row.x >= xMin &&
+        row.x <= xMax &&
+        row.y >= yMin &&
+        row.y <= yMax
+    );
   if (!valid.length) return [];
 
   const normDesc = (value: string): string =>
@@ -2170,6 +2201,9 @@ export default function HittingSuite({
   const [summaryPitchTypeDistributions, setSummaryPitchTypeDistributions] = useState<Map<string, number[]>>(new Map());
   const [enableGameLogColors, setEnableGameLogColors] = useState(true);
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
+  const [correlationOverviewBaseQuery, setCorrelationOverviewBaseQuery] = useState('');
+  const [correlationAllStatColumns, setCorrelationAllStatColumns] = useState<string[]>([]);
+  const [correlationAllStatRows, setCorrelationAllStatRows] = useState<Array<Record<string, string | number | null>>>([]);
   const autoFallbackAppliedRef = useRef(false);
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: HittingFiltersPayload }>());
   const overviewCacheRef = useRef(new Map<string, { at: number; payload: HittingOverviewPayload }>());
@@ -2281,8 +2315,9 @@ export default function HittingSuite({
   const canRunGameLog = Boolean(hasSpecificHitterSelection || (teamType && teamType !== 'All'));
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Batter Team' : 'Batter') : splitBy;
   const canLoadOverview = useMemo(() => !!filters && !!startDate && !!endDate, [filters, startDate, endDate]);
-  const isLeague = String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE';
-  const isPro = String(filters?.school_code ?? '').toUpperCase() === 'PRO';
+  const effectiveSchoolCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+  const isLeague = effectiveSchoolCode === 'LEAGUE';
+  const isPro = effectiveSchoolCode === 'PRO';
   const activeSchoolBrand = useMemo(
     () => resolveSchoolBrand(String(filters?.school_code ?? selectedSchoolCode ?? 'PCU')),
     [filters?.school_code, selectedSchoolCode]
@@ -2532,6 +2567,7 @@ export default function HittingSuite({
     const isLeaderboardPage = dashboardPage === 'Leaderboard';
     const summarySelectedHitter = hitter && hitter !== 'All' ? hitter : '';
     const params = new URLSearchParams();
+    params.set('metrics_v', '11');
     if (startDate) params.set('start_date', startDate);
     if (endDate) params.set('end_date', endDate);
     if (hitter && hitter !== 'All') params.set('hitter', hitter);
@@ -2625,6 +2661,7 @@ export default function HittingSuite({
       setPercentileBaselineRequestKey('');
     }
     const requestKey = `/api/dashboard/hitting/overview?${params.toString()}`;
+    if (isLeaderboardPage) setCorrelationOverviewBaseQuery(params.toString());
     const chartRequestKey = shouldScheduleCompanionCharts
       ? (() => {
           const chartParams = new URLSearchParams(params);
@@ -3514,13 +3551,17 @@ export default function HittingSuite({
   }, [isLeague, isLeaderboardPage]);
   const displayedTableColumns = useMemo(() => {
     const splitColumn = overview?.table_columns?.[0] ?? 'Pitch';
+    const sourceColumns = overview?.table_columns?.length ? overview.table_columns : [splitColumn];
+    if (tableMode === 'Results' && sourceColumns.length > 1) {
+      return [splitColumn, ...RESULTS_TABLE_COLUMNS_TEMPLATE];
+    }
     if (isPro && isLeaderboardPage && tableMode !== 'Custom') {
-      return overview?.table_columns?.length ? overview.table_columns : [splitColumn];
+      return sourceColumns;
     }
     if (tableMode === 'Custom') {
       return customTableColumns.length ? [splitColumn, ...customTableColumns] : [splitColumn];
     }
-    return overview?.table_columns?.length ? overview.table_columns : [splitColumn];
+    return sourceColumns;
   }, [overview?.table_columns, tableMode, customTableColumns, isPro, isLeaderboardPage]);
   const leaderboardBaseColumns = useMemo(() => displayedTableColumns, [displayedTableColumns]);
   useEffect(() => {
@@ -3715,18 +3756,22 @@ export default function HittingSuite({
   const correlationColumns = useMemo(
     () => {
       if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage)) return [] as string[];
+      if (isLeaderboardPage && correlationAllStatColumns.length) return correlationAllStatColumns;
       return isGameLogPage ? gameLogColumns : displayedTableColumns;
     },
-    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, gameLogColumns, displayedTableColumns]
+    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, correlationAllStatColumns, gameLogColumns, displayedTableColumns]
   );
   const correlationRows = useMemo(
     () => {
       if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage)) return [] as Array<Record<string, string | number | null | undefined>>;
+      if (isLeaderboardPage && correlationAllStatRows.length) {
+        return correlationAllStatRows as Array<Record<string, string | number | null | undefined>>;
+      }
       return isGameLogPage
         ? (gameLogRowsWithPins as Array<Record<string, string | number | null | undefined>>)
         : (leaderboardRowsWithPins as Array<Record<string, string | number | null | undefined>>);
     },
-    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, gameLogRowsWithPins, leaderboardRowsWithPins]
+    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, correlationAllStatRows, gameLogRowsWithPins, leaderboardRowsWithPins]
   );
   const leaderboardColumnRanges = useMemo(() => {
     if (!isLeaderboardPage) return new Map<string, { min: number; max: number }>();
@@ -3896,6 +3941,77 @@ export default function HittingSuite({
     },
     [overview?.available_table_columns]
   );
+  const correlationAxisColumns = useMemo(
+    () => Array.from(new Set([...FALLBACK_AVAILABLE_CUSTOM_COLUMNS, ...availableCustomColumns])),
+    [availableCustomColumns]
+  );
+  useEffect(() => {
+    if (!showLeaderboardCorrelation || dashboardPage !== 'Leaderboard') {
+      setCorrelationAllStatColumns([]);
+      setCorrelationAllStatRows([]);
+      return;
+    }
+    const splitColumn = String(displayedTableColumns[0] ?? '').trim();
+    if (!correlationOverviewBaseQuery || !correlationAxisColumns.length || !splitColumn) return;
+    let active = true;
+    const controller = new AbortController();
+    const run = async () => {
+      try {
+        const metrics = correlationAxisColumns.filter((column) => column !== splitColumn);
+        const mergedByKey = new Map<string, Record<string, string | number | null>>();
+        const mergeRows = (rows: Array<Record<string, string | number | null>>, columns: string[]) => {
+          for (const row of rows) {
+            const key = String(row[splitColumn] ?? '').trim();
+            if (!key) continue;
+            const existing = mergedByKey.get(key) ?? { [splitColumn]: row[splitColumn] ?? key };
+            existing[splitColumn] = row[splitColumn] ?? key;
+            for (const column of columns) {
+              if (column === splitColumn) continue;
+              if (Object.prototype.hasOwnProperty.call(row, column)) {
+                existing[column] = row[column] as string | number | null;
+              }
+            }
+            mergedByKey.set(key, existing);
+          }
+        };
+        await Promise.all(metrics.map(async (metric) => {
+          const params = new URLSearchParams(correlationOverviewBaseQuery);
+          params.set('table_mode', 'Custom');
+          params.set('custom_columns', metric);
+          params.set('force_raw', '1');
+          params.set('include_chart_points', '0');
+          params.set('include_row_pitches', '0');
+          params.delete('chart_only');
+          params.delete('chart_points_limit');
+          const response = await fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+          const payload = (await response.json().catch(() => ({}))) as {
+            table_rows?: Array<Record<string, string | number | null>>;
+            table_columns?: string[];
+            available_table_columns?: string[];
+          };
+          if (!response.ok || !active) return;
+          const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+          const availableColumns = Array.isArray(payload.available_table_columns) ? payload.available_table_columns : [];
+          const allColumns = Array.from(new Set([...tableColumns, ...availableColumns, splitColumn, metric]));
+          const tableRows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+          const normalized = normalizeTableRowsForColumns(allColumns, tableRows);
+          mergeRows(normalized, [splitColumn, metric]);
+        }));
+        if (!active) return;
+        const mergedRows = Array.from(mergedByKey.values());
+        setCorrelationAllStatColumns([splitColumn, ...metrics]);
+        setCorrelationAllStatRows(mergedRows);
+      } catch (error) {
+        if (!active) return;
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+      }
+    };
+    void run();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [showLeaderboardCorrelation, dashboardPage, correlationOverviewBaseQuery, correlationAxisColumns, displayedTableColumns]);
   const remainingCustomColumns = useMemo(
     () => availableCustomColumns.filter((column) => !customTableColumns.includes(column)),
     [availableCustomColumns, customTableColumns]
@@ -6415,7 +6531,7 @@ export default function HittingSuite({
           onClose={() => setShowLeaderboardCorrelation(false)}
           title={isGameLogPage ? 'Hitting Game Log Correlation' : 'Hitting Leaderboard Correlation'}
           columns={correlationColumns}
-          axisColumns={availableCustomColumns}
+          axisColumns={isLeaderboardPage ? correlationAxisColumns : undefined}
           rows={correlationRows}
           viewByLabel={isLeaderboardPage ? leaderboardViewBy : 'Player'}
           primaryColumnName={correlationColumns[0] ?? ''}

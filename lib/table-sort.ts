@@ -61,8 +61,17 @@ export function parseSortableNumber(value: unknown): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value !== 'string') return null;
-  const cleaned = value.replace(/[%\s,]/g, '');
-  const parsed = Number(cleaned);
+  const raw = value.trim();
+  if (!raw) return null;
+  const normalized = raw.replace(/\u2212/g, '-'); // normalize unicode minus
+  const parenNegative = normalized.match(/^\((.*)\)$/);
+  const unsignedInner = (parenNegative ? parenNegative[1] : normalized).trim();
+  const cleaned = unsignedInner.replace(/[%\s,$]/g, '');
+  const directParsed = Number(cleaned);
+  if (Number.isFinite(directParsed)) return parenNegative ? -directParsed : directParsed;
+  const numericToken = cleaned.match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/i)?.[0];
+  if (!numericToken) return null;
+  const parsed = Number(numericToken);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -99,6 +108,12 @@ export function sortTableRows<T extends SortableRow>(
 export function formatTableDisplayValue(column: string, value: unknown): string {
   if (value === null || value === undefined || value === '') return '-';
   const upper = column.trim().toUpperCase();
+  if (upper === 'USAGE' || upper === 'USAGE %' || upper === 'USAGE%') {
+    const numericValue = parseSortableNumber(value);
+    if (numericValue === null) return String(value);
+    const normalizedUsage = Math.abs(numericValue) <= 1 ? numericValue * 100 : numericValue;
+    return `${normalizedUsage.toFixed(1)}%`;
+  }
   if (upper.includes('%')) {
     const numericValue = parseSortableNumber(value);
     if (numericValue === null) return String(value);

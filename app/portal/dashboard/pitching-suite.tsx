@@ -2157,6 +2157,9 @@ export default function PitchingSuite({
   const [percentileBaselineHandedRequestKey, setPercentileBaselineHandedRequestKey] = useState('');
   const [percentileBaselineHandedRows, setPercentileBaselineHandedRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
+  const [correlationOverviewBaseQuery, setCorrelationOverviewBaseQuery] = useState('');
+  const [correlationAllStatColumns, setCorrelationAllStatColumns] = useState<string[]>([]);
+  const [correlationAllStatRows, setCorrelationAllStatRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [isExportingLeaderboardPdf, setIsExportingLeaderboardPdf] = useState(false);
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [loadingCustomTables, setLoadingCustomTables] = useState(false);
@@ -3007,6 +3010,14 @@ export default function PitchingSuite({
       params.set('include_row_pitches', shouldIncludeRowPitches ? '1' : '0');
       params.set('include_trend_rows', isLeague ? '0' : (isTrendPage ? '1' : '0'));
     }
+    const isTableOnlyOverviewRequest =
+      params.get('include_chart_points') === '0' &&
+      params.get('include_row_pitches') === '0' &&
+      params.get('include_trend_rows') === '0' &&
+      !params.has('chart_only');
+    if (isTableOnlyOverviewRequest) {
+      params.delete('visual_option');
+    }
 
     const shouldLoadLeaderboardBaseline =
       isLeaderboard &&
@@ -3019,7 +3030,12 @@ export default function PitchingSuite({
       shouldLoadGameLogBaseline ||
       shouldLoadPitchLogBaseline ||
       (isSummaryPage && (showCellPercentiles || summaryStatView === 'Percentile' || enableTableColors));
-    if (shouldLoadPercentileBaseline) {
+    const shouldSkipLeagueBroadSummaryBaseline =
+      isLeague &&
+      isSummaryPage &&
+      isLeagueAllSelection &&
+      leagueWindowDays > 14;
+    if (shouldLoadPercentileBaseline && !shouldSkipLeagueBroadSummaryBaseline) {
       const baselineParams = new URLSearchParams(params);
       baselineParams.delete('force_raw');
       baselineParams.set('percentile_baseline', '1');
@@ -3028,6 +3044,7 @@ export default function PitchingSuite({
       baselineParams.set('include_trend_rows', '0');
       baselineParams.delete('chart_only');
       baselineParams.delete('chart_points_limit');
+      baselineParams.delete('visual_option');
       baselineParams.delete('pitcher');
       if (isSummaryPage) {
         // Summary percentile baselines should always be a pitcher-wide pool.
@@ -3077,6 +3094,7 @@ export default function PitchingSuite({
       setPercentileBaselineHandedRequestKey('');
     }
     const requestKey = `/api/dashboard/pitching/overview?${params.toString()}`;
+    if (isLeaderboardPage) setCorrelationOverviewBaseQuery(params.toString());
     const shouldSkipProCompanionChart = isPro && isSummaryPage && isProAllSelection && proWindowDays > 14;
     const chartRequestKey = ((shouldForceProFastSummary || shouldScheduleCompanionCharts) && !shouldSkipProCompanionChart)
       ? (() => {
@@ -6212,7 +6230,15 @@ export default function PitchingSuite({
         const adjustedX = typeof rawX === 'number' ? orientX(rawX) : rawX;
         return { p, x: adjustedX, y: rawY };
       })
-      .filter((row): row is { p: OverviewPayload['chart_points'][number]; x: number; y: number } => row.x !== null && row.y !== null);
+      .filter(
+        (row): row is { p: OverviewPayload['chart_points'][number]; x: number; y: number } =>
+          row.x !== null &&
+          row.y !== null &&
+          row.x >= xMin &&
+          row.x <= xMax &&
+          row.y >= yMin &&
+          row.y <= yMax
+      );
     if (!valid.length) return [];
     const globalXwobaRows = valid.filter(
       (rowPoint) =>
@@ -8362,22 +8388,26 @@ export default function PitchingSuite({
   const correlationColumns = useMemo(
     () => {
       if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage && !isPitchLogPage)) return [] as string[];
+      if (isLeaderboardPage && correlationAllStatColumns.length) return correlationAllStatColumns;
       if (isGameLogPage) return gameLogColumns;
       if (isPitchLogPage) return pitchLogColumns;
       return displayedTableColumns;
     },
-    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, isPitchLogPage, gameLogColumns, pitchLogColumns, displayedTableColumns]
+    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, isPitchLogPage, correlationAllStatColumns, gameLogColumns, pitchLogColumns, displayedTableColumns]
   );
   const correlationRows = useMemo(
     () => {
       if (!showLeaderboardCorrelation || (!isLeaderboardPage && !isGameLogPage && !isPitchLogPage)) return [] as Array<Record<string, string | number | null | undefined>>;
+      if (isLeaderboardPage && correlationAllStatColumns.length) {
+        return correlationAllStatRows as Array<Record<string, string | number | null | undefined>>;
+      }
       return isGameLogPage
         ? (gameLogRowsWithPins as Array<Record<string, string | number | null | undefined>>)
         : isPitchLogPage
         ? (sortedPitchLogRows as Array<Record<string, string | number | null | undefined>>)
         : (leaderboardRowsWithPins as Array<Record<string, string | number | null | undefined>>);
     },
-    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, isPitchLogPage, gameLogRowsWithPins, sortedPitchLogRows, leaderboardRowsWithPins]
+    [showLeaderboardCorrelation, isLeaderboardPage, isGameLogPage, isPitchLogPage, correlationAllStatColumns, correlationAllStatRows, gameLogRowsWithPins, sortedPitchLogRows, leaderboardRowsWithPins]
   );
   const latestTeamByPitcher = useMemo(() => {
     const points = overview?.chart_points ?? [];
@@ -8571,6 +8601,25 @@ export default function PitchingSuite({
       })(),
     [overview?.available_table_columns]
   );
+  const correlationAxisColumns = useMemo(() => {
+    const set = new Set<string>();
+    for (const column of availableCustomColumns) {
+      const value = String(column ?? '').trim();
+      if (value) set.add(value);
+    }
+    for (const column of displayedTableColumns.slice(1)) {
+      const value = String(column ?? '').trim();
+      if (value) set.add(value);
+    }
+    return Array.from(set);
+  }, [availableCustomColumns, displayedTableColumns]);
+  useEffect(() => {
+    // Correlation rows are now fetched on-demand in the modal by selected X/Y axes.
+    // Keep these arrays cleared to avoid expensive "all stats" custom fetches.
+    setCorrelationAllStatColumns([]);
+    setCorrelationAllStatRows([]);
+    return;
+  }, [showLeaderboardCorrelation, dashboardPage, correlationOverviewBaseQuery, correlationAxisColumns, displayedTableColumns]);
   const remainingCustomColumns = useMemo(
     () => availableCustomColumns.filter((column) => !customTableColumns.includes(column)),
     [availableCustomColumns, customTableColumns]
@@ -12472,12 +12521,13 @@ export default function PitchingSuite({
           onClose={() => setShowLeaderboardCorrelation(false)}
           title={isGameLogPage ? 'Pitching Game Log Correlation' : (isPitchLogPage ? 'Pitching Pitch Log Correlation' : 'Pitching Leaderboard Correlation')}
           columns={correlationColumns}
-          axisColumns={availableCustomColumns}
+          axisColumns={isLeaderboardPage ? correlationAxisColumns : undefined}
           rows={correlationRows}
           minPointsRequired={isPitchLogPage ? 1 : 2}
           viewByLabel={isLeaderboardPage ? leaderboardViewBy : 'Player'}
           primaryColumnName={correlationColumns[0] ?? ''}
           formatValue={isPitchLogPage ? formatPitchLogCellDisplayValue : formatPitchingTableDisplayValue}
+          correlationQueryBase={isLeaderboardPage ? correlationOverviewBaseQuery : undefined}
           siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
           siteLogoAlt={activeSchoolBrand.logoAlt}
           pointLogoSrcForLabel={(label) => {

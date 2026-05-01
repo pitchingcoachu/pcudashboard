@@ -493,6 +493,64 @@ async function fetchLeagueSafePitchingLeaderboard(params: {
   });
 }
 
+async function maybeReturnPitchingPitchTypesRollup(params: {
+  request: Request;
+  schoolCode: string;
+  startDate: string;
+  endDate: string;
+  level: string;
+  sessionType: string;
+  hand: string;
+  batterSide: string;
+  teamType: string;
+  pitchTypes: string;
+  customColumns: string;
+}): Promise<NextResponse | null> {
+  const {
+    request,
+    schoolCode,
+    startDate,
+    endDate,
+    level,
+    sessionType,
+    hand,
+    batterSide,
+    teamType,
+    pitchTypes,
+    customColumns,
+  } = params;
+  try {
+    const requestUrl = new URL(request.url);
+    const origin = `${requestUrl.protocol}//${requestUrl.host}`;
+    const rollup = new URL('/api/dashboard/pitching/table-rollup', origin);
+    rollup.searchParams.set('school_code', schoolCode);
+    if (startDate) rollup.searchParams.set('start_date', startDate);
+    if (endDate) rollup.searchParams.set('end_date', endDate);
+    if (level) rollup.searchParams.set('level', level);
+    if (sessionType) rollup.searchParams.set('session_type', sessionType);
+    if (hand) rollup.searchParams.set('hand', hand);
+    if (batterSide) rollup.searchParams.set('batter_side', batterSide);
+    if (teamType) rollup.searchParams.set('team_type', teamType);
+    if (pitchTypes) rollup.searchParams.set('pitch_types', pitchTypes);
+    if (customColumns) rollup.searchParams.set('custom_columns', customColumns);
+    rollup.searchParams.set('split_by', 'Pitch Types');
+    const response = await fetch(rollup.toString(), {
+      cache: 'no-store',
+      headers: { cookie: request.headers.get('cookie') ?? '' },
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    return NextResponse.json(payload, {
+      headers: {
+        ...RESPONSE_CACHE_HEADERS,
+        'x-dashboard-fallback': 'pitching-pitch-types-rollup',
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(request: Request) {
   const routeStartedAt = Date.now();
   const cookieStore = await cookies();
@@ -791,6 +849,52 @@ export async function GET(request: Request) {
     isLeaderboardLikeSplit &&
     !hasLeagueLeaderboardNarrowingFilters &&
     !isTruthy(chartOnly);
+  const shouldForceLeaguePitchTypesRollup =
+    isLeague &&
+    !shouldScopePlayer &&
+    !percentileBaseline &&
+    broadScope &&
+    daySpan >= 14 &&
+    splitBy === 'Pitch Types' &&
+    !includeChartsRequested &&
+    !isTruthy(chartOnly) &&
+    !hasValue(withVideo) &&
+    !hasValue(breakLines) &&
+    !hasValue(venue) &&
+    !hasValue(qpLocations) &&
+    !hasValue(inZone) &&
+    !hasValue(zoneLocations) &&
+    !hasValue(pitchResults) &&
+    !hasValue(countFilter) &&
+    !hasValue(afterCountFilter) &&
+    !hasValue(veloMin) &&
+    !hasValue(veloMax) &&
+    !hasValue(ivbMin) &&
+    !hasValue(ivbMax) &&
+    !hasValue(hbMin) &&
+    !hasValue(hbMax) &&
+    !hasValue(pcMin) &&
+    !hasValue(pcMax) &&
+    !hasValue(bfMin) &&
+    !hasValue(bfMax) &&
+    !hasValue(ipMin) &&
+    !hasValue(ipMax);
+  if (shouldForceLeaguePitchTypesRollup) {
+    const rollupPayload = await maybeReturnPitchingPitchTypesRollup({
+      request,
+      schoolCode,
+      startDate,
+      endDate,
+      level,
+      sessionType,
+      hand,
+      batterSide,
+      teamType: teamType && teamType !== 'All' ? teamType : 'All',
+      pitchTypes,
+      customColumns,
+    });
+    if (rollupPayload) return rollupPayload;
+  }
   if (leagueBroadLeaderboard) {
     // Keep League broad leaderboard requests on rollup-only payloads.
     url.searchParams.set('team_type', 'All');
