@@ -4948,6 +4948,37 @@ export async function upsertPlayerPlanGoal(input: {
   return { ok: true };
 }
 
+export async function clearPlayerPlanGoalsForPlayer(input: {
+  organizationId: number;
+  playerId: number;
+  keepSlotIndexes?: number[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const playerCheck = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM players
+      WHERE id = $1 AND organization_id = $2
+      LIMIT 1
+    `,
+    [input.playerId, input.organizationId]
+  );
+  if ((playerCheck.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
+
+  const keep = Array.from(new Set((input.keepSlotIndexes ?? []).filter((slot) => Number.isFinite(slot) && slot >= 1 && slot <= 3)));
+  if (!keep.length) {
+    await pool.query(`DELETE FROM player_plan_goals WHERE player_id = $1`, [input.playerId]);
+    return { ok: true };
+  }
+  await pool.query(`DELETE FROM player_plan_goals WHERE player_id = $1 AND slot_index <> ALL($2::smallint[])`, [
+    input.playerId,
+    keep,
+  ]);
+  return { ok: true };
+}
+
 export async function listPlayerPlanNotesForPlayer(input: {
   playerId: number;
   domain?: 'Pitching' | 'Hitting' | 'Catching' | 'General';

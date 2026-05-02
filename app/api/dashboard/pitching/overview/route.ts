@@ -157,7 +157,10 @@ function applyOverviewBackfills(payload: unknown): unknown {
 }
 
 function resolveOverviewTimeoutMs(schoolCode: string): number {
-  return String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 300000 : 120000;
+  const upper = String(schoolCode ?? '').trim().toUpperCase();
+  if (upper === 'LEAGUE') return 45000;
+  if (upper === 'PRO') return 30000;
+  return 30000;
 }
 
 function resolveOverviewCachePolicy(
@@ -198,6 +201,19 @@ function hasNonEmptyTableRows(payload: unknown): boolean {
 
 function hasValue(value: string): boolean {
   return String(value ?? '').trim().length > 0;
+}
+
+function trimCustomColumnsForBaseline(raw: string, maxCols = 48): string {
+  const deduped = Array.from(
+    new Set(
+      String(raw ?? '')
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean)
+    )
+  );
+  if (deduped.length <= maxCols) return deduped.join(',');
+  return deduped.slice(0, maxCols).join(',');
 }
 
 async function maybeAttachPitchingHeatmapRollup(params: {
@@ -574,7 +590,7 @@ export async function GET(request: Request) {
   const level = inputUrl.searchParams.get('level')?.trim() ?? '';
   const tableMode = inputUrl.searchParams.get('table_mode')?.trim() ?? '';
   const splitBy = inputUrl.searchParams.get('split_by')?.trim() ?? '';
-  const customColumns = inputUrl.searchParams.get('custom_columns')?.trim() ?? '';
+  const rawCustomColumns = inputUrl.searchParams.get('custom_columns')?.trim() ?? '';
   const visualOption = inputUrl.searchParams.get('visual_option')?.trim() ?? '';
   const inZone = inputUrl.searchParams.get('in_zone')?.trim() ?? '';
   const qpLocations = inputUrl.searchParams.get('qp_locations')?.trim() ?? '';
@@ -602,6 +618,9 @@ export async function GET(request: Request) {
   const percentileBaseline = isTruthy(inputUrl.searchParams.get('percentile_baseline')?.trim() ?? '');
   const percentilePool = inputUrl.searchParams.get('percentile_pool')?.trim().toLowerCase() ?? '';
   const useMlbPercentilePool = percentileBaseline && percentilePool === 'mlb';
+  const customColumns = percentileBaseline
+    ? trimCustomColumnsForBaseline(rawCustomColumns, 48)
+    : rawCustomColumns;
   const includeRowPitches = inputUrl.searchParams.get('include_row_pitches')?.trim() ?? '';
   const includeTrendRows = inputUrl.searchParams.get('include_trend_rows')?.trim() ?? '';
   const resolvedSchoolCode = resolveDashboardSchoolCode({

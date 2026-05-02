@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { getPlayerForUser, listPlayerSummariesByOrganization } from '../../../../../lib/training-db';
 import { logApiTiming } from '../../../../../lib/request-timing';
+import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 
 export async function GET() {
   const startedAtMs = Date.now();
@@ -13,10 +14,15 @@ export async function GET() {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return finish(401, { error: 'Unauthorized' });
+  const mappedOrganizationId = resolveProgrammingOrganizationId(session);
+  const scopedOrganizationId =
+    Number.isFinite(Number(mappedOrganizationId)) && Number(mappedOrganizationId) > 0
+      ? Number(mappedOrganizationId)
+      : Number(session.organizationId ?? 0);
 
   if (session.role === 'player') {
     const own = await getPlayerForUser({
-      organizationId: session.organizationId ?? 0,
+      organizationId: scopedOrganizationId,
       userId: session.userId ?? 0,
     });
     if (!own) return finish(200, { players: [] }, { role: 'player', count: 0 });
@@ -34,7 +40,7 @@ export async function GET() {
   }
 
   const filtered = await listPlayerSummariesByOrganization({
-    organizationId: session.organizationId ?? 0,
+    organizationId: scopedOrganizationId,
     assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
   });
   return finish(200, {

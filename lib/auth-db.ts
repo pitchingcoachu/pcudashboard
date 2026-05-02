@@ -472,6 +472,19 @@ export async function ensureAuthDbReady(): Promise<void> {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_plan_automation_rollups (
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      school_code TEXT NOT NULL,
+      percentile_source TEXT NOT NULL,
+      season_year INTEGER NOT NULL,
+      payload_json JSONB NOT NULL,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (organization_id, player_id, school_code, percentile_source, season_year)
+    );
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS exercise_categories (
       id SERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -662,6 +675,7 @@ export async function ensureAuthDbReady(): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_body_weight_logs_player_date ON body_weight_logs (player_id, log_date);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_plan_goals_player_slot ON player_plan_goals (player_id, slot_index);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_completed_plan_goals_player_completed_at ON completed_player_plan_goals (player_id, completed_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_plan_automation_rollups_lookup ON player_plan_automation_rollups (organization_id, school_code, percentile_source, season_year, generated_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_categories_org ON exercise_categories (organization_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_library_org ON exercise_library (organization_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_library_org ON workout_library (organization_id);`);

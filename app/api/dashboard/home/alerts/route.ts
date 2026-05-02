@@ -360,6 +360,7 @@ export async function GET() {
   const dates = resolveDateWindows();
   const apiBase = resolveDashboardApiBaseUrl();
   const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
+  const staleSnapshotKey = `${schoolCode}:${dates.seasonStart}:${dates.seasonEnd}:${dates.recentStart}:${dates.recentEnd}:${shouldScopePlayer ? 'scoped' : 'all'}`;
 
   try {
     const playerIdentity = shouldScopePlayer
@@ -456,9 +457,31 @@ export async function GET() {
       hitting: snapshot.hitting,
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to load home alerts.' },
-      { status: 502 }
-    );
+    // Degrade gracefully for home dashboard: serve stale snapshot if available,
+    // otherwise return empty payload instead of a hard 502.
+    const stale = Array.from(alertsSnapshotCache.entries()).find(([key]) => key.startsWith(staleSnapshotKey))?.[1];
+    if (stale) {
+      return NextResponse.json({
+        school_code: schoolCode,
+        season_start: dates.seasonStart,
+        season_end: dates.seasonEnd,
+        recent_start: dates.recentStart,
+        recent_end: dates.recentEnd,
+        pitching: stale.payload.pitching,
+        hitting: stale.payload.hitting,
+        degraded: true,
+      });
+    }
+    return NextResponse.json({
+      school_code: schoolCode,
+      season_start: dates.seasonStart,
+      season_end: dates.seasonEnd,
+      recent_start: dates.recentStart,
+      recent_end: dates.recentEnd,
+      pitching: [],
+      hitting: [],
+      degraded: true,
+      error: error instanceof Error ? error.message : 'Failed to load home alerts.',
+    });
   }
 }

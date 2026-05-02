@@ -110,6 +110,8 @@ type GoalChartState = {
   points: Array<Record<string, unknown>>;
 };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
+type PlanMode = 'Manual' | 'Automated';
+type PercentileSource = 'NCAA' | 'MLB';
 
 const DOMAIN_OPTIONS: Domain[] = ['Pitching', 'Hitting', 'Catching'];
 const GOAL_CATEGORIES: GoalCategory[] = [
@@ -283,6 +285,15 @@ function normalizePersonName(value: string): string {
     .replace(/\./g, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+}
+
+function firstLastKey(value: string): string {
+  const cleaned = normalizePersonName(value);
+  if (!cleaned) return '';
+  const parts = cleaned.split(/\s+/).filter(Boolean);
+  if (!parts.length) return '';
+  if (parts.length === 1) return parts[0];
+  return `${parts[0]} ${parts[parts.length - 1]}`;
 }
 
 function uniqueNames(values: string[]): string[] {
@@ -1352,12 +1363,16 @@ export default function PlayerPlansSuite() {
   const [domainExecutionStats, setDomainExecutionStats] = useState<string[]>(DOMAIN_EXECUTION_FALLBACKS.Pitching);
   const [goalControlsVisible, setGoalControlsVisible] = useState<Record<GoalSlot, boolean>>({ 1: true, 2: true, 3: true });
   const [goalChartHover, setGoalChartHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
+  const [planMode, setPlanMode] = useState<PlanMode>('Manual');
+  const [automationPercentileSource, setAutomationPercentileSource] = useState<PercentileSource>('NCAA');
+  const [automationLoading, setAutomationLoading] = useState(false);
+  const [automationRefreshLoading, setAutomationRefreshLoading] = useState(false);
+  const [automationLinkedPlayerId, setAutomationLinkedPlayerId] = useState('');
+  const [automationStartFresh, setAutomationStartFresh] = useState(false);
+  const [automationSessionType, setAutomationSessionType] = useState('Season');
+  const [automationStartDate, setAutomationStartDate] = useState('');
+  const [automationEndDate, setAutomationEndDate] = useState('');
 
-  const selectedPlayerId = useMemo(() => {
-    const normalized = normalizePersonName(selectedPlayerName);
-    const linked = linkedPlayers.find((player) => normalizePersonName(player.fullName) === normalized);
-    return linked?.playerId ?? 0;
-  }, [linkedPlayers, selectedPlayerName]);
   const centeredName = useMemo(() => formatNameFirstLast(selectedPlayerName), [selectedPlayerName]);
   const selectedDashboardPlayerName = useMemo(() => {
     const candidates =
@@ -1368,10 +1383,38 @@ export default function PlayerPlansSuite() {
           : filterOptions.catchers ?? [];
     return resolveDashboardPlayerName(selectedPlayerName, candidates);
   }, [domain, filterOptions.catchers, filterOptions.hitters, filterOptions.pitchers, selectedPlayerName]);
+  const selectedPlayerId = useMemo(() => {
+    const candidates = playerNameQueryCandidates(selectedPlayerName, selectedDashboardPlayerName);
+    const normalizedCandidates = new Set(candidates.map((name) => normalizePersonName(name)).filter(Boolean));
+    const firstLastCandidates = new Set(candidates.map((name) => firstLastKey(name)).filter(Boolean));
+    const linked = linkedPlayers.find((player) => {
+      const full = player.fullName ?? '';
+      const normalizedLinked = normalizePersonName(full);
+      const firstLastLinked = firstLastKey(full);
+      return normalizedCandidates.has(normalizedLinked) || firstLastCandidates.has(firstLastLinked);
+    });
+    return linked?.playerId ?? 0;
+  }, [linkedPlayers, selectedDashboardPlayerName, selectedPlayerName]);
   const playerQueryCandidates = useMemo(
     () => playerNameQueryCandidates(selectedPlayerName, selectedDashboardPlayerName),
     [selectedDashboardPlayerName, selectedPlayerName]
   );
+  const automatedGoals = useMemo(
+    () => planGoals.filter((goal) => Boolean(goal.category && (goal.objectiveText.trim() || goal.executionStat.trim() || goal.targetValue.trim()))),
+    [planGoals]
+  );
+  const linkedPlayerSelectOptions = useMemo(
+    () =>
+      [...linkedPlayers]
+        .sort((a, b) => formatNameFirstLast(a.fullName).localeCompare(formatNameFirstLast(b.fullName)))
+        .map((player) => ({ value: String(player.playerId), label: formatNameFirstLast(player.fullName) })),
+    [linkedPlayers]
+  );
+  const resolvedAutomationPlayerId = useMemo(() => {
+    const explicit = Number(automationLinkedPlayerId);
+    if (Number.isFinite(explicit) && explicit > 0) return explicit;
+    return selectedPlayerId;
+  }, [automationLinkedPlayerId, selectedPlayerId]);
   useEffect(() => {
     const allowed = new Set(DOMAIN_GOAL_CATEGORIES[domain] ?? GOAL_CATEGORIES);
     setPlanGoals((prev) =>
@@ -1379,8 +1422,9 @@ export default function PlayerPlansSuite() {
     );
   }, [domain]);
   const chartFetchGoals = useMemo(
-    () =>
-      planGoals
+    () => {
+      if (domain === 'Pitching' && planMode === 'Automated') return [];
+      return planGoals
         .filter((goal) => isChartCapableGoal(goal, domain))
         .map((goal) => ({
           slotIndex: goal.slotIndex,
@@ -1393,8 +1437,9 @@ export default function PlayerPlansSuite() {
           teams: goal.teams,
           hand: goal.hand,
           batterSide: goal.batterSide,
-        })),
-    [planGoals]
+        }));
+    },
+    [domain, planGoals, planMode]
   );
 
   useEffect(() => {
@@ -1726,6 +1771,149 @@ export default function PlayerPlansSuite() {
       setMessage(error instanceof Error ? error.message : 'Failed to save goal.');
     } finally {
       setGoalSavingSlot(null);
+    }
+  }
+
+  async function generateAutomatedGoals() {
+    const dashboardName = (selectedDashboardPlayerName || selectedPlayerName || '').trim();
+    if (!dashboardName) {
+      setMessage('Select a player first.');
+      return;
+    }
+    if (domain !== 'Pitching') {
+      setMessage('Automated player plans are currently available for Pitching only.');
+      return;
+    }
+    setAutomationLoading(true);
+    setMessage('Building automated plan...');
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 45000);
+    try {
+      let response = await fetch('/api/player/plan-goals/automated', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          playerId: resolvedAutomationPlayerId > 0 ? resolvedAutomationPlayerId : undefined,
+          dashboardPlayerName: dashboardName,
+          percentileSource: automationPercentileSource,
+          clearExisting: automationStartFresh,
+        }),
+      });
+      let payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
+        generated?: number;
+      };
+      if (!response.ok && response.status === 409) {
+        setMessage('Cache out of date. Refreshing automated cache and retrying...');
+        const refreshResponse = await fetch('/api/player/plan-goals/automated/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playerId: resolvedAutomationPlayerId > 0 ? resolvedAutomationPlayerId : undefined,
+            dashboardPlayerName: dashboardName,
+            percentileSource: automationPercentileSource,
+            sessionType: automationSessionType,
+            startDate: automationStartDate,
+            endDate: automationEndDate,
+          }),
+        });
+        const refreshPayload = (await refreshResponse.json().catch(() => ({}))) as { error?: string };
+        if (!refreshResponse.ok) throw new Error(refreshPayload.error ?? 'Failed to refresh automated cache.');
+        response = await fetch('/api/player/plan-goals/automated', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            playerId: resolvedAutomationPlayerId > 0 ? resolvedAutomationPlayerId : undefined,
+            dashboardPlayerName: dashboardName,
+            percentileSource: automationPercentileSource,
+            clearExisting: automationStartFresh,
+          }),
+        });
+        payload = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
+          generated?: number;
+        };
+      }
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to generate automated goals.');
+      const payloadGoals = Array.isArray(payload.activeGoals) ? payload.activeGoals : [];
+      if (payloadGoals.length) {
+        const next = ([1, 2, 3] as GoalSlot[]).map((slot) => {
+          const existing = payloadGoals.find((entry) => entry.slotIndex === slot);
+          return parseStoredGoalDescription(existing?.category ?? null, existing?.goalDescription ?? null, slot, existing?.createdAt ?? null);
+        });
+        setPlanGoals(next);
+        setMessage(`Automated plan created (${payload.generated ?? next.filter((goal) => Boolean(goal.category)).length} goals).`);
+        return;
+      }
+      try {
+        const refreshPlayerId = Number((payload as { playerId?: number }).playerId ?? resolvedAutomationPlayerId);
+        if (!Number.isFinite(refreshPlayerId) || refreshPlayerId <= 0) throw new Error('Automated plan saved but player link could not be resolved.');
+        const refreshResponse = await fetch(`/api/player/plan-goals?playerId=${refreshPlayerId}`, { cache: 'no-store' });
+        const refreshPayload = (await refreshResponse.json().catch(() => ({}))) as {
+          activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
+          error?: string;
+        };
+        if (!refreshResponse.ok) throw new Error(refreshPayload.error ?? 'Failed to refresh automated goals.');
+        const next = ([1, 2, 3] as GoalSlot[]).map((slot) => {
+          const existing = refreshPayload.activeGoals?.find((entry) => entry.slotIndex === slot);
+          return parseStoredGoalDescription(existing?.category ?? null, existing?.goalDescription ?? null, slot, existing?.createdAt ?? null);
+        });
+        setPlanGoals(next);
+        setMessage(`Automated plan created (${payload.generated ?? next.filter((goal) => Boolean(goal.category)).length} goals).`);
+      } catch {
+        const next = ([1, 2, 3] as GoalSlot[]).map((slot) => {
+          const existing = payload.activeGoals?.find((entry) => entry.slotIndex === slot);
+          return parseStoredGoalDescription(existing?.category ?? null, existing?.goalDescription ?? null, slot, existing?.createdAt ?? null);
+        });
+        setPlanGoals(next);
+        setMessage(`Automated plan created (${payload.generated ?? next.filter((goal) => Boolean(goal.category)).length} goals).`);
+      }
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error && error.name === 'AbortError'
+          ? 'Automated plan timed out after 45s. Try again; if it repeats, we need to trim backend query load.'
+          : error instanceof Error
+            ? error.message
+            : 'Failed to generate automated goals.';
+      setMessage(errorMessage);
+    } finally {
+      window.clearTimeout(timeout);
+      setAutomationLoading(false);
+    }
+  }
+
+  async function refreshAutomatedCache() {
+    const dashboardName = (selectedDashboardPlayerName || selectedPlayerName || '').trim();
+    if (!dashboardName) {
+      setMessage('Select a player first.');
+      return;
+    }
+    setAutomationRefreshLoading(true);
+    setMessage('Refreshing automated cache...');
+    try {
+      const response = await fetch('/api/player/plan-goals/automated/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId: resolvedAutomationPlayerId > 0 ? resolvedAutomationPlayerId : undefined,
+          dashboardPlayerName: dashboardName,
+          percentileSource: automationPercentileSource,
+          sessionType: automationSessionType,
+          startDate: automationStartDate,
+          endDate: automationEndDate,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; generated?: number };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to refresh automated cache.');
+      setMessage(`Automated cache refreshed (${payload.generated ?? 0} goals).`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to refresh automated cache.');
+    } finally {
+      setAutomationRefreshLoading(false);
     }
   }
 
@@ -2353,6 +2541,97 @@ export default function PlayerPlansSuite() {
             <input value={headerNote} onChange={(event) => setHeaderNote(event.target.value)} placeholder="Date / cycle / context..." />
           </label>
         </div>
+        <div
+          className="portal-form-grid"
+          style={{ gridTemplateColumns: domain === 'Pitching' ? 'repeat(5, minmax(170px, 1fr))' : '1fr', marginTop: 10 }}
+        >
+          <label>
+            Goal Mode
+            <select value={planMode} onChange={(event) => setPlanMode((event.target.value as PlanMode) || 'Manual')}>
+              <option value="Manual">Manual</option>
+              <option value="Automated">Automated</option>
+            </select>
+          </label>
+          {domain === 'Pitching' && planMode === 'Automated' ? (
+            <>
+              <label>
+                Linked Player
+                <select value={automationLinkedPlayerId} onChange={(event) => setAutomationLinkedPlayerId(event.target.value)}>
+                  <option value="">Use current player</option>
+                  {linkedPlayerSelectOptions.map((player) => (
+                    <option key={player.value} value={player.value}>
+                      {player.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Percentile Source
+                <select
+                  value={automationPercentileSource}
+                  onChange={(event) => setAutomationPercentileSource((event.target.value as PercentileSource) || 'NCAA')}
+                >
+                  <option value="NCAA">NCAA</option>
+                  <option value="MLB">MLB</option>
+                </select>
+              </label>
+              <label>
+                Session Type
+                <select value={automationSessionType} onChange={(event) => setAutomationSessionType(event.target.value || 'Season')}>
+                  <option value="Season">Season</option>
+                  <option value="Game">Game</option>
+                  <option value="Live">Live</option>
+                  <option value="Bullpen">Bullpen</option>
+                </select>
+              </label>
+              <label>
+                Start Date
+                <input type="date" value={automationStartDate} onChange={(event) => setAutomationStartDate(event.target.value)} />
+              </label>
+              <label>
+                End Date
+                <input type="date" value={automationEndDate} onChange={(event) => setAutomationEndDate(event.target.value)} />
+              </label>
+              <label>
+                Automation
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={automationStartFresh}
+                      onChange={(event) => setAutomationStartFresh(event.target.checked)}
+                    />
+                    Start Fresh (clear existing goals first)
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ width: '100%' }}
+                    onClick={refreshAutomatedCache}
+                    disabled={automationRefreshLoading}
+                  >
+                    {automationRefreshLoading ? 'Refreshing Cache...' : 'Refresh Automated Cache'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    style={{ width: '100%' }}
+                    onClick={generateAutomatedGoals}
+                    disabled={automationLoading}
+                  >
+                    {automationLoading ? 'Building Plan...' : 'Create Automated Plan'}
+                  </button>
+                </div>
+              </label>
+              <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 6 }}>
+                <p className="portal-muted-text" style={{ margin: 0 }}>
+                  Uses selected pitcher split data and {automationPercentileSource} percentiles.
+                  {!resolvedAutomationPlayerId ? ' Linked player selection is required.' : ''}
+                </p>
+              </div>
+            </>
+          ) : null}
+        </div>
         <div style={{ textAlign: 'center', marginTop: 8 }}>
           <div style={{ fontSize: '1.35rem', fontWeight: 800, letterSpacing: '0.02em', opacity: 0.95 }}>Player Development Plan</div>
           <h2 style={{ margin: '4px 0 0 0', fontSize: '1.12rem', fontWeight: 650 }}>{centeredName || '-'}</h2>
@@ -2367,6 +2646,38 @@ export default function PlayerPlansSuite() {
 
       <article className="portal-admin-card">
         <h3 style={{ marginTop: 0 }}>Goals</h3>
+        {domain === 'Pitching' && planMode === 'Automated' ? (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {automationLoading ? <p className="portal-muted-text" style={{ margin: 0 }}>Building automated plan...</p> : null}
+            {!automationLoading && automatedGoals.length === 0 ? (
+              <p className="portal-muted-text" style={{ margin: 0 }}>
+                Click <strong>Create Automated Plan</strong> to generate goals.
+              </p>
+            ) : null}
+            {automatedGoals.map((goal, index) => (
+              <article
+                key={`automated-goal-${goal.slotIndex}`}
+                className="portal-day-card"
+                style={{ display: 'grid', gap: 8, padding: 12, border: '1px solid rgba(255,255,255,0.14)' }}
+              >
+                <div className="portal-row-between">
+                  <h4 style={{ margin: 0 }}>{`Priority ${index + 1}: ${goal.executionStat || goalTypeLabel(goal)}`}</h4>
+                  <span className="portal-muted-text">{goal.createdAt ? new Date(goal.createdAt).toLocaleDateString() : ''}</span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(140px, 1fr))', gap: 8 }}>
+                  <div><strong>Category:</strong> {goal.category || '-'}</div>
+                  <div><strong>Target:</strong> {goal.targetValue || '-'}</div>
+                  <div><strong>Direction:</strong> {goal.comparator}</div>
+                  <div><strong>Batter Side:</strong> {goal.batterSide || 'All'}</div>
+                </div>
+                <div style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, padding: '8px 10px', whiteSpace: 'pre-wrap' }}>
+                  {goal.objectiveText.trim() || goalSummary(goal)}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : null}
+        {!(domain === 'Pitching' && planMode === 'Automated') ? (
         <div className="portal-profile-goals-grid" style={{ alignItems: 'stretch' }}>
           {planGoals.map((goal) => {
             const chartCapable = isChartCapableGoal(goal, domain);
@@ -2824,6 +3135,7 @@ export default function PlayerPlansSuite() {
             );
           })}
         </div>
+        ) : null}
       </article>
 
       {goalChartHover ? (

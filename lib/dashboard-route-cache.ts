@@ -20,6 +20,21 @@ export type DashboardFetchResult = {
   durationMs: number;
 };
 
+function errorContainsTimeout(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  if (message.includes('timeout') || message.includes('timed out') || message.includes('headers timeout')) {
+    return true;
+  }
+  const withCause = error as Error & { cause?: unknown };
+  const cause = withCause.cause as { code?: string; message?: string } | undefined;
+  if (!cause) return false;
+  const code = String(cause.code ?? '').toUpperCase();
+  if (code === 'UND_ERR_HEADERS_TIMEOUT' || code === 'ABORT_ERR') return true;
+  const causeMessage = String(cause.message ?? '').toLowerCase();
+  return causeMessage.includes('timeout') || causeMessage.includes('timed out');
+}
+
 function getCacheStore(): Map<string, CacheEntry> {
   const globalRef = globalThis as typeof globalThis & {
     [GLOBAL_CACHE_KEY]?: Map<string, CacheEntry>;
@@ -109,19 +124,26 @@ export async function fetchDashboardJsonWithCache(options: {
         attempt += 1;
         try {
           const controller = new AbortController();
-          const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
+          const timeoutMessage = `Dashboard API timeout after ${timeoutMs}ms`;
+          let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+          const timeoutPromise = new Promise<Response>((_, reject) => {
+            timeoutHandle = setTimeout(() => {
+              controller.abort();
+              reject(new Error(timeoutMessage));
+            }, timeoutMs);
+          });
           try {
-            response = await options.fetcher(controller.signal);
+            response = await Promise.race([options.fetcher(controller.signal), timeoutPromise]);
           } catch (error) {
             if (
               error instanceof Error &&
-              (error.name === 'AbortError' || error.message.toLowerCase().includes('aborted'))
+              (error.name === 'AbortError' || error.message.toLowerCase().includes('aborted') || errorContainsTimeout(error))
             ) {
-              throw new Error(`Dashboard API timeout after ${timeoutMs}ms`);
+              throw new Error(timeoutMessage);
             }
             throw error;
           } finally {
-            clearTimeout(timeoutHandle);
+            if (timeoutHandle) clearTimeout(timeoutHandle);
           }
           break;
         } catch (error) {

@@ -32,12 +32,14 @@ async function resolveAllowedPlayerId(
     session as { role?: 'admin' | 'coach' | 'player'; organizationId?: number; userId?: number; playerId?: number | null },
     requestedPlayerId
   );
-  if (!allowed) return { ok: false as const, status: 403, error: 'Forbidden' };
   const organizationId = resolveProgrammingOrganizationId(session);
   const player = await getPlayerByIdInOrganization({
     organizationId,
     playerId: requestedPlayerId,
   });
+  // Admins should be able to access any player row in the currently-resolved org,
+  // even when legacy session.organizationId differs from mapped programming org.
+  if (!allowed && session.role !== 'admin') return { ok: false as const, status: 403, error: 'Forbidden' };
   if (!player) return { ok: false as const, status: 404, error: 'Player not found.' };
   return { ok: true as const, playerId: player.id };
 }
