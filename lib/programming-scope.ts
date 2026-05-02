@@ -43,6 +43,7 @@ function parseOrgSchoolMap(raw: string): Record<number, string> {
 function parseGlobalAdminEmails(): string[] {
   const base = [
     'jgaynor@pitchingcoachu.com',
+    'sethconner12@gmail.com',
     'ahalverson@pitchingcoachu.com',
     'jchipman@pitchingcoachu.com',
     'patrick.jones@rosterpilot.com',

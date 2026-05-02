@@ -11,14 +11,25 @@ import {
   upsertPlayerPlanGoal,
 } from '../../../../lib/training-db';
 
+function resolvePlanGoalsOrganizationId(
+  session: { organizationId?: number; role?: string; userId?: number; playerId?: number | null } | null
+): number {
+  if (!session) return 0;
+  const mapped = Number(resolveProgrammingOrganizationId(session));
+  if (Number.isFinite(mapped) && mapped > 0) return mapped;
+  const fallback = Number(session.organizationId ?? 0);
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+}
+
 async function resolveAllowedPlayerId(
   session: { role?: string; organizationId?: number; userId?: number; playerId?: number | null } | null,
   requestedPlayerId: number
 ) {
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
+  const organizationId = resolvePlanGoalsOrganizationId(session);
+  if (!organizationId) return { ok: false as const, status: 400, error: 'No organization is available for this session.' };
 
   if (session.role === 'player') {
-    const organizationId = resolveProgrammingOrganizationId(session);
     const ownPlayer = await getPlayerForUser({
       organizationId,
       userId: session.userId ?? 0,
@@ -32,7 +43,6 @@ async function resolveAllowedPlayerId(
     session as { role?: 'admin' | 'coach' | 'player'; organizationId?: number; userId?: number; playerId?: number | null },
     requestedPlayerId
   );
-  const organizationId = resolveProgrammingOrganizationId(session);
   const player = await getPlayerByIdInOrganization({
     organizationId,
     playerId: requestedPlayerId,
@@ -82,7 +92,7 @@ export async function POST(request: Request) {
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
   const result = await upsertPlayerPlanGoal({
-    organizationId: resolveProgrammingOrganizationId(session),
+    organizationId: resolvePlanGoalsOrganizationId(session),
     playerId: allowed.playerId,
     slotIndex,
     category,
@@ -114,7 +124,7 @@ export async function PATCH(request: Request) {
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
   const result = await completePlayerPlanGoal({
-    organizationId: resolveProgrammingOrganizationId(session),
+    organizationId: resolvePlanGoalsOrganizationId(session),
     playerId: allowed.playerId,
     slotIndex,
     completionDetails,

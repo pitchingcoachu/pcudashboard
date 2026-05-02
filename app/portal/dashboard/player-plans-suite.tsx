@@ -1701,7 +1701,14 @@ export default function PlayerPlansSuite() {
           activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
           error?: string;
         };
-        if (!response.ok) throw new Error(payload.error ?? 'Failed to load goals.');
+        if (!response.ok) {
+          if (response.status === 404) {
+            if (!active) return;
+            setPlanGoals([1, 2, 3].map((slot) => parseStoredGoalDescription(null, null, slot as GoalSlot, null)));
+            return;
+          }
+          throw new Error(payload.error ?? 'Failed to load goals.');
+        }
         if (!active) return;
         const next = ([1, 2, 3] as GoalSlot[]).map((slot) => {
           const existing = payload.activeGoals?.find((goal) => goal.slotIndex === slot);

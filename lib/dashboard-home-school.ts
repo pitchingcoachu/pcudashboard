@@ -20,6 +20,7 @@ function parseOrgSchoolMap(raw: string): OrgMap {
 function parseGlobalAdminEmails(): string[] {
   const base = [
     'jgaynor@pitchingcoachu.com',
+    'sethconner12@gmail.com',
     'ahalverson@pitchingcoachu.com',
     'jchipman@pitchingcoachu.com',
     'patrick.jones@rosterpilot.com',
@@ -57,4 +58,3 @@ export function resolveHomeDashboardSchoolCode(input: {
   const fallback = normalizeSchoolCode(process.env.DASHBOARD_DEFAULT_SCHOOL_CODE ?? 'OSU');
   return fallback || 'OSU';
 }
-

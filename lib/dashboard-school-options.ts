@@ -51,6 +51,7 @@ function schoolFromOrganizationId(organizationId: number): string | null {
 function parseGlobalAdminEmails(): string[] {
   const base = [
     'jgaynor@pitchingcoachu.com',
+    'sethconner12@gmail.com',
     'ahalverson@pitchingcoachu.com',
     'jchipman@pitchingcoachu.com',
     'patrick.jones@rosterpilot.com',

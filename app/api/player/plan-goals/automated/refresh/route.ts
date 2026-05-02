@@ -28,6 +28,7 @@ const BB_THRESHOLD = 11;
 const K_THRESHOLD = 20;
 const EA_THRESHOLD = 70;
 const FPS_THRESHOLD = 60;
+const WHIFF_THRESHOLD = 30;
 const LOWER_BETTER = new Set(['bbpct']);
 
 function inZoneThresholdForPitch(pitch: string): number {
@@ -83,6 +84,11 @@ function parseNum(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function pctFromCounts(numerator: number | null, denominator: number | null): number | null {
+  if (numerator === null || denominator === null || denominator <= 0) return null;
+  return Number(((100 * numerator) / denominator).toFixed(1));
+}
+
 function percentileForValue(value: number, distribution: number[]): number | null {
   if (!Number.isFinite(value) || distribution.length <= 1) return null;
   const min = distribution[0];
@@ -126,16 +132,117 @@ function normalizePlayerName(value: string): string {
   return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function normalizePitcherLookupKey(value: string): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function normalizeFirstLastKey(value: string): string {
+  const compact = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9,\s]/g, ' ')
+    .replace(/\s+/g, ' ');
+  if (!compact) return '';
+  const commaMatch = compact.match(/^([^,]+),\s*(.+)$/);
+  const ordered = commaMatch ? `${commaMatch[2]} ${commaMatch[1]}` : compact;
+  const parts = ordered.split(' ').filter(Boolean);
+  if (parts.length < 2) return parts[0] ?? '';
+  return `${parts[0]} ${parts[parts.length - 1]}`;
+}
+
+function normalizeNameWords(value: string): string[] {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .split(/[,\s]+/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+function firstLastWords(value: string): { first: string; last: string } | null {
+  const compact = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9,\s]/g, ' ')
+    .replace(/\s+/g, ' ');
+  if (!compact) return null;
+  const commaMatch = compact.match(/^([^,]+),\s*(.+)$/);
+  const ordered = commaMatch ? `${commaMatch[2]} ${commaMatch[1]}` : compact;
+  const parts = ordered.split(' ').filter(Boolean);
+  if (parts.length < 2) return null;
+  return { first: parts[0], last: parts[parts.length - 1] };
+}
+
+function pitcherNameCandidates(value: string): string[] {
+  const raw = String(value ?? '').trim();
+  if (!raw) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (candidate: string) => {
+    const c = String(candidate ?? '').trim();
+    if (!c) return;
+    const key = c.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(c);
+  };
+  add(raw);
+  add(raw.replace(/\./g, ' '));
+  const commaMatch = raw.match(/^([^,]+),\s*(.+)$/);
+  if (commaMatch) add(`${commaMatch[2]} ${commaMatch[1]}`);
+  const parts = raw.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) add(`${parts.slice(1).join(' ')} ${parts[0]}`);
+  return out;
+}
+
 function pickPitcherRow(
   rows: Array<Record<string, unknown>>,
   splitCol: string,
-  pitcherName: string
+  pitcherName: string,
+  extraCandidates: string[] = []
 ): Record<string, unknown> | null {
-  const target = normalizePlayerName(pitcherName);
-  const bySplitCol = rows.find((entry) => normalizePlayerName(String(entry[splitCol] ?? '')) === target);
+  const nameCandidates = Array.from(new Set([pitcherName, ...extraCandidates].map((v) => String(v ?? '').trim()).filter(Boolean)));
+  const normCandidates = new Set(nameCandidates.map((v) => normalizePlayerName(v)).filter(Boolean));
+  const firstLastCandidates = new Set(nameCandidates.map((v) => normalizeFirstLastKey(v)).filter(Boolean));
+  const bySplitCol = rows.find((entry) => {
+    const splitRaw = String(entry[splitCol] ?? '');
+    const splitNorm = normalizePlayerName(splitRaw);
+    const splitFirstLast = normalizeFirstLastKey(splitRaw);
+    return normCandidates.has(splitNorm) || (splitFirstLast && firstLastCandidates.has(splitFirstLast));
+  });
   if (bySplitCol) return bySplitCol;
-  const byPitcherKey = rows.find((entry) => normalizePlayerName(String(entry.Pitcher ?? entry.pitcher ?? '')) === target);
+  const byPitcherKey = rows.find((entry) => {
+    const raw = String(entry.Pitcher ?? entry.pitcher ?? '');
+    const norm = normalizePlayerName(raw);
+    const firstLast = normalizeFirstLastKey(raw);
+    return normCandidates.has(norm) || (firstLast && firstLastCandidates.has(firstLast));
+  });
   if (byPitcherKey) return byPitcherKey;
+  const candidateWordPairs = nameCandidates.map(firstLastWords).filter((v): v is { first: string; last: string } => Boolean(v));
+  const fuzzyBySplit = rows.find((entry) => {
+    const words = normalizeNameWords(String(entry[splitCol] ?? ''));
+    if (!words.length) return false;
+    return candidateWordPairs.some(({ first, last }) => {
+      const hasLast = words.some((w) => w === last || w.endsWith(last) || last.endsWith(w));
+      if (!hasLast) return false;
+      const hasFirst = words.some((w) => w === first || w.startsWith(first) || first.startsWith(w));
+      return hasFirst;
+    });
+  });
+  if (fuzzyBySplit) return fuzzyBySplit;
+  const fuzzyByPitcherKey = rows.find((entry) => {
+    const words = normalizeNameWords(String(entry.Pitcher ?? entry.pitcher ?? ''));
+    if (!words.length) return false;
+    return candidateWordPairs.some(({ first, last }) => {
+      const hasLast = words.some((w) => w === last || w.endsWith(last) || last.endsWith(w));
+      if (!hasLast) return false;
+      const hasFirst = words.some((w) => w === first || w.startsWith(first) || first.startsWith(w));
+      return hasFirst;
+    });
+  });
+  if (fuzzyByPitcherKey) return fuzzyByPitcherKey;
   return null;
 }
 
@@ -203,6 +310,28 @@ async function fetchRollup(request: Request, params: URLSearchParams): Promise<{
     error?: string;
   };
   if (!response.ok) throw new Error(payload.error ?? 'Rollup query failed.');
+  return {
+    rows: Array.isArray(payload.table_rows) ? payload.table_rows : [],
+    splitCol: Array.isArray(payload.table_columns) && payload.table_columns.length ? String(payload.table_columns[0]) : '',
+  };
+}
+
+async function fetchOverviewTable(request: Request, params: URLSearchParams): Promise<{ rows: Array<Record<string, unknown>>; splitCol: string }> {
+  const base = new URL('/api/dashboard/pitching/overview', request.url);
+  base.search = params.toString();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  const response = await fetch(base.toString(), {
+    cache: 'no-store',
+    headers: { cookie: request.headers.get('cookie') ?? '' },
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeout));
+  const payload = (await response.json().catch(() => ({}))) as {
+    table_rows?: Array<Record<string, unknown>>;
+    table_columns?: string[];
+    error?: string;
+  };
+  if (!response.ok) throw new Error(payload.error ?? 'Overview query failed.');
   return {
     rows: Array.isArray(payload.table_rows) ? payload.table_rows : [],
     splitCol: Array.isArray(payload.table_columns) && payload.table_columns.length ? String(payload.table_columns[0]) : '',
@@ -292,75 +421,327 @@ export async function POST(request: Request) {
     p.set('custom_columns', columns.join(','));
     return p;
   };
+  const pitcherCandidates = pitcherNameCandidates(pitcherName);
+  let canonicalPitcherCandidates: string[] = [];
+  try {
+    await ensureAuthDbReady();
+    const pool = getDbPool();
+    const tableRef = schoolCode === 'PRO' ? 'public.pro_pitching_heatmap_daily_bins' : 'public.pitching_heatmap_daily_bins';
+    const candidateKeys = Array.from(new Set(pitcherCandidates.map((v) => normalizePitcherLookupKey(v)).filter(Boolean)));
+    if (candidateKeys.length > 0) {
+      const where: string[] = ['school_code = $1'];
+      const values: unknown[] = [schoolCode];
+      let idx = values.length;
+      if (startDate) {
+        values.push(startDate);
+        idx = values.length;
+        where.push(`session_date >= $${idx}::date`);
+      }
+      if (endDate) {
+        values.push(endDate);
+        idx = values.length;
+        where.push(`session_date <= $${idx}::date`);
+      }
+      if (sessionType && sessionType.toUpperCase() !== 'ALL') {
+        values.push(sessionType.toUpperCase());
+        idx = values.length;
+        where.push(`session_type_bucket = $${idx}`);
+      }
+      values.push(candidateKeys);
+      idx = values.length;
+      where.push(`regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher_norm), ''), '')), '[^a-z0-9]', '', 'g') = ANY($${idx}::text[])`);
+      const canonical = await pool.query<{ pitcher_norm: string }>(
+        `
+        SELECT pitcher_norm
+        FROM ${tableRef}
+        WHERE ${where.join(' AND ')}
+        GROUP BY pitcher_norm
+        ORDER BY pitcher_norm
+        LIMIT 25
+        `,
+        values
+      );
+      canonicalPitcherCandidates = canonical.rows
+        .map((row) => String(row.pitcher_norm ?? '').trim())
+        .filter(Boolean);
+    }
+  } catch {
+    canonicalPitcherCandidates = [];
+  }
+  const fetchRollupForPitcher = async (
+    baseParams: URLSearchParams,
+    fallbackOnEmpty: boolean = false
+  ): Promise<{ rows: Array<Record<string, unknown>>; splitCol: string; usedPitcher: string }> => {
+    let last: { rows: Array<Record<string, unknown>>; splitCol: string } | null = null;
+    let usedPitcher = '';
+    const effectiveCandidates = Array.from(new Set([...canonicalPitcherCandidates, ...pitcherCandidates]));
+    if (lockedPitcherCandidate) {
+      const params = new URLSearchParams(baseParams);
+      params.set('pitcher', lockedPitcherCandidate);
+      const payload = await fetchRollup(request, params);
+      if (payload.rows.length > 0) return { ...payload, usedPitcher: lockedPitcherCandidate };
+      if (fallbackOnEmpty) {
+        const fallbackPayload = await fetchRollup(request, baseParams);
+        return { ...fallbackPayload, usedPitcher: lockedPitcherCandidate };
+      }
+      return { ...payload, usedPitcher: lockedPitcherCandidate };
+    }
+    for (const candidate of effectiveCandidates) {
+      const params = new URLSearchParams(baseParams);
+      params.set('pitcher', candidate);
+      const payload = await fetchRollup(request, params);
+      last = payload;
+      usedPitcher = candidate;
+      if (payload.rows.length > 0) {
+        lockedPitcherCandidate = candidate;
+        return { ...payload, usedPitcher };
+      }
+    }
+    if (fallbackOnEmpty) {
+      const payload = await fetchRollup(request, baseParams);
+      return { ...payload, usedPitcher: '' };
+    }
+    if (last) return { ...last, usedPitcher };
+    return { rows: [], splitCol: '', usedPitcher: '' };
+  };
+  const fetchOverviewForPitcher = async (
+    baseParams: URLSearchParams
+  ): Promise<{ rows: Array<Record<string, unknown>>; splitCol: string; usedPitcher: string }> => {
+    let last: { rows: Array<Record<string, unknown>>; splitCol: string } | null = null;
+    let usedPitcher = '';
+    const effectiveCandidates = Array.from(new Set([...canonicalPitcherCandidates, ...pitcherCandidates]));
+    if (lockedPitcherCandidate) {
+      const params = new URLSearchParams(baseParams);
+      params.set('pitcher', lockedPitcherCandidate);
+      const payload = await fetchOverviewTable(request, params);
+      return { ...payload, usedPitcher: lockedPitcherCandidate };
+    }
+    for (const candidate of effectiveCandidates) {
+      const params = new URLSearchParams(baseParams);
+      params.set('pitcher', candidate);
+      const payload = await fetchOverviewTable(request, params);
+      last = payload;
+      usedPitcher = candidate;
+      if (payload.rows.length > 0) {
+        lockedPitcherCandidate = candidate;
+        return { ...payload, usedPitcher };
+      }
+    }
+    if (last) return { ...last, usedPitcher };
+    return { rows: [], splitCol: '', usedPitcher: '' };
+  };
+  let lockedPitcherCandidate = '';
+  const fetchDirectPitcherSideMetrics = async (): Promise<{
+    left: { kPct: number | null; bbPct: number | null; eaPct: number | null; fpsPct: number | null };
+    right: { kPct: number | null; bbPct: number | null; eaPct: number | null; fpsPct: number | null };
+    all: { kPct: number | null; bbPct: number | null; eaPct: number | null; fpsPct: number | null };
+  }> => {
+    await ensureAuthDbReady();
+    const pool = getDbPool();
+    const tableRef = schoolCode === 'PRO' ? 'public.pro_pitching_heatmap_daily_bins' : 'public.pitching_heatmap_daily_bins';
+    const candidateKeys = Array.from(new Set([...canonicalPitcherCandidates, ...pitcherCandidates].map(normalizePitcherLookupKey).filter(Boolean)));
+    if (!candidateKeys.length) {
+      return {
+        left: { kPct: null, bbPct: null, eaPct: null, fpsPct: null },
+        right: { kPct: null, bbPct: null, eaPct: null, fpsPct: null },
+        all: { kPct: null, bbPct: null, eaPct: null, fpsPct: null },
+      };
+    }
+    const run = async (includeSessionType: boolean) => {
+      const where: string[] = ['school_code = $1'];
+      const values: unknown[] = [schoolCode];
+      if (startDate) {
+        values.push(startDate);
+        where.push(`session_date >= $${values.length}::date`);
+      }
+      if (endDate) {
+        values.push(endDate);
+        where.push(`session_date <= $${values.length}::date`);
+      }
+      if (includeSessionType && sessionType && sessionType.toUpperCase() !== 'ALL') {
+        values.push(sessionType.toUpperCase());
+        where.push(`session_type_bucket = $${values.length}`);
+      }
+      values.push(candidateKeys);
+      where.push(`regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher_norm), ''), '')), '[^a-z0-9]', '', 'g') = ANY($${values.length}::text[])`);
+      return pool.query<{
+        side: string;
+        pa_n: number | null;
+        k_n: number | null;
+        bb_n: number | null;
+        ea_num: number | null;
+        ea_den: number | null;
+        fps_num: number | null;
+        fps_den: number | null;
+      }>(
+        `
+        SELECT
+          CASE
+            WHEN batterside_norm = 'Left' THEN 'Left'
+            WHEN batterside_norm = 'Right' THEN 'Right'
+            ELSE 'All'
+          END AS side,
+          SUM(pa_n)::int AS pa_n,
+          SUM(k_n)::int AS k_n,
+          SUM(bb_n)::int AS bb_n,
+          SUM(ea_num)::int AS ea_num,
+          SUM(ea_den)::int AS ea_den,
+          SUM(fps_num)::int AS fps_num,
+          SUM(fps_den)::int AS fps_den
+        FROM ${tableRef}
+        WHERE ${where.join(' AND ')}
+        GROUP BY 1
+        `,
+        values
+      );
+    };
+    let rows = await run(true);
+    // Some schools do not tag this slice under SEASON consistently; retry without
+    // session_type to keep player-specific automation working.
+    if ((rows.rowCount ?? 0) < 1 && sessionType && sessionType.toUpperCase() !== 'ALL') {
+      rows = await run(false);
+    }
+    const build = (side: 'Left' | 'Right' | 'All') => {
+      const row = rows.rows.find((r) => String(r.side) === side) ?? null;
+      return {
+        kPct: pctFromCounts(parseNum(row?.k_n), parseNum(row?.pa_n)),
+        bbPct: pctFromCounts(parseNum(row?.bb_n), parseNum(row?.pa_n)),
+        eaPct: pctFromCounts(parseNum(row?.ea_num), parseNum(row?.ea_den)),
+        fpsPct: pctFromCounts(parseNum(row?.fps_num), parseNum(row?.fps_den)),
+      };
+    };
+    return { left: build('Left'), right: build('Right'), all: build('All') };
+  };
 
   try {
-    const resultsCols = ['K%', 'BB%'];
-    const processCols = ['E+A%', 'FPS%'];
+    const resultsCols = ['K%', 'BB%', 'Whiff%', 'InZone%'];
+    const processCols = ['E+A%', 'FPS%', 'Whiff%', 'InZone%'];
     const pitchCols = ['#', 'InZone%', 'Whiff%', 'Stuff+'];
 
-    const rHand = mkParams('Batter Hand', resultsCols);
-    rHand.set('pitcher', pitcherName);
-    const pHand = mkParams('Batter Hand', processCols);
-    pHand.set('pitcher', pitcherName);
-    const [resultsHand, processHand] = await Promise.all([
-      fetchRollup(request, rHand),
-      fetchRollup(request, pHand),
+    const mkOverviewParams = (columns: string[]) => {
+      const p = new URLSearchParams();
+      p.set('school_code', schoolCode);
+      p.set('table_mode', 'Live');
+      p.set('split_by', 'Batter Hand');
+      p.set('session_type', sessionType);
+      if (startDate) p.set('start_date', startDate);
+      if (endDate) p.set('end_date', endDate);
+      p.set('custom_columns', columns.join(','));
+      p.set('include_chart_points', '0');
+      p.set('include_row_pitches', '0');
+      p.set('include_trend_rows', '0');
+      return p;
+    };
+    const rHand = mkOverviewParams(resultsCols);
+    const pHand = mkOverviewParams(processCols);
+    const [resultsHand, processHand, directMetrics] = await Promise.all([
+      fetchOverviewForPitcher(rHand),
+      fetchOverviewForPitcher(pHand),
+      fetchDirectPitcherSideMetrics().catch(() => ({
+        left: { kPct: null, bbPct: null, eaPct: null, fpsPct: null },
+        right: { kPct: null, bbPct: null, eaPct: null, fpsPct: null },
+        all: { kPct: null, bbPct: null, eaPct: null, fpsPct: null },
+      })),
     ]);
 
     const fetchPitcherSideRow = async (side: HandSide, columns: string[]) => {
-      const p = mkParams('Pitcher', columns);
-      p.set('pitcher', pitcherName);
+      const p = mkParams('Pitch Types', columns);
       p.set('batter_side', side);
-      const payload = await fetchRollup(request, p);
-      const split = payload.splitCol || 'Pitcher';
+      const payload = await fetchRollupForPitcher(p, false);
+      const split = payload.splitCol || 'Pitch';
       return (
-        pickPitcherRow(payload.rows, split, pitcherName) ??
-        payload.rows.find((entry) => String(entry[split] ?? '').trim().toLowerCase() !== 'all') ??
+        payload.rows.find((entry) => String(entry[split] ?? '').trim().toLowerCase() === 'all') ??
         payload.rows[0] ??
         null
       );
     };
-    const [resultsLeftRowByPitcher, resultsRightRowByPitcher, processLeftRowByPitcher, processRightRowByPitcher] = await Promise.all([
+    const fetchPitcherOverallRow = async (columns: string[]) => {
+      const p = mkParams('Pitch Types', columns);
+      const payload = await fetchRollupForPitcher(p, false);
+      const split = payload.splitCol || 'Pitch';
+      return (
+        payload.rows.find((entry) => String(entry[split] ?? '').trim().toLowerCase() === 'all') ??
+        payload.rows[0] ??
+        null
+      );
+    };
+    const fetchPitcherSideCounts = async (side: HandSide) => {
+      const row = await fetchPitcherSideRow(side, ['PA', 'K', 'BB']);
+      const pa = parseNum(row?.PA);
+      const k = parseNum(row?.K);
+      const bb = parseNum(row?.BB);
+      return { pa, k, bb };
+    };
+    const collectPitcherLabels = async (side: HandSide) => {
+      const p = mkParams('Pitch Types', ['K%', 'BB%']);
+      p.set('batter_side', side);
+      const payload = await fetchRollupForPitcher(p, false);
+      const split = payload.splitCol || 'Pitch';
+      const labels = payload.rows
+        .map((row) => String(row[split] ?? '').trim())
+        .filter((v) => v.length > 0)
+        .slice(0, 20);
+      return { split, labels };
+    };
+    const [resultsLeftRowByPitcher, resultsRightRowByPitcher, processLeftRowByPitcher, processRightRowByPitcher, leftCounts, rightCounts, overallCountsRow, overallProcessRow] = await Promise.all([
       fetchPitcherSideRow('Left', ['K%', 'BB%']),
       fetchPitcherSideRow('Right', ['K%', 'BB%']),
       fetchPitcherSideRow('Left', ['E+A%', 'FPS%']),
       fetchPitcherSideRow('Right', ['E+A%', 'FPS%']),
+      fetchPitcherSideCounts('Left'),
+      fetchPitcherSideCounts('Right'),
+      fetchPitcherOverallRow(['PA', 'K', 'BB', 'K%', 'BB%']),
+      fetchPitcherOverallRow(['E+A%', 'FPS%']),
     ]);
+    const overallPa = parseNum(overallCountsRow?.PA);
+    const overallK = parseNum(overallCountsRow?.K);
+    const overallBB = parseNum(overallCountsRow?.BB);
+    const overallKpct = parseNum(overallCountsRow?.['K%']) ?? pctFromCounts(overallK, overallPa);
+    const overallBBpct = parseNum(overallCountsRow?.['BB%']) ?? pctFromCounts(overallBB, overallPa);
+    const overallEa = parseNum(overallProcessRow?.['E+A%']);
+    const overallFps = parseNum(overallProcessRow?.['FPS%']);
 
     const handCol = resultsHand.splitCol || processHand.splitCol || 'Batter Hand';
     const handRows = {
       Left: getRowBySplit(resultsHand.rows, handCol, 'Left'),
       Right: getRowBySplit(resultsHand.rows, handCol, 'Right'),
     };
-    let kLeftRaw = parseNum(resultsLeftRowByPitcher?.['K%']) ?? parseNum(handRows.Left?.['K%']);
-    let kRightRaw = parseNum(resultsRightRowByPitcher?.['K%']) ?? parseNum(handRows.Right?.['K%']);
-    let bbLeftRaw = parseNum(resultsLeftRowByPitcher?.['BB%']) ?? parseNum(handRows.Left?.['BB%']);
-    let bbRightRaw = parseNum(resultsRightRowByPitcher?.['BB%']) ?? parseNum(handRows.Right?.['BB%']);
+    const resultsAllRow =
+      resultsHand.rows.find((row) => String(row[handCol] ?? '').trim().toLowerCase() === 'all') ??
+      resultsHand.rows[0] ??
+      null;
+    const processAllRow =
+      processHand.rows.find((row) => String(row[processHand.splitCol || handCol] ?? '').trim().toLowerCase() === 'all') ??
+      processHand.rows[0] ??
+      null;
+    // Lock "current" stat source to Batter Hand summary rows to match table semantics.
+    let kLeftRaw = parseNum(handRows.Left?.['K%']) ?? parseNum(resultsAllRow?.['K%']);
+    let kRightRaw = parseNum(handRows.Right?.['K%']) ?? parseNum(resultsAllRow?.['K%']);
+    let bbLeftRaw = parseNum(handRows.Left?.['BB%']) ?? parseNum(resultsAllRow?.['BB%']);
+    let bbRightRaw = parseNum(handRows.Right?.['BB%']) ?? parseNum(resultsAllRow?.['BB%']);
+    if (kLeftRaw === null) kLeftRaw = pctFromCounts(leftCounts.k, leftCounts.pa);
+    if (kRightRaw === null) kRightRaw = pctFromCounts(rightCounts.k, rightCounts.pa);
+    if (bbLeftRaw === null) bbLeftRaw = pctFromCounts(leftCounts.bb, leftCounts.pa);
+    if (bbRightRaw === null) bbRightRaw = pctFromCounts(rightCounts.bb, rightCounts.pa);
+    if (kLeftRaw === null) kLeftRaw = overallKpct;
+    if (kRightRaw === null) kRightRaw = overallKpct;
+    if (bbLeftRaw === null) bbLeftRaw = overallBBpct;
+    if (bbRightRaw === null) bbRightRaw = overallBBpct;
+    if (kLeftRaw === null) kLeftRaw = directMetrics.left.kPct ?? directMetrics.all.kPct;
+    if (kRightRaw === null) kRightRaw = directMetrics.right.kPct ?? directMetrics.all.kPct;
+    if (bbLeftRaw === null) bbLeftRaw = directMetrics.left.bbPct ?? directMetrics.all.bbPct;
+    if (bbRightRaw === null) bbRightRaw = directMetrics.right.bbPct ?? directMetrics.all.bbPct;
 
-    // Some datasets return only "All" for Batter Hand split. In that case, force
-    // handed values via Pitcher split + batter_side filter for this selected pitcher.
-    const hasHandRows = Boolean(handRows.Left || handRows.Right);
-    if (!hasHandRows) {
-      const fetchPitcherSide = async (side: HandSide, columns: string[]) => {
-        const p = mkParams('Pitcher', columns);
-        p.set('pitcher', pitcherName);
-        p.set('batter_side', side);
-        const payload = await fetchRollup(request, p);
-        const row =
-          payload.rows.find((entry) => String(entry[payload.splitCol || 'Pitcher'] ?? '').trim().toLowerCase() !== 'all') ??
-          payload.rows[0] ??
-          null;
-        return row;
-      };
-      const [leftResultsRow, rightResultsRow] = await Promise.all([
-        fetchPitcherSide('Left', ['K%', 'BB%']),
-        fetchPitcherSide('Right', ['K%', 'BB%']),
-      ]);
-      kLeftRaw = parseNum(leftResultsRow?.['K%']);
-      bbLeftRaw = parseNum(leftResultsRow?.['BB%']);
-      kRightRaw = parseNum(rightResultsRow?.['K%']);
-      bbRightRaw = parseNum(rightResultsRow?.['BB%']);
+    // Side K/BB must come from Batter Hand summary path. Only fall back to
+    // direct aggregated pitcher metrics when summary rows are sparse.
+    if (kLeftRaw === null && kRightRaw === null && bbLeftRaw === null && bbRightRaw === null) {
+      kLeftRaw = directMetrics.left.kPct ?? directMetrics.all.kPct;
+      kRightRaw = directMetrics.right.kPct ?? directMetrics.all.kPct;
+      bbLeftRaw = directMetrics.left.bbPct ?? directMetrics.all.bbPct;
+      bbRightRaw = directMetrics.right.bbPct ?? directMetrics.all.bbPct;
     }
+    // Keep nulls if still unresolved; downstream fallback should use real process/aggregate
+    // metrics and avoid inventing synthetic K/BB values.
 
     const bbConcernSides = (['Left', 'Right'] as HandSide[]).filter((side) => {
       const value = side === 'Left' ? bbLeftRaw : bbRightRaw;
@@ -376,8 +757,22 @@ export async function POST(request: Request) {
     const kWorstSide: HandSide =
       (kLeftRaw ?? 999) <= (kRightRaw ?? 999) ? 'Left' : 'Right';
 
-    const createBB = bbConcernSides.length > 0;
-    const createK = kConcernSides.length > 0;
+    const kDeficits = (['Left', 'Right'] as HandSide[])
+      .map((side) => {
+        const value = side === 'Left' ? kLeftRaw : kRightRaw;
+        return value === null ? null : K_THRESHOLD - value;
+      })
+      .filter((v): v is number => v !== null);
+    const bbDeficits = (['Left', 'Right'] as HandSide[])
+      .map((side) => {
+        const value = side === 'Left' ? bbLeftRaw : bbRightRaw;
+        return value === null ? null : value - BB_THRESHOLD;
+      })
+      .filter((v): v is number => v !== null);
+    const bestKDeficit = kDeficits.length ? Math.max(...kDeficits) : Number.NEGATIVE_INFINITY;
+    const bestBBDeficit = bbDeficits.length ? Math.max(...bbDeficits) : Number.NEGATIVE_INFINITY;
+    const createK = bestKDeficit > 0;
+    const createBB = bestBBDeficit > 0;
 
     const goals: GoalDraft[] = [];
 
@@ -385,10 +780,12 @@ export async function POST(request: Request) {
       const side = bbConcernSides.includes(bbWorstSide) ? bbWorstSide : bbConcernSides[0];
       const processSplitCol = processHand.splitCol || handCol;
       const processRow =
-        (side === 'Left' ? processLeftRowByPitcher : processRightRowByPitcher) ??
+        getRowBySplit(processHand.rows, processSplitCol, side) ??
         getRowBySplit(processHand.rows, processSplitCol, side);
-      const eaRaw = parseNum(processRow?.['E+A%']);
-      const fpsRaw = parseNum(processRow?.['FPS%']);
+      let eaRaw = parseNum(processRow?.['E+A%']) ?? parseNum(processAllRow?.['E+A%']) ?? overallEa;
+      let fpsRaw = parseNum(processRow?.['FPS%']) ?? parseNum(processAllRow?.['FPS%']) ?? overallFps;
+      if (eaRaw === null) eaRaw = (side === 'Left' ? directMetrics.left.eaPct : directMetrics.right.eaPct) ?? directMetrics.all.eaPct;
+      if (fpsRaw === null) fpsRaw = (side === 'Left' ? directMetrics.left.fpsPct : directMetrics.right.fpsPct) ?? directMetrics.all.fpsPct;
       const eaGap = eaRaw === null ? Number.NEGATIVE_INFINITY : EA_THRESHOLD - eaRaw;
       const fpsGap = fpsRaw === null ? Number.NEGATIVE_INFINITY : FPS_THRESHOLD - fpsRaw;
       const primaryMetric = eaGap >= fpsGap ? 'E+A%' : 'FPS%';
@@ -408,7 +805,6 @@ export async function POST(request: Request) {
       }
 
       const pPitch = mkParams('Pitch Types', ['#', 'InZone%']);
-      pPitch.set('pitcher', pitcherName);
       pPitch.set('batter_side', side);
       if (primaryMetric === 'FPS%') pPitch.set('count_filter', '0-0');
 
@@ -416,7 +812,7 @@ export async function POST(request: Request) {
       pPitchBase.set('batter_side', side);
       if (primaryMetric === 'FPS%') pPitchBase.set('count_filter', '0-0');
 
-      const [pitchRows, pitchBaseRows] = await Promise.all([fetchRollup(request, pPitch), fetchRollup(request, pPitchBase)]);
+      const [pitchRows, pitchBaseRows] = await Promise.all([fetchRollupForPitcher(pPitch), fetchRollup(request, pPitchBase)]);
       const pitchSplit = pitchRows.splitCol || 'Pitch';
 
       const allRow = pitchRows.rows.find((r) => String(r[pitchSplit] ?? '').trim().toLowerCase() === 'all');
@@ -475,13 +871,31 @@ export async function POST(request: Request) {
 
     if (createK && goals.length < 3) {
       const side = kConcernSides.includes(kWorstSide) ? kWorstSide : kConcernSides[0];
+      const processSplitCol = processHand.splitCol || handCol;
+      const processRow =
+        getRowBySplit(processHand.rows, processSplitCol, side) ??
+        getRowBySplit(processHand.rows, processSplitCol, side);
+      const sideWhiff = parseNum(processRow?.['Whiff%']) ?? parseNum(processAllRow?.['Whiff%']);
+      if (sideWhiff !== null && sideWhiff < WHIFF_THRESHOLD) {
+        const target = stepUpTarget(sideWhiff, WHIFF_THRESHOLD);
+        goals.push({
+          category: 'Execution',
+          executionStat: 'Whiff%',
+          comparator: 'Greater Than',
+          targetValue: target,
+          objectiveText: `Improve Whiff% vs ${side === 'Left' ? 'LHH' : 'RHH'} to ${target.toFixed(1)}%. (${currentPctText(sideWhiff)})`,
+          batterSide: side,
+        });
+      }
+      if (goals.length >= 3) {
+        // preserve priority cap
+      } else {
       const rPitch = mkParams('Pitch Types', pitchCols);
-      rPitch.set('pitcher', pitcherName);
       rPitch.set('batter_side', side);
       const rPitchBase = mkParams('Pitch Types', pitchCols);
       rPitchBase.set('batter_side', side);
 
-      const [pitchRows, pitchBaseRows] = await Promise.all([fetchRollup(request, rPitch), fetchRollup(request, rPitchBase)]);
+      const [pitchRows, pitchBaseRows] = await Promise.all([fetchRollupForPitcher(rPitch), fetchRollup(request, rPitchBase)]);
       const splitCol = pitchRows.splitCol || 'Pitch';
       const allRow = pitchRows.rows.find((r) => String(r[splitCol] ?? '').trim().toLowerCase() === 'all');
       const totalPitches = parseNum(allRow?.['#']) ?? 0;
@@ -539,6 +953,7 @@ export async function POST(request: Request) {
             pitchTypes: [stuffConcern.pitch],
           });
       }
+      }
     }
 
     if (!goals.length) {
@@ -552,8 +967,10 @@ export async function POST(request: Request) {
       const bbGapRight = rightBB - BB_THRESHOLD;
       const bestKGap = Math.max(kGapLeft, kGapRight);
       const bestBBGap = Math.max(bbGapLeft, bbGapRight);
-      const useK = bestKGap >= bestBBGap;
-      if (useK && Number.isFinite(Math.min(leftK, rightK))) {
+      const hasKDeficit = bestKGap > 0;
+      const hasBBDeficit = bestBBGap > 0;
+      const useK = hasKDeficit && (!hasBBDeficit || bestKGap >= bestBBGap);
+      if ((hasKDeficit || hasBBDeficit) && useK && Number.isFinite(Math.min(leftK, rightK))) {
         const side: HandSide = leftK <= rightK ? 'Left' : 'Right';
         const current = side === 'Left' ? leftK : rightK;
         const target = stepUpTarget(current, K_THRESHOLD);
@@ -565,7 +982,7 @@ export async function POST(request: Request) {
           objectiveText: `Raise K% vs ${side === 'Left' ? 'LHH' : 'RHH'} to ${target.toFixed(1)}%. (${currentPctText(current)})`,
           batterSide: side,
         });
-      } else if (Number.isFinite(Math.max(leftBB, rightBB))) {
+      } else if ((hasKDeficit || hasBBDeficit) && Number.isFinite(Math.max(leftBB, rightBB))) {
         const side: HandSide = leftBB >= rightBB ? 'Left' : 'Right';
         const current = side === 'Left' ? leftBB : rightBB;
         const target = stepDownTarget(current, BB_THRESHOLD);
@@ -622,61 +1039,110 @@ export async function POST(request: Request) {
         if (fps !== null) fallbackCandidates.push({ stat: 'FPS%', side: 'Right', current: fps, deficit: FPS_THRESHOLD - fps });
         if (k !== null) fallbackCandidates.push({ stat: 'K%', side: 'Right', current: k, deficit: K_THRESHOLD - k });
         if (bb !== null) fallbackCandidates.push({ stat: 'BB%', side: 'Right', current: bb, deficit: bb - BB_THRESHOLD });
+        const directEa = directMetrics.all.eaPct;
+        const directFps = directMetrics.all.fpsPct;
+        const directK = directMetrics.all.kPct;
+        const directBb = directMetrics.all.bbPct;
+        if (directEa !== null) fallbackCandidates.push({ stat: 'E+A%', side: 'Right', current: directEa, deficit: EA_THRESHOLD - directEa });
+        if (directFps !== null) fallbackCandidates.push({ stat: 'FPS%', side: 'Right', current: directFps, deficit: FPS_THRESHOLD - directFps });
+        if (directK !== null) fallbackCandidates.push({ stat: 'K%', side: 'Right', current: directK, deficit: K_THRESHOLD - directK });
+        if (directBb !== null) fallbackCandidates.push({ stat: 'BB%', side: 'Right', current: directBb, deficit: directBb - BB_THRESHOLD });
       }
 
       if (fallbackCandidates.length) {
-        // Prioritize most under-threshold; if none under, choose smallest margin to threshold.
+        // Prioritize under-threshold items only; avoid manufacturing generic K/BB goals.
         const below = fallbackCandidates.filter((c) => c.deficit > 0);
-        const chosen = (below.length
-          ? below.sort((a, b) => b.deficit - a.deficit)
-          : fallbackCandidates.sort((a, b) => Math.abs(a.deficit) - Math.abs(b.deficit)))[0];
-        if (chosen.stat === 'BB%') {
-          const target = stepDownTarget(chosen.current, BB_THRESHOLD);
-          finalGoals.push({
-            category: 'Execution',
-            executionStat: 'BB%',
-            comparator: 'Less Than',
-            targetValue: target,
-            objectiveText: `Lower BB% vs ${chosen.side === 'Left' ? 'LHH' : 'RHH'} below ${target.toFixed(1)}%. (${currentPctText(chosen.current)})`,
-            batterSide: chosen.side,
-          });
+        if (below.length) {
+          const chosen = below.sort((a, b) => b.deficit - a.deficit)[0];
+          if (chosen.stat === 'BB%') {
+            const target = stepDownTarget(chosen.current, BB_THRESHOLD);
+            finalGoals.push({
+              category: 'Execution',
+              executionStat: 'BB%',
+              comparator: 'Less Than',
+              targetValue: target,
+              objectiveText: `Lower BB% vs ${chosen.side === 'Left' ? 'LHH' : 'RHH'} below ${target.toFixed(1)}%. (${currentPctText(chosen.current)})`,
+              batterSide: chosen.side,
+            });
+          } else {
+            const threshold = chosen.stat === 'E+A%' ? EA_THRESHOLD : chosen.stat === 'FPS%' ? FPS_THRESHOLD : K_THRESHOLD;
+            const target = stepUpTarget(chosen.current, threshold);
+            finalGoals.push({
+              category: 'Execution',
+              executionStat: chosen.stat,
+              comparator: 'Greater Than',
+              targetValue: target,
+              objectiveText: `Raise ${chosen.stat} vs ${chosen.side === 'Left' ? 'LHH' : 'RHH'} to ${target.toFixed(1)}%. (${currentPctText(chosen.current)})`,
+              batterSide: chosen.side,
+            });
+          }
         } else {
-          const threshold = chosen.stat === 'E+A%' ? EA_THRESHOLD : chosen.stat === 'FPS%' ? FPS_THRESHOLD : K_THRESHOLD;
-          const target = stepUpTarget(chosen.current, threshold);
-          finalGoals.push({
-            category: 'Execution',
-            executionStat: chosen.stat,
-            comparator: 'Greater Than',
-            targetValue: target,
-            objectiveText: `Raise ${chosen.stat} vs ${chosen.side === 'Left' ? 'LHH' : 'RHH'} to ${target.toFixed(1)}%. (${currentPctText(chosen.current)})`,
-            batterSide: chosen.side,
-          });
+          const processOnly = fallbackCandidates
+            .filter((c) => c.stat === 'E+A%' || c.stat === 'FPS%')
+            .sort((a, b) => Math.abs(a.deficit) - Math.abs(b.deficit));
+          const chosenProcess = processOnly[0] ?? null;
+          if (chosenProcess) {
+            const threshold = chosenProcess.stat === 'E+A%' ? EA_THRESHOLD : FPS_THRESHOLD;
+            const target = stepUpTarget(chosenProcess.current, threshold);
+            finalGoals.push({
+              category: 'Execution',
+              executionStat: chosenProcess.stat,
+              comparator: 'Greater Than',
+              targetValue: target,
+              objectiveText: `Raise ${chosenProcess.stat} vs ${chosenProcess.side === 'Left' ? 'LHH' : 'RHH'} to ${target.toFixed(1)}%. (${currentPctText(chosenProcess.current)})`,
+              batterSide: chosenProcess.side,
+            });
+          }
         }
       } else {
-        const processAll =
-          processHand.rows.find((row) => {
-            const split = processHand.splitCol || handCol;
-            return String(row[split] ?? '').trim().toLowerCase() === 'all';
-          }) ??
-          processHand.rows[0] ??
-          null;
-        const currentEa = parseNum(processAll?.['E+A%']) ?? EA_THRESHOLD - 5;
-        const target = stepUpTarget(currentEa, EA_THRESHOLD);
-        finalGoals.push({
-          category: 'Execution',
-          executionStat: 'E+A%',
-          comparator: 'Greater Than',
-          targetValue: target,
-          objectiveText: `Raise E+A% to ${target.toFixed(1)}%. (${currentPctText(currentEa)})`,
-          batterSide: 'Right',
-        });
+        return NextResponse.json(
+          {
+            error: `Unable to compute player-specific automated goals for ${pitcherName} with current filters.`,
+            debug: {
+              pitcherName,
+              pitcherCandidates,
+              canonicalPitcherCandidates,
+              directMetrics,
+              kLeftRaw,
+              kRightRaw,
+              bbLeftRaw,
+              bbRightRaw,
+            },
+          },
+          { status: 400 }
+        );
       }
     }
 
     const payload: AutomationRollupPayload = {
       generated_at: new Date().toISOString(),
       generated_goals: finalGoals,
-      debug: { source: 'table-rollup-refresh', percentileSource, rulesVersion: AUTOMATION_RULES_VERSION },
+      debug: {
+        source: 'overview-live-refresh',
+        percentileSource,
+        rulesVersion: AUTOMATION_RULES_VERSION,
+        pitcherRequested: pitcherName,
+        pitcherCandidates,
+        lockedPitcherCandidate: lockedPitcherCandidate || null,
+        pitcherMatchedResultsHand: resultsHand.usedPitcher || null,
+        pitcherMatchedProcessHand: processHand.usedPitcher || null,
+        kLeft: kLeftRaw,
+        kRight: kRightRaw,
+        bbLeft: bbLeftRaw,
+        bbRight: bbRightRaw,
+        resultsSplitCol: handCol,
+        resultsLeftRow: handRows.Left ?? null,
+        resultsRightRow: handRows.Right ?? null,
+        resultsAllRow: resultsAllRow ?? null,
+        processSplitCol: processHand.splitCol || handCol,
+        processLeftRow: getRowBySplit(processHand.rows, processHand.splitCol || handCol, 'Left') ?? null,
+        processRightRow: getRowBySplit(processHand.rows, processHand.splitCol || handCol, 'Right') ?? null,
+        processAllRow: processAllRow ?? null,
+        bestKDeficit,
+        bestBBDeficit,
+        createK,
+        createBB,
+      },
     };
 
     await upsertAutomationRollup({

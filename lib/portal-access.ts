@@ -10,7 +10,11 @@ type SessionLike = {
 
 export async function canManagePlayer(session: SessionLike, playerId: number): Promise<boolean> {
   if (!session) return false;
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const mappedOrganizationId = resolveProgrammingOrganizationId(session);
+  const organizationId =
+    Number.isFinite(Number(mappedOrganizationId)) && Number(mappedOrganizationId) > 0
+      ? Number(mappedOrganizationId)
+      : Number(session.organizationId ?? 0);
   if (organizationId <= 0 || !Number.isFinite(playerId) || playerId <= 0) return false;
 
   if (session.role === 'admin') {
