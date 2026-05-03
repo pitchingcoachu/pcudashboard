@@ -5552,6 +5552,41 @@ export async function completePlayerPlanGoal(input: {
   }
 }
 
+export async function deletePlayerPlanGoal(input: {
+  organizationId: number;
+  playerId: number;
+  slotIndex: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  if (!Number.isFinite(input.slotIndex) || input.slotIndex < 1 || input.slotIndex > 3) {
+    return { ok: false, error: 'slotIndex must be 1, 2, or 3.' };
+  }
+
+  const playerCheck = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM players
+      WHERE id = $1 AND organization_id = $2
+      LIMIT 1
+    `,
+    [input.playerId, input.organizationId]
+  );
+  if ((playerCheck.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
+
+  await pool.query(
+    `
+      DELETE FROM player_plan_goals
+      WHERE player_id = $1
+        AND slot_index = $2
+    `,
+    [input.playerId, input.slotIndex]
+  );
+  return { ok: true };
+}
+
 export async function upsertBodyWeightLog(input: {
   playerId: number;
   loggedByUserId: number;

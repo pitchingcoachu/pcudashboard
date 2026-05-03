@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
-import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
+import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
 import { ensureAuthDbReady, getDbPool } from '../../../../../lib/auth-db';
 import { resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { clearPlayerPlanGoalsForPlayer, getPlayerByIdInOrganization, listPlayerPlanGoalsForPlayer, upsertPlayerPlanGoal } from '../../../../../lib/training-db';
@@ -17,7 +17,27 @@ type GoalDraft = {
   pitchTypes?: string[];
   countOptions?: string[];
 };
-const AUTOMATION_RULES_VERSION = 'fixed-thresholds-v1';
+const AUTOMATION_RULES_VERSION = 'fixed-thresholds-v4';
+
+function normalizeSchoolCode(value: unknown): string {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+function parseOrgSchoolMap(raw: string): Record<number, string> {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<number, string> = {};
+    for (const [orgIdRaw, schoolRaw] of Object.entries(parsed)) {
+      const orgId = Number(orgIdRaw);
+      const school = normalizeSchoolCode(typeof schoolRaw === 'string' ? schoolRaw : '');
+      if (!Number.isFinite(orgId) || orgId <= 0 || !school) continue;
+      out[orgId] = school;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 async function resolveAutomationPlayer(input: {
   organizationId: number;
@@ -96,8 +116,8 @@ export async function POST(request: Request) {
 
   const playerId = Number(body.playerId ?? 0);
   const percentileSource: 'NCAA' | 'MLB' = body.percentileSource === 'MLB' ? 'MLB' : 'NCAA';
-  const mappedOrganizationId = resolveProgrammingOrganizationId(session);
-  const organizationId = Number(mappedOrganizationId) > 0 ? Number(mappedOrganizationId) : Number(session.organizationId ?? 0);
+  const mappedOrganizationId = resolveSchoolScopedOrganizationId(session);
+  const organizationId = Number(mappedOrganizationId) > 0 ? Number(mappedOrganizationId) : 0;
   if (!organizationId) return NextResponse.json({ error: 'No organization is available for the current site/session.' }, { status: 400 });
 
   const player = await resolveAutomationPlayer({
@@ -118,6 +138,13 @@ export async function POST(request: Request) {
     appUrl: session.appUrl,
     apps: session.apps,
   });
+  const mappedSchoolCode = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}')[organizationId] ?? '';
+  if (mappedSchoolCode && schoolCode && mappedSchoolCode !== schoolCode) {
+    return NextResponse.json(
+      { error: `Safety stop: selected school ${schoolCode} does not match resolved org mapping ${mappedSchoolCode}.` },
+      { status: 409 }
+    );
+  }
   const seasonYear = new Date().getUTCFullYear();
 
   const rollup = await getAutomationRollup({
@@ -159,6 +186,13 @@ export async function POST(request: Request) {
     });
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   }
+  const keepSlots = goals.map((_, idx) => idx + 1);
+  const trim = await clearPlayerPlanGoalsForPlayer({
+    organizationId,
+    playerId: player.id,
+    keepSlotIndexes: keepSlots,
+  });
+  if (!trim.ok) return NextResponse.json({ error: trim.error }, { status: 400 });
 
   const data = await listPlayerPlanGoalsForPlayer({ playerId: player.id });
   return NextResponse.json({ ok: true, generated: goals.length, cachedAt: rollup.generatedAt, playerId: player.id, ...data });

@@ -18,6 +18,11 @@ type PlayerPlanNote = {
   createdAt: string;
 };
 
+type LinkedPlayerOption = {
+  playerId: number;
+  fullName: string;
+};
+
 type AttachmentPreview = {
   name: string;
   mimeType: string;
@@ -46,6 +51,50 @@ function uniqueNames(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
 }
 
+function uniqueCanonicalNames(values: string[]): string[] {
+  const map = new Map<string, string>();
+  for (const raw of values) {
+    const trimmed = String(raw ?? '').trim();
+    if (!trimmed) continue;
+    const key = normalizePersonName(trimmed);
+    if (!key) continue;
+    const existing = map.get(key);
+    if (!existing || (existing.includes(',') && !trimmed.includes(','))) map.set(key, trimmed);
+  }
+  return Array.from(map.values());
+}
+
+function normalizePersonName(value: string): string {
+  return formatNameFirstLast(String(value ?? ''))
+    .toLowerCase()
+    .replace(/\./g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function normalizeDateOnly(value: string): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const direct = raw.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(direct)) return direct;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const year = parsed.getUTCFullYear();
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function resolveTypedPlayerInput(inputName: string, candidates: string[]): string {
+  const typed = String(inputName ?? '').trim();
+  if (!typed) return 'All';
+  const exact = candidates.find((value) => value === typed);
+  if (exact) return exact;
+  const typedNorm = normalizePersonName(typed);
+  const normalized = candidates.find((value) => normalizePersonName(value) === typedNorm);
+  return normalized ?? typed;
+}
+
 async function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -65,7 +114,9 @@ function categoryBadgeStyle(category: string): React.CSSProperties {
 
 export default function PlayerNotesSuite() {
   const [dashboardPlayerOptions, setDashboardPlayerOptions] = useState<string[]>([]);
+  const [linkedPlayers, setLinkedPlayers] = useState<LinkedPlayerOption[]>([]);
   const [selectedPlayerName, setSelectedPlayerName] = useState('All');
+  const [playerInputName, setPlayerInputName] = useState('All');
   const [loadingPlayers, setLoadingPlayers] = useState(false);
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [message, setMessage] = useState('');
@@ -88,6 +139,22 @@ export default function PlayerNotesSuite() {
     () => uniqueNames([...DEFAULT_NOTE_CATEGORIES, ...customCategories, ...notes.map((note) => note.category)]),
     [customCategories, notes]
   );
+  const selectedLinkedPlayerId = useMemo(() => {
+    const selectedNorm = normalizePersonName(selectedPlayerName);
+    if (!selectedNorm || selectedPlayerName === 'All') return 0;
+    const match = linkedPlayers.find((player) => normalizePersonName(player.fullName) === selectedNorm);
+    return Number(match?.playerId ?? 0);
+  }, [linkedPlayers, selectedPlayerName]);
+  const commitPlayerInput = () => {
+    const resolved = resolveTypedPlayerInput(playerInputName, dashboardPlayerOptions);
+    const match = dashboardPlayerOptions.find((name) => normalizePersonName(name) === normalizePersonName(resolved));
+    const next = match ?? 'All';
+    setSelectedPlayerName(next);
+    setPlayerInputName(next);
+  };
+  useEffect(() => {
+    setPlayerInputName(selectedPlayerName);
+  }, [selectedPlayerName]);
 
   useEffect(() => {
     let active = true;
@@ -96,23 +163,33 @@ export default function PlayerNotesSuite() {
       fetch('/api/dashboard/player-plans/domain-players?domain=Pitching', { cache: 'no-store' }),
       fetch('/api/dashboard/player-plans/domain-players?domain=Hitting', { cache: 'no-store' }),
       fetch('/api/dashboard/player-plans/domain-players?domain=Catching', { cache: 'no-store' }),
+      fetch('/api/dashboard/player-plans/players', { cache: 'no-store' }),
     ])
       .then(async (responses) => {
         const payloads = await Promise.all(
-          responses.map(async (response) => {
+          responses.slice(0, 3).map(async (response) => {
             const payload = (await response.json().catch(() => ({}))) as { players?: string[] };
             return response.ok ? payload : { players: [] };
           })
         );
+        const linkedPayload = (await responses[3].json().catch(() => ({}))) as { players?: Array<{ playerId: number; fullName: string }> };
         if (!active) return;
-        const combined = uniqueNames(payloads.flatMap((payload) => payload.players ?? []));
+        const combined = uniqueCanonicalNames(payloads.flatMap((payload) => payload.players ?? []));
         const options = ['All', ...combined];
         setDashboardPlayerOptions(options);
+        setLinkedPlayers(
+          Array.isArray(linkedPayload.players)
+            ? linkedPayload.players
+                .map((player) => ({ playerId: Number(player.playerId ?? 0), fullName: String(player.fullName ?? '').trim() }))
+                .filter((player) => player.playerId > 0 && player.fullName.length > 0)
+            : []
+        );
         setSelectedPlayerName((current) => (options.includes(current) ? current : 'All'));
       })
       .catch(() => {
         if (!active) return;
         setDashboardPlayerOptions(['All']);
+        setLinkedPlayers([]);
         setSelectedPlayerName('All');
       })
       .finally(() => {
@@ -134,7 +211,9 @@ export default function PlayerNotesSuite() {
     const notesUrl =
       selectedPlayerName === 'All'
         ? '/api/player/plan-notes?domain=General'
-        : `/api/player/plan-notes?domain=General&dashboardPlayerName=${encodeURIComponent(selectedPlayerName)}`;
+        : selectedLinkedPlayerId > 0
+          ? `/api/player/plan-notes?domain=General&playerId=${selectedLinkedPlayerId}`
+          : `/api/player/plan-notes?domain=General&dashboardPlayerName=${encodeURIComponent(selectedPlayerName)}`;
     fetch(notesUrl, { cache: 'no-store' })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as { notes?: PlayerPlanNote[]; error?: string };
@@ -152,7 +231,23 @@ export default function PlayerNotesSuite() {
     return () => {
       active = false;
     };
-  }, [selectedPlayerName]);
+  }, [selectedLinkedPlayerId, selectedPlayerName]);
+
+  useEffect(() => {
+    if (!notes.length) {
+      setFilterStartDate('');
+      setFilterEndDate('');
+      return;
+    }
+    const dates = notes.map((note) => normalizeDateOnly(note.noteDate)).filter(Boolean).sort();
+    if (!dates.length) {
+      setFilterStartDate('');
+      setFilterEndDate('');
+      return;
+    }
+    setFilterStartDate(dates[0]);
+    setFilterEndDate(dates[dates.length - 1]);
+  }, [notes]);
 
   async function saveNote() {
     if (!selectedPlayerName.trim()) {
@@ -171,7 +266,8 @@ export default function PlayerNotesSuite() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          dashboardPlayerName: selectedPlayerName,
+          playerId: selectedLinkedPlayerId > 0 ? selectedLinkedPlayerId : undefined,
+          dashboardPlayerName: selectedLinkedPlayerId > 0 ? undefined : selectedPlayerName,
           domain: 'General',
           noteDate,
           category: noteCategory,
@@ -250,10 +346,13 @@ export default function PlayerNotesSuite() {
 
   const filteredNotes = useMemo(() => {
     const query = searchText.trim().toLowerCase();
+    const startDate = normalizeDateOnly(filterStartDate);
+    const endDate = normalizeDateOnly(filterEndDate);
     return notes.filter((note) => {
+      const noteDate = normalizeDateOnly(note.noteDate);
       if (filterCategory !== 'All' && note.category !== filterCategory) return false;
-      if (filterStartDate && note.noteDate < filterStartDate) return false;
-      if (filterEndDate && note.noteDate > filterEndDate) return false;
+      if (startDate && noteDate && noteDate < startDate) return false;
+      if (endDate && noteDate && noteDate > endDate) return false;
       if (!query) return true;
       const text = `${note.noteText} ${note.category} ${note.attachmentName ?? ''} ${note.dashboardPlayerName ?? ''}`.toLowerCase();
       return text.includes(query);
@@ -301,14 +400,26 @@ export default function PlayerNotesSuite() {
           <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(180px, 1fr))' }}>
             <label>
               Player
-              <select value={selectedPlayerName} onChange={(event) => setSelectedPlayerName(event.target.value)}>
-                {!dashboardPlayerOptions.length ? <option value="">No players available</option> : null}
+              <input
+                list="player-notes-player-options"
+                value={playerInputName}
+                onChange={(event) => setPlayerInputName(event.target.value)}
+                onBlur={commitPlayerInput}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    commitPlayerInput();
+                  }
+                }}
+                placeholder={dashboardPlayerOptions.length ? 'Type or choose player...' : 'No players available'}
+              />
+              <datalist id="player-notes-player-options">
                 {dashboardPlayerOptions.map((playerName) => (
                   <option key={playerName} value={playerName}>
                     {formatNameFirstLast(playerName)}
                   </option>
                 ))}
-              </select>
+              </datalist>
             </label>
             <label>
               Search Notes

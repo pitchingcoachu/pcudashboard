@@ -1,24 +1,72 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
+import { resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import {
+  deletePlayerPlanGoal,
   completePlayerPlanGoal,
+  createPlayerPlanNote,
   getPlayerByIdInOrganization,
   getPlayerForUser,
   listPlayerPlanGoalsForPlayer,
   upsertPlayerPlanGoal,
 } from '../../../../lib/training-db';
 
+type GoalPayload = {
+  schema?: string;
+  category?: string;
+  objectiveText?: string;
+  executionStat?: string;
+  comparator?: 'Greater Than' | 'Less Than';
+  targetValue?: number | null;
+  filters?: {
+    batterSide?: string;
+    pitchTypes?: string[];
+    countOptions?: string[];
+  };
+};
+
+function formatCompletedGoalNote(goal: { slotIndex: number; category: string; goalDescription: string; completionDetails: string; completedBy: string }): string {
+  const lines: string[] = [];
+  lines.push(`Completed Goal ${goal.slotIndex}`);
+  lines.push(`Completed By: ${goal.completedBy || 'Unknown'}`);
+  lines.push(`Category: ${goal.category}`);
+
+  let parsed: GoalPayload | null = null;
+  try {
+    parsed = JSON.parse(goal.goalDescription) as GoalPayload;
+  } catch {
+    parsed = null;
+  }
+
+  if (parsed) {
+    if (parsed.executionStat) lines.push(`Stat: ${parsed.executionStat}`);
+    if (parsed.comparator) lines.push(`Comparator: ${parsed.comparator}`);
+    if (typeof parsed.targetValue === 'number' && Number.isFinite(parsed.targetValue)) lines.push(`Target: ${parsed.targetValue}`);
+    if (parsed.filters?.batterSide) lines.push(`Batter Side: ${parsed.filters.batterSide}`);
+    const pitchTypes = (parsed.filters?.pitchTypes ?? []).filter(Boolean);
+    if (pitchTypes.length) lines.push(`Pitch Types: ${pitchTypes.join(', ')}`);
+    const countOptions = (parsed.filters?.countOptions ?? []).filter(Boolean);
+    if (countOptions.length) lines.push(`Counts: ${countOptions.join(', ')}`);
+    const objective = String(parsed.objectiveText ?? '').trim();
+    if (objective) lines.push(`Objective: ${objective}`);
+  } else {
+    lines.push(`Goal: ${goal.goalDescription}`);
+  }
+
+  const completion = goal.completionDetails.trim();
+  if (completion) lines.push(`Completion Notes: ${completion}`);
+  return lines.join('\n');
+}
+
 function resolvePlanGoalsOrganizationId(
   session: { organizationId?: number; role?: string; userId?: number; playerId?: number | null } | null
 ): number {
   if (!session) return 0;
-  const mapped = Number(resolveProgrammingOrganizationId(session));
+  const mapped = Number(resolveSchoolScopedOrganizationId(session));
   if (Number.isFinite(mapped) && mapped > 0) return mapped;
-  const fallback = Number(session.organizationId ?? 0);
-  return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+  return 0;
 }
 
 async function resolveAllowedPlayerId(
@@ -115,6 +163,60 @@ export async function PATCH(request: Request) {
   const playerId = Number(body.playerId ?? 0);
   const slotIndex = Number(body.slotIndex ?? 0);
   const completionDetails = String(body.completionDetails ?? '');
+  const domainRaw = String(body.domain ?? '');
+  const domain = domainRaw === 'Pitching' || domainRaw === 'Hitting' || domainRaw === 'Catching' || domainRaw === 'General' ? domainRaw : 'General';
+
+  if (!Number.isFinite(playerId) || playerId <= 0) {
+    return NextResponse.json({ error: 'Valid playerId is required.' }, { status: 400 });
+  }
+
+  const allowed = await resolveAllowedPlayerId(session, playerId);
+  if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+  const before = await listPlayerPlanGoalsForPlayer({ playerId: allowed.playerId, completedLimit: 1 });
+  const goalToComplete = before.activeGoals.find((goal) => goal.slotIndex === slotIndex);
+
+  const result = await completePlayerPlanGoal({
+    organizationId: resolvePlanGoalsOrganizationId(session),
+    playerId: allowed.playerId,
+    slotIndex,
+    completionDetails,
+    completedByUserId: session.userId ?? 0,
+  });
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+
+  if (goalToComplete?.category && goalToComplete.goalDescription) {
+    const noteDate = new Date().toISOString().slice(0, 10);
+    const noteBody = formatCompletedGoalNote({
+      slotIndex,
+      category: goalToComplete.category,
+      goalDescription: goalToComplete.goalDescription,
+      completionDetails,
+      completedBy: 'Goal Completion Automation',
+    });
+    await createPlayerPlanNote({
+      organizationId: resolvePlanGoalsOrganizationId(session),
+      playerId: allowed.playerId,
+      domain,
+      noteDate,
+      category: 'Player Plan',
+      noteText: noteBody,
+      createdByUserId: session.userId ?? 0,
+    });
+  }
+
+  const data = await listPlayerPlanGoalsForPlayer({ playerId: allowed.playerId });
+  return NextResponse.json({ ok: true, ...data });
+}
+
+export async function DELETE(request: Request) {
+  const cookieStore = await cookies();
+  const session = getSessionFromCookies(cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const playerId = Number(body.playerId ?? 0);
+  const slotIndex = Number(body.slotIndex ?? 0);
 
   if (!Number.isFinite(playerId) || playerId <= 0) {
     return NextResponse.json({ error: 'Valid playerId is required.' }, { status: 400 });
@@ -123,12 +225,10 @@ export async function PATCH(request: Request) {
   const allowed = await resolveAllowedPlayerId(session, playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
-  const result = await completePlayerPlanGoal({
+  const result = await deletePlayerPlanGoal({
     organizationId: resolvePlanGoalsOrganizationId(session),
     playerId: allowed.playerId,
     slotIndex,
-    completionDetails,
-    completedByUserId: session.userId ?? 0,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
 

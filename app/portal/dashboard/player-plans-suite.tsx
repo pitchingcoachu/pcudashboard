@@ -109,9 +109,20 @@ type GoalChartState = {
   error: string;
   points: Array<Record<string, unknown>>;
 };
+type MetricNode = { value: number | null; avg: number | null };
+type AutomatedTreePitchMetric = { pitch: string; usage: MetricNode; inZone: MetricNode; strike: MetricNode; whiff: MetricNode; stuff: MetricNode };
+type AutomatedTreeSideData = {
+  kPct: MetricNode;
+  bbPct: MetricNode;
+  whiffPct: MetricNode;
+  eaPct: MetricNode;
+  fpsPct: MetricNode;
+  pitches00: AutomatedTreePitchMetric[];
+  pitchesAll: AutomatedTreePitchMetric[];
+};
+type AutomatedTreeData = { left: AutomatedTreeSideData; right: AutomatedTreeSideData; overallK: MetricNode; overallBB: MetricNode };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
 type PlanMode = 'Manual' | 'Automated';
-type PercentileSource = 'NCAA' | 'MLB';
 
 const DOMAIN_OPTIONS: Domain[] = ['Pitching', 'Hitting', 'Catching'];
 const GOAL_CATEGORIES: GoalCategory[] = [
@@ -300,6 +311,19 @@ function uniqueNames(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
 }
 
+function uniqueCanonicalNames(values: string[]): string[] {
+  const map = new Map<string, string>();
+  for (const raw of values) {
+    const trimmed = String(raw ?? '').trim();
+    if (!trimmed) continue;
+    const key = normalizePersonName(trimmed);
+    if (!key) continue;
+    const existing = map.get(key);
+    if (!existing || (existing.includes(',') && !trimmed.includes(','))) map.set(key, trimmed);
+  }
+  return Array.from(map.values());
+}
+
 function resolveDashboardPlayerName(selectedName: string, candidates: string[]): string {
   const selected = String(selectedName ?? '').trim();
   if (!selected) return '';
@@ -312,11 +336,174 @@ function resolveDashboardPlayerName(selectedName: string, candidates: string[]):
   return normalizedMatch ?? selected;
 }
 
+function resolveTypedPlayerInput(inputName: string, candidates: string[]): string {
+  const typed = String(inputName ?? '').trim();
+  if (!typed) return '';
+  const cleanedCandidates = uniqueNames(candidates.filter((value) => value && value !== 'All'));
+  if (!cleanedCandidates.length) return typed;
+  const exact = cleanedCandidates.find((value) => value === typed);
+  if (exact) return exact;
+  const typedNorm = normalizePersonName(typed);
+  const normalizedMatch = cleanedCandidates.find((value) => normalizePersonName(value) === typedNorm);
+  if (normalizedMatch) return normalizedMatch;
+  const firstLastTyped = firstLastKey(typed);
+  const firstLastMatch = cleanedCandidates.find((value) => firstLastKey(value) === firstLastTyped);
+  return firstLastMatch ?? typed;
+}
+
 function normalizeNameKey(value: string): string {
   return String(value ?? '')
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
+}
+
+function toMetricNumber(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const raw = String(value ?? '').trim();
+  if (!raw || raw === '-') return null;
+  const parsed = Number(raw.replace(/[%,$]/g, ''));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function metricColor(value: number | null, avg: number | null, lowerBetter = false): string {
+  if (value === null || avg === null) return 'rgba(255,255,255,0.9)';
+  const delta = value - avg;
+  const eps = Math.max(0.25, Math.abs(avg) * 0.01);
+  if (Math.abs(delta) <= eps) return 'rgba(255,255,255,0.95)';
+  const better = lowerBetter ? delta < 0 : delta > 0;
+  return better ? '#22c55e' : '#ef4444';
+}
+
+function formatMetricValue(value: number | null, kind: 'pct' | 'plus' = 'pct'): string {
+  if (value === null || !Number.isFinite(value)) return '--';
+  if (kind === 'plus') return `${value.toFixed(1)}`;
+  return `${value.toFixed(1)}%`;
+}
+
+function getRowLabelValue(row: Record<string, unknown>, preferredKeys: string[]): string {
+  for (const key of preferredKeys) {
+    const v = String(row[key] ?? '').trim();
+    if (v) return v;
+  }
+  for (const [key, raw] of Object.entries(row)) {
+    const v = String(raw ?? '').trim();
+    if (!v) continue;
+    if (key === '#' || /^\d+(\.\d+)?$/.test(v)) continue;
+    return v;
+  }
+  return '';
+}
+
+function findMetricValue(row: Record<string, unknown> | null, keys: string[]): number | null {
+  if (!row) return null;
+  for (const key of keys) {
+    if (key in row) {
+      const n = toMetricNumber(row[key]);
+      if (n !== null) return n;
+    }
+  }
+  const normalizedTarget = new Set(keys.map((k) => k.toLowerCase().replace(/[^a-z0-9+]/g, '')));
+  for (const [key, value] of Object.entries(row)) {
+    const normalizedKey = key.toLowerCase().replace(/[^a-z0-9+]/g, '');
+    if (normalizedTarget.has(normalizedKey)) {
+      const n = toMetricNumber(value);
+      if (n !== null) return n;
+    }
+  }
+  return null;
+}
+
+function weightedMetricFromPitches(rows: AutomatedTreePitchMetric[], metric: 'whiff' | 'stuff'): number | null {
+  if (!rows.length) return null;
+  let num = 0;
+  let den = 0;
+  for (const row of rows) {
+    const usage = row.usage.value ?? 0;
+    const value = metric === 'whiff' ? row.whiff.value : row.stuff.value;
+    if (value === null || usage <= 0) continue;
+    num += value * usage;
+    den += usage;
+  }
+  if (den <= 0) return null;
+  return num / den;
+}
+
+function weightedMetricAvgFromPitches(rows: AutomatedTreePitchMetric[], metric: 'whiff' | 'stuff'): number | null {
+  if (!rows.length) return null;
+  let num = 0;
+  let den = 0;
+  for (const row of rows) {
+    const usage = row.usage.avg ?? 0;
+    const value = metric === 'whiff' ? row.whiff.avg : row.stuff.avg;
+    if (value === null || usage <= 0) continue;
+    num += value * usage;
+    den += usage;
+  }
+  if (den <= 0) return null;
+  return num / den;
+}
+
+function normalizePitchLabel(value: string): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function colorFromThresholdBand(value: number | null, poor: number, great: number, higherBetter = true): string {
+  if (value === null || !Number.isFinite(value)) return 'rgba(255,255,255,0.9)';
+  if (higherBetter) {
+    if (value < poor) return '#ef4444';
+    if (value > great) return '#22c55e';
+    return 'rgba(255,255,255,0.95)';
+  }
+  if (value > poor) return '#ef4444';
+  if (value < great) return '#22c55e';
+  return 'rgba(255,255,255,0.95)';
+}
+
+function pitchFamilyKey(pitch: string): string {
+  const key = normalizePitchLabel(pitch);
+  if (key.includes('fastball') || key === 'fb' || key === 'fourseam' || key === 'fourseamfastball') return 'fastball';
+  if (key.includes('sinker') || key === 'si' || key === 'twoseam' || key === 'twoseamfastball') return 'sinker';
+  if (key.includes('cutter') || key === 'fc') return 'cutter';
+  if (key.includes('slider') || key === 'sl') return 'slider';
+  if (key.includes('sweeper') || key === 'sv') return 'sweeper';
+  if (key.includes('curve') || key === 'cu' || key === 'kc') return 'curveball';
+  if (key.includes('change') || key === 'ch') return 'changeup';
+  if (key.includes('split') || key === 'fs') return 'splitter';
+  return key;
+}
+
+function treeMetricColor(metric: 'k' | 'bb' | 'whiff_overall' | 'stuff_overall' | 'fps' | 'inzone' | 'strike' | 'whiff_pitch' | 'stuff_pitch' | 'usage', value: number | null, pitch?: string): string {
+  if (metric === 'usage') return 'rgba(255,255,255,0.95)';
+  if (metric === 'k') return colorFromThresholdBand(value, 19, 25, true);
+  if (metric === 'bb') return colorFromThresholdBand(value, 12, 8, false);
+  if (metric === 'whiff_overall') return colorFromThresholdBand(value, 20, 26, true);
+  if (metric === 'stuff_overall') return colorFromThresholdBand(value, 95, 105, true);
+  if (metric === 'fps') return colorFromThresholdBand(value, 60, 64, true);
+  if (metric === 'strike') return colorFromThresholdBand(value, 59, 65, true);
+  if (metric === 'inzone') {
+    const fam = pitchFamilyKey(pitch ?? '');
+    if (fam === 'fastball' || fam === 'sinker') return colorFromThresholdBand(value, 49, 57, true);
+    if (fam === 'changeup' || fam === 'splitter') return colorFromThresholdBand(value, 30, 40, true);
+    if (fam === 'cutter' || fam === 'slider' || fam === 'curveball' || fam === 'sweeper') return colorFromThresholdBand(value, 40, 48, true);
+    return colorFromThresholdBand(value, 44, 52, true);
+  }
+  if (metric === 'whiff_pitch') {
+    const fam = pitchFamilyKey(pitch ?? '');
+    if (fam === 'fastball') return colorFromThresholdBand(value, 15, 25, true);
+    if (fam === 'sinker') return colorFromThresholdBand(value, 10, 14, true);
+    if (fam === 'cutter') return colorFromThresholdBand(value, 21, 29, true);
+    return colorFromThresholdBand(value, 28, 38, true);
+  }
+  if (metric === 'stuff_pitch') {
+    const fam = pitchFamilyKey(pitch ?? '');
+    if (fam === 'fastball') return colorFromThresholdBand(value, 97, 109, true);
+    if (fam === 'sinker') return colorFromThresholdBand(value, 70, 90, true);
+    return colorFromThresholdBand(value, 95, 105, true);
+  }
+  return 'rgba(255,255,255,0.95)';
 }
 
 function playerNameQueryCandidates(selectedName: string, resolvedName: string): string[] {
@@ -1332,11 +1519,13 @@ function SearchableMultiSelect({
   );
 }
 
-export default function PlayerPlansSuite() {
+export default function PlayerPlansSuite(props: { selectedSchoolCode?: string }) {
+  const selectedSchoolCode = String(props.selectedSchoolCode ?? '').trim().toUpperCase();
   const [domain, setDomain] = useState<Domain>('Pitching');
   const [linkedPlayers, setLinkedPlayers] = useState<PlayerOption[]>([]);
   const [dashboardPlayerOptions, setDashboardPlayerOptions] = useState<string[]>([]);
   const [selectedPlayerName, setSelectedPlayerName] = useState('');
+  const [playerInputName, setPlayerInputName] = useState('');
   const [headerNote, setHeaderNote] = useState('');
   const [loadingPlayers, setLoadingPlayers] = useState(false);
   const [loadingGoals, setLoadingGoals] = useState(false);
@@ -1364,14 +1553,16 @@ export default function PlayerPlansSuite() {
   const [goalControlsVisible, setGoalControlsVisible] = useState<Record<GoalSlot, boolean>>({ 1: true, 2: true, 3: true });
   const [goalChartHover, setGoalChartHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
   const [planMode, setPlanMode] = useState<PlanMode>('Manual');
-  const [automationPercentileSource, setAutomationPercentileSource] = useState<PercentileSource>('NCAA');
+  const automationPercentileSource = 'NCAA';
   const [automationLoading, setAutomationLoading] = useState(false);
-  const [automationRefreshLoading, setAutomationRefreshLoading] = useState(false);
   const [automationLinkedPlayerId, setAutomationLinkedPlayerId] = useState('');
-  const [automationStartFresh, setAutomationStartFresh] = useState(false);
   const [automationSessionType, setAutomationSessionType] = useState('Season');
+  const [automationStuffBase, setAutomationStuffBase] = useState<'Fastball' | 'Sinker'>('Fastball');
   const [automationStartDate, setAutomationStartDate] = useState('');
   const [automationEndDate, setAutomationEndDate] = useState('');
+  const [automationTree, setAutomationTree] = useState<AutomatedTreeData | null>(null);
+  const [automationTreeLoading, setAutomationTreeLoading] = useState(false);
+  const [automationTreeError, setAutomationTreeError] = useState('');
 
   const centeredName = useMemo(() => formatNameFirstLast(selectedPlayerName), [selectedPlayerName]);
   const selectedDashboardPlayerName = useMemo(() => {
@@ -1391,7 +1582,12 @@ export default function PlayerPlansSuite() {
       const full = player.fullName ?? '';
       const normalizedLinked = normalizePersonName(full);
       const firstLastLinked = firstLastKey(full);
-      return normalizedCandidates.has(normalizedLinked) || firstLastCandidates.has(firstLastLinked);
+      if (normalizedCandidates.has(normalizedLinked) || firstLastCandidates.has(firstLastLinked)) return true;
+      for (const candidate of normalizedCandidates) {
+        if (!candidate || !normalizedLinked) continue;
+        if (normalizedLinked.startsWith(candidate) || candidate.startsWith(normalizedLinked)) return true;
+      }
+      return false;
     });
     return linked?.playerId ?? 0;
   }, [linkedPlayers, selectedDashboardPlayerName, selectedPlayerName]);
@@ -1415,6 +1611,298 @@ export default function PlayerPlansSuite() {
     if (Number.isFinite(explicit) && explicit > 0) return explicit;
     return selectedPlayerId;
   }, [automationLinkedPlayerId, selectedPlayerId]);
+  const resolvedAutomationPlayerName = useMemo(() => {
+    const id = resolvedAutomationPlayerId;
+    if (!Number.isFinite(id) || id <= 0) return '';
+    const linked = linkedPlayers.find((player) => Number(player.playerId) === id);
+    return String(linked?.fullName ?? '').trim();
+  }, [linkedPlayers, resolvedAutomationPlayerId]);
+  const activePlanPlayerId = useMemo(() => {
+    if (domain === 'Pitching' && planMode === 'Automated') return resolvedAutomationPlayerId;
+    return selectedPlayerId;
+  }, [domain, planMode, resolvedAutomationPlayerId, selectedPlayerId]);
+  const commitPlayerInput = () => {
+    const resolved = resolveTypedPlayerInput(playerInputName, dashboardPlayerOptions);
+    if (!resolved) {
+      setPlayerInputName(selectedPlayerName);
+      return;
+    }
+    const match = dashboardPlayerOptions.find((name) => normalizePersonName(name) === normalizePersonName(resolved));
+    if (!match) {
+      setPlayerInputName(selectedPlayerName);
+      return;
+    }
+    setSelectedPlayerName(match);
+    setPlayerInputName(match);
+  };
+  useEffect(() => {
+    setPlayerInputName(selectedPlayerName);
+  }, [selectedPlayerName]);
+
+  useEffect(() => {
+    if (!(domain === 'Pitching' && planMode === 'Automated')) return;
+    const pitcherName = (resolvedAutomationPlayerName || selectedDashboardPlayerName || selectedPlayerName || '').trim();
+    const pitcherCandidates = Array.from(
+      new Set(
+        [
+          ...playerNameQueryCandidates(selectedPlayerName, selectedDashboardPlayerName),
+          ...playerNameQueryCandidates(resolvedAutomationPlayerName, resolvedAutomationPlayerName),
+          pitcherName,
+          pitcherName.replace(/,\s*$/, '').trim(),
+          formatNameFirstLast(pitcherName),
+        ]
+          .map((x) => String(x ?? '').trim())
+          .filter(Boolean)
+      )
+    );
+    if (!pitcherName) {
+      setAutomationTree(null);
+      return;
+    }
+    let active = true;
+    setAutomationTreeLoading(true);
+    setAutomationTreeError('');
+    const schoolCode = selectedSchoolCode || '';
+    const fetchRollup = async (extra: Record<string, string>) => {
+      const params = new URLSearchParams();
+      if (schoolCode) params.set('school_code', schoolCode);
+      params.set('session_type', automationSessionType || 'Season');
+      params.set('stuff_base', automationStuffBase);
+      if (automationStartDate) params.set('start_date', automationStartDate);
+      if (automationEndDate) params.set('end_date', automationEndDate);
+      Object.entries(extra).forEach(([k, v]) => params.set(k, v));
+      let firstSuccessful: { rows: Array<Record<string, unknown>>; splitCol: string } | null = null;
+      for (const candidate of pitcherCandidates) {
+        params.set('pitcher', candidate);
+        const r = await fetch(`/api/dashboard/pitching/table-rollup?${params.toString()}`, { cache: 'no-store' });
+        const p = (await r.json().catch(() => ({}))) as { table_rows?: Array<Record<string, unknown>>; table_columns?: string[]; error?: string };
+        if (!r.ok) continue;
+        const result = { rows: Array.isArray(p.table_rows) ? p.table_rows : [], splitCol: String(p.table_columns?.[0] ?? '') };
+        if (!firstSuccessful) firstSuccessful = result;
+        if (result.rows.length > 0) return result;
+      }
+      if (firstSuccessful) return firstSuccessful;
+      throw new Error(`Failed to load automated tree data for ${pitcherName}.`);
+    };
+    const fetchOverviewHand = async (extra: Record<string, string>, withPitcher: boolean) => {
+      const params = new URLSearchParams();
+      if (schoolCode) params.set('school_code', schoolCode);
+      params.set('table_mode', 'Live');
+      params.set('split_by', 'Batter Hand');
+      params.set('session_type', automationSessionType || 'Season');
+      params.set('stuff_base', automationStuffBase);
+      if (automationStartDate) params.set('start_date', automationStartDate);
+      if (automationEndDate) params.set('end_date', automationEndDate);
+      params.set('include_chart_points', '0');
+      params.set('include_row_pitches', '0');
+      params.set('include_trend_rows', '0');
+      Object.entries(extra).forEach(([k, v]) => params.set(k, v));
+      if (!withPitcher) {
+        const r = await fetch(`/api/dashboard/pitching/overview?${params.toString()}`, { cache: 'no-store' });
+        const p = (await r.json().catch(() => ({}))) as { table_rows?: Array<Record<string, unknown>>; table_columns?: string[]; error?: string };
+        if (!r.ok) throw new Error(p.error ?? 'Failed to load batter-hand baseline data.');
+        return { rows: Array.isArray(p.table_rows) ? p.table_rows : [], splitCol: String(p.table_columns?.[0] ?? '') };
+      }
+      let firstSuccessful: { rows: Array<Record<string, unknown>>; splitCol: string } | null = null;
+      for (const candidate of pitcherCandidates) {
+        params.set('pitcher', candidate);
+        const r = await fetch(`/api/dashboard/pitching/overview?${params.toString()}`, { cache: 'no-store' });
+        const p = (await r.json().catch(() => ({}))) as { table_rows?: Array<Record<string, unknown>>; table_columns?: string[]; error?: string };
+        if (!r.ok) continue;
+        const result = { rows: Array.isArray(p.table_rows) ? p.table_rows : [], splitCol: String(p.table_columns?.[0] ?? '') };
+        if (!firstSuccessful) firstSuccessful = result;
+        if (result.rows.length > 0) return result;
+      }
+      if (firstSuccessful) return firstSuccessful;
+      throw new Error(`Failed to load batter-hand data for ${pitcherName}.`);
+    };
+    const fetchOverviewPitchTypes = async (extra: Record<string, string>, withPitcher: boolean, timeoutMs: number = 15000) => {
+      const params = new URLSearchParams();
+      if (schoolCode) params.set('school_code', schoolCode);
+      params.set('table_mode', 'Live');
+      params.set('split_by', 'Pitch Types');
+      params.set('session_type', automationSessionType || 'Season');
+      params.set('stuff_base', automationStuffBase);
+      if (automationStartDate) params.set('start_date', automationStartDate);
+      if (automationEndDate) params.set('end_date', automationEndDate);
+      params.set('include_chart_points', '0');
+      params.set('include_row_pitches', '0');
+      params.set('include_trend_rows', '0');
+      Object.entries(extra).forEach(([k, v]) => params.set(k, v));
+      if (!withPitcher) {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+        let r: Response;
+        try {
+          r = await fetch(`/api/dashboard/pitching/overview?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+        } catch {
+          window.clearTimeout(timeout);
+          return { rows: [], splitCol: '' };
+        }
+        window.clearTimeout(timeout);
+        const p = (await r.json().catch(() => ({}))) as { table_rows?: Array<Record<string, unknown>>; table_columns?: string[]; error?: string };
+        if (!r.ok) throw new Error(p.error ?? 'Failed to load pitch-type baseline data.');
+        return { rows: Array.isArray(p.table_rows) ? p.table_rows : [], splitCol: String(p.table_columns?.[0] ?? '') };
+      }
+      let firstSuccessful: { rows: Array<Record<string, unknown>>; splitCol: string } | null = null;
+      for (const candidate of pitcherCandidates) {
+        params.set('pitcher', candidate);
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+        let r: Response;
+        try {
+          r = await fetch(`/api/dashboard/pitching/overview?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+        } catch {
+          window.clearTimeout(timeout);
+          continue;
+        }
+        window.clearTimeout(timeout);
+        const p = (await r.json().catch(() => ({}))) as { table_rows?: Array<Record<string, unknown>>; table_columns?: string[]; error?: string };
+        if (!r.ok) continue;
+        const result = { rows: Array.isArray(p.table_rows) ? p.table_rows : [], splitCol: String(p.table_columns?.[0] ?? '') };
+        if (!firstSuccessful) firstSuccessful = result;
+        if (result.rows.length > 0) return result;
+      }
+      if (firstSuccessful) return firstSuccessful;
+      throw new Error(`Failed to load pitch-type data for ${pitcherName}.`);
+    };
+    const fetchPitchTypesZeroZeroForPitcher = async (batterSide: 'Left' | 'Right') => {
+      const rollupPayload = await fetchRollup({
+        split_by: 'Pitch Types',
+        custom_columns: '#,InZone%,Strike%,Whiff%,Stuff+',
+        batter_side: batterSide,
+        count_filter: '0-0',
+      });
+      if (rollupPayload.rows.length > 0) return rollupPayload;
+      return fetchOverviewPitchTypes(
+        { custom_columns: '#,InZone%,Strike%,Whiff%,Stuff+', batter_side: batterSide, count_filter: '0-0' },
+        true,
+        12000
+      );
+    };
+    const fetchBase = async (extra: Record<string, string>) => {
+      const params = new URLSearchParams();
+      if (schoolCode) params.set('school_code', schoolCode);
+      params.set('session_type', automationSessionType || 'Season');
+      params.set('stuff_base', automationStuffBase);
+      if (automationStartDate) params.set('start_date', automationStartDate);
+      if (automationEndDate) params.set('end_date', automationEndDate);
+      Object.entries(extra).forEach(([k, v]) => params.set(k, v));
+      const r = await fetch(`/api/dashboard/pitching/table-rollup?${params.toString()}`, { cache: 'no-store' });
+      const p = (await r.json().catch(() => ({}))) as { table_rows?: Array<Record<string, unknown>>; table_columns?: string[]; error?: string };
+      if (!r.ok) throw new Error(p.error ?? 'Failed to load automated tree baseline.');
+      return { rows: Array.isArray(p.table_rows) ? p.table_rows : [], splitCol: String(p.table_columns?.[0] ?? '') };
+    };
+    const sideRow = (rows: Array<Record<string, unknown>>, side: 'Left' | 'Right') => {
+      const tokens = side === 'Left' ? ['left', 'lhh', 'l'] : ['right', 'rhh', 'r'];
+      return (
+        rows.find((r) => {
+          const label = getRowLabelValue(r, ['Batter Hand', 'Batter Side', 'Split', 'Hand']).toLowerCase();
+          return tokens.some((t) => label === t || label.startsWith(`${t} `) || label.includes(` ${t}`));
+        }) ?? null
+      );
+    };
+    const allRow = (rows: Array<Record<string, unknown>>) =>
+      rows.find((r) => getRowLabelValue(r, ['Batter Hand', 'Batter Side', 'Pitch', 'Pitch Type', 'Pitch Types', 'Split']).trim().toLowerCase() === 'all') ?? null;
+
+    (async () => {
+      try {
+        const [handPlayer, handBase, pitchL00P, pitchL00B, pitchR00P, pitchR00B, pitchLAllP, pitchLAllB, pitchRAllP, pitchRAllB] = await Promise.all([
+          fetchRollup({ split_by: 'Batter Hand', custom_columns: 'K%,BB%,Whiff%,E+A%,FPS%' }),
+          fetchBase({ split_by: 'Batter Hand', custom_columns: 'K%,BB%,Whiff%,E+A%,FPS%' }),
+          fetchPitchTypesZeroZeroForPitcher('Left'),
+          fetchBase({ split_by: 'Pitch Types', custom_columns: '#,InZone%,Strike%,Whiff%,Stuff+', batter_side: 'Left', count_filter: '0-0' }),
+          fetchPitchTypesZeroZeroForPitcher('Right'),
+          fetchBase({ split_by: 'Pitch Types', custom_columns: '#,InZone%,Strike%,Whiff%,Stuff+', batter_side: 'Right', count_filter: '0-0' }),
+          fetchRollup({ split_by: 'Pitch Types', custom_columns: '#,InZone%,Strike%,Whiff%,Stuff+', batter_side: 'Left' }),
+          fetchBase({ split_by: 'Pitch Types', custom_columns: '#,InZone%,Strike%,Whiff%,Stuff+', batter_side: 'Left' }),
+          fetchRollup({ split_by: 'Pitch Types', custom_columns: '#,InZone%,Strike%,Whiff%,Stuff+', batter_side: 'Right' }),
+          fetchBase({ split_by: 'Pitch Types', custom_columns: '#,InZone%,Strike%,Whiff%,Stuff+', batter_side: 'Right' }),
+        ]);
+        const hasAnyPlayerRows =
+          handPlayer.rows.length > 0 ||
+          pitchL00P.rows.length > 0 ||
+          pitchR00P.rows.length > 0 ||
+          pitchLAllP.rows.length > 0 ||
+          pitchRAllP.rows.length > 0;
+        if (!hasAnyPlayerRows) throw new Error(`No pitcher rows found for ${pitcherName}.`);
+
+        const mkPitchRows = (p: { rows: Array<Record<string, unknown>>; splitCol: string }, b: { rows: Array<Record<string, unknown>>; splitCol: string }) => {
+          const pAll = allRow(p.rows);
+          const bAll = allRow(b.rows);
+          const pTot = findMetricValue(pAll, ['#', 'P']) ?? 0;
+          const bTot = findMetricValue(bAll, ['#', 'P']) ?? 0;
+          const baselineByPitch = new Map<string, Record<string, unknown>>();
+          for (const bRow of b.rows) {
+            const bPitch = getRowLabelValue(bRow, ['Pitch Types', 'Pitch Type', 'Pitch', 'Tagged Pitch Type']);
+            const key = normalizePitchLabel(bPitch);
+            if (key && bPitch.toLowerCase() !== 'all') baselineByPitch.set(key, bRow);
+          }
+          return p.rows
+            .map((row) => {
+              const pitch = getRowLabelValue(row, ['Pitch Types', 'Pitch Type', 'Pitch', 'Tagged Pitch Type']);
+              if (!pitch || pitch.toLowerCase() === 'all') return null;
+              const bRow = baselineByPitch.get(normalizePitchLabel(pitch)) ?? null;
+              const count = findMetricValue(row, ['#', 'P']) ?? 0;
+              const bCount = findMetricValue(bRow, ['#', 'P']) ?? 0;
+              const bAllInZone = findMetricValue(bAll, ['InZone%']);
+              const bAllStrike = findMetricValue(bAll, ['Strike%']);
+              const bAllWhiff = findMetricValue(bAll, ['Whiff%']);
+              const bAllStuff = findMetricValue(bAll, ['Stuff+', 'Stuff +', 'StuffPlus', 'stuff_plus', 'tj_stuff_plus']);
+              return {
+                pitch,
+                usage: { value: pTot > 0 ? (count / pTot) * 100 : null, avg: bTot > 0 ? (bCount / bTot) * 100 : null },
+                inZone: { value: findMetricValue(row, ['InZone%']), avg: findMetricValue(bRow, ['InZone%']) ?? bAllInZone },
+                strike: { value: findMetricValue(row, ['Strike%']), avg: findMetricValue(bRow, ['Strike%']) ?? bAllStrike },
+                whiff: { value: findMetricValue(row, ['Whiff%']), avg: findMetricValue(bRow, ['Whiff%']) ?? bAllWhiff },
+                stuff: {
+                  value: findMetricValue(row, ['Stuff+', 'Stuff +', 'StuffPlus', 'stuff_plus', 'tj_stuff_plus']),
+                  avg: findMetricValue(bRow, ['Stuff+', 'Stuff +', 'StuffPlus', 'stuff_plus', 'tj_stuff_plus']) ?? bAllStuff,
+                },
+              } satisfies AutomatedTreePitchMetric;
+            })
+            .filter((v): v is AutomatedTreePitchMetric => Boolean(v))
+            .sort((a, b) => (b.usage.value ?? 0) - (a.usage.value ?? 0));
+        };
+
+        const mkSide = (side: 'Left' | 'Right') => {
+          const pRow = sideRow(handPlayer.rows, side);
+          const bRow = sideRow(handBase.rows, side);
+          const allRows = side === 'Left' ? mkPitchRows(pitchLAllP, pitchLAllB) : mkPitchRows(pitchRAllP, pitchRAllB);
+          const zeroZeroRows = side === 'Left' ? mkPitchRows(pitchL00P, pitchL00B) : mkPitchRows(pitchR00P, pitchR00B);
+          return {
+            kPct: { value: findMetricValue(pRow, ['K%']), avg: findMetricValue(bRow, ['K%']) },
+            bbPct: { value: findMetricValue(pRow, ['BB%']), avg: findMetricValue(bRow, ['BB%']) },
+            whiffPct: { value: findMetricValue(pRow, ['Whiff%']), avg: findMetricValue(bRow, ['Whiff%']) },
+            eaPct: { value: findMetricValue(pRow, ['E+A%']), avg: findMetricValue(bRow, ['E+A%']) },
+            fpsPct: { value: findMetricValue(pRow, ['FPS%']), avg: findMetricValue(bRow, ['FPS%']) },
+            pitches00: zeroZeroRows,
+            pitchesAll: allRows,
+          } satisfies AutomatedTreeSideData;
+        };
+
+        const pAll = allRow(handPlayer.rows);
+        const bAll = allRow(handBase.rows);
+        const next: AutomatedTreeData = {
+          left: mkSide('Left'),
+          right: mkSide('Right'),
+          overallK: { value: findMetricValue(pAll, ['K%']), avg: findMetricValue(bAll, ['K%']) },
+          overallBB: { value: findMetricValue(pAll, ['BB%']), avg: findMetricValue(bAll, ['BB%']) },
+        };
+        if (!active) return;
+        setAutomationTree(next);
+      } catch (err) {
+        if (!active) return;
+        setAutomationTree(null);
+        setAutomationTreeError(err instanceof Error ? err.message : 'Failed to build goal tree.');
+      } finally {
+        if (active) setAutomationTreeLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [automationEndDate, automationSessionType, automationStartDate, automationStuffBase, domain, linkedPlayers, planMode, resolvedAutomationPlayerId, resolvedAutomationPlayerName, selectedDashboardPlayerName, selectedPlayerName, selectedSchoolCode]);
   useEffect(() => {
     const allowed = new Set(DOMAIN_GOAL_CATEGORIES[domain] ?? GOAL_CATEGORIES);
     setPlanGoals((prev) =>
@@ -1463,7 +1951,7 @@ export default function PlayerPlansSuite() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [selectedSchoolCode]);
 
   useEffect(() => {
     let active = true;
@@ -1471,7 +1959,7 @@ export default function PlayerPlansSuite() {
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as { players?: string[]; error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load player options.');
-        const cleanedPlayers = uniqueNames(payload.players ?? []);
+        const cleanedPlayers = uniqueCanonicalNames(payload.players ?? []);
         if (!active) return;
         if (cleanedPlayers.length) {
           setDashboardPlayerOptions(cleanedPlayers);
@@ -1689,13 +2177,13 @@ export default function PlayerPlansSuite() {
   }, [domain]);
 
   useEffect(() => {
-    if (!selectedPlayerId) {
+    if (!activePlanPlayerId) {
       setPlanGoals([1, 2, 3].map((slot) => parseStoredGoalDescription(null, null, slot as GoalSlot, null)));
       return;
     }
     let active = true;
     setLoadingGoals(true);
-    fetch(`/api/player/plan-goals?playerId=${selectedPlayerId}`, { cache: 'no-store' })
+    fetch(`/api/player/plan-goals?playerId=${activePlanPlayerId}`, { cache: 'no-store' })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as {
           activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
@@ -1727,10 +2215,10 @@ export default function PlayerPlansSuite() {
     return () => {
       active = false;
     };
-  }, [selectedPlayerId]);
+  }, [activePlanPlayerId]);
 
   async function saveGoal(slotIndex: GoalSlot) {
-    if (!selectedPlayerId) {
+    if (!activePlanPlayerId) {
       setMessage('Select a player first.');
       return;
     }
@@ -1743,7 +2231,7 @@ export default function PlayerPlansSuite() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          playerId: selectedPlayerId,
+          playerId: activePlanPlayerId,
           slotIndex,
           category: goal.category,
           goalDescription: serializeGoalDescription(goal),
@@ -1755,7 +2243,7 @@ export default function PlayerPlansSuite() {
       };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to save goal.');
       try {
-        const refreshResponse = await fetch(`/api/player/plan-goals?playerId=${selectedPlayerId}`, { cache: 'no-store' });
+        const refreshResponse = await fetch(`/api/player/plan-goals?playerId=${activePlanPlayerId}`, { cache: 'no-store' });
         const refreshPayload = (await refreshResponse.json().catch(() => ({}))) as {
           activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
           error?: string;
@@ -1781,7 +2269,79 @@ export default function PlayerPlansSuite() {
     }
   }
 
-  async function generateAutomatedGoals() {
+  async function completeGoal(slotIndex: GoalSlot) {
+    if (!activePlanPlayerId) {
+      setMessage('Select a player first.');
+      return;
+    }
+    const completionDetails = window.prompt('Completion notes (optional):', '') ?? '';
+    setGoalSavingSlot(slotIndex);
+    setMessage('');
+    try {
+      const response = await fetch('/api/player/plan-goals', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId: activePlanPlayerId,
+          slotIndex,
+          completionDetails,
+          domain,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
+      };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to complete goal.');
+      const next = ([1, 2, 3] as GoalSlot[]).map((slot) => {
+        const existing = payload.activeGoals?.find((entry) => entry.slotIndex === slot);
+        return parseStoredGoalDescription(existing?.category ?? null, existing?.goalDescription ?? null, slot, existing?.createdAt ?? null);
+      });
+      setPlanGoals(next);
+      setMessage(`Goal ${slotIndex} marked complete.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to complete goal.');
+    } finally {
+      setGoalSavingSlot(null);
+    }
+  }
+
+  async function deleteGoal(slotIndex: GoalSlot) {
+    if (!activePlanPlayerId) {
+      setMessage('Select a player first.');
+      return;
+    }
+    if (!window.confirm(`Delete Goal ${slotIndex}?`)) return;
+    setGoalSavingSlot(slotIndex);
+    setMessage('');
+    try {
+      const response = await fetch('/api/player/plan-goals', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId: activePlanPlayerId,
+          slotIndex,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
+      };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to delete goal.');
+      const next = ([1, 2, 3] as GoalSlot[]).map((slot) => {
+        const existing = payload.activeGoals?.find((entry) => entry.slotIndex === slot);
+        return parseStoredGoalDescription(existing?.category ?? null, existing?.goalDescription ?? null, slot, existing?.createdAt ?? null);
+      });
+      setPlanGoals(next);
+      setMessage(`Goal ${slotIndex} deleted.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to delete goal.');
+    } finally {
+      setGoalSavingSlot(null);
+    }
+  }
+
+  async function generateAutomatedGoals(options?: { forceClearExisting?: boolean; statusLabel?: string }) {
     const dashboardName = (selectedDashboardPlayerName || selectedPlayerName || '').trim();
     if (!dashboardName) {
       setMessage('Select a player first.');
@@ -1792,7 +2352,7 @@ export default function PlayerPlansSuite() {
       return;
     }
     setAutomationLoading(true);
-    setMessage('Building automated plan...');
+    setMessage(options?.statusLabel ?? 'Building automated plan...');
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 45000);
     try {
@@ -1804,7 +2364,7 @@ export default function PlayerPlansSuite() {
           playerId: resolvedAutomationPlayerId > 0 ? resolvedAutomationPlayerId : undefined,
           dashboardPlayerName: dashboardName,
           percentileSource: automationPercentileSource,
-          clearExisting: automationStartFresh,
+          clearExisting: Boolean(options?.forceClearExisting),
         }),
       });
       let payload = (await response.json().catch(() => ({}))) as {
@@ -1812,8 +2372,13 @@ export default function PlayerPlansSuite() {
         activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
         generated?: number;
       };
-      if (!response.ok && response.status === 409) {
-        setMessage('Cache out of date. Refreshing automated cache and retrying...');
+      const missingCache =
+        !response.ok &&
+        response.status === 400 &&
+        String(payload.error ?? '').toLowerCase().includes('no automation cache found');
+      const staleCache = !response.ok && response.status === 409;
+      if (missingCache || staleCache) {
+        setMessage('Refreshing automated data and retrying...');
         const refreshResponse = await fetch('/api/player/plan-goals/automated/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1822,6 +2387,7 @@ export default function PlayerPlansSuite() {
             dashboardPlayerName: dashboardName,
             percentileSource: automationPercentileSource,
             sessionType: automationSessionType,
+            stuffBase: automationStuffBase,
             startDate: automationStartDate,
             endDate: automationEndDate,
           }),
@@ -1836,7 +2402,7 @@ export default function PlayerPlansSuite() {
             playerId: resolvedAutomationPlayerId > 0 ? resolvedAutomationPlayerId : undefined,
             dashboardPlayerName: dashboardName,
             percentileSource: automationPercentileSource,
-            clearExisting: automationStartFresh,
+            clearExisting: Boolean(options?.forceClearExisting),
           }),
         });
         payload = (await response.json().catch(() => ({}))) as {
@@ -1890,37 +2456,6 @@ export default function PlayerPlansSuite() {
     } finally {
       window.clearTimeout(timeout);
       setAutomationLoading(false);
-    }
-  }
-
-  async function refreshAutomatedCache() {
-    const dashboardName = (selectedDashboardPlayerName || selectedPlayerName || '').trim();
-    if (!dashboardName) {
-      setMessage('Select a player first.');
-      return;
-    }
-    setAutomationRefreshLoading(true);
-    setMessage('Refreshing automated cache...');
-    try {
-      const response = await fetch('/api/player/plan-goals/automated/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          playerId: resolvedAutomationPlayerId > 0 ? resolvedAutomationPlayerId : undefined,
-          dashboardPlayerName: dashboardName,
-          percentileSource: automationPercentileSource,
-          sessionType: automationSessionType,
-          startDate: automationStartDate,
-          endDate: automationEndDate,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { error?: string; generated?: number };
-      if (!response.ok) throw new Error(payload.error ?? 'Failed to refresh automated cache.');
-      setMessage(`Automated cache refreshed (${payload.generated ?? 0} goals).`);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Failed to refresh automated cache.');
-    } finally {
-      setAutomationRefreshLoading(false);
     }
   }
 
@@ -2534,14 +3069,26 @@ export default function PlayerPlansSuite() {
           </label>
           <label>
             Player
-            <select value={selectedPlayerName} onChange={(event) => setSelectedPlayerName(event.target.value)}>
-              {!dashboardPlayerOptions.length ? <option value="">No players available</option> : null}
+            <input
+              list="player-plans-player-options"
+              value={playerInputName}
+              onChange={(event) => setPlayerInputName(event.target.value)}
+              onBlur={commitPlayerInput}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitPlayerInput();
+                }
+              }}
+              placeholder={dashboardPlayerOptions.length ? 'Type or choose player...' : 'No players available'}
+            />
+            <datalist id="player-plans-player-options">
               {dashboardPlayerOptions.map((playerName) => (
                 <option key={playerName} value={playerName}>
                   {formatNameFirstLast(playerName)}
                 </option>
               ))}
-            </select>
+            </datalist>
           </label>
           <label>
             Header Notes
@@ -2550,7 +3097,7 @@ export default function PlayerPlansSuite() {
         </div>
         <div
           className="portal-form-grid"
-          style={{ gridTemplateColumns: domain === 'Pitching' ? 'repeat(5, minmax(170px, 1fr))' : '1fr', marginTop: 10 }}
+          style={{ gridTemplateColumns: domain === 'Pitching' ? 'repeat(6, minmax(170px, 1fr))' : '1fr', marginTop: 10 }}
         >
           <label>
             Goal Mode
@@ -2573,22 +3120,19 @@ export default function PlayerPlansSuite() {
                 </select>
               </label>
               <label>
-                Percentile Source
-                <select
-                  value={automationPercentileSource}
-                  onChange={(event) => setAutomationPercentileSource((event.target.value as PercentileSource) || 'NCAA')}
-                >
-                  <option value="NCAA">NCAA</option>
-                  <option value="MLB">MLB</option>
-                </select>
-              </label>
-              <label>
                 Session Type
                 <select value={automationSessionType} onChange={(event) => setAutomationSessionType(event.target.value || 'Season')}>
                   <option value="Season">Season</option>
                   <option value="Game">Game</option>
                   <option value="Live">Live</option>
                   <option value="Bullpen">Bullpen</option>
+                </select>
+              </label>
+              <label>
+                Stuff+ Base
+                <select value={automationStuffBase} onChange={(event) => setAutomationStuffBase(event.target.value === 'Sinker' ? 'Sinker' : 'Fastball')}>
+                  <option value="Fastball">Fastball</option>
+                  <option value="Sinker">Sinker</option>
                 </select>
               </label>
               <label>
@@ -2602,37 +3146,29 @@ export default function PlayerPlansSuite() {
               <label>
                 Automation
                 <div style={{ display: 'grid', gap: 6 }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                    <input
-                      type="checkbox"
-                      checked={automationStartFresh}
-                      onChange={(event) => setAutomationStartFresh(event.target.checked)}
-                    />
-                    Start Fresh (clear existing goals first)
-                  </label>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    style={{ width: '100%' }}
-                    onClick={refreshAutomatedCache}
-                    disabled={automationRefreshLoading}
-                  >
-                    {automationRefreshLoading ? 'Refreshing Cache...' : 'Refresh Automated Cache'}
-                  </button>
                   <button
                     type="button"
                     className="btn btn-primary"
                     style={{ width: '100%' }}
-                    onClick={generateAutomatedGoals}
+                    onClick={() => void generateAutomatedGoals()}
                     disabled={automationLoading}
                   >
-                    {automationLoading ? 'Building Plan...' : 'Create Automated Plan'}
+                    {automationLoading ? 'Building Goals...' : 'Create/Update Automated Goals'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ width: '100%' }}
+                    onClick={() => void generateAutomatedGoals({ forceClearExisting: true, statusLabel: 'Refreshing goals from latest stats...' })}
+                    disabled={automationLoading}
+                  >
+                    {automationLoading ? 'Rebuilding...' : 'Rebuild From Current Numbers (Overwrite)'}
                   </button>
                 </div>
               </label>
               <div style={{ display: 'flex', alignItems: 'flex-end', paddingBottom: 6 }}>
                 <p className="portal-muted-text" style={{ margin: 0 }}>
-                  Uses selected pitcher split data and {automationPercentileSource} percentiles.
+                  Uses selected pitcher split data.
                   {!resolvedAutomationPlayerId ? ' Linked player selection is required.' : ''}
                 </p>
               </div>
@@ -2655,6 +3191,173 @@ export default function PlayerPlansSuite() {
         <h3 style={{ marginTop: 0 }}>Goals</h3>
         {domain === 'Pitching' && planMode === 'Automated' ? (
           <div style={{ display: 'grid', gap: 10 }}>
+            {automationTreeLoading ? <p className="portal-muted-text" style={{ margin: 0 }}>Loading decision tree metrics...</p> : null}
+            {automationTreeError ? <p className="auth-error" style={{ margin: 0 }}>{automationTreeError}</p> : null}
+            {automationTree ? (
+              <article
+                className="portal-day-card"
+                style={{ display: 'grid', gap: 12, padding: 12, border: '1px solid rgba(255,255,255,0.14)' }}
+              >
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(260px, 1fr))', gap: 12 }}>
+                  {([
+                    {
+                      key: 'k',
+                      title: `K% ${formatMetricValue(automationTree.overallK.value)}`,
+                      color: treeMetricColor('k', automationTree.overallK.value),
+                      branchA: { label: 'Whiff%', lowerBetter: false, sideMetric: 'whiffPct' as const, rows: 'pitchesAll' as const },
+                      branchB: { label: 'Stuff+', lowerBetter: false, sideMetric: null, rows: 'pitchesAll' as const },
+                    },
+                    {
+                      key: 'bb',
+                      title: `BB% ${formatMetricValue(automationTree.overallBB.value)}`,
+                      color: treeMetricColor('bb', automationTree.overallBB.value),
+                      branchA: { label: 'FPS%', lowerBetter: false, sideMetric: 'fpsPct' as const, rows: 'pitches00' as const },
+                      branchB: { label: 'E+A%', lowerBetter: false, sideMetric: 'eaPct' as const, rows: 'pitchesAll' as const },
+                    },
+                  ] as const).map((root) => (
+                    <div key={root.key} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10 }}>
+                      <div style={{ textAlign: 'center', marginBottom: 10 }}>
+                        <div style={{ display: 'inline-block', border: '1px solid rgba(255,255,255,0.22)', borderRadius: 999, padding: '6px 16px', fontWeight: 800, color: root.color }}>
+                          {root.title}
+                        </div>
+                      </div>
+                      <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                        <div style={{ position: 'absolute', left: '50%', top: -6, width: 1, height: 14, background: 'rgba(255,255,255,0.25)' }} />
+                        <div style={{ position: 'absolute', left: '25%', right: '25%', top: 8, height: 1, background: 'rgba(255,255,255,0.25)' }} />
+                        {([
+                          { side: 'Left', data: automationTree.left, label: 'LHH' },
+                          { side: 'Right', data: automationTree.right, label: 'RHH' },
+                        ] as const).map((side) => (
+                          <div key={`${root.key}-${side.side}`} style={{ position: 'relative', display: 'grid', gap: 8, paddingTop: 10, gridTemplateRows: '56px auto' }}>
+                            <div style={{ textAlign: 'center' }}>
+                              <div style={{ display: 'inline-grid', placeItems: 'center', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, padding: '4px 10px', fontWeight: 700, minWidth: 120, minHeight: 54 }}>
+                                {side.label}{' '}
+                                <span style={{ color: root.key === 'k' ? treeMetricColor('k', side.data.kPct.value) : treeMetricColor('bb', side.data.bbPct.value) }}>
+                                  {root.key === 'k' ? formatMetricValue(side.data.kPct.value) : formatMetricValue(side.data.bbPct.value)}
+                                </span>
+                              </div>
+                            </div>
+                            <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start', paddingTop: 18 }}>
+                              <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: 18, background: 'rgba(255,255,255,0.2)' }} />
+                              <div style={{ position: 'absolute', left: '25%', right: '25%', top: 18, height: 1, background: 'rgba(255,255,255,0.2)' }} />
+                              {[root.branchA, root.branchB].map((branch) => {
+                                const topMetric =
+                                  branch.sideMetric === 'whiffPct'
+                                    ? side.data.whiffPct
+                                    : branch.sideMetric === 'fpsPct'
+                                      ? side.data.fpsPct
+                                      : branch.sideMetric === 'eaPct'
+                                        ? side.data.eaPct
+                                        : branch.label === 'Stuff+'
+                                          ? { value: weightedMetricFromPitches(side.data.pitchesAll, 'stuff'), avg: weightedMetricAvgFromPitches(side.data.pitchesAll, 'stuff') }
+                                          : null;
+                                const rows = side.data[branch.rows];
+                                return (
+                                  <div key={`${root.key}-${side.side}-${branch.label}`} style={{ position: 'relative', display: 'grid', gap: 5, paddingTop: 14, minWidth: 0, gridTemplateRows: '36px auto' }}>
+                                    <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: 14, background: 'rgba(255,255,255,0.2)' }} />
+                                    <div
+                                      style={{
+                                        border: '1px solid rgba(255,255,255,0.16)',
+                                        borderRadius: 8,
+                                        padding: '4px 6px',
+                                        fontWeight: 650,
+                                        textAlign: 'center',
+                                        color:
+                                          branch.label === 'Whiff%'
+                                            ? treeMetricColor('whiff_overall', topMetric?.value ?? null)
+                                            : branch.label === 'Stuff+'
+                                              ? treeMetricColor('stuff_overall', topMetric?.value ?? null)
+                                              : branch.label === 'FPS%'
+                                                ? treeMetricColor('fps', topMetric?.value ?? null)
+                                                : metricColor(topMetric?.value ?? null, topMetric?.avg ?? null, false),
+                                        minHeight: 32,
+                                        display: 'grid',
+                                        alignContent: 'center',
+                                      }}
+                                    >
+                                      {branch.label}{topMetric ? ` ${formatMetricValue(topMetric.value, branch.label === 'Stuff+' ? 'plus' : 'pct')}` : ''}
+                                    </div>
+                                    <div style={{ display: 'grid', gap: 4 }}>
+                                      {rows.length === 0 ? (
+                                        <div style={{ fontSize: 12, opacity: 0.7, border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 6, padding: '5px 7px' }}>
+                                          {branch.label === 'FPS%' ? 'No 0-0 pitch-type rows returned for this split.' : 'No pitch-type rows returned for this split.'}
+                                        </div>
+                                      ) : null}
+                                      {rows.slice(0, 8).map((pitch) => {
+                                        const whiffColor = treeMetricColor('whiff_pitch', pitch.whiff.value, pitch.pitch);
+                                        const stuffColor = treeMetricColor('stuff_pitch', pitch.stuff.value, pitch.pitch);
+                                        const inZoneColor = treeMetricColor('inzone', pitch.inZone.value, pitch.pitch);
+                                        const strikeColor = treeMetricColor('strike', pitch.strike.value, pitch.pitch);
+                                        const usageColor = treeMetricColor('usage', pitch.usage.value, pitch.pitch);
+                                        return (
+                                          <div
+                                            key={`${root.key}-${side.side}-${branch.label}-${pitch.pitch}`}
+                                            style={{
+                                              border: '1px solid rgba(255,255,255,0.08)',
+                                              borderRadius: 6,
+                                              padding: '5px 7px',
+                                              fontSize: 12,
+                                              display: 'grid',
+                                              gap: 4,
+                                              minHeight: 58,
+                                              alignContent: 'start',
+                                            }}
+                                          >
+                                            <div style={{ fontWeight: 600, lineHeight: 1.15 }}>
+                                              {branch.label === 'FPS%'
+                                                ? `${pitch.pitch} - 0-0 counts`
+                                                : branch.label === 'E+A%'
+                                                  ? `${pitch.pitch} - Overall`
+                                                  : pitch.pitch}
+                                            </div>
+                                            {branch.label === 'FPS%' ? (
+                                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 }}>
+                                                <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 4, padding: '3px 5px', color: inZoneColor, minHeight: 40, display: 'grid', alignContent: 'center' }}>
+                                                  InZone {formatMetricValue(pitch.inZone.value)}
+                                                </div>
+                                                <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 4, padding: '3px 5px', color: strikeColor, minHeight: 40, display: 'grid', alignContent: 'center' }}>
+                                                  Strike {formatMetricValue(pitch.strike.value)}
+                                                </div>
+                                                <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 4, padding: '3px 5px', color: usageColor, minHeight: 40, display: 'grid', alignContent: 'center' }}>
+                                                  Usage {formatMetricValue(pitch.usage.value)}
+                                                </div>
+                                              </div>
+                                            ) : branch.label === 'E+A%' ? (
+                                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 }}>
+                                                <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 4, padding: '3px 5px', color: inZoneColor, minHeight: 40, display: 'grid', alignContent: 'center' }}>
+                                                  InZone {formatMetricValue(pitch.inZone.value)}
+                                                </div>
+                                                <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 4, padding: '3px 5px', color: strikeColor, minHeight: 40, display: 'grid', alignContent: 'center' }}>
+                                                  Strike {formatMetricValue(pitch.strike.value)}
+                                                </div>
+                                                <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 4, padding: '3px 5px', color: usageColor, minHeight: 40, display: 'grid', alignContent: 'center' }}>
+                                                  Usage {formatMetricValue(pitch.usage.value)}
+                                                </div>
+                                              </div>
+                                            ) : branch.label === 'Stuff+' ? (
+                                              <div style={{ color: stuffColor }}>Stuff+ {formatMetricValue(pitch.stuff.value, 'plus')}</div>
+                                            ) : (
+                                              <div style={{ color: whiffColor }}>Whiff {formatMetricValue(pitch.whiff.value)}</div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="portal-muted-text" style={{ margin: 0 }}>
+                  Colors: green above baseline, white near baseline, red below baseline.
+                </p>
+              </article>
+            ) : null}
             {automationLoading ? <p className="portal-muted-text" style={{ margin: 0 }}>Building automated plan...</p> : null}
             {!automationLoading && automatedGoals.length === 0 ? (
               <p className="portal-muted-text" style={{ margin: 0 }}>
@@ -3133,11 +3836,29 @@ export default function PlayerPlansSuite() {
                     type="button"
                     className="btn btn-ghost"
                     onClick={() => void saveGoal(goal.slotIndex)}
-                    disabled={!goal.category || goalSavingSlot === goal.slotIndex || !selectedPlayerId}
+                    disabled={!goal.category || goalSavingSlot === goal.slotIndex || !activePlanPlayerId}
                   >
                     {goalSavingSlot === goal.slotIndex ? 'Saving...' : 'Save Goal'}
                   </button>
                 ) : null}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: controlsVisible ? 8 : 0 }}>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => void completeGoal(goal.slotIndex)}
+                    disabled={goalSavingSlot === goal.slotIndex || !goal.category || !activePlanPlayerId}
+                  >
+                    Complete Goal
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => void deleteGoal(goal.slotIndex)}
+                    disabled={goalSavingSlot === goal.slotIndex || !goal.category || !activePlanPlayerId}
+                  >
+                    Delete Goal
+                  </button>
+                </div>
               </article>
             );
           })}

@@ -481,7 +481,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       ) : null}
       {!isLeague && mountedSuites['Player Plans'] ? (
         <div style={{ display: showSuite('Player Plans') ? 'block' : 'none' }}>
-          <PlayerPlansSuite />
+          <PlayerPlansSuite selectedSchoolCode={selectedSchoolCode} />
         </div>
       ) : null}
       {!isLeague && canAccessPlayerNotes && mountedSuites['Player Notes'] ? (

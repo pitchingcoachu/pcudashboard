@@ -11,9 +11,17 @@ import {
   getPlayerForUser,
   listDashboardPlayerNotes,
   listDashboardPlayerNotesByOrganization,
+  listPlayerSummariesByOrganization,
   listPlayerPlanNotesForPlayer,
   updateDashboardPlayerNote,
 } from '../../../../lib/training-db';
+
+function withAuthorPrefix(rawText: string, authorName: string): string {
+  const body = String(rawText ?? '').trim();
+  const author = String(authorName ?? '').trim() || 'Unknown';
+  const withoutExistingPrefix = body.replace(/^Created By:\s.*(?:\r?\n){1,2}/i, '');
+  return `Created By: ${author}\n\n${withoutExistingPrefix}`.trim();
+}
 
 async function resolveAllowedPlayerId(
   session: { role?: string; organizationId?: number; userId?: number; playerId?: number | null } | null,
@@ -75,9 +83,30 @@ export async function GET(request: Request) {
 
   if (!Number.isFinite(playerId) || playerId <= 0) {
     try {
-      const notes = await listDashboardPlayerNotesByOrganization({
+      const dashboardNotes = await listDashboardPlayerNotesByOrganization({
         organizationId,
         domain: normalizedDomain,
+      });
+      const playerRows = await listPlayerSummariesByOrganization({
+        organizationId,
+        assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+      });
+      const playerNoteGroups = await Promise.all(
+        playerRows.map(async (player) => ({
+          playerName: player.fullName,
+          notes: await listPlayerPlanNotesForPlayer({ playerId: player.playerId, domain: normalizedDomain }),
+        }))
+      );
+      const playerNotes = playerNoteGroups.flatMap((group) =>
+        group.notes.map((note) => ({
+          ...note,
+          dashboardPlayerName: group.playerName,
+        }))
+      );
+      const notes = [...dashboardNotes, ...playerNotes].sort((a, b) => {
+        const byDate = String(b.noteDate ?? '').localeCompare(String(a.noteDate ?? ''));
+        if (byDate !== 0) return byDate;
+        return String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''));
       });
       return NextResponse.json({ notes });
     } catch (error) {
@@ -109,6 +138,7 @@ export async function POST(request: Request) {
   const attachmentName = String(body.attachmentName ?? '');
   const attachmentMimeType = String(body.attachmentMimeType ?? '');
   const attachmentDataUrl = String(body.attachmentDataUrl ?? '');
+  const authoredNoteText = withAuthorPrefix(noteText, String(session.name ?? session.email ?? '').trim());
 
   if (domain !== 'Pitching' && domain !== 'Hitting' && domain !== 'Catching' && domain !== 'General') {
     return NextResponse.json({ error: 'Valid domain is required.' }, { status: 400 });
@@ -124,7 +154,7 @@ export async function POST(request: Request) {
         domain: domain as 'Pitching' | 'Hitting' | 'Catching' | 'General',
         noteDate,
         category,
-        noteText,
+        noteText: authoredNoteText,
         attachmentName,
         attachmentMimeType,
         attachmentDataUrl,
@@ -155,7 +185,7 @@ export async function POST(request: Request) {
     domain,
     noteDate,
     category,
-    noteText,
+    noteText: authoredNoteText,
     attachmentName,
     attachmentMimeType,
     attachmentDataUrl,
@@ -183,13 +213,14 @@ export async function PATCH(request: Request) {
   const attachmentName = String(body.attachmentName ?? '');
   const attachmentMimeType = String(body.attachmentMimeType ?? '');
   const attachmentDataUrl = String(body.attachmentDataUrl ?? '');
+  const authoredNoteText = withAuthorPrefix(noteText, String(session.name ?? session.email ?? '').trim());
 
   const updated = await updateDashboardPlayerNote({
     organizationId,
     noteId,
     noteDate,
     category,
-    noteText,
+    noteText: authoredNoteText,
     attachmentName,
     attachmentMimeType,
     attachmentDataUrl,

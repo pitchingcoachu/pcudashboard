@@ -1,14 +1,34 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../../lib/auth';
-import { resolveProgrammingOrganizationId } from '../../../../../../lib/programming-scope';
+import { resolveSchoolScopedOrganizationId } from '../../../../../../lib/programming-scope';
 import { ensureAuthDbReady, getDbPool } from '../../../../../../lib/auth-db';
 import { getPlayerByIdInOrganization } from '../../../../../../lib/training-db';
 import { resolveDashboardSchoolCode } from '../../../../../../lib/dashboard-access';
 import { upsertAutomationRollup, type AutomationRollupPayload } from '../../../../../../lib/player-plan-automation-rollup';
 
 export const maxDuration = 300;
-const AUTOMATION_RULES_VERSION = 'fixed-thresholds-v1';
+const AUTOMATION_RULES_VERSION = 'fixed-thresholds-v4';
+
+function normalizeSchoolCode(value: unknown): string {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+function parseOrgSchoolMap(raw: string): Record<number, string> {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<number, string> = {};
+    for (const [orgIdRaw, schoolRaw] of Object.entries(parsed)) {
+      const orgId = Number(orgIdRaw);
+      const school = normalizeSchoolCode(typeof schoolRaw === 'string' ? schoolRaw : '');
+      if (!Number.isFinite(orgId) || orgId <= 0 || !school) continue;
+      out[orgId] = school;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 type HandSide = 'Left' | 'Right';
 type GoalDraft = {
@@ -181,7 +201,10 @@ function pitcherNameCandidates(value: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const add = (candidate: string) => {
-    const c = String(candidate ?? '').trim();
+    const c = String(candidate ?? '')
+      .trim()
+      .replace(/[,\s]+$/g, '')
+      .replace(/\s+/g, ' ');
     if (!c) return;
     const key = c.toLowerCase();
     if (seen.has(key)) return;
@@ -189,11 +212,17 @@ function pitcherNameCandidates(value: string): string[] {
     out.push(c);
   };
   add(raw);
+  add(raw.replace(/[,\s]+$/g, ''));
   add(raw.replace(/\./g, ' '));
   const commaMatch = raw.match(/^([^,]+),\s*(.+)$/);
   if (commaMatch) add(`${commaMatch[2]} ${commaMatch[1]}`);
   const parts = raw.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) add(`${parts.slice(1).join(' ')} ${parts[0]}`);
+  if (parts.length >= 2) {
+    const first = parts[0].replace(/[,\s]+$/g, '');
+    const last = parts[parts.length - 1].replace(/[,\s]+$/g, '');
+    add(`${parts.slice(1).join(' ')} ${parts[0]}`);
+    add(`${last}, ${first}`);
+  }
   return out;
 }
 
@@ -376,14 +405,15 @@ export async function POST(request: Request) {
     dashboardPlayerName?: string;
     percentileSource?: 'NCAA' | 'MLB';
     sessionType?: string;
+    stuffBase?: 'Fastball' | 'Sinker' | string;
     startDate?: string;
     endDate?: string;
   };
   const playerId = Number(body.playerId ?? 0);
   const percentileSource: 'NCAA' | 'MLB' = body.percentileSource === 'MLB' ? 'MLB' : 'NCAA';
 
-  const mappedOrganizationId = resolveProgrammingOrganizationId(session);
-  const organizationId = Number(mappedOrganizationId) > 0 ? Number(mappedOrganizationId) : Number(session.organizationId ?? 0);
+  const mappedOrganizationId = resolveSchoolScopedOrganizationId(session);
+  const organizationId = Number(mappedOrganizationId) > 0 ? Number(mappedOrganizationId) : 0;
   if (!organizationId) return NextResponse.json({ error: 'No organization available.' }, { status: 400 });
   const dashboardPlayerName = String(body.dashboardPlayerName ?? '').trim();
   const player = await resolveAutomationPlayer({
@@ -404,10 +434,19 @@ export async function POST(request: Request) {
     appUrl: session.appUrl,
     apps: session.apps,
   });
+  const mappedSchoolCode = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}')[organizationId] ?? '';
+  if (mappedSchoolCode && schoolCode && mappedSchoolCode !== schoolCode) {
+    return NextResponse.json(
+      { error: `Safety stop: selected school ${schoolCode} does not match resolved org mapping ${mappedSchoolCode}.` },
+      { status: 409 }
+    );
+  }
 
   const pitcherName = dashboardPlayerName || player.fullName;
   if (!pitcherName) return NextResponse.json({ error: 'Player name is required.' }, { status: 400 });
   const sessionType = String(body.sessionType ?? 'Season').trim() || 'Season';
+  const stuffBaseRaw = String(body.stuffBase ?? 'Fastball').trim().toLowerCase();
+  const stuffBase = stuffBaseRaw === 'sinker' ? 'Sinker' : 'Fastball';
   const startDate = String(body.startDate ?? '').trim();
   const endDate = String(body.endDate ?? '').trim();
 
@@ -416,6 +455,7 @@ export async function POST(request: Request) {
     p.set('school_code', schoolCode);
     p.set('split_by', splitBy);
     p.set('session_type', sessionType);
+    p.set('stuff_base', stuffBase);
     if (startDate) p.set('start_date', startDate);
     if (endDate) p.set('end_date', endDate);
     p.set('custom_columns', columns.join(','));
@@ -618,25 +658,11 @@ export async function POST(request: Request) {
     const processCols = ['E+A%', 'FPS%', 'Whiff%', 'InZone%'];
     const pitchCols = ['#', 'InZone%', 'Whiff%', 'Stuff+'];
 
-    const mkOverviewParams = (columns: string[]) => {
-      const p = new URLSearchParams();
-      p.set('school_code', schoolCode);
-      p.set('table_mode', 'Live');
-      p.set('split_by', 'Batter Hand');
-      p.set('session_type', sessionType);
-      if (startDate) p.set('start_date', startDate);
-      if (endDate) p.set('end_date', endDate);
-      p.set('custom_columns', columns.join(','));
-      p.set('include_chart_points', '0');
-      p.set('include_row_pitches', '0');
-      p.set('include_trend_rows', '0');
-      return p;
-    };
-    const rHand = mkOverviewParams(resultsCols);
-    const pHand = mkOverviewParams(processCols);
+    const rHand = mkParams('Batter Hand', resultsCols);
+    const pHand = mkParams('Batter Hand', processCols);
     const [resultsHand, processHand, directMetrics] = await Promise.all([
-      fetchOverviewForPitcher(rHand),
-      fetchOverviewForPitcher(pHand),
+      fetchRollupForPitcher(rHand, false),
+      fetchRollupForPitcher(pHand, false),
       fetchDirectPitcherSideMetrics().catch(() => ({
         left: { kPct: null, bbPct: null, eaPct: null, fpsPct: null },
         right: { kPct: null, bbPct: null, eaPct: null, fpsPct: null },
@@ -782,8 +808,17 @@ export async function POST(request: Request) {
       const processRow =
         getRowBySplit(processHand.rows, processSplitCol, side) ??
         getRowBySplit(processHand.rows, processSplitCol, side);
-      let eaRaw = parseNum(processRow?.['E+A%']) ?? parseNum(processAllRow?.['E+A%']) ?? overallEa;
-      let fpsRaw = parseNum(processRow?.['FPS%']) ?? parseNum(processAllRow?.['FPS%']) ?? overallFps;
+      const processPitcherSideRow = side === 'Left' ? processLeftRowByPitcher : processRightRowByPitcher;
+      let eaRaw =
+        parseNum(processPitcherSideRow?.['E+A%']) ??
+        parseNum(processRow?.['E+A%']) ??
+        parseNum(processAllRow?.['E+A%']) ??
+        overallEa;
+      let fpsRaw =
+        parseNum(processPitcherSideRow?.['FPS%']) ??
+        parseNum(processRow?.['FPS%']) ??
+        parseNum(processAllRow?.['FPS%']) ??
+        overallFps;
       if (eaRaw === null) eaRaw = (side === 'Left' ? directMetrics.left.eaPct : directMetrics.right.eaPct) ?? directMetrics.all.eaPct;
       if (fpsRaw === null) fpsRaw = (side === 'Left' ? directMetrics.left.fpsPct : directMetrics.right.fpsPct) ?? directMetrics.all.fpsPct;
       const eaGap = eaRaw === null ? Number.NEGATIVE_INFINITY : EA_THRESHOLD - eaRaw;
@@ -871,25 +906,7 @@ export async function POST(request: Request) {
 
     if (createK && goals.length < 3) {
       const side = kConcernSides.includes(kWorstSide) ? kWorstSide : kConcernSides[0];
-      const processSplitCol = processHand.splitCol || handCol;
-      const processRow =
-        getRowBySplit(processHand.rows, processSplitCol, side) ??
-        getRowBySplit(processHand.rows, processSplitCol, side);
-      const sideWhiff = parseNum(processRow?.['Whiff%']) ?? parseNum(processAllRow?.['Whiff%']);
-      if (sideWhiff !== null && sideWhiff < WHIFF_THRESHOLD) {
-        const target = stepUpTarget(sideWhiff, WHIFF_THRESHOLD);
-        goals.push({
-          category: 'Execution',
-          executionStat: 'Whiff%',
-          comparator: 'Greater Than',
-          targetValue: target,
-          objectiveText: `Improve Whiff% vs ${side === 'Left' ? 'LHH' : 'RHH'} to ${target.toFixed(1)}%. (${currentPctText(sideWhiff)})`,
-          batterSide: side,
-        });
-      }
-      if (goals.length >= 3) {
-        // preserve priority cap
-      } else {
+      if (goals.length < 3) {
       const rPitch = mkParams('Pitch Types', pitchCols);
       rPitch.set('batter_side', side);
       const rPitchBase = mkParams('Pitch Types', pitchCols);
@@ -940,7 +957,8 @@ export async function POST(request: Request) {
             batterSide: side,
             pitchTypes: [whiffConcern.pitch],
           });
-      } else if (stuffConcern) {
+      }
+      if (stuffConcern && goals.length < 3) {
         const threshold = stuffThresholdForPitch(stuffConcern.pitch);
         const targetV = stepUpTarget(stuffConcern.stuffVal ?? threshold, threshold);
           goals.push({
@@ -969,20 +987,7 @@ export async function POST(request: Request) {
       const bestBBGap = Math.max(bbGapLeft, bbGapRight);
       const hasKDeficit = bestKGap > 0;
       const hasBBDeficit = bestBBGap > 0;
-      const useK = hasKDeficit && (!hasBBDeficit || bestKGap >= bestBBGap);
-      if ((hasKDeficit || hasBBDeficit) && useK && Number.isFinite(Math.min(leftK, rightK))) {
-        const side: HandSide = leftK <= rightK ? 'Left' : 'Right';
-        const current = side === 'Left' ? leftK : rightK;
-        const target = stepUpTarget(current, K_THRESHOLD);
-        goals.push({
-          category: 'Execution',
-          executionStat: 'K%',
-          comparator: 'Greater Than',
-          targetValue: target,
-          objectiveText: `Raise K% vs ${side === 'Left' ? 'LHH' : 'RHH'} to ${target.toFixed(1)}%. (${currentPctText(current)})`,
-          batterSide: side,
-        });
-      } else if ((hasKDeficit || hasBBDeficit) && Number.isFinite(Math.max(leftBB, rightBB))) {
+      if ((hasKDeficit || hasBBDeficit) && Number.isFinite(Math.max(leftBB, rightBB))) {
         const side: HandSide = leftBB >= rightBB ? 'Left' : 'Right';
         const current = side === 'Left' ? leftBB : rightBB;
         const target = stepDownTarget(current, BB_THRESHOLD);
@@ -1013,39 +1018,44 @@ export async function POST(request: Request) {
         null;
 
       const fallbackCandidates: Array<{
-        stat: 'E+A%' | 'FPS%' | 'K%' | 'BB%';
+        stat: 'E+A%' | 'FPS%' | 'BB%';
         side: HandSide;
         current: number;
         deficit: number;
       }> = [];
       for (const side of ['Left', 'Right'] as HandSide[]) {
         const pRow = side === 'Left' ? processLeft : processRight;
-        const ea = parseNum(pRow?.['E+A%']) ?? parseNum(processAll?.['E+A%']);
-        const fps = parseNum(pRow?.['FPS%']) ?? parseNum(processAll?.['FPS%']);
-        const k = side === 'Left' ? kLeftRaw : kRightRaw;
-        const bb = side === 'Left' ? bbLeftRaw : bbRightRaw;
+        const pitcherProcessRow = side === 'Left' ? processLeftRowByPitcher : processRightRowByPitcher;
+        const ea =
+          parseNum(pitcherProcessRow?.['E+A%']) ??
+          parseNum(pRow?.['E+A%']) ??
+          parseNum(processAll?.['E+A%']) ??
+          (side === 'Left' ? directMetrics.left.eaPct : directMetrics.right.eaPct) ??
+          directMetrics.all.eaPct;
+        const fps =
+          parseNum(pitcherProcessRow?.['FPS%']) ??
+          parseNum(pRow?.['FPS%']) ??
+          parseNum(processAll?.['FPS%']) ??
+          (side === 'Left' ? directMetrics.left.fpsPct : directMetrics.right.fpsPct) ??
+          directMetrics.all.fpsPct;
+        const bb = side === 'Left' ? (bbLeftRaw ?? pctFromCounts(leftCounts.bb, leftCounts.pa)) : (bbRightRaw ?? pctFromCounts(rightCounts.bb, rightCounts.pa));
         if (ea !== null) fallbackCandidates.push({ stat: 'E+A%', side, current: ea, deficit: EA_THRESHOLD - ea });
         if (fps !== null) fallbackCandidates.push({ stat: 'FPS%', side, current: fps, deficit: FPS_THRESHOLD - fps });
-        if (k !== null) fallbackCandidates.push({ stat: 'K%', side, current: k, deficit: K_THRESHOLD - k });
         if (bb !== null) fallbackCandidates.push({ stat: 'BB%', side, current: bb, deficit: bb - BB_THRESHOLD });
       }
       // If no side rows, try all-row metrics.
       if (!fallbackCandidates.length) {
         const ea = parseNum(processAll?.['E+A%']);
         const fps = parseNum(processAll?.['FPS%']);
-        const k = parseNum(resultsAll?.['K%']);
         const bb = parseNum(resultsAll?.['BB%']);
         if (ea !== null) fallbackCandidates.push({ stat: 'E+A%', side: 'Right', current: ea, deficit: EA_THRESHOLD - ea });
         if (fps !== null) fallbackCandidates.push({ stat: 'FPS%', side: 'Right', current: fps, deficit: FPS_THRESHOLD - fps });
-        if (k !== null) fallbackCandidates.push({ stat: 'K%', side: 'Right', current: k, deficit: K_THRESHOLD - k });
         if (bb !== null) fallbackCandidates.push({ stat: 'BB%', side: 'Right', current: bb, deficit: bb - BB_THRESHOLD });
         const directEa = directMetrics.all.eaPct;
         const directFps = directMetrics.all.fpsPct;
-        const directK = directMetrics.all.kPct;
         const directBb = directMetrics.all.bbPct;
         if (directEa !== null) fallbackCandidates.push({ stat: 'E+A%', side: 'Right', current: directEa, deficit: EA_THRESHOLD - directEa });
         if (directFps !== null) fallbackCandidates.push({ stat: 'FPS%', side: 'Right', current: directFps, deficit: FPS_THRESHOLD - directFps });
-        if (directK !== null) fallbackCandidates.push({ stat: 'K%', side: 'Right', current: directK, deficit: K_THRESHOLD - directK });
         if (directBb !== null) fallbackCandidates.push({ stat: 'BB%', side: 'Right', current: directBb, deficit: directBb - BB_THRESHOLD });
       }
 
@@ -1065,7 +1075,7 @@ export async function POST(request: Request) {
               batterSide: chosen.side,
             });
           } else {
-            const threshold = chosen.stat === 'E+A%' ? EA_THRESHOLD : chosen.stat === 'FPS%' ? FPS_THRESHOLD : K_THRESHOLD;
+            const threshold = chosen.stat === 'E+A%' ? EA_THRESHOLD : FPS_THRESHOLD;
             const target = stepUpTarget(chosen.current, threshold);
             finalGoals.push({
               category: 'Execution',
@@ -1112,6 +1122,25 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
+    }
+
+    if (!finalGoals.length) {
+      return NextResponse.json(
+        {
+          error: `Unable to generate automated goals for ${pitcherName} with current filters.`,
+          debug: {
+            pitcherName,
+            pitcherCandidates,
+            canonicalPitcherCandidates,
+            directMetrics,
+            kLeftRaw,
+            kRightRaw,
+            bbLeftRaw,
+            bbRightRaw,
+          },
+        },
+        { status: 400 }
+      );
     }
 
     const payload: AutomationRollupPayload = {
