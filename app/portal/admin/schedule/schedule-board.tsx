@@ -228,7 +228,9 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   const [playerQuery, setPlayerQuery] = useState(players[0]?.name ?? '');
   const [showPlayerSuggestions, setShowPlayerSuggestions] = useState(false);
   const [isMobilePlayerPicker, setIsMobilePlayerPicker] = useState(false);
+  const [isMobileSchedule, setIsMobileSchedule] = useState(false);
   const [view, setView] = useState<ViewMode>('month');
+  const [mobilePaletteCollapsed, setMobilePaletteCollapsed] = useState(true);
   const [builderMode, setBuilderMode] = useState<BuilderMode>('schedule');
   const [paletteMode, setPaletteMode] = useState<PaletteMode>('workouts');
   const [workoutPaletteView, setWorkoutPaletteView] = useState<WorkoutPaletteView>('categories');
@@ -287,6 +289,22 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     if (typeof window === 'undefined') return;
     const media = window.matchMedia('(max-width: 780px)');
     const sync = () => setIsMobilePlayerPicker(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(max-width: 780px)');
+    const sync = () => {
+      const mobile = media.matches;
+      setIsMobileSchedule(mobile);
+      if (mobile) {
+        setView((previous) => (previous === 'month' ? 'day' : previous));
+        setMobilePaletteCollapsed(true);
+      }
+    };
     sync();
     media.addEventListener('change', sync);
     return () => media.removeEventListener('change', sync);
@@ -1956,8 +1974,19 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         )}
       </div>
 
+      {isMobileSchedule && !(builderMode === 'schedule' && view === 'throwing') ? (
+        <div style={{ marginBottom: '0.45rem' }}>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => setMobilePaletteCollapsed((previous) => !previous)}
+          >
+            {mobilePaletteCollapsed ? 'Show Workout Folder' : 'Hide Workout Folder'}
+          </button>
+        </div>
+      ) : null}
       <div className="portal-schedule-layout">
-        {builderMode === 'schedule' && view === 'throwing' ? null : (
+        {builderMode === 'schedule' && view === 'throwing' ? null : (!isMobileSchedule || !mobilePaletteCollapsed) ? (
         <aside className="portal-workout-palette">
           <div className="portal-schedule-view-switch" role="group" aria-label="Palette folder" style={{ marginBottom: 8, flexWrap: 'wrap', rowGap: 6 }}>
             <button
@@ -2118,7 +2147,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
             </div>
           </div>
         </aside>
-        )}
+        ) : null}
 
         <section
           className="portal-schedule-calendar"

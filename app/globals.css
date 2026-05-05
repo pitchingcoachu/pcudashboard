@@ -5333,6 +5333,40 @@ body.theme-light .portal-corr-tooltip {
     min-width: 0;
   }
 
+  .portal-schedule-toolbar,
+  .portal-schedule-layout,
+  .portal-schedule-calendar {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .portal-schedule-toolbar {
+    overflow-x: hidden;
+  }
+
+  .portal-schedule-layout {
+    overflow-x: hidden;
+  }
+
+  .portal-schedule-calendar {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .portal-schedule-view-switch {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .portal-schedule-player-picker,
+  .portal-schedule-player-picker input,
+  .portal-schedule-player-picker select {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
   .portal-schedule-day {
     min-height: 160px !important;
     aspect-ratio: auto;
