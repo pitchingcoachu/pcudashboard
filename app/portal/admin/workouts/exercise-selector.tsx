@@ -86,6 +86,8 @@ export default function WorkoutExerciseSelector({
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([category, items]) => ({ category, items }));
   }, [exercises, query]);
+  const hasSearchQuery = normalized(query).length > 0;
+  const searchedExercises = useMemo(() => grouped.flatMap((group) => group.items), [grouped]);
 
   const addExercise = (exerciseId: number) => {
     setSelectedIds((prev) => (prev.includes(exerciseId) ? prev : [...prev, exerciseId]));
@@ -224,6 +226,32 @@ export default function WorkoutExerciseSelector({
 
       {grouped.length === 0 ? (
         <p className="portal-muted-text">No exercises match your search.</p>
+      ) : hasSearchQuery ? (
+        <div className="portal-choice-list">
+          {searchedExercises.map((exercise) => {
+            const selectedIndex = selectedIds.indexOf(exercise.id);
+            const isSelected = selectedIndex >= 0;
+            return (
+              <div key={exercise.id} className="portal-choice-line">
+                <div className="portal-choice-line-main">
+                  <strong>{exercise.name}</strong>
+                  <span className="portal-category-chip" style={categoryChipStyle(exercise.category)}>
+                    {exercise.category}
+                  </span>
+                </div>
+                <div className="portal-choice-line-actions">
+                  {isSelected ? (
+                    <span className="portal-selected-pill">Selected #{selectedIndex + 1}</span>
+                  ) : (
+                    <button type="button" className="btn btn-ghost" onClick={() => addExercise(exercise.id)}>
+                      Add
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       ) : (
         <div className="portal-folder-stack">
           {grouped.map((group) => (

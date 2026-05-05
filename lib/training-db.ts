@@ -491,6 +491,22 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_templates_org_updated ON schedule_templates (organization_id, updated_at DESC);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_template_days_template_offset ON schedule_template_days (template_id, day_offset);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_template_day_items_day_sort ON schedule_template_day_items (template_day_id, sort_order);`);
+    await pool.query(`
+    CREATE TABLE IF NOT EXISTS schedule_throwing_state (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      by_date_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      week_notes_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      templates_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      updated_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, player_id)
+    );
+  `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_throwing_state_org_player ON schedule_throwing_state (organization_id, player_id);`);
     global.__pcuTrainingDbReady = true;
   })().finally(() => {
     global.__pcuTrainingDbReadyPromise = undefined;
@@ -2759,6 +2775,81 @@ export async function deleteScheduleTemplate(input: {
   if ((deleted.rowCount ?? 0) !== 1) return { ok: false, error: 'Template not found.' };
   _invalidateTrainingReadCacheForOrganization(input.organizationId);
   return { ok: true };
+}
+
+export async function getScheduleThrowingState(input: {
+  organizationId: number;
+  playerId: number;
+}): Promise<{ byDate: Record<string, unknown>; weekNotes: Record<string, unknown>; templates: unknown[] }> {
+  if (!isDatabaseConfigured()) return { byDate: {}, weekNotes: {}, templates: [] };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    by_date_json: Record<string, unknown> | null;
+    week_notes_json: Record<string, unknown> | null;
+    templates_json: unknown[] | null;
+  }>(
+    `
+      SELECT by_date_json, week_notes_json, templates_json
+      FROM schedule_throwing_state
+      WHERE organization_id = $1 AND player_id = $2
+      LIMIT 1
+    `,
+    [input.organizationId, input.playerId]
+  );
+  if ((result.rowCount ?? 0) < 1) return { byDate: {}, weekNotes: {}, templates: [] };
+  return {
+    byDate: (result.rows[0]?.by_date_json ?? {}) as Record<string, unknown>,
+    weekNotes: (result.rows[0]?.week_notes_json ?? {}) as Record<string, unknown>,
+    templates: Array.isArray(result.rows[0]?.templates_json) ? (result.rows[0]?.templates_json as unknown[]) : [],
+  };
+}
+
+export async function saveScheduleThrowingState(input: {
+  organizationId: number;
+  playerId: number;
+  userId: number;
+  byDate: Record<string, unknown>;
+  weekNotes: Record<string, unknown>;
+  templates: unknown[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  try {
+    await pool.query(
+      `
+        INSERT INTO schedule_throwing_state (
+          organization_id,
+          player_id,
+          by_date_json,
+          week_notes_json,
+          templates_json,
+          created_by_user_id,
+          updated_by_user_id
+        )
+        VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6, $6)
+        ON CONFLICT (organization_id, player_id)
+        DO UPDATE SET
+          by_date_json = EXCLUDED.by_date_json,
+          week_notes_json = EXCLUDED.week_notes_json,
+          templates_json = EXCLUDED.templates_json,
+          updated_by_user_id = EXCLUDED.updated_by_user_id,
+          updated_at = NOW()
+      `,
+      [
+        input.organizationId,
+        input.playerId,
+        JSON.stringify(input.byDate ?? {}),
+        JSON.stringify(input.weekNotes ?? {}),
+        JSON.stringify(Array.isArray(input.templates) ? input.templates : []),
+        input.userId,
+      ]
+    );
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to save throwing state.' };
+  }
 }
 
 export async function applyScheduleTemplateToPlayer(input: {

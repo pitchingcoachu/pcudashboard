@@ -1156,9 +1156,22 @@ function applyPitchingSummarySplitFilter(params: URLSearchParams, splitBy: strin
   for (const key of clearKeys) params.delete(key);
   if (isAllLikeRowValue(rowLabel)) return true;
   switch (splitBy) {
-    case 'Pitch Types':
-      params.set('pitch_types', resolvePitchTypeFilterValue(rowLabel, availablePitchTypes));
+    case 'Pitch Types': {
+      const token = normalizeNameToken(rowLabel);
+      // Guard against accidental hand-like labels getting applied as pitch_types
+      // (e.g. "Right"/"Left"), which creates very expensive invalid baseline queries.
+      if (token === 'left' || token === 'right' || token === 'lhh' || token === 'rhh') return false;
+      const resolvedPitchType = resolvePitchTypeFilterValue(rowLabel, availablePitchTypes);
+      const resolvedToken = normalizeNameToken(resolvedPitchType);
+      const knownPitchTypes = new Set(
+        (availablePitchTypes ?? [])
+          .map((value) => normalizeNameToken(value))
+          .filter(Boolean)
+      );
+      if (knownPitchTypes.size > 0 && !knownPitchTypes.has(resolvedToken)) return false;
+      params.set('pitch_types', resolvedPitchType);
       return true;
+    }
     case 'Pitcher Hand':
       params.set('hand', canonicalizeHandLabel(rowLabel));
       return true;
@@ -3050,6 +3063,13 @@ export default function PitchingSuite({
         // Summary percentile baselines should always be a pitcher-wide pool.
         // Row-specific split filters are applied in the summary-percentiles pass.
         baselineParams.set('split_by', 'Pitcher');
+      }
+      // Keep percentile baseline lightweight on school sites. Heavy Custom-table
+      // baseline requests with large custom column sets can time out and disable
+      // all color coding.
+      if (!isPro) {
+        baselineParams.delete('custom_columns');
+        if (baselineParams.get('table_mode') === 'Custom') baselineParams.set('table_mode', 'Live');
       }
       if (isGameLogPage || isPitchLogPage) baselineParams.set('split_by', 'Game');
       const activePercentileScope =

@@ -39,12 +39,11 @@ export async function POST(request: Request) {
   const scheduleType = String(form.get('scheduleType') ?? 'calendar').trim().toLowerCase() === 'cycle' ? 'cycle' : 'calendar';
   const performedLoadValues = form
     .getAll('performedLoadValues')
-    .map((value) => String(value).trim())
-    .filter((value) => value.length > 0);
+    .map((value) => String(value).trim());
   const assessmentScoreValues = form
     .getAll('assessmentScoreValues')
     .map((value) => String(value).trim())
-    .filter((value) => value === '1' || value === '2' || value === '3');
+    .map((value) => (value === '1' || value === '2' || value === '3' ? value : ''));
   const assessmentNoteValues = form
     .getAll('assessmentNoteValues')
     .map((value) => String(value).trim());

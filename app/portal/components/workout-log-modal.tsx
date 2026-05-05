@@ -27,8 +27,7 @@ function parseLoadValues(value: string | null): string[] {
   if (!value) return [];
   return value
     .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
+    .map((part) => part.trim());
 }
 
 function parseAssessmentNotesPayload(

@@ -69,7 +69,7 @@ export async function POST(request: Request) {
       const query = String(entry.query ?? '').trim();
       if (!rowKey || !query) return;
 
-      const baseUrl = new URL('/api/dashboard/pitching/overview', origin);
+      const baseUrl = new URL('/api/dashboard/pitching/table-rollup', origin);
       baseUrl.search = query;
       if ((baseUrl.searchParams.get('table_mode') ?? '').trim().toLowerCase() === 'custom') {
         baseUrl.searchParams.set('custom_columns', columns.join(','));
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
 
       const handedQuery = String(entry.handedQuery ?? '').trim();
       if (!handedQuery) return;
-      const handedUrl = new URL('/api/dashboard/pitching/overview', origin);
+      const handedUrl = new URL('/api/dashboard/pitching/table-rollup', origin);
       handedUrl.search = handedQuery;
       if ((handedUrl.searchParams.get('table_mode') ?? '').trim().toLowerCase() === 'custom') {
         handedUrl.searchParams.set('custom_columns', columns.join(','));
