@@ -226,6 +226,8 @@ function isThrowingCalendarWorkoutName(value: string): boolean {
 export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps) {
   const [playerId, setPlayerId] = useState<number>(players[0]?.id ?? 0);
   const [playerQuery, setPlayerQuery] = useState(players[0]?.name ?? '');
+  const [showPlayerSuggestions, setShowPlayerSuggestions] = useState(false);
+  const [isMobilePlayerPicker, setIsMobilePlayerPicker] = useState(false);
   const [view, setView] = useState<ViewMode>('month');
   const [builderMode, setBuilderMode] = useState<BuilderMode>('schedule');
   const [paletteMode, setPaletteMode] = useState<PaletteMode>('workouts');
@@ -269,11 +271,26 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     setTemplateDayItems({});
   };
 
+  const filteredPlayers = useMemo(() => {
+    const q = playerQuery.trim().toLowerCase();
+    if (!q) return players;
+    return players.filter((player) => player.name.toLowerCase().includes(q));
+  }, [playerQuery, players]);
+
   useEffect(() => {
     const selected = players.find((player) => player.id === playerId);
     if (!selected) return;
     setPlayerQuery(selected.name);
   }, [playerId, players]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const media = window.matchMedia('(max-width: 780px)');
+    const sync = () => setIsMobilePlayerPicker(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
 
   useEffect(() => {
     const q = playerQuery.trim().toLowerCase();
@@ -1695,8 +1712,15 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               <input
                 className="portal-schedule-control"
                 value={playerQuery}
-                onChange={(event) => setPlayerQuery(event.target.value)}
+                onChange={(event) => {
+                  setPlayerQuery(event.target.value);
+                  if (isMobilePlayerPicker) setShowPlayerSuggestions(true);
+                }}
+                onFocus={() => {
+                  if (isMobilePlayerPicker) setShowPlayerSuggestions(true);
+                }}
                 onBlur={() => {
+                  if (isMobilePlayerPicker) setTimeout(() => setShowPlayerSuggestions(false), 120);
                   const q = playerQuery.trim().toLowerCase();
                   if (!q) {
                     const selected = players.find((player) => player.id === playerId);
@@ -1716,6 +1740,25 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                 list="schedule-player-search-options"
                 aria-label="Search player"
               />
+              {isMobilePlayerPicker && showPlayerSuggestions && (
+                <div className="portal-search-dropdown" role="listbox" aria-label="Player suggestions">
+                  {(filteredPlayers.length > 0 ? filteredPlayers : players).slice(0, 24).map((player) => (
+                    <button
+                      key={`player-suggest-${player.id}`}
+                      type="button"
+                      className="portal-search-dropdown-item"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        setPlayerId(player.id);
+                        setPlayerQuery(player.name);
+                        setShowPlayerSuggestions(false);
+                      }}
+                    >
+                      {player.name}
+                    </button>
+                  ))}
+                </div>
+              )}
               <datalist id="schedule-player-search-options">
                 {players.map((player) => (
                   <option key={player.id} value={player.name} />

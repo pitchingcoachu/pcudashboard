@@ -180,6 +180,8 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
       if (parsed.hostname.includes('youtube.com')) {
         const videoId = parsed.searchParams.get('v');
         if (videoId) return `https://www.youtube.com/embed/${videoId}`;
+        const shortMatch = parsed.pathname.match(/^\/shorts\/([^/?#]+)/i);
+        if (shortMatch?.[1]) return `https://www.youtube.com/embed/${shortMatch[1]}`;
       }
       if (parsed.hostname.includes('youtu.be')) {
         const videoId = parsed.pathname.replace('/', '').trim();
