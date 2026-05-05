@@ -225,6 +225,7 @@ function isThrowingCalendarWorkoutName(value: string): boolean {
 
 export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps) {
   const [playerId, setPlayerId] = useState<number>(players[0]?.id ?? 0);
+  const [playerQuery, setPlayerQuery] = useState(players[0]?.name ?? '');
   const [view, setView] = useState<ViewMode>('month');
   const [builderMode, setBuilderMode] = useState<BuilderMode>('schedule');
   const [paletteMode, setPaletteMode] = useState<PaletteMode>('workouts');
@@ -267,6 +268,21 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     setTemplateWeekCount(4);
     setTemplateDayItems({});
   };
+
+  useEffect(() => {
+    const selected = players.find((player) => player.id === playerId);
+    if (!selected) return;
+    setPlayerQuery(selected.name);
+  }, [playerId, players]);
+
+  useEffect(() => {
+    const q = playerQuery.trim().toLowerCase();
+    if (!q) return;
+    const exact = players.find((player) => player.name.trim().toLowerCase() === q);
+    if (!exact) return;
+    if (exact.id === playerId) return;
+    setPlayerId(exact.id);
+  }, [playerId, playerQuery, players]);
 
   const visibleRange = useMemo(() => {
     if (view === 'cycle') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
@@ -1676,13 +1692,35 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           <>
             <label className="portal-schedule-player-picker">
               Player
-              <select className="portal-schedule-control" value={String(playerId)} onChange={(event) => setPlayerId(Number(event.target.value))}>
+              <input
+                className="portal-schedule-control"
+                value={playerQuery}
+                onChange={(event) => setPlayerQuery(event.target.value)}
+                onBlur={() => {
+                  const q = playerQuery.trim().toLowerCase();
+                  if (!q) {
+                    const selected = players.find((player) => player.id === playerId);
+                    setPlayerQuery(selected?.name ?? '');
+                    return;
+                  }
+                  const exact = players.find((player) => player.name.trim().toLowerCase() === q);
+                  if (exact) {
+                    setPlayerId(exact.id);
+                    setPlayerQuery(exact.name);
+                    return;
+                  }
+                  const selected = players.find((player) => player.id === playerId);
+                  setPlayerQuery(selected?.name ?? '');
+                }}
+                placeholder="Search player..."
+                list="schedule-player-search-options"
+                aria-label="Search player"
+              />
+              <datalist id="schedule-player-search-options">
                 {players.map((player) => (
-                  <option key={player.id} value={String(player.id)}>
-                    {player.name}
-                  </option>
+                  <option key={player.id} value={player.name} />
                 ))}
-              </select>
+              </datalist>
             </label>
             <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
               {(['day', 'week', 'month', 'cycle', 'throwing'] as ViewMode[]).map((mode) => (
