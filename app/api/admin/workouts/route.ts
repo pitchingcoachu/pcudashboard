@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
-import { createWorkout } from '../../../../lib/training-db';
+import { createWorkout, listWorkoutsByOrganization } from '../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -14,6 +14,34 @@ function wantsJsonResponse(request: Request): boolean {
   const accept = request.headers.get('accept') ?? '';
   const requestedWith = request.headers.get('x-requested-with') ?? '';
   return accept.includes('application/json') || requestedWith.toLowerCase() === 'fetch';
+}
+
+export async function GET(request: Request) {
+  const wantsJson = wantsJsonResponse(request);
+  const cookieStore = await cookies();
+  const session = getSessionFromCookies(cookieStore);
+  if (!session) {
+    if (wantsJson) return NextResponse.json({ ok: false, error: 'Not authenticated.' }, { status: 401 });
+    return NextResponse.redirect(new URL('/login', request.url), 303);
+  }
+  if (session.role === 'player') {
+    if (wantsJson) return NextResponse.json({ ok: false, error: 'Forbidden.' }, { status: 403 });
+    return NextResponse.redirect(new URL('/portal/player', request.url), 303);
+  }
+
+  const organizationId = resolveProgrammingOrganizationId(session);
+  if (organizationId <= 0) {
+    if (wantsJson) {
+      return NextResponse.json(
+        { ok: false, error: 'Session context missing. Please log out and log in again.' },
+        { status: 400 }
+      );
+    }
+    return NextResponse.redirect(new URL('/portal/admin/workouts', request.url), 303);
+  }
+
+  const workouts = await listWorkoutsByOrganization(organizationId);
+  return NextResponse.json({ ok: true, workouts });
 }
 
 export async function POST(request: Request) {

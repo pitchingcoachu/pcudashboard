@@ -3780,6 +3780,11 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
     workout_description: string | null;
     workout_exercise_names: string | null;
     workout_exercise_json: unknown;
+    completed: boolean | null;
+    performed_sets: string | null;
+    performed_reps: string | null;
+    performed_load: string | null;
+    log_notes: string | null;
   }>(
     `
       WITH selected_workout_ids AS (
@@ -3832,10 +3837,29 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
         w.category AS workout_category,
         w.description AS workout_description,
         ws.exercise_names AS workout_exercise_names,
-        ws.exercise_json AS workout_exercise_json
+        ws.exercise_json AS workout_exercise_json,
+        h.completed,
+        h.performed_sets,
+        h.performed_reps,
+        h.performed_load,
+        h.notes AS log_notes
       FROM program_cycle_items ci
       JOIN workout_library w ON w.id = ci.workout_id
       LEFT JOIN workout_summaries ws ON ws.workout_id = ci.workout_id
+      LEFT JOIN LATERAL (
+        SELECT
+          eh.completed,
+          eh.performed_sets,
+          eh.performed_reps,
+          eh.performed_load,
+          eh.notes
+        FROM exercise_log_history eh
+        WHERE eh.player_id = ci.player_id
+          AND eh.schedule_type = 'cycle'
+          AND eh.cycle_item_id = ci.id
+        ORDER BY eh.logged_at DESC, eh.id DESC
+        LIMIT 1
+      ) h ON TRUE
       WHERE ci.player_id = $1
       ORDER BY
         CASE ci.cycle_slot
@@ -3883,11 +3907,11 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
     prescribedReps: null,
     prescribedLoad: null,
     prescribedNotes: null,
-    completed: false,
-    performedSets: null,
-    performedReps: null,
-    performedLoad: null,
-    logNotes: null,
+    completed: Boolean(row.completed),
+    performedSets: row.performed_sets,
+    performedReps: row.performed_reps,
+    performedLoad: row.performed_load,
+    logNotes: row.log_notes,
     programName: '3-Day Cycle',
   }));
 }

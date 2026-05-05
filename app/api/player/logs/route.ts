@@ -6,12 +6,34 @@ import { canManagePlayer } from '../../../../lib/portal-access';
 
 const ASSESSMENT_NOTES_TOKEN = '[ASSESSMENT_NOTES]';
 
-function parseBodyWeightSetValues(form: FormData): string[] {
+function parseIndexedLoadValues(form: FormData): string[] {
+  const raw = form
+    .getAll('performedLoadValuesIndexed')
+    .map((value) => String(value));
+  if (raw.length === 0) return [];
+
+  const byIndex = new Map<number, string>();
+  let maxIndex = -1;
+  for (const entry of raw) {
+    const colon = entry.indexOf(':');
+    if (colon <= 0) continue;
+    const index = Number(entry.slice(0, colon));
+    if (!Number.isFinite(index) || index < 0) continue;
+    const value = entry.slice(colon + 1).trim();
+    byIndex.set(index, value);
+    if (index > maxIndex) maxIndex = index;
+  }
+  if (maxIndex < 0) return [];
+
+  return Array.from({ length: maxIndex + 1 }, (_, idx) => byIndex.get(idx) ?? '');
+}
+
+function parseBodyWeightSetValues(form: FormData): Map<number, '0' | '1'> {
   const raw = form
     .getAll('performedBodyWeightSetValues')
     .map((value) => String(value).trim())
     .filter((value) => /^\d+:[01]$/.test(value));
-  if (!raw.length) return [];
+  if (!raw.length) return new Map();
 
   const bySet = new Map<number, number>();
   for (const entry of raw) {
@@ -23,9 +45,22 @@ function parseBodyWeightSetValues(form: FormData): string[] {
     bySet.set(setIndex, Math.max(prior, checked === 1 ? 1 : 0));
   }
 
-  return Array.from(bySet.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([, checked]) => String(checked));
+  const out = new Map<number, '0' | '1'>();
+  for (const [setIndex, checked] of bySet.entries()) {
+    out.set(setIndex, checked === 1 ? '1' : '0');
+  }
+  return out;
+}
+
+function mergeLoadValues(performedLoadValues: string[], bodyWeightSetValues: Map<number, '0' | '1'>): string[] {
+  if (bodyWeightSetValues.size === 0) return performedLoadValues;
+  const maxBodyIndex = Math.max(...Array.from(bodyWeightSetValues.keys()));
+  const maxLen = Math.max(performedLoadValues.length, maxBodyIndex + 1);
+  const merged = Array.from({ length: maxLen }, (_, idx) => performedLoadValues[idx] ?? '');
+  for (const [setIndex, checkedValue] of bodyWeightSetValues.entries()) {
+    if (setIndex >= 0) merged[setIndex] = checkedValue;
+  }
+  return merged;
 }
 
 function redirectWithMessage(request: Request, target: string, params: Record<string, string>) {
@@ -49,9 +84,11 @@ export async function POST(request: Request) {
   const scheduleType = String(form.get('scheduleType') ?? 'calendar').trim().toLowerCase() === 'cycle' ? 'cycle' : 'calendar';
   const month = String(form.get('month') ?? '');
   const previewPlayerId = String(form.get('previewPlayerId') ?? '');
-  const performedLoadValues = form
-    .getAll('performedLoadValues')
-    .map((value) => String(value).trim());
+  const performedLoadValuesIndexed = parseIndexedLoadValues(form);
+  const performedLoadValues =
+    performedLoadValuesIndexed.length > 0
+      ? performedLoadValuesIndexed
+      : form.getAll('performedLoadValues').map((value) => String(value).trim());
   const assessmentScoreValues = form
     .getAll('assessmentScoreValues')
     .map((value) => String(value).trim())
@@ -60,8 +97,8 @@ export async function POST(request: Request) {
     .getAll('assessmentNoteValues')
     .map((value) => String(value).trim());
   const bodyWeightSetValues = parseBodyWeightSetValues(form);
-  const baseLoadValues =
-    assessmentScoreValues.length > 0 ? assessmentScoreValues : bodyWeightSetValues.length > 0 ? bodyWeightSetValues : performedLoadValues;
+  const mergedLoadValues = mergeLoadValues(performedLoadValues, bodyWeightSetValues);
+  const baseLoadValues = assessmentScoreValues.length > 0 ? assessmentScoreValues : mergedLoadValues;
   const performedLoadCombined = baseLoadValues.join(', ');
   const baseNotes = String(form.get('notes') ?? '').trim();
   const hasAssessmentNotes = assessmentNoteValues.some((value) => value.length > 0);

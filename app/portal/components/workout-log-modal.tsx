@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ExerciseLoadHistoryEntry, ProgramItemRow } from '../../../lib/training-db';
 
@@ -118,11 +118,12 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
   const [mounted, setMounted] = useState(false);
   const [historyByExercise, setHistoryByExercise] = useState<Record<number, ExerciseLoadHistoryEntry[]>>({});
   const [videoPreview, setVideoPreview] = useState<{ title: string; url: string } | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
 
   const isCycleItem = item.scheduleType === 'cycle';
-  const loadValues = useMemo(() => (isCycleItem ? [] : parseLoadValues(item.performedLoad)), [isCycleItem, item.performedLoad]);
+  const loadValues = useMemo(() => parseLoadValues(item.performedLoad), [item.performedLoad]);
   const isAssessmentWorkout = (item.workoutCategory ?? '').trim().toLowerCase() === 'assessment';
-  const notesPayload = useMemo(() => (isCycleItem ? { generalNotes: '', assessmentNotes: [] } : parseAssessmentNotesPayload(item.logNotes ?? '')), [isCycleItem, item.logNotes]);
+  const notesPayload = useMemo(() => parseAssessmentNotesPayload(item.logNotes ?? ''), [item.logNotes]);
   const exerciseIdsForHistory = useMemo(() => {
     if (item.itemType === 'workout') {
       return Array.from(
@@ -242,6 +243,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
         </p>
 
         <form
+          ref={formRef}
           spellCheck={false}
           data-gramm="false"
           data-gramm_editor="false"
@@ -252,6 +254,18 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
             setError('');
             try {
               const form = new FormData(event.currentTarget);
+              const loadInputs = Array.from(
+                event.currentTarget.querySelectorAll<HTMLInputElement>("input[name='performedLoadValues']")
+              );
+              const loadInputIndexes = Array.from(
+                event.currentTarget.querySelectorAll<HTMLInputElement>("input[name='performedLoadValueIndexes']")
+              );
+              form.delete('performedLoadValuesIndexed');
+              loadInputs.forEach((input, index) => {
+                const explicitIndex = Number(loadInputIndexes[index]?.value ?? '');
+                const effectiveIndex = Number.isFinite(explicitIndex) && explicitIndex >= 0 ? explicitIndex : index;
+                form.append('performedLoadValuesIndexed', `${effectiveIndex}:${input.value}`);
+              });
               form.set('itemId', String(item.itemId));
               form.set('playerId', String(playerId));
 
@@ -278,7 +292,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                 let loadIndex = 0;
                 return item.workoutExercises.map((exercise, exerciseIdx) => {
                   const setCount = parseSetCount(exercise.prescribedSets);
-                  const assessmentCurrent = isCycleItem ? '' : loadValues[exerciseIdx] ?? '';
+                  const assessmentCurrent = loadValues[exerciseIdx] ?? '';
                   return (
                     <div key={`${item.itemId}-modal-ex-${exerciseIdx}`} className="portal-workout-player-exercise">
                       <div className="portal-workout-player-head">
@@ -336,7 +350,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                               name="assessmentNoteValues"
                               rows={2}
                               placeholder="Assessment note..."
-                              defaultValue={isCycleItem ? '' : notesPayload.assessmentNotes[exerciseIdx] ?? ''}
+                              defaultValue={notesPayload.assessmentNotes[exerciseIdx] ?? ''}
                               style={{ marginTop: '0.35rem' }}
                             />
                           </label>
@@ -344,7 +358,8 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                       ) : (
                         <div className="portal-set-weights">
                           {Array.from({ length: setCount }).map((_, setIdx) => {
-                            const current = isCycleItem ? '' : loadValues[loadIndex] ?? '';
+                            const current = loadValues[loadIndex] ?? '';
+                            const setValueIndex = loadIndex;
                             loadIndex += 1;
                             const checked = ['1', 'true', 'yes', 'on', 'checked'].includes(current.trim().toLowerCase());
                             return (
@@ -355,22 +370,24 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                                     <input
                                       type="hidden"
                                       name="performedBodyWeightSetValues"
-                                      value={`${setIdx}:0`}
+                                      value={`${setValueIndex}:0`}
                                     />
                                     <input
                                       type="checkbox"
                                       name="performedBodyWeightSetValues"
-                                      value={`${setIdx}:1`}
+                                      value={`${setValueIndex}:1`}
                                       defaultChecked={checked}
                                     />
-                                    <span>Completed</span>
                                   </div>
                                 ) : (
-                                  <input
-                                    name="performedLoadValues"
-                                    defaultValue={current}
-                                    placeholder={trackingPlaceholder(exercise.trackingType)}
-                                  />
+                                  <>
+                                    <input type="hidden" name="performedLoadValueIndexes" value={setValueIndex} />
+                                    <input
+                                      name="performedLoadValues"
+                                      defaultValue={current}
+                                      placeholder={trackingPlaceholder(exercise.trackingType)}
+                                    />
+                                  </>
                                 )}
                               </label>
                             );
@@ -425,7 +442,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                 : null}
               <div className="portal-set-weights">
                 {Array.from({ length: parseSetCount(item.prescribedSets) }).map((_, setIdx) => {
-                  const current = isCycleItem ? '' : loadValues[setIdx] ?? '';
+                  const current = loadValues[setIdx] ?? '';
                   const checked = ['1', 'true', 'yes', 'on', 'checked'].includes(current.trim().toLowerCase());
                   return (
                     <label key={`${item.itemId}-modal-set-${setIdx}`}>
@@ -439,14 +456,16 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                             value={`${setIdx}:1`}
                             defaultChecked={checked}
                           />
-                          <span>Completed</span>
                         </div>
                       ) : (
-                        <input
-                          name="performedLoadValues"
-                          defaultValue={current}
-                          placeholder={trackingPlaceholder(item.trackingType)}
-                        />
+                        <>
+                          <input type="hidden" name="performedLoadValueIndexes" value={setIdx} />
+                          <input
+                            name="performedLoadValues"
+                            defaultValue={current}
+                            placeholder={trackingPlaceholder(item.trackingType)}
+                          />
+                        </>
                       )}
                     </label>
                   );
@@ -458,7 +477,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
           <div className="portal-log-grid">
             <label className="portal-form-span-2">
               Notes
-              <textarea name="notes" rows={2} defaultValue={isCycleItem ? '' : notesPayload.generalNotes} />
+              <textarea name="notes" rows={2} defaultValue={notesPayload.generalNotes} />
             </label>
           </div>
 
@@ -508,7 +527,14 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
           padding: '1rem',
           background: '#000',
         }}
-        onClick={onClose}
+        onClick={() => {
+          if (saving || deleting) return;
+          if (formRef.current) {
+            formRef.current.requestSubmit();
+            return;
+          }
+          onClose();
+        }}
         role="presentation"
       >
         <div onClick={(event) => event.stopPropagation()} style={{ width: 'min(720px, 96vw)' }}>

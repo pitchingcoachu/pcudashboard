@@ -1134,7 +1134,10 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   const throwingInputBaseStyle: CSSProperties = {
     minHeight: '36px',
     padding: '0.42rem 0.55rem',
-    textAlign: 'center',
+    textAlign: 'left',
+    width: '100%',
+    minWidth: 0,
+    boxSizing: 'border-box',
   };
 
   const throwingNotesStyle: CSSProperties = {
@@ -1142,6 +1145,54 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     height: 'calc((36px * 4) + (0.28rem * 3))',
     minHeight: 'calc((36px * 4) + (0.28rem * 3))',
     resize: 'none',
+  };
+
+  const throwingLabelStyle: CSSProperties = {
+    fontSize: '0.78rem',
+    fontWeight: 700,
+    color: 'var(--text-main)',
+    minWidth: '74px',
+    textAlign: 'left',
+    whiteSpace: 'nowrap',
+  };
+
+  const throwingRowStyle: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: '78px 1fr',
+    alignItems: 'center',
+    gap: '0.32rem',
+    minWidth: 0,
+  };
+
+  const parseIntensityValue = (raw: string): number | null => {
+    const match = String(raw ?? '').match(/(\d+(?:\.\d+)?)/);
+    if (!match) return null;
+    const value = Number(match[1]);
+    return Number.isFinite(value) ? value : null;
+  };
+
+  const getThrowingCellHighlightStyle = (entry: ThrowingDayEntry): CSSProperties => {
+    const intensity = parseIntensityValue(entry.intensity);
+    if (intensity == null) return {};
+    if (intensity <= 60) {
+      return {
+        background: 'rgba(153, 27, 27, 0.30)',
+        boxShadow: 'inset 0 0 0 1px rgba(239, 68, 68, 0.55)',
+      };
+    }
+    if (intensity >= 65 && intensity <= 85) {
+      return {
+        background: 'rgba(202, 138, 4, 0.28)',
+        boxShadow: 'inset 0 0 0 1px rgba(250, 204, 21, 0.55)',
+      };
+    }
+    if (intensity >= 90) {
+      return {
+        background: 'rgba(21, 128, 61, 0.30)',
+        boxShadow: 'inset 0 0 0 1px rgba(74, 222, 128, 0.55)',
+      };
+    }
+    return {};
   };
 
   const deleteCalendarItem = async (itemId: number) => {
@@ -1416,6 +1467,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           borderBottom: '1px solid var(--calendar-grid-border, var(--border))',
           boxShadow: throwingApplyStartDate === date ? 'inset 0 0 0 1px rgba(220, 38, 38, 0.5)' : undefined,
           cursor: 'pointer',
+          ...getThrowingCellHighlightStyle(entry),
         }}
         onClick={() => setThrowingApplyStartDate(date)}
         onDoubleClick={(event) => {
@@ -1428,34 +1480,22 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           <span className="portal-schedule-day-num">{dayNumber(date)}</span>
         </div>
         <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.28rem' }}>
-          <input
-            className="portal-throwing-field"
-            placeholder="Intensity"
-            value={entry.intensity}
-            onChange={(event) => setField('intensity', event.target.value)}
-            style={throwingInputBaseStyle}
-          />
-          <input
-            className="portal-throwing-field"
-            placeholder="Distance"
-            value={entry.distance}
-            onChange={(event) => setField('distance', event.target.value)}
-            style={throwingInputBaseStyle}
-          />
-          <input
-            className="portal-throwing-field"
-            placeholder="Throws"
-            value={entry.throwsText}
-            onChange={(event) => setField('throwsText', event.target.value)}
-            style={throwingInputBaseStyle}
-          />
-          <input
-            className="portal-throwing-field"
-            placeholder="Bullpen, Flat Ground, etc."
-            value={entry.bullpen}
-            onChange={(event) => setField('bullpen', event.target.value)}
-            style={throwingInputBaseStyle}
-          />
+          <div style={throwingRowStyle}>
+            <span style={throwingLabelStyle}>Intensity:</span>
+            <input className="portal-throwing-field" value={entry.intensity} onChange={(event) => setField('intensity', event.target.value)} style={throwingInputBaseStyle} />
+          </div>
+          <div style={throwingRowStyle}>
+            <span style={throwingLabelStyle}>Distance:</span>
+            <input className="portal-throwing-field" value={entry.distance} onChange={(event) => setField('distance', event.target.value)} style={throwingInputBaseStyle} />
+          </div>
+          <div style={throwingRowStyle}>
+            <span style={throwingLabelStyle}>Throws:</span>
+            <input className="portal-throwing-field" value={entry.throwsText} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
+          </div>
+          <div style={throwingRowStyle}>
+            <span style={throwingLabelStyle}>Mound:</span>
+            <input className="portal-throwing-field" value={entry.bullpen} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
+          </div>
         </div>
       </article>
     );
@@ -1581,6 +1621,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           borderLeft: 0,
           borderRight: '1px solid var(--calendar-grid-border, var(--border))',
           borderBottom: '1px solid var(--calendar-grid-border, var(--border))',
+          ...getThrowingCellHighlightStyle(entry),
         }}
         onDoubleClick={(event) => {
           if ((event.target as HTMLElement).closest('input, textarea')) return;
@@ -1592,10 +1633,22 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           <span className="portal-schedule-day-num" />
         </div>
         <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.28rem' }}>
-          <input className="portal-throwing-field" placeholder="Intensity" value={entry.intensity} onChange={(event) => setField('intensity', event.target.value)} style={throwingInputBaseStyle} />
-          <input className="portal-throwing-field" placeholder="Distance" value={entry.distance} onChange={(event) => setField('distance', event.target.value)} style={throwingInputBaseStyle} />
-          <input className="portal-throwing-field" placeholder="Throws" value={entry.throwsText} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
-          <input className="portal-throwing-field" placeholder="Bullpen, Flat Ground, etc." value={entry.bullpen} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
+          <div style={throwingRowStyle}>
+            <span style={throwingLabelStyle}>Intensity:</span>
+            <input className="portal-throwing-field" value={entry.intensity} onChange={(event) => setField('intensity', event.target.value)} style={throwingInputBaseStyle} />
+          </div>
+          <div style={throwingRowStyle}>
+            <span style={throwingLabelStyle}>Distance:</span>
+            <input className="portal-throwing-field" value={entry.distance} onChange={(event) => setField('distance', event.target.value)} style={throwingInputBaseStyle} />
+          </div>
+          <div style={throwingRowStyle}>
+            <span style={throwingLabelStyle}>Throws:</span>
+            <input className="portal-throwing-field" value={entry.throwsText} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
+          </div>
+          <div style={throwingRowStyle}>
+            <span style={throwingLabelStyle}>Mound:</span>
+            <input className="portal-throwing-field" value={entry.bullpen} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
+          </div>
         </div>
       </article>
     );
