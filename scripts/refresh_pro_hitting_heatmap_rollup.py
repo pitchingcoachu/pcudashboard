@@ -184,9 +184,9 @@ WITH src AS (
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS fps_den,
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('calledstrike','strikecalled','swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS fps_num,
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='fastballs' THEN 1 ELSE 0 END)::int AS fps_fb_den,
-    SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='fastballs' AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('calledstrike','strikecalled','swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS fps_fb_num,
+    SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='fastballs' AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS fps_fb_num,
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='off-speed' THEN 1 ELSE 0 END)::int AS fps_os_den,
-    SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='off-speed' AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('calledstrike','strikecalled','swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS fps_os_num,
+    SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='off-speed' AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS fps_os_num,
     SUM(CASE WHEN NOT (plate_x_bin BETWEEN 7 AND 16 AND plate_z_bin BETWEEN 9 AND 21) AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS chase_n,
     SUM(CASE WHEN REGEXP_REPLACE(LOWER(COALESCE(play_result, '')), '[^a-z0-9]+', '', 'g') IN ('single','double','triple','homerun','homer') THEN 1 ELSE 0 END)::int AS h_n,
     SUM(CASE WHEN REGEXP_REPLACE(LOWER(COALESCE(play_result, '')), '[^a-z0-9]+', '', 'g') IN ('double','triple','homerun','homer') THEN 1 ELSE 0 END)::int AS xbh_n,
@@ -194,7 +194,17 @@ WITH src AS (
     SUM(CASE WHEN REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('hitbypitch') OR REGEXP_REPLACE(LOWER(COALESCE(play_result, '')), '[^a-z0-9]+', '', 'g') IN ('hitbypitch') THEN 1 ELSE 0 END)::int AS hbp_n,
     SUM(CASE WHEN REGEXP_REPLACE(LOWER(COALESCE(korbb, '')), '[^a-z0-9]+', '', 'g') IN ('strikeout','strikeoutdoubleplay') THEN 1 ELSE 0 END)::int AS k_n,
     SUM(CASE WHEN REGEXP_REPLACE(LOWER(COALESCE(korbb, '')), '[^a-z0-9]+', '', 'g') IN ('walk','intentwalk','intentionalwalk') THEN 1 ELSE 0 END)::int AS bb_n,
-    SUM(CASE WHEN REGEXP_REPLACE(LOWER(COALESCE(tagged_hit_type, '')), '[^a-z0-9]+', '_', 'g') LIKE '%barrel%' THEN 1 ELSE 0 END)::int AS barrel_n,
+    SUM(
+      CASE
+        WHEN REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('inplayouts','inplaynoout','inplayruns','inplay','hitintoplay')
+          AND ev IS NOT NULL
+          AND launch_angle IS NOT NULL
+          AND ev >= 95.0
+          AND launch_angle BETWEEN 10.0 AND 35.0
+        THEN 1
+        ELSE 0
+      END
+    )::int AS barrel_n,
     SUM(CASE WHEN xiso IS NOT NULL THEN xiso ELSE 0 END)::double precision AS xiso_sum,
     SUM(CASE WHEN xiso IS NOT NULL THEN 1 ELSE 0 END)::int AS xiso_n,
     SUM(rv)::double precision AS rv_sum,

@@ -528,11 +528,15 @@ export async function GET(request: Request) {
       summary,
     });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: error instanceof Error ? error.message : 'Failed to load dashboard home search.',
-      },
-      { status: 502 }
-    );
+    const fallbackWindow = resolveSeasonWindow(schoolCode, null);
+    return NextResponse.json({
+      school_code: schoolCode,
+      date_window: fallbackWindow,
+      candidates: [],
+      suggestions: [],
+      selected: targetType && targetValue ? { type: targetType, value: targetValue } : null,
+      summary: null,
+      error: error instanceof Error ? error.message : 'Failed to load dashboard home search.',
+    });
   }
 }

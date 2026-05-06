@@ -72,6 +72,44 @@ type AggRow = {
   ev_n: number;
 };
 
+const PITCH_TYPE_ORDER = [
+  'Fastball',
+  'Sinker',
+  'Cutter',
+  'Slider',
+  'Sweeper',
+  'Curveball',
+  'ChangeUp',
+  'Splitter',
+  'Undefined',
+  'Unknown',
+] as const;
+
+function canonicalPitchType(value: string): string {
+  const token = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+  if (!token) return 'Unknown';
+  if (['fastball', 'fourseam', 'fourseamfastball', '4seam', '4seamfastball', 'ff', 'fa'].includes(token)) return 'Fastball';
+  if (['sinker', 'twoseam', 'twoseamfastball', 'oneseamfastball', 'si', 'ft'].includes(token)) return 'Sinker';
+  if (['cutter', 'fc'].includes(token)) return 'Cutter';
+  if (['slider', 'sl'].includes(token)) return 'Slider';
+  if (['sweeper', 'st'].includes(token)) return 'Sweeper';
+  if (['curveball', 'curve', 'cu', 'kc', 'slurve', 'sv'].includes(token)) return 'Curveball';
+  if (['changeup', 'change', 'ch', 'circlechange'].includes(token)) return 'ChangeUp';
+  if (['splitter', 'split', 'splitfinger', 'sp', 'fs'].includes(token)) return 'Splitter';
+  if (token === 'undefined') return 'Undefined';
+  if (token === 'unknown') return 'Unknown';
+  return String(value ?? '').trim() || 'Unknown';
+}
+
+function pitchTypeSortRank(value: string): number {
+  const canonical = canonicalPitchType(value);
+  const idx = PITCH_TYPE_ORDER.indexOf(canonical as (typeof PITCH_TYPE_ORDER)[number]);
+  return idx >= 0 ? idx : PITCH_TYPE_ORDER.length;
+}
+
 function toRate(n: number, d: number): number | null {
   if (!Number.isFinite(n) || !Number.isFinite(d) || d <= 0) return null;
   return (n / d) * 100;
@@ -298,6 +336,13 @@ export async function GET(request: Request) {
     return pitchTypeSet.has(String(row.pitch_type ?? '').trim().toLowerCase());
   });
   if (!filtered.length) return NextResponse.json({ table_rows: [], table_columns: [] });
+  if (splitByNorm === 'Pitch Types') {
+    filtered.sort((a, b) => {
+      const rankDiff = pitchTypeSortRank(String(a.pitch_type ?? a.split_value ?? '')) - pitchTypeSortRank(String(b.pitch_type ?? b.split_value ?? ''));
+      if (rankDiff !== 0) return rankDiff;
+      return String(a.split_value ?? a.pitch_type ?? '').localeCompare(String(b.split_value ?? b.pitch_type ?? ''));
+    });
+  }
 
   const splitColumn =
     splitByNorm === 'Pitcher Hand'

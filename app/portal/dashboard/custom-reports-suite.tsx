@@ -563,8 +563,8 @@ function pitcherNameCandidatesForApi(value: string): string[] {
 function inferPitcherHandFromTitle(title: string): 'Right' | 'Left' | '' {
   const normalized = String(title ?? '').trim().toLowerCase();
   if (!normalized) return '';
-  if (/\bvs\.\s*rhp\b/.test(normalized)) return 'Right';
-  if (/\bvs\.\s*lhp\b/.test(normalized)) return 'Left';
+  if (/\bvs\.?\s*rhp\b/.test(normalized)) return 'Right';
+  if (/\bvs\.?\s*lhp\b/.test(normalized)) return 'Left';
   return '';
 }
 
@@ -1407,7 +1407,20 @@ const heatmapScaleFromMetricAndPitchTypes = (
   if (metric === 'xISO') return { min: 0.05, mid: 0.175, max: 0.3 };
 
   if (metric === 'Whiff Rate') return { min: 0, mid: 25, max: 50 };
-  if (metric === 'SwStrk%') return { min: 0, mid: 12.5, max: 25 };
+  if (metric === 'SwStrk%') {
+    if (selectedPitchTypes.length !== 1) {
+      const selectedSet = new Set(selectedPitchTypes);
+      if (selectedSet.size === 2 && selectedSet.has('fastball') && selectedSet.has('sinker')) {
+        return { min: 0, mid: 10, max: 20 };
+      }
+      return { min: 10, mid: 25, max: 40 };
+    }
+    const pt = selectedPitchTypes[0];
+    if (pt === 'fastball') return { min: 0, mid: 10, max: 20 };
+    if (pt === 'sinker') return { min: 0, mid: 7.5, max: 15 };
+    if (pt === 'cutter') return { min: 0, mid: 12.5, max: 25 };
+    return { min: 10, mid: 25, max: 40 };
+  }
   if (metric === 'Swing Rate') return { min: 20, mid: 50, max: 80 };
   if (metric === 'GB Rate') return { min: 38, mid: 43, max: 48 };
   if (metric === 'Contact Rate') {
@@ -3407,6 +3420,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const hasHittingRollupUnsupportedFilters =
             reportType === 'Hitting' &&
             (
+              (cellFilters.includes('Batter Hand') && config.batterSide && config.batterSide !== 'All') ||
               (cellFilters.includes('Pitch Results') && selectedValues(config.pitchResults).length > 0) ||
               (cellFilters.includes('In Zone') && config.inZone && config.inZone !== 'All') ||
               (cellFilters.includes('Count') && selectedValues(config.countFilter).length > 0) ||
@@ -3467,6 +3481,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             })();
           const hittingTableRollupEndpoint =
             (() => {
+              const normalizedReportTitle = String(reportTitle ?? '').trim().toLowerCase();
+              const isAdvanceVsHandTemplate = /^advance\s+(report\s+)?vs\.?\s*(rhp|lhp)\b/.test(normalizedReportTitle);
+              if (isAdvanceVsHandTemplate) return '';
               const supportedHittingTableRollupColumns = new Set([
                 '#', 'P', 'PA', 'BF', 'AB', 'AVG', 'OBP', 'SLG', 'OPS', 'H', 'XBH', 'HR', 'HBP', 'BB', 'K', 'Whiffs',
                 'Usage', 'Overall', 'InZone%', 'Strike%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%',
@@ -3564,7 +3581,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               }
             }
             if (!skipPerCellBaselineFetch) {
-              percentileBaselineKey = `${endpoint}?${baselineParams.toString()}`;
+              if (reportType === 'Hitting' && hittingTableRollupEndpoint) {
+                const rollupBaselineParams = new URLSearchParams(baselineParams);
+                rollupBaselineParams.set('school_code', String(resolvedSchoolCode || '').trim().toUpperCase());
+                rollupBaselineParams.delete('include_chart_points');
+                rollupBaselineParams.delete('chart_points_limit');
+                rollupBaselineParams.delete('chart_only');
+                rollupBaselineParams.delete('include_row_pitches');
+                rollupBaselineParams.delete('include_trend_rows');
+                percentileBaselineKey = `${hittingTableRollupEndpoint}?${rollupBaselineParams.toString()}`;
+              } else {
+                percentileBaselineKey = `${endpoint}?${baselineParams.toString()}`;
+              }
             }
           }
           try {
@@ -3621,12 +3649,13 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               if (reportType === 'Hitting' && normalizedPanelType === 'Summary Table') {
                 const skipExpensiveFallbacks = reportScope === 'Multi-Player';
                 const hitterCandidates = hitterNameCandidatesForApi(scopePlayer);
+                const summaryRetryEndpoint = hittingTableRollupEndpoint || endpoint;
                 if (!hasNonEmptyTableRows(loadedPayload) && hitterCandidates.length > 1) {
                   for (const candidate of hitterCandidates.slice(1)) {
                     try {
                       const nameRetryParams = new URLSearchParams(params);
                       nameRetryParams.set('hitter', candidate);
-                      const nameRetryPayload = await queueBatchedOverviewFetch(`${endpoint}?${nameRetryParams.toString()}`);
+                      const nameRetryPayload = await queueBatchedOverviewFetch(`${summaryRetryEndpoint}?${nameRetryParams.toString()}`);
                       if (hasNonEmptyTableRows(nameRetryPayload)) {
                         loadedPayload = nameRetryPayload;
                         break;
@@ -3643,7 +3672,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     const teamRetryParams = new URLSearchParams(params);
                     teamRetryParams.set('team_type', 'All');
                     teamRetryParams.delete('chart_only');
-                    const teamRetryPayload = await queueBatchedOverviewFetch(`${endpoint}?${teamRetryParams.toString()}`);
+                    const teamRetryPayload = await queueBatchedOverviewFetch(`${summaryRetryEndpoint}?${teamRetryParams.toString()}`);
                     if (hasNonEmptyTableRows(teamRetryPayload)) {
                       loadedPayload = teamRetryPayload;
                     }
@@ -3658,7 +3687,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     teamRawRetryParams.set('force_raw', '1');
                     teamRawRetryParams.set('include_chart_points', '1');
                     teamRawRetryParams.delete('chart_only');
-                    const teamRawRetryPayload = await queueBatchedOverviewFetch(`${endpoint}?${teamRawRetryParams.toString()}`);
+                    const teamRawRetryPayload = await queueBatchedOverviewFetch(`${summaryRetryEndpoint}?${teamRawRetryParams.toString()}`);
                     if (hasNonEmptyTableRows(teamRawRetryPayload)) {
                       loadedPayload = teamRawRetryPayload;
                     }
@@ -4096,8 +4125,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         logging: false,
         ignoreElements: (element) => element.getAttribute?.('data-export-ignore') === 'true',
         onclone: (doc) => {
-          if (!isLightTheme) return;
-          doc.body.classList.add('theme-light');
+          if (isLightTheme) doc.body.classList.add('theme-light');
           const cloneRoot = doc.querySelector<HTMLElement>(`[${exportMarkerAttr}="1"]`);
           if (!cloneRoot) return;
           const parseRgba = (value: string): { r: number; g: number; b: number; a: number } | null => {
@@ -4154,8 +4182,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           }
           const tableHeaders = Array.from(cloneRoot.querySelectorAll('.portal-custom-reports-table-wrap th')) as HTMLElement[];
           for (const th of tableHeaders) {
-            th.style.setProperty('color', '#0f172a', 'important');
-            th.style.setProperty('-webkit-text-fill-color', '#0f172a', 'important');
+            const bg = bgForNode(th);
+            const luminance = bg ? ((0.2126 * bg.r) + (0.7152 * bg.g) + (0.0722 * bg.b)) : 255;
+            const nextColor = luminance >= 170 ? '#0f172a' : '#f8fafc';
+            th.style.setProperty('color', nextColor, 'important');
+            th.style.setProperty('-webkit-text-fill-color', nextColor, 'important');
             th.style.setProperty('opacity', '1', 'important');
             th.style.setProperty('visibility', 'visible', 'important');
           }
@@ -4183,6 +4214,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             chip.style.setProperty('font-weight', '700', 'important');
             chip.style.setProperty('color', chipTextColor, 'important');
             chip.style.setProperty('-webkit-text-fill-color', chipTextColor, 'important');
+            chip.style.setProperty('position', 'relative', 'important');
+            chip.style.setProperty('z-index', '1', 'important');
             chip.style.setProperty('opacity', '1', 'important');
             chip.style.setProperty('visibility', 'visible', 'important');
           }
