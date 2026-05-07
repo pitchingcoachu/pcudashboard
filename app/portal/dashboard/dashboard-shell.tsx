@@ -17,6 +17,7 @@ type DashboardShellProps = {
   role: 'admin' | 'coach' | 'player';
   selectedSchoolCode: string;
   forceHome?: boolean;
+  initialSuite?: SuiteName | null;
 };
 
 type Candidate = {
@@ -129,7 +130,7 @@ async function fetchHomePayload(signal?: AbortSignal): Promise<SearchPayload> {
   return payload;
 }
 
-export default function DashboardShell({ role, selectedSchoolCode, forceHome = false }: DashboardShellProps) {
+export default function DashboardShell({ role, selectedSchoolCode, forceHome = false, initialSuite = null }: DashboardShellProps) {
   const storageSchoolToken = String(selectedSchoolCode ?? '').trim().toUpperCase() || 'DEFAULT';
   const shellStorageKey = `portal_dashboard_shell_state:${storageSchoolToken}`;
   const pendingHomeNavigateStorageKey = `portal_dashboard_home_nav:${storageSchoolToken}`;
@@ -215,6 +216,14 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       }
       return;
     }
+    if (initialSuite) {
+      const frameId = window.requestAnimationFrame(() => {
+        activateSuite(initialSuite);
+      });
+      return () => {
+        window.cancelAnimationFrame(frameId);
+      };
+    }
     let restoredRequest: HomeNavigateRequest | null = null;
     try {
       const rawPendingNavigate = window.sessionStorage.getItem(pendingHomeNavigateStorageKey);
@@ -242,7 +251,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [forceHome, shellStorageKey, pendingHomeNavigateStorageKey, activateSuite]);
+  }, [forceHome, initialSuite, shellStorageKey, pendingHomeNavigateStorageKey, activateSuite]);
   const handleHomeNavigate = (input: Omit<HomeNavigateRequest, 'requestId'>) => {
     const nextRequest: HomeNavigateRequest = {
       ...input,

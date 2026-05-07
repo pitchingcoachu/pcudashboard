@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { ProgramItemRow } from '../../../../lib/training-db';
@@ -226,8 +227,6 @@ function isThrowingCalendarWorkoutName(value: string): boolean {
 export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps) {
   const [playerId, setPlayerId] = useState<number>(players[0]?.id ?? 0);
   const [playerQuery, setPlayerQuery] = useState(players[0]?.name ?? '');
-  const [showPlayerSuggestions, setShowPlayerSuggestions] = useState(false);
-  const [isMobilePlayerPicker, setIsMobilePlayerPicker] = useState(false);
   const [isMobileSchedule, setIsMobileSchedule] = useState(false);
   const [view, setView] = useState<ViewMode>('month');
   const [mobilePaletteCollapsed, setMobilePaletteCollapsed] = useState(true);
@@ -284,15 +283,6 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     if (!selected) return;
     setPlayerQuery(selected.name);
   }, [playerId, players]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const media = window.matchMedia('(max-width: 780px)');
-    const sync = () => setIsMobilePlayerPicker(media.matches);
-    sync();
-    media.addEventListener('change', sync);
-    return () => media.removeEventListener('change', sync);
-  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1732,13 +1722,8 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                 value={playerQuery}
                 onChange={(event) => {
                   setPlayerQuery(event.target.value);
-                  if (isMobilePlayerPicker) setShowPlayerSuggestions(true);
-                }}
-                onFocus={() => {
-                  if (isMobilePlayerPicker) setShowPlayerSuggestions(true);
                 }}
                 onBlur={() => {
-                  if (isMobilePlayerPicker) setTimeout(() => setShowPlayerSuggestions(false), 120);
                   const q = playerQuery.trim().toLowerCase();
                   if (!q) {
                     const selected = players.find((player) => player.id === playerId);
@@ -1758,31 +1743,17 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                 list="schedule-player-search-options"
                 aria-label="Search player"
               />
-              {isMobilePlayerPicker && showPlayerSuggestions && (
-                <div className="portal-search-dropdown" role="listbox" aria-label="Player suggestions">
-                  {(filteredPlayers.length > 0 ? filteredPlayers : players).slice(0, 24).map((player) => (
-                    <button
-                      key={`player-suggest-${player.id}`}
-                      type="button"
-                      className="portal-search-dropdown-item"
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        setPlayerId(player.id);
-                        setPlayerQuery(player.name);
-                        setShowPlayerSuggestions(false);
-                      }}
-                    >
-                      {player.name}
-                    </button>
-                  ))}
-                </div>
-              )}
               <datalist id="schedule-player-search-options">
-                {players.map((player) => (
+                {(filteredPlayers.length > 0 ? filteredPlayers : players).slice(0, 50).map((player) => (
                   <option key={player.id} value={player.name} />
                 ))}
               </datalist>
             </label>
+            {playerId > 0 ? (
+              <Link href={`/portal/player?previewPlayerId=${playerId}`} className="btn btn-ghost as-link">
+                View Profile
+              </Link>
+            ) : null}
             <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
               {(['day', 'week', 'month', 'cycle', 'throwing'] as ViewMode[]).map((mode) => (
                 <button
@@ -2030,26 +2001,6 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               className="portal-library-search"
               aria-label={paletteMode === 'workouts' ? 'Search saved workouts' : 'Search saved templates'}
             />
-            {paletteMode === 'workouts' && workoutQuery.trim().length > 0 && workoutSuggestions.length > 0 && (
-              <div className="portal-search-dropdown" role="listbox" aria-label="Workout search suggestions">
-                {workoutSuggestions.map((workout) => (
-                  <button
-                    key={`suggest-${workout.id}`}
-                    type="button"
-                    className="portal-search-option"
-                    draggable
-                    onDragStart={(event) => {
-                      event.dataTransfer.setData('workoutId', String(workout.id));
-                    }}
-                    onClick={() => {
-                      setWorkoutQuery(workout.name);
-                    }}
-                  >
-                    {workout.name}
-                  </button>
-                ))}
-              </div>
-            )}
             {paletteMode === 'templates' && workoutQuery.trim().length > 0 && templateSuggestions.length > 0 && (
               <div className="portal-search-dropdown" role="listbox" aria-label="Template search suggestions">
                 {templateSuggestions.map((template) => (

@@ -24,9 +24,19 @@ async function postForm(url: string, formData: FormData): Promise<ApiResult> {
 export function AsyncWorkoutCreateForm({
   categories,
   exercises,
+  initialName = '',
+  initialCategory = '',
+  initialDescription = '',
+  initialSelectedExerciseIds = [],
+  initialValuesByExerciseId = {},
 }: {
   categories: ExerciseCategoryRow[];
   exercises: ExerciseRow[];
+  initialName?: string;
+  initialCategory?: string;
+  initialDescription?: string;
+  initialSelectedExerciseIds?: number[];
+  initialValuesByExerciseId?: Record<number, { prefix?: string; prescribedSets?: string; prescribedReps?: string; notes?: string }>;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -55,11 +65,11 @@ export function AsyncWorkoutCreateForm({
       <input type="hidden" name="redirectTo" value="/portal/admin/workouts" />
       <label>
         Workout Name
-        <input name="name" required />
+        <input name="name" defaultValue={initialName} required />
       </label>
       <label>
         Workout Category
-        <select name="category" defaultValue={categories[0]?.name ?? ''} required>
+        <select name="category" defaultValue={initialCategory || categories[0]?.name || ''} required>
           {categories.map((category) => (
             <option key={category.id} value={category.name}>
               {category.name}
@@ -69,10 +79,14 @@ export function AsyncWorkoutCreateForm({
       </label>
       <label className="portal-form-span-2">
         Description
-        <textarea name="description" rows={2} />
+        <textarea name="description" rows={2} defaultValue={initialDescription} />
       </label>
       <div className="portal-form-span-2">
-        <WorkoutExerciseSelector exercises={exercises} />
+        <WorkoutExerciseSelector
+          exercises={exercises}
+          initialSelectedExerciseIds={initialSelectedExerciseIds}
+          initialValuesByExerciseId={initialValuesByExerciseId}
+        />
       </div>
       <button type="submit" className="btn btn-primary" disabled={isPending}>
         {isPending ? 'Saving...' : 'Save Workout'}

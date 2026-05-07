@@ -293,9 +293,9 @@ function LineChart({
             {point.xLabel}
           </text>
         ))}
-        {chartPoints.map((point) => (
+        {chartPoints.map((point, index) => (
           <circle
-            key={`${point.xLabel}-${point.value}`}
+            key={`${point.xLabel}-${point.value}-${index}`}
             cx={point.x}
             cy={point.y}
             r="4"

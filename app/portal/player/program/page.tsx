@@ -301,6 +301,13 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
         <div className="portal-month-header">
           <div>
             <h2>{player.fullName}</h2>
+            {session.role === 'admin' || session.role === 'coach' ? (
+              <div style={{ marginTop: '0.5rem' }}>
+                <Link href="/portal/dashboard?suite=player-notes" className="btn btn-ghost">
+                  Player Notes
+                </Link>
+              </div>
+            ) : null}
           </div>
           <form method="get" className="portal-month-filter">
             {(session.role === 'admin' || session.role === 'coach') && (

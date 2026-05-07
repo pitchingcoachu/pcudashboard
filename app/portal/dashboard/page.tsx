@@ -14,12 +14,25 @@ type PortalDashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
+function readSuiteParam(
+  value: string | string[] | undefined
+): 'Player Notes' | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const normalized = String(raw ?? '').trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'player-notes' || normalized === 'player_notes' || normalized === 'player notes') {
+    return 'Player Notes';
+  }
+  return null;
+}
+
 export default async function PortalDashboardPage({ searchParams }: PortalDashboardPageProps) {
   const resolvedSearchParams = (await searchParams) ?? {};
   const forceHome =
     (Array.isArray(resolvedSearchParams.home)
       ? resolvedSearchParams.home[0]
       : resolvedSearchParams.home) === '1';
+  const initialSuite = readSuiteParam(resolvedSearchParams.suite);
   const session = await requirePortalSession();
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
@@ -121,6 +134,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
           role={session.role}
           selectedSchoolCode={selectedSchool}
           forceHome={forceHome}
+          initialSuite={initialSuite}
         />
       ) : (
         <section className="portal-panel">

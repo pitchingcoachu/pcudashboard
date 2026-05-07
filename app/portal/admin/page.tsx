@@ -187,6 +187,13 @@ export default async function AdminHomePage() {
         </>
       ) : null}
       <article className="portal-admin-card">
+        <h2>Player Notes</h2>
+        <p>Open player notes in dashboard.</p>
+        <Link href="/portal/dashboard?suite=player-notes" className="btn btn-primary as-link">
+          Open Player Notes
+        </Link>
+      </article>
+      <article className="portal-admin-card">
         <h2>Dashboard</h2>
         <p>Open the main dashboard view.</p>
         <Link href="/portal/dashboard" className="btn btn-primary as-link">
