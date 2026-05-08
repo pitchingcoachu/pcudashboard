@@ -606,7 +606,6 @@ export default function ProfileDashboard({
         if (cancelled) return;
         const options = Array.isArray(payload.exercises) ? payload.exercises : [];
         setTrackedExerciseOptions(options);
-        setSelectedExerciseId((current) => current ?? options[0]?.exerciseId ?? null);
       } catch {
         if (cancelled) return;
         setTrackedExerciseOptions([]);

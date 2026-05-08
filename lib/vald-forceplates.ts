@@ -29,6 +29,7 @@ type ValdTest = {
   profileId: string;
   testType: string;
   recordedDateUtc: string;
+  weight?: number | null;
   parameter?: ValdTestMetric;
   extendedParameters?: ValdTestMetric[];
 };
@@ -315,6 +316,7 @@ function coerceTests(payload: unknown): ValdTest[] {
         profileId: String(data.profileId ?? '').trim(),
         testType: String(data.testType ?? '').trim() || 'Unknown',
         recordedDateUtc: String(data.recordedDateUtc ?? '').trim(),
+        weight: Number.isFinite(Number(data.weight)) ? Number(data.weight) : null,
         parameter: parameterRaw ? mapMetric(parameterRaw) : undefined,
         extendedParameters: extendedRaw.map(mapMetric).filter((x) => x.resultId > 0),
       };
