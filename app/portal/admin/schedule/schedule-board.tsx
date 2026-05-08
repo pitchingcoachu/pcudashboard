@@ -1337,8 +1337,10 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
 
   const onTemplateDayDrop = (event: React.DragEvent<HTMLElement>, dayOffset: number) => {
     event.preventDefault();
-    const sourceOffset = Number(event.dataTransfer.getData('templateDayOffset'));
-    const sourceIndex = Number(event.dataTransfer.getData('templateDayItemIndex'));
+    const sourceOffsetRaw = event.dataTransfer.getData('templateDayOffset');
+    const sourceIndexRaw = event.dataTransfer.getData('templateDayItemIndex');
+    const sourceOffset = sourceOffsetRaw === '' ? Number.NaN : Number(sourceOffsetRaw);
+    const sourceIndex = sourceIndexRaw === '' ? Number.NaN : Number(sourceIndexRaw);
     if (
       Number.isFinite(sourceOffset) &&
       sourceOffset >= 0 &&
@@ -1374,6 +1376,31 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         },
       ],
     }));
+  };
+
+  const onTemplateItemDrop = (
+    event: React.DragEvent<HTMLElement>,
+    dayOffset: number,
+    targetIndex: number
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const sourceOffsetRaw = event.dataTransfer.getData('templateDayOffset');
+    const sourceIndexRaw = event.dataTransfer.getData('templateDayItemIndex');
+    const sourceOffset = sourceOffsetRaw === '' ? Number.NaN : Number(sourceOffsetRaw);
+    const sourceIndex = sourceIndexRaw === '' ? Number.NaN : Number(sourceIndexRaw);
+    if (!Number.isFinite(sourceOffset) || !Number.isFinite(sourceIndex)) return;
+    if (sourceOffset < 0 || sourceIndex < 0) return;
+    if (sourceOffset !== dayOffset) return;
+    if (sourceIndex === targetIndex) return;
+
+    setTemplateDayItems((current) => {
+      const list = [...(current[dayOffset] ?? [])];
+      if (sourceIndex >= list.length || targetIndex < 0 || targetIndex >= list.length) return current;
+      const [moved] = list.splice(sourceIndex, 1);
+      list.splice(targetIndex, 0, moved);
+      return { ...current, [dayOffset]: list };
+    });
   };
 
   const removeTemplateDayItem = (dayOffset: number, itemIndex: number) => {
@@ -2498,6 +2525,8 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                               event.dataTransfer.setData('templateDayOffset', String(offset));
                               event.dataTransfer.setData('templateDayItemIndex', String(index));
                             }}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={(event) => onTemplateItemDrop(event, offset, index)}
                           >
                             <span style={{ fontWeight: 700 }}>{item.workoutName}</span>
                             <span

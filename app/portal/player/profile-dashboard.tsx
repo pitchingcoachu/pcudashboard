@@ -23,6 +23,24 @@ type ExerciseTrendPoint = {
   averageLoad: number;
 };
 
+type ForcePlateMetricOption = {
+  key: string;
+  label: string;
+};
+
+type TrendOption = {
+  key: string;
+  label: string;
+};
+
+type ForcePlateProfilePayload = {
+  options?: ForcePlateMetricOption[];
+  trendByMetric?: Record<string, ExerciseTrendPoint[]>;
+  valdWeightLogs?: BodyWeightLogRow[];
+  defaultMetricKey?: string;
+  error?: string;
+};
+
 const PLAN_GOAL_CATEGORIES = [
   'Mechanical',
   'Stuff',
@@ -207,6 +225,7 @@ function LineChart({
   fixedYMax?: number;
   chartHeight?: number;
 }) {
+  const [hoveredPoint, setHoveredPoint] = useState<{ x: number; y: number; label: string } | null>(null);
   if (points.length === 0) return <p className="portal-muted-text">{emptyText}</p>;
 
   const width = 620;
@@ -258,14 +277,13 @@ function LineChart({
   const path = chartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ');
   const xLabelStep = Math.max(1, Math.ceil(chartPoints.length / 7));
   const xTicks = chartPoints.filter((_, idx) => idx % xLabelStep === 0 || idx === chartPoints.length - 1);
-  const [hoveredPoint, setHoveredPoint] = useState<{ x: number; y: number; label: string } | null>(null);
-
   return (
-    <div className="portal-chart-wrap">
-      <svg viewBox={`0 0 ${width} ${height}`} className="portal-chart" role="img" aria-label={yLabel}>
+    <div className="portal-chart-wrap portal-profile-chart-wrap">
+      <svg viewBox={`0 0 ${width} ${height}`} className="portal-chart portal-profile-line-chart" role="img" aria-label={yLabel}>
         {yTicks.map((tick) => (
           <g key={`y-${tick.value.toFixed(2)}`}>
             <line
+              className="portal-profile-line-chart-grid"
               x1={leftPad}
               y1={tick.y}
               x2={width - rightPad}
@@ -273,16 +291,17 @@ function LineChart({
               stroke="rgba(255,255,255,0.12)"
               strokeWidth="1"
             />
-            <text x={leftPad - 8} y={tick.y + 4} textAnchor="end" fill="rgba(255,255,255,0.72)" fontSize="11">
+            <text className="portal-profile-line-chart-tick" x={leftPad - 8} y={tick.y + 4} textAnchor="end" fill="rgba(255,255,255,0.72)" fontSize="11">
               {Number.isInteger(tick.value) ? String(tick.value) : tick.value.toFixed(1)}
             </text>
           </g>
         ))}
-        <line x1={leftPad} y1={topPad} x2={leftPad} y2={height - bottomPad} stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
-        <line x1={leftPad} y1={height - bottomPad} x2={width - rightPad} y2={height - bottomPad} stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
-        <path d={path} fill="none" stroke="rgba(200, 16, 46, 0.95)" strokeWidth="2.6" />
+        <line className="portal-profile-line-chart-axis" x1={leftPad} y1={topPad} x2={leftPad} y2={height - bottomPad} stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
+        <line className="portal-profile-line-chart-axis" x1={leftPad} y1={height - bottomPad} x2={width - rightPad} y2={height - bottomPad} stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
+        <path className="portal-profile-line-chart-path" d={path} fill="none" stroke="rgba(200, 16, 46, 0.95)" strokeWidth="2.6" />
         {xTicks.map((point) => (
           <text
+            className="portal-profile-line-chart-tick"
             key={`x-${point.xLabel}-${point.x.toFixed(1)}`}
             x={point.x}
             y={height - 12}
@@ -295,6 +314,7 @@ function LineChart({
         ))}
         {chartPoints.map((point, index) => (
           <circle
+            className="portal-profile-line-chart-point"
             key={`${point.xLabel}-${point.value}-${index}`}
             cx={point.x}
             cy={point.y}
@@ -310,11 +330,11 @@ function LineChart({
             onMouseLeave={() => setHoveredPoint(null)}
           />
         ))}
-        <text x={leftPad} y={12} fill="rgba(255,255,255,0.7)" fontSize="11">
+        <text className="portal-profile-line-chart-label" x={leftPad} y={12} fill="rgba(255,255,255,0.7)" fontSize="11">
           {yLabel}
         </text>
         {hoveredPoint && (
-          <g>
+          <g className="portal-profile-line-chart-tooltip">
             <rect
               x={Math.max(leftPad + 2, Math.min(hoveredPoint.x - 52, width - rightPad - 120))}
               y={Math.max(topPad + 2, hoveredPoint.y - 28)}
@@ -407,10 +427,16 @@ export default function ProfileDashboard({
   const [weightLogs, setWeightLogs] = useState<BodyWeightLogRow[]>(initialWeightLogs);
   const [trackedExerciseOptions, setTrackedExerciseOptions] = useState<TrackedExercise[]>(trackedExercises);
 
-  const [selectedExerciseId, setSelectedExerciseId] = useState<number | null>(initialExerciseId);
+  const [selectedTrendKey, setSelectedTrendKey] = useState<string>(
+    initialExerciseId ? `exercise:${initialExerciseId}` : ''
+  );
   const [trendLoading, setTrendLoading] = useState(false);
   const [trendMessage, setTrendMessage] = useState('');
   const [trendData, setTrendData] = useState<ExerciseTrendPoint[]>(initialTrend);
+  const [forceMetricOptions, setForceMetricOptions] = useState<ForcePlateMetricOption[]>([]);
+  const [forceTrendByMetric, setForceTrendByMetric] = useState<Record<string, ExerciseTrendPoint[]>>({});
+  const [valdWeightLogs, setValdWeightLogs] = useState<BodyWeightLogRow[]>([]);
+  const [defaultForceMetricKey, setDefaultForceMetricKey] = useState('');
   const [profileExpanded, setProfileExpanded] = useState(false);
   const [assessmentExpanded, setAssessmentExpanded] = useState(true);
 
@@ -437,10 +463,22 @@ export default function ProfileDashboard({
     initialAssessmentScores[0]?.dayDate ?? ''
   );
 
-  const sortedWeightLogs = useMemo(
-    () => [...weightLogs].sort((a, b) => a.logDate.localeCompare(b.logDate)),
-    [weightLogs]
-  );
+  const sortedWeightLogs = useMemo(() => {
+    const merged = new Map<string, BodyWeightLogRow>();
+    for (const log of [...weightLogs, ...valdWeightLogs]) {
+      const key = String(log.logDate ?? '').trim();
+      if (!key || !Number.isFinite(Number(log.weightLbs))) continue;
+      const current = merged.get(key);
+      if (!current || Number(log.weightLbs) > Number(current.weightLbs)) {
+        merged.set(key, {
+          logDate: key,
+          weightLbs: Number(log.weightLbs),
+          notes: log.notes ?? null,
+        });
+      }
+    }
+    return Array.from(merged.values()).sort((a, b) => a.logDate.localeCompare(b.logDate));
+  }, [weightLogs, valdWeightLogs]);
   const latestWeightLog = sortedWeightLogs.length > 0 ? sortedWeightLogs[sortedWeightLogs.length - 1] : null;
   const fallbackProfileWeight = Number(profile.profileWeightLbs);
   const effectiveProfileWeight =
@@ -455,6 +493,20 @@ export default function ProfileDashboard({
   const weightTrendPoints = useMemo(
     () => sortedWeightLogs.map((log) => ({ xLabel: formatDate(log.logDate), value: log.weightLbs })),
     [sortedWeightLogs]
+  );
+
+  const trendOptions = useMemo<TrendOption[]>(
+    () => [
+      ...trackedExerciseOptions.map((exercise) => ({
+        key: `exercise:${exercise.exerciseId}`,
+        label: `${exercise.name} (${exercise.category})`,
+      })),
+      ...forceMetricOptions.map((metric) => ({
+        key: `force:${metric.key}`,
+        label: metric.label,
+      })),
+    ],
+    [trackedExerciseOptions, forceMetricOptions]
   );
 
   const assessmentDates = useMemo(
@@ -568,7 +620,61 @@ export default function ProfileDashboard({
   }, [playerId]);
 
   useEffect(() => {
-    if (!selectedExerciseId) {
+    let cancelled = false;
+    const loadForceMetrics = async () => {
+      try {
+        const params = new URLSearchParams({ playerId: String(playerId) });
+        const response = await fetch(`/api/player/force-plate-profile?${params.toString()}`, { cache: 'no-store' });
+        const payload = (await response.json().catch(() => ({}))) as ForcePlateProfilePayload;
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load force plate profile metrics.');
+        if (cancelled) return;
+        const options = Array.isArray(payload.options) ? payload.options : [];
+        setForceMetricOptions(options);
+        setForceTrendByMetric(payload.trendByMetric ?? {});
+        setValdWeightLogs(Array.isArray(payload.valdWeightLogs) ? payload.valdWeightLogs : []);
+        setDefaultForceMetricKey(String(payload.defaultMetricKey ?? ''));
+      } catch {
+        if (cancelled) return;
+        setForceMetricOptions([]);
+        setForceTrendByMetric({});
+        setValdWeightLogs([]);
+        setDefaultForceMetricKey('');
+      }
+    };
+
+    void loadForceMetrics();
+    return () => {
+      cancelled = true;
+    };
+  }, [playerId]);
+
+  useEffect(() => {
+    if (!trendOptions.length) {
+      setSelectedTrendKey('');
+      return;
+    }
+    if (selectedTrendKey && trendOptions.some((option) => option.key === selectedTrendKey)) return;
+    if (defaultForceMetricKey && trendOptions.some((option) => option.key === `force:${defaultForceMetricKey}`)) {
+      setSelectedTrendKey(`force:${defaultForceMetricKey}`);
+      return;
+    }
+    setSelectedTrendKey(trendOptions[0]?.key ?? '');
+  }, [trendOptions, selectedTrendKey, defaultForceMetricKey]);
+
+  useEffect(() => {
+    if (!selectedTrendKey) {
+      setTrendData([]);
+      return;
+    }
+    if (selectedTrendKey.startsWith('force:')) {
+      const metricKey = selectedTrendKey.slice('force:'.length);
+      setTrendLoading(false);
+      setTrendMessage('');
+      setTrendData(Array.isArray(forceTrendByMetric[metricKey]) ? forceTrendByMetric[metricKey] : []);
+      return;
+    }
+    const selectedExerciseId = Number(selectedTrendKey.slice('exercise:'.length));
+    if (!Number.isFinite(selectedExerciseId) || selectedExerciseId <= 0) {
       setTrendData([]);
       return;
     }
@@ -603,7 +709,7 @@ export default function ProfileDashboard({
     return () => {
       cancelled = true;
     };
-  }, [playerId, selectedExerciseId]);
+  }, [playerId, selectedTrendKey, forceTrendByMetric]);
 
   const saveGoal = async (slotIndex: 1 | 2 | 3) => {
     if (!canManageGoals) return;
@@ -1349,14 +1455,14 @@ export default function ProfileDashboard({
           <h3>Exercise Load Trend</h3>
           <select
             className="portal-assessment-trend-select"
-            aria-label="Exercise"
-            value={selectedExerciseId ? String(selectedExerciseId) : ''}
-            onChange={(event) => setSelectedExerciseId(event.target.value ? Number(event.target.value) : null)}
+            aria-label="Exercise or force plate metric"
+            value={selectedTrendKey}
+            onChange={(event) => setSelectedTrendKey(event.target.value)}
           >
-            <option value="">Select exercise</option>
-            {trackedExerciseOptions.map((exercise) => (
-              <option key={exercise.exerciseId} value={String(exercise.exerciseId)}>
-                {exercise.name} ({exercise.category})
+            <option value="">Select metric</option>
+            {trendOptions.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label}
               </option>
             ))}
           </select>

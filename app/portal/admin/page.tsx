@@ -194,6 +194,13 @@ export default async function AdminHomePage() {
         </Link>
       </article>
       <article className="portal-admin-card">
+        <h2>Force Plate Data</h2>
+        <p>View VALD ForceDecks metrics and test history.</p>
+        <Link href="/portal/force-plates" className="btn btn-primary as-link">
+          Open Force Plate Data
+        </Link>
+      </article>
+      <article className="portal-admin-card">
         <h2>Dashboard</h2>
         <p>Open the main dashboard view.</p>
         <Link href="/portal/dashboard" className="btn btn-primary as-link">

@@ -297,7 +297,8 @@ function todayIsoDate(): string {
 function formatNameFirstLast(name: string): string {
   const trimmed = String(name ?? '').trim();
   if (!trimmed.includes(',')) return trimmed;
-  const [last, first] = trimmed.split(',').map((part) => part.trim());
+  const [last, ...rest] = trimmed.split(',').map((part) => part.trim());
+  const first = rest.join(' ').trim();
   if (!last || !first) return trimmed;
   return `${first} ${last}`;
 }
@@ -334,6 +335,17 @@ function uniqueCanonicalNames(values: string[]): string[] {
     if (!existing || (existing.includes(',') && !trimmed.includes(','))) map.set(key, trimmed);
   }
   return Array.from(map.values());
+}
+
+function uniqueDisplayNames(values: string[]): string[] {
+  const byNormalized = new Map<string, string>();
+  for (const raw of values) {
+    const display = formatNameFirstLast(String(raw ?? '').trim());
+    const key = normalizePersonName(display);
+    if (!key) continue;
+    if (!byNormalized.has(key)) byNormalized.set(key, display);
+  }
+  return Array.from(byNormalized.values()).sort((a, b) => a.localeCompare(b));
 }
 
 function resolveDashboardPlayerName(selectedName: string, candidates: string[]): string {
@@ -1997,6 +2009,15 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
         .map((player) => ({ value: String(player.playerId), label: formatNameFirstLast(player.fullName) })),
     [linkedPlayers]
   );
+  const linkedPlayersNameKey = useMemo(
+    () =>
+      linkedPlayers
+        .map((player) => String(player.fullName ?? '').trim())
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b))
+        .join('|'),
+    [linkedPlayers]
+  );
   const resolvedAutomationPlayerId = useMemo(() => {
     const explicit = Number(automationLinkedPlayerId);
     if (Number.isFinite(explicit) && explicit > 0) return explicit;
@@ -3030,7 +3051,10 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as { players?: string[]; error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load player options.');
-        const cleanedPlayers = uniqueCanonicalNames(payload.players ?? []);
+        const linkedNames = linkedPlayers
+          .map((player) => String(player.fullName ?? '').trim())
+          .filter(Boolean);
+        const cleanedPlayers = uniqueDisplayNames(uniqueCanonicalNames([...(payload.players ?? []), ...linkedNames]));
         if (!active) return;
         if (cleanedPlayers.length) {
           setDashboardPlayerOptions(cleanedPlayers);
@@ -3048,7 +3072,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     return () => {
       active = false;
     };
-  }, [domain]);
+  }, [domain, linkedPlayersNameKey]);
 
   useEffect(() => {
     const fallback = DOMAIN_EXECUTION_FALLBACKS[domain] ?? DOMAIN_EXECUTION_FALLBACKS.Pitching;
@@ -4165,9 +4189,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
             />
             <datalist id="player-plans-player-options">
               {dashboardPlayerOptions.map((playerName) => (
-                <option key={playerName} value={playerName}>
-                  {formatNameFirstLast(playerName)}
-                </option>
+                <option key={playerName} value={playerName} />
               ))}
             </datalist>
           </label>

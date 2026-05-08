@@ -61,6 +61,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
   }
   const programmingOrganizationId = resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
+  const isPcuSchool = String(programmingSchoolCode ?? '').trim().toUpperCase() === 'PCU';
   const params = await searchParams;
   const previewPlayerIdRaw = typeof params.previewPlayerId === 'string' ? params.previewPlayerId : '';
   const previewSelf = typeof params.preview === 'string' ? params.preview === 'self' : false;
@@ -301,6 +302,13 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
         <div className="portal-month-header">
           <div>
             <h2>{player.fullName}</h2>
+            {isPcuSchool ? (
+              <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <Link href="/portal/force-plates" className="btn btn-ghost">
+                  Force Plate Data
+                </Link>
+              </div>
+            ) : null}
             {session.role === 'admin' || session.role === 'coach' ? (
               <div style={{ marginTop: '0.5rem' }}>
                 <Link href="/portal/dashboard?suite=player-notes" className="btn btn-ghost">

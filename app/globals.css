@@ -2460,6 +2460,28 @@ body.theme-light .portal-theme-toggle-btn.active {
   background: rgba(10, 10, 10, 0.9);
 }
 
+body:not(.theme-light) .portal-form-grid select,
+body:not(.theme-light) .portal-inline-filter select,
+body:not(.theme-light) .portal-assessment-trend-select,
+body:not(.theme-light) .portal-preview-form select,
+body:not(.theme-light) .portal-schedule-player-picker select,
+body:not(.theme-light) .portal-schedule-toolbar select {
+  color-scheme: dark;
+  background: rgba(8, 8, 8, 0.96);
+  color: rgba(245, 247, 255, 0.96);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+body:not(.theme-light) .portal-form-grid select option,
+body:not(.theme-light) .portal-inline-filter select option,
+body:not(.theme-light) .portal-assessment-trend-select option,
+body:not(.theme-light) .portal-preview-form select option,
+body:not(.theme-light) .portal-schedule-player-picker select option,
+body:not(.theme-light) .portal-schedule-toolbar select option {
+  background: #0a0a0a;
+  color: #f4f7ff;
+}
+
 .portal-form-grid input[type='date'] {
   display: block;
   width: 100%;
@@ -4848,6 +4870,56 @@ body.theme-light .portal-corr-tooltip {
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.3);
+}
+
+.portal-profile-line-chart .portal-profile-line-chart-path,
+.portal-profile-line-chart .portal-profile-line-chart-point {
+  stroke: rgba(200, 16, 46, 0.96);
+  fill: rgba(200, 16, 46, 0.96);
+}
+
+body.theme-light .portal-profile-line-chart {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(15, 23, 42, 0.24);
+}
+
+body.theme-light .portal-profile-line-chart .portal-profile-line-chart-grid {
+  stroke: rgba(15, 23, 42, 0.16) !important;
+}
+
+body.theme-light .portal-profile-line-chart .portal-profile-line-chart-axis {
+  stroke: rgba(15, 23, 42, 0.4) !important;
+}
+
+body.theme-light .portal-profile-line-chart .portal-profile-line-chart-tick,
+body.theme-light .portal-profile-line-chart .portal-profile-line-chart-label {
+  fill: #000000 !important;
+}
+
+body.theme-light .portal-profile-line-chart .portal-profile-line-chart-path {
+  stroke: rgba(200, 16, 46, 0.98) !important;
+}
+
+body.theme-light .portal-profile-line-chart .portal-profile-line-chart-point {
+  fill: rgba(200, 16, 46, 0.98) !important;
+  stroke: rgba(200, 16, 46, 0.98) !important;
+}
+
+body.theme-light .portal-profile-line-chart .portal-profile-line-chart-tooltip rect {
+  fill: rgba(15, 23, 42, 0.96) !important;
+  stroke: rgba(15, 23, 42, 0.4) !important;
+}
+
+body.theme-light .portal-profile-line-chart .portal-profile-line-chart-tooltip text {
+  fill: #ffffff !important;
+}
+
+body.theme-light .portal-force-plate-chart .portal-force-plate-chart-tick,
+body.theme-light .portal-force-plate-chart .portal-force-plate-chart-axis-label,
+body.theme-light .portal-force-plate-chart .portal-force-plate-chart-edge-date,
+body.theme-light .portal-force-plate-chart-legend-text {
+  fill: #000000 !important;
+  color: #000000 !important;
 }
 
 .portal-chart-foot {

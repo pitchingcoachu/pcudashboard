@@ -42,7 +42,8 @@ function todayIsoDate(): string {
 function formatNameFirstLast(name: string): string {
   const trimmed = String(name ?? '').trim();
   if (!trimmed.includes(',')) return trimmed;
-  const [last, first] = trimmed.split(',').map((part) => part.trim());
+  const [last, ...rest] = trimmed.split(',').map((part) => part.trim());
+  const first = rest.join(' ').trim();
   if (!last || !first) return trimmed;
   return `${first} ${last}`;
 }
@@ -62,6 +63,17 @@ function uniqueCanonicalNames(values: string[]): string[] {
     if (!existing || (existing.includes(',') && !trimmed.includes(','))) map.set(key, trimmed);
   }
   return Array.from(map.values());
+}
+
+function uniqueDisplayNames(values: string[]): string[] {
+  const byNormalized = new Map<string, string>();
+  for (const raw of values) {
+    const display = formatNameFirstLast(String(raw ?? '').trim());
+    const key = normalizePersonName(display);
+    if (!key) continue;
+    if (!byNormalized.has(key)) byNormalized.set(key, display);
+  }
+  return Array.from(byNormalized.values()).sort((a, b) => a.localeCompare(b));
 }
 
 function normalizePersonName(value: string): string {
@@ -174,7 +186,12 @@ export default function PlayerNotesSuite() {
         );
         const linkedPayload = (await responses[3].json().catch(() => ({}))) as { players?: Array<{ playerId: number; fullName: string }> };
         if (!active) return;
-        const combined = uniqueCanonicalNames(payloads.flatMap((payload) => payload.players ?? []));
+        const linked = Array.isArray(linkedPayload.players)
+          ? linkedPayload.players
+              .map((player) => String(player?.fullName ?? '').trim())
+              .filter(Boolean)
+          : [];
+        const combined = uniqueDisplayNames(uniqueCanonicalNames([...payloads.flatMap((payload) => payload.players ?? []), ...linked]));
         const options = ['All', ...combined];
         setDashboardPlayerOptions(options);
         setLinkedPlayers(
@@ -415,9 +432,7 @@ export default function PlayerNotesSuite() {
               />
               <datalist id="player-notes-player-options">
                 {dashboardPlayerOptions.map((playerName) => (
-                  <option key={playerName} value={playerName}>
-                    {formatNameFirstLast(playerName)}
-                  </option>
+                  <option key={playerName} value={playerName} />
                 ))}
               </datalist>
             </label>
