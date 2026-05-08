@@ -324,7 +324,8 @@ function coerceTests(payload: unknown): ValdTest[] {
 
 function fmtValue(value: number | null, decimals: number): string {
   if (value === null || !Number.isFinite(value)) return '--';
-  return value.toFixed(Math.max(0, Math.min(4, decimals)));
+  const safeDecimals = Math.max(0, Math.min(4, decimals));
+  return value.toFixed(Math.min(1, safeDecimals));
 }
 
 function normalizeMetricValue(metricName: string, value: number): number {

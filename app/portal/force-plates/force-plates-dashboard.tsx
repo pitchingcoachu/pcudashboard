@@ -235,10 +235,10 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
             <strong>Data points:</strong> {filteredRows.length}
           </p>
           <p style={{ margin: 0 }}>
-            <strong>Latest:</strong> {latest ? `${latest.value.toFixed(2)}${latest.metricUnit ? ` ${latest.metricUnit}` : ''}` : '--'}
+            <strong>Latest:</strong> {latest ? `${latest.value.toFixed(1)}${latest.metricUnit ? ` ${latest.metricUnit}` : ''}` : '--'}
           </p>
           <p style={{ margin: 0 }}>
-            <strong>Average:</strong> {avg !== null ? `${avg.toFixed(2)}${latest?.metricUnit ? ` ${latest.metricUnit}` : ''}` : '--'}
+            <strong>Average:</strong> {avg !== null ? `${avg.toFixed(1)}${latest?.metricUnit ? ` ${latest.metricUnit}` : ''}` : '--'}
           </p>
         </div>
         {chartPoints.length > 0 ? (
@@ -251,7 +251,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                 <g key={`y-tick-${idx}`}>
                   <line x1="56" y1={tick.y} x2="532" y2={tick.y} stroke="rgba(148,163,184,0.14)" strokeWidth="1" />
                   <text className="portal-force-plate-chart-tick" x="52" y={tick.y + 3} fill="rgba(203,213,225,0.88)" fontSize="9" textAnchor="end">
-                    {tick.value.toFixed(2)}
+                    {tick.value.toFixed(1)}
                   </text>
                 </g>
               ))}
@@ -283,7 +283,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                   const row = filteredRows[hoverIndex];
                   const tooltipX = Math.min(410, Math.max(80, point.x + 12));
                   const tooltipY = Math.max(18, point.y - 58);
-                  const valueText = `${point.value.toFixed(2)}${row?.metricUnit ? ` ${row.metricUnit}` : ''}`;
+                  const valueText = `${point.value.toFixed(1)}${row?.metricUnit ? ` ${row.metricUnit}` : ''}`;
                   return (
                     <g>
                       <rect x={tooltipX} y={tooltipY} width="140" height="46" rx="7" fill="rgba(15,23,42,0.95)" stroke="rgba(59,130,246,0.5)" strokeWidth="1" />
@@ -349,7 +349,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                   <td>{row.date}</td>
                   <td>{row.testType}</td>
                   <td>{`${row.metricName}${row.metricUnit ? ` (${row.metricUnit})` : ''}`}</td>
-                  <td>{row.value.toFixed(2)}</td>
+                  <td>{row.value.toFixed(1)}</td>
                 </tr>
               ))}
             </tbody>
@@ -385,7 +385,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                     {player.metricAverages.map((row) => (
                       <tr key={`${player.playerName}-${row.metric}`}>
                         <td>{row.metric}</td>
-                        <td>{`${row.average.toFixed(2)}${row.unit ? ` ${row.unit}` : ''}`}</td>
+                        <td>{`${row.average.toFixed(1)}${row.unit ? ` ${row.unit}` : ''}`}</td>
                         <td>{row.samples}</td>
                       </tr>
                     ))}

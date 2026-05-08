@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Image from 'next/image';
 import { requirePortalSession } from '../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
@@ -201,9 +202,11 @@ export default async function ForcePlatesPage({
 
       <section className="portal-panel portal-admin-panel">
         <div className="portal-admin-stack">
-          <div className="portal-admin-headline">
-            <h2>Force Plate Data</h2>
-            <p>Initial VALD ForceDecks integration for PCU. Data source can be expanded to additional schools later.</p>
+          <div className="portal-admin-headline" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
+            <h2>VALD Force Plate Data</h2>
+            <div style={{ position: 'relative', width: '220px', height: '56px', overflow: 'hidden', flexShrink: 0 }}>
+              <Image src="/vald.webp" alt="VALD" fill style={{ objectFit: 'cover', objectPosition: 'center' }} />
+            </div>
           </div>
           {error ? (
             <article className="portal-admin-card">
