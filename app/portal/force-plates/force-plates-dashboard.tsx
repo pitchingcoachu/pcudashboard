@@ -1,7 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ValdPlayerSnapshot } from '../../../lib/vald-forceplates';
+import LeaderboardCorrelationModal from '../dashboard/leaderboard-correlation-modal';
 
 type Snapshot = {
   fetchedAt: string;
@@ -47,7 +48,25 @@ function toIsoDate(value: string): string {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeName(value: string): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const firstLast = raw.includes(',')
+    ? (() => {
+        const [last, ...rest] = raw.split(',').map((x) => x.trim());
+        const first = rest.join(' ').trim();
+        return first && last ? `${first} ${last}` : raw;
+      })()
+    : raw;
+  return firstLast
+    .toLowerCase()
+    .replace(/\./g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot }) {
+  const [activeTab, setActiveTab] = useState<'player' | 'leaderboard'>('player');
   const [selectedPlayer, setSelectedPlayer] = useState(snapshot.players[0]?.playerName ?? '');
   const [pointMode, setPointMode] = useState<'average' | 'rep'>('average');
   const player = useMemo(() => snapshot.players.find((entry) => entry.playerName === selectedPlayer) ?? null, [snapshot.players, selectedPlayer]);
@@ -87,6 +106,13 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
 
   const [selectedTestType, setSelectedTestType] = useState('All');
   const [dateRangeByPlayer, setDateRangeByPlayer] = useState<Record<string, { start: string; end: string }>>({});
+  const [leaderStartDate, setLeaderStartDate] = useState('');
+  const [leaderEndDate, setLeaderEndDate] = useState('');
+  const [leaderVelocityRows, setLeaderVelocityRows] = useState<Array<{ name: string; fbVelo: number | null; veloMax: number | null }>>([]);
+  const [leaderColumns, setLeaderColumns] = useState<string[]>(['CMJ', 'SQ', 'FBvelo', 'VeloMax']);
+  const [leaderColumnMenuOpen, setLeaderColumnMenuOpen] = useState(false);
+  const [leaderSort, setLeaderSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'CMJ', dir: 'desc' });
+  const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
   const testTypeOptions = useMemo(() => {
     if (!player) return ['All'];
     return ['All', ...Array.from(new Set(player.metricRows.map((row) => row.testType))).sort((a, b) => a.localeCompare(b))];
@@ -154,8 +180,203 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
   const latest = filteredRows[filteredRows.length - 1] ?? null;
   const avg = filteredRows.length ? filteredRows.reduce((sum, row) => sum + row.value, 0) / filteredRows.length : null;
 
+  const leaderboardBounds = useMemo(() => {
+    const dates = snapshot.players
+      .flatMap((entry) => entry.metricRows.map((row) => toIsoDate(String(row.dateTime ?? row.date))))
+      .filter(Boolean)
+      .sort();
+    return { min: dates[0] ?? '', max: dates[dates.length - 1] ?? '' };
+  }, [snapshot.players]);
+
+  useEffect(() => {
+    if (!leaderStartDate && leaderboardBounds.min) setLeaderStartDate(leaderboardBounds.min);
+    if (!leaderEndDate && leaderboardBounds.max) setLeaderEndDate(leaderboardBounds.max);
+  }, [leaderStartDate, leaderEndDate, leaderboardBounds.min, leaderboardBounds.max]);
+
+  const leaderboardMetricOptions = useMemo(() => {
+    const metricMap = new Map<string, string>();
+    for (const playerEntry of snapshot.players) {
+      for (const row of playerEntry.metricRows) {
+        if (String(row.pointType ?? 'average') !== 'average') continue;
+        const key = `metric:${metricKey(row.metricName, row.metricUnit)}`;
+        if (!metricMap.has(key)) metricMap.set(key, `${row.metricName}${row.metricUnit ? ` (${row.metricUnit})` : ''}`);
+      }
+    }
+    return [
+      { key: 'CMJ', label: 'CMJ' },
+      { key: 'SQ', label: 'SQ' },
+      { key: 'FBvelo', label: 'FBvelo' },
+      { key: 'VeloMax', label: 'VeloMax' },
+      ...Array.from(metricMap.entries())
+        .map(([key, label]) => ({ key, label }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    ];
+  }, [snapshot.players]);
+
+  useEffect(() => {
+    setLeaderColumns((current) => current.filter((key) => leaderboardMetricOptions.some((opt) => opt.key === key)));
+  }, [leaderboardMetricOptions]);
+
+  useEffect(() => {
+    if (!leaderStartDate || !leaderEndDate) return;
+    let cancelled = false;
+    const loadVelocity = async () => {
+      try {
+        const params = new URLSearchParams({ startDate: leaderStartDate, endDate: leaderEndDate });
+        const response = await fetch(`/api/player/force-plate-velo?${params.toString()}`, { cache: 'no-store' });
+        const payload = (await response.json().catch(() => ({}))) as {
+          rows?: Array<{ name: string; fbVelo: number | null; veloMax: number | null }>;
+        };
+        if (!response.ok) throw new Error('Failed');
+        if (cancelled) return;
+        setLeaderVelocityRows(Array.isArray(payload.rows) ? payload.rows : []);
+      } catch {
+        if (cancelled) return;
+        setLeaderVelocityRows([]);
+      }
+    };
+    void loadVelocity();
+    return () => {
+      cancelled = true;
+    };
+  }, [leaderStartDate, leaderEndDate]);
+
+  const resolveVeloForPlayer = (
+    playerName: string,
+    rows: Array<{ name: string; fbVelo: number | null; veloMax: number | null }>
+  ): { fbVelo: number | null; veloMax: number | null } => {
+    const exact = rows.find((row) => normalizeName(row.name) === normalizeName(playerName));
+    if (exact) return { fbVelo: exact.fbVelo, veloMax: exact.veloMax };
+    const targetTokens = normalizeName(playerName).split(' ').filter(Boolean);
+    if (!targetTokens.length) return { fbVelo: null, veloMax: null };
+    const targetLast = targetTokens[targetTokens.length - 1];
+    const fuzzy = rows.find((row) => {
+      const rowNorm = normalizeName(row.name);
+      if (!rowNorm) return false;
+      const rowTokens = rowNorm.split(' ').filter(Boolean);
+      const rowLast = rowTokens[rowTokens.length - 1];
+      if (!rowLast || rowLast !== targetLast) return false;
+      return rowNorm.includes(targetTokens[0]) || normalizeName(playerName).includes(rowTokens[0] ?? '');
+    });
+    return fuzzy ? { fbVelo: fuzzy.fbVelo, veloMax: fuzzy.veloMax } : { fbVelo: null, veloMax: null };
+  };
+
+  const leaderboardRows = useMemo(() => {
+    const inRange = (rowDate: string) =>
+      (!leaderStartDate || rowDate >= leaderStartDate) && (!leaderEndDate || rowDate <= leaderEndDate);
+    const preferredJumpMetric = (rows: ValdPlayerSnapshot['metricRows']) => {
+      const keys = Array.from(new Set(rows.map((row) => metricKey(row.metricName, row.metricUnit))));
+      const pick =
+        keys.find((key) => key.toLowerCase().includes('jump height (flight time)') && key.toLowerCase().includes('inch')) ??
+        keys.find((key) => key.toLowerCase().includes('jump height') && key.toLowerCase().includes('inch')) ??
+        keys.find((key) => key.toLowerCase().includes('jump height')) ??
+        '';
+      return pick;
+    };
+    return snapshot.players.map((playerEntry) => {
+      const avgRows = playerEntry.metricRows.filter((row) => String(row.pointType ?? 'average') === 'average');
+      const ranged = avgRows.filter((row) => {
+        const iso = toIsoDate(String(row.dateTime ?? row.date));
+        return iso ? inRange(iso) : false;
+      });
+      const byMetric = new Map<string, number[]>();
+      for (const row of ranged) {
+        const key = metricKey(row.metricName, row.metricUnit);
+        const list = byMetric.get(key) ?? [];
+        list.push(row.value);
+        byMetric.set(key, list);
+      }
+      const metricAverages = Object.fromEntries(
+        Array.from(byMetric.entries()).map(([key, values]) => [key, values.length ? values.reduce((a, b) => a + b, 0) / values.length : null])
+      ) as Record<string, number | null>;
+      const jumpKey = preferredJumpMetric(ranged);
+      const cmjRows = ranged.filter((row) => row.testType.toUpperCase() === 'CMJ' && metricKey(row.metricName, row.metricUnit) === jumpKey);
+      const sqRows = ranged.filter((row) => ['SQ', 'SJ', 'SQUAT JUMP'].includes(row.testType.toUpperCase()) && metricKey(row.metricName, row.metricUnit) === jumpKey);
+      const cmj = cmjRows.length ? cmjRows.reduce((sum, row) => sum + row.value, 0) / cmjRows.length : null;
+      const sq = sqRows.length ? sqRows.reduce((sum, row) => sum + row.value, 0) / sqRows.length : null;
+      const velo = resolveVeloForPlayer(playerEntry.playerName, leaderVelocityRows);
+      return {
+        playerName: playerEntry.playerName,
+        cmj,
+        sq,
+        metricAverages,
+        fbVelo: velo.fbVelo,
+        veloMax: velo.veloMax,
+      };
+    });
+  }, [snapshot.players, leaderStartDate, leaderEndDate, leaderVelocityRows]);
+
+  const sortedLeaderboardRows = useMemo(() => {
+    const valueFor = (row: (typeof leaderboardRows)[number], column: string): number | string | null => {
+      if (column === 'Player') return row.playerName;
+      if (column === 'CMJ') return row.cmj;
+      if (column === 'SQ') return row.sq;
+      if (column === 'FBvelo') return row.fbVelo;
+      if (column === 'VeloMax') return row.veloMax;
+      if (column.startsWith('metric:')) return row.metricAverages[column.slice('metric:'.length)] ?? null;
+      return null;
+    };
+    const sorted = [...leaderboardRows].sort((a, b) => {
+      const av = valueFor(a, leaderSort.key);
+      const bv = valueFor(b, leaderSort.key);
+      if (typeof av === 'string' || typeof bv === 'string') {
+        const aText = String(av ?? '');
+        const bText = String(bv ?? '');
+        const cmp = aText.localeCompare(bText);
+        return leaderSort.dir === 'asc' ? cmp : -cmp;
+      }
+      const aNum = typeof av === 'number' ? av : Number.NEGATIVE_INFINITY;
+      const bNum = typeof bv === 'number' ? bv : Number.NEGATIVE_INFINITY;
+      const cmp = aNum - bNum;
+      return leaderSort.dir === 'asc' ? cmp : -cmp;
+    });
+    return sorted;
+  }, [leaderSort, leaderboardRows]);
+
+  const correlationColumns = useMemo(
+    () => ['Player', ...leaderColumns.map((column) => leaderboardMetricOptions.find((opt) => opt.key === column)?.label ?? column)],
+    [leaderColumns, leaderboardMetricOptions]
+  );
+
+  const correlationRows = useMemo(() => {
+    return leaderboardRows.map((row) => {
+      const out: Record<string, string | number | null> = { Player: row.playerName };
+      for (const column of leaderColumns) {
+        const label = leaderboardMetricOptions.find((opt) => opt.key === column)?.label ?? column;
+        let value: number | null = null;
+        if (column === 'CMJ') value = row.cmj;
+        else if (column === 'SQ') value = row.sq;
+        else if (column === 'FBvelo') value = row.fbVelo;
+        else if (column === 'VeloMax') value = row.veloMax;
+        else if (column.startsWith('metric:')) value = row.metricAverages[column.slice('metric:'.length)] ?? null;
+        out[label] = value;
+      }
+      return out;
+    });
+  }, [leaderboardRows, leaderColumns, leaderboardMetricOptions]);
+
   return (
     <div className="portal-admin-stack">
+      <article className="portal-admin-card">
+        <div className="portal-schedule-view-switch" role="group" aria-label="Force plate view">
+          <button
+            type="button"
+            className={`btn ${activeTab === 'player' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setActiveTab('player')}
+          >
+            Player Data
+          </button>
+          <button
+            type="button"
+            className={`btn ${activeTab === 'leaderboard' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setActiveTab('leaderboard')}
+          >
+            Leaderboard
+          </button>
+        </div>
+      </article>
+
+      {activeTab === 'player' ? (
       <article className="portal-admin-card">
         <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(6, minmax(180px, 1fr))' }}>
           <label>
@@ -228,7 +449,9 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
           </label>
         </div>
       </article>
+      ) : null}
 
+      {activeTab === 'player' ? (
       <article className="portal-admin-card">
         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
           <p style={{ margin: 0 }}>
@@ -330,7 +553,9 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
           </p>
         )}
       </article>
+      ) : null}
 
+      {activeTab === 'player' ? (
       <article className="portal-admin-card">
         <h4 style={{ marginTop: 0 }}>Metric Values</h4>
         {filteredRows.length ? (
@@ -358,8 +583,9 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
           <p className="portal-muted-text">No metric rows available for this filter.</p>
         )}
       </article>
+      ) : null}
 
-      {player ? (
+      {activeTab === 'player' && player ? (
         <article className="portal-admin-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <div>
@@ -425,6 +651,210 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
           </div>
         </article>
       ) : null}
+
+      {activeTab === 'leaderboard' ? (
+      <article className="portal-admin-card">
+        <div className="portal-row-between">
+          <h3 style={{ marginTop: 0 }}>Leaderboard</h3>
+          <button type="button" className="btn btn-ghost" onClick={() => setShowLeaderboardCorrelation(true)}>
+            View Chart
+          </button>
+        </div>
+        <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(180px, 1fr))' }}>
+          <label>
+            Start Date
+            <input
+              type="date"
+              value={leaderStartDate}
+              onChange={(event) => setLeaderStartDate(event.target.value)}
+            />
+          </label>
+          <label>
+            End Date
+            <input
+              type="date"
+              value={leaderEndDate}
+              onChange={(event) => setLeaderEndDate(event.target.value)}
+            />
+          </label>
+          <label>
+            Columns
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ width: '100%', justifyContent: 'space-between' }}
+                onClick={() => setLeaderColumnMenuOpen((current) => !current)}
+              >
+                {leaderColumns.length ? `${leaderColumns.length} selected` : 'Select columns'}
+              </button>
+              {leaderColumnMenuOpen ? (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 4px)',
+                    left: 0,
+                    right: 0,
+                    maxHeight: 260,
+                    overflowY: 'auto',
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    background: 'var(--panel-strong)',
+                    padding: '0.5rem',
+                    zIndex: 25,
+                    display: 'grid',
+                    gap: '0.35rem',
+                  }}
+                >
+                  {leaderboardMetricOptions.map((option) => {
+                    const checked = leaderColumns.includes(option.key);
+                    return (
+                      <label
+                        key={`leader-col-${option.key}`}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '16px minmax(0, 1fr)',
+                          gap: 8,
+                          alignItems: 'center',
+                          fontSize: '0.84rem',
+                          lineHeight: 1.15,
+                          minHeight: 22,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            const isChecked = event.target.checked;
+                            setLeaderColumns((current) => {
+                              if (isChecked) return current.includes(option.key) ? current : [...current, option.key];
+                              return current.filter((key) => key !== option.key);
+                            });
+                          }}
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          </label>
+        </div>
+        <table className="portal-table">
+          <thead>
+            <tr>
+              <th
+                style={{
+                  textAlign: 'center',
+                  whiteSpace: 'nowrap',
+                  cursor: 'pointer',
+                  background: leaderSort.key === 'Player' ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                  color: leaderSort.key === 'Player' ? '#fff' : undefined,
+                }}
+                onClick={() =>
+                  setLeaderSort((current) =>
+                    current.key === 'Player'
+                      ? { key: 'Player', dir: current.dir === 'asc' ? 'desc' : 'asc' }
+                      : { key: 'Player', dir: 'asc' }
+                  )
+                }
+              >
+                <span style={{ userSelect: 'none' }}>
+                  Player
+                  {leaderSort.key === 'Player' ? ` ${leaderSort.dir === 'asc' ? '↑' : '↓'}` : ''}
+                </span>
+              </th>
+              {leaderColumns.map((column) => {
+                const option = leaderboardMetricOptions.find((opt) => opt.key === column);
+                return (
+                  <th
+                    key={`head-${column}`}
+                    style={{
+                      textAlign: 'center',
+                      whiteSpace: 'nowrap',
+                      cursor: 'pointer',
+                      background: leaderSort.key === column ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                      color: leaderSort.key === column ? '#fff' : undefined,
+                    }}
+                    onClick={() =>
+                      setLeaderSort((current) =>
+                        current.key === column
+                          ? { key: column, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+                          : { key: column, dir: 'desc' }
+                      )
+                    }
+                  >
+                    <span style={{ userSelect: 'none' }}>
+                      {option?.label ?? column}
+                      {leaderSort.key === column ? ` ${leaderSort.dir === 'asc' ? '↑' : '↓'}` : ''}
+                    </span>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedLeaderboardRows.map((row) => (
+              <tr key={`leader-${row.playerName}`}>
+                <td
+                  style={
+                    leaderSort.key === 'Player'
+                      ? {
+                          background: 'rgba(var(--portal-accent-rgb, 59,130,246), 0.18)',
+                          color: '#fff',
+                          fontWeight: 700,
+                          textAlign: 'center',
+                        }
+                      : { textAlign: 'center' }
+                  }
+                >
+                  {row.playerName}
+                </td>
+                {leaderColumns.map((column) => {
+                  let value: number | null = null;
+                  if (column === 'CMJ') value = row.cmj;
+                  else if (column === 'SQ') value = row.sq;
+                  else if (column === 'FBvelo') value = row.fbVelo;
+                  else if (column === 'VeloMax') value = row.veloMax;
+                  else if (column.startsWith('metric:')) value = row.metricAverages[column.slice('metric:'.length)] ?? null;
+                  const isActiveSortColumn = leaderSort.key === column;
+                  return (
+                    <td
+                      key={`val-${row.playerName}-${column}`}
+                      style={
+                        isActiveSortColumn
+                          ? {
+                              background: 'rgba(var(--portal-accent-rgb, 59,130,246), 0.18)',
+                              color: '#fff',
+                              fontWeight: 700,
+                              textAlign: 'center',
+                            }
+                          : { textAlign: 'center' }
+                      }
+                    >
+                      {value === null ? '-' : value.toFixed(1)}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </article>
+      ) : null}
+
+      <LeaderboardCorrelationModal
+        open={showLeaderboardCorrelation}
+        onClose={() => setShowLeaderboardCorrelation(false)}
+        title="Force Plate Leaderboard Correlation"
+        columns={correlationColumns}
+        rows={correlationRows}
+        viewByLabel="Player"
+        primaryColumnName="Player"
+        siteLogoSrc="/vald.webp"
+        siteLogoAlt="VALD"
+      />
     </div>
   );
 }

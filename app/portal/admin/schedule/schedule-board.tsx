@@ -8,13 +8,13 @@ import WorkoutLogModal from '../../components/workout-log-modal';
 
 type PlayerChoice = { id: number; name: string };
 type WorkoutChoice = { id: number; name: string; exerciseCount: number; category: string };
-type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'throwing';
+type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'throwing' | 'bullpens';
 type ThrowingBuilderMode = 'month' | 'weeks';
 type ThrowingCalendarView = 'day' | 'week' | 'month';
 type BuilderMode = 'schedule' | 'template';
 type PaletteMode = 'workouts' | 'templates';
 type WorkoutPaletteView = 'all' | 'categories';
-type ThrowingDayEntry = { intensity: string; distance: string; throwsText: string; bullpen: string };
+type ThrowingDayEntry = { intensity: string; distance: string; throwsText: string; drills: string; bullpen: string };
 type ThrowingTemplate = {
   id: string;
   name: string;
@@ -23,6 +23,26 @@ type ThrowingTemplate = {
   weekNotes: Record<string, string>;
   updatedAt: string;
 };
+type BullpenScript = {
+  title: string;
+  rowCount: number;
+  columns: string[];
+  rows: string[][];
+};
+type BullpenTemplate = {
+  id: string;
+  name: string;
+  rowCount: number;
+  columns: string[];
+  rows: string[][];
+  updatedAt: string;
+};
+type BullpenState = {
+  current: BullpenScript;
+  templates: BullpenTemplate[];
+  selectedTemplateId: string;
+};
+type BullpenFieldKey = number;
 type TemplateChoice = {
   id: number;
   name: string;
@@ -58,6 +78,9 @@ type TemplateDraftItem = {
 type ScheduleBoardProps = {
   players: PlayerChoice[];
   workouts: WorkoutChoice[];
+  schoolCode: string;
+  schoolLogoSrc: string | null;
+  schoolLogoAlt: string;
 };
 
 type CopiedAssignment = {
@@ -92,6 +115,8 @@ const TEMPLATE_MIN_WEEKS = 1;
 const TEMPLATE_MAX_WEEKS = 52;
 const THROWING_MIN_WEEKS = 1;
 const THROWING_MAX_WEEKS = 24;
+const BULLPEN_MIN_ROWS = 1;
+const BULLPEN_MAX_ROWS = 300;
 const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c'; label: string }> = [
   { key: 'medium', label: 'Medium' },
   { key: 'high', label: 'High' },
@@ -100,6 +125,22 @@ const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low' | 'mobility' | 's_an
   { key: 's_and_c', label: 'S&C' },
 ];
 const SCHEDULE_REQUEST_TIMEOUT_MS = 20000;
+
+const DEFAULT_BULLPEN_COLUMNS = ['Pitch Type', 'Ball Type', 'Stretch/Windup', 'Location', 'Situation', 'Notes'];
+
+function buildBullpenRows(rowCount: number, columnCount: number, rows?: string[][]): string[][] {
+  const normalizedCount = Math.max(BULLPEN_MIN_ROWS, Math.min(BULLPEN_MAX_ROWS, rowCount || 20));
+  const safeCols = Math.max(1, Math.min(16, columnCount || DEFAULT_BULLPEN_COLUMNS.length));
+  const base = Array.isArray(rows)
+    ? rows.slice(0, normalizedCount).map((row) => {
+        const values = Array.isArray(row) ? row.slice(0, safeCols).map((v) => String(v ?? '')) : [];
+        while (values.length < safeCols) values.push('');
+        return values;
+      })
+    : [];
+  while (base.length < normalizedCount) base.push(Array.from({ length: safeCols }, () => ''));
+  return base;
+}
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = SCHEDULE_REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -224,7 +265,7 @@ function isThrowingCalendarWorkoutName(value: string): boolean {
   return value.trim().toLowerCase() === 'throwing calendar';
 }
 
-export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps) {
+export default function ScheduleBoard({ players, workouts, schoolCode, schoolLogoSrc, schoolLogoAlt }: ScheduleBoardProps) {
   const [playerId, setPlayerId] = useState<number>(players[0]?.id ?? 0);
   const [playerQuery, setPlayerQuery] = useState(players[0]?.name ?? '');
   const [isMobileSchedule, setIsMobileSchedule] = useState(false);
@@ -262,6 +303,17 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   const [throwingTemplateWeekNotes, setThrowingTemplateWeekNotes] = useState<Record<string, string>>({});
   const [throwingApplyTemplateId, setThrowingApplyTemplateId] = useState<string>('');
   const [throwingApplyStartDate, setThrowingApplyStartDate] = useState<string>('');
+  const [bullpenCurrent, setBullpenCurrent] = useState<BullpenScript>({
+    title: '',
+    rowCount: 20,
+    columns: [...DEFAULT_BULLPEN_COLUMNS],
+    rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length),
+  });
+  const [bullpenTemplates, setBullpenTemplates] = useState<BullpenTemplate[]>([]);
+  const [selectedBullpenTemplateId, setSelectedBullpenTemplateId] = useState<string>('');
+  const [bullpenFillDrag, setBullpenFillDrag] = useState<{ sourceRow: number; sourceField: BullpenFieldKey; value: string } | null>(null);
+  const [bullpenColumnDragIndex, setBullpenColumnDragIndex] = useState<number | null>(null);
+  const bullpenFillTargetsRef = useRef<Set<string>>(new Set());
   const throwingCalendarRef = useRef<HTMLDivElement | null>(null);
   const throwingStateLoadedRef = useRef(false);
 
@@ -328,7 +380,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
       setItems([]);
       return;
     }
-    if (view === 'throwing') {
+    if (view === 'throwing' || view === 'bullpens') {
       setItems([]);
       return;
     }
@@ -394,6 +446,9 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         setThrowingTemplateWeekCount(4);
         setThrowingTemplateByCell({});
         setThrowingTemplateWeekNotes({});
+        setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
+        setBullpenTemplates([]);
+        setSelectedBullpenTemplateId('');
         return;
       }
       try {
@@ -402,6 +457,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           byDate?: Record<string, ThrowingDayEntry>;
           weekNotes?: Record<string, string>;
           templates?: ThrowingTemplate[];
+          bullpenState?: BullpenState;
           error?: string;
         };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load throwing calendar.');
@@ -424,6 +480,43 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           setThrowingTemplateByCell({});
           setThrowingTemplateWeekNotes({});
         }
+        const bullpenState = payload.bullpenState;
+        if (bullpenState && typeof bullpenState === 'object') {
+          const current = bullpenState.current ?? { title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: [] };
+          const rowCount = Math.max(BULLPEN_MIN_ROWS, Math.min(BULLPEN_MAX_ROWS, Number(current.rowCount ?? 20) || 20));
+          const columns = Array.isArray(current.columns)
+            ? current.columns.map((value) => String(value ?? '').trim()).filter(Boolean).slice(0, 16)
+            : [...DEFAULT_BULLPEN_COLUMNS];
+          const safeColumns = columns.length ? columns : [...DEFAULT_BULLPEN_COLUMNS];
+          setBullpenCurrent({
+            title: String(current.title ?? ''),
+            rowCount,
+            columns: safeColumns,
+            rows: buildBullpenRows(rowCount, safeColumns.length, current.rows),
+          });
+          const nextBullpenTemplates = Array.isArray(bullpenState.templates)
+            ? bullpenState.templates.map((template) => ({
+                id: String(template.id ?? ''),
+                name: String(template.name ?? ''),
+                rowCount: Math.max(BULLPEN_MIN_ROWS, Math.min(BULLPEN_MAX_ROWS, Number(template.rowCount ?? 20) || 20)),
+                columns: Array.isArray(template.columns)
+                  ? template.columns.map((value) => String(value ?? '').trim()).filter(Boolean).slice(0, 16)
+                  : [...DEFAULT_BULLPEN_COLUMNS],
+                rows: buildBullpenRows(
+                  Number(template.rowCount ?? 20) || 20,
+                  Array.isArray(template.columns) && template.columns.length ? template.columns.length : DEFAULT_BULLPEN_COLUMNS.length,
+                  template.rows
+                ),
+                updatedAt: String(template.updatedAt ?? ''),
+              })).filter((template) => template.id && template.name)
+            : [];
+          setBullpenTemplates(nextBullpenTemplates);
+          setSelectedBullpenTemplateId(String(bullpenState.selectedTemplateId ?? ''));
+        } else {
+          setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
+          setBullpenTemplates([]);
+          setSelectedBullpenTemplateId('');
+        }
         throwingStateLoadedRef.current = true;
       } catch (requestError) {
         if (cancelled) return;
@@ -436,6 +529,9 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         setThrowingTemplateWeekCount(4);
         setThrowingTemplateByCell({});
         setThrowingTemplateWeekNotes({});
+        setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
+        setBullpenTemplates([]);
+        setSelectedBullpenTemplateId('');
         throwingStateLoadedRef.current = true;
       }
     };
@@ -456,11 +552,16 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           byDate: throwingByDate,
           weekNotes: throwingWeekNotes,
           templates: throwingTemplates,
+          bullpenState: {
+            current: bullpenCurrent,
+            templates: bullpenTemplates,
+            selectedTemplateId: selectedBullpenTemplateId,
+          },
         }),
       }).catch(() => {});
     }, 350);
     return () => clearTimeout(handle);
-  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates]);
+  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId]);
 
   useEffect(() => {
     if (!selectedTemplateId) {
@@ -496,6 +597,12 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
     setThrowingApplyTemplateId('');
   }, [throwingApplyTemplateId, throwingTemplates]);
 
+  useEffect(() => {
+    if (!selectedBullpenTemplateId) return;
+    if (bullpenTemplates.some((template) => template.id === selectedBullpenTemplateId)) return;
+    setSelectedBullpenTemplateId('');
+  }, [selectedBullpenTemplateId, bullpenTemplates]);
+
   const itemsByDate = useMemo(() => {
     const map = new Map<string, ProgramItemRow[]>();
     for (const item of items) {
@@ -527,6 +634,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   const dayCells = useMemo(() => (view === 'day' ? [anchorDate] : []), [anchorDate, view]);
   const periodLabel = useMemo(() => {
     if (view === 'cycle') return '3-Day Cycle';
+    if (view === 'bullpens') return 'Bullpens';
     if (view === 'throwing') {
       if (throwingBuilderMode === 'weeks') return 'Throwing Calendar · Week Builder';
       if (throwingCalendarView === 'day') {
@@ -563,13 +671,14 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   }, [anchorDate, throwingBuilderMode, throwingCalendarView, view]);
 
   const getThrowingTemplateCellKey = (weekIndex: number, dayIndex: number) => `w${weekIndex + 1}-d${dayIndex}`;
-  const emptyThrowingEntry: ThrowingDayEntry = { intensity: '', distance: '', throwsText: '', bullpen: '' };
+  const emptyThrowingEntry: ThrowingDayEntry = { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' };
   const hasThrowingEntry = (entry: ThrowingDayEntry | undefined): boolean =>
     Boolean(
       entry &&
         (String(entry.intensity ?? '').trim() ||
           String(entry.distance ?? '').trim() ||
           String(entry.throwsText ?? '').trim() ||
+          String(entry.drills ?? '').trim() ||
           String(entry.bullpen ?? '').trim())
     );
   const filteredWorkouts = useMemo(() => {
@@ -706,6 +815,8 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         date.setUTCMonth(date.getUTCMonth() + direction);
         setAnchorDate(toIsoDate(date));
       }
+    } else if (view === 'bullpens') {
+      return;
     }
     else if (view === 'week') setAnchorDate((prev) => addDays(prev, direction * 7));
     else {
@@ -716,7 +827,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   };
 
   const jumpToCurrentForView = (mode: ViewMode) => {
-    if (mode === 'day' || mode === 'week' || mode === 'cycle' || mode === 'throwing') {
+    if (mode === 'day' || mode === 'week' || mode === 'cycle' || mode === 'throwing' || mode === 'bullpens') {
       setAnchorDate(toIsoDate(new Date()));
     }
   };
@@ -1424,7 +1535,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         key={dayDate}
         className={`portal-schedule-day${compact ? ' is-compact' : ''}${view === 'week' ? ' is-week' : ''}${isOutsideMonth ? ' is-outside' : ''}${today ? ' is-today' : ''}`}
         style={{
-          minHeight: view === 'week' ? '128px' : '220px',
+          minHeight: view === 'week' ? '128px' : '280px',
           borderRadius: 0,
           borderTop: 0,
           borderLeft: 0,
@@ -1448,7 +1559,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
             {showDayLabel && <span className="portal-schedule-day-label">{shortDayLabel(dayDate)}</span>}
           </strong>
         </header>
-        <div className="portal-schedule-day-body" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.3rem' }}>
+        <div className="portal-schedule-day-body">
           {dayItems.map((item) => (
             <button
               key={item.itemId}
@@ -1456,7 +1567,9 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               className="portal-schedule-item"
               title={item.itemName}
               style={{
-                display: 'block',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 width: 'calc(100% - 0.35rem)',
                 margin: '0 auto',
                 boxSizing: 'border-box',
@@ -1464,7 +1577,9 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                 color: 'var(--text-main)',
                 border: '1px solid var(--calendar-grid-border, var(--border))',
                 borderRadius: '6px',
-                padding: '0.24rem 0.4rem',
+                padding: '0.1rem 0.34rem',
+                minHeight: '22px',
+                lineHeight: 1.1,
                 ...categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout'),
               }}
               draggable
@@ -1485,7 +1600,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                 setSelectedItem(item);
               }}
             >
-              <strong>{item.itemName}</strong>
+              <strong style={{ lineHeight: 1.1 }}>{item.itemName}</strong>
             </button>
           ))}
         </div>
@@ -1498,7 +1613,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
       key={key}
       className="portal-schedule-day portal-schedule-day-empty"
       style={{
-        minHeight: '220px',
+        minHeight: '280px',
         borderRadius: 0,
         borderTop: 0,
         borderLeft: 0,
@@ -1514,11 +1629,11 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
   }
 
   const renderThrowingDay = (date: string, key: string) => {
-    const entry = throwingByDate[date] ?? { intensity: '', distance: '', throwsText: '', bullpen: '' };
+    const entry = throwingByDate[date] ?? { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' };
     const setField = (field: keyof ThrowingDayEntry, value: string) => {
       setThrowingByDate((prev) => ({
         ...prev,
-        [date]: { ...(prev[date] ?? { intensity: '', distance: '', throwsText: '', bullpen: '' }), [field]: value },
+        [date]: { ...(prev[date] ?? { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' }), [field]: value },
       }));
     };
     return (
@@ -1561,7 +1676,11 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
             <input className="portal-throwing-field" value={entry.throwsText} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
           </div>
           <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Mound:</span>
+            <span style={throwingLabelStyle}>Drills:</span>
+            <input className="portal-throwing-field" value={entry.drills} onChange={(event) => setField('drills', event.target.value)} style={throwingInputBaseStyle} />
+          </div>
+          <div style={throwingRowStyle}>
+            <span style={throwingLabelStyle}>Bullpen:</span>
             <input className="portal-throwing-field" value={entry.bullpen} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
           </div>
         </div>
@@ -1653,6 +1772,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           intensity: String(source?.intensity ?? ''),
           distance: String(source?.distance ?? ''),
           throwsText: String(source?.throwsText ?? ''),
+          drills: String(source?.drills ?? ''),
           bullpen: String(source?.bullpen ?? ''),
         };
       }
@@ -1670,11 +1790,11 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
 
   const renderThrowingTemplateDay = (weekIndex: number, dayIndex: number) => {
     const cellKey = getThrowingTemplateCellKey(weekIndex, dayIndex);
-    const entry = throwingTemplateByCell[cellKey] ?? { intensity: '', distance: '', throwsText: '', bullpen: '' };
+    const entry = throwingTemplateByCell[cellKey] ?? { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' };
     const setField = (field: keyof ThrowingDayEntry, value: string) => {
       setThrowingTemplateByCell((prev) => ({
         ...prev,
-        [cellKey]: { ...(prev[cellKey] ?? { intensity: '', distance: '', throwsText: '', bullpen: '' }), [field]: value },
+        [cellKey]: { ...(prev[cellKey] ?? { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' }), [field]: value },
       }));
     };
     return (
@@ -1714,12 +1834,257 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
             <input className="portal-throwing-field" value={entry.throwsText} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
           </div>
           <div style={throwingRowStyle}>
-            <span style={throwingLabelStyle}>Mound:</span>
+            <span style={throwingLabelStyle}>Drills:</span>
+            <input className="portal-throwing-field" value={entry.drills} onChange={(event) => setField('drills', event.target.value)} style={throwingInputBaseStyle} />
+          </div>
+          <div style={throwingRowStyle}>
+            <span style={throwingLabelStyle}>Bullpen:</span>
             <input className="portal-throwing-field" value={entry.bullpen} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
           </div>
         </div>
       </article>
     );
+  };
+
+  const updateBullpenRowCount = (nextCountRaw: number) => {
+    const nextCount = Math.max(BULLPEN_MIN_ROWS, Math.min(BULLPEN_MAX_ROWS, nextCountRaw || 20));
+    setBullpenCurrent((prev) => ({
+      ...prev,
+      rowCount: nextCount,
+      rows: buildBullpenRows(nextCount, prev.columns.length, prev.rows),
+    }));
+  };
+
+  const updateBullpenColumnCount = (nextCountRaw: number) => {
+    const nextCount = Math.max(1, Math.min(16, nextCountRaw || DEFAULT_BULLPEN_COLUMNS.length));
+    setBullpenCurrent((prev) => {
+      const currentCols = Array.isArray(prev.columns) && prev.columns.length ? prev.columns : [...DEFAULT_BULLPEN_COLUMNS];
+      const nextCols = currentCols.slice(0, nextCount);
+      while (nextCols.length < nextCount) nextCols.push(`Column ${nextCols.length + 1}`);
+      return {
+        ...prev,
+        columns: nextCols,
+        rows: buildBullpenRows(prev.rowCount, nextCols.length, prev.rows),
+      };
+    });
+  };
+
+  const updateBullpenColumnTitle = (columnIndex: number, value: string) => {
+    setBullpenCurrent((prev) => {
+      const cols = [...prev.columns];
+      cols[columnIndex] = value;
+      return { ...prev, columns: cols };
+    });
+  };
+
+  const moveBullpenColumn = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    setBullpenCurrent((prev) => {
+      if (fromIndex < 0 || toIndex < 0 || fromIndex >= prev.columns.length || toIndex >= prev.columns.length) return prev;
+      const columns = [...prev.columns];
+      const [movedColumn] = columns.splice(fromIndex, 1);
+      columns.splice(toIndex, 0, movedColumn);
+      const rows = buildBullpenRows(prev.rowCount, prev.columns.length, prev.rows).map((row) => {
+        const nextRow = [...row];
+        const [movedValue] = nextRow.splice(fromIndex, 1);
+        nextRow.splice(toIndex, 0, movedValue);
+        return nextRow;
+      });
+      return { ...prev, columns, rows };
+    });
+  };
+
+  const updateBullpenCell = (rowIndex: number, field: number, value: string) => {
+    setBullpenCurrent((prev) => {
+      const rows = buildBullpenRows(prev.rowCount, prev.columns.length, prev.rows);
+      const nextRow = [...rows[rowIndex]];
+      nextRow[field] = value;
+      rows[rowIndex] = nextRow;
+      return { ...prev, rows };
+    });
+  };
+
+  const copyBullpenCell = (sourceRow: number, sourceField: BullpenFieldKey, targetRow: number, targetField: BullpenFieldKey) => {
+    setBullpenCurrent((prev) => {
+      const rows = buildBullpenRows(prev.rowCount, prev.columns.length, prev.rows);
+      const source = rows[sourceRow]?.[sourceField] ?? '';
+      const nextRow = [...rows[targetRow]];
+      nextRow[targetField] = source;
+      rows[targetRow] = nextRow;
+      return { ...prev, rows };
+    });
+  };
+
+  useEffect(() => {
+    if (!bullpenFillDrag) return;
+    const onMouseUp = () => {
+      const targets = Array.from(bullpenFillTargetsRef.current);
+      if (targets.length) {
+        setBullpenCurrent((prev) => {
+          const rows = buildBullpenRows(prev.rowCount, prev.columns.length, prev.rows);
+          for (const key of targets) {
+            const [rowRaw, fieldRaw] = key.split('__');
+            const rowIndex = Number(rowRaw);
+            const field = Number(fieldRaw);
+            if (!Number.isFinite(rowIndex) || rowIndex < 0 || rowIndex >= rows.length) continue;
+            if (!Number.isFinite(field) || field < 0 || field >= prev.columns.length) continue;
+            const nextRow = [...rows[rowIndex]];
+            nextRow[field] = bullpenFillDrag.value;
+            rows[rowIndex] = nextRow;
+          }
+          return { ...prev, rows };
+        });
+      }
+      bullpenFillTargetsRef.current = new Set();
+      setBullpenFillDrag(null);
+    };
+    window.addEventListener('mouseup', onMouseUp);
+    return () => window.removeEventListener('mouseup', onMouseUp);
+  }, [bullpenFillDrag]);
+
+  const startNewBullpenScript = () => {
+    setSelectedBullpenTemplateId('');
+    setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
+  };
+
+  const applyBullpenTemplate = (templateId: string) => {
+    if (!templateId) return;
+    const selected = bullpenTemplates.find((template) => template.id === templateId);
+    if (!selected) return;
+    setSelectedBullpenTemplateId(selected.id);
+    setBullpenCurrent({
+      title: selected.name,
+      rowCount: selected.rowCount,
+      columns: selected.columns?.length ? selected.columns : [...DEFAULT_BULLPEN_COLUMNS],
+      rows: buildBullpenRows(selected.rowCount, (selected.columns?.length ? selected.columns : DEFAULT_BULLPEN_COLUMNS).length, selected.rows),
+    });
+  };
+
+  const saveBullpenTemplate = () => {
+    const name = bullpenCurrent.title.trim();
+    if (!name) {
+      setError('Bullpen script title is required before saving template.');
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const templateId = selectedBullpenTemplateId || `bp-${Date.now()}`;
+    const next: BullpenTemplate = {
+      id: templateId,
+      name,
+      rowCount: bullpenCurrent.rowCount,
+      columns: bullpenCurrent.columns,
+      rows: buildBullpenRows(bullpenCurrent.rowCount, bullpenCurrent.columns.length, bullpenCurrent.rows),
+      updatedAt: nowIso,
+    };
+    setBullpenTemplates((prev) => {
+      const idx = prev.findIndex((template) => template.id === templateId);
+      if (idx < 0) return [next, ...prev];
+      const copy = [...prev];
+      copy[idx] = next;
+      return copy;
+    });
+    setSelectedBullpenTemplateId(templateId);
+    setError('');
+  };
+
+  const downloadBullpenScript = async () => {
+    try {
+      const { jsPDF } = await import('jspdf');
+      const pdf = new jsPDF({ unit: 'pt', format: 'letter', orientation: 'landscape' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 28;
+      const isLightTheme =
+        typeof document !== 'undefined' &&
+        document.body.classList.contains('theme-light');
+
+      const loadImageDataUrl = async (src: string): Promise<string | null> => {
+        try {
+          const response = await fetch(src);
+          if (!response.ok) return null;
+          const blob = await response.blob();
+          return await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result ?? ''));
+            reader.onerror = () => reject(new Error('Failed reading image.'));
+            reader.readAsDataURL(blob);
+          });
+        } catch {
+          return null;
+        }
+      };
+
+      const [leftLogo, rightLogo] = await Promise.all([
+        loadImageDataUrl(schoolLogoSrc ?? '/pitching-coach-u-logo.png'),
+        loadImageDataUrl('/pitching-coach-u-logo.png'),
+      ]);
+
+      const logoW = 42;
+      const logoH = 42;
+      if (!isLightTheme) {
+        pdf.setFillColor(8, 10, 16);
+        pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+      }
+      if (leftLogo) pdf.addImage(leftLogo, 'PNG', margin, margin - 8, logoW, logoH);
+      if (rightLogo) pdf.addImage(rightLogo, 'PNG', pageWidth - margin - logoW, margin - 8, logoW, logoH);
+
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(16);
+      pdf.setTextColor(isLightTheme ? 15 : 248, isLightTheme ? 23 : 250, isLightTheme ? 42 : 252);
+      const scriptTitle = bullpenCurrent.title.trim() || 'Bullpen Script';
+      pdf.text(scriptTitle, pageWidth / 2, margin + 12, { align: 'center' });
+
+      const headers = ['Pitch #', ...bullpenCurrent.columns.map((value) => value.trim() || 'Column')];
+      const dynamicCount = bullpenCurrent.columns.length;
+      const dynamicWidths = bullpenCurrent.columns.map((_, idx) => {
+        if (idx === dynamicCount - 1) return 180;
+        if (idx === dynamicCount - 2) return 138;
+        return 95;
+      });
+      const colWidths = [52, ...dynamicWidths];
+      const tableWidth = colWidths.reduce((sum, width) => sum + width, 0);
+      const startX = Math.max(margin, (pageWidth - tableWidth) / 2);
+      let y = margin + 56;
+      const rows = buildBullpenRows(bullpenCurrent.rowCount, bullpenCurrent.columns.length, bullpenCurrent.rows);
+      const rowCountTotal = rows.length + 1;
+      const availableHeight = Math.max(1, pageHeight - y - margin);
+      const rowHeight = Math.max(8, Math.min(20, availableHeight / Math.max(1, rowCountTotal)));
+      const headerFontSize = Math.max(6.5, Math.min(10, rowHeight * 0.46));
+      const rowFontSize = Math.max(6, Math.min(9, rowHeight * 0.44));
+      const baselineY = rowHeight * 0.68;
+
+      const drawRow = (cells: string[], isHeader = false) => {
+        let x = startX;
+        pdf.setFont('helvetica', isHeader ? 'bold' : 'normal');
+        pdf.setFontSize(isHeader ? headerFontSize : rowFontSize);
+        for (let i = 0; i < cells.length; i += 1) {
+          const width = colWidths[i];
+          if (isHeader) {
+            if (isLightTheme) pdf.setFillColor(241, 245, 249);
+            else pdf.setFillColor(20, 26, 37);
+            pdf.rect(x, y, width, rowHeight, 'F');
+          }
+          pdf.setDrawColor(isLightTheme ? 148 : 71, isLightTheme ? 163 : 85, isLightTheme ? 184 : 105);
+          pdf.setLineWidth(0.6);
+          pdf.rect(x, y, width, rowHeight);
+          pdf.setTextColor(isLightTheme ? 15 : 241, isLightTheme ? 23 : 245, isLightTheme ? 42 : 249);
+          pdf.text(String(cells[i] ?? ''), x + width / 2, y + baselineY, { align: 'center', maxWidth: width - 8 });
+          x += width;
+        }
+        y += rowHeight;
+      };
+
+      drawRow(headers, true);
+      for (let idx = 0; idx < rows.length; idx += 1) {
+        const row = rows[idx];
+        drawRow([String(idx + 1), ...row.map((value) => String(value ?? ''))]);
+      }
+
+      const safeTitle = scriptTitle.replace(/[^a-z0-9]+/gi, '-').replace(/(^-|-$)/g, '').toLowerCase() || 'bullpen-script';
+      pdf.save(`${safeTitle}.pdf`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to export bullpen script PDF.');
+    }
   };
 
   return (
@@ -1782,7 +2147,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
               </Link>
             ) : null}
             <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
-              {(['day', 'week', 'month', 'cycle', 'throwing'] as ViewMode[]).map((mode) => (
+              {(['day', 'week', 'month', 'cycle', 'throwing', 'bullpens'] as ViewMode[]).map((mode) => (
                 <button
                   key={mode}
                   type="button"
@@ -1792,7 +2157,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                     setView(mode);
                   }}
                 >
-                  {mode === 'cycle' ? '3-Day Cycle' : mode === 'throwing' ? 'Throwing Calendar' : `${mode[0].toUpperCase()}${mode.slice(1)}`}
+                  {mode === 'cycle' ? '3-Day Cycle' : mode === 'throwing' ? 'Throwing Calendar' : mode === 'bullpens' ? 'Bullpens' : `${mode[0].toUpperCase()}${mode.slice(1)}`}
                 </button>
               ))}
             </div>
@@ -1907,6 +2272,106 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                 )}
               </>
             )}
+            {view === 'bullpens' && (
+              <div style={{ display: 'grid', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  Script Template
+                  <select
+                    className="portal-schedule-control"
+                    value={selectedBullpenTemplateId}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setSelectedBullpenTemplateId(value);
+                      if (value) applyBullpenTemplate(value);
+                    }}
+                  >
+                    <option value="">Current Player Script</option>
+                    {bullpenTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  Script Title
+                  <input
+                    className="portal-schedule-control"
+                    value={bullpenCurrent.title}
+                    onChange={(event) => setBullpenCurrent((prev) => ({ ...prev, title: event.target.value }))}
+                    placeholder="Bullpen Script Title"
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  Pitches (Rows)
+                  <input
+                    className="portal-schedule-control"
+                    type="number"
+                    min={BULLPEN_MIN_ROWS}
+                    max={BULLPEN_MAX_ROWS}
+                    value={bullpenCurrent.rowCount}
+                    onChange={(event) => updateBullpenRowCount(Number(event.target.value))}
+                    style={{ width: 110 }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  Columns
+                  <input
+                    className="portal-schedule-control"
+                    type="number"
+                    min={1}
+                    max={16}
+                    value={bullpenCurrent.columns.length}
+                    onChange={(event) => updateBullpenColumnCount(Number(event.target.value))}
+                    style={{ width: 90 }}
+                  />
+                </label>
+                <button type="button" className="btn btn-primary" onClick={saveBullpenTemplate}>
+                  Save Template
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={startNewBullpenScript}>
+                  New Script
+                </button>
+                <button type="button" className="btn btn-ghost" onClick={() => void downloadBullpenScript()}>
+                  Download PDF
+                </button>
+                </div>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: '0.8rem', opacity: 0.85 }}>Column Titles (drag to reorder)</span>
+                  <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, bullpenCurrent.columns.length)}, minmax(120px, 1fr))`, gap: 6 }}>
+                    {bullpenCurrent.columns.map((column, idx) => (
+                      <div
+                        key={`bp-col-control-${idx}`}
+                        draggable
+                        onDragStart={() => setBullpenColumnDragIndex(idx)}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = 'move';
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          if (bullpenColumnDragIndex === null) return;
+                          moveBullpenColumn(bullpenColumnDragIndex, idx);
+                          setBullpenColumnDragIndex(null);
+                        }}
+                        onDragEnd={() => setBullpenColumnDragIndex(null)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                      >
+                        <span style={{ fontSize: '0.82rem', opacity: 0.72, cursor: 'grab', userSelect: 'none' }}>⋮⋮</span>
+                        <input
+                          className="portal-schedule-control"
+                          value={column}
+                          onChange={(event) => updateBullpenColumnTitle(idx, event.target.value)}
+                          placeholder={`Column ${idx + 1}`}
+                          style={{ textAlign: 'center', fontWeight: 700 }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -1972,7 +2437,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         )}
       </div>
 
-      {isMobileSchedule && !(builderMode === 'schedule' && view === 'throwing') ? (
+      {isMobileSchedule && !(builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens')) ? (
         <div style={{ marginBottom: '0.45rem' }}>
           <button
             type="button"
@@ -1984,7 +2449,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
         </div>
       ) : null}
       <div className="portal-schedule-layout">
-        {builderMode === 'schedule' && view === 'throwing' ? null : (!isMobileSchedule || !mobilePaletteCollapsed) ? (
+        {builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens') ? null : (!isMobileSchedule || !mobilePaletteCollapsed) ? (
         <aside className="portal-workout-palette">
           <div className="portal-schedule-view-switch" role="group" aria-label="Palette folder" style={{ marginBottom: 8, flexWrap: 'wrap', rowGap: 6 }}>
             <button
@@ -2132,12 +2597,12 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           aria-busy={loading}
           data-throwing-export-root={builderMode === 'schedule' && view === 'throwing' ? 'true' : undefined}
           ref={builderMode === 'schedule' && view === 'throwing' ? throwingCalendarRef : undefined}
-          style={builderMode === 'schedule' && view === 'throwing' ? { gridColumn: '1 / -1', width: '100%' } : undefined}
+          style={builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens') ? { gridColumn: '1 / -1', width: '100%' } : undefined}
         >
           {builderMode === 'schedule' ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '0.45rem' }}>
               <h3 className="portal-schedule-period">{periodLabel}</h3>
-              {view !== 'cycle' && !(view === 'throwing' && throwingBuilderMode === 'weeks') && (
+              {view !== 'cycle' && view !== 'bullpens' && !(view === 'throwing' && throwingBuilderMode === 'weeks') && (
                 <div className="portal-schedule-nav">
                   <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)} aria-label="Previous period">
                     ←
@@ -2151,7 +2616,7 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
           ) : (
             <h3 className="portal-schedule-period">Template Calendar</h3>
           )}
-          {builderMode === 'schedule' && view !== 'day' && view !== 'cycle' && view !== 'throwing' && (
+          {builderMode === 'schedule' && view !== 'day' && view !== 'cycle' && view !== 'throwing' && view !== 'bullpens' && (
             <div
               data-schedule-weekdays="true"
               className={`portal-schedule-weekdays${view === 'week' ? ' is-week' : ''}`}
@@ -2212,6 +2677,174 @@ export default function ScheduleBoard({ players, workouts }: ScheduleBoardProps)
                   {label}
                 </span>
               ))}
+            </div>
+          )}
+          {builderMode === 'schedule' && view === 'bullpens' && (
+            <div
+              className="portal-panel"
+              style={{
+                minHeight: 'unset',
+                padding: '0.75rem',
+                borderRadius: 10,
+                border: '1px solid var(--calendar-grid-border, var(--border))',
+                background: 'rgba(0,0,0,0.16)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '56px 1fr 56px',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginBottom: '0.6rem',
+                }}
+              >
+                <img
+                  src={schoolLogoSrc ?? '/pitching-coach-u-logo.png'}
+                  alt={schoolLogoSrc ? schoolLogoAlt : `${schoolCode} logo`}
+                  style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'start' }}
+                />
+                <h3
+                  style={{
+                    margin: 0,
+                    textAlign: 'center',
+                    fontSize: '1.05rem',
+                    fontWeight: 800,
+                    letterSpacing: '0.01em',
+                  }}
+                >
+                  {bullpenCurrent.title.trim() || 'Bullpen Script'}
+                </h3>
+                <img
+                  src="/pitching-coach-u-logo.png"
+                  alt="PCU logo"
+                  style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'end' }}
+                />
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
+                  <thead>
+                    <tr>
+                      {['Pitch #', ...bullpenCurrent.columns.map((value) => value.trim() || 'Column')].map((label) => (
+                        <th
+                          key={label}
+                          style={{
+                            textAlign: 'center',
+                            fontSize: '0.98rem',
+                            fontWeight: 800,
+                            padding: '0.4rem 0.35rem',
+                            borderBottom: '1px solid var(--calendar-grid-border, var(--border))',
+                            borderRight: '1px solid var(--calendar-grid-border, var(--border))',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {buildBullpenRows(bullpenCurrent.rowCount, bullpenCurrent.columns.length, bullpenCurrent.rows).map((row, idx) => (
+                      <tr key={`bp-row-${idx}`}>
+                        <td
+                          style={{
+                            textAlign: 'center',
+                            fontWeight: 700,
+                            padding: '0.32rem',
+                            borderBottom: '1px solid rgba(255,255,255,0.1)',
+                            borderRight: '1px solid var(--calendar-grid-border, var(--border))',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {idx + 1}
+                        </td>
+                        {bullpenCurrent.columns.map((_, fieldIdx) => (
+                          <td
+                            key={`bp-cell-${idx}-${fieldIdx}`}
+                            style={{
+                              padding: '0.2rem',
+                              borderBottom: '1px solid rgba(255,255,255,0.1)',
+                              borderRight: '1px solid var(--calendar-grid-border, var(--border))',
+                            }}
+                            onMouseEnter={() => {
+                              if (!bullpenFillDrag) return;
+                              bullpenFillTargetsRef.current.add(`${idx}__${fieldIdx}`);
+                            }}
+                          >
+                            <div style={{ position: 'relative' }}>
+                              <input
+                                className="portal-schedule-control"
+                                value={row[fieldIdx] ?? ''}
+                                onChange={(event) => updateBullpenCell(idx, fieldIdx, event.target.value)}
+                                draggable
+                                onDragStart={(event) => {
+                                  event.dataTransfer.setData('text/plain', row[fieldIdx] ?? '');
+                                  event.dataTransfer.setData('application/x-bullpen-row', String(idx));
+                                  event.dataTransfer.setData('application/x-bullpen-field', String(fieldIdx));
+                                  event.dataTransfer.effectAllowed = 'copy';
+                                }}
+                                onDragOver={(event) => {
+                                  event.preventDefault();
+                                  event.dataTransfer.dropEffect = 'copy';
+                                }}
+                                onDrop={(event) => {
+                                  event.preventDefault();
+                                  const sourceRow = Number(event.dataTransfer.getData('application/x-bullpen-row'));
+                                  const sourceField = Number(event.dataTransfer.getData('application/x-bullpen-field'));
+                                  if (Number.isFinite(sourceRow) && Number.isFinite(sourceField)) {
+                                    copyBullpenCell(sourceRow, sourceField, idx, fieldIdx);
+                                    return;
+                                  }
+                                  const textValue = event.dataTransfer.getData('text/plain');
+                                  if (textValue) updateBullpenCell(idx, fieldIdx, textValue);
+                                }}
+                                style={{
+                                  width: '100%',
+                                  minWidth:
+                                    fieldIdx === bullpenCurrent.columns.length - 1
+                                      ? 260
+                                      : fieldIdx === bullpenCurrent.columns.length - 2
+                                        ? 180
+                                        : fieldIdx === 2
+                                          ? 120
+                                          : 95,
+                                  borderRadius: 7,
+                                  padding: '0.35rem 0.45rem',
+                                  textAlign: 'center',
+                                  fontSize: '1.02rem',
+                                  fontWeight: 600,
+                                }}
+                              />
+                              <button
+                                type="button"
+                                aria-label="Fill value"
+                                onMouseDown={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  bullpenFillTargetsRef.current = new Set([`${idx}__${fieldIdx}`]);
+                                  setBullpenFillDrag({ sourceRow: idx, sourceField: fieldIdx, value: String(row[fieldIdx] ?? '') });
+                                }}
+                                style={{
+                                  position: 'absolute',
+                                  right: 3,
+                                  bottom: 3,
+                                  width: 8,
+                                  height: 8,
+                                  borderRadius: 2,
+                                  border: '1px solid rgba(148,163,184,0.8)',
+                                  background: 'rgba(248,250,252,0.92)',
+                                  cursor: 'crosshair',
+                                  padding: 0,
+                                }}
+                              />
+                            </div>
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
           {builderMode === 'schedule' && view === 'month' && (

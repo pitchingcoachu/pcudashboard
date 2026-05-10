@@ -42,6 +42,7 @@ const PAD_LEFT = 68;
 const PAD_RIGHT = 26;
 const PAD_TOP = 74;
 const PAD_BOTTOM = 64;
+const STAT_DECIMALS = 1;
 
 function formatNameFirstLast(name: string): string {
   const value = String(name ?? '').trim();
@@ -993,7 +994,7 @@ export default function LeaderboardCorrelationModal({
           <>
             <div className="portal-corr-stats">
               <span>{viewByLabel}s: {stats.count}</span>
-              <span>R<sup>2</sup>: {stats.rSquared === null ? '-' : stats.rSquared.toFixed(3)}</span>
+              <span>R<sup>2</sup>: {stats.rSquared === null ? '-' : stats.rSquared.toFixed(STAT_DECIMALS)}</span>
               <button
                 type="button"
                 className={`btn ${showTrendline ? 'btn-primary' : 'btn-ghost'} portal-corr-swap-btn`}
@@ -1103,7 +1104,7 @@ export default function LeaderboardCorrelationModal({
                 >
                   R
                   <tspan baselineShift="super" fontSize="9">2</tspan>
-                  <tspan>{` = ${stats.rSquared === null ? '-' : stats.rSquared.toFixed(3)}`}</tspan>
+                  <tspan>{` = ${stats.rSquared === null ? '-' : stats.rSquared.toFixed(STAT_DECIMALS)}`}</tspan>
                 </text>
                 {stats.meanX !== null ? (
                   <text
@@ -1114,7 +1115,7 @@ export default function LeaderboardCorrelationModal({
                     fontSize={11}
                     fontWeight={700}
                   >
-                    {`Avg ${xColumn}: ${tableLikeTickValue(stats.meanX, xDecimals)}`}
+                    {`Avg ${xColumn}: ${tableLikeTickValue(stats.meanX, STAT_DECIMALS)}`}
                   </text>
                 ) : null}
                 {stats.meanY !== null ? (
@@ -1126,7 +1127,7 @@ export default function LeaderboardCorrelationModal({
                     fontSize={11}
                     fontWeight={700}
                   >
-                    {`Avg ${yColumn}: ${tableLikeTickValue(stats.meanY, yDecimals)}`}
+                    {`Avg ${yColumn}: ${tableLikeTickValue(stats.meanY, STAT_DECIMALS)}`}
                   </text>
                 ) : null}
                 {trendline ? (
@@ -1239,8 +1240,8 @@ export default function LeaderboardCorrelationModal({
                   }}
                 >
                   <div><strong>#{hover.point.rank}</strong> {hover.point.displayLabel}</div>
-                  <div>{xColumn}: {formatValue ? formatValue(xColumn, hover.point.x) : formatTableDisplayValue(xColumn, hover.point.x)}</div>
-                  <div>{yColumn}: {formatValue ? formatValue(yColumn, hover.point.y) : formatTableDisplayValue(yColumn, hover.point.y)}</div>
+                  <div>{xColumn}: {hover.point.x.toFixed(STAT_DECIMALS)}{xIsPercent ? '%' : ''}</div>
+                  <div>{yColumn}: {hover.point.y.toFixed(STAT_DECIMALS)}{yIsPercent ? '%' : ''}</div>
                 </div>
               ) : null}
             </div>

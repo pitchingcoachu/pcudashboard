@@ -10,8 +10,8 @@ type PlayerOption = {
 type MetricOption = {
   key: string;
   label: string;
-  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
-  group: 'Weight Progress' | 'Speed' | 'Jump Height' | 'Exercises';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'force_plate';
+  group: 'Weight Progress' | 'Speed' | 'Jump Height' | 'Exercises' | 'Force Plate';
 };
 
 type TrendPoint = {
@@ -21,6 +21,8 @@ type TrendPoint = {
 
 type PanelConfig = {
   metricKey: string;
+  forcePlateTestType: string;
+  forcePlatePointType: 'average' | 'rep';
 };
 
 type Props = {
@@ -30,7 +32,7 @@ type Props = {
   schoolLogoAlt: string;
 };
 
-const GROUP_ORDER: MetricOption['group'][] = ['Weight Progress', 'Speed', 'Jump Height', 'Exercises'];
+const GROUP_ORDER: MetricOption['group'][] = ['Weight Progress', 'Speed', 'Jump Height', 'Exercises', 'Force Plate'];
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -90,13 +92,14 @@ export default function TestingBuilder({ players, schoolCode, schoolLogoSrc, sch
   const [startDate, setStartDate] = useState(isoDaysAgo(90));
   const [endDate, setEndDate] = useState(todayIso());
   const [panels, setPanels] = useState<PanelConfig[]>([
-    { metricKey: 'body_weight' },
-    { metricKey: '' },
-    { metricKey: '' },
-    { metricKey: '' },
+    { metricKey: 'body_weight', forcePlateTestType: 'All', forcePlatePointType: 'average' },
+    { metricKey: '', forcePlateTestType: 'All', forcePlatePointType: 'average' },
+    { metricKey: '', forcePlateTestType: 'All', forcePlatePointType: 'average' },
+    { metricKey: '', forcePlateTestType: 'All', forcePlatePointType: 'average' },
   ]);
   const [metrics, setMetrics] = useState<MetricOption[]>([]);
   const [seriesByKey, setSeriesByKey] = useState<Record<string, TrendPoint[]>>({});
+  const [forcePlateTestTypes, setForcePlateTestTypes] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -106,12 +109,25 @@ export default function TestingBuilder({ players, schoolCode, schoolLogoSrc, sch
     setPanels((previous) => {
       if (previous.length === slotCount) return previous;
       if (previous.length > slotCount) return previous.slice(0, slotCount);
-      return [...previous, ...Array.from({ length: slotCount - previous.length }, () => ({ metricKey: '' }))];
+      return [
+        ...previous,
+        ...Array.from({ length: slotCount - previous.length }, () => ({
+          metricKey: '',
+          forcePlateTestType: 'All',
+          forcePlatePointType: 'average' as const,
+        })),
+      ];
     });
   }, [slotCount]);
 
-  const requestedMetricKeys = useMemo(
-    () => Array.from(new Set(panels.map((panel) => panel.metricKey).filter(Boolean))),
+  const metricRequests = useMemo(
+    () =>
+      panels.map((panel, index) => ({
+        panelIndex: index,
+        metricKey: panel.metricKey,
+        forcePlateTestType: panel.forcePlateTestType || 'All',
+        forcePlatePointType: panel.forcePlatePointType || 'average',
+      })),
     [panels]
   );
 
@@ -126,7 +142,7 @@ export default function TestingBuilder({ players, schoolCode, schoolLogoSrc, sch
       playerId,
       startDate,
       endDate,
-      metricKeys: requestedMetricKeys.join(','),
+      metricRequests: JSON.stringify(metricRequests),
     });
     setLoading(true);
     setError('');
@@ -136,17 +152,23 @@ export default function TestingBuilder({ players, schoolCode, schoolLogoSrc, sch
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load testing data.');
         setMetrics(Array.isArray(payload.metrics) ? payload.metrics : []);
         setSeriesByKey(payload.seriesByKey && typeof payload.seriesByKey === 'object' ? payload.seriesByKey : {});
+        setForcePlateTestTypes(
+          Array.isArray(payload.availableForcePlateTestTypes)
+            ? payload.availableForcePlateTestTypes.map((value: unknown) => String(value ?? '').trim()).filter(Boolean)
+            : []
+        );
       })
       .catch((reason: unknown) => {
         if (reason instanceof Error && reason.name === 'AbortError') return;
         setError(reason instanceof Error ? reason.message : 'Failed to load testing data.');
+        setForcePlateTestTypes([]);
       })
       .finally(() => {
         setLoading(false);
       });
 
     return () => controller.abort();
-  }, [playerId, startDate, endDate, requestedMetricKeys]);
+  }, [playerId, startDate, endDate, metricRequests]);
 
   const metricGroups = useMemo(() => {
     const grouped = new Map<MetricOption['group'], MetricOption[]>();
@@ -233,11 +255,14 @@ export default function TestingBuilder({ players, schoolCode, schoolLogoSrc, sch
 
         <div className="portal-testing-panels" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
           {Array.from({ length: slotCount }).map((_, idx) => {
-            const panel = panels[idx] ?? { metricKey: '' };
-            const points = panel.metricKey ? seriesByKey[panel.metricKey] ?? [] : [];
+            const panel = panels[idx] ?? { metricKey: '', forcePlateTestType: 'All', forcePlatePointType: 'average' as const };
+            const seriesKey = `panel:${idx}`;
+            const points = panel.metricKey ? seriesByKey[seriesKey] ?? [] : [];
             const path = buildTrendPath(points, 560, 300);
             const ticks = yTicks(points, 5);
             const metricLabel = metrics.find((metric) => metric.key === panel.metricKey)?.label ?? 'Select Metric';
+            const isForcePlateMetric = panel.metricKey.startsWith('force_plate:');
+            const forcePlateTestTypeOptions = ['All', ...forcePlateTestTypes];
             return (
               <article className="portal-testing-panel" key={`panel-${idx}`}>
                 <label className="portal-inline-filter">
@@ -266,6 +291,41 @@ export default function TestingBuilder({ players, schoolCode, schoolLogoSrc, sch
                     })}
                   </select>
                 </label>
+                {isForcePlateMetric ? (
+                  <div className="portal-testing-grid-2">
+                    <label className="portal-inline-filter">
+                      Exercise
+                      <select
+                        value={panel.forcePlateTestType}
+                        onChange={(event) => {
+                          const next = [...panels];
+                          next[idx] = { ...panel, forcePlateTestType: event.target.value };
+                          setPanels(next);
+                        }}
+                      >
+                        {forcePlateTestTypeOptions.map((testType) => (
+                          <option key={testType} value={testType}>
+                            {testType}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="portal-inline-filter">
+                      Data Type
+                      <select
+                        value={panel.forcePlatePointType}
+                        onChange={(event) => {
+                          const next = [...panels];
+                          next[idx] = { ...panel, forcePlatePointType: event.target.value as 'average' | 'rep' };
+                          setPanels(next);
+                        }}
+                      >
+                        <option value="average">Average</option>
+                        <option value="rep">Reps</option>
+                      </select>
+                    </label>
+                  </div>
+                ) : null}
                 <div className="portal-testing-chart-title">{metricLabel}</div>
                 {!panel.metricKey ? (
                   <p className="portal-muted-text">Choose a metric for this panel.</p>
@@ -275,6 +335,8 @@ export default function TestingBuilder({ players, schoolCode, schoolLogoSrc, sch
                   <div className="portal-testing-chart-wrap">
                     <svg viewBox="0 0 560 300" style={{ width: '100%', height: 300 }}>
                       <rect x={0} y={0} width={560} height={300} fill="rgba(0,0,0,0.25)" rx={10} />
+                      <line x1={44} y1={18} x2={44} y2={266} stroke="rgba(255,255,255,0.45)" strokeWidth={1.2} />
+                      <line x1={44} y1={266} x2={544} y2={266} stroke="rgba(255,255,255,0.45)" strokeWidth={1.2} />
                       {ticks.map((tick, tickIdx) => {
                         const min = Math.min(...ticks);
                         const max = Math.max(...ticks);
@@ -300,7 +362,7 @@ export default function TestingBuilder({ players, schoolCode, schoolLogoSrc, sch
                           <g key={`p-${point.date}-${pointIdx}`}>
                             <circle cx={x} cy={y} r={4.2} fill="#ff6b6b" />
                             {(pointIdx === 0 || pointIdx === points.length - 1 || pointIdx % Math.max(1, Math.floor(points.length / 4)) === 0) && (
-                              <text x={x} y={286} textAnchor="middle" fontSize={11} fill="rgba(255,255,255,0.75)">
+                              <text x={x} y={282} textAnchor="middle" fontSize={11} fill="rgba(255,255,255,0.75)">
                                 {shortDate(point.date)}
                               </text>
                             )}
@@ -308,6 +370,20 @@ export default function TestingBuilder({ players, schoolCode, schoolLogoSrc, sch
                         );
                       })}
                       <path d={path} fill="none" stroke="#ff6b6b" strokeWidth={2.5} />
+                      <text x={294} y={296} textAnchor="middle" fontSize={11} fill="rgba(255,255,255,0.82)" fontWeight={700}>
+                        Date
+                      </text>
+                      <text
+                        x={14}
+                        y={142}
+                        textAnchor="middle"
+                        transform="rotate(-90 14 142)"
+                        fontSize={11}
+                        fill="rgba(255,255,255,0.82)"
+                        fontWeight={700}
+                      >
+                        Value
+                      </text>
                     </svg>
                   </div>
                 )}

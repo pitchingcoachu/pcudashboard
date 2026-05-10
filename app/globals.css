@@ -4263,8 +4263,11 @@ body.theme-light .portal-color-toggle .portal-color-toggle-btn.is-on::before {
   padding: 0.5rem;
   background: rgba(0, 0, 0, 0.24);
   display: grid;
+  align-content: center;
+  justify-items: center;
   gap: 0.2rem;
   cursor: grab;
+  text-align: center;
 }
 
 .portal-workout-palette-item span {
@@ -4274,6 +4277,7 @@ body.theme-light .portal-color-toggle .portal-color-toggle-btn.is-on::before {
 
 .portal-schedule-calendar {
   display: grid;
+  align-content: start;
   gap: 0.4rem;
   overflow-x: auto;
   min-width: 0;
@@ -4422,8 +4426,11 @@ body.theme-light {
   margin: 0;
   min-width: 0;
   min-height: 0;
+  height: 100%;
   max-height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   padding-right: 0.15rem;
 }
 
@@ -4513,9 +4520,9 @@ body.theme-light .portal-throwing-notes::placeholder {
   background: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.14);
   color: var(--text-main);
   display: grid;
-  gap: 0.08rem;
+  align-content: center;
   justify-items: center;
-  align-items: center;
+  gap: 0.08rem;
   text-align: center;
   cursor: pointer;
   overflow: hidden;

@@ -2780,7 +2780,7 @@ export async function deleteScheduleTemplate(input: {
 export async function getScheduleThrowingState(input: {
   organizationId: number;
   playerId: number;
-}): Promise<{ byDate: Record<string, unknown>; weekNotes: Record<string, unknown>; templates: unknown[] }> {
+}): Promise<{ byDate: Record<string, unknown>; weekNotes: Record<string, unknown>; templates: unknown }> {
   if (!isDatabaseConfigured()) return { byDate: {}, weekNotes: {}, templates: [] };
   await ensureTrainingDbReady();
   const pool = getDbPool();
@@ -2801,7 +2801,7 @@ export async function getScheduleThrowingState(input: {
   return {
     byDate: (result.rows[0]?.by_date_json ?? {}) as Record<string, unknown>,
     weekNotes: (result.rows[0]?.week_notes_json ?? {}) as Record<string, unknown>,
-    templates: Array.isArray(result.rows[0]?.templates_json) ? (result.rows[0]?.templates_json as unknown[]) : [],
+    templates: (result.rows[0]?.templates_json ?? []) as unknown,
   };
 }
 
@@ -2811,7 +2811,7 @@ export async function saveScheduleThrowingState(input: {
   userId: number;
   byDate: Record<string, unknown>;
   weekNotes: Record<string, unknown>;
-  templates: unknown[];
+  templates: unknown;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
@@ -2842,7 +2842,7 @@ export async function saveScheduleThrowingState(input: {
         input.playerId,
         JSON.stringify(input.byDate ?? {}),
         JSON.stringify(input.weekNotes ?? {}),
-        JSON.stringify(Array.isArray(input.templates) ? input.templates : []),
+        JSON.stringify(input.templates ?? []),
         input.userId,
       ]
     );

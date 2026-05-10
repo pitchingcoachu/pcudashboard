@@ -1,11 +1,13 @@
 import { listPlayerChoicesByOrganization, listWorkoutChoicesByOrganization, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 import { requirePortalSession } from '../../../../lib/portal-session';
 import { canUseProgrammingData, getSchoolProductAccess, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
+import { resolveSchoolBrand } from '../../../../lib/school-brand';
 import ScheduleBoard from './schedule-board';
 
 export default async function AdminSchedulePage() {
   const session = await requirePortalSession();
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
+  const brand = resolveSchoolBrand(programmingSchoolCode);
   const schoolAccess =
     session.role === 'admin'
       ? await getSchoolProductAccess(programmingSchoolCode)
@@ -55,7 +57,13 @@ export default async function AdminSchedulePage() {
         <p>Select a player, then use Workout Folder or Template Folder to drag onto the schedule.</p>
       </div>
       <article className="portal-admin-card">
-        <ScheduleBoard players={playerChoices} workouts={workoutChoices} />
+        <ScheduleBoard
+          players={playerChoices}
+          workouts={workoutChoices}
+          schoolCode={programmingSchoolCode}
+          schoolLogoSrc={brand.logoSrc}
+          schoolLogoAlt={brand.logoAlt}
+        />
       </article>
     </div>
   );

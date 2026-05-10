@@ -414,20 +414,21 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
           pointType: 'average',
         });
       }
+      let trialMetrics: { aggregate: ValdTrialMetric[]; raw: ValdTrialMetricPoint[] } = { aggregate: [], raw: [] };
+      try {
+        trialMetrics = await fetchTrialMetricsForTest(base.forcedecks, tenantId, test.testId);
+      } catch {
+        trialMetrics = { aggregate: [], raw: [] };
+      }
+      trialMetricsByTestId.set(test.testId, trialMetrics.aggregate);
+      trialRawByTestId.set(test.testId, trialMetrics.raw);
+
       let metrics = [test.parameter, ...(test.extendedParameters ?? [])].filter(Boolean) as ValdTestMetric[];
       if (metrics.length === 0) {
-        try {
-          const trialMetrics = await fetchTrialMetricsForTest(base.forcedecks, tenantId, test.testId);
-          trialMetricsByTestId.set(test.testId, trialMetrics.aggregate);
-          trialRawByTestId.set(test.testId, trialMetrics.raw);
-          metrics = trialMetrics.aggregate.map((row) => ({
-            resultId: row.resultId,
-            value: row.value,
-          }));
-        } catch {
-          trialMetricsByTestId.set(test.testId, []);
-          trialRawByTestId.set(test.testId, []);
-        }
+        metrics = trialMetrics.aggregate.map((row) => ({
+          resultId: row.resultId,
+          value: row.value,
+        }));
       }
       for (const metric of metrics) {
         if (!Number.isFinite(Number(metric.value))) continue;
