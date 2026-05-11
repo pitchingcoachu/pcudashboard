@@ -109,7 +109,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
   const [leaderStartDate, setLeaderStartDate] = useState('');
   const [leaderEndDate, setLeaderEndDate] = useState('');
   const [leaderVelocityRows, setLeaderVelocityRows] = useState<Array<{ name: string; fbVelo: number | null; veloMax: number | null }>>([]);
-  const [leaderColumns, setLeaderColumns] = useState<string[]>(['CMJ', 'SQ', 'FBvelo', 'VeloMax']);
+  const [leaderColumns, setLeaderColumns] = useState<string[]>(['CMJ', 'CMJMax', 'SJ', 'SJMax', 'RSI', 'FBvelo', 'VeloMax']);
   const [leaderColumnMenuOpen, setLeaderColumnMenuOpen] = useState(false);
   const [leaderSort, setLeaderSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'CMJ', dir: 'desc' });
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
@@ -141,6 +141,40 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
   );
 
   const pointRows = useMemo(() => [...filteredRows], [filteredRows]);
+  const metricTableRows = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        date: string;
+        testType: string;
+        metricLabel: string;
+        values: number[];
+      }
+    >();
+    for (const row of filteredRows) {
+      const metricLabel = `${row.metricName}${row.metricUnit ? ` (${row.metricUnit})` : ''}`;
+      const key = `${row.testId}__${row.metricId}__${row.testType}__${row.date}__${metricLabel}`;
+      const current = groups.get(key) ?? {
+        date: row.date,
+        testType: row.testType,
+        metricLabel,
+        values: [],
+      };
+      current.values.push(row.value);
+      groups.set(key, current);
+    }
+    return Array.from(groups.values()).map((entry) => {
+      const avg = entry.values.length ? entry.values.reduce((sum, value) => sum + value, 0) / entry.values.length : null;
+      const max = entry.values.length ? Math.max(...entry.values) : null;
+      return {
+        date: entry.date,
+        testType: entry.testType,
+        metricLabel: entry.metricLabel,
+        average: avg,
+        max,
+      };
+    });
+  }, [filteredRows]);
   const chartPoints = useMemo(() => {
     if (pointRows.length < 1) return [];
     const values = pointRows.map((row) => row.value);
@@ -176,6 +210,9 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     });
   }, [yScale]);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [playerColumns, setPlayerColumns] = useState<string[]>(['CMJ', 'CMJMax', 'SJ', 'SJMax', 'RSI', 'FBvelo', 'VeloMax']);
+  const [playerColumnMenuOpen, setPlayerColumnMenuOpen] = useState(false);
+  const [playerSort, setPlayerSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'CMJ', dir: 'desc' });
 
   const latest = filteredRows[filteredRows.length - 1] ?? null;
   const avg = filteredRows.length ? filteredRows.reduce((sum, row) => sum + row.value, 0) / filteredRows.length : null;
@@ -204,6 +241,10 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     }
     return [
       { key: 'CMJ', label: 'CMJ' },
+      { key: 'SJ', label: 'SJ' },
+      { key: 'CMJMax', label: 'CMJ Max' },
+      { key: 'SJMax', label: 'SJ Max' },
+      { key: 'RSI', label: 'RSI' },
       { key: 'SQ', label: 'SQ' },
       { key: 'FBvelo', label: 'FBvelo' },
       { key: 'VeloMax', label: 'VeloMax' },
@@ -213,9 +254,15 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     ];
   }, [snapshot.players]);
 
+  const playerTableMetricOptions = leaderboardMetricOptions;
+
   useEffect(() => {
     setLeaderColumns((current) => current.filter((key) => leaderboardMetricOptions.some((opt) => opt.key === key)));
   }, [leaderboardMetricOptions]);
+
+  useEffect(() => {
+    setPlayerColumns((current) => current.filter((key) => playerTableMetricOptions.some((opt) => opt.key === key)));
+  }, [playerTableMetricOptions]);
 
   useEffect(() => {
     if (!leaderStartDate || !leaderEndDate) return;
@@ -291,13 +338,24 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
       ) as Record<string, number | null>;
       const jumpKey = preferredJumpMetric(ranged);
       const cmjRows = ranged.filter((row) => row.testType.toUpperCase() === 'CMJ' && metricKey(row.metricName, row.metricUnit) === jumpKey);
-      const sqRows = ranged.filter((row) => ['SQ', 'SJ', 'SQUAT JUMP'].includes(row.testType.toUpperCase()) && metricKey(row.metricName, row.metricUnit) === jumpKey);
+      const sqRows = ranged.filter((row) => row.testType.toUpperCase() === 'SQ' && metricKey(row.metricName, row.metricUnit) === jumpKey);
+      const sjRows = ranged.filter((row) => ['SJ', 'SQUAT JUMP'].includes(row.testType.toUpperCase()) && metricKey(row.metricName, row.metricUnit) === jumpKey);
       const cmj = cmjRows.length ? cmjRows.reduce((sum, row) => sum + row.value, 0) / cmjRows.length : null;
       const sq = sqRows.length ? sqRows.reduce((sum, row) => sum + row.value, 0) / sqRows.length : null;
+      const sj = sjRows.length ? sjRows.reduce((sum, row) => sum + row.value, 0) / sjRows.length : null;
+      const cmjMax = cmjRows.length ? Math.max(...cmjRows.map((row) => row.value)) : null;
+      const sjMax = sjRows.length ? Math.max(...sjRows.map((row) => row.value)) : null;
+      const rsiKey = Array.from(byMetric.keys()).find((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes('rsimodified'));
+      const rsiValues = rsiKey ? (byMetric.get(rsiKey) ?? []) : [];
+      const rsiModified = rsiValues.length ? rsiValues.reduce((a, b) => a + b, 0) / rsiValues.length : null;
       const velo = resolveVeloForPlayer(playerEntry.playerName, leaderVelocityRows);
       return {
         playerName: playerEntry.playerName,
         cmj,
+        sj,
+        cmjMax,
+        sjMax,
+        rsiModified,
         sq,
         metricAverages,
         fbVelo: velo.fbVelo,
@@ -306,10 +364,67 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     });
   }, [snapshot.players, leaderStartDate, leaderEndDate, leaderVelocityRows]);
 
+  const playerAggregateRows = useMemo(() => {
+    if (!player) return [];
+    const inRange = (rowDate: string) => (!startDate || rowDate >= startDate) && (!endDate || rowDate <= endDate);
+    const preferredJumpMetric = (rows: typeof player.metricRows) => {
+      const keys = Array.from(new Set(rows.map((row) => metricKey(row.metricName, row.metricUnit))));
+      return (
+        keys.find((key) => key.toLowerCase().includes('jump height (flight time)') && key.toLowerCase().includes('inch')) ??
+        keys.find((key) => key.toLowerCase().includes('jump height') && key.toLowerCase().includes('inch')) ??
+        keys.find((key) => key.toLowerCase().includes('jump height')) ??
+        ''
+      );
+    };
+    const avgRows = player.metricRows.filter((row) => String(row.pointType ?? 'average') === 'average');
+    const ranged = avgRows.filter((row) => {
+      const iso = toIsoDate(String(row.dateTime ?? row.date));
+      return iso ? inRange(iso) : false;
+    });
+    const byMetric = new Map<string, number[]>();
+    for (const row of ranged) {
+      const mk = metricKey(row.metricName, row.metricUnit);
+      const list = byMetric.get(mk) ?? [];
+      list.push(row.value);
+      byMetric.set(mk, list);
+    }
+    const metricAverages = Object.fromEntries(
+      Array.from(byMetric.entries()).map(([key, values]) => [key, values.length ? values.reduce((a, b) => a + b, 0) / values.length : null])
+    ) as Record<string, number | null>;
+    const jumpKey = preferredJumpMetric(ranged);
+    const cmjRows = ranged.filter((row) => row.testType.toUpperCase() === 'CMJ' && metricKey(row.metricName, row.metricUnit) === jumpKey);
+    const sqRows = ranged.filter((row) => row.testType.toUpperCase() === 'SQ' && metricKey(row.metricName, row.metricUnit) === jumpKey);
+    const sjRows = ranged.filter((row) => ['SJ', 'SQUAT JUMP'].includes(row.testType.toUpperCase()) && metricKey(row.metricName, row.metricUnit) === jumpKey);
+    const cmj = cmjRows.length ? cmjRows.reduce((sum, row) => sum + row.value, 0) / cmjRows.length : null;
+    const sq = sqRows.length ? sqRows.reduce((sum, row) => sum + row.value, 0) / sqRows.length : null;
+    const sj = sjRows.length ? sjRows.reduce((sum, row) => sum + row.value, 0) / sjRows.length : null;
+    const cmjMax = cmjRows.length ? Math.max(...cmjRows.map((row) => row.value)) : null;
+    const sjMax = sjRows.length ? Math.max(...sjRows.map((row) => row.value)) : null;
+    const rsiKey = Array.from(byMetric.keys()).find((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes('rsimodified'));
+    const rsiValues = rsiKey ? (byMetric.get(rsiKey) ?? []) : [];
+    const rsiModified = rsiValues.length ? rsiValues.reduce((a, b) => a + b, 0) / rsiValues.length : null;
+    const velo = resolveVeloForPlayer(player.playerName, leaderVelocityRows);
+    return [{
+      cmj,
+      sj,
+      cmjMax,
+      sjMax,
+      rsiModified,
+      sq,
+      metricAverages,
+      fbVelo: velo.fbVelo,
+      veloMax: velo.veloMax,
+    }];
+  }, [player, startDate, endDate, leaderVelocityRows]);
+
   const sortedLeaderboardRows = useMemo(() => {
     const valueFor = (row: (typeof leaderboardRows)[number], column: string): number | string | null => {
       if (column === 'Player') return row.playerName;
       if (column === 'CMJ') return row.cmj;
+      if (column === 'SJ') return row.sj;
+      if (column === 'CMJMax') return row.cmjMax;
+      if (column === 'SJMax') return row.sjMax;
+      if (column === 'RSI') return row.rsiModified;
       if (column === 'SQ') return row.sq;
       if (column === 'FBvelo') return row.fbVelo;
       if (column === 'VeloMax') return row.veloMax;
@@ -345,6 +460,10 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
         const label = leaderboardMetricOptions.find((opt) => opt.key === column)?.label ?? column;
         let value: number | null = null;
         if (column === 'CMJ') value = row.cmj;
+        else if (column === 'SJ') value = row.sj;
+        else if (column === 'CMJMax') value = row.cmjMax;
+        else if (column === 'SJMax') value = row.sjMax;
+        else if (column === 'RSI') value = row.rsiModified;
         else if (column === 'SQ') value = row.sq;
         else if (column === 'FBvelo') value = row.fbVelo;
         else if (column === 'VeloMax') value = row.veloMax;
@@ -557,24 +676,122 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
 
       {activeTab === 'player' ? (
       <article className="portal-admin-card">
-        <h4 style={{ marginTop: 0 }}>Metric Values</h4>
-        {filteredRows.length ? (
+        <div className="portal-row-between">
+          <h4 style={{ marginTop: 0 }}>Player Metrics</h4>
+          <div style={{ minWidth: 220, position: 'relative' }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ width: '100%', justifyContent: 'space-between' }}
+              onClick={() => setPlayerColumnMenuOpen((current) => !current)}
+            >
+              {playerColumns.length ? `${playerColumns.length} selected` : 'Select columns'}
+            </button>
+            {playerColumnMenuOpen ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 4px)',
+                  left: 0,
+                  right: 0,
+                  maxHeight: 260,
+                  overflowY: 'auto',
+                  border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  background: 'var(--panel-strong)',
+                  padding: '0.5rem',
+                  zIndex: 25,
+                  display: 'grid',
+                  gap: '0.35rem',
+                }}
+              >
+                {playerTableMetricOptions.map((option) => {
+                  const checked = playerColumns.includes(option.key);
+                  return (
+                    <label
+                      key={`player-col-${option.key}`}
+                      style={{ display: 'grid', gridTemplateColumns: '16px minmax(0, 1fr)', gap: 8, alignItems: 'center', fontSize: '0.84rem', lineHeight: 1.15, minHeight: 22 }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) => {
+                          const isChecked = event.target.checked;
+                          setPlayerColumns((current) => {
+                            if (isChecked) return current.includes(option.key) ? current : [...current, option.key];
+                            return current.filter((key) => key !== option.key);
+                          });
+                        }}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        {playerAggregateRows.length ? (
           <table className="portal-table">
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Test Type</th>
-                <th>Metric</th>
-                <th>Value</th>
+                {playerColumns.map((column) => {
+                  const option = playerTableMetricOptions.find((opt) => opt.key === column);
+                  return (
+                    <th
+                      key={`player-metric-head-${column}`}
+                      style={{
+                        textAlign: 'center',
+                        whiteSpace: 'nowrap',
+                        cursor: 'pointer',
+                        background: playerSort.key === column ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                        color: playerSort.key === column ? '#fff' : undefined,
+                      }}
+                      onClick={() =>
+                        setPlayerSort((current) =>
+                          current.key === column
+                            ? { key: column, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+                            : { key: column, dir: 'desc' }
+                        )
+                      }
+                    >
+                      <span style={{ userSelect: 'none' }}>
+                        {option?.label ?? column}
+                        {playerSort.key === column ? ` ${playerSort.dir === 'asc' ? '↑' : '↓'}` : ''}
+                      </span>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
-              {[...filteredRows].reverse().map((row, index) => (
-                <tr key={`${row.testId}-${row.metricId}-${row.trialId ?? index}`}>
-                  <td>{row.date}</td>
-                  <td>{row.testType}</td>
-                  <td>{`${row.metricName}${row.metricUnit ? ` (${row.metricUnit})` : ''}`}</td>
-                  <td>{row.value.toFixed(1)}</td>
+              {playerAggregateRows.map((row, rowIndex) => (
+                <tr key={`player-aggregate-row-${rowIndex}`}>
+                  {playerColumns.map((column) => {
+                    let value: number | null = null;
+                    if (column === 'CMJ') value = row.cmj;
+                    else if (column === 'SJ') value = row.sj;
+                    else if (column === 'CMJMax') value = row.cmjMax;
+                    else if (column === 'SJMax') value = row.sjMax;
+                    else if (column === 'RSI') value = row.rsiModified;
+                    else if (column === 'SQ') value = row.sq;
+                    else if (column === 'FBvelo') value = row.fbVelo;
+                    else if (column === 'VeloMax') value = row.veloMax;
+                    else if (column.startsWith('metric:')) value = row.metricAverages[column.slice('metric:'.length)] ?? null;
+                    const isActiveSortColumn = playerSort.key === column;
+                    return (
+                      <td
+                        key={`player-aggregate-cell-${rowIndex}-${column}`}
+                        style={
+                          isActiveSortColumn
+                            ? { background: 'rgba(var(--portal-accent-rgb, 59,130,246), 0.18)', color: '#fff', fontWeight: 700, textAlign: 'center' }
+                            : { textAlign: 'center' }
+                        }
+                      >
+                        {value === null ? '-' : value.toFixed(1)}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -583,73 +800,6 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
           <p className="portal-muted-text">No metric rows available for this filter.</p>
         )}
       </article>
-      ) : null}
-
-      {activeTab === 'player' && player ? (
-        <article className="portal-admin-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div>
-              <h3 style={{ marginTop: 0, marginBottom: 4 }}>{player.playerName}</h3>
-              <p className="portal-muted-text" style={{ margin: 0 }}>
-                {player.profileId ? `Profile linked • ${player.testsCount} tests` : 'No VALD profile match yet'}
-              </p>
-            </div>
-          </div>
-          <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'minmax(260px, 1fr) minmax(0, 2fr)', marginTop: 10 }}>
-            <div>
-              <h4 style={{ marginTop: 0 }}>Metric Averages</h4>
-              {player.metricAverages.length ? (
-                <table className="portal-table">
-                  <thead>
-                    <tr>
-                      <th>Metric</th>
-                      <th>Avg</th>
-                      <th>N</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {player.metricAverages.map((row) => (
-                      <tr key={`${player.playerName}-${row.metric}`}>
-                        <td>{row.metric}</td>
-                        <td>{`${row.average.toFixed(1)}${row.unit ? ` ${row.unit}` : ''}`}</td>
-                        <td>{row.samples}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p className="portal-muted-text">No metric averages available yet.</p>
-              )}
-            </div>
-            <div>
-              <h4 style={{ marginTop: 0 }}>Recent Tests</h4>
-              {player.recentTests.length ? (
-                <table className="portal-table">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Type</th>
-                      <th>Primary Metric</th>
-                      <th>Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {player.recentTests.map((row) => (
-                      <tr key={`${row.testId}-${row.primaryMetric}`}>
-                        <td>{row.date}</td>
-                        <td>{row.testType}</td>
-                        <td>{row.primaryMetric}</td>
-                        <td>{row.primaryValue}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p className="portal-muted-text">No tests returned for this player in the configured lookback window.</p>
-              )}
-            </div>
-          </div>
-        </article>
       ) : null}
 
       {activeTab === 'leaderboard' ? (
@@ -814,6 +964,10 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                 {leaderColumns.map((column) => {
                   let value: number | null = null;
                   if (column === 'CMJ') value = row.cmj;
+                  else if (column === 'SJ') value = row.sj;
+                  else if (column === 'CMJMax') value = row.cmjMax;
+                  else if (column === 'SJMax') value = row.sjMax;
+                  else if (column === 'RSI') value = row.rsiModified;
                   else if (column === 'SQ') value = row.sq;
                   else if (column === 'FBvelo') value = row.fbVelo;
                   else if (column === 'VeloMax') value = row.veloMax;
