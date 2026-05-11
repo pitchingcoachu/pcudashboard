@@ -265,6 +265,10 @@ function isThrowingCalendarWorkoutName(value: string): boolean {
   return value.trim().toLowerCase() === 'throwing calendar';
 }
 
+function isBullpenWorkoutName(value: string): boolean {
+  return value.trim().toLowerCase() === 'bullpen';
+}
+
 export default function ScheduleBoard({ players, workouts, schoolCode, schoolLogoSrc, schoolLogoAlt }: ScheduleBoardProps) {
   const [playerId, setPlayerId] = useState<number>(players[0]?.id ?? 0);
   const [playerQuery, setPlayerQuery] = useState(players[0]?.name ?? '');
@@ -1595,6 +1599,10 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
                   setView('throwing');
                   setThrowingBuilderMode('month');
                   setThrowingCalendarView('day');
+                  return;
+                }
+                if (isBullpenWorkoutName(item.itemName)) {
+                  setView('bullpens');
                   return;
                 }
                 setSelectedItem(item);
@@ -3103,7 +3111,13 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
                           event.dataTransfer.setData('cycleItemId', String(item.itemId));
                           event.dataTransfer.setData('cycleItemSlot', item.cycleSlot ?? '');
                         }}
-                        onClick={() => setSelectedItem(item)}
+                        onClick={() => {
+                          if (isBullpenWorkoutName(item.itemName)) {
+                            setView('bullpens');
+                            return;
+                          }
+                          setSelectedItem(item);
+                        }}
                       >
                         <strong>{item.itemName}</strong>
                       </button>
