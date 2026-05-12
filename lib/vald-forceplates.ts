@@ -136,8 +136,7 @@ function normalizeName(value: string): string {
   return firstLast
     .toLowerCase()
     .replace(/\./g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+    .replace(/[^a-z0-9]+/g, '');
 }
 
 function isoDaysAgo(days: number): string {

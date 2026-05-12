@@ -17,8 +17,7 @@ function normalizeName(value: string): string {
     .trim()
     .toLowerCase()
     .replace(/\./g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+    .replace(/[^a-z0-9]+/g, '');
 }
 
 function toFirstLast(value: string): string {
