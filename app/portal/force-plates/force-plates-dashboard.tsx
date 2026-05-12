@@ -42,9 +42,16 @@ function valueRange(values: number[]): { min: number; max: number } {
 function toIsoDate(value: string): string {
   const parsed = new Date(String(value ?? '').trim());
   if (Number.isNaN(parsed.getTime())) return '';
-  const year = parsed.getUTCFullYear();
-  const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(parsed.getUTCDate()).padStart(2, '0');
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Phoenix',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(parsed);
+  const year = parts.find((part) => part.type === 'year')?.value ?? '';
+  const month = parts.find((part) => part.type === 'month')?.value ?? '';
+  const day = parts.find((part) => part.type === 'day')?.value ?? '';
+  if (!year || !month || !day) return '';
   return `${year}-${month}-${day}`;
 }
 
@@ -65,10 +72,136 @@ function normalizeName(value: string): string {
     .trim();
 }
 
+function isJumpHeightMetricName(metricName: string): boolean {
+  const normalized = String(metricName ?? '').toLowerCase();
+  return normalized.includes('jump height');
+}
+
+function pickJumpRows(
+  rows: Array<{ testType: string; metricName: string; metricUnit: string; value: number }>,
+  allowedTestTypes: string[]
+): Array<{ testType: string; metricName: string; metricUnit: string; value: number }> {
+  const tests = new Set(allowedTestTypes.map((t) => t.toUpperCase()));
+  const candidates = rows.filter((row) => tests.has(String(row.testType ?? '').toUpperCase()) && isJumpHeightMetricName(row.metricName));
+  if (!candidates.length) return [];
+  const inchCandidates = candidates.filter((row) => String(row.metricUnit ?? '').toLowerCase().includes('inch'));
+  if (inchCandidates.length) return inchCandidates;
+  const flightTimeCandidates = candidates.filter((row) => String(row.metricName ?? '').toLowerCase().includes('flight time'));
+  if (flightTimeCandidates.length) return flightTimeCandidates;
+  return candidates;
+}
+
+function mean(values: number[]): number | null {
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function normalizeTestType(value: string): string {
+  return String(value ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, '');
+}
+
+function isCmjType(value: string): boolean {
+  const n = normalizeTestType(value);
+  return n === 'CMJ' || n.includes('CMJ');
+}
+
+function isSjType(value: string): boolean {
+  const n = normalizeTestType(value);
+  return n === 'SJ' || n === 'SQUATJUMP' || n.includes('SQUATJUMP');
+}
+
+function isSqType(value: string): boolean {
+  const n = normalizeTestType(value);
+  return n === 'SQ';
+}
+
+function buildJumpPerTestValues(
+  rows: Array<{
+    testId: string;
+    testType: string;
+    metricName: string;
+    metricUnit: string;
+    value: number;
+    pointType?: 'average' | 'rep';
+  }>,
+  testMatch: (testType: string) => boolean
+): number[] {
+  const jumpRows = rows.filter((row) => testMatch(row.testType) && isJumpHeightMetricName(row.metricName));
+  if (!jumpRows.length) return [];
+  const byTest = new Map<string, Array<typeof jumpRows[number]>>();
+  for (const row of jumpRows) {
+    const list = byTest.get(row.testId) ?? [];
+    list.push(row);
+    byTest.set(row.testId, list);
+  }
+  const out: number[] = [];
+  for (const rowsForTest of byTest.values()) {
+    const avgRows = rowsForTest.filter((row) => String(row.pointType ?? 'average') === 'average');
+    const repRows = rowsForTest.filter((row) => String(row.pointType ?? 'average') === 'rep');
+    const selectPreferred = (candidates: Array<typeof jumpRows[number]>) => {
+      const inch = candidates.filter((row) => String(row.metricUnit ?? '').toLowerCase().includes('inch'));
+      if (inch.length) return inch;
+      const ft = candidates.filter((row) => String(row.metricName ?? '').toLowerCase().includes('flight time'));
+      if (ft.length) return ft;
+      return candidates;
+    };
+    const avgPreferred = selectPreferred(avgRows);
+    const repPreferred = selectPreferred(repRows);
+    const v = mean(avgPreferred.map((row) => row.value)) ?? mean(repPreferred.map((row) => row.value));
+    if (v !== null) out.push(v);
+  }
+  return out;
+}
+
+function computeJumpStats(
+  rows: Array<{
+    testId: string;
+    testType: string;
+    metricName: string;
+    metricUnit: string;
+    value: number;
+    pointType?: 'average' | 'rep';
+  }>,
+  testMatch: (testType: string) => boolean
+): { average: number | null; max: number | null } {
+  const jumpRows = rows.filter((row) => testMatch(row.testType) && isJumpHeightMetricName(row.metricName));
+  if (!jumpRows.length) return { average: null, max: null };
+  const byTest = new Map<string, Array<typeof jumpRows[number]>>();
+  for (const row of jumpRows) {
+    const list = byTest.get(row.testId) ?? [];
+    list.push(row);
+    byTest.set(row.testId, list);
+  }
+  const selectPreferred = (candidates: Array<typeof jumpRows[number]>) => {
+    const inch = candidates.filter((row) => String(row.metricUnit ?? '').toLowerCase().includes('inch'));
+    if (inch.length) return inch;
+    const ft = candidates.filter((row) => String(row.metricName ?? '').toLowerCase().includes('flight time'));
+    if (ft.length) return ft;
+    return candidates;
+  };
+
+  const perTest: number[] = [];
+  const repValues: number[] = [];
+  for (const rowsForTest of byTest.values()) {
+    const avgRows = selectPreferred(rowsForTest.filter((row) => String(row.pointType ?? 'average') === 'average'));
+    const reps = selectPreferred(rowsForTest.filter((row) => String(row.pointType ?? 'average') === 'rep'));
+    if (reps.length) {
+      perTest.push(mean(reps.map((row) => row.value)) ?? 0);
+      repValues.push(...reps.map((row) => row.value));
+    } else if (avgRows.length) {
+      const v = mean(avgRows.map((row) => row.value));
+      if (v !== null) perTest.push(v);
+    }
+  }
+  const average = mean(perTest);
+  const max = repValues.length ? Math.max(...repValues) : (perTest.length ? Math.max(...perTest) : null);
+  return { average, max };
+}
+
 export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot }) {
   const [activeTab, setActiveTab] = useState<'player' | 'leaderboard'>('player');
   const [selectedPlayer, setSelectedPlayer] = useState(snapshot.players[0]?.playerName ?? '');
-  const [pointMode, setPointMode] = useState<'average' | 'rep'>('average');
+  const [pointMode, setPointMode] = useState<'average' | 'rep'>('rep');
   const player = useMemo(() => snapshot.players.find((entry) => entry.playerName === selectedPlayer) ?? null, [snapshot.players, selectedPlayer]);
 
   const metricOptions = useMemo(() => {
@@ -311,23 +444,15 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
   const leaderboardRows = useMemo(() => {
     const inRange = (rowDate: string) =>
       (!leaderStartDate || rowDate >= leaderStartDate) && (!leaderEndDate || rowDate <= leaderEndDate);
-    const preferredJumpMetric = (rows: ValdPlayerSnapshot['metricRows']) => {
-      const keys = Array.from(new Set(rows.map((row) => metricKey(row.metricName, row.metricUnit))));
-      const pick =
-        keys.find((key) => key.toLowerCase().includes('jump height (flight time)') && key.toLowerCase().includes('inch')) ??
-        keys.find((key) => key.toLowerCase().includes('jump height') && key.toLowerCase().includes('inch')) ??
-        keys.find((key) => key.toLowerCase().includes('jump height')) ??
-        '';
-      return pick;
-    };
     return snapshot.players.map((playerEntry) => {
-      const avgRows = playerEntry.metricRows.filter((row) => String(row.pointType ?? 'average') === 'average');
-      const ranged = avgRows.filter((row) => {
+      const rangedAll = playerEntry.metricRows.filter((row) => {
         const iso = toIsoDate(String(row.dateTime ?? row.date));
         return iso ? inRange(iso) : false;
       });
+      const avgRows = rangedAll.filter((row) => String(row.pointType ?? 'average') === 'average');
+      const repRows = rangedAll.filter((row) => String(row.pointType ?? 'average') === 'rep');
       const byMetric = new Map<string, number[]>();
-      for (const row of ranged) {
+      for (const row of avgRows) {
         const key = metricKey(row.metricName, row.metricUnit);
         const list = byMetric.get(key) ?? [];
         list.push(row.value);
@@ -336,17 +461,16 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
       const metricAverages = Object.fromEntries(
         Array.from(byMetric.entries()).map(([key, values]) => [key, values.length ? values.reduce((a, b) => a + b, 0) / values.length : null])
       ) as Record<string, number | null>;
-      const jumpKey = preferredJumpMetric(ranged);
-      const cmjRows = ranged.filter((row) => row.testType.toUpperCase() === 'CMJ' && metricKey(row.metricName, row.metricUnit) === jumpKey);
-      const sqRows = ranged.filter((row) => row.testType.toUpperCase() === 'SQ' && metricKey(row.metricName, row.metricUnit) === jumpKey);
-      const sjRows = ranged.filter((row) => ['SJ', 'SQUAT JUMP'].includes(row.testType.toUpperCase()) && metricKey(row.metricName, row.metricUnit) === jumpKey);
-      const cmj = cmjRows.length ? cmjRows.reduce((sum, row) => sum + row.value, 0) / cmjRows.length : null;
-      const sq = sqRows.length ? sqRows.reduce((sum, row) => sum + row.value, 0) / sqRows.length : null;
-      const sj = sjRows.length ? sjRows.reduce((sum, row) => sum + row.value, 0) / sjRows.length : null;
-      const cmjMax = cmjRows.length ? Math.max(...cmjRows.map((row) => row.value)) : null;
-      const sjMax = sjRows.length ? Math.max(...sjRows.map((row) => row.value)) : null;
-      const rsiKey = Array.from(byMetric.keys()).find((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes('rsimodified'));
-      const rsiValues = rsiKey ? (byMetric.get(rsiKey) ?? []) : [];
+      const cmjStats = computeJumpStats(rangedAll, isCmjType);
+      const sjStats = computeJumpStats(rangedAll, isSjType);
+      const sqStats = computeJumpStats(rangedAll, isSqType);
+      const cmj = cmjStats.average;
+      const sq = sqStats.average;
+      const sj = sjStats.average;
+      const cmjMax = cmjStats.max;
+      const sjMax = sjStats.max;
+      const rsiRows = avgRows.filter((row) => String(row.metricName ?? '').toLowerCase().replace(/[^a-z0-9]/g, '').includes('rsimodified'));
+      const rsiValues = rsiRows.map((row) => row.value);
       const rsiModified = rsiValues.length ? rsiValues.reduce((a, b) => a + b, 0) / rsiValues.length : null;
       const velo = resolveVeloForPlayer(playerEntry.playerName, leaderVelocityRows);
       return {
@@ -366,23 +490,10 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
 
   const playerAggregateRows = useMemo(() => {
     if (!player) return [];
-    const inRange = (rowDate: string) => (!startDate || rowDate >= startDate) && (!endDate || rowDate <= endDate);
-    const preferredJumpMetric = (rows: typeof player.metricRows) => {
-      const keys = Array.from(new Set(rows.map((row) => metricKey(row.metricName, row.metricUnit))));
-      return (
-        keys.find((key) => key.toLowerCase().includes('jump height (flight time)') && key.toLowerCase().includes('inch')) ??
-        keys.find((key) => key.toLowerCase().includes('jump height') && key.toLowerCase().includes('inch')) ??
-        keys.find((key) => key.toLowerCase().includes('jump height')) ??
-        ''
-      );
-    };
-    const avgRows = player.metricRows.filter((row) => String(row.pointType ?? 'average') === 'average');
-    const ranged = avgRows.filter((row) => {
-      const iso = toIsoDate(String(row.dateTime ?? row.date));
-      return iso ? inRange(iso) : false;
-    });
+    const rangedAll = filteredRows;
+    const avgRows = filteredRows.filter((row) => String(row.pointType ?? 'average') === 'average');
     const byMetric = new Map<string, number[]>();
-    for (const row of ranged) {
+    for (const row of avgRows) {
       const mk = metricKey(row.metricName, row.metricUnit);
       const list = byMetric.get(mk) ?? [];
       list.push(row.value);
@@ -391,17 +502,16 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     const metricAverages = Object.fromEntries(
       Array.from(byMetric.entries()).map(([key, values]) => [key, values.length ? values.reduce((a, b) => a + b, 0) / values.length : null])
     ) as Record<string, number | null>;
-    const jumpKey = preferredJumpMetric(ranged);
-    const cmjRows = ranged.filter((row) => row.testType.toUpperCase() === 'CMJ' && metricKey(row.metricName, row.metricUnit) === jumpKey);
-    const sqRows = ranged.filter((row) => row.testType.toUpperCase() === 'SQ' && metricKey(row.metricName, row.metricUnit) === jumpKey);
-    const sjRows = ranged.filter((row) => ['SJ', 'SQUAT JUMP'].includes(row.testType.toUpperCase()) && metricKey(row.metricName, row.metricUnit) === jumpKey);
-    const cmj = cmjRows.length ? cmjRows.reduce((sum, row) => sum + row.value, 0) / cmjRows.length : null;
-    const sq = sqRows.length ? sqRows.reduce((sum, row) => sum + row.value, 0) / sqRows.length : null;
-    const sj = sjRows.length ? sjRows.reduce((sum, row) => sum + row.value, 0) / sjRows.length : null;
-    const cmjMax = cmjRows.length ? Math.max(...cmjRows.map((row) => row.value)) : null;
-    const sjMax = sjRows.length ? Math.max(...sjRows.map((row) => row.value)) : null;
-    const rsiKey = Array.from(byMetric.keys()).find((k) => k.toLowerCase().replace(/[^a-z0-9]/g, '').includes('rsimodified'));
-    const rsiValues = rsiKey ? (byMetric.get(rsiKey) ?? []) : [];
+    const cmjStats = computeJumpStats(rangedAll, isCmjType);
+    const sjStats = computeJumpStats(rangedAll, isSjType);
+    const sqStats = computeJumpStats(rangedAll, isSqType);
+    const cmj = cmjStats.average;
+    const sq = sqStats.average;
+    const sj = sjStats.average;
+    const cmjMax = cmjStats.max;
+    const sjMax = sjStats.max;
+    const rsiRows = avgRows.filter((row) => String(row.metricName ?? '').toLowerCase().replace(/[^a-z0-9]/g, '').includes('rsimodified'));
+    const rsiValues = rsiRows.map((row) => row.value);
     const rsiModified = rsiValues.length ? rsiValues.reduce((a, b) => a + b, 0) / rsiValues.length : null;
     const velo = resolveVeloForPlayer(player.playerName, leaderVelocityRows);
     return [{
@@ -415,7 +525,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
       fbVelo: velo.fbVelo,
       veloMax: velo.veloMax,
     }];
-  }, [player, startDate, endDate, leaderVelocityRows]);
+  }, [player, filteredRows, leaderVelocityRows]);
 
   const sortedLeaderboardRows = useMemo(() => {
     const valueFor = (row: (typeof leaderboardRows)[number], column: string): number | string | null => {

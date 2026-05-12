@@ -146,6 +146,13 @@ function isoDaysAgo(days: number): string {
   return date.toISOString().slice(0, 10) + 'T00:00:00.000Z';
 }
 
+function addUtcDays(iso: string, days: number): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10) + 'T00:00:00.000Z';
+}
+
 let tokenCache: { token: string; expiresAt: number } | null = null;
 
 async function getValdToken(): Promise<string> {
@@ -324,6 +331,43 @@ function coerceTests(payload: unknown): ValdTest[] {
     .filter((row) => row.testId && row.profileId && row.recordedDateUtc);
 }
 
+async function fetchAllTestsWindowed(
+  baseUrl: string,
+  tenantId: string,
+  modifiedFromUtc: string
+): Promise<unknown[]> {
+  const start = new Date(modifiedFromUtc);
+  const now = new Date();
+  if (Number.isNaN(start.getTime())) {
+    return [];
+  }
+  const all: unknown[] = [];
+  const seen = new Set<string>();
+  const WINDOW_DAYS = 3;
+  let cursor = modifiedFromUtc;
+  while (new Date(cursor).getTime() < now.getTime()) {
+    const next = addUtcDays(cursor, WINDOW_DAYS);
+    const upper = new Date(next).getTime() > now.getTime() ? now.toISOString() : next;
+    const payload = await valdGetJson<unknown>(baseUrl, '/tests', {
+      tenantId,
+      modifiedFromUtc: cursor,
+      modifiedToUtc: upper,
+    });
+    const rows = Array.isArray((payload as { tests?: unknown[] })?.tests)
+      ? ((payload as { tests: unknown[] }).tests as unknown[])
+      : [];
+    for (const row of rows) {
+      const id = String((row as Record<string, unknown>)?.testId ?? '').trim();
+      if (!id) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      all.push(row);
+    }
+    cursor = upper;
+  }
+  return all;
+}
+
 function fmtValue(value: number | null, decimals: number): string {
   if (value === null || !Number.isFinite(value)) return '--';
   const safeDecimals = Math.max(0, Math.min(4, decimals));
@@ -341,10 +385,17 @@ function toShortDate(value: string): string {
   if (!raw) return '';
   const parsed = new Date(raw);
   if (Number.isNaN(parsed.getTime())) return raw.slice(0, 10);
-  const month = parsed.getUTCMonth() + 1;
-  const day = parsed.getUTCDate();
-  const year = parsed.getUTCFullYear() % 100;
-  return `${month}/${day}/${String(year).padStart(2, '0')}`;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Phoenix',
+    year: '2-digit',
+    month: 'numeric',
+    day: 'numeric',
+  }).formatToParts(parsed);
+  const month = parts.find((part) => part.type === 'month')?.value ?? '';
+  const day = parts.find((part) => part.type === 'day')?.value ?? '';
+  const year = parts.find((part) => part.type === 'year')?.value ?? '';
+  if (!month || !day || !year) return raw.slice(0, 10);
+  return `${month}/${day}/${year}`;
 }
 
 export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promise<ValdSnapshot> {
@@ -361,11 +412,12 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
   const lookbackDays = Number(process.env.VALD_LOOKBACK_DAYS ?? DEFAULT_LOOKBACK_DAYS);
   const modifiedFromUtc = isoDaysAgo(Number.isFinite(lookbackDays) ? lookbackDays : DEFAULT_LOOKBACK_DAYS);
 
-  const [profilesPayload, defsPayload, testsPayload] = await Promise.all([
+  const [profilesPayload, defsPayload, testsPayloadRaw] = await Promise.all([
     valdGetJson<unknown>(base.profiles, '/profiles', { tenantId }),
     valdGetJson<unknown>(base.forcedecks, '/resultdefinitions', {}),
-    valdGetJson<unknown>(base.forcedecks, '/tests', { tenantId, modifiedFromUtc }),
+    fetchAllTestsWindowed(base.forcedecks, tenantId, modifiedFromUtc),
   ]);
+  const testsPayload: { tests: unknown[] } = { tests: testsPayloadRaw };
   const profiles = coerceProfiles(profilesPayload);
   const resultDefs = coerceDefinitions(defsPayload);
   const tests = coerceTests(testsPayload);
