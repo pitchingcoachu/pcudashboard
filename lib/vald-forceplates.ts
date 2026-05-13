@@ -247,19 +247,30 @@ async function valdGetJson<T>(baseUrl: string, path: string, query: Record<strin
     if (!value) continue;
     url.searchParams.set(key, value);
   }
-  const response = await fetch(url.toString(), {
-    headers: {
-      authorization: `Bearer ${token}`,
-      accept: 'application/json',
-    },
-    cache: 'no-store',
-  });
-  if (response.status === 204) return {} as T;
-  const payload = (await response.json().catch(() => ({}))) as T & { message?: string; error?: string };
-  if (!response.ok) {
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const response = await fetch(url.toString(), {
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: 'application/json',
+      },
+      cache: 'no-store',
+    });
+    if (response.status === 204) return {} as T;
+    const payload = (await response.json().catch(() => ({}))) as T & { message?: string; error?: string };
+    if (response.ok) return payload;
+    if (response.status === 429 && attempt < maxAttempts) {
+      const retryAfterRaw = String(response.headers.get('retry-after') ?? '').trim();
+      const retryAfterSec = Number(retryAfterRaw);
+      const backoffMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
+        ? retryAfterSec * 1000
+        : 600 * attempt;
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      continue;
+    }
     throw new Error(payload.message || payload.error || `VALD request failed (${response.status}).`);
   }
-  return payload;
+  throw new Error('VALD request failed (429).');
 }
 
 async function fetchTrialMetricsForTest(
@@ -477,7 +488,8 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     profilesByNorm.set(normalizeName(profile.fullName), profile);
   }
 
-  const players: ValdPlayerSnapshot[] = await Promise.all(playerNames.map(async (name) => {
+  const players: ValdPlayerSnapshot[] = [];
+  for (const name of playerNames) {
     const profile = findBestProfileMatch(name, profiles, profilesByNorm);
     const playerTests = profile ? tests.filter((test) => test.profileId === profile.profileId) : [];
     const ordered = [...playerTests].sort((a, b) => b.recordedDateUtc.localeCompare(a.recordedDateUtc));
@@ -629,8 +641,8 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
         testsCount: snapshotRow.testsCount,
       });
     }
-    return snapshotRow;
-  }));
+    players.push(snapshotRow);
+  }
 
   return {
     fetchedAt: new Date().toISOString(),
