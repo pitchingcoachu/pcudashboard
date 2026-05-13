@@ -169,6 +169,13 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load force plate data.';
+    const isValdRateLimit = /429/.test(message) || /rate limit/i.test(message);
+    if (isValdRateLimit) {
+      return NextResponse.json(
+        { error: 'VALD is rate-limiting requests right now. Please retry in about a minute.' },
+        { status: 503, headers: { 'retry-after': '60' } }
+      );
+    }
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

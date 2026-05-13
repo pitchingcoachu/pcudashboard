@@ -101,6 +101,8 @@ export type ValdSnapshot = {
 
 const DEFAULT_VALD_TOKEN_URL = 'https://auth.prd.vald.com/oauth/token';
 const DEFAULT_LOOKBACK_DAYS = 180;
+const DEFAULT_SNAPSHOT_CACHE_TTL_MS = 120_000;
+const DEFAULT_TRIAL_FETCH_LIMIT = 8;
 
 const regionBases: Record<ValdRegion, { profiles: string; forcedecks: string }> = {
   use: {
@@ -205,6 +207,28 @@ function addUtcDays(iso: string, days: number): string {
 }
 
 let tokenCache: { token: string; expiresAt: number } | null = null;
+let snapshotCache = new Map<string, { expiresAt: number; value: ValdSnapshot }>();
+let snapshotInflight = new Map<string, Promise<ValdSnapshot>>();
+
+function parseRetryAfterMs(raw: string): number | null {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) return null;
+  const asSeconds = Number(trimmed);
+  if (Number.isFinite(asSeconds) && asSeconds > 0) return Math.round(asSeconds * 1000);
+  const asDate = Date.parse(trimmed);
+  if (!Number.isFinite(asDate)) return null;
+  const delta = asDate - Date.now();
+  return delta > 0 ? delta : null;
+}
+
+function snapshotCacheKey(options: { tenantId: string; region: ValdRegion; playerNames: string[]; lookbackDays: number }): string {
+  const names = [...options.playerNames].map((name) => normalizeName(name)).sort();
+  return `${options.tenantId}|${options.region}|${options.lookbackDays}|${names.join(',')}`;
+}
+
+function cloneSnapshot(snapshot: ValdSnapshot): ValdSnapshot {
+  return JSON.parse(JSON.stringify(snapshot)) as ValdSnapshot;
+}
 
 async function getValdToken(): Promise<string> {
   if (tokenCache && tokenCache.expiresAt > Date.now() + 30_000) return tokenCache.token;
@@ -260,11 +284,9 @@ async function valdGetJson<T>(baseUrl: string, path: string, query: Record<strin
     const payload = (await response.json().catch(() => ({}))) as T & { message?: string; error?: string };
     if (response.ok) return payload;
     if (response.status === 429 && attempt < maxAttempts) {
-      const retryAfterRaw = String(response.headers.get('retry-after') ?? '').trim();
-      const retryAfterSec = Number(retryAfterRaw);
-      const backoffMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
-        ? retryAfterSec * 1000
-        : 600 * attempt;
+      const retryAfterMs = parseRetryAfterMs(String(response.headers.get('retry-after') ?? ''));
+      const jitterMs = Math.floor(Math.random() * 250);
+      const backoffMs = retryAfterMs ?? Math.min(12_000, 1000 * (2 ** (attempt - 1)) + jitterMs);
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
       continue;
     }
@@ -472,6 +494,22 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     forcedecks: String(process.env.VALD_FORCEDECKS_BASE_URL ?? baseDefault.forcedecks).trim() || baseDefault.forcedecks,
   };
   const lookbackDays = Number(process.env.VALD_LOOKBACK_DAYS ?? DEFAULT_LOOKBACK_DAYS);
+  const snapshotCacheTtlMs = Math.max(0, Number(process.env.VALD_SNAPSHOT_CACHE_TTL_MS ?? DEFAULT_SNAPSHOT_CACHE_TTL_MS));
+  const trialFetchLimit = Math.max(0, Number(process.env.VALD_TRIAL_FETCH_LIMIT ?? DEFAULT_TRIAL_FETCH_LIMIT));
+  const cacheKey = snapshotCacheKey({
+    tenantId,
+    region,
+    playerNames,
+    lookbackDays: Number.isFinite(lookbackDays) ? lookbackDays : DEFAULT_LOOKBACK_DAYS,
+  });
+  const cached = snapshotCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cloneSnapshot(cached.value);
+  }
+  const existing = snapshotInflight.get(cacheKey);
+  if (existing) return cloneSnapshot(await existing);
+
+  const run = (async (): Promise<ValdSnapshot> => {
   const modifiedFromUtc = isoDaysAgo(Number.isFinite(lookbackDays) ? lookbackDays : DEFAULT_LOOKBACK_DAYS);
 
   const [profilesPayload, defsPayload, testsPayloadRaw] = await Promise.all([
@@ -514,7 +552,8 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     const metricRows: ValdMetricRow[] = [];
     const trialMetricsByTestId = new Map<string, ValdTrialMetric[]>();
     const trialRawByTestId = new Map<string, ValdTrialMetricPoint[]>();
-    for (const test of recent) {
+    for (let idx = 0; idx < recent.length; idx += 1) {
+      const test = recent[idx];
       if (Number.isFinite(Number(test.weight)) && Number(test.weight) > 0) {
         metricRows.push({
           testId: test.testId,
@@ -529,10 +568,12 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
         });
       }
       let trialMetrics: { aggregate: ValdTrialMetric[]; raw: ValdTrialMetricPoint[] } = { aggregate: [], raw: [] };
-      try {
-        trialMetrics = await fetchTrialMetricsForTest(base.forcedecks, tenantId, test.testId);
-      } catch {
-        trialMetrics = { aggregate: [], raw: [] };
+      if (idx < trialFetchLimit) {
+        try {
+          trialMetrics = await fetchTrialMetricsForTest(base.forcedecks, tenantId, test.testId);
+        } catch {
+          trialMetrics = { aggregate: [], raw: [] };
+        }
       }
       trialMetricsByTestId.set(test.testId, trialMetrics.aggregate);
       trialRawByTestId.set(test.testId, trialMetrics.raw);
@@ -644,9 +685,30 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     players.push(snapshotRow);
   }
 
-  return {
+  const result: ValdSnapshot = {
     fetchedAt: new Date().toISOString(),
     tenantId,
     players,
   };
+  if (snapshotCacheTtlMs > 0) {
+    snapshotCache.set(cacheKey, {
+      expiresAt: Date.now() + snapshotCacheTtlMs,
+      value: cloneSnapshot(result),
+    });
+    if (snapshotCache.size > 500) {
+      const now = Date.now();
+      for (const [key, value] of snapshotCache.entries()) {
+        if (value.expiresAt <= now) snapshotCache.delete(key);
+      }
+    }
+  }
+  return result;
+  })();
+
+  snapshotInflight.set(cacheKey, run);
+  try {
+    return cloneSnapshot(await run);
+  } finally {
+    snapshotInflight.delete(cacheKey);
+  }
 }
