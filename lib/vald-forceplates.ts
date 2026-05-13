@@ -101,8 +101,8 @@ export type ValdSnapshot = {
 
 const DEFAULT_VALD_TOKEN_URL = 'https://auth.prd.vald.com/oauth/token';
 const DEFAULT_LOOKBACK_DAYS = 180;
-const DEFAULT_SNAPSHOT_CACHE_TTL_MS = 120_000;
-const DEFAULT_TRIAL_FETCH_LIMIT = 8;
+const DEFAULT_SNAPSHOT_CACHE_TTL_MS = 300_000;
+const DEFAULT_TRIAL_FETCH_LIMIT = 4;
 
 const regionBases: Record<ValdRegion, { profiles: string; forcedecks: string }> = {
   use: {
@@ -504,10 +504,24 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
   });
   const cached = snapshotCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
+    console.info('[vald-forceplates] snapshot cache hit', {
+      key: cacheKey,
+      ttlMsRemaining: Math.max(0, cached.expiresAt - Date.now()),
+      playerCount: playerNames.length,
+    });
     return cloneSnapshot(cached.value);
   }
+  console.info('[vald-forceplates] snapshot cache miss', {
+    key: cacheKey,
+    trialFetchLimit,
+    snapshotCacheTtlMs,
+    playerCount: playerNames.length,
+  });
   const existing = snapshotInflight.get(cacheKey);
-  if (existing) return cloneSnapshot(await existing);
+  if (existing) {
+    console.info('[vald-forceplates] snapshot inflight reuse', { key: cacheKey });
+    return cloneSnapshot(await existing);
+  }
 
   const run = (async (): Promise<ValdSnapshot> => {
   const modifiedFromUtc = isoDaysAgo(Number.isFinite(lookbackDays) ? lookbackDays : DEFAULT_LOOKBACK_DAYS);
@@ -574,6 +588,12 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
         } catch {
           trialMetrics = { aggregate: [], raw: [] };
         }
+      } else {
+        console.info('[vald-forceplates] trial fetch skipped by limit', {
+          testId: test.testId,
+          idx,
+          trialFetchLimit,
+        });
       }
       trialMetricsByTestId.set(test.testId, trialMetrics.aggregate);
       trialRawByTestId.set(test.testId, trialMetrics.raw);
@@ -694,6 +714,11 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     snapshotCache.set(cacheKey, {
       expiresAt: Date.now() + snapshotCacheTtlMs,
       value: cloneSnapshot(result),
+    });
+    console.info('[vald-forceplates] snapshot cache write', {
+      key: cacheKey,
+      snapshotCacheTtlMs,
+      playerCount: playerNames.length,
     });
     if (snapshotCache.size > 500) {
       const now = Date.now();
