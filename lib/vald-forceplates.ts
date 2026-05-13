@@ -139,6 +139,58 @@ function normalizeName(value: string): string {
     .replace(/[^a-z0-9]+/g, '');
 }
 
+function nameTokens(value: string): string[] {
+  const raw = String(value ?? '').trim().toLowerCase().replace(/\./g, ' ');
+  return raw
+    .split(/[^a-z0-9]+/g)
+    .map((t) => t.trim())
+    .filter(Boolean);
+}
+
+function findBestProfileMatch(name: string, profiles: ValdProfile[], profilesByNorm: Map<string, ValdProfile>): ValdProfile | null {
+  const normalizedInput = normalizeName(name);
+  const exact = profilesByNorm.get(normalizedInput);
+  if (exact) {
+    if (String(process.env.VALD_MATCH_DEBUG ?? '').trim() === '1') {
+      console.info('[vald-match] exact', { inputName: name, profileName: exact.fullName, profileId: exact.profileId });
+    }
+    return exact;
+  }
+  const targetTokens = nameTokens(name);
+  if (!targetTokens.length) return null;
+  const targetFirst = targetTokens[0];
+  const targetLast = targetTokens[targetTokens.length - 1];
+  let best: { profile: ValdProfile; score: number } | null = null;
+  for (const profile of profiles) {
+    const tokens = nameTokens(profile.fullName);
+    if (!tokens.length) continue;
+    const first = tokens[0];
+    const last = tokens[tokens.length - 1];
+    if (!first || !last) continue;
+    if (last !== targetLast) continue;
+    let score = 1;
+    if (first === targetFirst) score += 2;
+    const overlap = targetTokens.filter((t) => tokens.includes(t)).length;
+    score += overlap;
+    if (!best || score > best.score) best = { profile, score };
+  }
+  if (best?.profile) {
+    if (String(process.env.VALD_MATCH_DEBUG ?? '').trim() === '1') {
+      console.info('[vald-match] fuzzy', {
+        inputName: name,
+        profileName: best.profile.fullName,
+        profileId: best.profile.profileId,
+        score: best.score,
+      });
+    }
+    return best.profile;
+  }
+  if (String(process.env.VALD_MATCH_DEBUG ?? '').trim() === '1') {
+    console.info('[vald-match] miss', { inputName: name, normalizedInput });
+  }
+  return null;
+}
+
 function isoDaysAgo(days: number): string {
   const date = new Date();
   date.setUTCDate(date.getUTCDate() - Math.max(1, days));
@@ -426,8 +478,7 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
   }
 
   const players: ValdPlayerSnapshot[] = await Promise.all(playerNames.map(async (name) => {
-    const normalized = normalizeName(name);
-    const profile = profilesByNorm.get(normalized) ?? null;
+    const profile = findBestProfileMatch(name, profiles, profilesByNorm);
     const playerTests = profile ? tests.filter((test) => test.profileId === profile.profileId) : [];
     const ordered = [...playerTests].sort((a, b) => b.recordedDateUtc.localeCompare(a.recordedDateUtc));
     const recent = ordered.slice(0, 25);
@@ -562,7 +613,7 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
       };
     });
 
-    return {
+    const snapshotRow: ValdPlayerSnapshot = {
       playerName: name,
       profileId: profile?.profileId ?? null,
       testsCount: playerTests.length,
@@ -571,6 +622,14 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
       trend: series,
       metricRows: metricRows.sort((a, b) => String(a.dateTime ?? a.date).localeCompare(String(b.dateTime ?? b.date))),
     };
+    if (String(process.env.VALD_MATCH_DEBUG ?? '').trim() === '1') {
+      console.info('[vald-match] result', {
+        inputName: name,
+        profileId: snapshotRow.profileId,
+        testsCount: snapshotRow.testsCount,
+      });
+    }
+    return snapshotRow;
   }));
 
   return {

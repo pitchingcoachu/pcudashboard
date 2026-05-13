@@ -633,7 +633,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
             Chart Points
             <select value={pointMode} onChange={(event) => setPointMode(event.target.value === 'rep' ? 'rep' : 'average')}>
               <option value="average">Average by Test</option>
-              <option value="rep">Every Rep</option>
+              <option value="rep">Individual Reps</option>
             </select>
           </label>
           <label>

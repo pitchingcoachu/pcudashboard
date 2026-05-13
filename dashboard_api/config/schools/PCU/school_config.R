@@ -131,6 +131,7 @@ school_config <- list(
   "Kaufman, Rylan",
   "Hopkins, Weston",
   "Piercey, Branden",
+  "George, Sam",
   "Allison, Chris" 
     
   ),
@@ -258,7 +259,8 @@ school_config <- list(
   "Zuniga, Guillermo",
   "Kaufman, Rylan",
   "Hopkins, Weston",
-  "Piercey, Branden" 
+  "Piercey, Branden",
+  "George, Sam" 
   ),
   allowed_campers = character(0),
   colors = list(
