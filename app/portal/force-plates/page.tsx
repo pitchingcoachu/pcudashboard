@@ -5,7 +5,8 @@ import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../lib/programming-scope';
 import { getPlayerForUser, listPlayerChoicesByOrganization } from '../../../lib/training-db';
-import { fetchValdForceDecksSnapshot } from '../../../lib/vald-forceplates';
+import { loadForcePlateSnapshot } from '../../../lib/force-plate-cache-db';
+import type { ValdSnapshot } from '../../../lib/vald-forceplates';
 import ForcePlatesDashboard from './force-plates-dashboard';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
@@ -103,7 +104,7 @@ export default async function ForcePlatesPage({
   }
 
   let error = '';
-  let snapshot: Awaited<ReturnType<typeof fetchValdForceDecksSnapshot>> | null = null;
+  let snapshot: ValdSnapshot | null = null;
   let availablePlayers: string[] = [];
   if (!isPcu) {
     error = 'Force Plate Data is currently enabled only for PCU.';
@@ -113,7 +114,11 @@ export default async function ForcePlatesPage({
     error = 'No PCU players found in programming list.';
   } else {
     try {
-      const fullSnapshot = await fetchValdForceDecksSnapshot(candidateNames);
+      const cached = await loadForcePlateSnapshot({ organizationId: orgId, schoolCode: selectedSchoolCode });
+      if (!cached.snapshot) {
+        throw new Error('Force plate cache is empty. Ask an admin to run Force Plate Sync.');
+      }
+      const fullSnapshot = cached.snapshot;
       availablePlayers = fullSnapshot.players
         .filter((player) => Boolean(player.profileId) && player.testsCount > 0)
         .map((player) => player.playerName);

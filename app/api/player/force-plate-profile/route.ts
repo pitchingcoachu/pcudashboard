@@ -4,7 +4,7 @@ import { getSessionFromCookies } from '../../../../lib/auth';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { getPlayerByIdInOrganization } from '../../../../lib/training-db';
-import { fetchValdForceDecksSnapshot } from '../../../../lib/vald-forceplates';
+import { loadForcePlateSnapshot } from '../../../../lib/force-plate-cache-db';
 
 type ForcePlateMetricOption = {
   key: string;
@@ -77,7 +77,14 @@ export async function GET(request: Request) {
   if (!player) return NextResponse.json({ error: 'Player not found.' }, { status: 404 });
 
   try {
-    const snapshot = await fetchValdForceDecksSnapshot([player.fullName]);
+    const cached = await loadForcePlateSnapshot({ organizationId, schoolCode: resolveProgrammingSchoolCode(session) });
+    if (!cached.snapshot) {
+      return NextResponse.json(
+        { error: 'Force plate cache is empty. Ask an admin to run Force Plate Sync.' },
+        { status: 503 }
+      );
+    }
+    const snapshot = cached.snapshot;
     const selected =
       snapshot.players.find((entry) => normalizeName(entry.playerName) === normalizeName(player.fullName)) ??
       snapshot.players[0] ??
