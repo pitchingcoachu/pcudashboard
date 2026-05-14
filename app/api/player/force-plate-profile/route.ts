@@ -169,6 +169,11 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load force plate data.';
+    console.error('[force-plate-profile] failed', {
+      playerId,
+      message,
+      at: new Date().toISOString(),
+    });
     const isValdRateLimit = /429/.test(message) || /rate limit/i.test(message);
     if (isValdRateLimit) {
       return NextResponse.json(

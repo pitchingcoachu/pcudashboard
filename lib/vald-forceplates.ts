@@ -103,6 +103,7 @@ const DEFAULT_VALD_TOKEN_URL = 'https://auth.prd.vald.com/oauth/token';
 const DEFAULT_LOOKBACK_DAYS = 180;
 const DEFAULT_SNAPSHOT_CACHE_TTL_MS = 300_000;
 const DEFAULT_TRIAL_FETCH_LIMIT = 4;
+const DEFAULT_MULTI_PLAYER_TRIAL_FETCH_LIMIT = 0;
 
 const regionBases: Record<ValdRegion, { profiles: string; forcedecks: string }> = {
   use: {
@@ -495,7 +496,12 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
   };
   const lookbackDays = Number(process.env.VALD_LOOKBACK_DAYS ?? DEFAULT_LOOKBACK_DAYS);
   const snapshotCacheTtlMs = Math.max(0, Number(process.env.VALD_SNAPSHOT_CACHE_TTL_MS ?? DEFAULT_SNAPSHOT_CACHE_TTL_MS));
-  const trialFetchLimit = Math.max(0, Number(process.env.VALD_TRIAL_FETCH_LIMIT ?? DEFAULT_TRIAL_FETCH_LIMIT));
+  const trialFetchLimitConfigured = Math.max(0, Number(process.env.VALD_TRIAL_FETCH_LIMIT ?? DEFAULT_TRIAL_FETCH_LIMIT));
+  const multiPlayerTrialFetchLimit = Math.max(
+    0,
+    Number(process.env.VALD_MULTI_PLAYER_TRIAL_FETCH_LIMIT ?? DEFAULT_MULTI_PLAYER_TRIAL_FETCH_LIMIT)
+  );
+  const effectiveTrialFetchLimit = playerNames.length > 1 ? multiPlayerTrialFetchLimit : trialFetchLimitConfigured;
   const cacheKey = snapshotCacheKey({
     tenantId,
     region,
@@ -513,7 +519,9 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
   }
   console.info('[vald-forceplates] snapshot cache miss', {
     key: cacheKey,
-    trialFetchLimit,
+    trialFetchLimitConfigured,
+    multiPlayerTrialFetchLimit,
+    effectiveTrialFetchLimit,
     snapshotCacheTtlMs,
     playerCount: playerNames.length,
   });
@@ -582,7 +590,7 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
         });
       }
       let trialMetrics: { aggregate: ValdTrialMetric[]; raw: ValdTrialMetricPoint[] } = { aggregate: [], raw: [] };
-      if (idx < trialFetchLimit) {
+      if (idx < effectiveTrialFetchLimit) {
         try {
           trialMetrics = await fetchTrialMetricsForTest(base.forcedecks, tenantId, test.testId);
         } catch {
@@ -592,7 +600,7 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
         console.info('[vald-forceplates] trial fetch skipped by limit', {
           testId: test.testId,
           idx,
-          trialFetchLimit,
+          effectiveTrialFetchLimit,
         });
       }
       trialMetricsByTestId.set(test.testId, trialMetrics.aggregate);
