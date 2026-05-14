@@ -5,6 +5,7 @@ import { canManagePlayer } from '../../../../lib/portal-access';
 import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { getPlayerByIdInOrganization } from '../../../../lib/training-db';
 import { loadForcePlateSnapshot } from '../../../../lib/force-plate-cache-db';
+import { loadForcePlateSnapshotFromNeon } from '../../../../lib/force-plate-neon-db';
 
 type ForcePlateMetricOption = {
   key: string;
@@ -77,7 +78,13 @@ export async function GET(request: Request) {
   if (!player) return NextResponse.json({ error: 'Player not found.' }, { status: 404 });
 
   try {
-    const cached = await loadForcePlateSnapshot({ organizationId, schoolCode: resolveProgrammingSchoolCode(session) });
+    const schoolCode = resolveProgrammingSchoolCode(session);
+    const neon = await loadForcePlateSnapshotFromNeon({
+      organizationId,
+      schoolCode,
+      allowedPlayerNames: [player.fullName],
+    });
+    const cached = neon.snapshot ? { snapshot: neon.snapshot } : await loadForcePlateSnapshot({ organizationId, schoolCode });
     if (!cached.snapshot) {
       return NextResponse.json(
         { error: 'Force plate cache is empty. Ask an admin to run Force Plate Sync.' },

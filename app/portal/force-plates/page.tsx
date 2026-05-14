@@ -1,11 +1,13 @@
 import Link from 'next/link';
 import Image from 'next/image';
+import SyncForcePlatesButton from './sync-force-plates-button';
 import { requirePortalSession } from '../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../lib/programming-scope';
 import { getPlayerForUser, listPlayerChoicesByOrganization } from '../../../lib/training-db';
 import { loadForcePlateSnapshot } from '../../../lib/force-plate-cache-db';
+import { loadForcePlateSnapshotFromNeon } from '../../../lib/force-plate-neon-db';
 import type { ValdSnapshot } from '../../../lib/vald-forceplates';
 import ForcePlatesDashboard from './force-plates-dashboard';
 import MobileNavSelect from '../mobile-nav-select';
@@ -114,13 +116,18 @@ export default async function ForcePlatesPage({
     error = 'No PCU players found in programming list.';
   } else {
     try {
-      const cached = await loadForcePlateSnapshot({ organizationId: orgId, schoolCode: selectedSchoolCode });
-      if (!cached.snapshot) {
-        throw new Error('Force plate cache is empty. Ask an admin to run Force Plate Sync.');
-      }
+      const fromNeon = await loadForcePlateSnapshotFromNeon({
+        organizationId: orgId,
+        schoolCode: selectedSchoolCode,
+        allowedPlayerNames: candidateNames,
+      });
+      const cached = fromNeon.snapshot
+        ? { snapshot: fromNeon.snapshot }
+        : await loadForcePlateSnapshot({ organizationId: orgId, schoolCode: selectedSchoolCode });
+      if (!cached.snapshot) throw new Error('Force plate cache is empty. Ask an admin to run Force Plate Sync.');
       const fullSnapshot = cached.snapshot;
       availablePlayers = fullSnapshot.players
-        .filter((player) => Boolean(player.profileId) && player.testsCount > 0)
+        .filter((player) => player.testsCount > 0 || player.metricRows.length > 0 || player.recentTests.length > 0)
         .map((player) => player.playerName);
       const availableSet = new Set(availablePlayers.map(normalizeName));
       if (session.role === 'player') {
@@ -139,7 +146,7 @@ export default async function ForcePlatesPage({
         } else {
           snapshot = {
             ...fullSnapshot,
-            players: fullSnapshot.players.filter((player) => availableSet.has(normalizeName(player.playerName))),
+            players: fullSnapshot.players,
           };
         }
       }
@@ -207,7 +214,10 @@ export default async function ForcePlatesPage({
       <section className="portal-panel portal-admin-panel">
         <div className="portal-admin-stack">
           <div className="portal-admin-headline" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
-            <h2>VALD Force Plate Data</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <h2 style={{ margin: 0 }}>VALD Force Plate Data</h2>
+              {session.role !== 'player' ? <SyncForcePlatesButton /> : null}
+            </div>
             <div style={{ position: 'relative', width: '220px', height: '56px', overflow: 'hidden', flexShrink: 0 }}>
               <Image src="/vald.webp" alt="VALD" fill style={{ objectFit: 'cover', objectPosition: 'center' }} />
             </div>

@@ -1,0 +1,15 @@
+import pg from 'pg';
+const { Pool } = pg;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+const r = await pool.query("select school_code, synced_at, jsonb_array_length(snapshot->'players') as players from force_plate_snapshots order by synced_at desc limit 1");
+console.log('latest snapshot meta:', r.rows);
+const p = await pool.query("select snapshot->'players' as players from force_plate_snapshots order by synced_at desc limit 1");
+const players = p.rows?.[0]?.players ?? [];
+console.log('players count', players.length);
+const first = players[0] ?? null;
+console.log('first player name:', first?.playerName);
+const metrics = Array.isArray(first?.metricRows) ? first.metricRows : [];
+const names = [...new Set(metrics.map((m) => `${m.metricName}__${m.metricUnit}`))];
+console.log('first player metric types:', names.slice(0,40));
+console.log('first player metricRows count:', metrics.length);
+await pool.end();

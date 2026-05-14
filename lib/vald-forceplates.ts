@@ -27,6 +27,7 @@ type ValdTestMetric = {
 type ValdTest = {
   testId: string;
   profileId: string;
+  teamId?: string | null;
   testType: string;
   recordedDateUtc: string;
   weight?: number | null;
@@ -99,12 +100,22 @@ export type ValdSnapshot = {
   players: ValdPlayerSnapshot[];
 };
 
+type ValdSnapshotFetchOptions = {
+  trialFetchLimitOverride?: number;
+  multiPlayerTrialFetchLimitOverride?: number;
+  lookbackDaysOverride?: number;
+  testsWindowDaysOverride?: number;
+  recentTestLimitOverride?: number;
+  disableInMemoryCache?: boolean;
+};
+
 const DEFAULT_VALD_TOKEN_URL = 'https://auth.prd.vald.com/oauth/token';
 const DEFAULT_LOOKBACK_DAYS = 180;
 const DEFAULT_TESTS_WINDOW_DAYS = 30;
 const DEFAULT_SNAPSHOT_CACHE_TTL_MS = 300_000;
 const DEFAULT_TRIAL_FETCH_LIMIT = 4;
 const DEFAULT_MULTI_PLAYER_TRIAL_FETCH_LIMIT = 0;
+const DEFAULT_RECENT_TEST_LIMIT = 150;
 
 const regionBases: Record<ValdRegion, { profiles: string; forcedecks: string }> = {
   use: {
@@ -407,6 +418,7 @@ function coerceTests(payload: unknown): ValdTest[] {
       return {
         testId: String(data.testId ?? '').trim(),
         profileId: String(data.profileId ?? '').trim(),
+        teamId: String(data.teamId ?? data.teamID ?? data.teamid ?? '').trim() || null,
         testType: String(data.testType ?? '').trim() || 'Unknown',
         recordedDateUtc: String(data.recordedDateUtc ?? '').trim(),
         weight: Number.isFinite(Number(data.weight)) ? Number(data.weight) : null,
@@ -485,7 +497,10 @@ function toShortDate(value: string): string {
   return `${month}/${day}/${year}`;
 }
 
-export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promise<ValdSnapshot> {
+export async function fetchValdForceDecksSnapshot(
+  playerNames: string[],
+  options?: ValdSnapshotFetchOptions
+): Promise<ValdSnapshot> {
   const tenantId = String(process.env.VALD_FORCEDECKS_TENANT_ID ?? process.env.VALD_TEAM_ID ?? '').trim();
   if (!tenantId) {
     throw new Error('VALD_FORCEDECKS_TENANT_ID is not configured.');
@@ -496,14 +511,30 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     profiles: String(process.env.VALD_PROFILES_BASE_URL ?? baseDefault.profiles).trim() || baseDefault.profiles,
     forcedecks: String(process.env.VALD_FORCEDECKS_BASE_URL ?? baseDefault.forcedecks).trim() || baseDefault.forcedecks,
   };
-  const lookbackDays = Number(process.env.VALD_LOOKBACK_DAYS ?? DEFAULT_LOOKBACK_DAYS);
-  const testsWindowDays = Math.max(1, Number(process.env.VALD_TESTS_WINDOW_DAYS ?? DEFAULT_TESTS_WINDOW_DAYS));
+  const lookbackDaysBase = Number(process.env.VALD_LOOKBACK_DAYS ?? DEFAULT_LOOKBACK_DAYS);
+  const lookbackDays = Number.isFinite(Number(options?.lookbackDaysOverride))
+    ? Number(options?.lookbackDaysOverride)
+    : lookbackDaysBase;
+  const testsWindowDaysBase = Math.max(1, Number(process.env.VALD_TESTS_WINDOW_DAYS ?? DEFAULT_TESTS_WINDOW_DAYS));
+  const testsWindowDays = Number.isFinite(Number(options?.testsWindowDaysOverride))
+    ? Math.max(1, Number(options?.testsWindowDaysOverride))
+    : testsWindowDaysBase;
+  const recentTestLimitBase = Math.max(25, Number(process.env.VALD_RECENT_TEST_LIMIT ?? DEFAULT_RECENT_TEST_LIMIT));
+  const recentTestLimit = Number.isFinite(Number(options?.recentTestLimitOverride))
+    ? Math.max(25, Number(options?.recentTestLimitOverride))
+    : recentTestLimitBase;
   const snapshotCacheTtlMs = Math.max(0, Number(process.env.VALD_SNAPSHOT_CACHE_TTL_MS ?? DEFAULT_SNAPSHOT_CACHE_TTL_MS));
-  const trialFetchLimitConfigured = Math.max(0, Number(process.env.VALD_TRIAL_FETCH_LIMIT ?? DEFAULT_TRIAL_FETCH_LIMIT));
-  const multiPlayerTrialFetchLimit = Math.max(
+  const trialFetchLimitConfiguredBase = Math.max(0, Number(process.env.VALD_TRIAL_FETCH_LIMIT ?? DEFAULT_TRIAL_FETCH_LIMIT));
+  const trialFetchLimitConfigured = Number.isFinite(Number(options?.trialFetchLimitOverride))
+    ? Math.max(0, Number(options?.trialFetchLimitOverride))
+    : trialFetchLimitConfiguredBase;
+  const multiPlayerTrialFetchLimitBase = Math.max(
     0,
     Number(process.env.VALD_MULTI_PLAYER_TRIAL_FETCH_LIMIT ?? DEFAULT_MULTI_PLAYER_TRIAL_FETCH_LIMIT)
   );
+  const multiPlayerTrialFetchLimit = Number.isFinite(Number(options?.multiPlayerTrialFetchLimitOverride))
+    ? Math.max(0, Number(options?.multiPlayerTrialFetchLimitOverride))
+    : multiPlayerTrialFetchLimitBase;
   const effectiveTrialFetchLimit = playerNames.length > 1 ? multiPlayerTrialFetchLimit : trialFetchLimitConfigured;
   const cacheKey = snapshotCacheKey({
     tenantId,
@@ -511,8 +542,9 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     playerNames,
     lookbackDays: Number.isFinite(lookbackDays) ? lookbackDays : DEFAULT_LOOKBACK_DAYS,
   });
+  const useCache = options?.disableInMemoryCache ? false : true;
   const cached = snapshotCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (useCache && cached && cached.expiresAt > Date.now()) {
     console.info('[vald-forceplates] snapshot cache hit', {
       key: cacheKey,
       ttlMsRemaining: Math.max(0, cached.expiresAt - Date.now()),
@@ -528,10 +560,11 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     snapshotCacheTtlMs,
     lookbackDays: Number.isFinite(lookbackDays) ? lookbackDays : DEFAULT_LOOKBACK_DAYS,
     testsWindowDays,
+    recentTestLimit,
     playerCount: playerNames.length,
   });
   const existing = snapshotInflight.get(cacheKey);
-  if (existing) {
+  if (useCache && existing) {
     console.info('[vald-forceplates] snapshot inflight reuse', { key: cacheKey });
     return cloneSnapshot(await existing);
   }
@@ -558,7 +591,7 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     const profile = findBestProfileMatch(name, profiles, profilesByNorm);
     const playerTests = profile ? tests.filter((test) => test.profileId === profile.profileId) : [];
     const ordered = [...playerTests].sort((a, b) => b.recordedDateUtc.localeCompare(a.recordedDateUtc));
-    const recent = ordered.slice(0, 25);
+    const recent = ordered.slice(0, recentTestLimit);
 
     const series: ValdPlayerSeriesPoint[] = recent
       .map((test) => {
@@ -597,7 +630,7 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
       let trialMetrics: { aggregate: ValdTrialMetric[]; raw: ValdTrialMetricPoint[] } = { aggregate: [], raw: [] };
       if (idx < effectiveTrialFetchLimit) {
         try {
-          trialMetrics = await fetchTrialMetricsForTest(base.forcedecks, tenantId, test.testId);
+          trialMetrics = await fetchTrialMetricsForTest(base.forcedecks, String(test.teamId ?? '').trim() || tenantId, test.testId);
         } catch {
           trialMetrics = { aggregate: [], raw: [] };
         }
@@ -611,13 +644,23 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
       trialMetricsByTestId.set(test.testId, trialMetrics.aggregate);
       trialRawByTestId.set(test.testId, trialMetrics.raw);
 
-      let metrics = [test.parameter, ...(test.extendedParameters ?? [])].filter(Boolean) as ValdTestMetric[];
-      if (metrics.length === 0) {
-        metrics = trialMetrics.aggregate.map((row) => ({
-          resultId: row.resultId,
-          value: row.value,
-        }));
+      const baseMetrics = [test.parameter, ...(test.extendedParameters ?? [])].filter(Boolean) as ValdTestMetric[];
+      const trialAsMetrics = trialMetrics.aggregate.map((row) => ({
+        resultId: row.resultId,
+        value: row.value,
+      }));
+      const metricsById = new Map<number, ValdTestMetric>();
+      for (const metric of baseMetrics) {
+        if (!Number.isFinite(Number(metric.resultId)) || Number(metric.resultId) <= 0) continue;
+        metricsById.set(Number(metric.resultId), metric);
       }
+      for (const metric of trialAsMetrics) {
+        if (!Number.isFinite(Number(metric.resultId)) || Number(metric.resultId) <= 0) continue;
+        if (!metricsById.has(Number(metric.resultId))) {
+          metricsById.set(Number(metric.resultId), metric);
+        }
+      }
+      const metrics = Array.from(metricsById.values());
       for (const metric of metrics) {
         if (!Number.isFinite(Number(metric.value))) continue;
         const trialDef = trialMetricsByTestId.get(test.testId)?.find((row) => row.resultId === metric.resultId);
@@ -669,7 +712,7 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
       .sort((a, b) => b.samples - a.samples || a.metric.localeCompare(b.metric))
       .slice(0, 12);
 
-    const recentRows = recent.slice(0, 20).map((test) => {
+    const recentRows = recent.map((test) => {
       const primary = test.parameter;
       const trialMetrics = trialMetricsByTestId.get(test.testId) ?? [];
       const def = primary ? resultDefs.get(primary.resultId) : null;
@@ -723,7 +766,7 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     tenantId,
     players,
   };
-  if (snapshotCacheTtlMs > 0) {
+  if (useCache && snapshotCacheTtlMs > 0) {
     snapshotCache.set(cacheKey, {
       expiresAt: Date.now() + snapshotCacheTtlMs,
       value: cloneSnapshot(result),
@@ -743,10 +786,10 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
   return result;
   })();
 
-  snapshotInflight.set(cacheKey, run);
+  if (useCache) snapshotInflight.set(cacheKey, run);
   try {
     return cloneSnapshot(await run);
   } finally {
-    snapshotInflight.delete(cacheKey);
+    if (useCache) snapshotInflight.delete(cacheKey);
   }
 }

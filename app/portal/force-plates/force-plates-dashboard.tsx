@@ -204,6 +204,19 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
   const [pointMode, setPointMode] = useState<'average' | 'rep'>('rep');
   const player = useMemo(() => snapshot.players.find((entry) => entry.playerName === selectedPlayer) ?? null, [snapshot.players, selectedPlayer]);
 
+  useEffect(() => {
+    if (!snapshot.players.length) return;
+    const current = snapshot.players.find((entry) => entry.playerName === selectedPlayer) ?? null;
+    if (current && current.metricRows.length > 0) return;
+    const best =
+      snapshot.players.find((entry) => entry.metricRows.length > 0) ??
+      snapshot.players.find((entry) => entry.testsCount > 0) ??
+      snapshot.players[0];
+    if (best && best.playerName !== selectedPlayer) {
+      setSelectedPlayer(best.playerName);
+    }
+  }, [snapshot.players, selectedPlayer]);
+
   const metricOptions = useMemo(() => {
     if (!player) return [];
     const map = new Map<string, { name: string; unit: string; count: number }>();
@@ -235,6 +248,18 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
         metricKey(row.metricName, row.metricUnit) === activeMetric &&
         String(row.pointType ?? 'average') === desiredType
     );
+  }, [player, selectedMetricKey, defaultMetricKey, pointMode]);
+
+  useEffect(() => {
+    if (!player) return;
+    const activeMetric = selectedMetricKey || defaultMetricKey;
+    if (!activeMetric) return;
+    const hasRepRows = player.metricRows.some(
+      (row) => metricKey(row.metricName, row.metricUnit) === activeMetric && String(row.pointType ?? 'average') === 'rep'
+    );
+    if (!hasRepRows && pointMode === 'rep') {
+      setPointMode('average');
+    }
   }, [player, selectedMetricKey, defaultMetricKey, pointMode]);
 
   const [selectedTestType, setSelectedTestType] = useState('All');
@@ -620,8 +645,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
           </label>
           <label>
             Metric
-            <select value={selectedMetricKey} onChange={(event) => setSelectedMetricKey(event.target.value)}>
-              <option value="">Jump Height (Flight Time) in Inches (default)</option>
+            <select value={selectedMetricKey || defaultMetricKey || ''} onChange={(event) => setSelectedMetricKey(event.target.value)}>
               {metricOptions.map((option) => (
                 <option key={option.key} value={option.key}>
                   {option.label}
