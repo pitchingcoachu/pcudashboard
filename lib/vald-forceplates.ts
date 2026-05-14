@@ -101,6 +101,7 @@ export type ValdSnapshot = {
 
 const DEFAULT_VALD_TOKEN_URL = 'https://auth.prd.vald.com/oauth/token';
 const DEFAULT_LOOKBACK_DAYS = 180;
+const DEFAULT_TESTS_WINDOW_DAYS = 30;
 const DEFAULT_SNAPSHOT_CACHE_TTL_MS = 300_000;
 const DEFAULT_TRIAL_FETCH_LIMIT = 4;
 const DEFAULT_MULTI_PLAYER_TRIAL_FETCH_LIMIT = 0;
@@ -419,7 +420,8 @@ function coerceTests(payload: unknown): ValdTest[] {
 async function fetchAllTestsWindowed(
   baseUrl: string,
   tenantId: string,
-  modifiedFromUtc: string
+  modifiedFromUtc: string,
+  windowDays: number
 ): Promise<unknown[]> {
   const start = new Date(modifiedFromUtc);
   const now = new Date();
@@ -428,7 +430,7 @@ async function fetchAllTestsWindowed(
   }
   const all: unknown[] = [];
   const seen = new Set<string>();
-  const WINDOW_DAYS = 3;
+  const WINDOW_DAYS = Math.max(1, Number.isFinite(windowDays) ? Math.floor(windowDays) : DEFAULT_TESTS_WINDOW_DAYS);
   let cursor = modifiedFromUtc;
   while (new Date(cursor).getTime() < now.getTime()) {
     const next = addUtcDays(cursor, WINDOW_DAYS);
@@ -495,6 +497,7 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     forcedecks: String(process.env.VALD_FORCEDECKS_BASE_URL ?? baseDefault.forcedecks).trim() || baseDefault.forcedecks,
   };
   const lookbackDays = Number(process.env.VALD_LOOKBACK_DAYS ?? DEFAULT_LOOKBACK_DAYS);
+  const testsWindowDays = Math.max(1, Number(process.env.VALD_TESTS_WINDOW_DAYS ?? DEFAULT_TESTS_WINDOW_DAYS));
   const snapshotCacheTtlMs = Math.max(0, Number(process.env.VALD_SNAPSHOT_CACHE_TTL_MS ?? DEFAULT_SNAPSHOT_CACHE_TTL_MS));
   const trialFetchLimitConfigured = Math.max(0, Number(process.env.VALD_TRIAL_FETCH_LIMIT ?? DEFAULT_TRIAL_FETCH_LIMIT));
   const multiPlayerTrialFetchLimit = Math.max(
@@ -523,6 +526,8 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
     multiPlayerTrialFetchLimit,
     effectiveTrialFetchLimit,
     snapshotCacheTtlMs,
+    lookbackDays: Number.isFinite(lookbackDays) ? lookbackDays : DEFAULT_LOOKBACK_DAYS,
+    testsWindowDays,
     playerCount: playerNames.length,
   });
   const existing = snapshotInflight.get(cacheKey);
@@ -537,7 +542,7 @@ export async function fetchValdForceDecksSnapshot(playerNames: string[]): Promis
   const [profilesPayload, defsPayload, testsPayloadRaw] = await Promise.all([
     valdGetJson<unknown>(base.profiles, '/profiles', { tenantId }),
     valdGetJson<unknown>(base.forcedecks, '/resultdefinitions', {}),
-    fetchAllTestsWindowed(base.forcedecks, tenantId, modifiedFromUtc),
+    fetchAllTestsWindowed(base.forcedecks, tenantId, modifiedFromUtc, testsWindowDays),
   ]);
   const testsPayload: { tests: unknown[] } = { tests: testsPayloadRaw };
   const profiles = coerceProfiles(profilesPayload);
