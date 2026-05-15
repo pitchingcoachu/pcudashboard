@@ -20,7 +20,7 @@ function toFirstLast(value: string): string {
   return first && last ? `${first} ${last}` : raw;
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -53,6 +53,9 @@ export async function POST() {
   const syncWindowDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_WINDOW_DAYS ?? 60));
   await markForcePlateSyncRunStarted({ organizationId, schoolCode });
 
+  const url = new URL(request.url);
+  const forceFullSync = String(url.searchParams.get('full') ?? '').trim() === '1';
+
   const syncState = await getForcePlateSyncState({ organizationId, schoolCode });
   const nowMs = Date.now();
   const lastSyncedMs = syncState?.lastSyncedAt ? new Date(syncState.lastSyncedAt).getTime() : NaN;
@@ -60,10 +63,12 @@ export async function POST() {
     Number.isFinite(lastSyncedMs) && lastSyncedMs > 0
       ? Math.ceil((nowMs - lastSyncedMs) / 86_400_000) + incrementalPaddingDays
       : fullSyncLookbackDays;
-  const syncLookbackDays = Math.max(
-    incrementalPaddingDays + 1,
-    Math.min(maxIncrementalLookbackDays, derivedDays > 0 ? derivedDays : fullSyncLookbackDays)
-  );
+  const syncLookbackDays = forceFullSync
+    ? fullSyncLookbackDays
+    : Math.max(
+        incrementalPaddingDays + 1,
+        Math.min(maxIncrementalLookbackDays, derivedDays > 0 ? derivedDays : fullSyncLookbackDays)
+      );
 
   try {
   const snapshotPlayers: ValdSnapshot['players'] = [];
@@ -96,6 +101,7 @@ export async function POST() {
     playerCount: snapshot.players.length,
     fetchedAt: snapshot.fetchedAt,
     lookbackDaysUsed: syncLookbackDays,
+    forceFullSync,
   });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Force plate sync failed.';

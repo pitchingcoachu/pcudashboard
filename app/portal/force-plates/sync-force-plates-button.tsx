@@ -11,7 +11,7 @@ export default function SyncForcePlatesButton() {
     setSyncing(true);
     setNotice('');
     try {
-      const response = await fetch('/api/admin/force-plates/sync', {
+      const response = await fetch('/api/admin/force-plates/sync?full=1', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
       });

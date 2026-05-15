@@ -160,10 +160,18 @@ export async function upsertForcePlateSnapshotToNeon(args: {
         );
       }
 
-      await client.query(
-        `DELETE FROM force_plate_metric_rows WHERE organization_id = $1 AND school_code = $2 AND player_name_norm = $3`,
-        [args.organizationId, args.schoolCode, playerNorm]
-      );
+      const syncedTestIds = Array.from(testsById.keys());
+      if (syncedTestIds.length) {
+        await client.query(
+          `
+            DELETE FROM force_plate_metric_rows
+            WHERE organization_id = $1
+              AND school_code = $2
+              AND test_id = ANY($3::text[])
+          `,
+          [args.organizationId, args.schoolCode, syncedTestIds]
+        );
+      }
       for (const row of player.metricRows) {
         await client.query(
           `
