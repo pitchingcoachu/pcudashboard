@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/force-plates-sync",
+      "schedule": "*/30 * * * *"
+    }
+  ]
+}
