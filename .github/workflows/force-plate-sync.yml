@@ -1,0 +1,27 @@
+name: Force Plate Sync
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger force plate sync endpoint
+        env:
+          FORCE_PLATE_SYNC_URL: ${{ secrets.FORCE_PLATE_SYNC_URL }}
+          FORCE_PLATE_SYNC_CRON_KEY: ${{ secrets.FORCE_PLATE_SYNC_CRON_KEY }}
+        run: |
+          if [ -z "$FORCE_PLATE_SYNC_URL" ]; then
+            echo "FORCE_PLATE_SYNC_URL secret is missing"
+            exit 1
+          fi
+          if [ -z "$FORCE_PLATE_SYNC_CRON_KEY" ]; then
+            echo "FORCE_PLATE_SYNC_CRON_KEY secret is missing"
+            exit 1
+          fi
+          curl -fsS -X GET "$FORCE_PLATE_SYNC_URL" \
+            -H "Authorization: Bearer $FORCE_PLATE_SYNC_CRON_KEY" \
+            -H "Accept: application/json"

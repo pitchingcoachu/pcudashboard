@@ -22,7 +22,7 @@ export async function runForcePlateSync(args: {
   assignedCoachUserId?: number | null;
   forceFullSync?: boolean;
 }): Promise<{ ok: true; playerCount: number; fetchedAt: string; lookbackDaysUsed: number; forceFullSync: boolean } | { ok: false; error: string }> {
-  const syncTrialFetchLimit = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_TRIAL_FETCH_LIMIT ?? 100));
+  const syncTrialFetchLimit = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_TRIAL_FETCH_LIMIT ?? 25));
   const fullSyncLookbackDays = Math.max(30, Number(process.env.FORCE_PLATE_SYNC_LOOKBACK_DAYS ?? 3650));
   const incrementalPaddingDays = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_PADDING_DAYS ?? 2));
   const maxIncrementalLookbackDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_MAX_INCREMENTAL_LOOKBACK_DAYS ?? 180));
@@ -53,25 +53,15 @@ export async function runForcePlateSync(args: {
           Math.min(maxIncrementalLookbackDays, derivedDays > 0 ? derivedDays : fullSyncLookbackDays)
         );
 
-    const snapshotPlayers: ValdSnapshot['players'] = [];
-    let fetchedAt = new Date(0).toISOString();
-    for (const name of names) {
-      const one = await fetchValdForceDecksSnapshot([name], {
-        trialFetchLimitOverride: syncTrialFetchLimit,
-        lookbackDaysOverride: syncLookbackDays,
-        recentTestLimitOverride: syncRecentTestLimit,
-        testsWindowDaysOverride: syncWindowDays,
-        disableInMemoryCache: true,
-      });
-      const row = one.players[0];
-      if (row) snapshotPlayers.push(row);
-      if (String(one.fetchedAt) > fetchedAt) fetchedAt = one.fetchedAt;
-    }
-    const snapshot: ValdSnapshot = {
-      fetchedAt,
-      tenantId: '',
-      players: snapshotPlayers,
-    };
+    // Single bulk fetch per run is much faster and avoids serverless timeouts.
+    const snapshot = await fetchValdForceDecksSnapshot(names, {
+      trialFetchLimitOverride: syncTrialFetchLimit,
+      multiPlayerTrialFetchLimitOverride: syncTrialFetchLimit,
+      lookbackDaysOverride: syncLookbackDays,
+      recentTestLimitOverride: syncRecentTestLimit,
+      testsWindowDaysOverride: syncWindowDays,
+      disableInMemoryCache: true,
+    });
 
     const write = await saveForcePlateSnapshot({
       organizationId: args.organizationId,
