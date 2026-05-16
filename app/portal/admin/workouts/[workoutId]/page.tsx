@@ -56,6 +56,7 @@ export default async function EditWorkoutPage({ params, searchParams }: EditWork
         prefix: item.prefix ?? '',
         prescribedSets: item.prescribedSets ?? '',
         prescribedReps: item.prescribedReps ?? '',
+        prescribedLoad: item.prescribedLoad ?? '',
         notes: item.notes ?? '',
       },
     ])

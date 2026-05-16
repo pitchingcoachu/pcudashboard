@@ -36,7 +36,7 @@ export function AsyncWorkoutCreateForm({
   initialCategory?: string;
   initialDescription?: string;
   initialSelectedExerciseIds?: number[];
-  initialValuesByExerciseId?: Record<number, { prefix?: string; prescribedSets?: string; prescribedReps?: string; notes?: string }>;
+  initialValuesByExerciseId?: Record<number, { prefix?: string; prescribedSets?: string; prescribedReps?: string; prescribedLoad?: string; notes?: string }>;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -151,6 +151,7 @@ export function AsyncQuickExerciseForm({ categories }: { categories: ExerciseCat
           <option value="lbs">lbs</option>
           <option value="seconds">seconds</option>
           <option value="inches">inches</option>
+          <option value="velocity">Velocity (mph)</option>
           <option value="body_weight">Body Weight</option>
         </select>
       </label>

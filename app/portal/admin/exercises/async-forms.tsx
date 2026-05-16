@@ -115,6 +115,7 @@ export function AsyncExerciseCreateForm({ categories }: { categories: ExerciseCa
           <option value="lbs">lbs</option>
           <option value="seconds">seconds</option>
           <option value="inches">inches</option>
+          <option value="velocity">Velocity (mph)</option>
           <option value="body_weight">Body Weight</option>
         </select>
       </label>

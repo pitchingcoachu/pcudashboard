@@ -16,7 +16,7 @@ import { fetchValdForceDecksSnapshot } from '../../../../../lib/vald-forceplates
 type MetricOption = {
   key: string;
   label: string;
-  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'force_plate';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity' | 'force_plate';
   group: 'Weight Progress' | 'Speed' | 'Jump Height' | 'Exercises' | 'Force Plate';
 };
 

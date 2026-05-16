@@ -57,7 +57,7 @@ export async function runForcePlateSync(args: {
 
     const orderedNames = [...names].sort((a, b) => a.localeCompare(b));
     const startCursor = Math.max(0, Number(syncState?.playerCursor ?? 0)) % orderedNames.length;
-    const effectiveBatchSize = forceFullSync ? orderedNames.length : Math.min(playerBatchSize, orderedNames.length);
+    const effectiveBatchSize = Math.min(playerBatchSize, orderedNames.length);
     const batchNames: string[] = [];
     for (let i = 0; i < effectiveBatchSize; i += 1) {
       batchNames.push(orderedNames[(startCursor + i) % orderedNames.length]);
@@ -115,7 +115,7 @@ export async function runForcePlateSync(args: {
       schoolCode: args.schoolCode,
       ok: true,
       syncedAt: snapshot.fetchedAt,
-      nextPlayerCursor: forceFullSync ? 0 : progressedCursor,
+      nextPlayerCursor: progressedCursor,
     });
     return {
       ok: true,

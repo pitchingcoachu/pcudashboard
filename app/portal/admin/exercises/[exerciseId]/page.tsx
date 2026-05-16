@@ -91,6 +91,7 @@ export default async function EditExercisePage({ params, searchParams }: EditExe
               <option value="lbs">lbs</option>
               <option value="seconds">seconds</option>
               <option value="inches">inches</option>
+              <option value="velocity">Velocity (mph)</option>
               <option value="body_weight">Body Weight</option>
             </select>
           </label>

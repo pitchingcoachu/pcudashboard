@@ -55,6 +55,7 @@ export default async function AdminWorkoutsPage({ searchParams }: WorkoutPagePro
             prefix: item.prefix ?? '',
             prescribedSets: item.prescribedSets ?? '',
             prescribedReps: item.prescribedReps ?? '',
+            prescribedLoad: item.prescribedLoad ?? '',
             notes: item.notes ?? '',
           },
         ])

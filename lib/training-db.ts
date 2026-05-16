@@ -150,7 +150,7 @@ export type TrackedExerciseRow = {
   exerciseId: number;
   name: string;
   category: string;
-  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity';
 };
 
 export type ExerciseCategoryRow = {
@@ -163,7 +163,7 @@ export type ExerciseRow = {
   name: string;
   category: string;
   repMeasure: 'reps' | 'seconds' | 'distance';
-  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity';
   repsPerSide: boolean;
   description: string | null;
   instructionVideoUrl: string | null;
@@ -184,12 +184,13 @@ export type WorkoutEditorItem = {
   exerciseName: string;
   category: string;
   repMeasure: 'reps' | 'seconds' | 'distance';
-  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity';
   repsPerSide: boolean;
   sortOrder: number;
   prefix: string | null;
   prescribedSets: string | null;
   prescribedReps: string | null;
+  prescribedLoad: string | null;
   notes: string | null;
 };
 
@@ -235,7 +236,7 @@ export type WorkoutExerciseAssignment = {
   name: string;
   category: string;
   repMeasure: 'reps' | 'seconds' | 'distance';
-  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity';
   repsPerSide: boolean;
   prescribedSets: string | null;
   prescribedReps: string | null;
@@ -260,7 +261,7 @@ export type ProgramItemRow = {
   workoutExerciseNames: string[];
   workoutExercises: WorkoutExerciseAssignment[];
   repMeasure: 'reps' | 'seconds' | 'distance';
-  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity';
   repsPerSide: boolean;
   exerciseDescription: string | null;
   exerciseCoachingCues: string | null;
@@ -282,7 +283,7 @@ export type ExerciseLoadHistoryEntry = {
   loads: string[];
   prescribedReps: string | null;
   repMeasure: 'reps' | 'seconds' | 'distance';
-  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight';
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity';
   repsPerSide: boolean;
 };
 
@@ -533,13 +534,14 @@ function normalizeCategoryName(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-function normalizeTrackingType(value: string | null | undefined): 'lbs' | 'seconds' | 'inches' | 'body_weight' {
+function normalizeTrackingType(value: string | null | undefined): 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity' {
   const normalized = String(value ?? '')
     .trim()
     .toLowerCase();
   if (normalized === 'seconds') return 'seconds';
   if (normalized === 'inches') return 'inches';
   if (normalized === 'body_weight' || normalized === 'body weight' || normalized === 'bodyweight') return 'body_weight';
+  if (normalized === 'velocity') return 'velocity';
   return 'lbs';
 }
 
@@ -2470,6 +2472,7 @@ export async function getWorkoutByIdInOrganization(input: {
     prefix: string | null;
     prescribed_sets: string | null;
     prescribed_reps: string | null;
+    prescribed_load: string | null;
     notes: string | null;
   }>(
     `
@@ -2484,6 +2487,7 @@ export async function getWorkoutByIdInOrganization(input: {
         we.exercise_prefix AS prefix,
         we.prescribed_sets,
         we.prescribed_reps,
+        we.prescribed_load,
         we.notes
       FROM workout_exercises we
       JOIN exercise_library e ON e.id = we.exercise_id
@@ -2510,6 +2514,7 @@ export async function getWorkoutByIdInOrganization(input: {
       prefix: row.prefix,
       prescribedSets: row.prescribed_sets,
       prescribedReps: row.prescribed_reps,
+      prescribedLoad: row.prescribed_load,
       notes: row.notes,
     })),
   };

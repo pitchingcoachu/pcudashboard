@@ -82,16 +82,17 @@ function formatLoadNumber(value: number): string {
   return value.toFixed(1).replace(/\.0$/, '');
 }
 
-function trackingPlaceholder(trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight'): string {
+function trackingPlaceholder(trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity'): string {
   if (trackingType === 'body_weight') return 'completed';
   if (trackingType === 'seconds') return 'sec';
   if (trackingType === 'inches') return 'in';
+  if (trackingType === 'velocity') return 'mph';
   return 'lbs';
 }
 
 function formatMaxHistory(
   entries: ExerciseLoadHistoryEntry[],
-  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight'
+  trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity'
 ): { load: number; dayDate: string; repsText: string } | null {
   if (trackingType === 'body_weight') return null;
   let best: { load: number; dayDate: string; repsText: string } | null = null;

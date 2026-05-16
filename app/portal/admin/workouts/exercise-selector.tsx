@@ -6,7 +6,7 @@ import type { ExerciseRow } from '../../../../lib/training-db';
 type ExerciseSelectorProps = {
   exercises: ExerciseRow[];
   initialSelectedExerciseIds?: number[];
-  initialValuesByExerciseId?: Record<number, { prefix?: string; prescribedSets?: string; prescribedReps?: string; notes?: string }>;
+  initialValuesByExerciseId?: Record<number, { prefix?: string; prescribedSets?: string; prescribedReps?: string; prescribedLoad?: string; notes?: string }>;
 };
 
 function normalized(value: string): string {
@@ -40,6 +40,10 @@ function repsPlaceholder(exercise: ExerciseRow): string {
   if (exercise.repMeasure === 'seconds') return '20';
   if (exercise.repMeasure === 'distance') return '20 yd';
   return '8';
+}
+
+function isPlyoCategory(category: string): boolean {
+  return normalized(category).startsWith('plyo');
 }
 
 export default function WorkoutExerciseSelector({
@@ -122,6 +126,7 @@ export default function WorkoutExerciseSelector({
           <div className="portal-selected-stack">
             {selectedExercises.map((exercise, index) => {
               const defaults = initialValuesByExerciseId[exercise.id] ?? {};
+              const isPlyo = isPlyoCategory(exercise.category);
               return (
               <article
                 key={exercise.id}
@@ -186,15 +191,45 @@ export default function WorkoutExerciseSelector({
                     />
                     </label>
                     <label
+                      className="portal-small-field"
+                      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.25rem', width: isPlyo ? '160px' : '148px' }}
+                    >
+                    {isPlyo ? 'Plyo Ball' : 'Load'}
+                    {isPlyo ? (
+                      <select
+                        name={`prescribedLoad_${exercise.id}`}
+                        defaultValue={defaults.prescribedLoad ?? ''}
+                        style={{ width: '88px', minHeight: '30px', padding: '0.2rem 0.35rem' }}
+                      >
+                        <option value="">Select</option>
+                        <option value="3 oz">3 oz</option>
+                        <option value="4 oz">4 oz</option>
+                        <option value="5 oz">5 oz</option>
+                        <option value="6 oz">6 oz</option>
+                        <option value="7 oz">7 oz</option>
+                        <option value="9 oz">9 oz</option>
+                        <option value="16 oz">16 oz</option>
+                        <option value="32 oz">32 oz</option>
+                      </select>
+                    ) : (
+                      <input
+                        name={`prescribedLoad_${exercise.id}`}
+                        placeholder="185 lbs"
+                        defaultValue={defaults.prescribedLoad ?? ''}
+                        style={{ width: '88px', minHeight: '30px', padding: '0.2rem 0.35rem' }}
+                      />
+                    )}
+                    </label>
+                    <label
                       className="portal-small-field portal-small-field-notes"
-                      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.25rem', width: '430px' }}
+                      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.25rem', width: isPlyo ? '300px' : '430px' }}
                     >
                     Notes
                     <input
                       name={`notes_${exercise.id}`}
                       placeholder="Tempo, intent, rest..."
                       defaultValue={defaults.notes ?? ''}
-                      style={{ width: '360px', minHeight: '30px', padding: '0.2rem 0.35rem' }}
+                      style={{ width: isPlyo ? '230px' : '360px', minHeight: '30px', padding: '0.2rem 0.35rem' }}
                     />
                     </label>
                   </div>
