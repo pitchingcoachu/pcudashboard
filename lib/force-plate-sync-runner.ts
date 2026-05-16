@@ -1,5 +1,5 @@
 import { listPlayerChoicesByOrganization } from './training-db';
-import { fetchValdForceDecksSnapshot, type ValdSnapshot } from './vald-forceplates';
+import { fetchValdForceDecksSnapshot } from './vald-forceplates';
 import { saveForcePlateSnapshot } from './force-plate-cache-db';
 import {
   getForcePlateSyncState,
@@ -28,6 +28,7 @@ export async function runForcePlateSync(args: {
   const maxIncrementalLookbackDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_MAX_INCREMENTAL_LOOKBACK_DAYS ?? 180));
   const syncRecentTestLimit = Math.max(100, Number(process.env.FORCE_PLATE_SYNC_RECENT_TEST_LIMIT ?? 10000));
   const syncWindowDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_WINDOW_DAYS ?? 60));
+  const playerBatchSize = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_PLAYER_BATCH_SIZE ?? 6));
   const forceFullSync = Boolean(args.forceFullSync);
 
   await markForcePlateSyncRunStarted({ organizationId: args.organizationId, schoolCode: args.schoolCode });
@@ -53,8 +54,17 @@ export async function runForcePlateSync(args: {
           Math.min(maxIncrementalLookbackDays, derivedDays > 0 ? derivedDays : fullSyncLookbackDays)
         );
 
+    const orderedNames = [...names].sort((a, b) => a.localeCompare(b));
+    const startCursor = Math.max(0, Number(syncState?.playerCursor ?? 0)) % orderedNames.length;
+    const effectiveBatchSize = forceFullSync ? orderedNames.length : Math.min(playerBatchSize, orderedNames.length);
+    const batchNames: string[] = [];
+    for (let i = 0; i < effectiveBatchSize; i += 1) {
+      batchNames.push(orderedNames[(startCursor + i) % orderedNames.length]);
+    }
+    const nextCursor = forceFullSync ? 0 : (startCursor + effectiveBatchSize) % orderedNames.length;
+
     // Single bulk fetch per run is much faster and avoids serverless timeouts.
-    const snapshot = await fetchValdForceDecksSnapshot(names, {
+    const snapshot = await fetchValdForceDecksSnapshot(batchNames, {
       trialFetchLimitOverride: syncTrialFetchLimit,
       multiPlayerTrialFetchLimitOverride: syncTrialFetchLimit,
       lookbackDaysOverride: syncLookbackDays,
@@ -82,6 +92,7 @@ export async function runForcePlateSync(args: {
       schoolCode: args.schoolCode,
       ok: true,
       syncedAt: snapshot.fetchedAt,
+      nextPlayerCursor: nextCursor,
     });
     return {
       ok: true,

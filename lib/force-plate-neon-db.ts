@@ -72,10 +72,12 @@ async function ensureForcePlateNeonTables(): Promise<void> {
       last_run_completed_at TIMESTAMPTZ,
       last_status TEXT,
       last_error TEXT,
+      player_cursor INTEGER NOT NULL DEFAULT 0,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (organization_id, school_code)
     );
   `);
+  await pool.query(`ALTER TABLE force_plate_sync_state ADD COLUMN IF NOT EXISTS player_cursor INTEGER NOT NULL DEFAULT 0;`);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_force_plate_metric_rows_player
     ON force_plate_metric_rows (organization_id, school_code, player_name_norm);
@@ -95,6 +97,7 @@ export type ForcePlateSyncState = {
   lastRunCompletedAt: string | null;
   lastStatus: string | null;
   lastError: string | null;
+  playerCursor: number;
 };
 
 function parseIso(value: string | undefined): Date | null {
@@ -339,9 +342,10 @@ export async function getForcePlateSyncState(args: {
     last_run_completed_at: string | null;
     last_status: string | null;
     last_error: string | null;
+    player_cursor: number | null;
   }>(
     `
-      SELECT organization_id, school_code, last_synced_at, last_run_started_at, last_run_completed_at, last_status, last_error
+      SELECT organization_id, school_code, last_synced_at, last_run_started_at, last_run_completed_at, last_status, last_error, player_cursor
       FROM force_plate_sync_state
       WHERE organization_id = $1 AND school_code = $2
       LIMIT 1
@@ -358,6 +362,7 @@ export async function getForcePlateSyncState(args: {
     lastRunCompletedAt: row.last_run_completed_at,
     lastStatus: row.last_status,
     lastError: row.last_error,
+    playerCursor: Math.max(0, Number(row.player_cursor ?? 0)),
   };
 }
 
@@ -391,6 +396,7 @@ export async function markForcePlateSyncRunCompleted(args: {
   ok: boolean;
   syncedAt?: string | null;
   error?: string | null;
+  nextPlayerCursor?: number;
 }): Promise<void> {
   if (!isDatabaseConfigured()) return;
   await ensureForcePlateNeonTables();
@@ -399,15 +405,16 @@ export async function markForcePlateSyncRunCompleted(args: {
   await pool.query(
     `
       INSERT INTO force_plate_sync_state (
-        organization_id, school_code, last_synced_at, last_run_started_at, last_run_completed_at, last_status, last_error, updated_at
+        organization_id, school_code, last_synced_at, last_run_started_at, last_run_completed_at, last_status, last_error, player_cursor, updated_at
       )
-      VALUES ($1, $2, $3, NOW(), NOW(), $4, $5, NOW())
+      VALUES ($1, $2, $3, NOW(), NOW(), $4, $5, $6, NOW())
       ON CONFLICT (organization_id, school_code)
       DO UPDATE SET
         last_synced_at = CASE WHEN $4 = 'ok' THEN COALESCE($3, force_plate_sync_state.last_synced_at) ELSE force_plate_sync_state.last_synced_at END,
         last_run_completed_at = NOW(),
         last_status = $4,
         last_error = $5,
+        player_cursor = CASE WHEN $6 IS NULL THEN force_plate_sync_state.player_cursor ELSE $6 END,
         updated_at = NOW()
     `,
     [
@@ -416,6 +423,7 @@ export async function markForcePlateSyncRunCompleted(args: {
       syncedAt,
       args.ok ? 'ok' : 'error',
       args.ok ? null : String(args.error ?? 'Sync failed.'),
+      Number.isFinite(Number(args.nextPlayerCursor)) ? Math.max(0, Number(args.nextPlayerCursor)) : null,
     ]
   );
 }

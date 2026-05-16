@@ -24,4 +24,5 @@ jobs:
           fi
           curl -fsS -X GET "$FORCE_PLATE_SYNC_URL" \
             -H "Authorization: Bearer $FORCE_PLATE_SYNC_CRON_KEY" \
+            -H "x-cron-key: $FORCE_PLATE_SYNC_CRON_KEY" \
             -H "Accept: application/json"
