@@ -1,5 +1,5 @@
 import { listPlayerChoicesByOrganization } from './training-db';
-import { fetchValdForceDecksSnapshot } from './vald-forceplates';
+import { fetchValdForceDecksSnapshot, type ValdSnapshot } from './vald-forceplates';
 import { saveForcePlateSnapshot } from './force-plate-cache-db';
 import {
   getForcePlateSyncState,
@@ -28,7 +28,8 @@ export async function runForcePlateSync(args: {
   const maxIncrementalLookbackDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_MAX_INCREMENTAL_LOOKBACK_DAYS ?? 180));
   const syncRecentTestLimit = Math.max(100, Number(process.env.FORCE_PLATE_SYNC_RECENT_TEST_LIMIT ?? 10000));
   const syncWindowDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_WINDOW_DAYS ?? 60));
-  const playerBatchSize = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_PLAYER_BATCH_SIZE ?? 6));
+  const playerBatchSize = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_PLAYER_BATCH_SIZE ?? 2));
+  const maxRunSeconds = Math.max(20, Number(process.env.FORCE_PLATE_SYNC_MAX_RUN_SECONDS ?? 90));
   const forceFullSync = Boolean(args.forceFullSync);
 
   await markForcePlateSyncRunStarted({ organizationId: args.organizationId, schoolCode: args.schoolCode });
@@ -61,17 +62,39 @@ export async function runForcePlateSync(args: {
     for (let i = 0; i < effectiveBatchSize; i += 1) {
       batchNames.push(orderedNames[(startCursor + i) % orderedNames.length]);
     }
-    const nextCursor = forceFullSync ? 0 : (startCursor + effectiveBatchSize) % orderedNames.length;
 
-    // Single bulk fetch per run is much faster and avoids serverless timeouts.
-    const snapshot = await fetchValdForceDecksSnapshot(batchNames, {
-      trialFetchLimitOverride: syncTrialFetchLimit,
-      multiPlayerTrialFetchLimitOverride: syncTrialFetchLimit,
-      lookbackDaysOverride: syncLookbackDays,
-      recentTestLimitOverride: syncRecentTestLimit,
-      testsWindowDaysOverride: syncWindowDays,
-      disableInMemoryCache: true,
-    });
+    const deadlineMs = Date.now() + maxRunSeconds * 1000;
+    const snapshotPlayers: ValdSnapshot['players'] = [];
+    let fetchedAt = new Date(0).toISOString();
+    let processed = 0;
+    for (const name of batchNames) {
+      if (Date.now() >= deadlineMs) break;
+      try {
+        const one = await fetchValdForceDecksSnapshot([name], {
+          trialFetchLimitOverride: syncTrialFetchLimit,
+          lookbackDaysOverride: syncLookbackDays,
+          recentTestLimitOverride: syncRecentTestLimit,
+          testsWindowDaysOverride: syncWindowDays,
+          disableInMemoryCache: true,
+        });
+        const row = one.players[0];
+        if (row) snapshotPlayers.push(row);
+        if (String(one.fetchedAt) > fetchedAt) fetchedAt = one.fetchedAt;
+      } catch (error) {
+        console.error('[force-plate-sync] player sync failed', {
+          name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        processed += 1;
+      }
+    }
+    const snapshot: ValdSnapshot = {
+      fetchedAt: fetchedAt === new Date(0).toISOString() ? new Date().toISOString() : fetchedAt,
+      tenantId: '',
+      players: snapshotPlayers,
+    };
+    const progressedCursor = (startCursor + Math.max(1, processed)) % orderedNames.length;
 
     const write = await saveForcePlateSnapshot({
       organizationId: args.organizationId,
@@ -92,7 +115,7 @@ export async function runForcePlateSync(args: {
       schoolCode: args.schoolCode,
       ok: true,
       syncedAt: snapshot.fetchedAt,
-      nextPlayerCursor: nextCursor,
+      nextPlayerCursor: forceFullSync ? 0 : progressedCursor,
     });
     return {
       ok: true,
