@@ -90,6 +90,10 @@ function trackingPlaceholder(trackingType: 'lbs' | 'seconds' | 'inches' | 'body_
   return 'lbs';
 }
 
+function isPlyoCategory(value: string | null | undefined): boolean {
+  return String(value ?? '').trim().toLowerCase().startsWith('plyo');
+}
+
 function formatMaxHistory(
   entries: ExerciseLoadHistoryEntry[],
   trackingType: 'lbs' | 'seconds' | 'inches' | 'body_weight' | 'velocity'
@@ -328,6 +332,11 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                         {exercise.prescribedSets ?? '-'} x{' '}
                         {formatRepTarget(exercise.repMeasure, exercise.repsPerSide, exercise.prescribedReps)}
                       </p>
+                      {isPlyoCategory(exercise.category) && String(exercise.prescribedLoad ?? '').trim() ? (
+                        <p className="portal-muted-text">
+                          <strong>Plyo Ball:</strong> {String(exercise.prescribedLoad ?? '').trim()}
+                        </p>
+                      ) : null}
                       {!isAssessmentWorkout && exercise.exerciseId && historyByExercise[exercise.exerciseId]?.length
                         ? (() => {
                             const maxEntry = formatMaxHistory(historyByExercise[exercise.exerciseId], exercise.trackingType);

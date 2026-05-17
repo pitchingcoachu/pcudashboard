@@ -111,6 +111,7 @@ function categoryBubbleStyle(category: string): CSSProperties {
   };
 }
 
+
 export default function PlayerCalendar({ playerId, initialItems, initialStartDate, initialEndDate }: PlayerCalendarProps) {
   const [view, setView] = useState<ViewMode>('day');
   const [anchorDate, setAnchorDate] = useState<string>(toIsoDate(new Date()));

@@ -240,6 +240,8 @@ export type WorkoutExerciseAssignment = {
   repsPerSide: boolean;
   prescribedSets: string | null;
   prescribedReps: string | null;
+  prescribedLoad: string | null;
+  notes: string | null;
   instructionVideoUrl: string | null;
   description: string | null;
   coachingCues: string | null;
@@ -3679,6 +3681,8 @@ export async function listProgramItemsForPlayerByDateRange(input: {
                 'repsPerSide', e2.reps_per_side,
                 'prescribedSets', we2.prescribed_sets,
                 'prescribedReps', we2.prescribed_reps,
+                'prescribedLoad', we2.prescribed_load,
+                'notes', we2.notes,
                 'instructionVideoUrl', e2.instruction_video_url,
                 'description', e2.description,
                 'coachingCues', e2.coaching_cues
@@ -3821,6 +3825,8 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
                 'repsPerSide', e2.reps_per_side,
                 'prescribedSets', we2.prescribed_sets,
                 'prescribedReps', we2.prescribed_reps,
+                'prescribedLoad', we2.prescribed_load,
+                'notes', we2.notes,
                 'instructionVideoUrl', e2.instruction_video_url,
                 'description', e2.description,
                 'coachingCues', e2.coaching_cues
@@ -4107,6 +4113,8 @@ export async function listExerciseLoadHistoryForPlayer(input: {
                   'exerciseId', e2.id,
                   'prescribedSets', we2.prescribed_sets,
                   'prescribedReps', we2.prescribed_reps,
+                  'prescribedLoad', we2.prescribed_load,
+                  'notes', we2.notes,
                   'repMeasure', e2.rep_measure,
                   'trackingType', e2.tracking_type,
                   'repsPerSide', e2.reps_per_side
@@ -4127,6 +4135,8 @@ export async function listExerciseLoadHistoryForPlayer(input: {
                   'exerciseId', e2.id,
                   'prescribedSets', we2.prescribed_sets,
                   'prescribedReps', we2.prescribed_reps,
+                  'prescribedLoad', we2.prescribed_load,
+                  'notes', we2.notes,
                   'repMeasure', e2.rep_measure,
                   'trackingType', e2.tracking_type,
                   'repsPerSide', e2.reps_per_side
@@ -4185,6 +4195,8 @@ export async function listExerciseLoadHistoryForPlayer(input: {
                   'exerciseId', e2.id,
                   'prescribedSets', we2.prescribed_sets,
                   'prescribedReps', we2.prescribed_reps,
+                  'prescribedLoad', we2.prescribed_load,
+                  'notes', we2.notes,
                   'repMeasure', e2.rep_measure,
                   'trackingType', e2.tracking_type,
                   'repsPerSide', e2.reps_per_side

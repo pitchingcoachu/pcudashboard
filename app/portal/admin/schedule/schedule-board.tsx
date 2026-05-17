@@ -269,6 +269,7 @@ function isBullpenWorkoutName(value: string): boolean {
   return value.trim().toLowerCase() === 'bullpen';
 }
 
+
 export default function ScheduleBoard({ players, workouts, schoolCode, schoolLogoSrc, schoolLogoAlt }: ScheduleBoardProps) {
   const [playerId, setPlayerId] = useState<number>(players[0]?.id ?? 0);
   const [playerQuery, setPlayerQuery] = useState(players[0]?.name ?? '');
