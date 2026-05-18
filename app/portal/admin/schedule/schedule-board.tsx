@@ -8,7 +8,7 @@ import WorkoutLogModal from '../../components/workout-log-modal';
 
 type PlayerChoice = { id: number; name: string };
 type WorkoutChoice = { id: number; name: string; exerciseCount: number; category: string };
-type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'throwing' | 'bullpens' | 'velocity';
+type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
 type ThrowingBuilderMode = 'month' | 'weeks';
 type ThrowingCalendarView = 'day' | 'week' | 'month';
 type BuilderMode = 'schedule' | 'template';
@@ -79,6 +79,7 @@ type TemplateDraftItem = {
 type ScheduleBoardProps = {
   players: PlayerChoice[];
   workouts: WorkoutChoice[];
+  exercises: Array<{ id: number; name: string; category: string; instructionVideoUrl: string | null }>;
   schoolCode: string;
   schoolLogoSrc: string | null;
   schoolLogoAlt: string;
@@ -270,8 +271,20 @@ function isBullpenWorkoutName(value: string): boolean {
   return value.trim().toLowerCase() === 'bullpen';
 }
 
+function isVelocityWorkoutName(value: string): boolean {
+  return value.trim().toLowerCase() === 'velocity plan';
+}
+function isDrillsWorkoutName(value: string): boolean {
+  return value.trim().toLowerCase() === 'throwing drills';
+}
 
-export default function ScheduleBoard({ players, workouts, schoolCode, schoolLogoSrc, schoolLogoAlt }: ScheduleBoardProps) {
+
+function isDrillEligibleCategory(category: string): boolean {
+  const value = String(category ?? '').trim().toLowerCase();
+  return value.includes('plyo') || value.includes('throw') || (value.includes('medicine') && value.includes('ball'));
+}
+
+export default function ScheduleBoard({ players, workouts, exercises, schoolCode, schoolLogoSrc, schoolLogoAlt }: ScheduleBoardProps) {
   const [playerId, setPlayerId] = useState<number>(players[0]?.id ?? 0);
   const [playerQuery, setPlayerQuery] = useState(players[0]?.name ?? '');
   const [isMobileSchedule, setIsMobileSchedule] = useState(false);
@@ -327,6 +340,18 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
   const [velocityTemplates, setVelocityTemplates] = useState<BullpenTemplate[]>([]);
   const [selectedVelocityTemplateId, setSelectedVelocityTemplateId] = useState<string>('');
   const [visibleVelocityTemplateIds, setVisibleVelocityTemplateIds] = useState<string[]>([]);
+  const [drillsRowCount, setDrillsRowCount] = useState<number>(4);
+  const [drillsRows, setDrillsRows] = useState<Array<{ drill: string; sets: string; reps: string; weight: string; notes: string }>>(
+    Array.from({ length: 4 }, () => ({ drill: '', sets: '', reps: '', weight: '', notes: '' }))
+  );
+  const [drillExerciseOptions, setDrillExerciseOptions] = useState<Array<{ id: number; name: string; category: string; instructionVideoUrl: string | null }>>(
+    exercises.filter((exercise) => isDrillEligibleCategory(exercise.category))
+  );
+  const [newDrillName, setNewDrillName] = useState('');
+  const [newDrillCategory, setNewDrillCategory] = useState('Plyos');
+  const [newDrillVideoUrl, setNewDrillVideoUrl] = useState('');
+  const [newDrillSaveToLibrary, setNewDrillSaveToLibrary] = useState(true);
+  const [drillVideoPreview, setDrillVideoPreview] = useState<{ title: string; url: string } | null>(null);
   const [bullpenFillDrag, setBullpenFillDrag] = useState<{ sourceRow: number; sourceField: BullpenFieldKey; value: string } | null>(null);
   const [bullpenColumnDragIndex, setBullpenColumnDragIndex] = useState<number | null>(null);
   const bullpenFillTargetsRef = useRef<Set<string>>(new Set());
@@ -345,6 +370,16 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
     if (!q) return players;
     return players.filter((player) => player.name.toLowerCase().includes(q));
   }, [playerQuery, players]);
+
+  useEffect(() => {
+    setDrillExerciseOptions((previous) => {
+      const fromProps = exercises.filter((exercise) => isDrillEligibleCategory(exercise.category));
+      if (previous.length === 0) return fromProps;
+      const byName = new Map<string, { id: number; name: string; category: string; instructionVideoUrl: string | null }>();
+      for (const option of [...fromProps, ...previous]) byName.set(option.name.toLowerCase(), option);
+      return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+    });
+  }, [exercises]);
 
   useEffect(() => {
     const selected = players.find((player) => player.id === playerId);
@@ -396,7 +431,7 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
       setItems([]);
       return;
     }
-    if (view === 'throwing' || view === 'bullpens' || view === 'velocity') {
+    if (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'drills') {
       setItems([]);
       return;
     }
@@ -477,6 +512,7 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
           bullpenTemplates?: BullpenTemplate[];
           velocityState?: BullpenState;
           velocityTemplates?: BullpenTemplate[];
+          drillsState?: { rowCount?: number; rows?: Array<{ drill?: string; sets?: string; reps?: string; weight?: string; notes?: string }> };
           error?: string;
         };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load throwing calendar.');
@@ -591,6 +627,23 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
           setSelectedVelocityTemplateId('');
           setVisibleVelocityTemplateIds([]);
         }
+        if (payload.drillsState && typeof payload.drillsState === 'object') {
+          const nextCount = Math.max(1, Math.min(200, Number(payload.drillsState.rowCount ?? 4) || 4));
+          const source = Array.isArray(payload.drillsState.rows) ? payload.drillsState.rows : [];
+          const nextRows = source.slice(0, nextCount).map((row) => ({
+            drill: String(row?.drill ?? ''),
+            sets: String(row?.sets ?? ''),
+            reps: String(row?.reps ?? ''),
+            weight: String(row?.weight ?? ''),
+            notes: String(row?.notes ?? ''),
+          }));
+          while (nextRows.length < nextCount) nextRows.push({ drill: '', sets: '', reps: '', weight: '', notes: '' });
+          setDrillsRowCount(nextCount);
+          setDrillsRows(nextRows);
+        } else {
+          setDrillsRowCount(4);
+          setDrillsRows(Array.from({ length: 4 }, () => ({ drill: '', sets: '', reps: '', weight: '', notes: '' })));
+        }
         throwingStateLoadedRef.current = true;
       } catch (requestError) {
         if (cancelled) return;
@@ -611,6 +664,8 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
         setVelocityTemplates([]);
         setSelectedVelocityTemplateId('');
         setVisibleVelocityTemplateIds([]);
+        setDrillsRowCount(4);
+        setDrillsRows(Array.from({ length: 4 }, () => ({ drill: '', sets: '', reps: '', weight: '', notes: '' })));
         throwingStateLoadedRef.current = true;
       }
     };
@@ -643,11 +698,12 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
             visibleTemplateIds: visibleVelocityTemplateIds,
           },
           velocityTemplates,
+          drillsState: { rowCount: drillsRowCount, rows: drillsRows.slice(0, drillsRowCount) },
         }),
       }).catch(() => {});
     }, 350);
     return () => clearTimeout(handle);
-  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds]);
+  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, drillsRowCount, drillsRows]);
 
   useEffect(() => {
     if (!selectedTemplateId) {
@@ -734,6 +790,7 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
     if (view === 'cycle') return '3-Day Cycle';
     if (view === 'bullpens') return 'Bullpens';
     if (view === 'velocity') return 'Velocity';
+    if (view === 'drills') return 'Drills';
     if (view === 'throwing') {
       if (throwingBuilderMode === 'weeks') return 'Throwing Calendar · Week Builder';
       if (throwingCalendarView === 'day') {
@@ -914,7 +971,7 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
         date.setUTCMonth(date.getUTCMonth() + direction);
         setAnchorDate(toIsoDate(date));
       }
-    } else if (view === 'bullpens' || view === 'velocity') {
+    } else if (view === 'bullpens' || view === 'velocity' || view === 'drills') {
       return;
     }
     else if (view === 'week') setAnchorDate((prev) => addDays(prev, direction * 7));
@@ -1415,6 +1472,29 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
     minWidth: 0,
   };
 
+  const embedVideoUrl = (raw: string): string => {
+    try {
+      const parsed = new URL(raw);
+      if (parsed.hostname.includes('youtube.com')) {
+        const videoId = parsed.searchParams.get('v');
+        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
+        const shortMatch = parsed.pathname.match(/^\/shorts\/([^/?#]+)/i);
+        if (shortMatch?.[1]) return `https://www.youtube.com/embed/${shortMatch[1]}`;
+      }
+      if (parsed.hostname.includes('youtu.be')) {
+        const videoId = parsed.pathname.replace('/', '').trim();
+        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
+      }
+      if (parsed.hostname.includes('vimeo.com')) {
+        const id = parsed.pathname.split('/').filter(Boolean)[0];
+        if (id) return `https://player.vimeo.com/video/${id}`;
+      }
+      return raw;
+    } catch {
+      return raw;
+    }
+  };
+
   const parseIntensityValue = (raw: string): number | null => {
     const match = String(raw ?? '').match(/(\d+(?:\.\d+)?)/);
     if (!match) return null;
@@ -1698,6 +1778,14 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
                 }
                 if (isBullpenWorkoutName(item.itemName)) {
                   setView('bullpens');
+                  return;
+                }
+                if (isVelocityWorkoutName(item.itemName)) {
+                  setView('velocity');
+                  return;
+                }
+                if (isDrillsWorkoutName(item.itemName)) {
+                  setView('drills');
                   return;
                 }
                 setSelectedItem(item);
@@ -2281,7 +2369,7 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
               </Link>
             ) : null}
             <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
-              {(['day', 'week', 'month', 'cycle', 'throwing', 'bullpens', 'velocity'] as ViewMode[]).map((mode) => (
+              {(['day', 'week', 'month', 'cycle', 'throwing', 'bullpens', 'velocity', 'drills'] as ViewMode[]).map((mode) => (
                 <button
                   key={mode}
                   type="button"
@@ -2546,6 +2634,114 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
                 </div>
               </div>
             )}
+            {view === 'drills' && (
+              <div style={{ display: 'grid', gap: 8 }}>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  Rows
+                  <input
+                    className="portal-schedule-control"
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={drillsRowCount}
+                    onChange={(event) => {
+                      const nextCount = Math.max(1, Math.min(200, Number(event.target.value) || 4));
+                      setDrillsRowCount(nextCount);
+                      setDrillsRows((prev) => {
+                        const next = prev.slice(0, nextCount);
+                        while (next.length < nextCount) next.push({ drill: '', sets: '', reps: '', weight: '', notes: '' });
+                        return next;
+                      });
+                    }}
+                    style={{ width: 100 }}
+                  />
+                </label>
+                <div style={{ borderTop: '1px solid var(--calendar-grid-border, var(--border))', paddingTop: 8, display: 'grid', gap: 8 }}>
+                  <strong style={{ fontSize: '0.92rem' }}>Quick Add Drill Exercise</strong>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <input
+                      className="portal-schedule-control"
+                      placeholder="Exercise name"
+                      value={newDrillName}
+                      onChange={(event) => setNewDrillName(event.target.value)}
+                      style={{ minWidth: 220 }}
+                    />
+                    <select className="portal-schedule-control" value={newDrillCategory} onChange={(event) => setNewDrillCategory(event.target.value)}>
+                      <option value="Plyos">Plyos</option>
+                      <option value="Throwing">Throwing</option>
+                      <option value="Medicine Ball">Medicine Ball</option>
+                    </select>
+                    <input
+                      className="portal-schedule-control"
+                      placeholder="Video URL (optional)"
+                      value={newDrillVideoUrl}
+                      onChange={(event) => setNewDrillVideoUrl(event.target.value)}
+                      style={{ minWidth: 260 }}
+                    />
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <input type="checkbox" checked={newDrillSaveToLibrary} onChange={(event) => setNewDrillSaveToLibrary(event.target.checked)} />
+                      Add to Exercise Library
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={async () => {
+                        const name = newDrillName.trim();
+                        if (!name) {
+                          setError('Exercise name is required.');
+                          return;
+                        }
+                        if (newDrillSaveToLibrary) {
+                          const form = new FormData();
+                          form.set('name', name);
+                          form.set('category', newDrillCategory);
+                          form.set('repMeasure', 'reps');
+                          form.set('trackingType', 'body_weight');
+                          form.set('instructionVideoUrl', newDrillVideoUrl.trim());
+                          form.set('description', '');
+                          form.set('coachingCues', '');
+                          form.set('redirectTo', '/portal/admin/schedule');
+                          const response = await fetchWithTimeout('/api/admin/exercises', {
+                            method: 'POST',
+                            body: form,
+                            headers: { Accept: 'application/json', 'X-Requested-With': 'fetch' },
+                          });
+                          const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+                          if (!response.ok || payload.ok === false) {
+                            setError(payload.error ?? 'Failed to add exercise.');
+                            return;
+                          }
+                        }
+                        setDrillExerciseOptions((prev) => {
+                          const exists = prev.some((option) => option.name.trim().toLowerCase() === name.toLowerCase());
+                          if (exists) return prev;
+                          return [
+                            ...prev,
+                            {
+                              id: Number.MIN_SAFE_INTEGER + prev.length,
+                              name,
+                              category: newDrillCategory,
+                              instructionVideoUrl: newDrillVideoUrl.trim() || null,
+                            },
+                          ].sort((a, b) => a.name.localeCompare(b.name));
+                        });
+                        setDrillsRows((prev) => {
+                          const next = [...prev];
+                          const targetIndex = next.findIndex((row) => !row.drill.trim());
+                          if (targetIndex >= 0) next[targetIndex] = { ...next[targetIndex], drill: name };
+                          return next;
+                        });
+                        setNewDrillName('');
+                        setNewDrillVideoUrl('');
+                        setError('');
+                      }}
+                    >
+                      Add Drill
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -2611,7 +2807,7 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
         )}
       </div>
 
-      {isMobileSchedule && !(builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity')) ? (
+      {isMobileSchedule && !(builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'drills')) ? (
         <div style={{ marginBottom: '0.45rem' }}>
           <button
             type="button"
@@ -2623,7 +2819,7 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
         </div>
       ) : null}
       <div className="portal-schedule-layout">
-        {builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity') ? null : (!isMobileSchedule || !mobilePaletteCollapsed) ? (
+        {builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'drills') ? null : (!isMobileSchedule || !mobilePaletteCollapsed) ? (
         <aside className="portal-workout-palette">
           <div className="portal-schedule-view-switch" role="group" aria-label="Palette folder" style={{ marginBottom: 8, flexWrap: 'wrap', rowGap: 6 }}>
             <button
@@ -2771,12 +2967,12 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
           aria-busy={loading}
           data-throwing-export-root={builderMode === 'schedule' && view === 'throwing' ? 'true' : undefined}
           ref={builderMode === 'schedule' && view === 'throwing' ? throwingCalendarRef : undefined}
-          style={builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity') ? { gridColumn: '1 / -1', width: '100%' } : undefined}
+          style={builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'drills') ? { gridColumn: '1 / -1', width: '100%' } : undefined}
         >
           {builderMode === 'schedule' ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '0.45rem' }}>
               <h3 className="portal-schedule-period">{periodLabel}</h3>
-              {view !== 'cycle' && view !== 'bullpens' && view !== 'velocity' && !(view === 'throwing' && throwingBuilderMode === 'weeks') && (
+              {view !== 'cycle' && view !== 'bullpens' && view !== 'velocity' && view !== 'drills' && !(view === 'throwing' && throwingBuilderMode === 'weeks') && (
                 <div className="portal-schedule-nav">
                   <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)} aria-label="Previous period">
                     ←
@@ -2790,7 +2986,7 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
           ) : (
             <h3 className="portal-schedule-period">Template Calendar</h3>
           )}
-          {builderMode === 'schedule' && view !== 'day' && view !== 'cycle' && view !== 'throwing' && view !== 'bullpens' && view !== 'velocity' && (
+          {builderMode === 'schedule' && view !== 'day' && view !== 'cycle' && view !== 'throwing' && view !== 'bullpens' && view !== 'velocity' && view !== 'drills' && (
             <div
               data-schedule-weekdays="true"
               className={`portal-schedule-weekdays${view === 'week' ? ' is-week' : ''}`}
@@ -3012,6 +3208,106 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
                                 }}
                               />
                             </div>
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {builderMode === 'schedule' && view === 'drills' && (
+            <div className="portal-panel" style={{ minHeight: 'unset', padding: '0.75rem', borderRadius: 10, border: '1px solid var(--calendar-grid-border, var(--border))', background: 'rgba(0,0,0,0.16)' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+                  <thead>
+                    <tr>
+                      {['Drill', 'Sets', 'Reps', 'Weight', 'Notes'].map((label) => (
+                        <th key={label} style={{ textAlign: 'center', fontSize: '1.08rem', fontWeight: 800, padding: '0.48rem 0.4rem', borderBottom: '1px solid var(--calendar-grid-border, var(--border))', borderRight: '1px solid var(--calendar-grid-border, var(--border))' }}>
+                          {label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drillsRows.slice(0, drillsRowCount).map((row, idx) => (
+                      <tr key={`drill-row-${idx}`}>
+                        {(['drill', 'sets', 'reps', 'weight', 'notes'] as const).map((field) => (
+                          <td key={`${idx}-${field}`} style={{ padding: '0.22rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))' }}>
+                            {field === 'drill' ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <select
+                                  className="portal-schedule-control"
+                                  value={row.drill}
+                                  onChange={(event) =>
+                                    setDrillsRows((prev) => {
+                                      const next = [...prev];
+                                      const current = next[idx] ?? { drill: '', sets: '', reps: '', weight: '', notes: '' };
+                                      next[idx] = { ...current, drill: event.target.value };
+                                      return next;
+                                    })
+                                  }
+                                  style={{
+                                    width: '100%',
+                                    minWidth: 180,
+                                    minHeight: '46px',
+                                    padding: '0.5rem 0.55rem',
+                                    fontSize: '1.02rem',
+                                    fontWeight: 600,
+                                    textAlign: 'left',
+                                  }}
+                                >
+                                  <option value="">Select drill</option>
+                                  {drillExerciseOptions.map((option) => (
+                                    <option key={`drill-opt-${option.id}-${option.name}`} value={option.name}>
+                                      {option.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                {(() => {
+                                  const selected = drillExerciseOptions.find((option) => option.name === row.drill);
+                                  const videoUrl = String(selected?.instructionVideoUrl ?? '').trim();
+                                  if (!videoUrl) return null;
+                                  return (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost"
+                                      onClick={() =>
+                                        setDrillVideoPreview({
+                                          title: selected?.name ?? 'Drill Video',
+                                          url: embedVideoUrl(videoUrl),
+                                        })
+                                      }
+                                    >
+                                      Video
+                                    </button>
+                                  );
+                                })()}
+                              </div>
+                            ) : (
+                              <input
+                                className="portal-schedule-control"
+                                value={row[field]}
+                                onChange={(event) =>
+                                  setDrillsRows((prev) => {
+                                    const next = [...prev];
+                                    const current = next[idx] ?? { drill: '', sets: '', reps: '', weight: '', notes: '' };
+                                    next[idx] = { ...current, [field]: event.target.value };
+                                    return next;
+                                  })
+                                }
+                                style={{
+                                  width: '100%',
+                                  minWidth: field === 'notes' ? 260 : 110,
+                                  minHeight: '46px',
+                                  padding: '0.5rem 0.55rem',
+                                  fontSize: '1.02rem',
+                                  fontWeight: 600,
+                                  textAlign: field === 'notes' ? 'left' : 'center',
+                                }}
+                              />
+                            )}
                           </td>
                         ))}
                       </tr>
@@ -3282,6 +3578,14 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
                             setView('bullpens');
                             return;
                           }
+                          if (isVelocityWorkoutName(item.itemName)) {
+                            setView('velocity');
+                            return;
+                          }
+                          if (isDrillsWorkoutName(item.itemName)) {
+                            setView('drills');
+                            return;
+                          }
                           setSelectedItem(item);
                         }}
                       >
@@ -3489,6 +3793,37 @@ export default function ScheduleBoard({ players, workouts, schoolCode, schoolLog
           )}
         </div>
       )}
+      {drillVideoPreview ? (
+        <div
+          className="portal-modal-backdrop"
+          role="presentation"
+          onClick={() => setDrillVideoPreview(null)}
+        >
+          <article
+            className="portal-modal-card"
+            role="dialog"
+            aria-modal="true"
+            onClick={(event) => event.stopPropagation()}
+            style={{ maxWidth: '820px', width: '92vw' }}
+          >
+            <div className="portal-modal-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <h3 style={{ margin: 0 }}>{drillVideoPreview.title}</h3>
+              <button type="button" className="btn btn-ghost" onClick={() => setDrillVideoPreview(null)}>
+                Close
+              </button>
+            </div>
+            <div style={{ marginTop: 10, position: 'relative', width: '100%', paddingTop: '56.25%' }}>
+              <iframe
+                src={drillVideoPreview.url}
+                title={drillVideoPreview.title}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, borderRadius: 8 }}
+              />
+            </div>
+          </article>
+        </div>
+      ) : null}
     </div>
   );
 }

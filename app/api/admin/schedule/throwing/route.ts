@@ -26,6 +26,10 @@ type ScriptState = {
   selectedTemplateId: string;
   visibleTemplateIds: string[];
 };
+type DrillsState = {
+  rowCount: number;
+  rows: Array<{ drill: string; sets: string; reps: string; weight: string; notes: string }>;
+};
 
 const SHARED_PLAYER_ID = 0;
 const DEFAULT_COLUMNS = ['Pitch Type', 'Ball Type', 'Stretch/Windup', 'Location', 'Situation', 'Notes'];
@@ -34,6 +38,10 @@ const DEFAULT_SCRIPT_STATE: ScriptState = {
   current: { title: '', rowCount: 20, columns: [...DEFAULT_COLUMNS], rows: [] },
   selectedTemplateId: '',
   visibleTemplateIds: [],
+};
+const DEFAULT_DRILLS_STATE: DrillsState = {
+  rowCount: 4,
+  rows: [],
 };
 
 function normalizeColumns(raw: unknown): string[] {
@@ -123,11 +131,30 @@ function parseTemplatesObject(raw: unknown): Record<string, unknown> {
       throwingTemplates: raw,
       bullpen: DEFAULT_SCRIPT_STATE,
       velocity: DEFAULT_SCRIPT_STATE,
+      drills: DEFAULT_DRILLS_STATE,
       bullpenTemplates: [],
       velocityTemplates: [],
     };
   }
   return {};
+}
+function normalizeDrillsState(raw: unknown): DrillsState {
+  if (!raw || typeof raw !== 'object') return DEFAULT_DRILLS_STATE;
+  const data = raw as Record<string, unknown>;
+  const rowCount = Math.max(1, Math.min(200, Number(data.rowCount ?? 4) || 4));
+  const sourceRows = Array.isArray(data.rows) ? data.rows : [];
+  const rows = sourceRows.slice(0, rowCount).map((row) => {
+    const value = row && typeof row === 'object' ? (row as Record<string, unknown>) : {};
+    return {
+      drill: String(value.drill ?? ''),
+      sets: String(value.sets ?? ''),
+      reps: String(value.reps ?? ''),
+      weight: String(value.weight ?? ''),
+      notes: String(value.notes ?? ''),
+    };
+  });
+  while (rows.length < rowCount) rows.push({ drill: '', sets: '', reps: '', weight: '', notes: '' });
+  return { rowCount, rows };
 }
 
 export async function GET(request: Request) {
@@ -190,6 +217,7 @@ export async function GET(request: Request) {
       velocityState: velocityState.current.title || velocityState.selectedTemplateId || velocityState.visibleTemplateIds.length ? velocityState : legacyVelocity,
       bullpenTemplates,
       velocityTemplates,
+      drillsState: normalizeDrillsState(playerTemplatesObj.drills),
     },
     { organizationId, playerId }
   );
@@ -223,6 +251,7 @@ export async function POST(request: Request) {
         velocityState?: unknown;
         bullpenTemplates?: unknown[];
         velocityTemplates?: unknown[];
+        drillsState?: unknown;
       }
     | null;
   if (!body) return finish(400, { error: 'Invalid JSON body.' });
@@ -251,6 +280,7 @@ export async function POST(request: Request) {
 
   const nextBullpenState = normalizeScriptState(body.bullpenState ?? playerObj.bullpen);
   const nextVelocityState = normalizeScriptState(body.velocityState ?? playerObj.velocity);
+  const nextDrillsState = normalizeDrillsState(body.drillsState ?? playerObj.drills);
 
   nextBullpenState.visibleTemplateIds = nextBullpenState.visibleTemplateIds.filter((id) => bullpenTemplateIds.has(id));
   nextVelocityState.visibleTemplateIds = nextVelocityState.visibleTemplateIds.filter((id) => velocityTemplateIds.has(id));
@@ -265,6 +295,7 @@ export async function POST(request: Request) {
       throwingTemplates: Array.isArray(body.templates) ? body.templates : existingThrowingTemplates,
       bullpen: nextBullpenState,
       velocity: nextVelocityState,
+      drills: nextDrillsState,
     },
   });
   if (!savePlayer.ok) return finish(400, { error: savePlayer.error });

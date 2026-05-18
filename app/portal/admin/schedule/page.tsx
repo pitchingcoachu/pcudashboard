@@ -1,4 +1,4 @@
-import { listPlayerChoicesByOrganization, listWorkoutChoicesByOrganization, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
+import { listExercisesByOrganization, listPlayerChoicesByOrganization, listWorkoutChoicesByOrganization, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 import { requirePortalSession } from '../../../../lib/portal-session';
 import { canUseProgrammingData, getSchoolProductAccess, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { resolveSchoolBrand } from '../../../../lib/school-brand';
@@ -21,7 +21,7 @@ export default async function AdminSchedulePage() {
         createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
       })
     : 0;
-  const [playersResult, workoutsResult] = await Promise.allSettled([
+  const [playersResult, workoutsResult, exercisesResult] = await Promise.allSettled([
     programmingOrganizationId > 0
       ? listPlayerChoicesByOrganization({
           organizationId: programmingOrganizationId,
@@ -29,14 +29,24 @@ export default async function AdminSchedulePage() {
         })
       : Promise.resolve([]),
     programmingOrganizationId > 0 ? listWorkoutChoicesByOrganization(programmingOrganizationId) : Promise.resolve([]),
+    programmingOrganizationId > 0 ? listExercisesByOrganization(programmingOrganizationId) : Promise.resolve([]),
   ]);
   const players = playersResult.status === 'fulfilled' ? playersResult.value : [];
   const workoutChoices = workoutsResult.status === 'fulfilled' ? workoutsResult.value : [];
   const loadError =
-    playersResult.status === 'rejected' || workoutsResult.status === 'rejected'
+    playersResult.status === 'rejected' || workoutsResult.status === 'rejected' || exercisesResult.status === 'rejected'
       ? 'Schedule data could not be loaded right now. Please refresh and try again.'
       : '';
   const playerChoices = players.map((player) => ({ id: player.playerId, name: player.fullName }));
+  const exerciseChoices =
+    exercisesResult.status === 'fulfilled'
+      ? exercisesResult.value.map((exercise) => ({
+          id: exercise.id,
+          name: exercise.name,
+          category: exercise.category,
+          instructionVideoUrl: exercise.instructionVideoUrl,
+        }))
+      : [];
 
   return (
     <div className="portal-admin-stack">
@@ -60,6 +70,7 @@ export default async function AdminSchedulePage() {
         <ScheduleBoard
           players={playerChoices}
           workouts={workoutChoices}
+          exercises={exerciseChoices}
           schoolCode={programmingSchoolCode}
           schoolLogoSrc={brand.logoSrc}
           schoolLogoAlt={brand.logoAlt}
