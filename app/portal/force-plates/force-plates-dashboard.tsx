@@ -55,6 +55,11 @@ function toIsoDate(value: string): string {
   return `${year}-${month}-${day}`;
 }
 
+function chartDateKey(value: string): string {
+  const iso = toIsoDate(value);
+  return iso || String(value ?? '');
+}
+
 function normalizeName(value: string): string {
   const raw = String(value ?? '').trim();
   if (!raw) return '';
@@ -201,7 +206,7 @@ function computeJumpStats(
 export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot }) {
   const [activeTab, setActiveTab] = useState<'player' | 'leaderboard'>('player');
   const [selectedPlayer, setSelectedPlayer] = useState(snapshot.players[0]?.playerName ?? '');
-  const [pointMode, setPointMode] = useState<'average' | 'rep'>('rep');
+  const [pointMode, setPointMode] = useState<'average' | 'rep' | 'max'>('rep');
   const player = useMemo(() => snapshot.players.find((entry) => entry.playerName === selectedPlayer) ?? null, [snapshot.players, selectedPlayer]);
 
   useEffect(() => {
@@ -242,12 +247,13 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
   const metricRows = useMemo(() => {
     if (!player) return [];
     const activeMetric = selectedMetricKey || defaultMetricKey;
+    const matchingRows = player.metricRows.filter((row) => metricKey(row.metricName, row.metricUnit) === activeMetric);
+    if (pointMode === 'max') {
+      const repRows = matchingRows.filter((row) => String(row.pointType ?? 'average') === 'rep');
+      return repRows.length ? repRows : matchingRows.filter((row) => String(row.pointType ?? 'average') === 'average');
+    }
     const desiredType = pointMode === 'rep' ? 'rep' : 'average';
-    return player.metricRows.filter(
-      (row) =>
-        metricKey(row.metricName, row.metricUnit) === activeMetric &&
-        String(row.pointType ?? 'average') === desiredType
-    );
+    return matchingRows.filter((row) => String(row.pointType ?? 'average') === desiredType);
   }, [player, selectedMetricKey, defaultMetricKey, pointMode]);
 
   useEffect(() => {
@@ -286,7 +292,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
   const startDate = dateRangeByPlayer[selectedPlayer]?.start || playerDateBounds.min;
   const endDate = dateRangeByPlayer[selectedPlayer]?.end || playerDateBounds.max;
 
-  const filteredRows = useMemo(
+  const filteredRowsBase = useMemo(
     () =>
       metricRows.filter((row) => {
         if (!(selectedTestType === 'All' || row.testType === selectedTestType)) return false;
@@ -298,7 +304,24 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     [metricRows, selectedTestType, startDate, endDate]
   );
 
+  const filteredRows = useMemo(() => {
+    if (pointMode !== 'max') return filteredRowsBase;
+    const byDate = new Map<string, (typeof filteredRowsBase)[number]>();
+    for (const row of filteredRowsBase) {
+      const key = row.date;
+      const current = byDate.get(key);
+      if (!current || row.value > current.value) {
+        byDate.set(key, row);
+      }
+    }
+    return Array.from(byDate.values()).sort((a, b) => chartDateKey(a.date).localeCompare(chartDateKey(b.date)));
+  }, [filteredRowsBase, pointMode]);
+
   const pointRows = useMemo(() => [...filteredRows], [filteredRows]);
+  const chartDates = useMemo(
+    () => Array.from(new Set(pointRows.map((row) => row.date))).sort((a, b) => chartDateKey(a).localeCompare(chartDateKey(b))),
+    [pointRows]
+  );
   const metricTableRows = useMemo(() => {
     const groups = new Map<
       string,
@@ -337,15 +360,21 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
     if (pointRows.length < 1) return [];
     const values = pointRows.map((row) => row.value);
     const range = valueRange(values);
-    const uniqueDates = Array.from(new Set(pointRows.map((row) => row.date)));
-    const dateIndexMap = new Map(uniqueDates.map((date, index) => [date, index]));
-    return pointRows.map((row, index) => {
-      const dateIndex = dateIndexMap.get(row.date) ?? 0;
-      const x = 56 + (dateIndex / Math.max(1, uniqueDates.length - 1)) * 476;
-      const y = 196 - ((row.value - range.min) / (range.max - range.min)) * 156;
-      return { x, y, value: row.value, date: row.date, testType: row.testType };
+    const sortedRows = [...pointRows].sort((a, b) => {
+      const byDate = chartDateKey(a.date).localeCompare(chartDateKey(b.date));
+      if (byDate !== 0) return byDate;
+      const byType = a.testType.localeCompare(b.testType);
+      if (byType !== 0) return byType;
+      return a.value - b.value;
     });
-  }, [pointRows]);
+    const dateIndexMap = new Map(chartDates.map((date, index) => [date, index]));
+    return sortedRows.map((row) => {
+      const dateIndex = dateIndexMap.get(row.date) ?? 0;
+      const x = 56 + (dateIndex / Math.max(1, chartDates.length - 1)) * 476;
+      const y = 196 - ((row.value - range.min) / (range.max - range.min)) * 156;
+      return { x, y, value: row.value, date: row.date, testType: row.testType, metricUnit: row.metricUnit };
+    });
+  }, [pointRows, chartDates]);
   const seriesByTestType = useMemo(() => {
     const types = Array.from(new Set(chartPoints.map((point) => point.testType)));
     return types.map((type) => ({
@@ -655,9 +684,15 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
           </label>
           <label>
             Chart Points
-            <select value={pointMode} onChange={(event) => setPointMode(event.target.value === 'rep' ? 'rep' : 'average')}>
+            <select
+              value={pointMode}
+              onChange={(event) =>
+                setPointMode(event.target.value === 'rep' ? 'rep' : event.target.value === 'max' ? 'max' : 'average')
+              }
+            >
               <option value="average">Average by Test</option>
               <option value="rep">Individual Reps</option>
+              <option value="max">Max by Date</option>
             </select>
           </label>
           <label>
@@ -719,10 +754,26 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
         </div>
         {chartPoints.length > 0 ? (
           <div style={{ marginTop: 10, display: 'grid', gap: 12, gridTemplateColumns: selectedTestType === 'All' && seriesByTestType.length > 1 ? 'minmax(0, 1fr) 160px' : '1fr' }}>
-            <svg viewBox="0 0 560 220" width="100%" height="240" role="img" aria-label="Metric trend chart" className="portal-force-plate-chart">
-              <rect x="0" y="0" width="560" height="220" fill="rgba(2,6,23,0.4)" rx="10" />
+            <svg viewBox="0 0 560 232" width="100%" height="248" role="img" aria-label="Metric trend chart" className="portal-force-plate-chart">
+              <rect x="0" y="0" width="560" height="232" fill="rgba(2,6,23,0.4)" rx="10" />
               <line x1="56" y1="196" x2="532" y2="196" stroke="rgba(148,163,184,0.5)" strokeWidth="1" />
               <line x1="56" y1="20" x2="56" y2="196" stroke="rgba(148,163,184,0.5)" strokeWidth="1" />
+              {chartDates.map((date, index) => {
+                const x = 56 + (index / Math.max(1, chartDates.length - 1)) * 476;
+                return (
+                  <text
+                    key={`x-date-${date}-${index}`}
+                    className="portal-force-plate-chart-edge-date"
+                    x={x}
+                    y={208}
+                    fill="rgba(203,213,225,0.8)"
+                    fontSize="8"
+                    textAnchor="middle"
+                  >
+                    {date}
+                  </text>
+                );
+              })}
               {yTicks.map((tick, idx) => (
                 <g key={`y-tick-${idx}`}>
                   <line x1="56" y1={tick.y} x2="532" y2={tick.y} stroke="rgba(148,163,184,0.14)" strokeWidth="1" />
@@ -731,7 +782,7 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                   </text>
                 </g>
               ))}
-              <text className="portal-force-plate-chart-axis-label" x="294" y="214" fill="rgba(203,213,225,0.9)" fontSize="10" textAnchor="middle">
+              <text className="portal-force-plate-chart-axis-label" x="294" y="224" fill="rgba(203,213,225,0.9)" fontSize="10" textAnchor="middle">
                 Date
               </text>
               <text className="portal-force-plate-chart-axis-label" x="14" y="108" fill="rgba(203,213,225,0.9)" fontSize="10" textAnchor="middle" transform="rotate(-90, 14, 108)">
@@ -756,10 +807,9 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
               {hoverIndex !== null && chartPoints[hoverIndex] ? (
                 (() => {
                   const point = chartPoints[hoverIndex];
-                  const row = filteredRows[hoverIndex];
                   const tooltipX = Math.min(410, Math.max(80, point.x + 12));
                   const tooltipY = Math.max(18, point.y - 58);
-                  const valueText = `${point.value.toFixed(1)}${row?.metricUnit ? ` ${row.metricUnit}` : ''}`;
+                  const valueText = `${point.value.toFixed(1)}${point.metricUnit ? ` ${point.metricUnit}` : ''}`;
                   return (
                     <g>
                       <rect x={tooltipX} y={tooltipY} width="140" height="46" rx="7" fill="rgba(15,23,42,0.95)" stroke="rgba(59,130,246,0.5)" strokeWidth="1" />
@@ -775,18 +825,6 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                     </g>
                   );
                 })()
-              ) : null}
-              {chartPoints.length > 0 ? (
-                <>
-                  <text className="portal-force-plate-chart-edge-date" x={56} y={208} fill="rgba(203,213,225,0.8)" fontSize="9" textAnchor="start">
-                    {chartPoints[0]?.date ?? ''}
-                  </text>
-                  {(chartPoints[0]?.date ?? '') !== (chartPoints[chartPoints.length - 1]?.date ?? '') ? (
-                    <text className="portal-force-plate-chart-edge-date" x={532} y={208} fill="rgba(203,213,225,0.8)" fontSize="9" textAnchor="end">
-                      {chartPoints[chartPoints.length - 1]?.date ?? ''}
-                    </text>
-                  ) : null}
-                </>
               ) : null}
             </svg>
             {selectedTestType === 'All' && seriesByTestType.length > 1 ? (
