@@ -25,6 +25,7 @@ type ScriptState = {
   current: ScriptGrid;
   selectedTemplateId: string;
   visibleTemplateIds: string[];
+  notes?: string;
 };
 type DrillsState = {
   rowCount: number;
@@ -38,6 +39,7 @@ const DEFAULT_SCRIPT_STATE: ScriptState = {
   current: { title: '', rowCount: 20, columns: [...DEFAULT_COLUMNS], rows: [] },
   selectedTemplateId: '',
   visibleTemplateIds: [],
+  notes: '',
 };
 const DEFAULT_DRILLS_STATE: DrillsState = {
   rowCount: 4,
@@ -121,6 +123,7 @@ function normalizeScriptState(raw: unknown): ScriptState {
     },
     selectedTemplateId,
     visibleTemplateIds,
+    notes: String(data.notes ?? ''),
   };
 }
 

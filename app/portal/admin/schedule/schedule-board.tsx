@@ -42,6 +42,7 @@ type BullpenState = {
   selectedTemplateId: string;
   visibleTemplateIds?: string[];
   templates?: BullpenTemplate[];
+  notes?: string;
 };
 type BullpenFieldKey = number;
 type TemplateChoice = {
@@ -331,6 +332,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [bullpenTemplates, setBullpenTemplates] = useState<BullpenTemplate[]>([]);
   const [selectedBullpenTemplateId, setSelectedBullpenTemplateId] = useState<string>('');
   const [visibleBullpenTemplateIds, setVisibleBullpenTemplateIds] = useState<string[]>([]);
+  const [bullpenNotes, setBullpenNotes] = useState('');
   const [velocityCurrent, setVelocityCurrent] = useState<BullpenScript>({
     title: '',
     rowCount: 20,
@@ -340,6 +342,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [velocityTemplates, setVelocityTemplates] = useState<BullpenTemplate[]>([]);
   const [selectedVelocityTemplateId, setSelectedVelocityTemplateId] = useState<string>('');
   const [visibleVelocityTemplateIds, setVisibleVelocityTemplateIds] = useState<string[]>([]);
+  const [velocityNotes, setVelocityNotes] = useState('');
   const [drillsRowCount, setDrillsRowCount] = useState<number>(4);
   const [drillsRows, setDrillsRows] = useState<Array<{ drill: string; sets: string; reps: string; weight: string; notes: string }>>(
     Array.from({ length: 4 }, () => ({ drill: '', sets: '', reps: '', weight: '', notes: '' }))
@@ -500,6 +503,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
         setBullpenTemplates([]);
         setSelectedBullpenTemplateId('');
+        setBullpenNotes('');
         return;
       }
       try {
@@ -570,6 +574,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               })).filter((template) => template.id && template.name);
           setBullpenTemplates(nextBullpenTemplates);
           setSelectedBullpenTemplateId(String(bullpenState.selectedTemplateId ?? ''));
+          setBullpenNotes(String(bullpenState.notes ?? ''));
           const fromApiVisible = Array.isArray(bullpenState.visibleTemplateIds)
             ? bullpenState.visibleTemplateIds.map((value) => String(value ?? '').trim()).filter(Boolean)
             : [];
@@ -579,6 +584,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           setBullpenTemplates([]);
           setSelectedBullpenTemplateId('');
           setVisibleBullpenTemplateIds([]);
+          setBullpenNotes('');
         }
         const velocityState = payload.velocityState;
         if (velocityState && typeof velocityState === 'object') {
@@ -617,6 +623,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             .filter((template) => template.id && template.name);
           setVelocityTemplates(nextVelocityTemplates);
           setSelectedVelocityTemplateId(String(velocityState.selectedTemplateId ?? ''));
+          setVelocityNotes(String(velocityState.notes ?? ''));
           const fromApiVisible = Array.isArray(velocityState.visibleTemplateIds)
             ? velocityState.visibleTemplateIds.map((value) => String(value ?? '').trim()).filter(Boolean)
             : [];
@@ -626,6 +633,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           setVelocityTemplates([]);
           setSelectedVelocityTemplateId('');
           setVisibleVelocityTemplateIds([]);
+          setVelocityNotes('');
         }
         if (payload.drillsState && typeof payload.drillsState === 'object') {
           const nextCount = Math.max(1, Math.min(200, Number(payload.drillsState.rowCount ?? 4) || 4));
@@ -660,10 +668,12 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setBullpenTemplates([]);
         setSelectedBullpenTemplateId('');
         setVisibleBullpenTemplateIds([]);
+        setBullpenNotes('');
         setVelocityCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
         setVelocityTemplates([]);
         setSelectedVelocityTemplateId('');
         setVisibleVelocityTemplateIds([]);
+        setVelocityNotes('');
         setDrillsRowCount(4);
         setDrillsRows(Array.from({ length: 4 }, () => ({ drill: '', sets: '', reps: '', weight: '', notes: '' })));
         throwingStateLoadedRef.current = true;
@@ -690,12 +700,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             current: bullpenCurrent,
             selectedTemplateId: selectedBullpenTemplateId,
             visibleTemplateIds: visibleBullpenTemplateIds,
+            notes: bullpenNotes,
           },
           bullpenTemplates,
           velocityState: {
             current: velocityCurrent,
             selectedTemplateId: selectedVelocityTemplateId,
             visibleTemplateIds: visibleVelocityTemplateIds,
+            notes: velocityNotes,
           },
           velocityTemplates,
           drillsState: { rowCount: drillsRowCount, rows: drillsRows.slice(0, drillsRowCount) },
@@ -703,7 +715,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       }).catch(() => {});
     }, 350);
     return () => clearTimeout(handle);
-  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, drillsRowCount, drillsRows]);
+  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, bullpenNotes, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, velocityNotes, drillsRowCount, drillsRows]);
 
   useEffect(() => {
     if (!selectedTemplateId) {
@@ -2573,6 +2585,20 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 </button>
                 </div>
                 <div style={{ display: 'grid', gap: 6 }}>
+                  <label style={{ display: 'grid', gap: 4 }}>
+                    {view === 'velocity' ? 'Velocity Notes (player can see)' : 'Bullpen Notes (player can see)'}
+                    <textarea
+                      className="portal-schedule-control"
+                      rows={3}
+                      value={isVelocityView ? velocityNotes : bullpenNotes}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (isVelocityView) setVelocityNotes(value);
+                        else setBullpenNotes(value);
+                      }}
+                      placeholder="Write notes for player..."
+                    />
+                  </label>
                   <span style={{ fontSize: '0.8rem', opacity: 0.85 }}>Player can view templates</span>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     {activeTemplates.map((template) => {
@@ -3092,6 +3118,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 />
               </div>
               <div style={{ overflowX: 'auto' }}>
+                {(isVelocityView ? velocityNotes : bullpenNotes).trim() ? (
+                  <div className="portal-muted-text" style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>
+                    {(isVelocityView ? velocityNotes : bullpenNotes).trim()}
+                  </div>
+                ) : null}
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
                   <thead>
                     <tr>

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { useRouter } from 'next/navigation';
 import type { ProgramItemRow } from '../../../lib/training-db';
 import WorkoutLogModal from '../components/workout-log-modal';
 
@@ -12,6 +13,7 @@ type PlayerCalendarProps = {
   initialItems: ProgramItemRow[];
   initialStartDate: string;
   initialEndDate: string;
+  previewPlayerId?: number | null;
 };
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -111,8 +113,25 @@ function categoryBubbleStyle(category: string): CSSProperties {
   };
 }
 
+function isThrowingCalendarWorkoutName(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'throwing calendar' || normalized.includes('throwing calendar');
+}
 
-export default function PlayerCalendar({ playerId, initialItems, initialStartDate, initialEndDate }: PlayerCalendarProps) {
+function isBullpenWorkoutName(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'bullpen' || normalized === 'bullpens' || normalized.includes('bullpen');
+}
+
+function isVelocityWorkoutName(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'velocity plan' || normalized === 'velocity' || normalized.includes('velocity');
+}
+
+
+export default function PlayerCalendar({ playerId, initialItems, initialStartDate, initialEndDate, previewPlayerId = null }: PlayerCalendarProps) {
+  const router = useRouter();
+  const query = previewPlayerId && Number.isFinite(previewPlayerId) && previewPlayerId > 0 ? `?previewPlayerId=${previewPlayerId}` : '';
   const [view, setView] = useState<ViewMode>('day');
   const [anchorDate, setAnchorDate] = useState<string>(toIsoDate(new Date()));
   const [items, setItems] = useState<ProgramItemRow[]>(initialItems);
@@ -270,7 +289,21 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                 padding: '0.24rem 0.4rem',
                 ...categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout'),
               }}
-              onClick={() => setSelectedItem(item)}
+              onClick={() => {
+                if (isThrowingCalendarWorkoutName(item.itemName)) {
+                  router.push(`/portal/player/program/throwing${query}`);
+                  return;
+                }
+                if (isBullpenWorkoutName(item.itemName)) {
+                  router.push(`/portal/player/program/bullpens${query}`);
+                  return;
+                }
+                if (isVelocityWorkoutName(item.itemName)) {
+                  router.push(`/portal/player/program/velocity${query}`);
+                  return;
+                }
+                setSelectedItem(item);
+              }}
             >
               <strong>{item.itemName}</strong>
             </button>
@@ -403,7 +436,21 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                           padding: '0.28rem 0.42rem',
                           ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
                         }}
-                        onClick={() => setSelectedItem(item)}
+                        onClick={() => {
+                          if (isThrowingCalendarWorkoutName(item.itemName)) {
+                            router.push(`/portal/player/program/throwing${query}`);
+                            return;
+                          }
+                          if (isBullpenWorkoutName(item.itemName)) {
+                            router.push(`/portal/player/program/bullpens${query}`);
+                            return;
+                          }
+                          if (isVelocityWorkoutName(item.itemName)) {
+                            router.push(`/portal/player/program/velocity${query}`);
+                            return;
+                          }
+                          setSelectedItem(item);
+                        }}
                       >
                         <strong>{item.itemName}</strong>
                       </button>

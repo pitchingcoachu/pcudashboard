@@ -307,6 +307,15 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
                 <Link href="/portal/force-plates" className="btn btn-ghost">
                   Force Plate Data
                 </Link>
+                <Link href="/portal/player/program/throwing" className="btn btn-ghost">
+                  Throwing Calendar
+                </Link>
+                <Link href="/portal/player/program/bullpens" className="btn btn-ghost">
+                  Bullpens
+                </Link>
+                <Link href="/portal/player/program/velocity" className="btn btn-ghost">
+                  Velocity
+                </Link>
               </div>
             ) : null}
             {session.role === 'admin' || session.role === 'coach' ? (
@@ -339,6 +348,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           initialItems={items}
           initialStartDate={initialRange.startDate}
           initialEndDate={initialRange.endDate}
+          previewPlayerId={session.role === 'admin' || session.role === 'coach' ? effectivePlayerId : null}
         />
       </section>
     </div>
