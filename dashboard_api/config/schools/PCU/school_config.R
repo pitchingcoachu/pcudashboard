@@ -132,6 +132,15 @@ school_config <- list(
   "Hopkins, Weston",
   "Piercey, Branden",
   "George, Sam",
+  "Imboden, Jacob",
+  "Clark, Hunter",
+  "Massi, Jack",
+  "Luna, Cale",
+  "Licari, Hawk",
+  "Moreland, Eastin",
+  "Fritz, Dominik",
+  "Fink, Cooper",
+  "Twichel, Ryan",
   "Allison, Chris" 
     
   ),
@@ -260,7 +269,16 @@ school_config <- list(
   "Kaufman, Rylan",
   "Hopkins, Weston",
   "Piercey, Branden",
-  "George, Sam" 
+  "George, Sam",
+  "Imboden, Jacob",
+  "Clark, Hunter",
+  "Massi, Jack",
+  "Luna, Cale",
+  "Licari, Hawk",
+  "Moreland, Eastin",
+  "Fritz, Dominik",
+  "Fink, Cooper",
+  "Twichel, Ryan" 
   ),
   allowed_campers = character(0),
   colors = list(
