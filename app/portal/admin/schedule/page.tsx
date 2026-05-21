@@ -3,9 +3,17 @@ import { requirePortalSession } from '../../../../lib/portal-session';
 import { canUseProgrammingData, getSchoolProductAccess, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { resolveSchoolBrand } from '../../../../lib/school-brand';
 import ScheduleBoard from './schedule-board';
+import Link from 'next/link';
 
-export default async function AdminSchedulePage() {
+type AdminSchedulePageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function AdminSchedulePage({ searchParams }: AdminSchedulePageProps) {
   const session = await requirePortalSession();
+  const params = await searchParams;
+  const playerIdQueryRaw = typeof params.playerId === 'string' ? params.playerId : '';
+  const playerIdQuery = Number(playerIdQueryRaw);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const brand = resolveSchoolBrand(programmingSchoolCode);
   const schoolAccess =
@@ -65,6 +73,11 @@ export default async function AdminSchedulePage() {
       <div className="portal-admin-headline">
         <h2>Schedule Builder</h2>
         <p>Select a player, then use Workout Folder or Template Folder to drag onto the schedule.</p>
+        <div>
+          <Link href="/portal/admin/master-calendar" className="btn btn-ghost as-link">
+            Open Master Calendar
+          </Link>
+        </div>
       </div>
       <article className="portal-admin-card">
         <ScheduleBoard
@@ -74,6 +87,7 @@ export default async function AdminSchedulePage() {
           schoolCode={programmingSchoolCode}
           schoolLogoSrc={brand.logoSrc}
           schoolLogoAlt={brand.logoAlt}
+          initialPlayerId={Number.isFinite(playerIdQuery) && playerIdQuery > 0 ? playerIdQuery : undefined}
         />
       </article>
     </div>

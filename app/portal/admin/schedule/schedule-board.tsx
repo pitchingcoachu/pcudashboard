@@ -84,6 +84,7 @@ type ScheduleBoardProps = {
   schoolCode: string;
   schoolLogoSrc: string | null;
   schoolLogoAlt: string;
+  initialPlayerId?: number;
 };
 
 type CopiedAssignment = {
@@ -285,9 +286,17 @@ function isDrillEligibleCategory(category: string): boolean {
   return value.includes('plyo') || value.includes('throw') || (value.includes('medicine') && value.includes('ball'));
 }
 
-export default function ScheduleBoard({ players, workouts, exercises, schoolCode, schoolLogoSrc, schoolLogoAlt }: ScheduleBoardProps) {
-  const [playerId, setPlayerId] = useState<number>(players[0]?.id ?? 0);
-  const [playerQuery, setPlayerQuery] = useState(players[0]?.name ?? '');
+export default function ScheduleBoard({ players, workouts, exercises, schoolCode, schoolLogoSrc, schoolLogoAlt, initialPlayerId }: ScheduleBoardProps) {
+  const resolveInitialPlayer = () => {
+    if (initialPlayerId && players.some((player) => player.id === initialPlayerId)) {
+      const matched = players.find((player) => player.id === initialPlayerId)!;
+      return { id: matched.id, name: matched.name };
+    }
+    return { id: players[0]?.id ?? 0, name: players[0]?.name ?? '' };
+  };
+  const initialPlayer = resolveInitialPlayer();
+  const [playerId, setPlayerId] = useState<number>(initialPlayer.id);
+  const [playerQuery, setPlayerQuery] = useState(initialPlayer.name);
   const [isMobileSchedule, setIsMobileSchedule] = useState(false);
   const [view, setView] = useState<ViewMode>('month');
   const [mobilePaletteCollapsed, setMobilePaletteCollapsed] = useState(true);
@@ -355,6 +364,17 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [newDrillVideoUrl, setNewDrillVideoUrl] = useState('');
   const [newDrillSaveToLibrary, setNewDrillSaveToLibrary] = useState(true);
   const [drillVideoPreview, setDrillVideoPreview] = useState<{ title: string; url: string } | null>(null);
+
+  useEffect(() => {
+    if (!players.length) return;
+    if (players.some((player) => player.id === playerId)) return;
+    const next = initialPlayerId && players.some((player) => player.id === initialPlayerId)
+      ? players.find((player) => player.id === initialPlayerId) ?? players[0]
+      : players[0];
+    if (!next) return;
+    setPlayerId(next.id);
+    setPlayerQuery(next.name);
+  }, [players, playerId, initialPlayerId]);
   const [bullpenFillDrag, setBullpenFillDrag] = useState<{ sourceRow: number; sourceField: BullpenFieldKey; value: string } | null>(null);
   const [bullpenColumnDragIndex, setBullpenColumnDragIndex] = useState<number | null>(null);
   const bullpenFillTargetsRef = useRef<Set<string>>(new Set());

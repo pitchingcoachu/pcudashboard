@@ -173,9 +173,14 @@ export default async function AdminHomePage() {
           <article className="portal-admin-card">
             <h2>Schedule</h2>
             <p>Build calendars with drag/drop workout scheduling.</p>
-            <Link href="/portal/admin/schedule" className="btn btn-primary as-link">
-              Open Schedule
-            </Link>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Link href="/portal/admin/schedule" className="btn btn-primary as-link">
+                Open Schedule
+              </Link>
+              <Link href="/portal/admin/master-calendar" className="btn btn-ghost as-link">
+                Master Calendar
+              </Link>
+            </div>
           </article>
           <article className="portal-admin-card">
             <h2>Testing</h2>
