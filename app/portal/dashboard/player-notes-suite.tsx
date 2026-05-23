@@ -28,8 +28,14 @@ type AttachmentPreview = {
   mimeType: string;
   dataUrl: string;
 };
+type NoteAttachment = {
+  name: string;
+  mimeType: string;
+  dataUrl: string;
+};
 
 const DEFAULT_NOTE_CATEGORIES = ['Player Plan', 'Weight Room', 'Nutrition', 'Mental Training', 'Grips'];
+const MULTI_ATTACHMENT_MIME = 'application/x.pcu-note-attachments+json';
 
 function todayIsoDate(): string {
   const now = new Date();
@@ -124,6 +130,50 @@ function categoryBadgeStyle(category: string): React.CSSProperties {
   return { background: 'rgba(14,165,233,0.2)', color: '#7dd3fc' };
 }
 
+function parseNoteAttachments(note: Pick<PlayerPlanNote, 'attachmentName' | 'attachmentMimeType' | 'attachmentDataUrl'>): NoteAttachment[] {
+  const dataUrl = String(note.attachmentDataUrl ?? '').trim();
+  const mimeType = String(note.attachmentMimeType ?? '').trim();
+  const attachmentName = String(note.attachmentName ?? '').trim();
+  if (!dataUrl) return [];
+  if (mimeType === MULTI_ATTACHMENT_MIME || dataUrl.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(dataUrl) as Array<{ name?: string; mimeType?: string; dataUrl?: string }>;
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .map((entry) => ({
+          name: String(entry?.name ?? '').trim() || 'attachment',
+          mimeType: String(entry?.mimeType ?? '').trim(),
+          dataUrl: String(entry?.dataUrl ?? '').trim(),
+        }))
+        .filter((entry) => entry.dataUrl.length > 0);
+    } catch {
+      return [];
+    }
+  }
+  return [{ name: attachmentName || 'attachment', mimeType, dataUrl }];
+}
+
+function encodeAttachmentsForApi(files: NoteAttachment[]): {
+  attachmentName: string;
+  attachmentMimeType: string;
+  attachmentDataUrl: string;
+} {
+  if (!files.length) return { attachmentName: '', attachmentMimeType: '', attachmentDataUrl: '' };
+  if (files.length === 1) {
+    const only = files[0];
+    return {
+      attachmentName: only.name,
+      attachmentMimeType: only.mimeType,
+      attachmentDataUrl: only.dataUrl,
+    };
+  }
+  return {
+    attachmentName: `${files.length} attachments`,
+    attachmentMimeType: MULTI_ATTACHMENT_MIME,
+    attachmentDataUrl: JSON.stringify(files),
+  };
+}
+
 export default function PlayerNotesSuite() {
   const [dashboardPlayerOptions, setDashboardPlayerOptions] = useState<string[]>([]);
   const [linkedPlayers, setLinkedPlayers] = useState<LinkedPlayerOption[]>([]);
@@ -136,7 +186,7 @@ export default function PlayerNotesSuite() {
   const [noteDate, setNoteDate] = useState(todayIsoDate());
   const [noteCategory, setNoteCategory] = useState('Player Plan');
   const [noteText, setNoteText] = useState('');
-  const [noteFile, setNoteFile] = useState<File | null>(null);
+  const [noteFiles, setNoteFiles] = useState<File[]>([]);
   const [filterCategory, setFilterCategory] = useState('All');
   const [customCategories, setCustomCategories] = useState<string[]>([]);
   const [newCategoryDraft, setNewCategoryDraft] = useState('');
@@ -278,7 +328,14 @@ export default function PlayerNotesSuite() {
     if (!noteText.trim()) return;
     setMessage('');
     try {
-      const attachmentDataUrl = noteFile ? await readFileAsDataUrl(noteFile) : '';
+      const attachments: NoteAttachment[] = await Promise.all(
+        noteFiles.map(async (file) => ({
+          name: file.name,
+          mimeType: file.type,
+          dataUrl: await readFileAsDataUrl(file),
+        }))
+      );
+      const encoded = encodeAttachmentsForApi(attachments);
       const response = await fetch('/api/player/plan-notes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -289,9 +346,9 @@ export default function PlayerNotesSuite() {
           noteDate,
           category: noteCategory,
           noteText: noteText.trim(),
-          attachmentName: noteFile?.name ?? '',
-          attachmentMimeType: noteFile?.type ?? '',
-          attachmentDataUrl,
+          attachmentName: encoded.attachmentName,
+          attachmentMimeType: encoded.attachmentMimeType,
+          attachmentDataUrl: encoded.attachmentDataUrl,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string; notes?: PlayerPlanNote[] };
@@ -299,7 +356,7 @@ export default function PlayerNotesSuite() {
       setNotes(Array.isArray(payload.notes) ? payload.notes : []);
       setCustomCategories((current) => uniqueNames([...current, noteCategory]));
       setNoteText('');
-      setNoteFile(null);
+      setNoteFiles([]);
       setMessage('Note saved.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to save note.');
@@ -512,7 +569,8 @@ export default function PlayerNotesSuite() {
               <input
                 type="file"
                 accept="image/*,video/*,application/pdf"
-                onChange={(event) => setNoteFile(event.target.files && event.target.files[0] ? event.target.files[0] : null)}
+                multiple
+                onChange={(event) => setNoteFiles(event.target.files ? Array.from(event.target.files) : [])}
               />
             </label>
             <label className="portal-inline-filter" style={{ marginTop: 8 }}>
@@ -531,7 +589,11 @@ export default function PlayerNotesSuite() {
             </div>
             {!selectedPlayerName.trim() ? <p className="portal-muted-text" style={{ margin: 0 }}>Select a player to save notes.</p> : null}
             {selectedPlayerName === 'All' ? <p className="portal-muted-text" style={{ margin: 0 }}>Select a specific player to save notes.</p> : null}
-            {noteFile ? <p className="portal-muted-text" style={{ margin: 0 }}>{`Attached: ${noteFile.name}`}</p> : null}
+            {noteFiles.length > 0 ? (
+              <div className="portal-muted-text" style={{ margin: 0 }}>
+                {noteFiles.map((file) => file.name).join(', ')}
+              </div>
+            ) : null}
             {message ? <p className={message.includes('Failed') || message.includes('Unauthorized') ? 'auth-error' : 'auth-message'}>{message}</p> : null}
           </article>
 
@@ -582,20 +644,19 @@ export default function PlayerNotesSuite() {
                                 {note.category}
                               </span>
                             </div>
-                            {note.attachmentDataUrl ? (
-                              <button
-                                type="button"
-                                className="btn btn-ghost"
-                                onClick={() =>
-                                  setAttachmentPreview({
-                                    name: note.attachmentName ?? 'attachment',
-                                    mimeType: note.attachmentMimeType ?? '',
-                                    dataUrl: note.attachmentDataUrl ?? '',
-                                  })
-                                }
-                              >
-                                Open Attachment
-                              </button>
+                            {parseNoteAttachments(note).length > 0 ? (
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                {parseNoteAttachments(note).map((attachment, idx) => (
+                                  <button
+                                    key={`att-${note.id}-${idx}`}
+                                    type="button"
+                                    className="btn btn-ghost"
+                                    onClick={() => setAttachmentPreview(attachment)}
+                                  >
+                                    {parseNoteAttachments(note).length > 1 ? `Attachment ${idx + 1}` : 'Open Attachment'}
+                                  </button>
+                                ))}
+                              </div>
                             ) : null}
                           </div>
                           {editingNoteId === note.id ? (

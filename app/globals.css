@@ -15,6 +15,49 @@
   --portal-fastball-color: #ffffff;
 }
 
+/* Biomechanics suite must always keep full desktop header/nav visible. */
+body.biomechanics-suite-active .portal-header {
+  display: grid !important;
+  grid-template-columns: minmax(210px, 1fr) auto minmax(280px, 1fr) !important;
+  align-items: center !important;
+}
+
+body.biomechanics-suite-active .portal-header-center {
+  display: flex !important;
+  justify-content: center !important;
+}
+
+body.biomechanics-suite-active .portal-header-right {
+  display: inline-flex !important;
+  justify-self: end !important;
+  align-items: center !important;
+  width: auto !important;
+  gap: 0.6rem !important;
+}
+
+body.biomechanics-suite-active .portal-header-right .portal-user-meta {
+  display: grid !important;
+}
+
+body.biomechanics-suite-active .portal-header-right .portal-social-row,
+body.biomechanics-suite-active .portal-header-right .btn,
+body.biomechanics-suite-active .portal-header-right .portal-theme-toggle,
+body.biomechanics-suite-active .portal-header-right .portal-header-logo-link {
+  display: inline-flex !important;
+}
+
+body.biomechanics-suite-active .portal-nav {
+  display: inline-flex !important;
+}
+
+body.biomechanics-suite-active .portal-nav-mobile-wrap {
+  display: none !important;
+}
+
+body.biomechanics-suite-active .portal-dashboard-suite-tabs {
+  display: flex !important;
+}
+
 .stat-definition-tooltip {
   position: fixed;
   z-index: 3000;
@@ -1464,7 +1507,7 @@ main {
   }
 }
 
-@media (max-width: 780px) {
+@media (max-width: 520px) {
   .top-nav {
     position: sticky;
     top: 0.55rem;
@@ -4927,6 +4970,60 @@ body.theme-light .portal-force-plate-chart .portal-force-plate-chart-edge-date,
 body.theme-light .portal-force-plate-chart-legend-text {
   fill: #000000 !important;
   color: #000000 !important;
+}
+
+.biomechanics-file-input {
+  color: #e2e8f0;
+  font-size: 0.95rem;
+}
+
+.biomechanics-file-input::file-selector-button {
+  background: rgba(15, 23, 42, 0.95);
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 8px;
+  padding: 0.32rem 0.7rem;
+  margin-right: 0.55rem;
+  cursor: pointer;
+}
+
+.biomechanics-file-input:disabled::file-selector-button {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+body.biomechanics-suite-active .portal-header {
+  grid-template-columns: minmax(210px, 1fr) auto minmax(280px, 1fr) !important;
+}
+
+body.biomechanics-suite-active .portal-header-center {
+  display: flex !important;
+  justify-content: center !important;
+}
+
+body.biomechanics-suite-active .portal-header-right {
+  display: inline-flex !important;
+  width: auto !important;
+  gap: 0.6rem !important;
+}
+
+body.biomechanics-suite-active .portal-header-right .portal-user-meta,
+body.biomechanics-suite-active .portal-header-right .portal-social-row,
+body.biomechanics-suite-active .portal-header-right .btn,
+body.biomechanics-suite-active .portal-header-right .portal-theme-toggle {
+  display: inline-flex !important;
+}
+
+body.biomechanics-suite-active .portal-nav {
+  display: inline-flex !important;
+}
+
+body.biomechanics-suite-active .portal-nav-mobile-wrap {
+  display: none !important;
+}
+
+body.biomechanics-suite-active .portal-dashboard-suite-tabs {
+  display: flex !important;
 }
 
 .portal-chart-foot {

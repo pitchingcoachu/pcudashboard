@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import BiomechanicsSuite from './biomechanics-suite';
 import CatchingSuite from './catching-suite';
 import ComparisonToolSuite from './comparison-tool-suite';
 import CustomReportsSuite from './custom-reports-suite';
@@ -45,6 +46,7 @@ type SuiteName =
   | 'Catching'
   | 'Custom Reports'
   | 'Comparison Tool'
+  | 'Biomechanics'
   | 'Player Plans'
   | 'Player Notes'
   | 'Stuff+ Calculator';
@@ -67,6 +69,7 @@ const ALL_SUITE_NAMES: SuiteName[] = [
   'Catching',
   'Custom Reports',
   'Comparison Tool',
+  'Biomechanics',
   'Player Plans',
   'Player Notes',
   'Stuff+ Calculator',
@@ -148,6 +151,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
     Catching: suite === 'Catching',
     'Custom Reports': suite === 'Custom Reports',
     'Comparison Tool': suite === 'Comparison Tool',
+    'Biomechanics': suite === 'Biomechanics',
     'Player Plans': suite === 'Player Plans',
     'Player Notes': suite === 'Player Notes',
     'Stuff+ Calculator': suite === 'Stuff+ Calculator',
@@ -179,11 +183,12 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
     const base: SuiteName[] = ['Home', 'Pitching', 'Hitting'];
     if (!isPro) base.push('Catching');
     base.push('Custom Reports', 'Comparison Tool');
+    if (String(selectedSchoolCode || '').trim().toUpperCase() === 'PCU') base.push('Biomechanics');
     if (!isLeague) base.push('Player Plans');
     if (!isLeague && canAccessPlayerNotes) base.push('Player Notes');
     if (!isLeague) base.push('Stuff+ Calculator');
     return base;
-  }, [canAccessPlayerNotes, isLeague, isPro]);
+  }, [canAccessPlayerNotes, isLeague, isPro, selectedSchoolCode]);
 
   const activeSuite: SuiteName = suiteOptions.includes(suite) ? suite : 'Home';
   const showSuite = (name: SuiteName) => activeSuite === name;
@@ -486,6 +491,11 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       {mountedSuites['Comparison Tool'] ? (
         <div style={{ display: showSuite('Comparison Tool') ? 'block' : 'none' }}>
           <ComparisonToolSuite />
+        </div>
+      ) : null}
+      {mountedSuites.Biomechanics ? (
+        <div style={{ display: showSuite('Biomechanics') ? 'block' : 'none' }}>
+          <BiomechanicsSuite role={role} isActive={showSuite('Biomechanics')} />
         </div>
       ) : null}
       {!isLeague && mountedSuites['Player Plans'] ? (
