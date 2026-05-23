@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
 import type { PortalSession } from '../../../../lib/portal-session';
-import { loadRosterVectorsFromConfig } from '../../../../lib/dashboard-roster-config';
 import {
   getBiomechanicsSnapshot,
   saveAllPitchRows,
@@ -105,17 +104,6 @@ function normalizePcuPlayerName(lastFirstName: string): string {
 }
 
 async function fetchPcuPitchers(): Promise<string[]> {
-  const local = loadRosterVectorsFromConfig('PCU');
-  if (local?.allowedPitchers?.length) {
-    return Array.from(
-      new Set(
-        local.allowedPitchers
-          .map((name) => normalizePcuPlayerName(name))
-          .filter(Boolean)
-          .sort((a, b) => a.localeCompare(b))
-      )
-    );
-  }
   const apiBase = resolveDashboardApiBaseUrl();
   const url = new URL(`${apiBase}/v1/pitching/filters`);
   url.searchParams.set('school_code', 'PCU');
@@ -123,7 +111,7 @@ async function fetchPcuPitchers(): Promise<string[]> {
   const payload = (await response.json().catch(() => ({}))) as PitchingFiltersPayload;
   if (!response.ok) throw new Error(String(payload.error ?? payload.detail ?? 'Failed to load PCU pitcher list.'));
   const list = Array.isArray(payload.pitchers) ? payload.pitchers.map((v) => String(v ?? '').trim()).filter(Boolean) : [];
-  return Array.from(new Set(list));
+  return Array.from(new Set(list.map((name) => normalizePcuPlayerName(name)).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 }
 
 function applyPcuNameMatching(rows: Array<Record<string, unknown>>, pitchers: string[]): Array<Record<string, unknown>> {
