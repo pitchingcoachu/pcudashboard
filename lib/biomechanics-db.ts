@@ -761,7 +761,7 @@ export async function getBiomechanicsSnapshot(args: {
       strideLengthIn: strideLengthCm === null ? null : strideLengthCm / 2.54,
       strideDirectionIn: strideWidthCm === null ? null : strideWidthCm / 2.54,
     };
-  }).filter((row) => row.dateKey && row.nameNorm);
+  }).filter((row) => row.dateKey);
 
   const singleRows = pitchOptionsResult.rows.map((row) => {
     const sourceFileName = String(row.source_file_name ?? '').trim();
@@ -778,8 +778,9 @@ export async function getBiomechanicsSnapshot(args: {
     };
   });
 
-  const allGroups = new Map<string, Array<typeof allRows[number]>>();
-  for (const row of allRows) {
+  const allRowsForPitcherGrouping = allRows.filter((row) => row.nameNorm);
+  const allGroups = new Map<string, Array<typeof allRowsForPitcherGrouping[number]>>();
+  for (const row of allRowsForPitcherGrouping) {
     const key = `${row.nameNorm}|${row.dateKey}`;
     const arr = allGroups.get(key) ?? [];
     arr.push(row);

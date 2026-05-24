@@ -704,7 +704,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     unmatchedAllPitchRows: 0,
   });
   const [uploadMessage, setUploadMessage] = useState<string>('');
-  const [uploadPercent, setUploadPercent] = useState<number>(0);
+  const [uploadFilesDone, setUploadFilesDone] = useState<number>(0);
+  const [uploadFilesTotal, setUploadFilesTotal] = useState<number>(0);
   const [uploadPhase, setUploadPhase] = useState<'idle' | 'uploading' | 'processing'>('idle');
   const [allPitchInputKey, setAllPitchInputKey] = useState<number>(0);
   const [singlePitchInputKey, setSinglePitchInputKey] = useState<number>(0);
@@ -792,7 +793,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     setIsUploading(true);
     setError('');
     setUploadMessage('');
-    setUploadPercent(0);
+    setUploadFilesDone(0);
+    setUploadFilesTotal(files.length);
     setUploadPhase('uploading');
     try {
       const uploadBatch = (batch: File[]) => new Promise<{ error?: string; filesProcessed?: number; rowsInserted?: number }>((resolve, reject) => {
@@ -822,22 +824,17 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const picked = Array.from(files);
       let totalFilesProcessed = 0;
       let totalRowsInserted = 0;
-      const batches = uploadKind === 'single_pitch'
-        ? picked.map((file) => [file])
-        : [picked];
+      const batches = picked.map((file) => [file]);
 
       for (let i = 0; i < batches.length; i += 1) {
         const batch = batches[i] ?? [];
-        const progress = Math.round((i / Math.max(1, batches.length)) * 95);
-        setUploadPercent(Math.max(1, progress));
         setUploadPhase('uploading');
         const payload = await uploadBatch(batch);
         totalFilesProcessed += Number(payload.filesProcessed ?? batch.length);
         totalRowsInserted += Number(payload.rowsInserted ?? 0);
-        setUploadPercent(Math.round(((i + 1) / Math.max(1, batches.length)) * 95));
+        setUploadFilesDone(i + 1);
       }
       setUploadPhase('processing');
-      setUploadPercent(100);
       setUploadMessage(`Upload complete: ${totalFilesProcessed} file(s), ${totalRowsInserted} row(s) processed.`);
       if (uploadKind === 'all_pitches') setAllPitchInputKey((value) => value + 1);
       if (uploadKind === 'single_pitch') setSinglePitchInputKey((value) => value + 1);
@@ -847,6 +844,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     } finally {
       setIsUploading(false);
       setUploadPhase('idle');
+      setUploadFilesDone(0);
+      setUploadFilesTotal(0);
     }
   };
 
@@ -929,29 +928,10 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       {!error && uploadMessage ? <p style={{ margin: 0, color: '#86efac' }}>{uploadMessage}</p> : null}
       {isUploading ? (
         <p style={{ margin: 0, color: '#93c5fd' }}>
-          {uploadPhase === 'processing' ? 'Upload complete. Processing on server...' : 'Uploading CSV files...'}
+          {uploadPhase === 'processing'
+            ? `Processing on server... ${uploadFilesTotal}/${uploadFilesTotal}`
+            : `Uploading CSV files... ${uploadFilesDone}/${uploadFilesTotal}`}
         </p>
-      ) : null}
-      {isUploading ? (
-        <div style={{ display: 'grid', gap: 4 }}>
-          <div style={{ height: 10, borderRadius: 999, background: 'rgba(148,163,184,0.25)', overflow: 'hidden' }}>
-            <div
-              style={{
-                height: '100%',
-                width: `${uploadPercent}%`,
-                background:
-                  uploadPhase === 'processing'
-                    ? 'repeating-linear-gradient(90deg, #22d3ee, #22d3ee 14px, #34d399 14px, #34d399 28px)'
-                    : 'linear-gradient(90deg, #22d3ee, #34d399)',
-                backgroundSize: uploadPhase === 'processing' ? '40px 10px' : undefined,
-                transition: 'width 180ms ease',
-              }}
-            />
-          </div>
-          <p style={{ margin: 0, fontSize: 12, color: '#cbd5e1' }}>
-            {uploadPhase === 'processing' ? '95% (server processing...)' : `${uploadPercent}%`}
-          </p>
-        </div>
       ) : null}
       <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13 }}>
         Match Quality: {matchSummary.matchedAllPitchRows}/{matchSummary.totalAllPitchRows} pitches matched ({matchSummary.unmatchedAllPitchRows} unmatched all-pitch rows). Single-pitch files uploaded: {matchSummary.totalSinglePitchFiles} ({matchSummary.matchedSinglePitchFiles} currently paired).
