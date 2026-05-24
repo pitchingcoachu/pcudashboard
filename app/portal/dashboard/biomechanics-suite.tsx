@@ -32,6 +32,14 @@ type Payload = {
   selected_pitch_key?: string | null;
   selected_pitch_points?: PitchPoint[];
   pitcher_options?: string[];
+  tags_options?: string[];
+  selected_pitch_tags?: string | null;
+  match_summary?: {
+    totalSinglePitchFiles?: number;
+    matchedSinglePitchFiles?: number;
+    unmatchedSinglePitchFiles?: number;
+    totalAllPitchRows?: number;
+  };
   error?: string;
 };
 
@@ -54,6 +62,36 @@ function toFirstLastName(value: string): string {
   if (!raw.includes(',')) return raw;
   const [last, ...rest] = raw.split(',');
   return `${rest.join(' ').trim()} ${last.trim()}`.replace(/\s+/g, ' ').trim();
+}
+
+function formatPitchOptionLabel(option: PitchOption, allOptions: PitchOption[]): string {
+  const rawLabel = String(option.label ?? '').trim();
+  const [rawPitcherPart] = rawLabel.split('|');
+  const pitcher = toFirstLastName(rawPitcherPart?.trim() ?? '') || 'Unknown Pitcher';
+  const match = rawLabel.match(/(\d{8})_(\d+)\.csv/i);
+  if (!match) return rawLabel || pitcher;
+  const datePart = match[1] ?? '';
+  const timePart = Number(match[2] ?? 0);
+  const samePitcherDate = allOptions
+    .map((candidate) => {
+      const candidateLabel = String(candidate.label ?? '').trim();
+      const [candidatePitcherPart] = candidateLabel.split('|');
+      const candidatePitcher = toFirstLastName(candidatePitcherPart?.trim() ?? '');
+      const candidateMatch = candidateLabel.match(/(\d{8})_(\d+)\.csv/i);
+      if (!candidateMatch) return null;
+      if (candidatePitcher !== pitcher) return null;
+      if ((candidateMatch[1] ?? '') !== datePart) return null;
+      return { pitchKey: candidate.pitchKey, timePart: Number(candidateMatch[2] ?? 0) };
+    })
+    .filter((v): v is { pitchKey: string; timePart: number } => Boolean(v))
+    .sort((a, b) => a.timePart - b.timePart);
+  const pitchNum = Math.max(1, samePitcherDate.findIndex((v) => v.pitchKey === option.pitchKey) + 1);
+  const yyyy = Number(datePart.slice(0, 4));
+  const mm = Number(datePart.slice(4, 6));
+  const dd = Number(datePart.slice(6, 8));
+  const yy = String(yyyy % 100).padStart(2, '0');
+  const formattedDate = `${mm}/${String(dd).padStart(2, '0')}/${yy}`;
+  return `${pitcher} | ${formattedDate} | Pitch #${pitchNum}`;
 }
 
 function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
@@ -223,20 +261,20 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
     return (lastLoading + firstDelivery) / 2;
   }, [chartPoints]);
 
-  if (!domain) {
-    return <p style={{ color: '#9ca3af', margin: 0 }}>No single-pitch data for this selection.</p>;
-  }
-
   const width = 860;
   const height = 520;
   const pad = { left: 54, right: 20, top: 16, bottom: 42 };
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
-  const dx = domain.maxX - domain.minX || 1;
-  const dy = domain.maxY - domain.minY || 1;
+  const minX = domain?.minX ?? 0;
+  const maxX = domain?.maxX ?? 1;
+  const minY = domain?.minY ?? -1;
+  const maxY = domain?.maxY ?? 1;
+  const dx = maxX - minX || 1;
+  const dy = maxY - minY || 1;
 
-  const x = (v: number) => pad.left + ((v - domain.minX) / dx) * plotW;
-  const y = (v: number) => pad.top + (1 - (v - domain.minY) / dy) * plotH;
+  const x = (v: number) => pad.left + ((v - minX) / dx) * plotW;
+  const y = (v: number) => pad.top + (1 - (v - minY) / dy) * plotH;
 
   const paths = (['loading', 'delivery'] as const).flatMap((phase) =>
     metrics.map((metric) => {
@@ -270,7 +308,7 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
   );
   const hoverPayload = useMemo(() => {
     if (!domain || hoverClientX === null || !chartPoints.length) return null;
-    const tHover = domain.minX + ((hoverClientX - pad.left) / plotW) * dx;
+    const tHover = minX + ((hoverClientX - pad.left) / plotW) * dx;
     let closest: PitchPoint | null = null;
     let closestDelta = Number.POSITIVE_INFINITY;
     for (const point of chartPoints) {
@@ -298,7 +336,7 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
       phase,
       metrics: metricsAtPoint,
     };
-  }, [chartPoints, domain, dx, hoverClientX, metrics, plotW]);
+  }, [chartPoints, domain, dx, hoverClientX, metrics, minX, plotW]);
   const yTicks = useMemo(() => {
     if (!domain) return [] as number[];
     const start = Math.ceil(domain.minY / 50) * 50;
@@ -465,6 +503,10 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
     const close = `L ${x(areaPoints[areaPoints.length - 1]!.t).toFixed(2)} ${y(0).toFixed(2)} L ${x(areaPoints[0]!.t).toFixed(2)} ${y(0).toFixed(2)} Z`;
     return `${top} ${close}`;
   }, [chartPoints, domain, keyMetrics.impulseEndT, keyMetrics.impulseStartT]);
+
+  if (!domain) {
+    return <p style={{ color: '#9ca3af', margin: 0 }}>No single-pitch data for this selection.</p>;
+  }
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 860px) minmax(240px, 1fr)', gap: 12, position: 'relative', zIndex: 0, overflow: 'hidden', alignItems: 'start' }}>
       <div style={{ position: 'relative' }}>
@@ -503,7 +545,7 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
         <text x={pad.left - 8} y={y(0) + 4} fill="#e2e8f0" fontSize="11" textAnchor="end">0.0</text>
         {[0, 0.25, 0.5, 0.75, 1].map((step) => {
           const xx = pad.left + step * plotW;
-          const value = (domain.minX + step * (domain.maxX - domain.minX)).toFixed(1);
+          const value = (minX + step * (maxX - minX)).toFixed(1);
           return (
             <g key={`x-grid-${step}`}>
               <line x1={xx} y1={pad.top} x2={xx} y2={height - pad.bottom} stroke="rgba(148,163,184,0.12)" strokeWidth="1" />
@@ -640,9 +682,16 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [selectedPitchKey, setSelectedPitchKey] = useState<string>('');
   const [selectedPitchPoints, setSelectedPitchPoints] = useState<PitchPoint[]>([]);
   const [pitcherOptions, setPitcherOptions] = useState<string[]>([]);
+  const [tagsOptions, setTagsOptions] = useState<string[]>([]);
+  const [selectedTag, setSelectedTag] = useState<string>('ALL');
+  const [selectedPitchTags, setSelectedPitchTags] = useState<string>('');
   const [selectedPitcher, setSelectedPitcher] = useState<string>('ALL');
-  const [selectedUploadPitcher, setSelectedUploadPitcher] = useState<string>('');
-  const [pitcherSearch, setPitcherSearch] = useState<string>('');
+  const [matchSummary, setMatchSummary] = useState<{ totalSinglePitchFiles: number; matchedSinglePitchFiles: number; unmatchedSinglePitchFiles: number; totalAllPitchRows: number }>({
+    totalSinglePitchFiles: 0,
+    matchedSinglePitchFiles: 0,
+    unmatchedSinglePitchFiles: 0,
+    totalAllPitchRows: 0,
+  });
   const [uploadMessage, setUploadMessage] = useState<string>('');
   const [uploadPercent, setUploadPercent] = useState<number>(0);
   const [uploadPhase, setUploadPhase] = useState<'idle' | 'uploading' | 'processing'>('idle');
@@ -654,12 +703,6 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     border: '1px solid rgba(148, 163, 184, 0.45)',
     borderRadius: 10,
   };
-  const pitcherSelectStyle: CSSProperties = {
-    ...selectStyle,
-    fontSize: '1.05rem',
-    fontWeight: 600,
-    minHeight: 42,
-  };
 
   const loadData = async (pitchKeyOverride?: string) => {
     setIsLoading(true);
@@ -669,6 +712,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       if (startDate) query.set('startDate', startDate);
       if (endDate) query.set('endDate', endDate);
       if (selectedPitcher && selectedPitcher !== 'ALL') query.set('pitcher', selectedPitcher);
+      if (selectedTag && selectedTag !== 'ALL') query.set('tag', selectedTag);
       if (pitchKeyOverride || selectedPitchKey) query.set('pitchKey', pitchKeyOverride || selectedPitchKey);
       const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
       const payload = (await response.json().catch(() => ({}))) as Payload;
@@ -679,13 +723,22 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const pitchKey = String(payload.selected_pitch_key ?? options[0]?.pitchKey ?? '');
       const points = Array.isArray(payload.selected_pitch_points) ? payload.selected_pitch_points : [];
       const uploadPitchers = Array.isArray(payload.pitcher_options) ? payload.pitcher_options : [];
+      const nextTags = Array.isArray(payload.tags_options) ? payload.tags_options : [];
       setTableColumns(columns);
       setTableRows(rows);
       setPitchOptions(options);
       setSelectedPitchKey(pitchKey);
       setSelectedPitchPoints(points);
       setPitcherOptions(uploadPitchers);
-      setSelectedUploadPitcher((current) => (current && uploadPitchers.includes(current) ? current : (uploadPitchers[0] ?? '')));
+      setTagsOptions(nextTags);
+      setSelectedPitchTags(String(payload.selected_pitch_tags ?? ''));
+      setMatchSummary({
+        totalSinglePitchFiles: Number(payload.match_summary?.totalSinglePitchFiles ?? 0),
+        matchedSinglePitchFiles: Number(payload.match_summary?.matchedSinglePitchFiles ?? 0),
+        unmatchedSinglePitchFiles: Number(payload.match_summary?.unmatchedSinglePitchFiles ?? 0),
+        totalAllPitchRows: Number(payload.match_summary?.totalAllPitchRows ?? 0),
+      });
+      setSelectedTag((current) => (current !== 'ALL' && !nextTags.includes(current) ? 'ALL' : current));
       if (!sortColumn && columns.length) setSortColumn(columns[0]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load biomechanics data.');
@@ -696,7 +749,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
 
   useEffect(() => {
     void loadData();
-  }, [selectedPitcher]);
+  }, [selectedPitcher, selectedTag]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -716,14 +769,10 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     return sortTableRows(tableRows, sortColumn, sortDirection);
   }, [sortColumn, sortDirection, tableRows]);
 
-  const filteredPitcherOptions = useMemo(() => {
-    const needle = pitcherSearch.trim().toLowerCase();
-    const filtered = !needle ? pitcherOptions : pitcherOptions.filter((name) => toFirstLastName(name).toLowerCase().includes(needle));
-    if (selectedUploadPitcher && !filtered.includes(selectedUploadPitcher) && pitcherOptions.includes(selectedUploadPitcher)) {
-      return [selectedUploadPitcher, ...filtered];
-    }
-    return filtered;
-  }, [pitcherOptions, pitcherSearch, selectedUploadPitcher]);
+  const displayPitchOptions = useMemo(
+    () => pitchOptions.map((option) => ({ ...option, label: formatPitchOptionLabel(option, pitchOptions) })),
+    [pitchOptions]
+  );
 
   const uploadFiles = async (uploadKind: 'all_pitches' | 'single_pitch', files: FileList | null) => {
     if (!files?.length) return;
@@ -735,10 +784,6 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     try {
       const formData = new FormData();
       formData.set('uploadKind', uploadKind);
-      if (uploadKind === 'single_pitch') {
-        if (!selectedUploadPitcher) throw new Error('Select a pitcher before uploading single-pitch CSV files.');
-        formData.set('pitcherName', selectedUploadPitcher);
-      }
       Array.from(files).forEach((file) => formData.append('files', file));
       const payload = await new Promise<{ error?: string; filesProcessed?: number; rowsInserted?: number }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -809,6 +854,20 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             ))}
           </select>
         </label>
+        <label style={{ display: 'grid', gap: 4, minWidth: 220 }}>
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>Tags</span>
+          <select
+            className="portal-select"
+            value={selectedTag}
+            onChange={(e) => setSelectedTag(e.target.value)}
+            style={selectStyle}
+          >
+            <option value="ALL">All</option>
+            {tagsOptions.map((tag) => (
+              <option key={`tag-${tag}`} value={tag}>{tag}</option>
+            ))}
+          </select>
+        </label>
         <button type="button" className="btn btn-ghost" onClick={() => void loadData()} disabled={isLoading || isUploading}>
           {isLoading ? 'Loading...' : 'Apply Filters'}
         </button>
@@ -832,23 +891,6 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
           <h3 style={{ margin: 0, fontSize: 16 }}>Upload Single-Pitch CSVs</h3>
           <p style={{ margin: 0, color: '#94a3b8', fontSize: 13 }}>Use files with time-series points for one pitch each.</p>
-          <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 12, color: '#94a3b8' }}>Pitcher</span>
-            <input
-              type="text"
-              className="portal-select"
-              placeholder="Search pitcher..."
-              value={pitcherSearch}
-              onChange={(e) => setPitcherSearch(e.target.value)}
-              style={selectStyle}
-            />
-            <select className="portal-select" value={selectedUploadPitcher} onChange={(e) => setSelectedUploadPitcher(e.target.value)} style={pitcherSelectStyle}>
-              {!filteredPitcherOptions.length ? <option value="">No matching pitchers</option> : null}
-              {filteredPitcherOptions.map((name) => (
-                <option key={name} value={name} style={{ color: '#0f172a', backgroundColor: '#f8fafc' }}>{toFirstLastName(name)}</option>
-              ))}
-            </select>
-          </label>
           <input
             key={singlePitchInputKey}
             type="file"
@@ -856,7 +898,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             accept=".csv,text/csv"
             multiple
             onChange={(e) => void uploadFiles('single_pitch', e.currentTarget.files)}
-            disabled={isUploading || !selectedUploadPitcher || role === 'player'}
+            disabled={isUploading || role === 'player'}
           />
         </div>
       </div>
@@ -889,6 +931,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
           </p>
         </div>
       ) : null}
+      <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13 }}>
+        Match Quality: {matchSummary.matchedSinglePitchFiles}/{matchSummary.totalSinglePitchFiles} single-pitch files matched ({matchSummary.unmatchedSinglePitchFiles} unmatched). All-pitch rows in scope: {matchSummary.totalAllPitchRows}.
+      </p>
 
       <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 10 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -904,7 +949,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
                 void loadData(next);
               }}
             >
-              {pitchOptions.length ? pitchOptions.map((option) => (
+              {displayPitchOptions.length ? displayPitchOptions.map((option) => (
                 <option key={option.pitchKey} value={option.pitchKey}>{option.label}</option>
               )) : <option value="">No pitches available</option>}
             </select>
@@ -917,6 +962,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             </select>
           </label>
         </div>
+        <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13 }}>
+          Tags: <strong>{selectedPitchTags || '—'}</strong>
+        </p>
         <LineChart points={selectedPitchPoints} mode={mode} />
       </div>
 

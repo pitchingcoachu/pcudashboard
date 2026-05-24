@@ -183,6 +183,9 @@ export async function GET(request: Request) {
       pitch_options: [],
       selected_pitch_key: null,
       selected_pitch_points: [],
+      tags_options: [],
+      selected_pitch_tags: null,
+      match_summary: { totalSinglePitchFiles: 0, matchedSinglePitchFiles: 0, unmatchedSinglePitchFiles: 0, totalAllPitchRows: 0 },
     });
   }
 
@@ -191,6 +194,7 @@ export async function GET(request: Request) {
   const endDate = String(searchParams.get('endDate') ?? '').trim() || null;
   const selectedPitchKey = String(searchParams.get('pitchKey') ?? '').trim() || null;
   const selectedPitcher = String(searchParams.get('pitcher') ?? '').trim() || null;
+  const selectedTag = String(searchParams.get('tag') ?? '').trim() || null;
 
   const pitcherOptions = await fetchPcuPitchers().catch(() => []);
   try {
@@ -201,6 +205,7 @@ export async function GET(request: Request) {
       endDate,
       selectedPitchKey,
       selectedPitcher,
+      selectedTag,
     });
 
     return NextResponse.json({
@@ -209,6 +214,9 @@ export async function GET(request: Request) {
       pitch_options: snapshot.pitchOptions,
       selected_pitch_key: snapshot.selectedPitchKey,
       selected_pitch_points: snapshot.selectedPitchPoints,
+      tags_options: snapshot.tagsOptions,
+      selected_pitch_tags: snapshot.selectedPitchTags,
+      match_summary: snapshot.matchSummary,
       pitcher_options: pitcherOptions,
     });
   } catch (error) {
@@ -218,6 +226,9 @@ export async function GET(request: Request) {
       pitch_options: [],
       selected_pitch_key: null,
       selected_pitch_points: [],
+      tags_options: [],
+      selected_pitch_tags: null,
+      match_summary: { totalSinglePitchFiles: 0, matchedSinglePitchFiles: 0, unmatchedSinglePitchFiles: 0, totalAllPitchRows: 0 },
       pitcher_options: pitcherOptions,
       error: error instanceof Error ? error.message : 'Failed to load biomechanics data.',
     });
@@ -253,7 +264,6 @@ export async function POST(request: Request) {
     if (!files.length) return NextResponse.json({ error: 'No CSV files were provided.' }, { status: 400 });
 
     const pitcherOptions = await fetchPcuPitchers();
-    const selectedPitcher = String(formData.get('pitcherName') ?? '').trim();
 
     let totalInserted = 0;
     for (const file of files) {
@@ -272,12 +282,6 @@ export async function POST(request: Request) {
         });
         totalInserted += result.insertedRows;
       } else {
-        if (!selectedPitcher) {
-          return NextResponse.json({ error: 'Select a pitcher before uploading single-pitch CSV files.' }, { status: 400 });
-        }
-        if (!pitcherOptions.includes(selectedPitcher)) {
-          return NextResponse.json({ error: 'Selected pitcher is not in the PCU allowed pitcher list.' }, { status: 400 });
-        }
         const result = await saveSinglePitchPoints({
           organizationId,
           schoolCode,
@@ -285,7 +289,6 @@ export async function POST(request: Request) {
           csvContent: fileText,
           rows,
           createdByUserId: Number(session.userId ?? 0) || null,
-          pitcherName: selectedPitcher,
         });
         totalInserted += result.insertedRows;
       }

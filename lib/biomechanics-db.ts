@@ -22,6 +22,36 @@ export type BiomechSinglePitchPoint = {
   position_id?: string | null;
 };
 
+type BiomechComputedMetrics = {
+  backPeakFz: number | null;
+  backPeakFy: number | null;
+  impulse: number | null;
+  yzTransferBack: number | null;
+  leadPeakFz: number | null;
+  leadPeakFy: number | null;
+  clawbackTime: number | null;
+  yzTransferFront: number | null;
+  yTransfer: number | null;
+  zTransfer: number | null;
+};
+
+type BiomechTableSummaryRow = {
+  Name: string;
+  Tags: string;
+  'Back Leg Peak Fz (lb)': number | null;
+  'Back Leg Peak Fy (lb)': number | null;
+  'Back Leg Impulse (lb·s)': number | null;
+  'Back Leg YZ Transfer (s)': number | null;
+  'Lead Leg Peak Fz (lb)': number | null;
+  'Lead Leg Peak Fy (lb)': number | null;
+  'Lead Leg Clawback (s)': number | null;
+  'Lead Leg YZ Transfer (s)': number | null;
+  'Y Transfer (s)': number | null;
+  'Z Transfer (s)': number | null;
+  'Stride Length (in)': number | null;
+  'Stride Direction (in)': number | null;
+};
+
 type NameMapping = {
   playerName?: string | null;
 };
@@ -117,6 +147,144 @@ function parsePitchLabelFromRow(row: Record<string, unknown>, fallback: string):
     .filter(Boolean);
   if (pieces.length) return pieces.join(' | ');
   return fallback;
+}
+
+function normalizePhase(value: string | null | undefined): 'loading' | 'delivery' | null {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'loading') return 'loading';
+  if (normalized === 'delivery') return 'delivery';
+  return null;
+}
+
+function parseSingleFileNameParts(fileName: string): { dateKey: string | null; timeKey: number | null } {
+  const match = String(fileName ?? '').match(/(\d{8})_(\d+)\.csv/i);
+  if (!match) return { dateKey: null, timeKey: null };
+  return { dateKey: String(match[1] ?? ''), timeKey: Number(match[2] ?? Number.NaN) };
+}
+
+function dateKeyPhoenixFromIso(value: string | null): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (!Number.isFinite(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Phoenix',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d);
+  const y = parts.find((p) => p.type === 'year')?.value ?? '';
+  const m = parts.find((p) => p.type === 'month')?.value ?? '';
+  const day = parts.find((p) => p.type === 'day')?.value ?? '';
+  if (!y || !m || !day) return null;
+  return `${y}${m}${day}`;
+}
+
+function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputedMetrics {
+  const loading = points
+    .filter((point) => normalizePhase(point.phase_name) === 'loading')
+    .map((point) => ({ t: toFinite(point.t), fy: toFinite(point.fy), fz: toFinite(point.fz) }))
+    .filter((p): p is { t: number; fy: number | null; fz: number | null } => p.t !== null)
+    .sort((a, b) => a.t - b.t);
+  const delivery = points
+    .filter((point) => normalizePhase(point.phase_name) === 'delivery')
+    .map((point) => ({ t: toFinite(point.t), fy: toFinite(point.fy), fz: toFinite(point.fz) }))
+    .filter((p): p is { t: number; fy: number | null; fz: number | null } => p.t !== null)
+    .sort((a, b) => a.t - b.t);
+
+  const maxBy = (arr: Array<{ t: number; v: number | null }>) => arr.filter((r) => r.v !== null).reduce<{ t: number; v: number } | null>((best, row) => {
+    if (row.v === null) return best;
+    if (!best || row.v > best.v) return { t: row.t, v: row.v };
+    return best;
+  }, null);
+  const minBy = (arr: Array<{ t: number; v: number | null }>) => arr.filter((r) => r.v !== null).reduce<{ t: number; v: number } | null>((best, row) => {
+    if (row.v === null) return best;
+    if (!best || row.v < best.v) return { t: row.t, v: row.v };
+    return best;
+  }, null);
+  const integrateTrapezoid = (arr: Array<{ t: number; v: number }>) => {
+    if (arr.length < 2) return 0;
+    let area = 0;
+    for (let i = 0; i < arr.length - 1; i += 1) {
+      const a = arr[i];
+      const b = arr[i + 1];
+      const dt = Math.max(0, b.t - a.t);
+      area += ((a.v + b.v) / 2) * dt;
+    }
+    return area;
+  };
+
+  const backPeakFz = maxBy(loading.map((p) => ({ t: p.t, v: p.fz })));
+  const backPeakFy = maxBy(loading.map((p) => ({ t: p.t, v: p.fy })));
+  const leadPeakFz = maxBy(delivery.map((p) => ({ t: p.t, v: p.fz })));
+  const leadPeakFy = minBy(delivery.map((p) => ({ t: p.t, v: p.fy })));
+
+  let impulse: number | null = null;
+  if (loading.length > 2) {
+    const peakFz = maxBy(loading.map((p) => ({ t: p.t, v: p.fz })));
+    const peakZIdx = peakFz ? loading.findIndex((p) => p.t === peakFz.t && p.fz === peakFz.v) : -1;
+    let startIdx = -1;
+    if (peakZIdx > 1 && peakFz) {
+      const peakTime = peakFz.t;
+      const windowStartTime = peakTime - 0.7;
+      const candidates: number[] = [];
+      for (let i = 0; i < peakZIdx; i += 1) {
+        const t = loading[i]?.t;
+        if (t !== undefined && t >= windowStartTime) candidates.push(i);
+      }
+      if (candidates.length) {
+        let minIdx = candidates[0] ?? 0;
+        for (const idx of candidates) {
+          const curr = loading[idx]?.fz;
+          const best = loading[minIdx]?.fz;
+          if (curr === null || curr === undefined) continue;
+          if (best === null || best === undefined || curr < best) minIdx = idx;
+        }
+        startIdx = minIdx;
+      }
+    }
+    if (startIdx >= 0) {
+      const loadingFromStart = loading.slice(startIdx);
+      const peakFyFromStart = maxBy(loadingFromStart.map((p) => ({ t: p.t, v: p.fy })));
+      let endIdx = loading.length - 1;
+      if (peakFyFromStart) {
+        const peakIdx = loading.findIndex((p) => p.t === peakFyFromStart.t && p.fy === peakFyFromStart.v);
+        if (peakIdx >= 0) {
+          for (let i = peakIdx + 1; i < loading.length; i += 1) {
+            const fy = loading[i]?.fy;
+            if (fy !== null && fy <= 0) {
+              endIdx = i;
+              break;
+            }
+          }
+        }
+      }
+      const impulseWindow = loading
+        .slice(startIdx, endIdx + 1)
+        .filter((p) => p.fy !== null)
+        .map((p) => ({ t: p.t, v: Math.max(0, Number(p.fy)) }));
+      impulse = integrateTrapezoid(impulseWindow);
+    }
+  }
+
+  let clawbackTime: number | null = null;
+  const landingIdx = delivery.findIndex((p) => (p.fy ?? 0) < 0);
+  if (landingIdx >= 0) {
+    const recover = delivery.slice(landingIdx + 1).find((p) => (p.fy ?? Number.NEGATIVE_INFINITY) >= 0);
+    if (recover) clawbackTime = Math.max(0, recover.t - delivery[landingIdx].t);
+  }
+
+  return {
+    backPeakFz: backPeakFz?.v ?? null,
+    backPeakFy: backPeakFy?.v ?? null,
+    impulse,
+    yzTransferBack: backPeakFy && backPeakFz ? Math.abs(backPeakFy.t - backPeakFz.t) : null,
+    leadPeakFz: leadPeakFz?.v ?? null,
+    leadPeakFy: leadPeakFy?.v ?? null,
+    clawbackTime,
+    yzTransferFront: leadPeakFy && leadPeakFz ? Math.abs(leadPeakFy.t - leadPeakFz.t) : null,
+    yTransfer: backPeakFy && leadPeakFy ? Math.abs(leadPeakFy.t - backPeakFy.t) : null,
+    zTransfer: backPeakFz && leadPeakFz ? Math.abs(leadPeakFz.t - backPeakFz.t) : null,
+  };
 }
 
 async function ensureBiomechanicsTables(): Promise<void> {
@@ -293,7 +461,7 @@ export async function saveSinglePitchPoints(args: {
   csvContent: string;
   rows: Array<Record<string, unknown>>;
   createdByUserId: number | null;
-  pitcherName: string;
+  pitcherName?: string | null;
   onChunkCommitted?: (rowsCommitted: number) => void;
 }): Promise<{ insertedRows: number; pitchKey: string }> {
   if (!isDatabaseConfigured()) throw new Error('DATABASE_URL is not configured.');
@@ -416,14 +584,29 @@ export async function getBiomechanicsSnapshot(args: {
   endDate?: string | null;
   selectedPitchKey?: string | null;
   selectedPitcher?: string | null;
+  selectedTag?: string | null;
 }): Promise<{
   tableColumns: string[];
   tableRows: Array<Record<string, string | number | null>>;
   pitchOptions: BiomechPitchOption[];
   selectedPitchKey: string | null;
   selectedPitchPoints: BiomechSinglePitchPoint[];
+  tagsOptions: string[];
+  selectedPitchTags: string | null;
+  matchSummary: { totalSinglePitchFiles: number; matchedSinglePitchFiles: number; unmatchedSinglePitchFiles: number; totalAllPitchRows: number };
 }> {
-  if (!isDatabaseConfigured()) return { tableColumns: [], tableRows: [], pitchOptions: [], selectedPitchKey: null, selectedPitchPoints: [] };
+  if (!isDatabaseConfigured()) {
+    return {
+      tableColumns: [],
+      tableRows: [],
+      pitchOptions: [],
+      selectedPitchKey: null,
+      selectedPitchPoints: [],
+      tagsOptions: [],
+      selectedPitchTags: null,
+      matchSummary: { totalSinglePitchFiles: 0, matchedSinglePitchFiles: 0, unmatchedSinglePitchFiles: 0, totalAllPitchRows: 0 },
+    };
+  }
   await ensureBiomechanicsTables();
   const pool = getDbPool();
   const schoolCode = normalizeSchoolCode(args.schoolCode);
@@ -442,7 +625,6 @@ export async function getBiomechanicsSnapshot(args: {
   }
   const dateFilterSql = dateFilterParts.length ? `AND ${dateFilterParts.join(' AND ')}` : '';
   let tablePitcherFilterSql = '';
-  let singlePitcherFilterSql = '';
   if (selectedPitcherNorm) {
     values.push(selectedPitcherNorm);
     const pitcherParamIndex = values.length;
@@ -454,14 +636,11 @@ export async function getBiomechanicsSnapshot(args: {
         NULLIF(TRIM(LOWER(regexp_replace(COALESCE(row_json->>'First Name', '') || ' ' || COALESCE(row_json->>'Last Name', ''), '[^a-z0-9]+', ' ', 'g'))), '')
       ) = $${pitcherParamIndex}
     `;
-    singlePitcherFilterSql = `AND COALESCE(NULLIF(TRIM(pitcher_name_norm), ''), '') = $${pitcherParamIndex}`;
   }
 
-  const rowResult = await pool.query<{
-    row_json: Record<string, string | number | null>;
-  }>(
+  const rowResult = await pool.query<{ row_json: Record<string, string | number | null>; captured_at: string | null; created_at: string | null }>(
     `
-    SELECT row_json
+    SELECT row_json, captured_at::text AS captured_at, created_at::text AS created_at
     FROM biomechanics_pitch_rows
     WHERE organization_id = $1
       AND school_code = $2
@@ -473,37 +652,38 @@ export async function getBiomechanicsSnapshot(args: {
     values
   );
 
-  const tableRows = rowResult.rows.map((row) => row.row_json ?? {});
-  const columnSet = new Set<string>();
-  for (const row of tableRows) {
-    for (const key of Object.keys(row)) {
-      if (!String(key).trim()) continue;
-      columnSet.add(key);
-    }
-  }
-  const tableColumns = Array.from(columnSet);
+  const selectedTag = String(args.selectedTag ?? '').trim();
 
   let pitchOptionsResult = await pool.query<{
     pitch_key: string;
     label: string;
     captured_at: string | null;
+    pitcher_name: string | null;
+    source_file_name: string | null;
   }>(
     `
     SELECT
-      source_file_hash AS pitch_key,
+      p.source_file_hash AS pitch_key,
       COALESCE(
-        NULLIF(TRIM(MAX(pitch_label)), ''),
-        NULLIF(TRIM(MAX(pitcher_name)), ''),
-        MAX(source_file_hash)
+        NULLIF(TRIM(MAX(p.pitch_label)), ''),
+        NULLIF(TRIM(MAX(p.pitcher_name)), ''),
+        MAX(p.source_file_hash)
       ) AS label,
-      MAX(captured_at)::text AS captured_at
-    FROM biomechanics_single_pitch_points
-    WHERE organization_id = $1
-      AND school_code = $2
+      MAX(p.captured_at)::text AS captured_at,
+      NULLIF(TRIM(MAX(p.pitcher_name)), '') AS pitcher_name,
+      NULLIF(TRIM(MAX(u.source_file_name)), '') AS source_file_name
+    FROM biomechanics_single_pitch_points p
+    LEFT JOIN biomechanics_uploads u
+      ON u.organization_id = p.organization_id
+     AND u.school_code = p.school_code
+     AND u.upload_kind = 'single_pitch'
+     AND u.source_file_hash = p.source_file_hash
+    WHERE p.organization_id = $1
+      AND p.school_code = $2
       ${dateFilterSql}
-      ${singlePitcherFilterSql}
-    GROUP BY source_file_hash
-    ORDER BY MAX(COALESCE(captured_at, created_at)) DESC
+      
+    GROUP BY p.source_file_hash
+    ORDER BY MAX(COALESCE(p.captured_at, p.created_at)) DESC
     LIMIT 400
     `,
     values
@@ -517,34 +697,131 @@ export async function getBiomechanicsSnapshot(args: {
       pitch_key: string;
       label: string;
       captured_at: string | null;
+      pitcher_name: string | null;
+      source_file_name: string | null;
     }>(
       `
       SELECT
-        source_file_hash AS pitch_key,
+        p.source_file_hash AS pitch_key,
         COALESCE(
-          NULLIF(TRIM(MAX(pitch_label)), ''),
-          NULLIF(TRIM(MAX(pitcher_name)), ''),
-          MAX(source_file_hash)
+          NULLIF(TRIM(MAX(p.pitch_label)), ''),
+          NULLIF(TRIM(MAX(p.pitcher_name)), ''),
+          MAX(p.source_file_hash)
         ) AS label,
-        MAX(captured_at)::text AS captured_at
-      FROM biomechanics_single_pitch_points
-      WHERE organization_id = $1
-        AND school_code = $2
+        MAX(p.captured_at)::text AS captured_at,
+        NULLIF(TRIM(MAX(p.pitcher_name)), '') AS pitcher_name,
+        NULLIF(TRIM(MAX(u.source_file_name)), '') AS source_file_name
+      FROM biomechanics_single_pitch_points p
+      LEFT JOIN biomechanics_uploads u
+        ON u.organization_id = p.organization_id
+       AND u.school_code = p.school_code
+       AND u.upload_kind = 'single_pitch'
+       AND u.source_file_hash = p.source_file_hash
+      WHERE p.organization_id = $1
+        AND p.school_code = $2
         ${dateFilterSql}
-        ${singlePitcherFilterSql}
-      GROUP BY source_file_hash
-      ORDER BY MAX(COALESCE(captured_at, created_at)) DESC
+        
+      GROUP BY p.source_file_hash
+      ORDER BY MAX(COALESCE(p.captured_at, p.created_at)) DESC
       LIMIT 400
       `,
       values
     );
   });
+  const allRows = rowResult.rows.map((row) => {
+    const json = (row.row_json ?? {}) as Record<string, unknown>;
+    const playerRaw =
+      pickStringCaseInsensitive(json, ['Player', 'Name', 'Pitcher']) ??
+      `${pickStringCaseInsensitive(json, ['First Name']) ?? ''} ${pickStringCaseInsensitive(json, ['Last Name']) ?? ''}`.trim();
+    const tags = pickStringCaseInsensitive(json, ['Tags', 'Tag']) ?? 'UnTagged';
+    const capturedAt = row.captured_at ?? row.created_at ?? null;
+    const dateKey = dateKeyPhoenixFromIso(capturedAt);
+    const strideLengthCm = toFinite(pickValueCaseInsensitive(json, ['strideLength (cm)', 'strideLength', 'Stride Length (cm)']));
+    const strideWidthCm = toFinite(pickValueCaseInsensitive(json, ['strideWidth (cm)', 'strideWidth', 'Stride Width (cm)']));
+    return {
+      name: playerRaw || 'Unknown',
+      nameNorm: normalizeName(playerRaw),
+      tags,
+      dateKey,
+      capturedAt,
+      strideLengthIn: strideLengthCm === null ? null : strideLengthCm / 2.54,
+      strideDirectionIn: strideWidthCm === null ? null : strideWidthCm / 2.54,
+    };
+  }).filter((row) => row.dateKey && row.nameNorm);
 
-  const pitchOptions: BiomechPitchOption[] = pitchOptionsResult.rows.map((row) => ({
-    pitchKey: row.pitch_key,
+  const singleRows = pitchOptionsResult.rows.map((row) => {
+    const sourceFileName = String(row.source_file_name ?? '').trim();
+    const parts = parseSingleFileNameParts(sourceFileName);
+    return {
+      pitchKey: row.pitch_key,
+      label: row.label,
+      capturedAt: row.captured_at,
+      pitcherName: String(row.pitcher_name ?? '').trim() || null,
+      pitcherNorm: normalizeName(row.pitcher_name ?? ''),
+      sourceFileName,
+      dateKey: parts.dateKey,
+      timeKey: parts.timeKey,
+    };
+  });
+
+  const allGroups = new Map<string, Array<typeof allRows[number]>>();
+  for (const row of allRows) {
+    const key = `${row.nameNorm}|${row.dateKey}`;
+    const arr = allGroups.get(key) ?? [];
+    arr.push(row);
+    allGroups.set(key, arr);
+  }
+  for (const arr of allGroups.values()) {
+    arr.sort((a, b) => String(a.capturedAt ?? '').localeCompare(String(b.capturedAt ?? '')));
+  }
+
+  const singleGroups = new Map<string, Array<typeof singleRows[number]>>();
+  for (const row of singleRows) {
+    if (!row.dateKey || row.timeKey === null || !Number.isFinite(row.timeKey)) continue;
+    const key = row.pitcherNorm ? `${row.pitcherNorm}|${row.dateKey}` : `__date_only__|${row.dateKey}`;
+    const arr = singleGroups.get(key) ?? [];
+    arr.push(row);
+    singleGroups.set(key, arr);
+  }
+  for (const arr of singleGroups.values()) {
+    arr.sort((a, b) => Number(a.timeKey ?? 0) - Number(b.timeKey ?? 0));
+  }
+
+  const mapping = new Map<string, { name: string; tags: string; strideLengthIn: number | null; strideDirectionIn: number | null }>();
+  for (const [key, singles] of singleGroups.entries()) {
+    const allForGroup = key.startsWith('__date_only__|')
+      ? allRows.filter((row) => `__date_only__|${row.dateKey}` === key)
+      : (allGroups.get(key) ?? []);
+    const n = Math.min(singles.length, allForGroup.length);
+    for (let i = 0; i < n; i += 1) {
+      const single = singles[i];
+      const allRow = allForGroup[i];
+      if (!single || !allRow) continue;
+      mapping.set(single.pitchKey, {
+        name: allRow.name,
+        tags: allRow.tags || 'UnTagged',
+        strideLengthIn: allRow.strideLengthIn,
+        strideDirectionIn: allRow.strideDirectionIn,
+      });
+    }
+  }
+
+  const tagsOptions = Array.from(new Set(Array.from(mapping.values()).map((v) => v.tags).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+
+  const pitchOptionsUnfiltered: BiomechPitchOption[] = singleRows.map((row) => ({
+    pitchKey: row.pitchKey,
     label: row.label,
-    capturedAt: row.captured_at,
+    capturedAt: row.capturedAt,
   }));
+  const pitchOptions = pitchOptionsUnfiltered.filter((option) => {
+    if (selectedPitcherNorm) {
+      const meta = mapping.get(option.pitchKey);
+      if (normalizeName(meta?.name ?? '') !== selectedPitcherNorm) return false;
+    }
+    if (!selectedTag || selectedTag.toUpperCase() === 'ALL') return true;
+    const meta = mapping.get(option.pitchKey);
+    return (meta?.tags ?? '') === selectedTag;
+  });
   const selectedPitchKey =
     args.selectedPitchKey && pitchOptions.some((option) => option.pitchKey === args.selectedPitchKey)
       ? args.selectedPitchKey
@@ -583,11 +860,115 @@ export async function getBiomechanicsSnapshot(args: {
     });
   }
 
+  const selectedPitchTags = selectedPitchKey ? (mapping.get(selectedPitchKey)?.tags ?? null) : null;
+  const matchSummary = {
+    totalSinglePitchFiles: singleRows.length,
+    matchedSinglePitchFiles: mapping.size,
+    unmatchedSinglePitchFiles: Math.max(0, singleRows.length - mapping.size),
+    totalAllPitchRows: allRows.length,
+  };
+
+  const metricKeys = pitchOptions.map((p) => p.pitchKey);
+  const pitchMetricsMap = new Map<string, BiomechComputedMetrics>();
+  if (metricKeys.length) {
+    const pointsAgg = await pool.query<BiomechSinglePitchPoint & { source_file_hash: string; row_json?: Record<string, unknown> | null }>(
+      `
+      SELECT source_file_hash, t, fx, fy, fz, mx, my, mz, row_json
+      FROM biomechanics_single_pitch_points
+      WHERE organization_id = $1
+        AND school_code = $2
+        AND source_file_hash = ANY($3::text[])
+      ORDER BY source_file_hash, point_index ASC
+      `,
+      [args.organizationId, schoolCode, metricKeys]
+    );
+    const grouped = new Map<string, BiomechSinglePitchPoint[]>();
+    for (const row of pointsAgg.rows) {
+      const point: BiomechSinglePitchPoint = {
+        t: toFinite(row.t) ?? 0,
+        fx: toFinite(row.fx),
+        fy: toFinite(row.fy),
+        fz: toFinite(row.fz),
+        mx: toFinite(row.mx),
+        my: toFinite(row.my),
+        mz: toFinite(row.mz),
+        phase_name: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Phase Name', 'Phase']),
+        device_id: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Device Id', 'Device']),
+        position_id: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Position Id', 'Position']),
+      };
+      const arr = grouped.get(row.source_file_hash) ?? [];
+      arr.push(point);
+      grouped.set(row.source_file_hash, arr);
+    }
+    for (const [pitchKey, points] of grouped.entries()) {
+      pitchMetricsMap.set(pitchKey, computePitchMetrics(points));
+    }
+  }
+
+  const tableColumnNames = [
+    'Name',
+    'Tags',
+    'Back Leg Peak Fz (lb)',
+    'Back Leg Peak Fy (lb)',
+    'Back Leg Impulse (lb·s)',
+    'Back Leg YZ Transfer (s)',
+    'Lead Leg Peak Fz (lb)',
+    'Lead Leg Peak Fy (lb)',
+    'Lead Leg Clawback (s)',
+    'Lead Leg YZ Transfer (s)',
+    'Y Transfer (s)',
+    'Z Transfer (s)',
+    'Stride Length (in)',
+    'Stride Direction (in)',
+  ];
+  const agg = new Map<string, { name: string; tags: string; count: number; sums: Record<string, number>; strideLen: number[]; strideDir: number[] }>();
+  for (const option of pitchOptions) {
+    const meta = mapping.get(option.pitchKey);
+    const metrics = pitchMetricsMap.get(option.pitchKey);
+    if (!meta || !metrics) continue;
+    const key = `${meta.name}|${meta.tags}`;
+    const curr = agg.get(key) ?? { name: meta.name, tags: meta.tags, count: 0, sums: {}, strideLen: [], strideDir: [] };
+    curr.count += 1;
+    const add = (k: keyof BiomechComputedMetrics) => {
+      const v = metrics[k];
+      if (v !== null && Number.isFinite(v)) curr.sums[k] = (curr.sums[k] ?? 0) + v;
+    };
+    add('backPeakFz'); add('backPeakFy'); add('impulse'); add('yzTransferBack');
+    add('leadPeakFz'); add('leadPeakFy'); add('clawbackTime'); add('yzTransferFront');
+    add('yTransfer'); add('zTransfer');
+    if (meta.strideLengthIn !== null && Number.isFinite(meta.strideLengthIn)) curr.strideLen.push(meta.strideLengthIn);
+    if (meta.strideDirectionIn !== null && Number.isFinite(meta.strideDirectionIn)) curr.strideDir.push(meta.strideDirectionIn);
+    agg.set(key, curr);
+  }
+  const avg = (sum: number | undefined, count: number) => (sum === undefined || count <= 0 ? null : sum / count);
+  const avgArr = (vals: number[]) => (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
+  const tableRows: BiomechTableSummaryRow[] = Array.from(agg.values())
+    .sort((a, b) => a.name.localeCompare(b.name) || a.tags.localeCompare(b.tags))
+    .map((r) => ({
+      Name: r.name,
+      Tags: r.tags,
+      'Back Leg Peak Fz (lb)': avg(r.sums.backPeakFz, r.count),
+      'Back Leg Peak Fy (lb)': avg(r.sums.backPeakFy, r.count),
+      'Back Leg Impulse (lb·s)': avg(r.sums.impulse, r.count),
+      'Back Leg YZ Transfer (s)': avg(r.sums.yzTransferBack, r.count),
+      'Lead Leg Peak Fz (lb)': avg(r.sums.leadPeakFz, r.count),
+      'Lead Leg Peak Fy (lb)': avg(r.sums.leadPeakFy, r.count),
+      'Lead Leg Clawback (s)': avg(r.sums.clawbackTime, r.count),
+      'Lead Leg YZ Transfer (s)': avg(r.sums.yzTransferFront, r.count),
+      'Y Transfer (s)': avg(r.sums.yTransfer, r.count),
+      'Z Transfer (s)': avg(r.sums.zTransfer, r.count),
+      'Stride Length (in)': avgArr(r.strideLen),
+      'Stride Direction (in)': avgArr(r.strideDir),
+    }));
+
   return {
-    tableColumns,
+    tableColumns: tableColumnNames,
     tableRows,
     pitchOptions,
     selectedPitchKey,
     selectedPitchPoints,
+    tagsOptions,
+    selectedPitchTags,
+    matchSummary,
   };
 }
