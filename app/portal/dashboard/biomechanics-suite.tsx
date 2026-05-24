@@ -39,6 +39,8 @@ type Payload = {
     matchedSinglePitchFiles?: number;
     unmatchedSinglePitchFiles?: number;
     totalAllPitchRows?: number;
+    matchedAllPitchRows?: number;
+    unmatchedAllPitchRows?: number;
   };
   error?: string;
 };
@@ -686,11 +688,20 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [selectedTag, setSelectedTag] = useState<string>('ALL');
   const [selectedPitchTags, setSelectedPitchTags] = useState<string>('');
   const [selectedPitcher, setSelectedPitcher] = useState<string>('ALL');
-  const [matchSummary, setMatchSummary] = useState<{ totalSinglePitchFiles: number; matchedSinglePitchFiles: number; unmatchedSinglePitchFiles: number; totalAllPitchRows: number }>({
+  const [matchSummary, setMatchSummary] = useState<{
+    totalSinglePitchFiles: number;
+    matchedSinglePitchFiles: number;
+    unmatchedSinglePitchFiles: number;
+    totalAllPitchRows: number;
+    matchedAllPitchRows: number;
+    unmatchedAllPitchRows: number;
+  }>({
     totalSinglePitchFiles: 0,
     matchedSinglePitchFiles: 0,
     unmatchedSinglePitchFiles: 0,
     totalAllPitchRows: 0,
+    matchedAllPitchRows: 0,
+    unmatchedAllPitchRows: 0,
   });
   const [uploadMessage, setUploadMessage] = useState<string>('');
   const [uploadPercent, setUploadPercent] = useState<number>(0);
@@ -737,6 +748,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         matchedSinglePitchFiles: Number(payload.match_summary?.matchedSinglePitchFiles ?? 0),
         unmatchedSinglePitchFiles: Number(payload.match_summary?.unmatchedSinglePitchFiles ?? 0),
         totalAllPitchRows: Number(payload.match_summary?.totalAllPitchRows ?? 0),
+        matchedAllPitchRows: Number(payload.match_summary?.matchedAllPitchRows ?? 0),
+        unmatchedAllPitchRows: Number(payload.match_summary?.unmatchedAllPitchRows ?? 0),
       });
       setSelectedTag((current) => (current !== 'ALL' && !nextTags.includes(current) ? 'ALL' : current));
       if (!sortColumn && columns.length) setSortColumn(columns[0]);
@@ -782,17 +795,12 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     setUploadPercent(0);
     setUploadPhase('uploading');
     try {
-      const formData = new FormData();
-      formData.set('uploadKind', uploadKind);
-      Array.from(files).forEach((file) => formData.append('files', file));
-      const payload = await new Promise<{ error?: string; filesProcessed?: number; rowsInserted?: number }>((resolve, reject) => {
+      const uploadBatch = (batch: File[]) => new Promise<{ error?: string; filesProcessed?: number; rowsInserted?: number }>((resolve, reject) => {
+        const formData = new FormData();
+        formData.set('uploadKind', uploadKind);
+        batch.forEach((file) => formData.append('files', file));
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/dashboard/biomechanics');
-        xhr.upload.onprogress = (event) => {
-          if (!event.lengthComputable) return;
-          const pct = Math.max(1, Math.min(95, Math.round((event.loaded / event.total) * 95)));
-          setUploadPercent(pct);
-        };
         xhr.onerror = () => reject(new Error('Upload failed.'));
         xhr.onload = () => {
           const json = (() => {
@@ -806,17 +814,31 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             reject(new Error(json.error || 'Upload failed.'));
             return;
           }
-          setUploadPercent(100);
-          setUploadPhase('idle');
           resolve(json);
-        };
-        xhr.upload.onload = () => {
-          setUploadPercent(95);
-          setUploadPhase('processing');
         };
         xhr.send(formData);
       });
-      setUploadMessage(`Upload complete: ${Number(payload.filesProcessed ?? 0)} file(s), ${Number(payload.rowsInserted ?? 0)} row(s) processed.`);
+
+      const picked = Array.from(files);
+      let totalFilesProcessed = 0;
+      let totalRowsInserted = 0;
+      const batches = uploadKind === 'single_pitch'
+        ? picked.map((file) => [file])
+        : [picked];
+
+      for (let i = 0; i < batches.length; i += 1) {
+        const batch = batches[i] ?? [];
+        const progress = Math.round((i / Math.max(1, batches.length)) * 95);
+        setUploadPercent(Math.max(1, progress));
+        setUploadPhase('uploading');
+        const payload = await uploadBatch(batch);
+        totalFilesProcessed += Number(payload.filesProcessed ?? batch.length);
+        totalRowsInserted += Number(payload.rowsInserted ?? 0);
+        setUploadPercent(Math.round(((i + 1) / Math.max(1, batches.length)) * 95));
+      }
+      setUploadPhase('processing');
+      setUploadPercent(100);
+      setUploadMessage(`Upload complete: ${totalFilesProcessed} file(s), ${totalRowsInserted} row(s) processed.`);
       if (uploadKind === 'all_pitches') setAllPitchInputKey((value) => value + 1);
       if (uploadKind === 'single_pitch') setSinglePitchInputKey((value) => value + 1);
       await loadData();
@@ -932,7 +954,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         </div>
       ) : null}
       <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13 }}>
-        Match Quality: {matchSummary.matchedSinglePitchFiles}/{matchSummary.totalSinglePitchFiles} single-pitch files matched ({matchSummary.unmatchedSinglePitchFiles} unmatched). All-pitch rows in scope: {matchSummary.totalAllPitchRows}.
+        Match Quality: {matchSummary.matchedAllPitchRows}/{matchSummary.totalAllPitchRows} pitches matched ({matchSummary.unmatchedAllPitchRows} unmatched all-pitch rows). Single-pitch files uploaded: {matchSummary.totalSinglePitchFiles} ({matchSummary.matchedSinglePitchFiles} currently paired).
       </p>
 
       <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 10 }}>

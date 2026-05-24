@@ -593,7 +593,14 @@ export async function getBiomechanicsSnapshot(args: {
   selectedPitchPoints: BiomechSinglePitchPoint[];
   tagsOptions: string[];
   selectedPitchTags: string | null;
-  matchSummary: { totalSinglePitchFiles: number; matchedSinglePitchFiles: number; unmatchedSinglePitchFiles: number; totalAllPitchRows: number };
+  matchSummary: {
+    totalSinglePitchFiles: number;
+    matchedSinglePitchFiles: number;
+    unmatchedSinglePitchFiles: number;
+    totalAllPitchRows: number;
+    matchedAllPitchRows: number;
+    unmatchedAllPitchRows: number;
+  };
 }> {
   if (!isDatabaseConfigured()) {
     return {
@@ -604,7 +611,14 @@ export async function getBiomechanicsSnapshot(args: {
       selectedPitchPoints: [],
       tagsOptions: [],
       selectedPitchTags: null,
-      matchSummary: { totalSinglePitchFiles: 0, matchedSinglePitchFiles: 0, unmatchedSinglePitchFiles: 0, totalAllPitchRows: 0 },
+      matchSummary: {
+        totalSinglePitchFiles: 0,
+        matchedSinglePitchFiles: 0,
+        unmatchedSinglePitchFiles: 0,
+        totalAllPitchRows: 0,
+        matchedAllPitchRows: 0,
+        unmatchedAllPitchRows: 0,
+      },
     };
   }
   await ensureBiomechanicsTables();
@@ -866,6 +880,8 @@ export async function getBiomechanicsSnapshot(args: {
     matchedSinglePitchFiles: mapping.size,
     unmatchedSinglePitchFiles: Math.max(0, singleRows.length - mapping.size),
     totalAllPitchRows: allRows.length,
+    matchedAllPitchRows: Math.min(mapping.size, allRows.length),
+    unmatchedAllPitchRows: Math.max(0, allRows.length - Math.min(mapping.size, allRows.length)),
   };
 
   const metricKeys = pitchOptions.map((p) => p.pitchKey);

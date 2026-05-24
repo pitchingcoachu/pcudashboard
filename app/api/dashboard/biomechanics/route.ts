@@ -185,7 +185,14 @@ export async function GET(request: Request) {
       selected_pitch_points: [],
       tags_options: [],
       selected_pitch_tags: null,
-      match_summary: { totalSinglePitchFiles: 0, matchedSinglePitchFiles: 0, unmatchedSinglePitchFiles: 0, totalAllPitchRows: 0 },
+      match_summary: {
+        totalSinglePitchFiles: 0,
+        matchedSinglePitchFiles: 0,
+        unmatchedSinglePitchFiles: 0,
+        totalAllPitchRows: 0,
+        matchedAllPitchRows: 0,
+        unmatchedAllPitchRows: 0,
+      },
     });
   }
 
@@ -228,7 +235,14 @@ export async function GET(request: Request) {
       selected_pitch_points: [],
       tags_options: [],
       selected_pitch_tags: null,
-      match_summary: { totalSinglePitchFiles: 0, matchedSinglePitchFiles: 0, unmatchedSinglePitchFiles: 0, totalAllPitchRows: 0 },
+      match_summary: {
+        totalSinglePitchFiles: 0,
+        matchedSinglePitchFiles: 0,
+        unmatchedSinglePitchFiles: 0,
+        totalAllPitchRows: 0,
+        matchedAllPitchRows: 0,
+        unmatchedAllPitchRows: 0,
+      },
       pitcher_options: pitcherOptions,
       error: error instanceof Error ? error.message : 'Failed to load biomechanics data.',
     });
