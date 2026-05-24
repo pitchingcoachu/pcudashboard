@@ -85,9 +85,33 @@ function toFinite(value: unknown): number | null {
 function toDateOrNull(value: string | null | undefined): string | null {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
-  const d = new Date(raw);
+  const normalized = raw.includes(' ') && /^\d{4}-\d{2}-\d{2}\s+\d/.test(raw)
+    ? raw.replace(/\s+/, 'T')
+    : raw;
+  const d = new Date(normalized);
   if (!Number.isFinite(d.getTime())) return null;
   return d.toISOString();
+}
+
+function parseUsDateTimeToIso(value: string): string | null {
+  const raw = String(value ?? '').trim();
+  const m = raw.match(
+    /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i
+  );
+  if (!m) return null;
+  const month = Number(m[1]);
+  const day = Number(m[2]);
+  let year = Number(m[3]);
+  if (year < 100) year += 2000;
+  let hour = Number(m[4] ?? 0);
+  const minute = Number(m[5] ?? 0);
+  const second = Number(m[6] ?? 0);
+  const ampm = String(m[7] ?? '').toUpperCase();
+  if (ampm === 'PM' && hour < 12) hour += 12;
+  if (ampm === 'AM' && hour === 12) hour = 0;
+  const dt = new Date(year, month - 1, day, hour, minute, second);
+  if (!Number.isFinite(dt.getTime())) return null;
+  return dt.toISOString();
 }
 
 function canonicalKey(value: string): string {
@@ -119,6 +143,7 @@ function parseCapturedAtFromRow(row: Record<string, unknown>): string | null {
     'pitch_date',
     'capture date/time',
     'capture date/time (america/phoenix)',
+    'capture date/time (american/phoenix)',
     'capture datetime',
     'timestamp',
     'time (unix ms)',
@@ -135,7 +160,7 @@ function parseCapturedAtFromRow(row: Record<string, unknown>): string | null {
   if (Number.isFinite(numeric) && numeric > 10_000_000_000) {
     return new Date(numeric).toISOString();
   }
-  return toDateOrNull(asString);
+  return toDateOrNull(asString) ?? parseUsDateTimeToIso(asString);
 }
 
 function parsePitchLabelFromRow(row: Record<string, unknown>, fallback: string): string {
