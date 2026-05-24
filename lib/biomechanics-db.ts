@@ -25,6 +25,7 @@ export type BiomechSinglePitchPoint = {
 type BiomechComputedMetrics = {
   backPeakFz: number | null;
   backPeakFy: number | null;
+  moundConnection: number | null;
   impulse: number | null;
   yzTransferBack: number | null;
   leadPeakFz: number | null;
@@ -40,6 +41,7 @@ type BiomechTableSummaryRow = {
   Tags: string;
   'Back Leg Peak Fz (lb)': number | null;
   'Back Leg Peak Fy (lb)': number | null;
+  'Mound Connection (BW%)': number | null;
   'Back Leg Impulse (lb·s)': number | null;
   'Back Leg YZ Transfer (s)': number | null;
   'Lead Leg Peak Fz (lb)': number | null;
@@ -204,17 +206,74 @@ function dateKeyPhoenixFromIso(value: string | null): string | null {
   return `${y}${m}${day}`;
 }
 
+function formatDateKeyMddyy(dateKey: string | null | undefined): string | null {
+  const raw = String(dateKey ?? '').trim();
+  if (!/^\d{8}$/.test(raw)) return null;
+  const yyyy = Number(raw.slice(0, 4));
+  const mm = Number(raw.slice(4, 6));
+  const dd = Number(raw.slice(6, 8));
+  const yy = String(yyyy % 100).padStart(2, '0');
+  return `${mm}/${String(dd).padStart(2, '0')}/${yy}`;
+}
+
 function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputedMetrics {
-  const loading = points
-    .filter((point) => normalizePhase(point.phase_name) === 'loading')
-    .map((point) => ({ t: toFinite(point.t), fy: toFinite(point.fy), fz: toFinite(point.fz) }))
+  const isMoundDevice = (value: string | null | undefined) => {
+    const normalized = String(value ?? '').toLowerCase();
+    return normalized.includes('pitching mound.drive') || normalized.includes('pitching mound.parent');
+  };
+  const isParentDevice = (value: string | null | undefined) => String(value ?? '').toLowerCase().includes('pitching mound.parent');
+  const isDriveDevice = (value: string | null | undefined) => String(value ?? '').toLowerCase().includes('pitching mound.drive');
+
+  const phasePoints = points.filter((point) => normalizePhase(point.phase_name));
+  const moundPoints = phasePoints.filter((point) => isMoundDevice(point.device_id));
+  const hasParent = moundPoints.some((point) => isParentDevice(point.device_id));
+  const sourcePoints = moundPoints.filter((point) => (hasParent ? isParentDevice(point.device_id) : isDriveDevice(point.device_id)));
+  const rawTimes = sourcePoints.map((point) => toFinite(point.t)).filter((v): v is number => v !== null);
+  if (!rawTimes.length) {
+    return {
+      backPeakFz: null,
+      backPeakFy: null,
+      moundConnection: null,
+      impulse: null,
+      yzTransferBack: null,
+      leadPeakFz: null,
+      leadPeakFy: null,
+      clawbackTime: null,
+      yzTransferFront: null,
+      yTransfer: null,
+      zTransfer: null,
+    };
+  }
+  const minRawTime = Math.min(...rawTimes);
+  const maxRawTime = Math.max(...rawTimes);
+  const rawRange = maxRawTime - minRawTime;
+  const treatAsMs = rawRange > 1000 || minRawTime > 100000;
+  const normalizedPoints = sourcePoints
+    .map((point) => {
+      const rawT = toFinite(point.t);
+      if (rawT === null) return null;
+      const t = treatAsMs ? (rawT - minRawTime) / 1000 : (rawT - minRawTime);
+      return {
+        t,
+        fy: toFinite(point.fy),
+        fz: toFinite(point.fz),
+        phase: normalizePhase(point.phase_name),
+      };
+    })
+    .filter((point): point is { t: number; fy: number | null; fz: number | null; phase: 'loading' | 'delivery' | null } => point !== null && point.phase !== null);
+
+  const loading = normalizedPoints
+    .filter((point) => point.phase === 'loading')
+    .map((point) => ({ t: point.t, fy: point.fy, fz: point.fz }))
     .filter((p): p is { t: number; fy: number | null; fz: number | null } => p.t !== null)
     .sort((a, b) => a.t - b.t);
-  const delivery = points
-    .filter((point) => normalizePhase(point.phase_name) === 'delivery')
-    .map((point) => ({ t: toFinite(point.t), fy: toFinite(point.fy), fz: toFinite(point.fz) }))
+  const delivery = normalizedPoints
+    .filter((point) => point.phase === 'delivery')
+    .map((point) => ({ t: point.t, fy: point.fy, fz: point.fz }))
     .filter((p): p is { t: number; fy: number | null; fz: number | null } => p.t !== null)
     .sort((a, b) => a.t - b.t);
+
+  // Below this line, calculations intentionally mirror LineChart key-metric logic.
 
   const maxBy = (arr: Array<{ t: number; v: number | null }>) => arr.filter((r) => r.v !== null).reduce<{ t: number; v: number } | null>((best, row) => {
     if (row.v === null) return best;
@@ -242,6 +301,13 @@ function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputed
   const backPeakFy = maxBy(loading.map((p) => ({ t: p.t, v: p.fy })));
   const leadPeakFz = maxBy(delivery.map((p) => ({ t: p.t, v: p.fz })));
   const leadPeakFy = minBy(delivery.map((p) => ({ t: p.t, v: p.fy })));
+  const firstLeadFz = delivery.find((p) => p.fz !== null);
+  const backFzBeforeLead = firstLeadFz
+    ? loading
+      .filter((p) => p.fz !== null && p.t <= firstLeadFz.t)
+      .sort((a, b) => a.t - b.t)
+      .at(-1)?.fz ?? null
+    : null;
 
   let impulse: number | null = null;
   if (loading.length > 2) {
@@ -301,6 +367,7 @@ function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputed
   return {
     backPeakFz: backPeakFz?.v ?? null,
     backPeakFy: backPeakFy?.v ?? null,
+    moundConnection: backFzBeforeLead,
     impulse,
     yzTransferBack: backPeakFy && backPeakFz ? Math.abs(backPeakFy.t - backPeakFz.t) : null,
     leadPeakFz: leadPeakFz?.v ?? null,
@@ -323,10 +390,47 @@ async function ensureBiomechanicsTables(): Promise<void> {
       await client.query(`SET LOCAL statement_timeout = '15s';`);
       await client.query(`ALTER TABLE biomechanics_single_pitch_points ADD COLUMN IF NOT EXISTS pitcher_name TEXT;`);
       await client.query(`ALTER TABLE biomechanics_single_pitch_points ADD COLUMN IF NOT EXISTS pitcher_name_norm TEXT;`);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS biomechanics_pitch_metrics (
+          id BIGSERIAL PRIMARY KEY,
+          organization_id BIGINT NOT NULL,
+          school_code TEXT NOT NULL,
+          source_file_hash TEXT NOT NULL,
+          back_peak_fz DOUBLE PRECISION,
+          back_peak_fy DOUBLE PRECISION,
+          mound_connection DOUBLE PRECISION,
+          impulse DOUBLE PRECISION,
+          yz_transfer_back DOUBLE PRECISION,
+          lead_peak_fz DOUBLE PRECISION,
+          lead_peak_fy DOUBLE PRECISION,
+          clawback_time DOUBLE PRECISION,
+          yz_transfer_front DOUBLE PRECISION,
+          y_transfer DOUBLE PRECISION,
+          z_transfer DOUBLE PRECISION,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (organization_id, school_code, source_file_hash)
+        );
+      `);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_date ON biomechanics_pitch_rows (organization_id, school_code, captured_at DESC);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index ASC);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_date ON biomechanics_single_pitch_points (organization_id, school_code, captured_at DESC);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash);`);
+      await client.query(`
+        WITH ranked AS (
+          SELECT
+            id,
+            ROW_NUMBER() OVER (
+              PARTITION BY organization_id, school_code, upload_kind, source_file_hash
+              ORDER BY created_at DESC, id DESC
+            ) AS rn
+          FROM biomechanics_uploads
+        )
+        DELETE FROM biomechanics_uploads u
+        USING ranked r
+        WHERE u.id = r.id
+          AND r.rn > 1
+      `);
       await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_biomech_uploads_scope_kind_hash ON biomechanics_uploads (organization_id, school_code, upload_kind, source_file_hash);`);
       await client.query('COMMIT');
       global.__pcuBiomechanicsDbPatched = true;
@@ -398,12 +502,49 @@ async function ensureBiomechanicsTables(): Promise<void> {
         UNIQUE (organization_id, school_code, source_file_hash, point_index)
       );
     `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS biomechanics_pitch_metrics (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id BIGINT NOT NULL,
+        school_code TEXT NOT NULL,
+        source_file_hash TEXT NOT NULL,
+        back_peak_fz DOUBLE PRECISION,
+        back_peak_fy DOUBLE PRECISION,
+        mound_connection DOUBLE PRECISION,
+        impulse DOUBLE PRECISION,
+        yz_transfer_back DOUBLE PRECISION,
+        lead_peak_fz DOUBLE PRECISION,
+        lead_peak_fy DOUBLE PRECISION,
+        clawback_time DOUBLE PRECISION,
+        yz_transfer_front DOUBLE PRECISION,
+        y_transfer DOUBLE PRECISION,
+        z_transfer DOUBLE PRECISION,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id, school_code, source_file_hash)
+      );
+    `);
     await client.query(`ALTER TABLE biomechanics_single_pitch_points ADD COLUMN IF NOT EXISTS pitcher_name TEXT;`);
     await client.query(`ALTER TABLE biomechanics_single_pitch_points ADD COLUMN IF NOT EXISTS pitcher_name_norm TEXT;`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_date ON biomechanics_pitch_rows (organization_id, school_code, captured_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index ASC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_date ON biomechanics_single_pitch_points (organization_id, school_code, captured_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash);`);
+    await client.query(`
+      WITH ranked AS (
+        SELECT
+          id,
+          ROW_NUMBER() OVER (
+            PARTITION BY organization_id, school_code, upload_kind, source_file_hash
+            ORDER BY created_at DESC, id DESC
+          ) AS rn
+        FROM biomechanics_uploads
+      )
+      DELETE FROM biomechanics_uploads u
+      USING ranked r
+      WHERE u.id = r.id
+        AND r.rn > 1
+    `);
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_biomech_uploads_scope_kind_hash ON biomechanics_uploads (organization_id, school_code, upload_kind, source_file_hash);`);
     await client.query('COMMIT');
     global.__pcuBiomechanicsDbReady = true;
@@ -432,22 +573,47 @@ export async function saveAllPitchRows(args: {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const uploadInsert = await client.query<{ id: number }>(
+    const existingUpload = await client.query<{ id: number }>(
       `
-      INSERT INTO biomechanics_uploads (
-        organization_id, school_code, upload_kind, source_file_name, source_file_hash, row_count, created_by_user_id
-      ) VALUES ($1, $2, 'all_pitches', $3, $4, $5, $6)
-      ON CONFLICT (organization_id, school_code, upload_kind, source_file_hash)
-      DO UPDATE SET
-        source_file_name = EXCLUDED.source_file_name,
-        row_count = EXCLUDED.row_count,
-        created_by_user_id = EXCLUDED.created_by_user_id,
-        created_at = NOW()
-      RETURNING id
+      SELECT id
+      FROM biomechanics_uploads
+      WHERE organization_id = $1
+        AND school_code = $2
+        AND upload_kind = 'all_pitches'
+        AND source_file_hash = $3
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+      FOR UPDATE
       `,
-      [args.organizationId, schoolCode, args.sourceFileName, sourceFileHash, args.rows.length, args.createdByUserId]
+      [args.organizationId, schoolCode, sourceFileHash]
     );
-    const uploadId = Number(uploadInsert.rows[0]?.id ?? 0);
+    let uploadId = Number(existingUpload.rows[0]?.id ?? 0);
+    if (uploadId > 0) {
+      await client.query(
+        `
+        UPDATE biomechanics_uploads
+        SET source_file_name = $4,
+            row_count = $5,
+            created_by_user_id = $6,
+            created_at = NOW()
+        WHERE id = $1
+          AND organization_id = $2
+          AND school_code = $3
+        `,
+        [uploadId, args.organizationId, schoolCode, args.sourceFileName, args.rows.length, args.createdByUserId]
+      );
+    } else {
+      const uploadInsert = await client.query<{ id: number }>(
+        `
+        INSERT INTO biomechanics_uploads (
+          organization_id, school_code, upload_kind, source_file_name, source_file_hash, row_count, created_by_user_id
+        ) VALUES ($1, $2, 'all_pitches', $3, $4, $5, $6)
+        RETURNING id
+        `,
+        [args.organizationId, schoolCode, args.sourceFileName, sourceFileHash, args.rows.length, args.createdByUserId]
+      );
+      uploadId = Number(uploadInsert.rows[0]?.id ?? 0);
+    }
     await client.query(
       `
       DELETE FROM biomechanics_pitch_rows
@@ -519,22 +685,47 @@ export async function saveSinglePitchPoints(args: {
     const pitchLabel = pitcherName ? `${pitcherName} | ${args.sourceFileName}` : parsePitchLabelFromRow(firstRow, args.sourceFileName);
 
     await client.query('BEGIN');
-    const uploadInsert = await client.query<{ id: number }>(
+    const existingUpload = await client.query<{ id: number }>(
       `
-      INSERT INTO biomechanics_uploads (
-        organization_id, school_code, upload_kind, source_file_name, source_file_hash, row_count, created_by_user_id
-      ) VALUES ($1, $2, 'single_pitch', $3, $4, $5, $6)
-      ON CONFLICT (organization_id, school_code, upload_kind, source_file_hash)
-      DO UPDATE SET
-        source_file_name = EXCLUDED.source_file_name,
-        row_count = EXCLUDED.row_count,
-        created_by_user_id = EXCLUDED.created_by_user_id,
-        created_at = NOW()
-      RETURNING id
+      SELECT id
+      FROM biomechanics_uploads
+      WHERE organization_id = $1
+        AND school_code = $2
+        AND upload_kind = 'single_pitch'
+        AND source_file_hash = $3
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+      FOR UPDATE
       `,
-      [args.organizationId, schoolCode, args.sourceFileName, sourceFileHash, args.rows.length, args.createdByUserId]
+      [args.organizationId, schoolCode, sourceFileHash]
     );
-    const uploadId = Number(uploadInsert.rows[0]?.id ?? 0);
+    let uploadId = Number(existingUpload.rows[0]?.id ?? 0);
+    if (uploadId > 0) {
+      await client.query(
+        `
+        UPDATE biomechanics_uploads
+        SET source_file_name = $4,
+            row_count = $5,
+            created_by_user_id = $6,
+            created_at = NOW()
+        WHERE id = $1
+          AND organization_id = $2
+          AND school_code = $3
+        `,
+        [uploadId, args.organizationId, schoolCode, args.sourceFileName, args.rows.length, args.createdByUserId]
+      );
+    } else {
+      const uploadInsert = await client.query<{ id: number }>(
+        `
+        INSERT INTO biomechanics_uploads (
+          organization_id, school_code, upload_kind, source_file_name, source_file_hash, row_count, created_by_user_id
+        ) VALUES ($1, $2, 'single_pitch', $3, $4, $5, $6)
+        RETURNING id
+        `,
+        [args.organizationId, schoolCode, args.sourceFileName, sourceFileHash, args.rows.length, args.createdByUserId]
+      );
+      uploadId = Number(uploadInsert.rows[0]?.id ?? 0);
+    }
     await client.query(
       `
       DELETE FROM biomechanics_single_pitch_points
@@ -544,8 +735,18 @@ export async function saveSinglePitchPoints(args: {
       `,
       [args.organizationId, schoolCode, sourceFileHash]
     );
+    await client.query(
+      `
+      DELETE FROM biomechanics_pitch_metrics
+      WHERE organization_id = $1
+        AND school_code = $2
+        AND source_file_hash = $3
+      `,
+      [args.organizationId, schoolCode, sourceFileHash]
+    );
     let insertedRows = 0;
     const pitcherNorm = normalizeName(pitcherName || '');
+    const metricPoints: BiomechSinglePitchPoint[] = [];
     const chunkSize = 100;
     for (let start = 0; start < args.rows.length; start += chunkSize) {
       const chunk = args.rows.slice(start, start + chunkSize);
@@ -573,6 +774,18 @@ export async function saveSinglePitchPoints(args: {
         const mx = toFinite(pickValueCaseInsensitive(row, ['Mx', 'M_x']));
         const my = toFinite(pickValueCaseInsensitive(row, ['My', 'M_y']));
         const mz = toFinite(pickValueCaseInsensitive(row, ['Mz', 'M_z']));
+        metricPoints.push({
+          t,
+          fx,
+          fy,
+          fz,
+          mx,
+          my,
+          mz,
+          phase_name: pickStringCaseInsensitive(row, ['Phase Name', 'Phase']),
+          device_id: pickStringCaseInsensitive(row, ['Device Id', 'Device']),
+          position_id: pickStringCaseInsensitive(row, ['Position Id', 'Position']),
+        });
         const base = values.length;
         rowsSql.push(
           `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},$${base + 13}::jsonb,$${base + 14},$${base + 15},$${base + 16},$${base + 17})`
@@ -624,6 +837,33 @@ export async function saveSinglePitchPoints(args: {
       insertedRows += result.rowCount ?? 0;
       if (args.onChunkCommitted) args.onChunkCommitted(chunk.length);
     }
+
+    const computed = computePitchMetrics(metricPoints);
+    await client.query(
+      `
+      INSERT INTO biomechanics_pitch_metrics (
+        organization_id, school_code, source_file_hash,
+        back_peak_fz, back_peak_fy, mound_connection, impulse, yz_transfer_back,
+        lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      `,
+      [
+        args.organizationId,
+        schoolCode,
+        sourceFileHash,
+        computed.backPeakFz,
+        computed.backPeakFy,
+        computed.moundConnection,
+        computed.impulse,
+        computed.yzTransferBack,
+        computed.leadPeakFz,
+        computed.leadPeakFy,
+        computed.clawbackTime,
+        computed.yzTransferFront,
+        computed.yTransfer,
+        computed.zTransfer,
+      ]
+    );
     await client.query('COMMIT');
     return { insertedRows, pitchKey: sourceFileHash };
   } catch (error) {
@@ -642,6 +882,7 @@ export async function getBiomechanicsSnapshot(args: {
   selectedPitchKey?: string | null;
   selectedPitcher?: string | null;
   selectedTag?: string | null;
+  forceMode?: 'force' | 'bw';
 }): Promise<{
   tableColumns: string[];
   tableRows: Array<Record<string, string | number | null>>;
@@ -650,6 +891,11 @@ export async function getBiomechanicsSnapshot(args: {
   selectedPitchPoints: BiomechSinglePitchPoint[];
   tagsOptions: string[];
   selectedPitchTags: string | null;
+  selectedPitchPlayer: string | null;
+  selectedPitchDate: string | null;
+  selectedPitchBodyWeightLb: number | null;
+  selectedPitchStrideLengthIn: number | null;
+  selectedPitchStrideDirectionIn: number | null;
   matchSummary: {
     totalSinglePitchFiles: number;
     matchedSinglePitchFiles: number;
@@ -668,6 +914,11 @@ export async function getBiomechanicsSnapshot(args: {
       selectedPitchPoints: [],
       tagsOptions: [],
       selectedPitchTags: null,
+      selectedPitchPlayer: null,
+      selectedPitchDate: null,
+      selectedPitchBodyWeightLb: null,
+      selectedPitchStrideLengthIn: null,
+      selectedPitchStrideDirectionIn: null,
       matchSummary: {
         totalSinglePitchFiles: 0,
         matchedSinglePitchFiles: 0,
@@ -695,6 +946,11 @@ export async function getBiomechanicsSnapshot(args: {
     dateFilterParts.push(`COALESCE(captured_at, created_at) < ($${values.length}::date + INTERVAL '1 day')`);
   }
   const dateFilterSql = dateFilterParts.length ? `AND ${dateFilterParts.join(' AND ')}` : '';
+  const dateFilterSqlSingle = dateFilterParts.length
+    ? `AND ${dateFilterParts
+      .map((part) => part.replace(/COALESCE\(captured_at,\s*created_at\)/g, 'COALESCE(p.captured_at, p.created_at)'))
+      .join(' AND ')}`
+    : '';
   const summaryValues: Array<string | number> = [...values];
   let tablePitcherFilterSql = '';
   if (selectedPitcherNorm) {
@@ -735,6 +991,7 @@ export async function getBiomechanicsSnapshot(args: {
   );
 
   const selectedTag = String(args.selectedTag ?? '').trim();
+  const forceMode = args.forceMode === 'bw' ? 'bw' : 'force';
 
   let pitchOptionsResult = await pool.query<{
     pitch_key: string;
@@ -762,7 +1019,7 @@ export async function getBiomechanicsSnapshot(args: {
      AND u.source_file_hash = p.source_file_hash
     WHERE p.organization_id = $1
       AND p.school_code = $2
-      ${dateFilterSql}
+      ${dateFilterSqlSingle}
       
     GROUP BY p.source_file_hash
     ORDER BY MAX(COALESCE(p.captured_at, p.created_at)) DESC
@@ -801,7 +1058,7 @@ export async function getBiomechanicsSnapshot(args: {
        AND u.source_file_hash = p.source_file_hash
       WHERE p.organization_id = $1
         AND p.school_code = $2
-        ${dateFilterSql}
+        ${dateFilterSqlSingle}
         
       GROUP BY p.source_file_hash
       ORDER BY MAX(COALESCE(p.captured_at, p.created_at)) DESC
@@ -831,6 +1088,7 @@ export async function getBiomechanicsSnapshot(args: {
     const dateKey = dateKeyPhoenixFromIso(capturedAt);
     const strideLengthCm = toFinite(pickValueCaseInsensitive(json, ['strideLength (cm)', 'strideLength', 'Stride Length (cm)']));
     const strideWidthCm = toFinite(pickValueCaseInsensitive(json, ['strideWidth (cm)', 'strideWidth', 'Stride Width (cm)']));
+    const systemWeightN = toFinite(pickValueCaseInsensitive(json, ['systemWeight (N)', 'systemWeight', 'System Weight (N)']));
     return {
       name: playerRaw || 'Unknown',
       nameNorm: normalizeName(playerRaw),
@@ -839,6 +1097,7 @@ export async function getBiomechanicsSnapshot(args: {
       capturedAt,
       strideLengthIn: strideLengthCm === null ? null : strideLengthCm / 2.54,
       strideDirectionIn: strideWidthCm === null ? null : strideWidthCm / 2.54,
+      bodyWeightLb: systemWeightN === null ? null : systemWeightN * 0.22480894387096,
     };
   }).filter((row) => row.dateKey);
 
@@ -881,7 +1140,7 @@ export async function getBiomechanicsSnapshot(args: {
     arr.sort((a, b) => Number(a.timeKey ?? 0) - Number(b.timeKey ?? 0));
   }
 
-  const mapping = new Map<string, { name: string; tags: string; strideLengthIn: number | null; strideDirectionIn: number | null }>();
+  const mapping = new Map<string, { name: string; tags: string; strideLengthIn: number | null; strideDirectionIn: number | null; pitchDateLabel: string | null; bodyWeightLb: number | null }>();
   for (const [key, singles] of singleGroups.entries()) {
     const allForGroup = key.startsWith('__date_only__|')
       ? allRows.filter((row) => `__date_only__|${row.dateKey}` === key)
@@ -896,6 +1155,8 @@ export async function getBiomechanicsSnapshot(args: {
         tags: allRow.tags || 'UnTagged',
         strideLengthIn: allRow.strideLengthIn,
         strideDirectionIn: allRow.strideDirectionIn,
+        pitchDateLabel: formatDateKeyMddyy(allRow.dateKey),
+        bodyWeightLb: allRow.bodyWeightLb,
       });
     }
   }
@@ -955,6 +1216,11 @@ export async function getBiomechanicsSnapshot(args: {
   }
 
   const selectedPitchTags = selectedPitchKey ? (mapping.get(selectedPitchKey)?.tags ?? null) : null;
+  const selectedPitchPlayer = selectedPitchKey ? (mapping.get(selectedPitchKey)?.name ?? null) : null;
+  const selectedPitchDate = selectedPitchKey ? (mapping.get(selectedPitchKey)?.pitchDateLabel ?? null) : null;
+  const selectedPitchBodyWeightLb = selectedPitchKey ? (mapping.get(selectedPitchKey)?.bodyWeightLb ?? null) : null;
+  const selectedPitchStrideLengthIn = selectedPitchKey ? (mapping.get(selectedPitchKey)?.strideLengthIn ?? null) : null;
+  const selectedPitchStrideDirectionIn = selectedPitchKey ? (mapping.get(selectedPitchKey)?.strideDirectionIn ?? null) : null;
   const totalAllRowsFromDb = Number(summaryAllRowsResult.rows[0]?.total_rows ?? 0);
   const totalSingleFilesFromDb = Number(summarySingleFilesResult.rows[0]?.total_files ?? 0);
   const totalAllForSummary = Math.max(allRows.length, totalAllRowsFromDb);
@@ -972,37 +1238,129 @@ export async function getBiomechanicsSnapshot(args: {
   const metricKeys = pitchOptions.map((p) => p.pitchKey);
   const pitchMetricsMap = new Map<string, BiomechComputedMetrics>();
   if (metricKeys.length) {
-    const pointsAgg = await pool.query<BiomechSinglePitchPoint & { source_file_hash: string; row_json?: Record<string, unknown> | null }>(
+    const metricsAgg = await pool.query<{
+      source_file_hash: string;
+      back_peak_fz: number | null;
+      back_peak_fy: number | null;
+      mound_connection: number | null;
+      impulse: number | null;
+      yz_transfer_back: number | null;
+      lead_peak_fz: number | null;
+      lead_peak_fy: number | null;
+      clawback_time: number | null;
+      yz_transfer_front: number | null;
+      y_transfer: number | null;
+      z_transfer: number | null;
+    }>(
       `
-      SELECT source_file_hash, t, fx, fy, fz, mx, my, mz, row_json
-      FROM biomechanics_single_pitch_points
+      SELECT
+        source_file_hash,
+        back_peak_fz,
+        back_peak_fy,
+        mound_connection,
+        impulse,
+        yz_transfer_back,
+        lead_peak_fz,
+        lead_peak_fy,
+        clawback_time,
+        yz_transfer_front,
+        y_transfer,
+        z_transfer
+      FROM biomechanics_pitch_metrics
       WHERE organization_id = $1
         AND school_code = $2
         AND source_file_hash = ANY($3::text[])
-      ORDER BY source_file_hash, point_index ASC
       `,
       [args.organizationId, schoolCode, metricKeys]
     );
-    const grouped = new Map<string, BiomechSinglePitchPoint[]>();
-    for (const row of pointsAgg.rows) {
-      const point: BiomechSinglePitchPoint = {
-        t: toFinite(row.t) ?? 0,
-        fx: toFinite(row.fx),
-        fy: toFinite(row.fy),
-        fz: toFinite(row.fz),
-        mx: toFinite(row.mx),
-        my: toFinite(row.my),
-        mz: toFinite(row.mz),
-        phase_name: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Phase Name', 'Phase']),
-        device_id: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Device Id', 'Device']),
-        position_id: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Position Id', 'Position']),
-      };
-      const arr = grouped.get(row.source_file_hash) ?? [];
-      arr.push(point);
-      grouped.set(row.source_file_hash, arr);
+    for (const row of metricsAgg.rows) {
+      pitchMetricsMap.set(row.source_file_hash, {
+        backPeakFz: toFinite(row.back_peak_fz),
+        backPeakFy: toFinite(row.back_peak_fy),
+        moundConnection: toFinite(row.mound_connection),
+        impulse: toFinite(row.impulse),
+        yzTransferBack: toFinite(row.yz_transfer_back),
+        leadPeakFz: toFinite(row.lead_peak_fz),
+        leadPeakFy: toFinite(row.lead_peak_fy),
+        clawbackTime: toFinite(row.clawback_time),
+        yzTransferFront: toFinite(row.yz_transfer_front),
+        yTransfer: toFinite(row.y_transfer),
+        zTransfer: toFinite(row.z_transfer),
+      });
     }
-    for (const [pitchKey, points] of grouped.entries()) {
-      pitchMetricsMap.set(pitchKey, computePitchMetrics(points));
+    const missingMetricKeys = metricKeys.filter((key) => !pitchMetricsMap.has(key));
+    if (missingMetricKeys.length) {
+      const pointsAgg = await pool.query<BiomechSinglePitchPoint & { source_file_hash: string; row_json?: Record<string, unknown> | null }>(
+        `
+        SELECT source_file_hash, t, fx, fy, fz, mx, my, mz, row_json
+        FROM biomechanics_single_pitch_points
+        WHERE organization_id = $1
+          AND school_code = $2
+          AND source_file_hash = ANY($3::text[])
+        ORDER BY source_file_hash, point_index ASC
+        `,
+        [args.organizationId, schoolCode, missingMetricKeys]
+      );
+      const grouped = new Map<string, BiomechSinglePitchPoint[]>();
+      for (const row of pointsAgg.rows) {
+        const point: BiomechSinglePitchPoint = {
+          t: toFinite(row.t) ?? 0,
+          fx: toFinite(row.fx),
+          fy: toFinite(row.fy),
+          fz: toFinite(row.fz),
+          mx: toFinite(row.mx),
+          my: toFinite(row.my),
+          mz: toFinite(row.mz),
+          phase_name: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Phase Name', 'Phase']),
+          device_id: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Device Id', 'Device']),
+          position_id: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Position Id', 'Position']),
+        };
+        const arr = grouped.get(row.source_file_hash) ?? [];
+        arr.push(point);
+        grouped.set(row.source_file_hash, arr);
+      }
+      for (const [pitchKey, points] of grouped.entries()) {
+        const computed = computePitchMetrics(points);
+        pitchMetricsMap.set(pitchKey, computed);
+        await pool.query(
+          `
+          INSERT INTO biomechanics_pitch_metrics (
+            organization_id, school_code, source_file_hash,
+            back_peak_fz, back_peak_fy, mound_connection, impulse, yz_transfer_back,
+            lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          ON CONFLICT (organization_id, school_code, source_file_hash)
+          DO UPDATE SET
+            back_peak_fz = EXCLUDED.back_peak_fz,
+            back_peak_fy = EXCLUDED.back_peak_fy,
+            mound_connection = EXCLUDED.mound_connection,
+            impulse = EXCLUDED.impulse,
+            yz_transfer_back = EXCLUDED.yz_transfer_back,
+            lead_peak_fz = EXCLUDED.lead_peak_fz,
+            lead_peak_fy = EXCLUDED.lead_peak_fy,
+            clawback_time = EXCLUDED.clawback_time,
+            yz_transfer_front = EXCLUDED.yz_transfer_front,
+            y_transfer = EXCLUDED.y_transfer,
+            z_transfer = EXCLUDED.z_transfer
+          `,
+          [
+            args.organizationId,
+            schoolCode,
+            pitchKey,
+            computed.backPeakFz,
+            computed.backPeakFy,
+            computed.moundConnection,
+            computed.impulse,
+            computed.yzTransferBack,
+            computed.leadPeakFz,
+            computed.leadPeakFy,
+            computed.clawbackTime,
+            computed.yzTransferFront,
+            computed.yTransfer,
+            computed.zTransfer,
+          ]
+        );
+      }
     }
   }
 
@@ -1011,6 +1369,7 @@ export async function getBiomechanicsSnapshot(args: {
     'Tags',
     'Back Leg Peak Fz (lb)',
     'Back Leg Peak Fy (lb)',
+    'Mound Connection (BW%)',
     'Back Leg Impulse (lb·s)',
     'Back Leg YZ Transfer (s)',
     'Lead Leg Peak Fz (lb)',
@@ -1023,6 +1382,7 @@ export async function getBiomechanicsSnapshot(args: {
     'Stride Direction (in)',
   ];
   const agg = new Map<string, { name: string; tags: string; count: number; sums: Record<string, number>; strideLen: number[]; strideDir: number[] }>();
+  const groupPitches = new Map<string, string[]>();
   for (const option of pitchOptions) {
     const meta = mapping.get(option.pitchKey);
     const metrics = pitchMetricsMap.get(option.pitchKey);
@@ -1034,26 +1394,56 @@ export async function getBiomechanicsSnapshot(args: {
       const v = metrics[k];
       if (v !== null && Number.isFinite(v)) curr.sums[k] = (curr.sums[k] ?? 0) + v;
     };
-    add('backPeakFz'); add('backPeakFy'); add('impulse'); add('yzTransferBack');
+    add('backPeakFz'); add('backPeakFy'); add('moundConnection'); add('impulse'); add('yzTransferBack');
     add('leadPeakFz'); add('leadPeakFy'); add('clawbackTime'); add('yzTransferFront');
     add('yTransfer'); add('zTransfer');
     if (meta.strideLengthIn !== null && Number.isFinite(meta.strideLengthIn)) curr.strideLen.push(meta.strideLengthIn);
     if (meta.strideDirectionIn !== null && Number.isFinite(meta.strideDirectionIn)) curr.strideDir.push(meta.strideDirectionIn);
     agg.set(key, curr);
+    const list = groupPitches.get(key) ?? [];
+    list.push(option.pitchKey);
+    groupPitches.set(key, list);
   }
   const avg = (sum: number | undefined, count: number) => (sum === undefined || count <= 0 ? null : sum / count);
   const avgArr = (vals: number[]) => (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
+  const avgBwMetric = (groupKey: string, pickMetric: (m: BiomechComputedMetrics) => number | null) => {
+    const keys = groupPitches.get(groupKey) ?? [];
+    let sum = 0;
+    let count = 0;
+    for (const pitchKey of keys) {
+      const metrics = pitchMetricsMap.get(pitchKey);
+      const bw = mapping.get(pitchKey)?.bodyWeightLb;
+      const metricValue = metrics ? pickMetric(metrics) : null;
+      const bwNum = typeof bw === 'number' && Number.isFinite(bw) ? bw : null;
+      const bwIsPlausible = bwNum !== null && bwNum >= 80 && bwNum <= 400;
+      if (!bwIsPlausible || metricValue === null || !Number.isFinite(metricValue)) continue;
+      sum += metricValue / bwNum;
+      count += 1;
+    }
+    return count > 0 ? sum / count : null;
+  };
   const tableRows: BiomechTableSummaryRow[] = Array.from(agg.values())
     .sort((a, b) => a.name.localeCompare(b.name) || a.tags.localeCompare(b.tags))
     .map((r) => ({
       Name: r.name,
       Tags: r.tags,
-      'Back Leg Peak Fz (lb)': avg(r.sums.backPeakFz, r.count),
-      'Back Leg Peak Fy (lb)': avg(r.sums.backPeakFy, r.count),
-      'Back Leg Impulse (lb·s)': avg(r.sums.impulse, r.count),
+      'Back Leg Peak Fz (lb)': forceMode === 'bw'
+        ? avgBwMetric(`${r.name}|${r.tags}`, (m) => m.backPeakFz)
+        : avg(r.sums.backPeakFz, r.count),
+      'Back Leg Peak Fy (lb)': forceMode === 'bw'
+        ? avgBwMetric(`${r.name}|${r.tags}`, (m) => m.backPeakFy)
+        : avg(r.sums.backPeakFy, r.count),
+      'Mound Connection (BW%)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.moundConnection),
+      'Back Leg Impulse (lb·s)': forceMode === 'bw'
+        ? avgBwMetric(`${r.name}|${r.tags}`, (m) => m.impulse)
+        : avg(r.sums.impulse, r.count),
       'Back Leg YZ Transfer (s)': avg(r.sums.yzTransferBack, r.count),
-      'Lead Leg Peak Fz (lb)': avg(r.sums.leadPeakFz, r.count),
-      'Lead Leg Peak Fy (lb)': avg(r.sums.leadPeakFy, r.count),
+      'Lead Leg Peak Fz (lb)': forceMode === 'bw'
+        ? avgBwMetric(`${r.name}|${r.tags}`, (m) => m.leadPeakFz)
+        : avg(r.sums.leadPeakFz, r.count),
+      'Lead Leg Peak Fy (lb)': forceMode === 'bw'
+        ? avgBwMetric(`${r.name}|${r.tags}`, (m) => m.leadPeakFy)
+        : avg(r.sums.leadPeakFy, r.count),
       'Lead Leg Clawback (s)': avg(r.sums.clawbackTime, r.count),
       'Lead Leg YZ Transfer (s)': avg(r.sums.yzTransferFront, r.count),
       'Y Transfer (s)': avg(r.sums.yTransfer, r.count),
@@ -1070,6 +1460,11 @@ export async function getBiomechanicsSnapshot(args: {
     selectedPitchPoints,
     tagsOptions,
     selectedPitchTags,
+    selectedPitchPlayer,
+    selectedPitchDate,
+    selectedPitchBodyWeightLb,
+    selectedPitchStrideLengthIn,
+    selectedPitchStrideDirectionIn,
     matchSummary,
   };
 }

@@ -185,6 +185,11 @@ export async function GET(request: Request) {
       selected_pitch_points: [],
       tags_options: [],
       selected_pitch_tags: null,
+      selected_pitch_player: null,
+      selected_pitch_date: null,
+      selected_pitch_body_weight_lb: null,
+      selected_pitch_stride_length_in: null,
+      selected_pitch_stride_direction_in: null,
       match_summary: {
         totalSinglePitchFiles: 0,
         matchedSinglePitchFiles: 0,
@@ -202,6 +207,7 @@ export async function GET(request: Request) {
   const selectedPitchKey = String(searchParams.get('pitchKey') ?? '').trim() || null;
   const selectedPitcher = String(searchParams.get('pitcher') ?? '').trim() || null;
   const selectedTag = String(searchParams.get('tag') ?? '').trim() || null;
+  const forceMode = String(searchParams.get('forceMode') ?? '').trim().toLowerCase() === 'bw' ? 'bw' : 'force';
 
   const pitcherOptions = await fetchPcuPitchers().catch(() => []);
   try {
@@ -213,6 +219,7 @@ export async function GET(request: Request) {
       selectedPitchKey,
       selectedPitcher,
       selectedTag,
+      forceMode,
     });
 
     return NextResponse.json({
@@ -223,6 +230,11 @@ export async function GET(request: Request) {
       selected_pitch_points: snapshot.selectedPitchPoints,
       tags_options: snapshot.tagsOptions,
       selected_pitch_tags: snapshot.selectedPitchTags,
+      selected_pitch_player: snapshot.selectedPitchPlayer,
+      selected_pitch_date: snapshot.selectedPitchDate,
+      selected_pitch_body_weight_lb: snapshot.selectedPitchBodyWeightLb,
+      selected_pitch_stride_length_in: snapshot.selectedPitchStrideLengthIn,
+      selected_pitch_stride_direction_in: snapshot.selectedPitchStrideDirectionIn,
       match_summary: snapshot.matchSummary,
       pitcher_options: pitcherOptions,
     });
@@ -235,6 +247,11 @@ export async function GET(request: Request) {
       selected_pitch_points: [],
       tags_options: [],
       selected_pitch_tags: null,
+      selected_pitch_player: null,
+      selected_pitch_date: null,
+      selected_pitch_body_weight_lb: null,
+      selected_pitch_stride_length_in: null,
+      selected_pitch_stride_direction_in: null,
       match_summary: {
         totalSinglePitchFiles: 0,
         matchedSinglePitchFiles: 0,

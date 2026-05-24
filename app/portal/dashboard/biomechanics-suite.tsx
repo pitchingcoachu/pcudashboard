@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { sortTableRows, type SortDirection } from '../../../lib/table-sort';
 
 type Role = 'admin' | 'coach' | 'player';
 type ViewMode = 'Force' | 'Moments';
+type ForceMode = 'force' | 'bw';
 
 type PitchOption = {
   pitchKey: string;
@@ -34,6 +35,11 @@ type Payload = {
   pitcher_options?: string[];
   tags_options?: string[];
   selected_pitch_tags?: string | null;
+  selected_pitch_player?: string | null;
+  selected_pitch_date?: string | null;
+  selected_pitch_body_weight_lb?: number | null;
+  selected_pitch_stride_length_in?: number | null;
+  selected_pitch_stride_direction_in?: number | null;
   match_summary?: {
     totalSinglePitchFiles?: number;
     matchedSinglePitchFiles?: number;
@@ -44,6 +50,24 @@ type Payload = {
   };
   error?: string;
 };
+
+const BIOMECH_TABLE_COLUMNS = [
+  'Name',
+  'Tags',
+  'Back Leg Peak Fz (lb)',
+  'Back Leg Peak Fy (lb)',
+  'Mound Connection (BW%)',
+  'Back Leg Impulse (lb·s)',
+  'Back Leg YZ Transfer (s)',
+  'Lead Leg Peak Fz (lb)',
+  'Lead Leg Peak Fy (lb)',
+  'Lead Leg Clawback (s)',
+  'Lead Leg YZ Transfer (s)',
+  'Y Transfer (s)',
+  'Z Transfer (s)',
+  'Stride Length (in)',
+  'Stride Direction (in)',
+] as const;
 
 function isoDateOffset(days: number): string {
   const d = new Date();
@@ -64,6 +88,32 @@ function toFirstLastName(value: string): string {
   if (!raw.includes(',')) return raw;
   const [last, ...rest] = raw.split(',');
   return `${rest.join(' ').trim()} ${last.trim()}`.replace(/\s+/g, ' ').trim();
+}
+
+function formatBiomechTableValue(column: string, value: string | number | null, forceMode: ForceMode): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const isForceColumn = column.includes('Peak Fz') || column.includes('Peak Fy');
+  const isImpulseColumn = column.includes('Impulse');
+  const isMoundConnectionColumn = column.includes('Mound Connection');
+  const isBwPercentColumn = isMoundConnectionColumn || (forceMode === 'bw' && (isForceColumn || isImpulseColumn));
+  const useThreeDecimals =
+    isBwPercentColumn
+    ||
+    column.includes('YZ Transfer')
+    || column.includes('Clawback')
+    || column.includes('Y Transfer')
+    || column.includes('Z Transfer');
+  const digits = useThreeDecimals ? 3 : 1;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (isBwPercentColumn) return `${(value * 100).toFixed(1)}%`;
+    return value.toFixed(digits);
+  }
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && String(value).trim() !== '') {
+    if (isBwPercentColumn) return `${(parsed * 100).toFixed(1)}%`;
+    return parsed.toFixed(digits);
+  }
+  return String(value);
 }
 
 function formatPitchOptionLabel(option: PitchOption, allOptions: PitchOption[]): string {
@@ -96,8 +146,29 @@ function formatPitchOptionLabel(option: PitchOption, allOptions: PitchOption[]):
   return `${pitcher} | ${formattedDate} | Pitch #${pitchNum}`;
 }
 
-function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
+function LineChart({
+  points,
+  mode,
+  forceMode,
+  bodyWeightLb,
+  strideLengthIn,
+  strideDirectionIn,
+}: {
+  points: PitchPoint[];
+  mode: ViewMode;
+  forceMode: ForceMode;
+  bodyWeightLb: number | null;
+  strideLengthIn: number | null;
+  strideDirectionIn: number | null;
+}) {
   const roundAxisBound = (value: number, direction: 'up' | 'down') => {
+    const isBwForceView = mode === 'Force' && forceMode === 'bw';
+    if (isBwForceView) {
+      const abs = Math.abs(value);
+      const step = abs >= 3 ? 1 : abs >= 1 ? 0.5 : 0.25;
+      if (direction === 'up') return Math.ceil(value / step) * step;
+      return Math.floor(value / step) * step;
+    }
     const abs = Math.abs(value);
     const step = abs >= 250 ? 100 : 50;
     if (direction === 'up') return Math.ceil(value / step) * step;
@@ -199,11 +270,13 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
       .sort((a, b) => a.t - b.t)
       .map((bucket) => {
         const avg = (values: number[]) => (values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : null);
+        const forceScale = mode === 'Force' && forceMode === 'bw' && bodyWeightLb && bodyWeightLb > 0 ? bodyWeightLb : null;
+        const scaleForce = (value: number | null) => (forceScale ? (value === null ? null : value / forceScale) : value);
         return {
           t: bucket.t,
-          fx: avg(bucket.fx),
-          fy: avg(bucket.fy),
-          fz: avg(bucket.fz),
+          fx: scaleForce(avg(bucket.fx)),
+          fy: scaleForce(avg(bucket.fy)),
+          fz: scaleForce(avg(bucket.fz)),
           mx: avg(bucket.mx),
           my: avg(bucket.my),
           mz: avg(bucket.mz),
@@ -218,7 +291,7 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
       sampled.push(averaged[Math.min(averaged.length - 1, Math.floor(i * step))] as PitchPoint);
     }
     return sampled;
-  }, [points]);
+  }, [bodyWeightLb, forceMode, mode, points]);
 
   const domain = useMemo(() => {
     if (!chartPoints.length) return null;
@@ -277,6 +350,10 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
 
   const x = (v: number) => pad.left + ((v - minX) / dx) * plotW;
   const y = (v: number) => pad.top + (1 - (v - minY) / dy) * plotH;
+  const formatYAxisTick = (value: number) => {
+    if (mode === 'Force' && forceMode === 'bw') return (value * 100).toFixed(1);
+    return value.toFixed(1);
+  };
 
   const paths = (['loading', 'delivery'] as const).flatMap((phase) =>
     metrics.map((metric) => {
@@ -341,13 +418,17 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
   }, [chartPoints, domain, dx, hoverClientX, metrics, minX, plotW]);
   const yTicks = useMemo(() => {
     if (!domain) return [] as number[];
-    const start = Math.ceil(domain.minY / 50) * 50;
-    const end = Math.floor(domain.maxY / 50) * 50;
+    const isBwForceView = mode === 'Force' && forceMode === 'bw';
+    const tickStep = isBwForceView
+      ? (Math.max(Math.abs(domain.minY), Math.abs(domain.maxY)) >= 3 ? 1 : Math.max(Math.abs(domain.minY), Math.abs(domain.maxY)) >= 1 ? 0.5 : 0.25)
+      : 50;
+    const start = Math.ceil(domain.minY / tickStep) * tickStep;
+    const end = Math.floor(domain.maxY / tickStep) * tickStep;
     const ticks: number[] = [];
-    for (let v = start; v <= end; v += 50) ticks.push(v);
+    for (let v = start; v <= end; v += tickStep) ticks.push(Number(v.toFixed(6)));
     if (!ticks.includes(0)) ticks.push(0);
     return Array.from(new Set(ticks)).sort((a, b) => b - a);
-  }, [domain]);
+  }, [domain, forceMode, mode]);
 
   const keyMetrics = useMemo(() => {
     const loading = chartPoints
@@ -387,6 +468,17 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
     const backPeakFy = maxBy(loading.map((p) => ({ t: p.t, v: p.fy })));
     const leadPeakFz = maxBy(delivery.map((p) => ({ t: p.t, v: p.fz })));
     const leadPeakFy = minBy(delivery.map((p) => ({ t: p.t, v: p.fy })));
+    const firstLeadFz = delivery.find((p) => p.fz !== null);
+    const backFzBeforeLead = firstLeadFz
+      ? loading.filter((p) => p.fz !== null && p.t <= firstLeadFz.t).sort((a, b) => a.t - b.t).at(-1)?.fz ?? null
+      : null;
+    const forcesAlreadyScaledToBw = mode === 'Force' && forceMode === 'bw';
+    const moundConnection =
+      backFzBeforeLead === null
+        ? null
+        : (forcesAlreadyScaledToBw
+          ? backFzBeforeLead
+          : (bodyWeightLb && bodyWeightLb > 0 ? backFzBeforeLead / bodyWeightLb : null));
 
     let impulse: number | null = null;
     let impulseStartT: number | null = null;
@@ -472,6 +564,7 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
     return {
       backPeakFz: backPeakFz?.v ?? null,
       backPeakFy: backPeakFy?.v ?? null,
+      moundConnection,
       impulse,
       impulseStartT,
       impulseEndT,
@@ -483,9 +576,21 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
       yTransfer,
       zTransfer,
     };
-  }, [chartPoints]);
+  }, [bodyWeightLb, chartPoints, forceMode, mode]);
 
   const fmt = (value: number | null, digits = 2) => (value === null || !Number.isFinite(value) ? '—' : value.toFixed(digits));
+  const fmtForceOrImpulse = (value: number | null, digits = 1) => {
+    if (value === null || !Number.isFinite(value)) return '—';
+    if (mode === 'Force' && forceMode === 'bw') return `${(value * 100).toFixed(1)}%`;
+    return value.toFixed(digits);
+  };
+  const fmtBwPercent = (value: number | null) => (value === null || !Number.isFinite(value) ? '—' : `${(value * 100).toFixed(1)}%`);
+  const fmtHoverMetric = (metricKey: string, value: number | null) => {
+    if (value === null || !Number.isFinite(value)) return '—';
+    const isForceMetric = metricKey === 'fx' || metricKey === 'fy' || metricKey === 'fz';
+    if (mode === 'Force' && forceMode === 'bw' && isForceMetric) return (value * 100).toFixed(1);
+    return value.toFixed(1);
+  };
   const impulseAreaPath = useMemo(() => {
     if (!domain) return '';
     const startT = keyMetrics.impulseStartT;
@@ -528,7 +633,7 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
         <line x1={pad.left} y1={height - pad.bottom} x2={width - pad.right} y2={height - pad.bottom} stroke="rgba(148,163,184,0.5)" strokeWidth="1" />
         {yTicks.map((tick) => {
           const yy = y(tick);
-          const value = tick.toFixed(1);
+          const value = formatYAxisTick(tick);
           return (
             <g key={`grid-y-${tick}`}>
               <line x1={pad.left} y1={yy} x2={width - pad.right} y2={yy} stroke="rgba(148,163,184,0.18)" strokeWidth="1" />
@@ -556,7 +661,9 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
           );
         })}
         <text x={width / 2} y={height - 8} fill="#cbd5e1" fontSize="12" textAnchor="middle">Time (s)</text>
-        <text x={14} y={height / 2} fill="#cbd5e1" fontSize="12" transform={`rotate(-90 14 ${height / 2})`} textAnchor="middle">Force</text>
+        <text x={14} y={height / 2} fill="#cbd5e1" fontSize="12" transform={`rotate(-90 14 ${height / 2})`} textAnchor="middle">
+          {mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'Force'}
+        </text>
         {transitionX !== null ? (
           <line
             x1={x(transitionX)}
@@ -629,7 +736,7 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
           {hoverPayload.metrics.map((metric) => (
             <div key={`tooltip-${metric.key}`} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ width: 8, height: 8, borderRadius: 999, background: metric.color }} />
-              <span>{metric.label}: {metric.value === null ? '—' : metric.value.toFixed(1)}</span>
+              <span>{metric.label}: {fmtHoverMetric(metric.key, metric.value)}</span>
             </div>
           ))}
         </div>
@@ -647,15 +754,16 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
         <h4 style={{ margin: 0 }}>Key Metrics</h4>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <strong>Back Leg</strong>
-          <span>Peak Fz (lb): {fmt(keyMetrics.backPeakFz, 1)}</span>
-          <span>Peak Fy (lb): {fmt(keyMetrics.backPeakFy, 1)}</span>
-          <span>Impulse (lb·s): {fmt(keyMetrics.impulse, 2)}</span>
+          <span>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.backPeakFz, 1)}</span>
+          <span>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.backPeakFy, 1)}</span>
+          <span>Mound Connection (BW%): {fmtBwPercent(keyMetrics.moundConnection)}</span>
+          <span>Impulse ({mode === 'Force' && forceMode === 'bw' ? 'BW%·s' : 'lb·s'}): {fmtForceOrImpulse(keyMetrics.impulse, 2)}</span>
           <span>YZ Transfer Back (s): {fmt(keyMetrics.yzTransferBack, 3)}</span>
         </div>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <strong>Lead Leg</strong>
-          <span>Peak Fz (lb): {fmt(keyMetrics.leadPeakFz, 1)}</span>
-          <span>Peak Fy (lb): {fmt(keyMetrics.leadPeakFy, 1)}</span>
+          <span>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.leadPeakFz, 1)}</span>
+          <span>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.leadPeakFy, 1)}</span>
           <span>Clawback Time (s): {fmt(keyMetrics.clawbackTime, 3)}</span>
           <span>YZ Transfer Front (s): {fmt(keyMetrics.yzTransferFront, 3)}</span>
         </div>
@@ -663,6 +771,8 @@ function LineChart({ points, mode }: { points: PitchPoint[]; mode: ViewMode }) {
           <strong>Other Metrics</strong>
           <span>Y Transfer (s): {fmt(keyMetrics.yTransfer, 3)}</span>
           <span>Z Transfer (s): {fmt(keyMetrics.zTransfer, 3)}</span>
+          <span>Stride Length (in): {fmt(strideLengthIn, 1)}</span>
+          <span>Stride Direction (in): {fmt(strideDirectionIn, 1)}</span>
         </div>
       </aside>
     </div>
@@ -673,6 +783,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [startDate, setStartDate] = useState<string>(isoDateOffset(-30));
   const [endDate, setEndDate] = useState<string>(isoDateOffset(0));
   const [mode, setMode] = useState<ViewMode>('Force');
+  const [forceMode, setForceMode] = useState<ForceMode>('force');
   const [sortColumn, setSortColumn] = useState<string>('');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -687,6 +798,11 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [tagsOptions, setTagsOptions] = useState<string[]>([]);
   const [selectedTag, setSelectedTag] = useState<string>('ALL');
   const [selectedPitchTags, setSelectedPitchTags] = useState<string>('');
+  const [selectedPitchPlayer, setSelectedPitchPlayer] = useState<string>('');
+  const [selectedPitchDate, setSelectedPitchDate] = useState<string>('');
+  const [selectedPitchBodyWeightLb, setSelectedPitchBodyWeightLb] = useState<number | null>(null);
+  const [selectedPitchStrideLengthIn, setSelectedPitchStrideLengthIn] = useState<number | null>(null);
+  const [selectedPitchStrideDirectionIn, setSelectedPitchStrideDirectionIn] = useState<number | null>(null);
   const [selectedPitcher, setSelectedPitcher] = useState<string>('ALL');
   const [matchSummary, setMatchSummary] = useState<{
     totalSinglePitchFiles: number;
@@ -725,11 +841,12 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       if (endDate) query.set('endDate', endDate);
       if (selectedPitcher && selectedPitcher !== 'ALL') query.set('pitcher', selectedPitcher);
       if (selectedTag && selectedTag !== 'ALL') query.set('tag', selectedTag);
+      query.set('forceMode', forceMode);
       if (pitchKeyOverride || selectedPitchKey) query.set('pitchKey', pitchKeyOverride || selectedPitchKey);
       const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
       const payload = (await response.json().catch(() => ({}))) as Payload;
       if (!response.ok) throw new Error(payload.error || 'Failed to load biomechanics data.');
-      const columns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
+      const columns = BIOMECH_TABLE_COLUMNS as unknown as string[];
       const rows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
       const options = Array.isArray(payload.pitch_options) ? payload.pitch_options : [];
       const pitchKey = String(payload.selected_pitch_key ?? options[0]?.pitchKey ?? '');
@@ -744,6 +861,11 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setPitcherOptions(uploadPitchers);
       setTagsOptions(nextTags);
       setSelectedPitchTags(String(payload.selected_pitch_tags ?? ''));
+      setSelectedPitchPlayer(String(payload.selected_pitch_player ?? ''));
+      setSelectedPitchDate(String(payload.selected_pitch_date ?? ''));
+      setSelectedPitchBodyWeightLb(typeof payload.selected_pitch_body_weight_lb === 'number' ? payload.selected_pitch_body_weight_lb : null);
+      setSelectedPitchStrideLengthIn(typeof payload.selected_pitch_stride_length_in === 'number' ? payload.selected_pitch_stride_length_in : null);
+      setSelectedPitchStrideDirectionIn(typeof payload.selected_pitch_stride_direction_in === 'number' ? payload.selected_pitch_stride_direction_in : null);
       setMatchSummary({
         totalSinglePitchFiles: Number(payload.match_summary?.totalSinglePitchFiles ?? 0),
         matchedSinglePitchFiles: Number(payload.match_summary?.matchedSinglePitchFiles ?? 0),
@@ -763,7 +885,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
 
   useEffect(() => {
     void loadData();
-  }, [selectedPitcher, selectedTag]);
+  }, [forceMode, selectedPitcher, selectedTag]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -963,11 +1085,25 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
               <option value="Moments">Moments (Mx, My, Mz)</option>
             </select>
           </label>
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>Scale</span>
+            <select className="portal-select" value={forceMode} onChange={(e) => setForceMode(e.target.value as ForceMode)} style={selectStyle}>
+              <option value="force">Force</option>
+              <option value="bw">BW%</option>
+            </select>
+          </label>
         </div>
         <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13 }}>
-          Tags: <strong>{selectedPitchTags || '—'}</strong>
+          Tags: <strong>{selectedPitchTags || '—'}</strong> | Player: <strong>{selectedPitchPlayer || '—'}</strong> | Date: <strong>{selectedPitchDate || '—'}</strong>
         </p>
-        <LineChart points={selectedPitchPoints} mode={mode} />
+        <LineChart
+          points={selectedPitchPoints}
+          mode={mode}
+          forceMode={forceMode}
+          bodyWeightLb={selectedPitchBodyWeightLb}
+          strideLengthIn={selectedPitchStrideLengthIn}
+          strideDirectionIn={selectedPitchStrideDirectionIn}
+        />
       </div>
 
       <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12 }}>
@@ -980,17 +1116,28 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
                   const active = sortColumn === column;
                   const glyph = active ? (sortDirection === 'desc' ? '↓' : '↑') : '↕';
                   return (
-                    <th key={column}>
+                    <th key={column} style={{ textAlign: 'center' }}>
                       <button
                         type="button"
-                        className="btn btn-ghost"
-                        style={{ padding: '0.2rem 0.35rem', minHeight: 'unset' }}
+                        className="portal-table-sort-btn"
+                        style={{
+                          appearance: 'none',
+                          border: 'none',
+                          background: 'transparent',
+                          color: 'inherit',
+                          font: 'inherit',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          padding: 0,
+                        }}
                         onClick={() => {
                           setSortColumn(column);
                           setSortDirection((prev) => (active && prev === 'desc' ? 'asc' : 'desc'));
                         }}
                       >
-                        {column} {glyph}
+                        {(forceMode === 'bw' && (column.includes('Peak Fz') || column.includes('Peak Fy') || column.includes('Impulse')))
+                          ? column.replace('(lb·s)', '(BW%·s)').replace('(lb)', '(BW%)')
+                          : column} {glyph}
                       </button>
                     </th>
                   );
@@ -1001,12 +1148,16 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
               {sortedRows.length ? sortedRows.map((row, rowIdx) => (
                 <tr key={`bio-row-${rowIdx}`}>
                   {tableColumns.map((column) => (
-                    <td key={`${rowIdx}-${column}`}>{formatTableDisplayValue(column, row[column])}</td>
+                    <td key={`${rowIdx}-${column}`} style={{ textAlign: 'center' }}>
+                      {formatBiomechTableValue(column, row[column] as string | number | null, forceMode)}
+                    </td>
                   ))}
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={Math.max(1, tableColumns.length)}>{isLoading ? 'Loading...' : 'No rows available.'}</td>
+                  <td colSpan={Math.max(1, tableColumns.length)} style={{ textAlign: 'center' }}>
+                    {isLoading ? 'Loading...' : 'No rows available.'}
+                  </td>
                 </tr>
               )}
             </tbody>
