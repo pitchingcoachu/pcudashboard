@@ -327,6 +327,7 @@ async function ensureBiomechanicsTables(): Promise<void> {
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index ASC);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_date ON biomechanics_single_pitch_points (organization_id, school_code, captured_at DESC);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash);`);
+      await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_biomech_uploads_scope_kind_hash ON biomechanics_uploads (organization_id, school_code, upload_kind, source_file_hash);`);
       await client.query('COMMIT');
       global.__pcuBiomechanicsDbPatched = true;
     } catch {
@@ -403,6 +404,7 @@ async function ensureBiomechanicsTables(): Promise<void> {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index ASC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_date ON biomechanics_single_pitch_points (organization_id, school_code, captured_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash);`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_biomech_uploads_scope_kind_hash ON biomechanics_uploads (organization_id, school_code, upload_kind, source_file_hash);`);
     await client.query('COMMIT');
     global.__pcuBiomechanicsDbReady = true;
     global.__pcuBiomechanicsDbPatched = true;
@@ -435,11 +437,26 @@ export async function saveAllPitchRows(args: {
       INSERT INTO biomechanics_uploads (
         organization_id, school_code, upload_kind, source_file_name, source_file_hash, row_count, created_by_user_id
       ) VALUES ($1, $2, 'all_pitches', $3, $4, $5, $6)
+      ON CONFLICT (organization_id, school_code, upload_kind, source_file_hash)
+      DO UPDATE SET
+        source_file_name = EXCLUDED.source_file_name,
+        row_count = EXCLUDED.row_count,
+        created_by_user_id = EXCLUDED.created_by_user_id,
+        created_at = NOW()
       RETURNING id
       `,
       [args.organizationId, schoolCode, args.sourceFileName, sourceFileHash, args.rows.length, args.createdByUserId]
     );
     const uploadId = Number(uploadInsert.rows[0]?.id ?? 0);
+    await client.query(
+      `
+      DELETE FROM biomechanics_pitch_rows
+      WHERE organization_id = $1
+        AND school_code = $2
+        AND source_file_hash = $3
+      `,
+      [args.organizationId, schoolCode, sourceFileHash]
+    );
     let insertedRows = 0;
     for (let idx = 0; idx < args.rows.length; idx += 1) {
       const row = args.rows[idx] ?? {};
@@ -507,11 +524,26 @@ export async function saveSinglePitchPoints(args: {
       INSERT INTO biomechanics_uploads (
         organization_id, school_code, upload_kind, source_file_name, source_file_hash, row_count, created_by_user_id
       ) VALUES ($1, $2, 'single_pitch', $3, $4, $5, $6)
+      ON CONFLICT (organization_id, school_code, upload_kind, source_file_hash)
+      DO UPDATE SET
+        source_file_name = EXCLUDED.source_file_name,
+        row_count = EXCLUDED.row_count,
+        created_by_user_id = EXCLUDED.created_by_user_id,
+        created_at = NOW()
       RETURNING id
       `,
       [args.organizationId, schoolCode, args.sourceFileName, sourceFileHash, args.rows.length, args.createdByUserId]
     );
     const uploadId = Number(uploadInsert.rows[0]?.id ?? 0);
+    await client.query(
+      `
+      DELETE FROM biomechanics_single_pitch_points
+      WHERE organization_id = $1
+        AND school_code = $2
+        AND source_file_hash = $3
+      `,
+      [args.organizationId, schoolCode, sourceFileHash]
+    );
     let insertedRows = 0;
     const pitcherNorm = normalizeName(pitcherName || '');
     const chunkSize = 100;
@@ -663,6 +695,7 @@ export async function getBiomechanicsSnapshot(args: {
     dateFilterParts.push(`COALESCE(captured_at, created_at) < ($${values.length}::date + INTERVAL '1 day')`);
   }
   const dateFilterSql = dateFilterParts.length ? `AND ${dateFilterParts.join(' AND ')}` : '';
+  const summaryValues: Array<string | number> = [...values];
   let tablePitcherFilterSql = '';
   if (selectedPitcherNorm) {
     values.push(selectedPitcherNorm);
@@ -689,6 +722,16 @@ export async function getBiomechanicsSnapshot(args: {
     LIMIT 1200
     `,
     values
+  );
+  const summaryAllRowsResult = await pool.query<{ total_rows: string }>(
+    `
+    SELECT COUNT(*)::text AS total_rows
+    FROM biomechanics_pitch_rows
+    WHERE organization_id = $1
+      AND school_code = $2
+      ${dateFilterSql}
+    `,
+    summaryValues
   );
 
   const selectedTag = String(args.selectedTag ?? '').trim();
@@ -767,6 +810,17 @@ export async function getBiomechanicsSnapshot(args: {
       values
     );
   });
+  const summarySingleFilesResult = await pool.query<{ total_files: string }>(
+    `
+    SELECT COUNT(DISTINCT source_file_hash)::text AS total_files
+    FROM biomechanics_single_pitch_points
+    WHERE organization_id = $1
+      AND school_code = $2
+      ${dateFilterSql}
+    `,
+    summaryValues
+  );
+
   const allRows = rowResult.rows.map((row) => {
     const json = (row.row_json ?? {}) as Record<string, unknown>;
     const playerRaw =
@@ -901,13 +955,18 @@ export async function getBiomechanicsSnapshot(args: {
   }
 
   const selectedPitchTags = selectedPitchKey ? (mapping.get(selectedPitchKey)?.tags ?? null) : null;
+  const totalAllRowsFromDb = Number(summaryAllRowsResult.rows[0]?.total_rows ?? 0);
+  const totalSingleFilesFromDb = Number(summarySingleFilesResult.rows[0]?.total_files ?? 0);
+  const totalAllForSummary = Math.max(allRows.length, totalAllRowsFromDb);
+  const totalSinglesForSummary = Math.max(singleRows.length, totalSingleFilesFromDb);
+  const matchedForSummary = Math.min(mapping.size, totalAllForSummary);
   const matchSummary = {
-    totalSinglePitchFiles: singleRows.length,
+    totalSinglePitchFiles: totalSinglesForSummary,
     matchedSinglePitchFiles: mapping.size,
-    unmatchedSinglePitchFiles: Math.max(0, singleRows.length - mapping.size),
-    totalAllPitchRows: allRows.length,
-    matchedAllPitchRows: Math.min(mapping.size, allRows.length),
-    unmatchedAllPitchRows: Math.max(0, allRows.length - Math.min(mapping.size, allRows.length)),
+    unmatchedSinglePitchFiles: Math.max(0, totalSinglesForSummary - mapping.size),
+    totalAllPitchRows: totalAllForSummary,
+    matchedAllPitchRows: matchedForSummary,
+    unmatchedAllPitchRows: Math.max(0, totalAllForSummary - matchedForSummary),
   };
 
   const metricKeys = pitchOptions.map((p) => p.pitchKey);
