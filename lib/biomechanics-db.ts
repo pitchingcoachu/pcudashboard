@@ -75,6 +75,14 @@ function normalizeName(value: string): string {
     .replace(/[^a-z0-9]+/g, ' ');
 }
 
+function toFirstLastName(value: string | null | undefined): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (!raw.includes(',')) return raw.replace(/\s+/g, ' ').trim();
+  const [last, ...rest] = raw.split(',');
+  return `${rest.join(' ').trim()} ${last.trim()}`.replace(/\s+/g, ' ').trim();
+}
+
 function toFinite(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value !== 'string') return null;
@@ -214,6 +222,16 @@ function formatDateKeyMddyy(dateKey: string | null | undefined): string | null {
   const dd = Number(raw.slice(6, 8));
   const yy = String(yyyy % 100).padStart(2, '0');
   return `${mm}/${String(dd).padStart(2, '0')}/${yy}`;
+}
+
+function splitTags(value: string | null | undefined): string[] {
+  const raw = String(value ?? '').trim();
+  if (!raw) return ['UnTagged'];
+  const parts = raw
+    .split(/[;,|]/g)
+    .map((v) => v.trim())
+    .filter(Boolean);
+  return parts.length ? Array.from(new Set(parts)) : ['UnTagged'];
 }
 
 function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputedMetrics {
@@ -557,6 +575,33 @@ async function ensureBiomechanicsTables(): Promise<void> {
   }
 }
 
+async function ensureBiomechanicsMetricsTable(): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS biomechanics_pitch_metrics (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id BIGINT NOT NULL,
+      school_code TEXT NOT NULL,
+      source_file_hash TEXT NOT NULL,
+      back_peak_fz DOUBLE PRECISION,
+      back_peak_fy DOUBLE PRECISION,
+      mound_connection DOUBLE PRECISION,
+      impulse DOUBLE PRECISION,
+      yz_transfer_back DOUBLE PRECISION,
+      lead_peak_fz DOUBLE PRECISION,
+      lead_peak_fy DOUBLE PRECISION,
+      clawback_time DOUBLE PRECISION,
+      yz_transfer_front DOUBLE PRECISION,
+      y_transfer DOUBLE PRECISION,
+      z_transfer DOUBLE PRECISION,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, school_code, source_file_hash)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
+}
+
 export async function saveAllPitchRows(args: {
   organizationId: number;
   schoolCode: string;
@@ -674,6 +719,7 @@ export async function saveSinglePitchPoints(args: {
 }): Promise<{ insertedRows: number; pitchKey: string }> {
   if (!isDatabaseConfigured()) throw new Error('DATABASE_URL is not configured.');
   await ensureBiomechanicsTables();
+  await ensureBiomechanicsMetricsTable();
   const pool = getDbPool();
   const sourceFileHash = createHash('sha256').update(args.csvContent).digest('hex');
   const schoolCode = normalizeSchoolCode(args.schoolCode);
@@ -930,6 +976,7 @@ export async function getBiomechanicsSnapshot(args: {
     };
   }
   await ensureBiomechanicsTables();
+  await ensureBiomechanicsMetricsTable();
   const pool = getDbPool();
   const schoolCode = normalizeSchoolCode(args.schoolCode);
   const selectedPitcher = String(args.selectedPitcher ?? '').trim();
@@ -1090,7 +1137,7 @@ export async function getBiomechanicsSnapshot(args: {
     const strideWidthCm = toFinite(pickValueCaseInsensitive(json, ['strideWidth (cm)', 'strideWidth', 'Stride Width (cm)']));
     const systemWeightN = toFinite(pickValueCaseInsensitive(json, ['systemWeight (N)', 'systemWeight', 'System Weight (N)']));
     return {
-      name: playerRaw || 'Unknown',
+      name: toFirstLastName(playerRaw || 'Unknown'),
       nameNorm: normalizeName(playerRaw),
       tags,
       dateKey,
@@ -1103,7 +1150,7 @@ export async function getBiomechanicsSnapshot(args: {
 
   const singleRows = pitchOptionsResult.rows.map((row) => {
     const sourceFileName = String(row.source_file_name ?? '').trim();
-    const parts = parseSingleFileNameParts(sourceFileName);
+    const parts = parseSingleFileNameParts(sourceFileName || String(row.label ?? ''));
     return {
       pitchKey: row.pitch_key,
       label: row.label,
@@ -1131,7 +1178,7 @@ export async function getBiomechanicsSnapshot(args: {
   const singleGroups = new Map<string, Array<typeof singleRows[number]>>();
   for (const row of singleRows) {
     if (!row.dateKey || row.timeKey === null || !Number.isFinite(row.timeKey)) continue;
-    const key = row.pitcherNorm ? `${row.pitcherNorm}|${row.dateKey}` : `__date_only__|${row.dateKey}`;
+    const key = `__date_only__|${row.dateKey}`;
     const arr = singleGroups.get(key) ?? [];
     arr.push(row);
     singleGroups.set(key, arr);
@@ -1140,11 +1187,17 @@ export async function getBiomechanicsSnapshot(args: {
     arr.sort((a, b) => Number(a.timeKey ?? 0) - Number(b.timeKey ?? 0));
   }
 
-  const mapping = new Map<string, { name: string; tags: string; strideLengthIn: number | null; strideDirectionIn: number | null; pitchDateLabel: string | null; bodyWeightLb: number | null }>();
+  const mapping = new Map<string, {
+    name: string;
+    tags: string;
+    tagsList: string[];
+    strideLengthIn: number | null;
+    strideDirectionIn: number | null;
+    pitchDateLabel: string | null;
+    bodyWeightLb: number | null;
+  }>();
   for (const [key, singles] of singleGroups.entries()) {
-    const allForGroup = key.startsWith('__date_only__|')
-      ? allRows.filter((row) => `__date_only__|${row.dateKey}` === key)
-      : (allGroups.get(key) ?? []);
+    const allForGroup = allRows.filter((row) => `__date_only__|${row.dateKey}` === key);
     const n = Math.min(singles.length, allForGroup.length);
     for (let i = 0; i < n; i += 1) {
       const single = singles[i];
@@ -1153,6 +1206,7 @@ export async function getBiomechanicsSnapshot(args: {
       mapping.set(single.pitchKey, {
         name: allRow.name,
         tags: allRow.tags || 'UnTagged',
+        tagsList: splitTags(allRow.tags || 'UnTagged'),
         strideLengthIn: allRow.strideLengthIn,
         strideDirectionIn: allRow.strideDirectionIn,
         pitchDateLabel: formatDateKeyMddyy(allRow.dateKey),
@@ -1161,13 +1215,21 @@ export async function getBiomechanicsSnapshot(args: {
     }
   }
 
-  const tagsOptions = Array.from(new Set(Array.from(mapping.values()).map((v) => v.tags).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const tagsOptions = Array.from(
+    new Set(
+      Array.from(mapping.values()).flatMap((v) => v.tagsList).filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b));
 
-  const pitchOptionsUnfiltered: BiomechPitchOption[] = singleRows.map((row) => ({
-    pitchKey: row.pitchKey,
-    label: row.label,
-    capturedAt: row.capturedAt,
-  }));
+  const pitchOptionsUnfiltered: BiomechPitchOption[] = singleRows.map((row) => {
+    const mappedName = mapping.get(row.pitchKey)?.name ?? '';
+    const fallback = toFirstLastName(String(row.pitcherName ?? '').trim());
+    return {
+      pitchKey: row.pitchKey,
+      label: mappedName || fallback || 'Unknown Pitcher',
+      capturedAt: row.capturedAt,
+    };
+  });
   const pitchOptions = pitchOptionsUnfiltered.filter((option) => {
     if (selectedPitcherNorm) {
       const meta = mapping.get(option.pitchKey);
@@ -1175,7 +1237,7 @@ export async function getBiomechanicsSnapshot(args: {
     }
     if (!selectedTag || selectedTag.toUpperCase() === 'ALL') return true;
     const meta = mapping.get(option.pitchKey);
-    return (meta?.tags ?? '') === selectedTag;
+    return (meta?.tagsList ?? []).includes(selectedTag);
   });
   const selectedPitchKey =
     args.selectedPitchKey && pitchOptions.some((option) => option.pitchKey === args.selectedPitchKey)
@@ -1272,7 +1334,48 @@ export async function getBiomechanicsSnapshot(args: {
         AND source_file_hash = ANY($3::text[])
       `,
       [args.organizationId, schoolCode, metricKeys]
-    );
+    ).catch(async (error) => {
+      const code = String((error as { code?: unknown } | null)?.code ?? '');
+      const message = String((error as { message?: unknown } | null)?.message ?? '').toLowerCase();
+      const missingMetricsTable = code === '42P01' || message.includes('biomechanics_pitch_metrics');
+      if (!missingMetricsTable) throw error;
+      await ensureBiomechanicsMetricsTable();
+      return pool.query<{
+        source_file_hash: string;
+        back_peak_fz: number | null;
+        back_peak_fy: number | null;
+        mound_connection: number | null;
+        impulse: number | null;
+        yz_transfer_back: number | null;
+        lead_peak_fz: number | null;
+        lead_peak_fy: number | null;
+        clawback_time: number | null;
+        yz_transfer_front: number | null;
+        y_transfer: number | null;
+        z_transfer: number | null;
+      }>(
+        `
+        SELECT
+          source_file_hash,
+          back_peak_fz,
+          back_peak_fy,
+          mound_connection,
+          impulse,
+          yz_transfer_back,
+          lead_peak_fz,
+          lead_peak_fy,
+          clawback_time,
+          yz_transfer_front,
+          y_transfer,
+          z_transfer
+        FROM biomechanics_pitch_metrics
+        WHERE organization_id = $1
+          AND school_code = $2
+          AND source_file_hash = ANY($3::text[])
+        `,
+        [args.organizationId, schoolCode, metricKeys]
+      );
+    });
     for (const row of metricsAgg.rows) {
       pitchMetricsMap.set(row.source_file_hash, {
         backPeakFz: toFinite(row.back_peak_fz),
@@ -1387,22 +1490,24 @@ export async function getBiomechanicsSnapshot(args: {
     const meta = mapping.get(option.pitchKey);
     const metrics = pitchMetricsMap.get(option.pitchKey);
     if (!meta || !metrics) continue;
-    const key = `${meta.name}|${meta.tags}`;
-    const curr = agg.get(key) ?? { name: meta.name, tags: meta.tags, count: 0, sums: {}, strideLen: [], strideDir: [] };
-    curr.count += 1;
-    const add = (k: keyof BiomechComputedMetrics) => {
-      const v = metrics[k];
-      if (v !== null && Number.isFinite(v)) curr.sums[k] = (curr.sums[k] ?? 0) + v;
-    };
-    add('backPeakFz'); add('backPeakFy'); add('moundConnection'); add('impulse'); add('yzTransferBack');
-    add('leadPeakFz'); add('leadPeakFy'); add('clawbackTime'); add('yzTransferFront');
-    add('yTransfer'); add('zTransfer');
-    if (meta.strideLengthIn !== null && Number.isFinite(meta.strideLengthIn)) curr.strideLen.push(meta.strideLengthIn);
-    if (meta.strideDirectionIn !== null && Number.isFinite(meta.strideDirectionIn)) curr.strideDir.push(meta.strideDirectionIn);
-    agg.set(key, curr);
-    const list = groupPitches.get(key) ?? [];
-    list.push(option.pitchKey);
-    groupPitches.set(key, list);
+    for (const tag of meta.tagsList) {
+      const key = `${meta.name}|${tag}`;
+      const curr = agg.get(key) ?? { name: meta.name, tags: tag, count: 0, sums: {}, strideLen: [], strideDir: [] };
+      curr.count += 1;
+      const add = (k: keyof BiomechComputedMetrics) => {
+        const v = metrics[k];
+        if (v !== null && Number.isFinite(v)) curr.sums[k] = (curr.sums[k] ?? 0) + v;
+      };
+      add('backPeakFz'); add('backPeakFy'); add('moundConnection'); add('impulse'); add('yzTransferBack');
+      add('leadPeakFz'); add('leadPeakFy'); add('clawbackTime'); add('yzTransferFront');
+      add('yTransfer'); add('zTransfer');
+      if (meta.strideLengthIn !== null && Number.isFinite(meta.strideLengthIn)) curr.strideLen.push(meta.strideLengthIn);
+      if (meta.strideDirectionIn !== null && Number.isFinite(meta.strideDirectionIn)) curr.strideDir.push(meta.strideDirectionIn);
+      agg.set(key, curr);
+      const list = groupPitches.get(key) ?? [];
+      list.push(option.pitchKey);
+      groupPitches.set(key, list);
+    }
   }
   const avg = (sum: number | undefined, count: number) => (sum === undefined || count <= 0 ? null : sum / count);
   const avgArr = (vals: number[]) => (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
@@ -1467,4 +1572,31 @@ export async function getBiomechanicsSnapshot(args: {
     selectedPitchStrideDirectionIn,
     matchSummary,
   };
+}
+
+export async function getLatestBiomechanicsDate(args: {
+  organizationId: number;
+  schoolCode: string;
+}): Promise<string | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureBiomechanicsTables();
+  const pool = getDbPool();
+  const schoolCode = normalizeSchoolCode(args.schoolCode);
+  const result = await pool.query<{ latest_date: string | null }>(
+    `
+    WITH all_dates AS (
+      SELECT MAX((COALESCE(captured_at, created_at))::date)::text AS d
+      FROM biomechanics_pitch_rows
+      WHERE organization_id = $1 AND school_code = $2
+      UNION ALL
+      SELECT MAX((COALESCE(captured_at, created_at))::date)::text AS d
+      FROM biomechanics_single_pitch_points
+      WHERE organization_id = $1 AND school_code = $2
+    )
+    SELECT MAX(d)::text AS latest_date
+    FROM all_dates
+    `,
+    [args.organizationId, schoolCode]
+  );
+  return String(result.rows[0]?.latest_date ?? '').trim() || null;
 }

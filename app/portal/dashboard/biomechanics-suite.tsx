@@ -40,6 +40,8 @@ type Payload = {
   selected_pitch_body_weight_lb?: number | null;
   selected_pitch_stride_length_in?: number | null;
   selected_pitch_stride_direction_in?: number | null;
+  applied_start_date?: string | null;
+  applied_end_date?: string | null;
   match_summary?: {
     totalSinglePitchFiles?: number;
     matchedSinglePitchFiles?: number;
@@ -121,7 +123,7 @@ function formatPitchOptionLabel(option: PitchOption, allOptions: PitchOption[]):
   const [rawPitcherPart] = rawLabel.split('|');
   const pitcher = toFirstLastName(rawPitcherPart?.trim() ?? '') || 'Unknown Pitcher';
   const match = rawLabel.match(/(\d{8})_(\d+)\.csv/i);
-  if (!match) return rawLabel || pitcher;
+  if (!match) return pitcher;
   const datePart = match[1] ?? '';
   const timePart = Number(match[2] ?? 0);
   const samePitcherDate = allOptions
@@ -339,6 +341,7 @@ function LineChart({
   const width = 860;
   const height = 520;
   const pad = { left: 54, right: 20, top: 16, bottom: 42 };
+  const yAxisHeight = height - pad.top - pad.bottom;
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
   const minX = domain?.minX ?? 0;
@@ -615,6 +618,7 @@ function LineChart({
     return <p style={{ color: '#9ca3af', margin: 0 }}>No single-pitch data for this selection.</p>;
   }
   return (
+    <>
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 860px) minmax(240px, 1fr)', gap: 12, position: 'relative', zIndex: 0, overflow: 'hidden', alignItems: 'start' }}>
       <div style={{ position: 'relative' }}>
         <svg
@@ -741,23 +745,15 @@ function LineChart({
           ))}
         </div>
         ) : null}
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
-          {paths.map((metric) => (
-            <span key={`legend-${metric.phase}-${metric.key}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#e2e8f0', fontSize: 12 }}>
-              <span style={{ width: 10, height: 10, borderRadius: 999, background: metric.color }} />
-              {phaseDisplayLabel(metric.phase)} {metric.label}
-            </span>
-          ))}
-        </div>
       </div>
-      <aside style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, background: 'rgba(2,6,23,0.35)', display: 'grid', gap: 10 }}>
+      <aside style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, background: 'rgba(2,6,23,0.35)', display: 'grid', gap: 10, height: yAxisHeight, overflowY: 'auto', marginTop: pad.top }}>
         <h4 style={{ margin: 0 }}>Key Metrics</h4>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <strong>Back Leg</strong>
           <span>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.backPeakFz, 1)}</span>
           <span>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.backPeakFy, 1)}</span>
           <span>Mound Connection (BW%): {fmtBwPercent(keyMetrics.moundConnection)}</span>
-          <span>Impulse ({mode === 'Force' && forceMode === 'bw' ? 'BW%·s' : 'lb·s'}): {fmtForceOrImpulse(keyMetrics.impulse, 2)}</span>
+          <span>Impulse ({mode === 'Force' && forceMode === 'bw' ? 'BW%·s' : 'lb·s'}): {fmtForceOrImpulse(keyMetrics.impulse, 1)}</span>
           <span>YZ Transfer Back (s): {fmt(keyMetrics.yzTransferBack, 3)}</span>
         </div>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
@@ -776,12 +772,21 @@ function LineChart({
         </div>
       </aside>
     </div>
+    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
+      {paths.map((metric) => (
+        <span key={`legend-${metric.phase}-${metric.key}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#e2e8f0', fontSize: 12 }}>
+          <span style={{ width: 10, height: 10, borderRadius: 999, background: metric.color }} />
+          {phaseDisplayLabel(metric.phase)} {metric.label}
+        </span>
+      ))}
+    </div>
+    </>
   );
 }
 
 export default function BiomechanicsSuite({ role, isActive = true }: { role: Role; isActive?: boolean }) {
-  const [startDate, setStartDate] = useState<string>(isoDateOffset(-30));
-  const [endDate, setEndDate] = useState<string>(isoDateOffset(0));
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
   const [mode, setMode] = useState<ViewMode>('Force');
   const [forceMode, setForceMode] = useState<ForceMode>('force');
   const [sortColumn, setSortColumn] = useState<string>('');
@@ -853,6 +858,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const points = Array.isArray(payload.selected_pitch_points) ? payload.selected_pitch_points : [];
       const uploadPitchers = Array.isArray(payload.pitcher_options) ? payload.pitcher_options : [];
       const nextTags = Array.isArray(payload.tags_options) ? payload.tags_options : [];
+      const appliedStartDate = String(payload.applied_start_date ?? '').trim();
+      const appliedEndDate = String(payload.applied_end_date ?? '').trim();
       setTableColumns(columns);
       setTableRows(rows);
       setPitchOptions(options);
@@ -866,6 +873,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setSelectedPitchBodyWeightLb(typeof payload.selected_pitch_body_weight_lb === 'number' ? payload.selected_pitch_body_weight_lb : null);
       setSelectedPitchStrideLengthIn(typeof payload.selected_pitch_stride_length_in === 'number' ? payload.selected_pitch_stride_length_in : null);
       setSelectedPitchStrideDirectionIn(typeof payload.selected_pitch_stride_direction_in === 'number' ? payload.selected_pitch_stride_direction_in : null);
+      if (appliedStartDate && appliedStartDate !== startDate) setStartDate(appliedStartDate);
+      if (appliedEndDate && appliedEndDate !== endDate) setEndDate(appliedEndDate);
       setMatchSummary({
         totalSinglePitchFiles: Number(payload.match_summary?.totalSinglePitchFiles ?? 0),
         matchedSinglePitchFiles: Number(payload.match_summary?.matchedSinglePitchFiles ?? 0),
@@ -1059,43 +1068,52 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         Match Quality: {matchSummary.matchedAllPitchRows}/{matchSummary.totalAllPitchRows} pitches matched ({matchSummary.unmatchedAllPitchRows} unmatched all-pitch rows). Single-pitch files uploaded: {matchSummary.totalSinglePitchFiles} ({matchSummary.matchedSinglePitchFiles} currently paired).
       </p>
 
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>
+        <label style={{ display: 'grid', gap: 4, width: 460, maxWidth: '100%', flex: '0 0 auto' }}>
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>Pitch</span>
+          <select
+            className="portal-select"
+            value={selectedPitchKey}
+            style={selectStyle}
+            onChange={(e) => {
+              const next = e.target.value;
+              setSelectedPitchKey(next);
+              void loadData(next);
+            }}
+          >
+            {displayPitchOptions.length ? displayPitchOptions.map((option) => (
+              <option key={option.pitchKey} value={option.pitchKey}>{option.label}</option>
+            )) : <option value="">No pitches available</option>}
+          </select>
+        </label>
+        <label style={{ display: 'grid', gap: 4 }}>
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>View</span>
+          <select className="portal-select" value={mode} onChange={(e) => setMode(e.target.value as ViewMode)} style={selectStyle}>
+            <option value="Force">Force (Fx, Fy, Fz)</option>
+            <option value="Moments">Moments (Mx, My, Mz)</option>
+          </select>
+        </label>
+        <label style={{ display: 'grid', gap: 4 }}>
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>Scale</span>
+          <select className="portal-select" value={forceMode} onChange={(e) => setForceMode(e.target.value as ForceMode)} style={selectStyle}>
+            <option value="force">Force</option>
+            <option value="bw">BW%</option>
+          </select>
+        </label>
+      </div>
+
       <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 10 }}>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <label style={{ display: 'grid', gap: 4, minWidth: 360, flex: 1 }}>
-            <span style={{ fontSize: 12, color: '#94a3b8' }}>Pitch</span>
-            <select
-              className="portal-select"
-              value={selectedPitchKey}
-              style={selectStyle}
-              onChange={(e) => {
-                const next = e.target.value;
-                setSelectedPitchKey(next);
-                void loadData(next);
-              }}
-            >
-              {displayPitchOptions.length ? displayPitchOptions.map((option) => (
-                <option key={option.pitchKey} value={option.pitchKey}>{option.label}</option>
-              )) : <option value="">No pitches available</option>}
-            </select>
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 12, color: '#94a3b8' }}>View</span>
-            <select className="portal-select" value={mode} onChange={(e) => setMode(e.target.value as ViewMode)} style={selectStyle}>
-              <option value="Force">Force (Fx, Fy, Fz)</option>
-              <option value="Moments">Moments (Mx, My, Mz)</option>
-            </select>
-          </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            <span style={{ fontSize: 12, color: '#94a3b8' }}>Scale</span>
-            <select className="portal-select" value={forceMode} onChange={(e) => setForceMode(e.target.value as ForceMode)} style={selectStyle}>
-              <option value="force">Force</option>
-              <option value="bw">BW%</option>
-            </select>
-          </label>
+        <div style={{ display: 'grid', justifyItems: 'center', gap: 2 }}>
+          <p style={{ margin: 0, color: '#e2e8f0', fontSize: 18, fontWeight: 700, textAlign: 'center' }}>
+            {selectedPitchPlayer || '—'}
+          </p>
+          <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13, textAlign: 'center' }}>
+            {selectedPitchDate || '—'}
+          </p>
+          <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13, textAlign: 'center' }}>
+            Tags: <strong>{selectedPitchTags || '—'}</strong>
+          </p>
         </div>
-        <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13 }}>
-          Tags: <strong>{selectedPitchTags || '—'}</strong> | Player: <strong>{selectedPitchPlayer || '—'}</strong> | Date: <strong>{selectedPitchDate || '—'}</strong>
-        </p>
         <LineChart
           points={selectedPitchPoints}
           mode={mode}

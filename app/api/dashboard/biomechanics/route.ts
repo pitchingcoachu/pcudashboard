@@ -5,6 +5,7 @@ import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../..
 import type { PortalSession } from '../../../../lib/portal-session';
 import {
   getBiomechanicsSnapshot,
+  getLatestBiomechanicsDate,
   saveAllPitchRows,
   saveSinglePitchPoints,
   type BiomechanicsUploadKind,
@@ -202,12 +203,19 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url);
-  const startDate = String(searchParams.get('startDate') ?? '').trim() || null;
-  const endDate = String(searchParams.get('endDate') ?? '').trim() || null;
+  let startDate = String(searchParams.get('startDate') ?? '').trim() || null;
+  let endDate = String(searchParams.get('endDate') ?? '').trim() || null;
   const selectedPitchKey = String(searchParams.get('pitchKey') ?? '').trim() || null;
   const selectedPitcher = String(searchParams.get('pitcher') ?? '').trim() || null;
   const selectedTag = String(searchParams.get('tag') ?? '').trim() || null;
   const forceMode = String(searchParams.get('forceMode') ?? '').trim().toLowerCase() === 'bw' ? 'bw' : 'force';
+  if (!startDate && !endDate) {
+    const latestDate = await getLatestBiomechanicsDate({ organizationId, schoolCode });
+    if (latestDate) {
+      startDate = latestDate;
+      endDate = latestDate;
+    }
+  }
 
   const pitcherOptions = await fetchPcuPitchers().catch(() => []);
   try {
@@ -235,6 +243,8 @@ export async function GET(request: Request) {
       selected_pitch_body_weight_lb: snapshot.selectedPitchBodyWeightLb,
       selected_pitch_stride_length_in: snapshot.selectedPitchStrideLengthIn,
       selected_pitch_stride_direction_in: snapshot.selectedPitchStrideDirectionIn,
+      applied_start_date: startDate,
+      applied_end_date: endDate,
       match_summary: snapshot.matchSummary,
       pitcher_options: pitcherOptions,
     });
@@ -252,6 +262,8 @@ export async function GET(request: Request) {
       selected_pitch_body_weight_lb: null,
       selected_pitch_stride_length_in: null,
       selected_pitch_stride_direction_in: null,
+      applied_start_date: startDate,
+      applied_end_date: endDate,
       match_summary: {
         totalSinglePitchFiles: 0,
         matchedSinglePitchFiles: 0,
