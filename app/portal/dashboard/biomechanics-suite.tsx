@@ -11,6 +11,7 @@ type PitchOption = {
   pitchKey: string;
   label: string;
   capturedAt: string | null;
+  velocityMph?: number | null;
 };
 
 type PitchPoint = {
@@ -37,6 +38,8 @@ type Payload = {
   selected_pitch_tags?: string | null;
   selected_pitch_player?: string | null;
   selected_pitch_date?: string | null;
+  selected_pitch_velocity_mph?: number | null;
+  pitch_velocity_by_key?: Record<string, number | null>;
   selected_pitch_body_weight_lb?: number | null;
   selected_pitch_stride_length_in?: number | null;
   selected_pitch_stride_direction_in?: number | null;
@@ -51,15 +54,25 @@ type Payload = {
     unmatchedAllPitchRows?: number;
   };
   error?: string;
+  debug?: {
+    candidate_org_ids?: number[];
+    selected_org_id?: number;
+    applied_start_date?: string | null;
+    applied_end_date?: string | null;
+    table_rows_count?: number;
+    pitch_options_count?: number;
+  };
 };
 
 const BIOMECH_TABLE_COLUMNS = [
   'Name',
   'Tags',
+  'Pitch Velocity (mph)',
   'Back Leg Peak Fz (lb)',
   'Back Leg Peak Fy (lb)',
   'Mound Connection (BW%)',
   'Back Leg Impulse (lb·s)',
+  'Back Leg Impulse Time (s)',
   'Back Leg YZ Transfer (s)',
   'Lead Leg Peak Fz (lb)',
   'Lead Leg Peak Fy (lb)',
@@ -94,6 +107,12 @@ function toFirstLastName(value: string): string {
 
 function formatBiomechTableValue(column: string, value: string | number | null, forceMode: ForceMode): string {
   if (value === null || value === undefined || value === '') return '—';
+  const isMsTransferColumn =
+    column.includes('Back Leg Impulse Time') ||
+    column.includes('Back Leg YZ Transfer') ||
+    column.includes('Lead Leg YZ Transfer') ||
+    column === 'Y Transfer (s)' ||
+    column === 'Z Transfer (s)';
   const isForceColumn = column.includes('Peak Fz') || column.includes('Peak Fy');
   const isImpulseColumn = column.includes('Impulse');
   const isMoundConnectionColumn = column.includes('Mound Connection');
@@ -107,51 +126,55 @@ function formatBiomechTableValue(column: string, value: string | number | null, 
     || column.includes('Z Transfer');
   const digits = useThreeDecimals ? 3 : 1;
   if (typeof value === 'number' && Number.isFinite(value)) {
+    if (isMsTransferColumn) return (value * 1000).toFixed(1);
     if (isBwPercentColumn) return `${(value * 100).toFixed(1)}%`;
     return value.toFixed(digits);
   }
   const parsed = Number(value);
   if (Number.isFinite(parsed) && String(value).trim() !== '') {
+    if (isMsTransferColumn) return (parsed * 1000).toFixed(1);
     if (isBwPercentColumn) return `${(parsed * 100).toFixed(1)}%`;
     return parsed.toFixed(digits);
   }
   return String(value);
 }
 
-function formatPitchOptionLabel(option: PitchOption, allOptions: PitchOption[]): string {
+function formatPitchOptionLabel(option: PitchOption, allOptions: PitchOption[], velocityByKey?: Record<string, number | null>): string {
   const rawLabel = String(option.label ?? '').trim();
-  const [rawPitcherPart] = rawLabel.split('|');
-  const pitcher = toFirstLastName(rawPitcherPart?.trim() ?? '') || 'Unknown Pitcher';
-  const match = rawLabel.match(/(\d{8})_(\d+)\.csv/i);
-  if (!match) return pitcher;
-  const datePart = match[1] ?? '';
-  const timePart = Number(match[2] ?? 0);
+  const pitcher = toFirstLastName(rawLabel) || 'Unknown Pitcher';
+  const currentTs = option.capturedAt ? new Date(option.capturedAt) : null;
+  if (!currentTs || !Number.isFinite(currentTs.getTime())) return pitcher;
+
+  const dateKey = currentTs.toISOString().slice(0, 10);
   const samePitcherDate = allOptions
     .map((candidate) => {
-      const candidateLabel = String(candidate.label ?? '').trim();
-      const [candidatePitcherPart] = candidateLabel.split('|');
-      const candidatePitcher = toFirstLastName(candidatePitcherPart?.trim() ?? '');
-      const candidateMatch = candidateLabel.match(/(\d{8})_(\d+)\.csv/i);
-      if (!candidateMatch) return null;
+      const candidatePitcher = toFirstLastName(String(candidate.label ?? '').trim());
       if (candidatePitcher !== pitcher) return null;
-      if ((candidateMatch[1] ?? '') !== datePart) return null;
-      return { pitchKey: candidate.pitchKey, timePart: Number(candidateMatch[2] ?? 0) };
+      const d = candidate.capturedAt ? new Date(candidate.capturedAt) : null;
+      if (!d || !Number.isFinite(d.getTime())) return null;
+      if (d.toISOString().slice(0, 10) !== dateKey) return null;
+      return { pitchKey: candidate.pitchKey, timeMs: d.getTime() };
     })
-    .filter((v): v is { pitchKey: string; timePart: number } => Boolean(v))
-    .sort((a, b) => a.timePart - b.timePart);
+    .filter((v): v is { pitchKey: string; timeMs: number } => Boolean(v))
+    .sort((a, b) => a.timeMs - b.timeMs);
+
   const pitchNum = Math.max(1, samePitcherDate.findIndex((v) => v.pitchKey === option.pitchKey) + 1);
-  const yyyy = Number(datePart.slice(0, 4));
-  const mm = Number(datePart.slice(4, 6));
-  const dd = Number(datePart.slice(6, 8));
-  const yy = String(yyyy % 100).padStart(2, '0');
-  const formattedDate = `${mm}/${String(dd).padStart(2, '0')}/${yy}`;
-  return `${pitcher} | ${formattedDate} | Pitch #${pitchNum}`;
+  const mm = String(currentTs.getMonth() + 1).padStart(2, '0');
+  const dd = String(currentTs.getDate()).padStart(2, '0');
+  const yy = String(currentTs.getFullYear() % 100).padStart(2, '0');
+  const fromMap = velocityByKey ? velocityByKey[option.pitchKey] : null;
+  const veloNum = typeof fromMap === 'number' && Number.isFinite(fromMap)
+    ? fromMap
+    : (typeof option.velocityMph === 'number' && Number.isFinite(option.velocityMph) ? option.velocityMph : null);
+  const velo = veloNum !== null ? `${veloNum.toFixed(1)} mph` : '— mph';
+  return `${pitcher} | ${mm}/${dd}/${yy} | Pitch #${pitchNum} | ${velo}`;
 }
 
 function LineChart({
   points,
   mode,
   forceMode,
+  pitchVelocityMph,
   bodyWeightLb,
   strideLengthIn,
   strideDirectionIn,
@@ -159,6 +182,7 @@ function LineChart({
   points: PitchPoint[];
   mode: ViewMode;
   forceMode: ForceMode;
+  pitchVelocityMph: number | null;
   bodyWeightLb: number | null;
   strideLengthIn: number | null;
   strideDirectionIn: number | null;
@@ -582,6 +606,7 @@ function LineChart({
   }, [bodyWeightLb, chartPoints, forceMode, mode]);
 
   const fmt = (value: number | null, digits = 2) => (value === null || !Number.isFinite(value) ? '—' : value.toFixed(digits));
+  const fmtMs = (value: number | null, digits = 1) => (value === null || !Number.isFinite(value) ? '—' : (value * 1000).toFixed(digits));
   const fmtForceOrImpulse = (value: number | null, digits = 1) => {
     if (value === null || !Number.isFinite(value)) return '—';
     if (mode === 'Force' && forceMode === 'bw') return `${(value * 100).toFixed(1)}%`;
@@ -754,19 +779,21 @@ function LineChart({
           <span>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.backPeakFy, 1)}</span>
           <span>Mound Connection (BW%): {fmtBwPercent(keyMetrics.moundConnection)}</span>
           <span>Impulse ({mode === 'Force' && forceMode === 'bw' ? 'BW%·s' : 'lb·s'}): {fmtForceOrImpulse(keyMetrics.impulse, 1)}</span>
-          <span>YZ Transfer Back (s): {fmt(keyMetrics.yzTransferBack, 3)}</span>
+          <span>Impulse Time (ms): {keyMetrics.impulseStartT !== null && keyMetrics.impulseEndT !== null ? fmtMs(Math.max(0, keyMetrics.impulseEndT - keyMetrics.impulseStartT)) : '—'}</span>
+          <span>YZ Transfer Back (ms): {fmtMs(keyMetrics.yzTransferBack)}</span>
         </div>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <strong>Lead Leg</strong>
           <span>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.leadPeakFz, 1)}</span>
           <span>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.leadPeakFy, 1)}</span>
           <span>Clawback Time (s): {fmt(keyMetrics.clawbackTime, 3)}</span>
-          <span>YZ Transfer Front (s): {fmt(keyMetrics.yzTransferFront, 3)}</span>
+          <span>YZ Transfer Front (ms): {fmtMs(keyMetrics.yzTransferFront)}</span>
         </div>
         <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
           <strong>Other Metrics</strong>
-          <span>Y Transfer (s): {fmt(keyMetrics.yTransfer, 3)}</span>
-          <span>Z Transfer (s): {fmt(keyMetrics.zTransfer, 3)}</span>
+          <span>Pitch Velocity (mph): {fmt(pitchVelocityMph, 1)}</span>
+          <span>Y Transfer (ms): {fmtMs(keyMetrics.yTransfer)}</span>
+          <span>Z Transfer (ms): {fmtMs(keyMetrics.zTransfer)}</span>
           <span>Stride Length (in): {fmt(strideLengthIn, 1)}</span>
           <span>Stride Direction (in): {fmt(strideDirectionIn, 1)}</span>
         </div>
@@ -792,6 +819,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [sortColumn, setSortColumn] = useState<string>('');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [tableColumns, setTableColumns] = useState<string[]>([]);
@@ -805,6 +833,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [selectedPitchTags, setSelectedPitchTags] = useState<string>('');
   const [selectedPitchPlayer, setSelectedPitchPlayer] = useState<string>('');
   const [selectedPitchDate, setSelectedPitchDate] = useState<string>('');
+  const [selectedPitchVelocityMph, setSelectedPitchVelocityMph] = useState<number | null>(null);
+  const [pitchVelocityByKey, setPitchVelocityByKey] = useState<Record<string, number | null>>({});
   const [selectedPitchBodyWeightLb, setSelectedPitchBodyWeightLb] = useState<number | null>(null);
   const [selectedPitchStrideLengthIn, setSelectedPitchStrideLengthIn] = useState<number | null>(null);
   const [selectedPitchStrideDirectionIn, setSelectedPitchStrideDirectionIn] = useState<number | null>(null);
@@ -825,6 +855,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     unmatchedAllPitchRows: 0,
   });
   const [uploadMessage, setUploadMessage] = useState<string>('');
+  const [debugInfo, setDebugInfo] = useState<string>('');
   const [uploadFilesDone, setUploadFilesDone] = useState<number>(0);
   const [uploadFilesTotal, setUploadFilesTotal] = useState<number>(0);
   const [uploadPhase, setUploadPhase] = useState<'idle' | 'uploading' | 'processing'>('idle');
@@ -850,7 +881,17 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       if (pitchKeyOverride || selectedPitchKey) query.set('pitchKey', pitchKeyOverride || selectedPitchKey);
       const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
       const payload = (await response.json().catch(() => ({}))) as Payload;
+      const debug = payload.debug;
+      if (debug) {
+        const candidateOrgIds = Array.isArray(debug.candidate_org_ids) ? debug.candidate_org_ids.join(',') : 'n/a';
+        setDebugInfo(
+          `debug org=${String(debug.selected_org_id ?? 'n/a')} candidates=[${candidateOrgIds}] dates=${String(debug.applied_start_date ?? '') || 'none'}..${String(debug.applied_end_date ?? '') || 'none'} rows=${Number(debug.table_rows_count ?? 0)} options=${Number(debug.pitch_options_count ?? 0)}`
+        );
+      } else {
+        setDebugInfo('');
+      }
       if (!response.ok) throw new Error(payload.error || 'Failed to load biomechanics data.');
+      if (payload.error) throw new Error(payload.error);
       const columns = BIOMECH_TABLE_COLUMNS as unknown as string[];
       const rows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
       const options = Array.isArray(payload.pitch_options) ? payload.pitch_options : [];
@@ -870,6 +911,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setSelectedPitchTags(String(payload.selected_pitch_tags ?? ''));
       setSelectedPitchPlayer(String(payload.selected_pitch_player ?? ''));
       setSelectedPitchDate(String(payload.selected_pitch_date ?? ''));
+      setSelectedPitchVelocityMph(typeof payload.selected_pitch_velocity_mph === 'number' ? payload.selected_pitch_velocity_mph : null);
+      setPitchVelocityByKey(payload.pitch_velocity_by_key && typeof payload.pitch_velocity_by_key === 'object' ? payload.pitch_velocity_by_key : {});
       setSelectedPitchBodyWeightLb(typeof payload.selected_pitch_body_weight_lb === 'number' ? payload.selected_pitch_body_weight_lb : null);
       setSelectedPitchStrideLengthIn(typeof payload.selected_pitch_stride_length_in === 'number' ? payload.selected_pitch_stride_length_in : null);
       setSelectedPitchStrideDirectionIn(typeof payload.selected_pitch_stride_direction_in === 'number' ? payload.selected_pitch_stride_direction_in : null);
@@ -915,8 +958,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   }, [sortColumn, sortDirection, tableRows]);
 
   const displayPitchOptions = useMemo(
-    () => pitchOptions.map((option) => ({ ...option, label: formatPitchOptionLabel(option, pitchOptions) })),
-    [pitchOptions]
+    () => pitchOptions.map((option) => ({ ...option, label: formatPitchOptionLabel(option, pitchOptions, pitchVelocityByKey) })),
+    [pitchOptions, pitchVelocityByKey]
   );
 
   const uploadFiles = async (uploadKind: 'all_pitches' | 'single_pitch', files: FileList | null) => {
@@ -977,6 +1020,33 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setUploadPhase('idle');
       setUploadFilesDone(0);
       setUploadFilesTotal(0);
+    }
+  };
+
+  const deleteSelectedPitch = async () => {
+    const pitchKey = String(selectedPitchKey ?? '').trim();
+    if (!pitchKey) return;
+    const selectedLabel = displayPitchOptions.find((option) => option.pitchKey === pitchKey)?.label ?? 'this pitch';
+    if (typeof window !== 'undefined') {
+      const ok = window.confirm(`Delete ${selectedLabel}?\n\nThis removes the single-pitch file and its paired all-pitch row.`);
+      if (!ok) return;
+    }
+    setIsDeleting(true);
+    setError('');
+    setUploadMessage('');
+    try {
+      const response = await fetch('/api/dashboard/biomechanics', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pitchKey }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || 'Failed to delete pitch.');
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete pitch.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -1056,6 +1126,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       </div>
 
       {error ? <p className="auth-error" style={{ margin: 0 }}>{error}</p> : null}
+      {!error && debugInfo ? <p style={{ margin: 0, color: '#facc15', fontSize: 12 }}>{debugInfo}</p> : null}
       {!error && uploadMessage ? <p style={{ margin: 0, color: '#86efac' }}>{uploadMessage}</p> : null}
       {isUploading ? (
         <p style={{ margin: 0, color: '#93c5fd' }}>
@@ -1086,6 +1157,16 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             )) : <option value="">No pitches available</option>}
           </select>
         </label>
+        {role !== 'player' ? (
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={() => void deleteSelectedPitch()}
+            disabled={isLoading || isUploading || isDeleting || !selectedPitchKey}
+          >
+            {isDeleting ? 'Deleting...' : 'Delete Pitch'}
+          </button>
+        ) : null}
         <label style={{ display: 'grid', gap: 4 }}>
           <span style={{ fontSize: 12, color: '#94a3b8' }}>View</span>
           <select className="portal-select" value={mode} onChange={(e) => setMode(e.target.value as ViewMode)} style={selectStyle}>
@@ -1111,13 +1192,14 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             {selectedPitchDate || '—'}
           </p>
           <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13, textAlign: 'center' }}>
-            Tags: <strong>{selectedPitchTags || '—'}</strong>
+            <strong>{selectedPitchTags || '—'}</strong> | <strong>{selectedPitchVelocityMph !== null ? `${selectedPitchVelocityMph.toFixed(1)} mph` : '— mph'}</strong>
           </p>
         </div>
         <LineChart
           points={selectedPitchPoints}
           mode={mode}
           forceMode={forceMode}
+          pitchVelocityMph={selectedPitchVelocityMph}
           bodyWeightLb={selectedPitchBodyWeightLb}
           strideLengthIn={selectedPitchStrideLengthIn}
           strideDirectionIn={selectedPitchStrideDirectionIn}
@@ -1155,6 +1237,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
                       >
                         {(forceMode === 'bw' && (column.includes('Peak Fz') || column.includes('Peak Fy') || column.includes('Impulse')))
                           ? column.replace('(lb·s)', '(BW%·s)').replace('(lb)', '(BW%)')
+                          : (column.includes('Back Leg Impulse Time') || column.includes('Back Leg YZ Transfer') || column.includes('Lead Leg YZ Transfer') || column === 'Y Transfer (s)' || column === 'Z Transfer (s)')
+                            ? column.replace('(s)', '(ms)')
                           : column} {glyph}
                       </button>
                     </th>

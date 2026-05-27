@@ -4,6 +4,7 @@ import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
 import type { PortalSession } from '../../../../lib/portal-session';
 import {
+  deleteBiomechanicsPitch,
   getBiomechanicsSnapshot,
   getLatestBiomechanicsDate,
   saveAllPitchRows,
@@ -168,6 +169,21 @@ function forbidden() {
   return NextResponse.json({ error: 'Biomechanics is only enabled for PCU.' }, { status: 403 });
 }
 
+function hasSnapshotData(snapshot: {
+  tableRows: Array<Record<string, string | number | null>>;
+  pitchOptions: Array<{ pitchKey: string; label: string; capturedAt?: string | null }>;
+  matchSummary: {
+    totalSinglePitchFiles: number;
+    totalAllPitchRows: number;
+  };
+}): boolean {
+  if (snapshot.tableRows.length > 0) return true;
+  if (snapshot.pitchOptions.length > 0) return true;
+  if (Number(snapshot.matchSummary.totalSinglePitchFiles ?? 0) > 0) return true;
+  if (Number(snapshot.matchSummary.totalAllPitchRows ?? 0) > 0) return true;
+  return false;
+}
+
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -188,6 +204,7 @@ export async function GET(request: Request) {
       selected_pitch_tags: null,
       selected_pitch_player: null,
       selected_pitch_date: null,
+      selected_pitch_velocity_mph: null,
       selected_pitch_body_weight_lb: null,
       selected_pitch_stride_length_in: null,
       selected_pitch_stride_direction_in: null,
@@ -203,32 +220,100 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url);
-  let startDate = String(searchParams.get('startDate') ?? '').trim() || null;
-  let endDate = String(searchParams.get('endDate') ?? '').trim() || null;
+  const startDateParam = String(searchParams.get('startDate') ?? '').trim() || null;
+  const endDateParam = String(searchParams.get('endDate') ?? '').trim() || null;
   const selectedPitchKey = String(searchParams.get('pitchKey') ?? '').trim() || null;
   const selectedPitcher = String(searchParams.get('pitcher') ?? '').trim() || null;
   const selectedTag = String(searchParams.get('tag') ?? '').trim() || null;
   const forceMode = String(searchParams.get('forceMode') ?? '').trim().toLowerCase() === 'bw' ? 'bw' : 'force';
-  if (!startDate && !endDate) {
-    const latestDate = await getLatestBiomechanicsDate({ organizationId, schoolCode });
-    if (latestDate) {
-      startDate = latestDate;
-      endDate = latestDate;
-    }
-  }
-
-  const pitcherOptions = await fetchPcuPitchers().catch(() => []);
   try {
-    const snapshot = await getBiomechanicsSnapshot({
-      organizationId,
-      schoolCode,
-      startDate,
-      endDate,
-      selectedPitchKey,
-      selectedPitcher,
-      selectedTag,
-      forceMode,
-    });
+    const pitcherOptions = await fetchPcuPitchers().catch(() => []);
+    const candidateOrgIds = Array.from(
+      new Set(
+        [
+          Number(scopedOrgId),
+          Number(session.organizationId ?? 0),
+          ...(schoolCode === 'PCU' ? [1] : []),
+        ].filter((value) => Number.isFinite(value) && value > 0)
+      )
+    );
+
+    let snapshot = null as Awaited<ReturnType<typeof getBiomechanicsSnapshot>> | null;
+    let appliedStartDate = startDateParam;
+    let appliedEndDate = endDateParam;
+    let selectedOrgId = organizationId;
+
+    for (const orgId of candidateOrgIds) {
+      let orgStartDate = startDateParam;
+      let orgEndDate = endDateParam;
+      if (!orgStartDate && !orgEndDate) {
+        const latestDate = await getLatestBiomechanicsDate({ organizationId: orgId, schoolCode });
+        if (latestDate) {
+          orgStartDate = latestDate;
+          orgEndDate = latestDate;
+        }
+      }
+
+      const datedSnapshot = await getBiomechanicsSnapshot({
+        organizationId: orgId,
+        schoolCode,
+        startDate: orgStartDate,
+        endDate: orgEndDate,
+        selectedPitchKey,
+        selectedPitcher,
+        selectedTag,
+        forceMode,
+      });
+
+      if (hasSnapshotData(datedSnapshot)) {
+        snapshot = datedSnapshot;
+        selectedOrgId = orgId;
+        appliedStartDate = orgStartDate;
+        appliedEndDate = orgEndDate;
+        break;
+      }
+
+      if (!startDateParam && !endDateParam && (orgStartDate || orgEndDate)) {
+        const unboundedSnapshot = await getBiomechanicsSnapshot({
+          organizationId: orgId,
+          schoolCode,
+          startDate: null,
+          endDate: null,
+          selectedPitchKey,
+          selectedPitcher,
+          selectedTag,
+          forceMode,
+        });
+        if (hasSnapshotData(unboundedSnapshot)) {
+          snapshot = unboundedSnapshot;
+          selectedOrgId = orgId;
+          appliedStartDate = null;
+          appliedEndDate = null;
+          break;
+        }
+      }
+
+      snapshot = datedSnapshot;
+      selectedOrgId = orgId;
+      appliedStartDate = orgStartDate;
+      appliedEndDate = orgEndDate;
+    }
+
+    if (!snapshot) {
+      snapshot = await getBiomechanicsSnapshot({
+        organizationId,
+        schoolCode,
+        startDate: startDateParam,
+        endDate: endDateParam,
+        selectedPitchKey,
+        selectedPitcher,
+        selectedTag,
+        forceMode,
+      });
+      selectedOrgId = organizationId;
+      appliedStartDate = startDateParam;
+      appliedEndDate = endDateParam;
+    }
 
     return NextResponse.json({
       table_columns: snapshot.tableColumns,
@@ -240,41 +325,56 @@ export async function GET(request: Request) {
       selected_pitch_tags: snapshot.selectedPitchTags,
       selected_pitch_player: snapshot.selectedPitchPlayer,
       selected_pitch_date: snapshot.selectedPitchDate,
+      selected_pitch_velocity_mph: snapshot.selectedPitchVelocityMph,
+      pitch_velocity_by_key: snapshot.pitchVelocityByKey,
       selected_pitch_body_weight_lb: snapshot.selectedPitchBodyWeightLb,
       selected_pitch_stride_length_in: snapshot.selectedPitchStrideLengthIn,
       selected_pitch_stride_direction_in: snapshot.selectedPitchStrideDirectionIn,
-      applied_start_date: startDate,
-      applied_end_date: endDate,
+      applied_start_date: appliedStartDate,
+      applied_end_date: appliedEndDate,
       match_summary: snapshot.matchSummary,
       pitcher_options: pitcherOptions,
+      debug: {
+        candidate_org_ids: candidateOrgIds,
+        selected_org_id: selectedOrgId,
+        applied_start_date: appliedStartDate,
+        applied_end_date: appliedEndDate,
+        table_rows_count: snapshot.tableRows.length,
+        pitch_options_count: snapshot.pitchOptions.length,
+      },
     });
   } catch (error) {
-    return NextResponse.json({
-      table_columns: [],
-      table_rows: [],
-      pitch_options: [],
-      selected_pitch_key: null,
-      selected_pitch_points: [],
-      tags_options: [],
-      selected_pitch_tags: null,
-      selected_pitch_player: null,
-      selected_pitch_date: null,
-      selected_pitch_body_weight_lb: null,
-      selected_pitch_stride_length_in: null,
-      selected_pitch_stride_direction_in: null,
-      applied_start_date: startDate,
-      applied_end_date: endDate,
-      match_summary: {
-        totalSinglePitchFiles: 0,
-        matchedSinglePitchFiles: 0,
-        unmatchedSinglePitchFiles: 0,
-        totalAllPitchRows: 0,
-        matchedAllPitchRows: 0,
-        unmatchedAllPitchRows: 0,
+    return NextResponse.json(
+      {
+        table_columns: [],
+        table_rows: [],
+        pitch_options: [],
+        selected_pitch_key: null,
+        selected_pitch_points: [],
+        tags_options: [],
+        selected_pitch_tags: null,
+        selected_pitch_player: null,
+        selected_pitch_date: null,
+        selected_pitch_velocity_mph: null,
+        pitch_velocity_by_key: {},
+        selected_pitch_body_weight_lb: null,
+        selected_pitch_stride_length_in: null,
+        selected_pitch_stride_direction_in: null,
+        applied_start_date: startDateParam,
+        applied_end_date: endDateParam,
+        match_summary: {
+          totalSinglePitchFiles: 0,
+          matchedSinglePitchFiles: 0,
+          unmatchedSinglePitchFiles: 0,
+          totalAllPitchRows: 0,
+          matchedAllPitchRows: 0,
+          unmatchedAllPitchRows: 0,
+        },
+        pitcher_options: [],
+        error: error instanceof Error ? error.message : 'Failed to load biomechanics data.',
       },
-      pitcher_options: pitcherOptions,
-      error: error instanceof Error ? error.message : 'Failed to load biomechanics data.',
-    });
+      { status: 500 }
+    );
   }
 }
 
@@ -341,6 +441,44 @@ export async function POST(request: Request) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to upload biomechanics CSV files.' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const scopedSession = toScopedSession(session);
+  if (session.role !== 'admin' && session.role !== 'coach') {
+    return NextResponse.json({ error: 'Only admins/coaches can delete biomechanics pitches.' }, { status: 403 });
+  }
+
+  const schoolCode = resolveDashboardSchoolCode(scopedSession);
+  if (schoolCode !== 'PCU') return forbidden();
+
+  const scopedOrgId = resolveSchoolScopedOrganizationId(scopedSession);
+  const organizationId = Number.isFinite(Number(scopedOrgId)) && Number(scopedOrgId) > 0 ? Number(scopedOrgId) : Number(session.organizationId ?? 0);
+  if (organizationId <= 0) return NextResponse.json({ error: 'Unable to resolve organization scope.' }, { status: 400 });
+
+  try {
+    const payload = (await request.json().catch(() => ({}))) as { pitchKey?: string };
+    const pitchKey = String(payload.pitchKey ?? '').trim();
+    if (!pitchKey) return NextResponse.json({ error: 'pitchKey is required.' }, { status: 400 });
+    const result = await deleteBiomechanicsPitch({
+      organizationId,
+      schoolCode,
+      pitchKey,
+    });
+    return NextResponse.json({
+      ok: true,
+      deleted_single_pitch: result.deletedSinglePitch,
+      deleted_all_pitch_row: result.deletedAllPitchRow,
+      deleted_all_pitch_row_id: result.deletedAllPitchRowId,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Failed to delete biomechanics pitch.' },
       { status: 500 }
     );
   }
