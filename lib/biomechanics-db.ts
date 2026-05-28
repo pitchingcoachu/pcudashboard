@@ -40,6 +40,9 @@ type BiomechComputedMetrics = {
 
 type BiomechTableSummaryRow = {
   Name: string;
+  Date: string;
+  '#': number;
+  'Pitch Type': string;
   Tags: string;
   'Pitch Velocity (mph)': number | null;
   'Back Leg Peak Fz (lb)': number | null;
@@ -169,7 +172,7 @@ async function getTrackmanVelocityByNameDate(args: {
   schoolCode: string;
   startDate?: string | null;
   endDate?: string | null;
-}): Promise<Map<string, Array<{ tSec: number | null; velo: number }>>> {
+}): Promise<Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>> {
   if (!isDatabaseConfigured()) return new Map();
   const pool = getDbPool();
   const values: Array<string> = [normalizeSchoolCode(args.schoolCode)];
@@ -190,7 +193,8 @@ async function getTrackmanVelocityByNameDate(args: {
       COALESCE(NULLIF(TRIM(pitcher), ''), '') AS pitcher_name,
       session_date::text AS session_date,
       NULLIF(TRIM(COALESCE(time::text, '')), '') AS tm_time,
-      relspeed::double precision AS velo
+      relspeed::double precision AS velo,
+      NULLIF(TRIM(COALESCE(taggedpitchtype::text, '')), '') AS pitch_type
     FROM pitch_events
     WHERE school_code = $1
       ${dateSql}
@@ -202,7 +206,34 @@ async function getTrackmanVelocityByNameDate(args: {
       COALESCE(NULLIF(TRIM(pitcher), ''), '') AS pitcher_name,
       session_date::text AS session_date,
       NULLIF(TRIM(COALESCE(time::text, '')), '') AS tm_time,
-      "RelSpeed"::double precision AS velo
+      relspeed::double precision AS velo,
+      NULL::text AS pitch_type
+    FROM pitch_events
+    WHERE school_code = $1
+      ${dateSql}
+      AND relspeed IS NOT NULL
+      AND COALESCE(NULLIF(TRIM(pitcher), ''), '') <> ''
+    `,
+    `
+    SELECT
+      COALESCE(NULLIF(TRIM(pitcher), ''), '') AS pitcher_name,
+      session_date::text AS session_date,
+      NULLIF(TRIM(COALESCE(time::text, '')), '') AS tm_time,
+      "RelSpeed"::double precision AS velo,
+      NULLIF(TRIM(COALESCE("TaggedPitchType"::text, '')), '') AS pitch_type
+    FROM pitch_events
+    WHERE school_code = $1
+      ${dateSql}
+      AND "RelSpeed" IS NOT NULL
+      AND COALESCE(NULLIF(TRIM(pitcher), ''), '') <> ''
+    `,
+    `
+    SELECT
+      COALESCE(NULLIF(TRIM(pitcher), ''), '') AS pitcher_name,
+      session_date::text AS session_date,
+      NULLIF(TRIM(COALESCE(time::text, '')), '') AS tm_time,
+      "RelSpeed"::double precision AS velo,
+      NULLIF(TRIM(COALESCE(taggedpitchtype::text, '')), '') AS pitch_type
     FROM pitch_events
     WHERE school_code = $1
       ${dateSql}
@@ -213,8 +244,8 @@ async function getTrackmanVelocityByNameDate(args: {
 
   for (const sql of attempts) {
     try {
-      const result = await pool.query<{ pitcher_name: string | null; session_date: string | null; tm_time: string | null; velo: number | null }>(sql, values);
-      const map = new Map<string, Array<{ tSec: number | null; velo: number }>>();
+      const result = await pool.query<{ pitcher_name: string | null; session_date: string | null; tm_time: string | null; velo: number | null; pitch_type: string | null }>(sql, values);
+      const map = new Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>();
       const parseTimeSec = (raw: string | null): number | null => {
         const text = String(raw ?? '').trim();
         if (!text) return null;
@@ -238,7 +269,7 @@ async function getTrackmanVelocityByNameDate(args: {
         for (const nameKey of keys) {
           const key = `${nameKey}|${dateKey}`;
           const arr = map.get(key) ?? [];
-          arr.push({ tSec: parseTimeSec(row.tm_time), velo });
+          arr.push({ tSec: parseTimeSec(row.tm_time), velo, pitchType: String(row.pitch_type ?? '').trim() || null });
           map.set(key, arr);
         }
       }
@@ -432,6 +463,17 @@ function splitTags(value: string | null | undefined): string[] {
     .map((v) => v.trim())
     .filter(Boolean);
   return parts.length ? Array.from(new Set(parts)) : ['UnTagged'];
+}
+
+function isForcePlatePitchTypeTag(value: string | null | undefined): boolean {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return normalized === 'fastball'
+    || normalized === 'sinker'
+    || normalized === 'cutter'
+    || normalized === 'sweeper'
+    || normalized === 'curveball'
+    || normalized === 'changeup'
+    || normalized === 'splitter';
 }
 
 function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputedMetrics {
@@ -1272,15 +1314,22 @@ export async function getBiomechanicsSnapshot(args: {
   selectedPitchKey?: string | null;
   selectedPitcher?: string | null;
   selectedTag?: string | null;
+  selectedPitchType?: string | null;
   forceMode?: 'force' | 'bw';
 }): Promise<{
   tableColumns: string[];
   tableRows: Array<Record<string, string | number | null>>;
+  leaderboardIndividualColumns: string[];
+  leaderboardIndividualRows: Array<Record<string, string | number | null>>;
+  leaderboardAverageColumns: string[];
+  leaderboardAverageRows: Array<Record<string, string | number | null>>;
   pitchOptions: BiomechPitchOption[];
   selectedPitchKey: string | null;
   selectedPitchPoints: BiomechSinglePitchPoint[];
   tagsOptions: string[];
+  pitchTypeOptions: string[];
   selectedPitchTags: string | null;
+  selectedPitchType: string | null;
   selectedPitchPlayer: string | null;
   selectedPitchDate: string | null;
   selectedPitchVelocityMph: number | null;
@@ -1301,11 +1350,17 @@ export async function getBiomechanicsSnapshot(args: {
     return {
       tableColumns: [],
       tableRows: [],
+      leaderboardIndividualColumns: [],
+      leaderboardIndividualRows: [],
+      leaderboardAverageColumns: [],
+      leaderboardAverageRows: [],
       pitchOptions: [],
       selectedPitchKey: null,
       selectedPitchPoints: [],
       tagsOptions: [],
+      pitchTypeOptions: [],
       selectedPitchTags: null,
+      selectedPitchType: null,
       selectedPitchPlayer: null,
       selectedPitchDate: null,
       selectedPitchVelocityMph: null,
@@ -1327,8 +1382,16 @@ export async function getBiomechanicsSnapshot(args: {
   await ensureBiomechanicsMetricsTable();
   const pool = getDbPool();
   const schoolCode = normalizeSchoolCode(args.schoolCode);
-  const selectedPitcher = String(args.selectedPitcher ?? '').trim();
-  const selectedPitcherKeys = new Set(buildNameKeys(selectedPitcher));
+  const selectedPitchers = Array.from(
+    new Set(
+      String(args.selectedPitcher ?? '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .filter((v) => v.toUpperCase() !== 'ALL')
+    )
+  );
+  const selectedPitcherKeys = new Set(selectedPitchers.flatMap((name) => buildNameKeys(name)));
 
   const dateFilterParts: string[] = [];
   const values: Array<string | number> = [args.organizationId, schoolCode];
@@ -1343,12 +1406,7 @@ export async function getBiomechanicsSnapshot(args: {
   const dateFilterSql = dateFilterParts.length ? `AND ${dateFilterParts.join(' AND ')}` : '';
   const dateFilterSqlSingle = dateFilterParts.length
     ? `AND ${dateFilterParts
-      .map((part) => part.replace(/COALESCE\(captured_at,\s*created_at\)/g, 'COALESCE(p.captured_at, p.created_at)'))
-      .join(' AND ')}`
-    : '';
-  const dateFilterSqlUploads = dateFilterParts.length
-    ? `AND ${dateFilterParts
-      .map((part) => part.replace(/COALESCE\(captured_at,\s*created_at\)/g, 'COALESCE(u.created_at, u.created_at)'))
+      .map((part) => part.replace(/COALESCE\(captured_at,\s*created_at\)/g, 'COALESCE(p.captured_at, u.created_at)'))
       .join(' AND ')}`
     : '';
   const summaryValues: Array<string | number> = [...values];
@@ -1375,7 +1433,23 @@ export async function getBiomechanicsSnapshot(args: {
     summaryValues
   );
 
-  const selectedTag = String(args.selectedTag ?? '').trim();
+  const selectedTags = Array.from(
+    new Set(
+      String(args.selectedTag ?? '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .filter((v) => v.toUpperCase() !== 'ALL')
+    )
+  );
+  const selectedPitchTypes = Array.from(
+    new Set(
+      String(args.selectedPitchType ?? '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean)
+    )
+  );
   const forceMode = args.forceMode === 'bw' ? 'bw' : 'force';
 
   const pitchOptionsResult = await pool.query<{
@@ -1392,26 +1466,36 @@ export async function getBiomechanicsSnapshot(args: {
         NULLIF(TRIM(u.source_file_name), ''),
         u.source_file_hash
       ) AS label,
-      u.created_at::text AS captured_at,
+      COALESCE(p.captured_at, u.created_at)::text AS captured_at,
       NULL::text AS pitcher_name,
       NULLIF(TRIM(u.source_file_name), '') AS source_file_name
     FROM biomechanics_uploads u
+    LEFT JOIN biomechanics_single_pitch_points p
+      ON p.organization_id = u.organization_id
+      AND p.school_code = u.school_code
+      AND p.source_file_hash = u.source_file_hash
+      AND p.point_index = 0
     WHERE u.organization_id = $1
       AND u.school_code = $2
       AND u.upload_kind = 'single_pitch'
-      ${dateFilterSqlUploads}
-    ORDER BY u.created_at DESC
+      ${dateFilterSqlSingle}
+    ORDER BY COALESCE(p.captured_at, u.created_at) DESC
     `,
     summaryValues
   );
   const summarySingleFilesResult = await pool.query<{ total_files: string }>(
     `
-    SELECT COUNT(*)::text AS total_files
+    SELECT COUNT(DISTINCT u.source_file_hash)::text AS total_files
     FROM biomechanics_uploads u
+    LEFT JOIN biomechanics_single_pitch_points p
+      ON p.organization_id = u.organization_id
+      AND p.school_code = u.school_code
+      AND p.source_file_hash = u.source_file_hash
+      AND p.point_index = 0
     WHERE u.organization_id = $1
       AND u.school_code = $2
       AND u.upload_kind = 'single_pitch'
-      ${dateFilterSqlUploads}
+      ${dateFilterSqlSingle}
     `,
     summaryValues
   );
@@ -1472,19 +1556,36 @@ export async function getBiomechanicsSnapshot(args: {
     startDate: args.startDate ?? null,
     endDate: args.endDate ?? null,
   });
-  const pickNearestTrackmanVelo = (nameRaw: string, dateKey: string, timeKey: number | null): number | null => {
+  const trackmanFallbackCursorByNameDate = new Map<string, number>();
+  const pickNearestTrackmanMatch = (nameRaw: string, dateKey: string, timeKey: number | null): { velo: number | null; pitchType: string | null } => {
     const keys = buildNameKeys(nameRaw);
     const rows = keys.flatMap((k) => trackmanVeloByNameDate.get(`${k}|${dateKey}`) ?? []);
-    if (!rows.length) return null;
-    if (timeKey === null || !Number.isFinite(timeKey)) return rows[0]?.velo ?? null;
-    let best: { delta: number; velo: number } | null = null;
-    for (const row of rows) {
-      if (row.tSec === null || !Number.isFinite(row.tSec)) continue;
-      const delta = Math.abs(Number(row.tSec) - Number(timeKey));
-      if (!best || delta < best.delta) best = { delta, velo: row.velo };
+    if (!rows.length) return { velo: null, pitchType: null };
+    const nameDateKey = `${keys[0] ?? trackmanNameNorm(nameRaw)}|${dateKey}`;
+    const timedRows = rows.filter((row) => row.tSec !== null && Number.isFinite(row.tSec));
+    if (!timedRows.length) {
+      const cursor = trackmanFallbackCursorByNameDate.get(nameDateKey) ?? 0;
+      const next = rows[Math.min(cursor, rows.length - 1)] ?? null;
+      trackmanFallbackCursorByNameDate.set(nameDateKey, cursor + 1);
+      return { velo: next?.velo ?? null, pitchType: next?.pitchType ?? null };
     }
-    if (!best) return null;
-    return best.delta <= 5 ? best.velo : null;
+    if (timeKey === null || !Number.isFinite(timeKey)) {
+      const cursor = trackmanFallbackCursorByNameDate.get(nameDateKey) ?? 0;
+      const next = timedRows[Math.min(cursor, timedRows.length - 1)] ?? null;
+      trackmanFallbackCursorByNameDate.set(nameDateKey, cursor + 1);
+      return { velo: next?.velo ?? null, pitchType: next?.pitchType ?? null };
+    }
+    let best: { delta: number; velo: number; pitchType: string | null } | null = null;
+    for (const row of timedRows) {
+      const delta = Math.abs(Number(row.tSec) - Number(timeKey));
+      if (!best || delta < best.delta) best = { delta, velo: row.velo, pitchType: row.pitchType };
+    }
+    if (!best) return { velo: null, pitchType: null };
+    if (best.delta <= 5) return { velo: best.velo, pitchType: best.pitchType };
+    const cursor = trackmanFallbackCursorByNameDate.get(nameDateKey) ?? 0;
+    const next = timedRows[Math.min(cursor, timedRows.length - 1)] ?? null;
+    trackmanFallbackCursorByNameDate.set(nameDateKey, cursor + 1);
+    return { velo: next?.velo ?? null, pitchType: next?.pitchType ?? null };
   };
 
   const singleRows = pitchOptionsResult.rows.map((row) => {
@@ -1539,6 +1640,7 @@ export async function getBiomechanicsSnapshot(args: {
     name: string;
     tags: string;
     tagsList: string[];
+    pitchType: string | null;
     strideLengthIn: number | null;
     strideDirectionIn: number | null;
     pitchDateLabel: string | null;
@@ -1553,16 +1655,19 @@ export async function getBiomechanicsSnapshot(args: {
       const allRow = allForGroup[i];
       if (!single || !allRow) continue;
       const allRowTimeSec = secondsOfDayFromIso(allRow.capturedAt);
+      const trackmanMatch = pickNearestTrackmanMatch(String(allRow.name ?? ''), String(allRow.dateKey ?? ''), allRowTimeSec);
+      const filteredTagsList = splitTags(allRow.tags || 'UnTagged').filter((tag) => !isForcePlatePitchTypeTag(tag));
       mapping.set(single.pitchKey, {
         name: allRow.name,
-        tags: allRow.tags || 'UnTagged',
-        tagsList: splitTags(allRow.tags || 'UnTagged'),
+        tags: filteredTagsList.length ? filteredTagsList.join(' | ') : 'UnTagged',
+        tagsList: filteredTagsList.length ? filteredTagsList : ['UnTagged'],
+        pitchType: trackmanMatch.pitchType,
         strideLengthIn: allRow.strideLengthIn,
         strideDirectionIn: allRow.strideDirectionIn,
         pitchDateLabel: formatDateKeyMddyy(allRow.dateKey),
         bodyWeightLb: allRow.bodyWeightLb,
         // Match to TrackMan using the all-pitch capture timestamp (Phoenix), not file-name time.
-        velocityMph: pickNearestTrackmanVelo(String(allRow.name ?? ''), String(allRow.dateKey ?? ''), allRowTimeSec) ?? allRow.velocityMph,
+        velocityMph: trackmanMatch.velo ?? allRow.velocityMph,
       });
     }
   }
@@ -1570,6 +1675,11 @@ export async function getBiomechanicsSnapshot(args: {
   const tagsOptions = Array.from(
     new Set(
       Array.from(mapping.values()).flatMap((v) => v.tagsList).filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+  const pitchTypeOptions = Array.from(
+    new Set(
+      Array.from(mapping.values()).map((v) => String(v.pitchType ?? '').trim()).filter(Boolean)
     )
   ).sort((a, b) => a.localeCompare(b));
 
@@ -1589,10 +1699,15 @@ export async function getBiomechanicsSnapshot(args: {
       const fallbackName = option.label || singleRowByPitchKey.get(option.pitchKey)?.pitcherName || '';
       if (!isSelectedPitcherMatch(meta?.name ?? fallbackName)) return false;
     }
-    if (!selectedTag || selectedTag.toUpperCase() === 'ALL') return true;
     const meta = mapping.get(option.pitchKey);
-    const tagsList = meta?.tagsList ?? ['UnTagged'];
-    return tagsList.includes(selectedTag);
+    if (selectedTags.length) {
+      const tagsList = meta?.tagsList ?? ['UnTagged'];
+      if (!selectedTags.some((tag) => tagsList.includes(tag))) return false;
+    }
+    if (selectedPitchTypes.length) {
+      if (!selectedPitchTypes.includes(String(meta?.pitchType ?? '').trim())) return false;
+    }
+    return true;
   });
   const selectedPitchKey =
     args.selectedPitchKey && pitchOptions.some((option) => option.pitchKey === args.selectedPitchKey)
@@ -1633,6 +1748,7 @@ export async function getBiomechanicsSnapshot(args: {
   }
 
   const selectedPitchTags = selectedPitchKey ? (mapping.get(selectedPitchKey)?.tags ?? null) : null;
+  const selectedPitchType = selectedPitchKey ? (mapping.get(selectedPitchKey)?.pitchType ?? null) : null;
   const selectedPitchPlayer = selectedPitchKey ? (mapping.get(selectedPitchKey)?.name ?? null) : null;
   const selectedPitchDate = selectedPitchKey ? (mapping.get(selectedPitchKey)?.pitchDateLabel ?? null) : null;
   const selectedPitchVelocityMph = selectedPitchKey ? (mapping.get(selectedPitchKey)?.velocityMph ?? null) : null;
@@ -1835,6 +1951,9 @@ export async function getBiomechanicsSnapshot(args: {
 
   const tableColumnNames = [
     'Name',
+    'Date',
+    '#',
+    'Pitch Type',
     'Tags',
     'Pitch Velocity (mph)',
     'Back Leg Peak Fz (lb)',
@@ -1852,7 +1971,18 @@ export async function getBiomechanicsSnapshot(args: {
     'Stride Length (in)',
     'Stride Direction (in)',
   ];
-  const agg = new Map<string, { name: string; tags: string; count: number; sums: Record<string, number>; strideLen: number[]; strideDir: number[]; velo: number[] }>();
+  const tableAgg = new Map<string, { name: string; tags: string; count: number; dates: Set<string>; pitchTypeCounts: Map<string, number>; sums: Record<string, number>; strideLen: number[]; strideDir: number[]; velo: number[] }>();
+  const leaderboardPitchRows: Array<Record<string, string | number | null>> = [];
+  const leaderboardPitchCountByNameDate = new Map<string, number>();
+  for (const option of pitchOptions) {
+    const mappedMeta = mapping.get(option.pitchKey);
+    const name = mappedMeta?.name ?? option.label ?? 'Unknown Pitcher';
+    const date = mappedMeta?.pitchDateLabel ?? '';
+    if (!date) continue;
+    const key = `${name}|${date}`;
+    leaderboardPitchCountByNameDate.set(key, (leaderboardPitchCountByNameDate.get(key) ?? 0) + 1);
+  }
+
   const groupPitches = new Map<string, string[]>();
   for (const option of pitchOptions) {
     const mappedMeta = mapping.get(option.pitchKey);
@@ -1861,6 +1991,7 @@ export async function getBiomechanicsSnapshot(args: {
       name: option.label || toFirstLastName(String(fallbackSingle?.pitcherName ?? '').trim()) || 'Unknown Pitcher',
       tags: 'UnTagged',
       tagsList: ['UnTagged'],
+      pitchType: null,
       strideLengthIn: null,
       strideDirectionIn: null,
       pitchDateLabel: formatDateKeyMddyy(fallbackSingle?.dateKey ?? null),
@@ -1871,8 +2002,10 @@ export async function getBiomechanicsSnapshot(args: {
     if (!metrics) continue;
     for (const tag of meta.tagsList) {
       const key = `${meta.name}|${tag}`;
-      const curr = agg.get(key) ?? { name: meta.name, tags: tag, count: 0, sums: {}, strideLen: [], strideDir: [], velo: [] };
+      const curr = tableAgg.get(key) ?? { name: meta.name, tags: tag, count: 0, dates: new Set<string>(), pitchTypeCounts: new Map<string, number>(), sums: {}, strideLen: [], strideDir: [], velo: [] };
       curr.count += 1;
+      if (meta.pitchDateLabel) curr.dates.add(meta.pitchDateLabel);
+      if (meta.pitchType) curr.pitchTypeCounts.set(meta.pitchType, (curr.pitchTypeCounts.get(meta.pitchType) ?? 0) + 1);
       const add = (k: keyof BiomechComputedMetrics) => {
         const v = metrics[k];
         if (v !== null && Number.isFinite(v)) curr.sums[k] = (curr.sums[k] ?? 0) + v;
@@ -1883,11 +2016,34 @@ export async function getBiomechanicsSnapshot(args: {
       if (meta.strideLengthIn !== null && Number.isFinite(meta.strideLengthIn)) curr.strideLen.push(meta.strideLengthIn);
       if (meta.strideDirectionIn !== null && Number.isFinite(meta.strideDirectionIn)) curr.strideDir.push(meta.strideDirectionIn);
       if (meta.velocityMph !== null && Number.isFinite(meta.velocityMph)) curr.velo.push(meta.velocityMph);
-      agg.set(key, curr);
+      tableAgg.set(key, curr);
       const list = groupPitches.get(key) ?? [];
       list.push(option.pitchKey);
       groupPitches.set(key, list);
     }
+
+    leaderboardPitchRows.push({
+      Name: meta.name,
+      Date: meta.pitchDateLabel ?? '',
+      '#': meta.pitchDateLabel ? (leaderboardPitchCountByNameDate.get(`${meta.name}|${meta.pitchDateLabel}`) ?? 1) : 1,
+      'Pitch Type': meta.pitchType ?? '',
+      Tags: meta.tags,
+      'Pitch Velocity (mph)': meta.velocityMph,
+      'Back Leg Peak Fz (lb)': metrics.backPeakFz,
+      'Back Leg Peak Fy (lb)': metrics.backPeakFy,
+      'Mound Connection (BW%)': metrics.moundConnection,
+      'Back Leg Impulse (lb·s)': metrics.impulse,
+      'Back Leg Impulse Time (s)': metrics.impulseTime,
+      'Back Leg YZ Transfer (s)': metrics.yzTransferBack,
+      'Lead Leg Peak Fz (lb)': metrics.leadPeakFz,
+      'Lead Leg Peak Fy (lb)': metrics.leadPeakFy,
+      'Lead Leg Clawback (s)': metrics.clawbackTime,
+      'Lead Leg YZ Transfer (s)': metrics.yzTransferFront,
+      'Y Transfer (s)': metrics.yTransfer,
+      'Z Transfer (s)': metrics.zTransfer,
+      'Stride Length (in)': meta.strideLengthIn,
+      'Stride Direction (in)': meta.strideDirectionIn,
+    });
   }
   const avg = (sum: number | undefined, count: number) => (sum === undefined || count <= 0 ? null : sum / count);
   const avgArr = (vals: number[]) => (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
@@ -1907,10 +2063,24 @@ export async function getBiomechanicsSnapshot(args: {
     }
     return count > 0 ? sum / count : null;
   };
-  const tableRows: BiomechTableSummaryRow[] = Array.from(agg.values())
+  const tableRows: BiomechTableSummaryRow[] = Array.from(tableAgg.values())
     .sort((a, b) => a.name.localeCompare(b.name) || a.tags.localeCompare(b.tags))
     .map((r) => ({
       Name: r.name,
+      Date: r.dates.size === 1 ? Array.from(r.dates)[0] : (r.dates.size > 1 ? 'Multi' : ''),
+      '#': r.count,
+      'Pitch Type': (() => {
+        if (!r.pitchTypeCounts.size) return '';
+        let bestType = '';
+        let bestCount = -1;
+        for (const [pitchType, cnt] of r.pitchTypeCounts.entries()) {
+          if (cnt > bestCount) {
+            bestType = pitchType;
+            bestCount = cnt;
+          }
+        }
+        return bestType;
+      })(),
       Tags: r.tags,
       'Pitch Velocity (mph)': avgArr(r.velo),
       'Back Leg Peak Fz (lb)': forceMode === 'bw'
@@ -1939,14 +2109,103 @@ export async function getBiomechanicsSnapshot(args: {
       'Stride Direction (in)': avgArr(r.strideDir),
     }));
 
+  const leaderboardAverageColumns = tableColumnNames;
+  const leaderboardIndividualColumns = tableColumnNames;
+
+  const leaderboardPitcherAgg = new Map<string, {
+    name: string;
+    dates: Set<string>;
+    count: number;
+    pitchTypeCounts: Map<string, number>;
+    sums: Record<string, number>;
+    strideLen: number[];
+    strideDir: number[];
+    velo: number[];
+  }>();
+  for (const row of leaderboardPitchRows) {
+    const name = String(row.Name ?? '').trim();
+    if (!name) continue;
+    const curr = leaderboardPitcherAgg.get(name) ?? { name, dates: new Set<string>(), count: 0, pitchTypeCounts: new Map<string, number>(), sums: {}, strideLen: [], strideDir: [], velo: [] };
+    curr.count += 1;
+    const date = String(row.Date ?? '').trim();
+    if (date) curr.dates.add(date);
+    const pitchType = String(row['Pitch Type'] ?? '').trim();
+    if (pitchType) curr.pitchTypeCounts.set(pitchType, (curr.pitchTypeCounts.get(pitchType) ?? 0) + 1);
+    const addNum = (key: string, bucket: Record<string, number>) => {
+      const v = toFinite(row[key]);
+      if (v === null) return;
+      bucket[key] = (bucket[key] ?? 0) + v;
+    };
+    addNum('Back Leg Peak Fz (lb)', curr.sums);
+    addNum('Back Leg Peak Fy (lb)', curr.sums);
+    addNum('Mound Connection (BW%)', curr.sums);
+    addNum('Back Leg Impulse (lb·s)', curr.sums);
+    addNum('Back Leg Impulse Time (s)', curr.sums);
+    addNum('Back Leg YZ Transfer (s)', curr.sums);
+    addNum('Lead Leg Peak Fz (lb)', curr.sums);
+    addNum('Lead Leg Peak Fy (lb)', curr.sums);
+    addNum('Lead Leg Clawback (s)', curr.sums);
+    addNum('Lead Leg YZ Transfer (s)', curr.sums);
+    addNum('Y Transfer (s)', curr.sums);
+    addNum('Z Transfer (s)', curr.sums);
+    const strideLen = toFinite(row['Stride Length (in)']);
+    const strideDir = toFinite(row['Stride Direction (in)']);
+    const velo = toFinite(row['Pitch Velocity (mph)']);
+    if (strideLen !== null) curr.strideLen.push(strideLen);
+    if (strideDir !== null) curr.strideDir.push(strideDir);
+    if (velo !== null) curr.velo.push(velo);
+    leaderboardPitcherAgg.set(name, curr);
+  }
+  const leaderboardAverageRows = Array.from(leaderboardPitcherAgg.values())
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((r) => ({
+      Name: r.name,
+      Date: r.dates.size === 1 ? Array.from(r.dates)[0] : (r.dates.size > 1 ? 'Multi' : ''),
+      '#': r.count,
+      'Pitch Type': (() => {
+        if (!r.pitchTypeCounts.size) return '';
+        let bestType = '';
+        let bestCount = -1;
+        for (const [pitchType, cnt] of r.pitchTypeCounts.entries()) {
+          if (cnt > bestCount) {
+            bestType = pitchType;
+            bestCount = cnt;
+          }
+        }
+        return bestType;
+      })(),
+      Tags: selectedTags.length ? selectedTags.join(', ') : 'All',
+      'Pitch Velocity (mph)': avgArr(r.velo),
+      'Back Leg Peak Fz (lb)': avg(r.sums['Back Leg Peak Fz (lb)'], r.count),
+      'Back Leg Peak Fy (lb)': avg(r.sums['Back Leg Peak Fy (lb)'], r.count),
+      'Mound Connection (BW%)': avg(r.sums['Mound Connection (BW%)'], r.count),
+      'Back Leg Impulse (lb·s)': avg(r.sums['Back Leg Impulse (lb·s)'], r.count),
+      'Back Leg Impulse Time (s)': avg(r.sums['Back Leg Impulse Time (s)'], r.count),
+      'Back Leg YZ Transfer (s)': avg(r.sums['Back Leg YZ Transfer (s)'], r.count),
+      'Lead Leg Peak Fz (lb)': avg(r.sums['Lead Leg Peak Fz (lb)'], r.count),
+      'Lead Leg Peak Fy (lb)': avg(r.sums['Lead Leg Peak Fy (lb)'], r.count),
+      'Lead Leg Clawback (s)': avg(r.sums['Lead Leg Clawback (s)'], r.count),
+      'Lead Leg YZ Transfer (s)': avg(r.sums['Lead Leg YZ Transfer (s)'], r.count),
+      'Y Transfer (s)': avg(r.sums['Y Transfer (s)'], r.count),
+      'Z Transfer (s)': avg(r.sums['Z Transfer (s)'], r.count),
+      'Stride Length (in)': avgArr(r.strideLen),
+      'Stride Direction (in)': avgArr(r.strideDir),
+    }));
+
   return {
     tableColumns: tableColumnNames,
     tableRows,
+    leaderboardIndividualColumns,
+    leaderboardIndividualRows: leaderboardPitchRows,
+    leaderboardAverageColumns,
+    leaderboardAverageRows,
     pitchOptions,
     selectedPitchKey,
     selectedPitchPoints,
     tagsOptions,
+    pitchTypeOptions,
     selectedPitchTags,
+    selectedPitchType,
     selectedPitchPlayer,
     selectedPitchDate,
     selectedPitchVelocityMph,

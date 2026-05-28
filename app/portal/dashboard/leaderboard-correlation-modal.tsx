@@ -43,6 +43,7 @@ const PAD_RIGHT = 26;
 const PAD_TOP = 74;
 const PAD_BOTTOM = 64;
 const STAT_DECIMALS = 1;
+const R_SQUARED_DECIMALS = 2;
 
 function formatNameFirstLast(name: string): string {
   const value = String(name ?? '').trim();
@@ -994,7 +995,7 @@ export default function LeaderboardCorrelationModal({
           <>
             <div className="portal-corr-stats">
               <span>{viewByLabel}s: {stats.count}</span>
-              <span>R<sup>2</sup>: {stats.rSquared === null ? '-' : stats.rSquared.toFixed(STAT_DECIMALS)}</span>
+              <span>R<sup>2</sup>: {stats.rSquared === null ? '-' : stats.rSquared.toFixed(R_SQUARED_DECIMALS)}</span>
               <button
                 type="button"
                 className={`btn ${showTrendline ? 'btn-primary' : 'btn-ghost'} portal-corr-swap-btn`}
@@ -1104,7 +1105,7 @@ export default function LeaderboardCorrelationModal({
                 >
                   R
                   <tspan baselineShift="super" fontSize="9">2</tspan>
-                  <tspan>{` = ${stats.rSquared === null ? '-' : stats.rSquared.toFixed(STAT_DECIMALS)}`}</tspan>
+                  <tspan>{` = ${stats.rSquared === null ? '-' : stats.rSquared.toFixed(R_SQUARED_DECIMALS)}`}</tspan>
                 </text>
                 {stats.meanX !== null ? (
                   <text

@@ -1,11 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 
 type Role = 'admin' | 'coach' | 'player';
 type ViewMode = 'Force' | 'Moments';
 type ForceMode = 'force' | 'bw';
+type BiomechPageTab = 'summary' | 'leaderboard';
+type LeaderboardViewMode = 'individual' | 'averages';
+type OptionItem = { value: string; label: string };
 
 type PitchOption = {
   pitchKey: string;
@@ -30,12 +34,18 @@ type PitchPoint = {
 type Payload = {
   table_columns?: string[];
   table_rows?: Array<Record<string, string | number | null>>;
+  leaderboard_individual_columns?: string[];
+  leaderboard_individual_rows?: Array<Record<string, string | number | null>>;
+  leaderboard_average_columns?: string[];
+  leaderboard_average_rows?: Array<Record<string, string | number | null>>;
   pitch_options?: PitchOption[];
   selected_pitch_key?: string | null;
   selected_pitch_points?: PitchPoint[];
   pitcher_options?: string[];
   tags_options?: string[];
+  pitch_type_options?: string[];
   selected_pitch_tags?: string | null;
+  selected_pitch_type?: string | null;
   selected_pitch_player?: string | null;
   selected_pitch_date?: string | null;
   selected_pitch_velocity_mph?: number | null;
@@ -66,6 +76,9 @@ type Payload = {
 
 const BIOMECH_TABLE_COLUMNS = [
   'Name',
+  'Date',
+  '#',
+  'Pitch Type',
   'Tags',
   'Pitch Velocity (mph)',
   'Back Leg Peak Fz (lb)',
@@ -82,6 +95,18 @@ const BIOMECH_TABLE_COLUMNS = [
   'Z Transfer (s)',
   'Stride Length (in)',
   'Stride Direction (in)',
+] as const;
+
+const PITCH_TYPE_ORDER = [
+  'Fastball',
+  'Sinker',
+  'Cutter',
+  'Slider',
+  'Sweeper',
+  'Curveball',
+  'ChangeUp',
+  'Splitter',
+  'Knuckleball',
 ] as const;
 
 function isoDateOffset(days: number): string {
@@ -105,8 +130,85 @@ function toFirstLastName(value: string): string {
   return `${rest.join(' ').trim()} ${last.trim()}`.replace(/\s+/g, ' ').trim();
 }
 
+function normalizeMulti(values: string[]): string[] {
+  const unique = Array.from(new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean)));
+  if (unique.length === 0) return ['All'];
+  if (unique.includes('All')) return ['All'];
+  return unique;
+}
+
+function SearchableMultiSelect({
+  options,
+  values,
+  onChange,
+}: {
+  options: OptionItem[];
+  values: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onDocClick = (event: MouseEvent) => {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const selectedLabels = options.filter((option) => values.includes(option.value)).map((option) => option.label);
+  const triggerText =
+    values.includes('All') || values.length === 0
+      ? 'All'
+      : selectedLabels.length === 1
+        ? selectedLabels[0] ?? 'All'
+        : `${selectedLabels.length} selected`;
+  const filtered = options.filter((option) => option.label.toLowerCase().includes(query.toLowerCase()));
+
+  const toggle = (value: string) => {
+    if (value === 'All') {
+      onChange(['All']);
+      return;
+    }
+    const current = values.filter((entry) => entry !== 'All');
+    const next = current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value];
+    onChange(normalizeMulti(next));
+  };
+
+  return (
+    <div className="portal-search-select" ref={rootRef}>
+      <button type="button" className="portal-search-select-trigger" onClick={() => setOpen((current) => !current)}>
+        {triggerText}
+      </button>
+      {open ? (
+        <div className="portal-search-select-menu">
+          <input className="portal-search-select-input" placeholder="Type to filter..." value={query} onChange={(event) => setQuery(event.target.value)} />
+          <div className="portal-search-select-options">
+            {filtered.map((option) => {
+              const checked = values.includes(option.value);
+              return (
+                <button key={option.value} type="button" className="portal-search-select-option portal-search-select-option-multi" onClick={() => toggle(option.value)}>
+                  <span>{checked ? '✓' : ''}</span>
+                  <span>{option.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function formatBiomechTableValue(column: string, value: string | number | null, forceMode: ForceMode): string {
   if (value === null || value === undefined || value === '') return '—';
+  if (column === '#') {
+    const n = toFinite(value);
+    return n === null ? String(value) : String(Math.round(n));
+  }
   const isMsTransferColumn =
     column.includes('Back Leg Impulse Time') ||
     column.includes('Back Leg YZ Transfer') ||
@@ -365,7 +467,6 @@ function LineChart({
   const width = 860;
   const height = 520;
   const pad = { left: 54, right: 20, top: 16, bottom: 42 };
-  const yAxisHeight = height - pad.top - pad.bottom;
   const plotW = width - pad.left - pad.right;
   const plotH = height - pad.top - pad.bottom;
   const minX = domain?.minX ?? 0;
@@ -644,11 +745,11 @@ function LineChart({
   }
   return (
     <>
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 860px) minmax(240px, 1fr)', gap: 12, position: 'relative', zIndex: 0, overflow: 'hidden', alignItems: 'start' }}>
-      <div style={{ position: 'relative' }}>
+    <div data-biomech-chart-row="true" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 0.95fr) minmax(0, 1.05fr)', gap: 12, position: 'relative', zIndex: 0, overflow: 'hidden', alignItems: 'stretch' }}>
+      <div data-biomech-graph-panel="true" style={{ position: 'relative', marginTop: pad.top }}>
         <svg
         viewBox={`0 0 ${width} ${height}`}
-        style={{ width: '100%', maxWidth: 860, background: 'rgba(2,6,23,0.45)', borderRadius: 12, overflow: 'hidden', display: 'block' }}
+        style={{ width: '100%', maxWidth: '100%', background: 'linear-gradient(165deg, rgba(8,8,10,0.96), rgba(24,24,28,0.9))', border: '1px solid rgba(200,16,46,0.28)', borderRadius: 12, overflow: 'hidden', display: 'block' }}
         onMouseLeave={() => setHoverClientX(null)}
         onMouseMove={(event) => {
           const rect = event.currentTarget.getBoundingClientRect();
@@ -748,8 +849,8 @@ function LineChart({
             top: 12,
             left: Math.max(8, Math.min(hoverPayload.xPx - 70, width - 170)),
             pointerEvents: 'none',
-            background: 'rgba(2, 6, 23, 0.92)',
-            border: '1px solid rgba(148,163,184,0.42)',
+            background: 'rgba(12, 12, 14, 0.94)',
+            border: '1px solid rgba(200,16,46,0.34)',
             borderRadius: 10,
             padding: '8px 10px',
             minWidth: 150,
@@ -771,31 +872,33 @@ function LineChart({
         </div>
         ) : null}
       </div>
-      <aside style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, background: 'rgba(2,6,23,0.35)', display: 'grid', gap: 10, height: yAxisHeight, overflowY: 'auto', marginTop: pad.top }}>
-        <h4 style={{ margin: 0 }}>Key Metrics</h4>
-        <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
-          <strong>Back Leg</strong>
-          <span>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.backPeakFz, 1)}</span>
-          <span>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.backPeakFy, 1)}</span>
-          <span>Mound Connection (BW%): {fmtBwPercent(keyMetrics.moundConnection)}</span>
-          <span>Impulse ({mode === 'Force' && forceMode === 'bw' ? 'BW%·s' : 'lb·s'}): {fmtForceOrImpulse(keyMetrics.impulse, 1)}</span>
-          <span>Impulse Time (ms): {keyMetrics.impulseStartT !== null && keyMetrics.impulseEndT !== null ? fmtMs(Math.max(0, keyMetrics.impulseEndT - keyMetrics.impulseStartT)) : '—'}</span>
-          <span>YZ Transfer Back (ms): {fmtMs(keyMetrics.yzTransferBack)}</span>
+      <aside data-biomech-metrics-panel="true" style={{ border: '1px solid rgba(200,16,46,0.36)', borderRadius: 14, padding: '8px 12px 12px', background: 'linear-gradient(165deg, rgba(8,8,10,0.96), rgba(24,24,28,0.9))', display: 'grid', gap: 10, height: `calc(100% - ${pad.top}px)`, minHeight: 0, overflowY: 'auto', marginTop: pad.top, boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)', boxSizing: 'border-box' }}>
+        <h4 style={{ margin: '-2px 0 0', textAlign: 'center', fontSize: 16, fontWeight: 700, color: '#e5e7eb' }}>Key Metrics</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, alignItems: 'stretch' }}>
+        <div style={{ display: 'grid', alignContent: 'start', gap: 5, fontSize: 12, padding: 10, borderRadius: 10, background: 'rgba(17,17,20,0.88)', border: '1px solid rgba(200,16,46,0.3)', height: '100%' }}>
+          <strong style={{ textAlign: 'left', fontSize: 12, color: '#e2e8f0', letterSpacing: '0.02em' }}>Back Leg</strong>
+          <span style={{ color: '#cbd5e1' }}>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.backPeakFz, 1)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.backPeakFy, 1)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Mound Connection (BW%): <strong style={{ color: '#f8fafc' }}>{fmtBwPercent(keyMetrics.moundConnection)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Impulse ({mode === 'Force' && forceMode === 'bw' ? 'BW%·s' : 'lb·s'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.impulse, 1)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Impulse Time (ms): <strong style={{ color: '#f8fafc' }}>{keyMetrics.impulseStartT !== null && keyMetrics.impulseEndT !== null ? fmtMs(Math.max(0, keyMetrics.impulseEndT - keyMetrics.impulseStartT)) : '—'}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>YZ Transfer Back (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yzTransferBack)}</strong></span>
         </div>
-        <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
-          <strong>Lead Leg</strong>
-          <span>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.leadPeakFz, 1)}</span>
-          <span>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): {fmtForceOrImpulse(keyMetrics.leadPeakFy, 1)}</span>
-          <span>Clawback Time (s): {fmt(keyMetrics.clawbackTime, 3)}</span>
-          <span>YZ Transfer Front (ms): {fmtMs(keyMetrics.yzTransferFront)}</span>
+        <div style={{ display: 'grid', alignContent: 'start', gap: 5, fontSize: 12, minWidth: 0, padding: 10, borderRadius: 10, background: 'rgba(17,17,20,0.88)', border: '1px solid rgba(200,16,46,0.3)', height: '100%' }}>
+          <strong style={{ textAlign: 'left', fontSize: 12, color: '#e2e8f0', letterSpacing: '0.02em' }}>Lead Leg</strong>
+          <span style={{ color: '#cbd5e1' }}>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.leadPeakFz, 1)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.leadPeakFy, 1)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Clawback Time (s): <strong style={{ color: '#f8fafc' }}>{fmt(keyMetrics.clawbackTime, 3)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>YZ Transfer Front (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yzTransferFront)}</strong></span>
         </div>
-        <div style={{ display: 'grid', gap: 4, fontSize: 13 }}>
-          <strong>Other Metrics</strong>
-          <span>Pitch Velocity (mph): {fmt(pitchVelocityMph, 1)}</span>
-          <span>Y Transfer (ms): {fmtMs(keyMetrics.yTransfer)}</span>
-          <span>Z Transfer (ms): {fmtMs(keyMetrics.zTransfer)}</span>
-          <span>Stride Length (in): {fmt(strideLengthIn, 1)}</span>
-          <span>Stride Direction (in): {fmt(strideDirectionIn, 1)}</span>
+        </div>
+        <div style={{ display: 'grid', gap: 5, fontSize: 12, justifyItems: 'center', textAlign: 'center', padding: 10, borderRadius: 10, background: 'rgba(12,12,14,0.86)', border: '1px solid rgba(200,16,46,0.26)' }}>
+          <strong style={{ color: '#e2e8f0', letterSpacing: '0.02em' }}>Other Metrics</strong>
+          <span style={{ color: '#cbd5e1' }}>Pitch Velocity (mph): <strong style={{ color: '#f8fafc' }}>{fmt(pitchVelocityMph, 1)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Y Transfer (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yTransfer)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Z Transfer (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.zTransfer)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Stride Length (in): <strong style={{ color: '#f8fafc' }}>{fmt(strideLengthIn, 1)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Stride Direction (in): <strong style={{ color: '#f8fafc' }}>{fmt(strideDirectionIn, 1)}</strong></span>
         </div>
       </aside>
     </div>
@@ -820,17 +923,28 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState<boolean>(false);
+  const [pageTab, setPageTab] = useState<BiomechPageTab>('summary');
+  const [leaderboardViewMode, setLeaderboardViewMode] = useState<LeaderboardViewMode>('individual');
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [isExportingSummaryPdf, setIsExportingSummaryPdf] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [tableColumns, setTableColumns] = useState<string[]>([]);
   const [tableRows, setTableRows] = useState<Array<Record<string, string | number | null>>>([]);
+  const [leaderboardIndividualColumns, setLeaderboardIndividualColumns] = useState<string[]>([]);
+  const [leaderboardIndividualRows, setLeaderboardIndividualRows] = useState<Array<Record<string, string | number | null>>>([]);
+  const [leaderboardAverageColumns, setLeaderboardAverageColumns] = useState<string[]>([]);
+  const [leaderboardAverageRows, setLeaderboardAverageRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [pitchOptions, setPitchOptions] = useState<PitchOption[]>([]);
   const [selectedPitchKey, setSelectedPitchKey] = useState<string>('');
   const [selectedPitchPoints, setSelectedPitchPoints] = useState<PitchPoint[]>([]);
   const [pitcherOptions, setPitcherOptions] = useState<string[]>([]);
   const [tagsOptions, setTagsOptions] = useState<string[]>([]);
-  const [selectedTag, setSelectedTag] = useState<string>('ALL');
+  const [pitchTypeOptions, setPitchTypeOptions] = useState<string[]>([]);
+  const [selectedTags, setSelectedTags] = useState<string[]>(['All']);
+  const [selectedPitchTypes, setSelectedPitchTypes] = useState<string[]>(['All']);
   const [selectedPitchTags, setSelectedPitchTags] = useState<string>('');
+  const [selectedPitchType, setSelectedPitchType] = useState<string>('');
   const [selectedPitchPlayer, setSelectedPitchPlayer] = useState<string>('');
   const [selectedPitchDate, setSelectedPitchDate] = useState<string>('');
   const [selectedPitchVelocityMph, setSelectedPitchVelocityMph] = useState<number | null>(null);
@@ -838,7 +952,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [selectedPitchBodyWeightLb, setSelectedPitchBodyWeightLb] = useState<number | null>(null);
   const [selectedPitchStrideLengthIn, setSelectedPitchStrideLengthIn] = useState<number | null>(null);
   const [selectedPitchStrideDirectionIn, setSelectedPitchStrideDirectionIn] = useState<number | null>(null);
-  const [selectedPitcher, setSelectedPitcher] = useState<string>('ALL');
+  const [selectedPitchers, setSelectedPitchers] = useState<string[]>(['All']);
   const [matchSummary, setMatchSummary] = useState<{
     totalSinglePitchFiles: number;
     matchedSinglePitchFiles: number;
@@ -861,12 +975,17 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [uploadPhase, setUploadPhase] = useState<'idle' | 'uploading' | 'processing'>('idle');
   const [allPitchInputKey, setAllPitchInputKey] = useState<number>(0);
   const [singlePitchInputKey, setSinglePitchInputKey] = useState<number>(0);
+  const summaryCardRef = useRef<HTMLDivElement | null>(null);
   const selectStyle: CSSProperties = {
     background: 'rgba(2, 6, 23, 0.72)',
     color: '#e2e8f0',
     border: '1px solid rgba(148, 163, 184, 0.45)',
     borderRadius: 10,
+    minHeight: 40,
+    fontSize: 15,
   };
+  const filterLabelStyle: CSSProperties = { fontSize: 14, color: '#94a3b8' };
+  const filterControlMinWidth = 250;
 
   const loadData = async (pitchKeyOverride?: string) => {
     setIsLoading(true);
@@ -875,8 +994,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const query = new URLSearchParams();
       if (startDate) query.set('startDate', startDate);
       if (endDate) query.set('endDate', endDate);
-      if (selectedPitcher && selectedPitcher !== 'ALL') query.set('pitcher', selectedPitcher);
-      if (selectedTag && selectedTag !== 'ALL') query.set('tag', selectedTag);
+      if (selectedPitchers.length && !selectedPitchers.includes('All')) query.set('pitcher', selectedPitchers.join(','));
+      if (selectedTags.length && !selectedTags.includes('All')) query.set('tag', selectedTags.join(','));
+      if (selectedPitchTypes.length && !selectedPitchTypes.includes('All')) query.set('pitchType', selectedPitchTypes.join(','));
       query.set('forceMode', forceMode);
       if (pitchKeyOverride || selectedPitchKey) query.set('pitchKey', pitchKeyOverride || selectedPitchKey);
       const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
@@ -894,21 +1014,32 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       if (payload.error) throw new Error(payload.error);
       const columns = BIOMECH_TABLE_COLUMNS as unknown as string[];
       const rows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+      const lbIndividualColumns = Array.isArray(payload.leaderboard_individual_columns) ? payload.leaderboard_individual_columns : [];
+      const lbIndividualRows = Array.isArray(payload.leaderboard_individual_rows) ? payload.leaderboard_individual_rows : [];
+      const lbAverageColumns = Array.isArray(payload.leaderboard_average_columns) ? payload.leaderboard_average_columns : [];
+      const lbAverageRows = Array.isArray(payload.leaderboard_average_rows) ? payload.leaderboard_average_rows : [];
       const options = Array.isArray(payload.pitch_options) ? payload.pitch_options : [];
       const pitchKey = String(payload.selected_pitch_key ?? options[0]?.pitchKey ?? '');
       const points = Array.isArray(payload.selected_pitch_points) ? payload.selected_pitch_points : [];
       const uploadPitchers = Array.isArray(payload.pitcher_options) ? payload.pitcher_options : [];
       const nextTags = Array.isArray(payload.tags_options) ? payload.tags_options : [];
+      const nextPitchTypes = Array.isArray(payload.pitch_type_options) ? payload.pitch_type_options : [];
       const appliedStartDate = String(payload.applied_start_date ?? '').trim();
       const appliedEndDate = String(payload.applied_end_date ?? '').trim();
       setTableColumns(columns);
       setTableRows(rows);
+      setLeaderboardIndividualColumns(lbIndividualColumns);
+      setLeaderboardIndividualRows(lbIndividualRows);
+      setLeaderboardAverageColumns(lbAverageColumns);
+      setLeaderboardAverageRows(lbAverageRows);
       setPitchOptions(options);
       setSelectedPitchKey(pitchKey);
       setSelectedPitchPoints(points);
       setPitcherOptions(uploadPitchers);
       setTagsOptions(nextTags);
+      setPitchTypeOptions(nextPitchTypes);
       setSelectedPitchTags(String(payload.selected_pitch_tags ?? ''));
+      setSelectedPitchType(String(payload.selected_pitch_type ?? ''));
       setSelectedPitchPlayer(String(payload.selected_pitch_player ?? ''));
       setSelectedPitchDate(String(payload.selected_pitch_date ?? ''));
       setSelectedPitchVelocityMph(typeof payload.selected_pitch_velocity_mph === 'number' ? payload.selected_pitch_velocity_mph : null);
@@ -926,7 +1057,27 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         matchedAllPitchRows: Number(payload.match_summary?.matchedAllPitchRows ?? 0),
         unmatchedAllPitchRows: Number(payload.match_summary?.unmatchedAllPitchRows ?? 0),
       });
-      setSelectedTag((current) => (current !== 'ALL' && !nextTags.includes(current) ? 'ALL' : current));
+      setSelectedTags((current) => {
+        if (current.length === 1 && current[0] === 'All') return current;
+        const filtered = current.filter((value) => nextTags.includes(value));
+        const next = normalizeMulti(filtered);
+        if (next.length === current.length && next.every((v, i) => v === current[i])) return current;
+        return next;
+      });
+      setSelectedPitchTypes((current) => {
+        if (current.length === 1 && current[0] === 'All') return current;
+        const filtered = current.filter((v) => nextPitchTypes.includes(v));
+        const next = normalizeMulti(filtered);
+        if (next.length === current.length && next.every((v, i) => v === current[i])) return current;
+        return next;
+      });
+      setSelectedPitchers((current) => {
+        if (current.length === 1 && current[0] === 'All') return current;
+        const filtered = current.filter((value) => uploadPitchers.includes(value));
+        const next = normalizeMulti(filtered);
+        if (next.length === current.length && next.every((v, i) => v === current[i])) return current;
+        return next;
+      });
       if (!sortColumn && columns.length) setSortColumn(columns[0]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load biomechanics data.');
@@ -937,7 +1088,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
 
   useEffect(() => {
     void loadData();
-  }, [forceMode, selectedPitcher, selectedTag]);
+  }, [forceMode, selectedPitchers, selectedTags, selectedPitchTypes]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -953,13 +1104,54 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   }, [isActive]);
 
   const sortedRows = useMemo(() => {
-    if (!sortColumn) return tableRows;
-    return sortTableRows(tableRows, sortColumn, sortDirection);
-  }, [sortColumn, sortDirection, tableRows]);
+    const activeColumns =
+      pageTab === 'summary'
+        ? tableColumns
+        : (leaderboardViewMode === 'individual' ? leaderboardIndividualColumns : leaderboardAverageColumns);
+    const activeRows =
+      pageTab === 'summary'
+        ? tableRows
+        : (leaderboardViewMode === 'individual' ? leaderboardIndividualRows : leaderboardAverageRows);
+    if (!sortColumn || !activeColumns.includes(sortColumn)) return activeRows;
+    return sortTableRows(activeRows, sortColumn, sortDirection);
+  }, [
+    sortColumn,
+    sortDirection,
+    pageTab,
+    leaderboardViewMode,
+    tableColumns,
+    tableRows,
+    leaderboardIndividualColumns,
+    leaderboardIndividualRows,
+    leaderboardAverageColumns,
+    leaderboardAverageRows,
+  ]);
 
   const displayPitchOptions = useMemo(
     () => pitchOptions.map((option) => ({ ...option, label: formatPitchOptionLabel(option, pitchOptions, pitchVelocityByKey) })),
     [pitchOptions, pitchVelocityByKey]
+  );
+  const pitchTypeSelectOptions = useMemo(() => {
+    const rank = new Map<string, number>(PITCH_TYPE_ORDER.map((name, idx) => [name.toLowerCase(), idx]));
+    const sorted = [...pitchTypeOptions].sort((a, b) => {
+      const aRank = rank.get(a.toLowerCase());
+      const bRank = rank.get(b.toLowerCase());
+      if (aRank !== undefined || bRank !== undefined) {
+        if (aRank === undefined) return 1;
+        if (bRank === undefined) return -1;
+        if (aRank !== bRank) return aRank - bRank;
+      }
+      return a.localeCompare(b);
+    });
+    return [{ value: 'All', label: 'All' }, ...sorted.map((value) => ({ value, label: value }))];
+  }, [pitchTypeOptions]);
+  const playerSelectOptions = useMemo(
+    () => [{ value: 'All', label: 'All' }, ...pitcherOptions.map((name) => ({ value: name, label: toFirstLastName(name) }))],
+    [pitcherOptions]
+  );
+  const tagSelectOptions = useMemo(
+    () => [{ value: 'All', label: 'All' }, ...tagsOptions.map((tag) => ({ value: tag, label: tag }))],
+    [tagsOptions]
   );
 
   const uploadFiles = async (uploadKind: 'all_pitches' | 'single_pitch', files: FileList | null) => {
@@ -1049,52 +1241,163 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setIsDeleting(false);
     }
   };
+  const downloadSummaryPdf = async () => {
+    if (!summaryCardRef.current || isExportingSummaryPdf) return;
+    setIsExportingSummaryPdf(true);
+    setError('');
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+      ]);
+      const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+      const pageBgHex = isLightTheme ? '#f8fafc' : '#000000';
+      const exportRoot = summaryCardRef.current.cloneNode(true) as HTMLDivElement;
+      exportRoot.style.width = '920px';
+      exportRoot.style.position = 'fixed';
+      exportRoot.style.left = '-99999px';
+      exportRoot.style.top = '0';
+      exportRoot.style.zIndex = '-1';
+      exportRoot.style.pointerEvents = 'none';
+      exportRoot.style.background = pageBgHex;
+      exportRoot.style.padding = '14px';
+      exportRoot.style.gap = '8px';
+      const pdfLogoRow = document.createElement('div');
+      pdfLogoRow.style.display = 'flex';
+      pdfLogoRow.style.justifyContent = 'space-between';
+      pdfLogoRow.style.alignItems = 'center';
+      pdfLogoRow.style.margin = '0 0 4px 0';
+      const leftLogo = document.createElement('img');
+      leftLogo.src = '/pitching-coach-u-logo.png';
+      leftLogo.alt = 'PCU logo';
+      leftLogo.style.width = '70px';
+      leftLogo.style.height = '70px';
+      leftLogo.style.objectFit = 'contain';
+      const rightLogo = document.createElement('img');
+      rightLogo.src = '/pitching-coach-u-logo.png';
+      rightLogo.alt = 'PCU logo';
+      rightLogo.style.width = '70px';
+      rightLogo.style.height = '70px';
+      rightLogo.style.objectFit = 'contain';
+      pdfLogoRow.append(leftLogo, rightLogo);
+      exportRoot.prepend(pdfLogoRow);
+      const chartRow = exportRoot.querySelector('[data-biomech-chart-row="true"]') as HTMLDivElement | null;
+      const graphPanel = exportRoot.querySelector('[data-biomech-graph-panel="true"]') as HTMLDivElement | null;
+      const metricsPanel = exportRoot.querySelector('[data-biomech-metrics-panel="true"]') as HTMLElement | null;
+      const graphSvg = exportRoot.querySelector('[data-biomech-graph-panel="true"] svg') as SVGElement | null;
+      const headerTitle = exportRoot.querySelector('p[style*="font-size: 18px"]') as HTMLParagraphElement | null;
+      if (chartRow) {
+        chartRow.style.gridTemplateColumns = 'minmax(0, 1fr)';
+        chartRow.style.alignItems = 'start';
+        chartRow.style.gap = '8px';
+      }
+      if (graphPanel) {
+        graphPanel.style.marginTop = '0';
+        graphPanel.style.width = '100%';
+      }
+      if (metricsPanel) {
+        metricsPanel.style.order = '-1';
+        metricsPanel.style.marginTop = '0';
+        metricsPanel.style.height = 'auto';
+        metricsPanel.style.overflowY = 'visible';
+        metricsPanel.style.padding = '10px 12px 12px';
+      }
+      if (graphSvg) {
+        graphSvg.style.maxWidth = '100%';
+        graphSvg.style.height = '340px';
+      }
+      if (headerTitle) {
+        headerTitle.style.fontSize = '28px';
+        headerTitle.style.lineHeight = '1.1';
+      }
+      document.body.appendChild(exportRoot);
+      const canvas = await html2canvas(exportRoot, {
+        backgroundColor: pageBgHex,
+        scale: Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1),
+        useCORS: true,
+      });
+      exportRoot.remove();
+      const imageData = canvas.toDataURL('image/jpeg', 0.9);
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const hex = pageBgHex.replace('#', '');
+      const r = Number.parseInt(hex.slice(0, 2), 16);
+      const g = Number.parseInt(hex.slice(2, 4), 16);
+      const b = Number.parseInt(hex.slice(4, 6), 16);
+      pdf.setFillColor(r, g, b);
+      pdf.rect(0, 0, pageW, pageH, 'F');
+      const margin = 8;
+      const usableW = pageW - margin * 2;
+      const usableH = pageH - margin * 2;
+      const scale = Math.min(usableW / canvas.width, usableH / canvas.height);
+      const drawW = canvas.width * scale;
+      const drawH = canvas.height * scale;
+      const drawX = (pageW - drawW) / 2;
+      const drawY = margin;
+      pdf.addImage(imageData, 'JPEG', drawX, drawY, drawW, drawH, undefined, 'FAST');
+      const player = String(selectedPitchPlayer ?? '').trim() || 'pitch';
+      const date = String(selectedPitchDate ?? '').trim() || 'date';
+      const safeName = `${player}_${date}`.replace(/[^a-z0-9_-]+/gi, '_');
+      pdf.save(`biomechanics_summary_${safeName}.pdf`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to download PDF.');
+    } finally {
+      setIsExportingSummaryPdf(false);
+    }
+  };
+
+  const activeTableColumns =
+    pageTab === 'summary'
+      ? tableColumns
+      : (leaderboardViewMode === 'individual' ? leaderboardIndividualColumns : leaderboardAverageColumns);
+  const activeTableTitle =
+    pageTab === 'summary'
+      ? 'Summary Table'
+      : (leaderboardViewMode === 'individual' ? 'Leaderboard: Individual Pitches' : 'Leaderboard: Averages');
 
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem', display: 'grid', gap: 14 }}>
       <h2 style={{ margin: 0 }}>Biomechanics</h2>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" className={pageTab === 'summary' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('summary')}>
+          Summary
+        </button>
+        <button type="button" className={pageTab === 'leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('leaderboard')}>
+          Leaderboard
+        </button>
+      </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap' }}>
-        <label style={{ display: 'grid', gap: 4 }}>
-          <span style={{ fontSize: 12, color: '#94a3b8' }}>Start Date</span>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="portal-select" style={selectStyle} />
+        <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
+          <span style={filterLabelStyle}>Start Date</span>
+          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="portal-select biomechanics-filter-control" style={selectStyle} />
         </label>
-        <label style={{ display: 'grid', gap: 4 }}>
-          <span style={{ fontSize: 12, color: '#94a3b8' }}>End Date</span>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="portal-select" style={selectStyle} />
+        <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
+          <span style={filterLabelStyle}>End Date</span>
+          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="portal-select biomechanics-filter-control" style={selectStyle} />
         </label>
-        <label style={{ display: 'grid', gap: 4, minWidth: 220 }}>
-          <span style={{ fontSize: 12, color: '#94a3b8' }}>Player</span>
-          <select
-            className="portal-select"
-            value={selectedPitcher}
-            onChange={(e) => setSelectedPitcher(e.target.value)}
-            style={selectStyle}
-          >
-            <option value="ALL">All</option>
-            {pitcherOptions.map((name) => (
-              <option key={`filter-${name}`} value={name}>{toFirstLastName(name)}</option>
-            ))}
-          </select>
+        <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
+          <span style={filterLabelStyle}>Player</span>
+          <SearchableMultiSelect options={playerSelectOptions} values={selectedPitchers} onChange={setSelectedPitchers} />
         </label>
-        <label style={{ display: 'grid', gap: 4, minWidth: 220 }}>
-          <span style={{ fontSize: 12, color: '#94a3b8' }}>Tags</span>
-          <select
-            className="portal-select"
-            value={selectedTag}
-            onChange={(e) => setSelectedTag(e.target.value)}
-            style={selectStyle}
-          >
-            <option value="ALL">All</option>
-            {tagsOptions.map((tag) => (
-              <option key={`tag-${tag}`} value={tag}>{tag}</option>
-            ))}
-          </select>
+        <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
+          <span style={filterLabelStyle}>Tags</span>
+          <SearchableMultiSelect options={tagSelectOptions} values={selectedTags} onChange={setSelectedTags} />
+        </label>
+        <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
+          <span style={filterLabelStyle}>Pitch Type</span>
+          <SearchableMultiSelect
+            options={pitchTypeSelectOptions}
+            values={selectedPitchTypes}
+            onChange={setSelectedPitchTypes}
+          />
         </label>
         <button type="button" className="btn btn-ghost" onClick={() => void loadData()} disabled={isLoading || isUploading}>
           {isLoading ? 'Loading...' : 'Apply Filters'}
         </button>
       </div>
 
+      {pageTab === 'summary' ? (
       <div style={{ display: 'grid', gap: 12 }}>
         <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
           <h3 style={{ margin: 0, fontSize: 16 }}>Upload All-Pitches CSVs</h3>
@@ -1124,9 +1427,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
           />
         </div>
       </div>
+      ) : null}
 
       {error ? <p className="auth-error" style={{ margin: 0 }}>{error}</p> : null}
-      {!error && debugInfo ? <p style={{ margin: 0, color: '#facc15', fontSize: 12 }}>{debugInfo}</p> : null}
       {!error && uploadMessage ? <p style={{ margin: 0, color: '#86efac' }}>{uploadMessage}</p> : null}
       {isUploading ? (
         <p style={{ margin: 0, color: '#93c5fd' }}>
@@ -1140,12 +1443,22 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       </p>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>
+        {pageTab === 'leaderboard' ? (
+          <label style={{ display: 'grid', gap: 4 }}>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>Leaderboard View</span>
+            <select className="portal-select" value={leaderboardViewMode} onChange={(e) => setLeaderboardViewMode(e.target.value as LeaderboardViewMode)} style={selectStyle}>
+              <option value="individual">Individual Pitches</option>
+              <option value="averages">Averages</option>
+            </select>
+          </label>
+        ) : null}
         <label style={{ display: 'grid', gap: 4, width: 460, maxWidth: '100%', flex: '0 0 auto' }}>
           <span style={{ fontSize: 12, color: '#94a3b8' }}>Pitch</span>
           <select
             className="portal-select"
             value={selectedPitchKey}
             style={selectStyle}
+            disabled={pageTab !== 'summary'}
             onChange={(e) => {
               const next = e.target.value;
               setSelectedPitchKey(next);
@@ -1162,7 +1475,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             type="button"
             className="btn btn-danger"
             onClick={() => void deleteSelectedPitch()}
-            disabled={isLoading || isUploading || isDeleting || !selectedPitchKey}
+            disabled={pageTab !== 'summary' || isLoading || isUploading || isDeleting || !selectedPitchKey}
           >
             {isDeleting ? 'Deleting...' : 'Delete Pitch'}
           </button>
@@ -1183,17 +1496,35 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         </label>
       </div>
 
-      <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 10 }}>
-        <div style={{ display: 'grid', justifyItems: 'center', gap: 2 }}>
+      {pageTab === 'summary' ? (
+      <div ref={summaryCardRef} style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 8, position: 'relative' }}>
+        <div data-html2canvas-ignore="true" style={{ position: 'absolute', top: 10, right: 10, zIndex: 2 }}>
+          <button type="button" className="btn btn-ghost" onClick={() => void downloadSummaryPdf()} disabled={isExportingSummaryPdf}>
+            {isExportingSummaryPdf ? 'Downloading PDF...' : 'Download PDF'}
+          </button>
+        </div>
+        <div style={{ display: 'grid', justifyItems: 'center', gap: 2, paddingTop: 2 }}>
           <p style={{ margin: 0, color: '#e2e8f0', fontSize: 18, fontWeight: 700, textAlign: 'center' }}>
             {selectedPitchPlayer || '—'}
           </p>
           <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13, textAlign: 'center' }}>
             {selectedPitchDate || '—'}
           </p>
-          <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13, textAlign: 'center' }}>
-            <strong>{selectedPitchTags || '—'}</strong> | <strong>{selectedPitchVelocityMph !== null ? `${selectedPitchVelocityMph.toFixed(1)} mph` : '— mph'}</strong>
-          </p>
+          {(() => {
+            const parts: string[] = [];
+            const pitchType = String(selectedPitchType ?? '').trim();
+            const tags = String(selectedPitchTags ?? '').trim();
+            const hasTag = Boolean(tags) && tags.toLowerCase() !== 'untagged';
+            if (pitchType) parts.push(pitchType);
+            if (hasTag) parts.push(tags);
+            if (selectedPitchVelocityMph !== null && Number.isFinite(selectedPitchVelocityMph)) parts.push(`${selectedPitchVelocityMph.toFixed(1)} mph`);
+            if (!parts.length) return null;
+            return (
+              <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13, textAlign: 'center' }}>
+                <strong>{parts.join(' | ')}</strong>
+              </p>
+            );
+          })()}
         </div>
         <LineChart
           points={selectedPitchPoints}
@@ -1205,14 +1536,22 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
           strideDirectionIn={selectedPitchStrideDirectionIn}
         />
       </div>
+      ) : null}
 
       <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12 }}>
-        <h3 style={{ marginTop: 0 }}>All-Pitches Table</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <h3 style={{ marginTop: 0, marginBottom: 0 }}>{activeTableTitle}</h3>
+          {pageTab === 'leaderboard' ? (
+            <button type="button" className="btn btn-ghost" onClick={() => setShowLeaderboardCorrelation(true)}>
+              View Chart
+            </button>
+          ) : null}
+        </div>
         <div className="portal-table-wrap" style={{ maxHeight: '52vh', overflow: 'auto' }}>
           <table className="portal-table">
             <thead>
               <tr>
-                {tableColumns.map((column) => {
+                {activeTableColumns.map((column) => {
                   const active = sortColumn === column;
                   const glyph = active ? (sortDirection === 'desc' ? '↓' : '↑') : '↕';
                   return (
@@ -1249,7 +1588,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             <tbody>
               {sortedRows.length ? sortedRows.map((row, rowIdx) => (
                 <tr key={`bio-row-${rowIdx}`}>
-                  {tableColumns.map((column) => (
+                  {activeTableColumns.map((column) => (
                     <td key={`${rowIdx}-${column}`} style={{ textAlign: 'center' }}>
                       {formatBiomechTableValue(column, row[column] as string | number | null, forceMode)}
                     </td>
@@ -1257,7 +1596,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={Math.max(1, tableColumns.length)} style={{ textAlign: 'center' }}>
+                  <td colSpan={Math.max(1, activeTableColumns.length)} style={{ textAlign: 'center' }}>
                     {isLoading ? 'Loading...' : 'No rows available.'}
                   </td>
                 </tr>
@@ -1266,6 +1605,16 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
           </table>
         </div>
       </div>
+      <LeaderboardCorrelationModal
+        open={showLeaderboardCorrelation && pageTab === 'leaderboard'}
+        onClose={() => setShowLeaderboardCorrelation(false)}
+        title={leaderboardViewMode === 'individual' ? 'Biomechanics Leaderboard Correlation (Individual Pitches)' : 'Biomechanics Leaderboard Correlation (Averages)'}
+        columns={activeTableColumns}
+        rows={sortedRows as Array<Record<string, string | number | null | undefined>>}
+        viewByLabel="Player"
+        primaryColumnName="Name"
+        formatValue={(column, value) => formatBiomechTableValue(column, value as string | number | null, forceMode)}
+      />
     </section>
   );
 }

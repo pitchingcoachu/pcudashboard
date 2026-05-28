@@ -2618,6 +2618,13 @@ body:not(.theme-light) .portal-schedule-toolbar select option {
   gap: 0.45rem;
 }
 
+.biomechanics-filter-control {
+  min-height: 40px !important;
+  height: 40px !important;
+  padding: 0.55rem 0.72rem !important;
+  font: 500 0.95rem/1.2 Manrope, sans-serif !important;
+}
+
 .portal-dashboard-sidebar .portal-form-grid label {
   text-align: center;
 }

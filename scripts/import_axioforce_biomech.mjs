@@ -415,11 +415,11 @@ async function importSinglePitchFile(client, filePath, idx, total) {
     const computed = computePitchMetrics(pointsForMetrics);
     await client.query(
       `INSERT INTO biomechanics_pitch_metrics
-      (organization_id, school_code, source_file_hash, back_peak_fz, back_peak_fy, mound_connection, impulse, yz_transfer_back, lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      (organization_id, school_code, source_file_hash, back_peak_fz, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back, lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [
         ORG_ID, SCHOOL_CODE, sourceFileHash, computed.backPeakFz, computed.backPeakFy, computed.moundConnection, computed.impulse,
-        computed.yzTransferBack, computed.leadPeakFz, computed.leadPeakFy, computed.clawbackTime, computed.yzTransferFront,
+        computed.impulseTime ?? null, computed.yzTransferBack, computed.leadPeakFz, computed.leadPeakFy, computed.clawbackTime, computed.yzTransferFront,
         computed.yTransfer, computed.zTransfer,
       ]
     );

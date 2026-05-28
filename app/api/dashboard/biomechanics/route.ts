@@ -197,10 +197,15 @@ export async function GET(request: Request) {
     return NextResponse.json({
       table_columns: [],
       table_rows: [],
+      leaderboard_individual_columns: [],
+      leaderboard_individual_rows: [],
+      leaderboard_average_columns: [],
+      leaderboard_average_rows: [],
       pitch_options: [],
       selected_pitch_key: null,
       selected_pitch_points: [],
       tags_options: [],
+      pitch_type_options: [],
       selected_pitch_tags: null,
       selected_pitch_player: null,
       selected_pitch_date: null,
@@ -225,6 +230,7 @@ export async function GET(request: Request) {
   const selectedPitchKey = String(searchParams.get('pitchKey') ?? '').trim() || null;
   const selectedPitcher = String(searchParams.get('pitcher') ?? '').trim() || null;
   const selectedTag = String(searchParams.get('tag') ?? '').trim() || null;
+  const selectedPitchType = String(searchParams.get('pitchType') ?? '').trim() || null;
   const forceMode = String(searchParams.get('forceMode') ?? '').trim().toLowerCase() === 'bw' ? 'bw' : 'force';
   try {
     const pitcherOptions = await fetchPcuPitchers().catch(() => []);
@@ -262,6 +268,7 @@ export async function GET(request: Request) {
         selectedPitchKey,
         selectedPitcher,
         selectedTag,
+        selectedPitchType,
         forceMode,
       });
 
@@ -282,6 +289,7 @@ export async function GET(request: Request) {
           selectedPitchKey,
           selectedPitcher,
           selectedTag,
+          selectedPitchType,
           forceMode,
         });
         if (hasSnapshotData(unboundedSnapshot)) {
@@ -308,6 +316,7 @@ export async function GET(request: Request) {
         selectedPitchKey,
         selectedPitcher,
         selectedTag,
+        selectedPitchType,
         forceMode,
       });
       selectedOrgId = organizationId;
@@ -318,11 +327,17 @@ export async function GET(request: Request) {
     return NextResponse.json({
       table_columns: snapshot.tableColumns,
       table_rows: snapshot.tableRows,
+      leaderboard_individual_columns: snapshot.leaderboardIndividualColumns,
+      leaderboard_individual_rows: snapshot.leaderboardIndividualRows,
+      leaderboard_average_columns: snapshot.leaderboardAverageColumns,
+      leaderboard_average_rows: snapshot.leaderboardAverageRows,
       pitch_options: snapshot.pitchOptions,
       selected_pitch_key: snapshot.selectedPitchKey,
       selected_pitch_points: snapshot.selectedPitchPoints,
       tags_options: snapshot.tagsOptions,
+      pitch_type_options: snapshot.pitchTypeOptions,
       selected_pitch_tags: snapshot.selectedPitchTags,
+      selected_pitch_type: snapshot.selectedPitchType,
       selected_pitch_player: snapshot.selectedPitchPlayer,
       selected_pitch_date: snapshot.selectedPitchDate,
       selected_pitch_velocity_mph: snapshot.selectedPitchVelocityMph,
@@ -348,11 +363,17 @@ export async function GET(request: Request) {
       {
         table_columns: [],
         table_rows: [],
+        leaderboard_individual_columns: [],
+        leaderboard_individual_rows: [],
+        leaderboard_average_columns: [],
+        leaderboard_average_rows: [],
         pitch_options: [],
         selected_pitch_key: null,
         selected_pitch_points: [],
         tags_options: [],
+        pitch_type_options: [],
         selected_pitch_tags: null,
+        selected_pitch_type: null,
         selected_pitch_player: null,
         selected_pitch_date: null,
         selected_pitch_velocity_mph: null,
