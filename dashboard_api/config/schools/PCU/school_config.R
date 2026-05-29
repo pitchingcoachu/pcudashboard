@@ -278,6 +278,8 @@ school_config <- list(
   "Moreland, Eastin",
   "Fritz, Dominik",
   "Fink, Cooper",
+  "Mixey, Ryan",
+  "Hutchison, Daniel",
   "Twichel, Ryan" 
   ),
   allowed_campers = character(0),

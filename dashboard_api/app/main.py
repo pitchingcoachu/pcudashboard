@@ -5857,7 +5857,17 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
     allowed_hitters = _extract_r_vector(text, "allowed_hitters")
     allowed_campers = _extract_r_vector(text, "allowed_campers")
     if school_code.upper() == "PCU":
-        pcu_additions = ["Heather, Connor", "Carr, Jordan", "King, Stan", "Jones, Grady", "Birt, Henry", "Zuniga, Guillermo", "Kaufman, Rylan"]
+        pcu_additions = [
+            "Heather, Connor",
+            "Carr, Jordan",
+            "King, Stan",
+            "Jones, Grady",
+            "Birt, Henry",
+            "Zuniga, Guillermo",
+            "Kaufman, Rylan",
+            "Mixey, Ryan",
+            "Hutchison, Daniel",
+        ]
         allowed_pitchers = sorted({*allowed_pitchers, *pcu_additions})
         allowed_hitters = sorted({*allowed_hitters, *pcu_additions})
     team_code = _extract_r_scalar(text, "team_code")

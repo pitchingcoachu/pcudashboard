@@ -2341,11 +2341,15 @@ export default function PitchingSuite({
   const [actionVideoPlaying, setActionVideoPlaying] = useState(false);
   const [actionVideoTime, setActionVideoTime] = useState(0);
   const [actionVideoDuration, setActionVideoDuration] = useState(0);
+  const [actionVideoRefreshNonce, setActionVideoRefreshNonce] = useState(0);
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Pitcher') : splitBy;
+  const singleActionVideoRef = useRef<HTMLVideoElement | null>(null);
   const leftCompareVideoRef = useRef<HTMLVideoElement | null>(null);
   const rightCompareVideoRef = useRef<HTMLVideoElement | null>(null);
   const actionViewRef = useRef<HTMLDivElement | null>(null);
+  const latestOverviewRequestKeyRef = useRef('');
+  const actionVideoRetryKeysRef = useRef(new Set<string>());
 
   const isLeague =
     String(selectedSchoolCode ?? '').toUpperCase() === 'LEAGUE' ||
@@ -3114,6 +3118,7 @@ export default function PitchingSuite({
       setPercentileBaselineHandedRequestKey('');
     }
     const requestKey = `/api/dashboard/pitching/overview?${params.toString()}`;
+    latestOverviewRequestKeyRef.current = requestKey;
     if (isLeaderboardPage) setCorrelationOverviewBaseQuery(params.toString());
     const shouldSkipProCompanionChart = isPro && isSummaryPage && isProAllSelection && proWindowDays > 14;
     const chartRequestKey = ((shouldForceProFastSummary || shouldScheduleCompanionCharts) && !shouldSkipProCompanionChart)
@@ -4647,16 +4652,66 @@ export default function PitchingSuite({
 
   const currentActionPitch = actionPitches[actionIndex] ?? null;
 
-  const openActionModal = (pitches: PitchActionPoint[]) => {
+  const refreshActionPitchVideoUrls = async (pitches: PitchActionPoint[]): Promise<PitchActionPoint[]> => {
+    if (!pitches.length) return pitches;
+    const baseRequestKey = latestOverviewRequestKeyRef.current;
+    if (!baseRequestKey) return pitches;
+    const ids = Array.from(
+      new Set(
+        pitches
+          .map((pitch) => Number(pitch.pitch_event_id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+          .map((id) => Math.trunc(id))
+      )
+    );
+    if (!ids.length) return pitches;
+    try {
+      const req = new URL(baseRequestKey, window.location.origin);
+      req.searchParams.set('with_video', '1');
+      req.searchParams.set('include_chart_points', '1');
+      req.searchParams.set('include_row_pitches', '0');
+      req.searchParams.set('include_trend_rows', '0');
+      req.searchParams.set('chart_only', '1');
+      req.searchParams.set('chart_points_limit', '2500');
+      req.searchParams.set('force_raw', '1');
+      req.searchParams.set('_video_refresh', String(Date.now()));
+      const response = await fetch(req.toString(), { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as { chart_points?: PitchActionPoint[]; error?: string };
+      if (!response.ok || payload.error) return pitches;
+      const freshPoints = Array.isArray(payload.chart_points) ? payload.chart_points : [];
+      if (!freshPoints.length) return pitches;
+      const byId = new Map<number, PitchActionPoint>();
+      for (const point of freshPoints) {
+        const id = Number(point.pitch_event_id);
+        if (Number.isFinite(id) && id > 0) byId.set(Math.trunc(id), point);
+      }
+      return pitches.map((pitch) => {
+        const id = Number(pitch.pitch_event_id);
+        const fresh = Number.isFinite(id) && id > 0 ? byId.get(Math.trunc(id)) : undefined;
+        if (!fresh) return pitch;
+        return {
+          ...pitch,
+          video_clip_1: fresh.video_clip_1 ?? pitch.video_clip_1,
+          video_clip_2: fresh.video_clip_2 ?? pitch.video_clip_2,
+          video_clip_3: fresh.video_clip_3 ?? pitch.video_clip_3,
+        };
+      });
+    } catch {
+      return pitches;
+    }
+  };
+
+  const openActionModal = async (pitches: PitchActionPoint[]) => {
     const deduped = Array.from(new Map(pitches.map((pitch) => [pitchIdentityKey(pitch), pitch])).values());
     if (!deduped.length) return;
+    const refreshed = await refreshActionPitchVideoUrls(deduped);
     const nextMode: 'video' | 'edit' | 'spin' =
       visualOption === 'Pitch Edit' && canUsePitchEdits ? 'edit' : visualOption === 'Spin Visual' ? 'spin' : 'video';
-    setActionPitches(deduped);
+    setActionPitches(refreshed);
     setActionIndex(0);
     setActionMode(nextMode);
-    setEditPitchType(deduped[0]?.pitch_type ?? '');
-    setEditPitcher(resolvePitcherName(deduped[0], selectedPitchers));
+    setEditPitchType(refreshed[0]?.pitch_type ?? '');
+    setEditPitcher(resolvePitcherName(refreshed[0], selectedPitchers));
     setActionSaveState('idle');
     setActionSaveMessage('');
     setActionIsPlaying(nextMode === 'spin');
@@ -4667,6 +4722,8 @@ export default function PitchingSuite({
     setActionVideoPlaying(false);
     setActionVideoTime(0);
     setActionVideoDuration(0);
+    setActionVideoRefreshNonce((value) => value + 1);
+    actionVideoRetryKeysRef.current.clear();
   };
 
   useEffect(() => {
@@ -5340,6 +5397,20 @@ export default function PitchingSuite({
     } catch {
       setActionVideoPlaying(false);
     }
+  };
+
+  const handleActionVideoLoadError = async (targetPitch: PitchActionPoint | null) => {
+    if (!targetPitch) return;
+    const retryKey = pitchIdentityKey(targetPitch);
+    if (!retryKey || actionVideoRetryKeysRef.current.has(retryKey)) return;
+    actionVideoRetryKeysRef.current.add(retryKey);
+    const refreshed = await refreshActionPitchVideoUrls([targetPitch]);
+    const first = refreshed[0];
+    if (!first) return;
+    setActionPitches((rows) =>
+      rows.map((row) => (pitchIdentityKey(row) === retryKey ? { ...row, video_clip_1: first.video_clip_1, video_clip_2: first.video_clip_2, video_clip_3: first.video_clip_3 } : row))
+    );
+    setActionVideoRefreshNonce((value) => value + 1);
   };
 
   useEffect(() => {
@@ -12346,12 +12417,15 @@ export default function PitchingSuite({
                               <div style={{ width: '100%', height: '100%', display: 'grid', gridTemplateColumns: '190px 1fr 1fr 190px', gap: 10, padding: 10 }}>
                                 {selectedLeftPitch ? renderVideoPitchMetrics(selectedLeftPitch, 'left', true) : <div />}
                                 <video
-                                  key={`left-${actionLeftPitchKey}-${selectedLeftUrls[0] ?? 'none'}`}
+                                  key={`left-${actionLeftPitchKey}-${selectedLeftUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
                                   ref={leftCompareVideoRef}
                                   style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
                                   onLoadedMetadata={updateSyncedDuration}
                                   onPause={() => setActionVideoPlaying(false)}
                                   onPlay={() => setActionVideoPlaying(true)}
+                                  onError={() => {
+                                    void handleActionVideoLoadError(selectedLeftPitch ?? null);
+                                  }}
                                 >
                                   <source src={selectedLeftUrls[0]} />
                                 </video>
@@ -12359,12 +12433,15 @@ export default function PitchingSuite({
                                   selectedRightUrls.length ? (
                                     <>
                                       <video
-                                        key={`right-${actionRightPitchKey}-${selectedRightUrls[0] ?? 'none'}`}
+                                        key={`right-${actionRightPitchKey}-${selectedRightUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
                                         ref={rightCompareVideoRef}
                                         style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
                                         onLoadedMetadata={updateSyncedDuration}
                                         onPause={() => setActionVideoPlaying(false)}
                                         onPlay={() => setActionVideoPlaying(true)}
+                                        onError={() => {
+                                          void handleActionVideoLoadError(selectedRightPitch ?? null);
+                                        }}
                                       >
                                         <source src={selectedRightUrls[0]} />
                                       </video>
@@ -12393,7 +12470,16 @@ export default function PitchingSuite({
                               </div>
                             )
                           ) : (
-                            <video controls autoPlay style={{ width: '100%', height: '100%', objectFit: 'contain' }}>
+                            <video
+                              key={`single-${currentPitchKey}-${actionVideoUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
+                              ref={singleActionVideoRef}
+                              controls
+                              autoPlay
+                              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                              onError={() => {
+                                void handleActionVideoLoadError(currentActionPitch ?? null);
+                              }}
+                            >
                               <source src={actionVideoUrls[0]} />
                             </video>
                           )
