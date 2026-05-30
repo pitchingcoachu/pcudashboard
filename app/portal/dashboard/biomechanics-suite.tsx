@@ -1702,33 +1702,25 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             </select>
           </label>
         ) : null}
-        <label style={{ display: 'grid', gap: 4, width: 460, maxWidth: '100%', flex: '0 0 auto' }}>
-          <span style={{ fontSize: 12, color: '#94a3b8' }}>Pitch</span>
-          <select
-            className="portal-select"
-            value={selectedPitchKey}
-            style={selectStyle}
-            disabled={pageTab !== 'summary' || !hasAppliedFilters}
-            onChange={(e) => {
-              const next = e.target.value;
-              setSelectedPitchKey(next);
-              if (hasAppliedFilters) void loadData(next);
-            }}
-          >
-            {displayPitchOptions.length ? displayPitchOptions.map((option) => (
-              <option key={option.pitchKey} value={option.pitchKey}>{option.label}</option>
-            )) : <option value="">No pitches available</option>}
-          </select>
-        </label>
-        {role !== 'player' ? (
-          <button
-            type="button"
-            className="btn btn-danger"
-            onClick={() => void deleteSelectedPitch()}
-            disabled={pageTab !== 'summary' || isLoading || isUploading || isDeleting || !selectedPitchKey || !hasAppliedFilters}
-          >
-            {isDeleting ? 'Deleting...' : 'Delete Pitch'}
-          </button>
+        {pageTab === 'summary' ? (
+          <label style={{ display: 'grid', gap: 4, width: 460, maxWidth: '100%', flex: '0 0 auto' }}>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>Pitch</span>
+            <select
+              className="portal-select"
+              value={selectedPitchKey}
+              style={selectStyle}
+              disabled={!hasAppliedFilters}
+              onChange={(e) => {
+                const next = e.target.value;
+                setSelectedPitchKey(next);
+                if (hasAppliedFilters) void loadData(next);
+              }}
+            >
+              {displayPitchOptions.length ? displayPitchOptions.map((option) => (
+                <option key={option.pitchKey} value={option.pitchKey}>{option.label}</option>
+              )) : <option value="">No pitches available</option>}
+            </select>
+          </label>
         ) : null}
         <label style={{ display: 'grid', gap: 4 }}>
           <span style={{ fontSize: 12, color: '#94a3b8' }}>View</span>
