@@ -256,6 +256,22 @@ function hasSnapshotData(snapshot: {
   return false;
 }
 
+function parseSelectedValues(raw: string | null): string[] {
+  const text = String(raw ?? '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((v) => String(v ?? '').trim())
+        .filter(Boolean);
+    }
+  } catch {
+    // Treat non-JSON as single value.
+  }
+  return [text];
+}
+
 export async function GET(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -300,14 +316,19 @@ export async function GET(request: Request) {
   const startDateParam = String(searchParams.get('startDate') ?? '').trim() || null;
   const endDateParam = String(searchParams.get('endDate') ?? '').trim() || null;
   const selectedPitchKey = String(searchParams.get('pitchKey') ?? '').trim() || null;
-  const selectedPitcher = String(searchParams.get('pitcher') ?? '').trim() || null;
+  const selectedPitcherRaw = String(searchParams.get('pitcher') ?? '').trim() || null;
   const selectedTag = String(searchParams.get('tag') ?? '').trim() || null;
   const selectedPitchType = String(searchParams.get('pitchType') ?? '').trim() || null;
   const forceMode = String(searchParams.get('forceMode') ?? '').trim().toLowerCase() === 'bw' ? 'bw' : 'force';
+  const playerScopedName = session.role === 'player' ? String(session.name ?? '').trim() : '';
+  const selectedPitcher = session.role === 'player'
+    ? (playerScopedName ? JSON.stringify([playerScopedName]) : null)
+    : selectedPitcherRaw;
   const cacheKey = [
     'biomech:v2',
     Number(organizationId),
     String(schoolCode),
+    session.role === 'player' ? `player:${String(session.userId ?? '')}` : `role:${session.role}`,
     startDateParam ?? '',
     endDateParam ?? '',
     selectedPitchKey ?? '',
@@ -338,7 +359,10 @@ export async function GET(request: Request) {
     // Ignore rollup cache read errors and continue to live computation.
   }
   try {
-    const pitcherOptions = await fetchPcuPitchers().catch(() => []);
+    const pitcherOptionsAll = await fetchPcuPitchers().catch(() => []);
+    const pitcherOptions = session.role === 'player'
+      ? (playerScopedName ? [playerScopedName] : [])
+      : pitcherOptionsAll;
     const candidateOrgIds = Array.from(
       new Set(
         [
@@ -350,6 +374,7 @@ export async function GET(request: Request) {
     );
 
     let snapshot = null as Awaited<ReturnType<typeof getBiomechanicsSnapshot>> | null;
+    let allSessionsSnapshot = null as Awaited<ReturnType<typeof getBiomechanicsSnapshot>> | null;
     let appliedStartDate = startDateParam;
     let appliedEndDate = endDateParam;
     let selectedOrgId = organizationId;
@@ -429,6 +454,21 @@ export async function GET(request: Request) {
       appliedEndDate = endDateParam;
     }
 
+    const selectedPitchers = parseSelectedValues(selectedPitcher).filter((v) => v.toUpperCase() !== 'ALL');
+    if (selectedPitchers.length === 1) {
+      allSessionsSnapshot = await getBiomechanicsSnapshot({
+        organizationId: selectedOrgId,
+        schoolCode,
+        startDate: null,
+        endDate: null,
+        selectedPitchKey: null,
+        selectedPitcher,
+        selectedTag,
+        selectedPitchType,
+        forceMode,
+      });
+    }
+
     const responsePayload = {
       table_columns: snapshot.tableColumns,
       table_rows: snapshot.tableRows,
@@ -454,6 +494,7 @@ export async function GET(request: Request) {
       applied_end_date: appliedEndDate,
       match_summary: snapshot.matchSummary,
       pitcher_options: pitcherOptions,
+      all_sessions_leaderboard_individual_rows: allSessionsSnapshot?.leaderboardIndividualRows ?? [],
     };
     biomechanicsResponseCache.set(cacheKey, { at: Date.now(), payload: responsePayload });
     void writeBiomechRollupCache({ organizationId, schoolCode, cacheKey, payload: responsePayload }).catch(() => {});
@@ -496,6 +537,7 @@ export async function GET(request: Request) {
           unmatchedAllPitchRows: 0,
         },
         pitcher_options: [],
+        all_sessions_leaderboard_individual_rows: [],
         error: error instanceof Error ? error.message : 'Failed to load biomechanics data.',
       },
       { status: 500 }

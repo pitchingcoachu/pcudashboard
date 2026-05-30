@@ -16,6 +16,7 @@ type PitchOption = {
   label: string;
   capturedAt: string | null;
   velocityMph?: number | null;
+  pitchType?: string | null;
 };
 
 type PitchPoint = {
@@ -53,6 +54,7 @@ type Payload = {
   selected_pitch_body_weight_lb?: number | null;
   selected_pitch_stride_length_in?: number | null;
   selected_pitch_stride_direction_in?: number | null;
+  all_sessions_leaderboard_individual_rows?: Array<Record<string, string | number | null>>;
   applied_start_date?: string | null;
   applied_end_date?: string | null;
   match_summary?: {
@@ -96,6 +98,19 @@ const BIOMECH_TABLE_COLUMNS = [
   'Stride Length (in)',
   'Stride Direction (in)',
 ] as const;
+
+const EXCLUDED_SINGLE_PLAYER_TAGS = new Set([
+  'untagged',
+  '5oz',
+  'fastball',
+  'sinker',
+  'cutter',
+  'curveball',
+  'slider',
+  'sweeper',
+  'splitter',
+  'changeup',
+]);
 
 const PITCH_TYPE_ORDER = [
   'Fastball',
@@ -286,8 +301,10 @@ function formatPitchOptionLabel(option: PitchOption, allOptions: PitchOption[], 
   const veloNum = typeof fromMap === 'number' && Number.isFinite(fromMap)
     ? fromMap
     : (typeof option.velocityMph === 'number' && Number.isFinite(option.velocityMph) ? option.velocityMph : null);
+  const pitchType = String(option.pitchType ?? '').trim();
   const velo = veloNum !== null ? `${veloNum.toFixed(1)} mph` : '— mph';
-  return `${pitcher} | ${mm}/${dd}/${yy} | Pitch #${pitchNum} | ${velo}`;
+  const pitchDetails = pitchType ? `${pitchType} | ${velo}` : velo;
+  return `${pitcher} | ${mm}/${dd}/${yy} | Pitch #${pitchNum} | ${pitchDetails}`;
 }
 
 function LineChart({
@@ -295,6 +312,7 @@ function LineChart({
   mode,
   forceMode,
   pitchVelocityMph,
+  pitchType,
   bodyWeightLb,
   strideLengthIn,
   strideDirectionIn,
@@ -303,6 +321,7 @@ function LineChart({
   mode: ViewMode;
   forceMode: ForceMode;
   pitchVelocityMph: number | null;
+  pitchType: string | null;
   bodyWeightLb: number | null;
   strideLengthIn: number | null;
   strideDirectionIn: number | null;
@@ -892,6 +911,17 @@ function LineChart({
       </div>
       <aside data-biomech-metrics-panel="true" style={{ border: '1px solid rgba(200,16,46,0.36)', borderRadius: 14, padding: '8px 12px 12px', background: 'linear-gradient(165deg, rgba(8,8,10,0.96), rgba(24,24,28,0.9))', display: 'grid', gap: 10, height: `calc(100% - ${pad.top}px)`, minHeight: 0, overflowY: 'auto', marginTop: pad.top, boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)', boxSizing: 'border-box' }}>
         <h4 style={{ margin: '-2px 0 0', textAlign: 'center', fontSize: 16, fontWeight: 700, color: '#e5e7eb' }}>Key Metrics</h4>
+        <div style={{ marginTop: -8, textAlign: 'center', color: '#cbd5e1', fontSize: 14, lineHeight: 1.1 }}>
+          {String(pitchType ?? '').trim() ? (
+            <>
+              <strong style={{ color: '#f8fafc' }}>{String(pitchType ?? '').trim()}</strong>
+              <span> | </span>
+            </>
+          ) : null}
+          <strong style={{ color: '#f8fafc' }}>
+            {pitchVelocityMph !== null && Number.isFinite(pitchVelocityMph) ? `${pitchVelocityMph.toFixed(1)} mph` : '— mph'}
+          </strong>
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 10, alignItems: 'stretch' }}>
         <div style={{ display: 'grid', alignContent: 'start', gap: 5, fontSize: 12, padding: 10, borderRadius: 10, background: 'rgba(17,17,20,0.88)', border: '1px solid rgba(200,16,46,0.3)', height: '100%' }}>
           <strong style={{ textAlign: 'left', fontSize: 12, color: '#e2e8f0', letterSpacing: '0.02em' }}>Back Leg</strong>
@@ -912,7 +942,6 @@ function LineChart({
         </div>
         <div style={{ display: 'grid', gap: 5, fontSize: 12, justifyItems: 'center', textAlign: 'center', padding: 10, borderRadius: 10, background: 'rgba(12,12,14,0.86)', border: '1px solid rgba(200,16,46,0.26)' }}>
           <strong style={{ color: '#e2e8f0', letterSpacing: '0.02em' }}>Other Metrics</strong>
-          <span style={{ color: '#cbd5e1' }}>Pitch Velocity (mph): <strong style={{ color: '#f8fafc' }}>{fmt(pitchVelocityMph, 1)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>Y Transfer (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yTransfer)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>Z Transfer (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.zTransfer)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>Stride Length (in): <strong style={{ color: '#f8fafc' }}>{fmt(strideLengthIn, 1)}</strong></span>
@@ -956,6 +985,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [leaderboardIndividualRows, setLeaderboardIndividualRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [leaderboardAverageColumns, setLeaderboardAverageColumns] = useState<string[]>([]);
   const [leaderboardAverageRows, setLeaderboardAverageRows] = useState<Array<Record<string, string | number | null>>>([]);
+  const [allSessionsLeaderboardIndividualRows, setAllSessionsLeaderboardIndividualRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [pitchOptions, setPitchOptions] = useState<PitchOption[]>([]);
   const [selectedPitchKey, setSelectedPitchKey] = useState<string>('');
   const [selectedPitchPoints, setSelectedPitchPoints] = useState<PitchPoint[]>([]);
@@ -1066,6 +1096,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setLeaderboardIndividualRows(lbIndividualRows);
       setLeaderboardAverageColumns(lbAverageColumns);
       setLeaderboardAverageRows(lbAverageRows);
+      setAllSessionsLeaderboardIndividualRows(Array.isArray(payload.all_sessions_leaderboard_individual_rows) ? payload.all_sessions_leaderboard_individual_rows : []);
       setPitchOptions(options);
       setSelectedPitchKey(pitchKey);
       setSelectedPitchPoints(points);
@@ -1194,7 +1225,20 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const rowName = toFirstLastName(String(row.Name ?? ''));
       return rowName === selectedPlayerFirstLast;
     });
-    if (!sourceRows.length) return sortedRows;
+    const allSessionRows = allSessionsLeaderboardIndividualRows.filter((row) => {
+      const rowName = toFirstLastName(String(row.Name ?? ''));
+      return rowName === selectedPlayerFirstLast;
+    });
+    const currentSessionDates = new Set(
+      sourceRows
+        .map((row) => String(row.Date ?? '').trim())
+        .filter(Boolean)
+    );
+    const allSessionRowsExcludingCurrent = allSessionRows.filter((row) => {
+      const date = String(row.Date ?? '').trim();
+      return !date || !currentSessionDates.has(date);
+    });
+    if (!sourceRows.length && !allSessionRowsExcludingCurrent.length) return sortedRows;
     type Agg = {
       pitchType: string;
       name: string;
@@ -1202,62 +1246,94 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       dateSet: Set<string>;
       tagsSet: Set<string>;
       sums: Record<string, number>;
+      sessionLabel: 'Current Session' | 'All Sessions';
     };
-    const byType = new Map<string, Agg>();
-    for (const row of sourceRows) {
-      const pitchTypeRaw = String(row['Pitch Type'] ?? '').trim();
-      const pitchType = pitchTypeRaw || 'Unspecified';
-      const key = pitchType;
-      const count = 1;
-      const current = byType.get(key) ?? {
-        pitchType: key,
-        name: String(row.Name ?? ''),
-        count: 0,
-        dateSet: new Set<string>(),
-        tagsSet: new Set<string>(),
-        sums: {},
-      };
-      current.count += count;
-      const dateVal = String(row.Date ?? '').trim();
-      if (dateVal) current.dateSet.add(dateVal);
-      const tagVal = String(row.Tags ?? '').trim();
-      if (tagVal) current.tagsSet.add(tagVal);
+    const aggregateRows = (
+      rows: Array<Record<string, string | number | null>>,
+      sessionLabel: 'Current Session' | 'All Sessions'
+    ): Map<string, Agg> => {
+      const byType = new Map<string, Agg>();
+      for (const row of rows) {
+        const pitchTypeRaw = String(row['Pitch Type'] ?? '').trim();
+        const pitchType = pitchTypeRaw || 'Unspecified';
+        const count = 1;
+        const current = byType.get(pitchType) ?? {
+          pitchType,
+          name: String(row.Name ?? ''),
+          count: 0,
+          dateSet: new Set<string>(),
+          tagsSet: new Set<string>(),
+          sums: {},
+          sessionLabel,
+        };
+        current.count += count;
+        const dateVal = String(row.Date ?? '').trim();
+        if (dateVal) current.dateSet.add(dateVal);
+        const tagVal = String(row.Tags ?? '').trim();
+        if (tagVal) current.tagsSet.add(tagVal);
         for (const column of BIOMECH_TABLE_COLUMNS) {
           if (column === 'Name' || column === 'Date' || column === '#' || column === 'Pitch Type' || column === 'Tags') continue;
           const value = toFinite(row[column] as unknown);
           if (value === null) continue;
           current.sums[column] = (current.sums[column] ?? 0) + value * count;
         }
-      byType.set(key, current);
-    }
+        byType.set(pitchType, current);
+      }
+      return byType;
+    };
+    const currentByType = aggregateRows(sourceRows, 'Current Session');
+    const allByType = aggregateRows(allSessionRowsExcludingCurrent, 'All Sessions');
+    const allTypes = new Set<string>([...currentByType.keys(), ...allByType.keys()]);
     const rank = new Map<string, number>(PITCH_TYPE_ORDER.map((name, idx) => [name.toLowerCase(), idx]));
-    return Array.from(byType.values())
-      .sort((a, b) => {
-        const aRank = rank.get(a.pitchType.toLowerCase());
-        const bRank = rank.get(b.pitchType.toLowerCase());
-        if (aRank !== undefined || bRank !== undefined) {
-          if (aRank === undefined) return 1;
-          if (bRank === undefined) return -1;
-          if (aRank !== bRank) return aRank - bRank;
-        }
-        return a.pitchType.localeCompare(b.pitchType);
-      })
-      .map((agg) => {
-        const output: Record<string, string | number | null> = {
-          Name: agg.name,
-          Date: agg.dateSet.size === 1 ? Array.from(agg.dateSet)[0] : (agg.dateSet.size > 1 ? 'Multi' : ''),
-          '#': agg.count,
-          'Pitch Type': agg.pitchType,
-          Tags: agg.tagsSet.size === 1 ? Array.from(agg.tagsSet)[0] : (agg.tagsSet.size > 1 ? 'Multi' : ''),
-        };
-        for (const column of BIOMECH_TABLE_COLUMNS) {
-          if (column in output) continue;
-          const sum = agg.sums[column];
-          output[column] = sum === undefined || agg.count <= 0 ? null : sum / agg.count;
-        }
-        return output;
-      });
-  }, [isSingleAppliedPlayer, pageTab, sortedRows, appliedPitchers, leaderboardIndividualRows]);
+    const orderedTypes = Array.from(allTypes).sort((a, b) => {
+      const aRank = rank.get(a.toLowerCase());
+      const bRank = rank.get(b.toLowerCase());
+      if (aRank !== undefined || bRank !== undefined) {
+        if (aRank === undefined) return 1;
+        if (bRank === undefined) return -1;
+        if (aRank !== bRank) return aRank - bRank;
+      }
+      return a.localeCompare(b);
+    });
+    const orderedAggs: Agg[] = [];
+    for (const pitchType of orderedTypes) {
+      const curr = currentByType.get(pitchType);
+      const all = allByType.get(pitchType);
+      if (curr) orderedAggs.push(curr);
+      if (all) orderedAggs.push(all);
+    }
+    return orderedAggs.map((agg) => {
+      const output: Record<string, string | number | null> = {
+        Name: agg.name,
+        Date: agg.dateSet.size === 1 ? Array.from(agg.dateSet)[0] : (agg.dateSet.size > 1 ? 'Multi' : ''),
+        '#': agg.count,
+        Session: agg.sessionLabel,
+        'Pitch Type': agg.pitchType,
+        Tags: agg.tagsSet.size === 1 ? Array.from(agg.tagsSet)[0] : (agg.tagsSet.size > 1 ? 'Multi' : ''),
+      };
+      for (const column of BIOMECH_TABLE_COLUMNS) {
+        if (column in output) continue;
+        const sum = agg.sums[column];
+        output[column] = sum === undefined || agg.count <= 0 ? null : sum / agg.count;
+      }
+      return output;
+    });
+  }, [isSingleAppliedPlayer, pageTab, sortedRows, appliedPitchers, leaderboardIndividualRows, allSessionsLeaderboardIndividualRows]);
+
+  const shouldHideTagsColumnForSinglePlayer = useMemo(() => {
+    if (!isSingleAppliedPlayer || pageTab !== 'summary') return false;
+    if (!summaryRowsByPitchType.length) return false;
+    return summaryRowsByPitchType.every((row) => {
+      const raw = String(row.Tags ?? '').trim();
+      if (!raw) return true;
+      const parts = raw
+        .split(/[|,;]+/g)
+        .map((v) => v.trim().toLowerCase())
+        .filter(Boolean);
+      if (!parts.length) return true;
+      return parts.every((tag) => EXCLUDED_SINGLE_PLAYER_TAGS.has(tag));
+    });
+  }, [isSingleAppliedPlayer, pageTab, summaryRowsByPitchType]);
 
   const displayPitchOptions = useMemo(
     () => pitchOptions.map((option) => ({ ...option, label: formatPitchOptionLabel(option, pitchOptions, pitchVelocityByKey) })),
@@ -1506,9 +1582,14 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const displayTableColumns =
     pageTab === 'summary' && isSingleAppliedPlayer
       ? (() => {
-          const filtered = activeTableColumns.filter((column) => column !== 'Name' && column !== 'Date');
-          const rest = filtered.filter((column) => column !== 'Pitch Type' && column !== '#');
-          return ['Pitch Type', '#', ...rest];
+        const filtered = activeTableColumns.filter((column) => column !== 'Name' && column !== 'Date');
+          const rest = filtered.filter((column) =>
+            column !== 'Pitch Type' &&
+            column !== '#' &&
+            column !== 'Session' &&
+            !(shouldHideTagsColumnForSinglePlayer && column === 'Tags')
+          );
+          return ['Pitch Type', '#', 'Session', ...rest];
         })()
       : activeTableColumns;
   const activeDisplayRows =
@@ -1673,20 +1754,17 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
           </button>
         </div>
         <div style={{ display: 'grid', justifyItems: 'center', gap: 2, paddingTop: 2 }}>
-          <p style={{ margin: 0, color: '#e2e8f0', fontSize: 18, fontWeight: 700, textAlign: 'center' }}>
+          <p style={{ margin: 0, color: '#e2e8f0', fontSize: 22, fontWeight: 700, textAlign: 'center', lineHeight: 1.1 }}>
             {selectedPitchPlayer || '—'}
           </p>
-          <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13, textAlign: 'center' }}>
+          <p style={{ margin: 0, color: '#cbd5e1', fontSize: 16, textAlign: 'center', lineHeight: 1.15 }}>
             {selectedPitchDate || '—'}
           </p>
           {(() => {
             const parts: string[] = [];
-            const pitchType = String(selectedPitchType ?? '').trim();
             const tags = String(selectedPitchTags ?? '').trim();
             const hasTag = Boolean(tags) && tags.toLowerCase() !== 'untagged';
-            if (pitchType) parts.push(pitchType);
             if (hasTag) parts.push(tags);
-            if (selectedPitchVelocityMph !== null && Number.isFinite(selectedPitchVelocityMph)) parts.push(`${selectedPitchVelocityMph.toFixed(1)} mph`);
             if (!parts.length) return null;
             return (
               <p style={{ margin: 0, color: '#cbd5e1', fontSize: 13, textAlign: 'center' }}>
@@ -1700,6 +1778,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
           mode={mode}
           forceMode={forceMode}
           pitchVelocityMph={selectedPitchVelocityMph}
+          pitchType={selectedPitchType}
           bodyWeightLb={selectedPitchBodyWeightLb}
           strideLengthIn={selectedPitchStrideLengthIn}
           strideDirectionIn={selectedPitchStrideDirectionIn}
@@ -1716,15 +1795,38 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             </button>
           ) : null}
         </div>
-        <div className="portal-table-wrap" style={{ maxHeight: '52vh', overflow: 'auto' }}>
-          <table className="portal-table">
+        <div className="portal-table-wrap" style={{ maxHeight: '52vh', overflow: 'auto', position: 'relative' }}>
+          <div
+            style={{
+              position: 'sticky',
+              top: 0,
+              height: 3,
+              background: 'rgba(8,8,8,0.98)',
+              zIndex: 8,
+              pointerEvents: 'none',
+            }}
+          />
+          <table className="portal-table" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
             <thead>
               <tr>
                 {displayTableColumns.map((column) => {
                   const active = sortColumn === column;
-                  const glyph = active ? (sortDirection === 'desc' ? '↓' : '↑') : '↕';
+                  const glyph = active ? (sortDirection === 'desc' ? '↓' : '↑') : '';
                   return (
-                    <th key={column} style={{ textAlign: 'center' }}>
+                    <th
+                      key={column}
+                      style={{
+                        textAlign: 'center',
+                        background: active ? 'rgb(120, 10, 28)' : 'rgba(8,8,8,0.96)',
+                        position: 'sticky',
+                        top: 0,
+                        zIndex: 6,
+                        boxShadow: active
+                          ? '0 2px 0 rgb(120, 10, 28)'
+                          : '0 2px 0 rgba(8,8,8,0.96)',
+                        backgroundClip: 'padding-box',
+                      }}
+                    >
                       <button
                         type="button"
                         className="portal-table-sort-btn"
@@ -1747,7 +1849,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
                           ? column.replace('(lb·s)', '(BW%·s)').replace('(lb)', '(BW%)')
                           : (column.includes('Back Leg Impulse Time') || column.includes('Back Leg YZ Transfer') || column.includes('Lead Leg YZ Transfer') || column === 'Y Transfer (s)' || column === 'Z Transfer (s)')
                             ? column.replace('(s)', '(ms)')
-                          : column} {glyph}
+                          : column}
+                        {glyph ? ` ${glyph}` : ''}
                       </button>
                     </th>
                   );
@@ -1761,16 +1864,32 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
                     (() => {
                       const pitchTypeCellValue = String(row['Pitch Type'] ?? '').trim();
                       const isPitchTypeCell = isSingleAppliedPlayer && pageTab === 'summary' && column === 'Pitch Type';
+                      const isMergedPitchTypeMode = isSingleAppliedPlayer && pageTab === 'summary' && displayTableColumns.includes('Session');
+                      if (isPitchTypeCell && isMergedPitchTypeMode) {
+                        const prevPitchType = rowIdx > 0 ? String(activeDisplayRows[rowIdx - 1]?.['Pitch Type'] ?? '').trim() : '';
+                        if (prevPitchType === pitchTypeCellValue) return null;
+                      }
                       const pitchTypeBg = isPitchTypeCell ? (PITCH_TYPE_COLOR[pitchTypeCellValue] ?? '#6b7280') : undefined;
                       const pitchTypeTextColor = isPitchTypeCell
                         ? (pitchTypeCellValue.toLowerCase() === 'fastball' ? '#000000' : '#ffffff')
                         : undefined;
+                      let pitchTypeRowSpan: number | undefined;
+                      if (isPitchTypeCell && isMergedPitchTypeMode) {
+                        let span = 1;
+                        for (let i = rowIdx + 1; i < activeDisplayRows.length; i += 1) {
+                          const nextPitchType = String(activeDisplayRows[i]?.['Pitch Type'] ?? '').trim();
+                          if (nextPitchType !== pitchTypeCellValue) break;
+                          span += 1;
+                        }
+                        pitchTypeRowSpan = span > 1 ? span : undefined;
+                      }
                       return (
                     <td
                       key={`${rowIdx}-${column}`}
+                      rowSpan={pitchTypeRowSpan}
                       style={{
                         textAlign: 'center',
-                        background: pitchTypeBg,
+                        background: pitchTypeBg ?? (rowIdx % 2 === 0 ? 'rgba(200,16,46,0.14)' : 'rgba(255,255,255,0.05)'),
                         color: pitchTypeTextColor,
                         fontWeight:
                           isSingleAppliedPlayer && pageTab === 'summary' && column === 'Pitch Type'

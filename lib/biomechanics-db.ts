@@ -8,6 +8,7 @@ export type BiomechPitchOption = {
   label: string;
   capturedAt: string | null;
   velocityMph?: number | null;
+  pitchType?: string | null;
 };
 
 export type BiomechSinglePitchPoint = {
@@ -192,19 +193,10 @@ async function getTrackmanVelocityByNameDate(args: {
     SELECT
       COALESCE(NULLIF(TRIM(pitcher), ''), '') AS pitcher_name,
       session_date::text AS session_date,
-      NULLIF(TRIM(COALESCE(time::text, pd.tm_time, '')), '') AS tm_time,
+      NULLIF(TRIM(COALESCE(time::text, '')), '') AS tm_time,
       relspeed::double precision AS velo,
       NULLIF(TRIM(COALESCE(taggedpitchtype::text, '')), '') AS pitch_type
     FROM pitch_events
-    LEFT JOIN LATERAL (
-      SELECT NULLIF(TRIM("Time"::text), '') AS tm_time
-      FROM pitch_data
-      WHERE NULLIF(TRIM("PitchUID"::text), '') IS NOT NULL
-        AND NULLIF(TRIM(COALESCE(pitch_events.pitchuid::text, pitch_events.pitch_key::text)), '') IS NOT NULL
-        AND LOWER(TRIM("PitchUID"::text)) = LOWER(TRIM(COALESCE(pitch_events.pitchuid::text, pitch_events.pitch_key::text)))
-      ORDER BY "Date" DESC NULLS LAST
-      LIMIT 1
-    ) pd ON TRUE
     WHERE school_code = $1
       ${dateSql}
       AND relspeed IS NOT NULL
@@ -214,19 +206,10 @@ async function getTrackmanVelocityByNameDate(args: {
     SELECT
       COALESCE(NULLIF(TRIM(pitcher), ''), '') AS pitcher_name,
       session_date::text AS session_date,
-      NULLIF(TRIM(COALESCE(time::text, pd.tm_time, '')), '') AS tm_time,
+      NULLIF(TRIM(COALESCE(time::text, '')), '') AS tm_time,
       relspeed::double precision AS velo,
       NULL::text AS pitch_type
     FROM pitch_events
-    LEFT JOIN LATERAL (
-      SELECT NULLIF(TRIM("Time"::text), '') AS tm_time
-      FROM pitch_data
-      WHERE NULLIF(TRIM("PitchUID"::text), '') IS NOT NULL
-        AND NULLIF(TRIM(COALESCE(pitch_events.pitchuid::text, pitch_events.pitch_key::text)), '') IS NOT NULL
-        AND LOWER(TRIM("PitchUID"::text)) = LOWER(TRIM(COALESCE(pitch_events.pitchuid::text, pitch_events.pitch_key::text)))
-      ORDER BY "Date" DESC NULLS LAST
-      LIMIT 1
-    ) pd ON TRUE
     WHERE school_code = $1
       ${dateSql}
       AND relspeed IS NOT NULL
@@ -323,7 +306,7 @@ async function getTrackmanVelocityByNameDate(args: {
       // Some schemas allow a query variant to execute but yield zero usable rows
       // (for example, relspeed exists but is empty while RelSpeed has data).
       // Only accept a variant when it actually returns mapped data.
-      if (map.size > 0 && timedCount > 0) return map;
+      if (map.size > 0) return map;
     } catch {
       // try next schema variant
     }
@@ -1742,6 +1725,15 @@ export async function getBiomechanicsSnapshot(args: {
       const allRowTimeSec = secondsOfDayFromIso(allRow.capturedAt);
       const trackmanMatch = pickNearestTrackmanMatch(String(allRow.name ?? ''), String(allRow.dateKey ?? ''), allRowTimeSec);
       const filteredTagsList = splitTags(allRow.tags || 'UnTagged').filter((tag) => !isForcePlatePitchTypeTag(tag));
+      const hasRealTag = filteredTagsList.some((tag) => {
+        const normalized = String(tag ?? '').trim().toLowerCase();
+        return Boolean(normalized) && normalized !== 'untagged';
+      });
+      const hasTrackmanMatch =
+        (trackmanMatch.velo !== null && Number.isFinite(trackmanMatch.velo)) ||
+        Boolean(String(trackmanMatch.pitchType ?? '').trim());
+      // Ignore calibration/non-throws: no usable tags and no TrackMan association.
+      if (!hasRealTag && !hasTrackmanMatch) continue;
       mapping.set(single.pitchKey, {
         name: allRow.name,
         tags: filteredTagsList.length ? filteredTagsList.join(' | ') : 'UnTagged',
@@ -1751,8 +1743,8 @@ export async function getBiomechanicsSnapshot(args: {
         strideDirectionIn: allRow.strideDirectionIn,
         pitchDateLabel: formatDateKeyMddyy(allRow.dateKey),
         bodyWeightLb: allRow.bodyWeightLb,
-        // Match to TrackMan using the all-pitch capture timestamp (Phoenix), not file-name time.
-        velocityMph: trackmanMatch.velo ?? allRow.velocityMph,
+        // Use TrackMan-only velo for pitch association (no force-plate fallback).
+        velocityMph: trackmanMatch.velo,
       });
     }
   }
@@ -1776,15 +1768,16 @@ export async function getBiomechanicsSnapshot(args: {
       label: mappedName || fallback || 'Unknown Pitcher',
       capturedAt: row.capturedAt,
       velocityMph: mapping.get(row.pitchKey)?.velocityMph ?? null,
+      pitchType: mapping.get(row.pitchKey)?.pitchType ?? null,
     };
   });
   const pitchOptions = pitchOptionsUnfiltered.filter((option) => {
+    const meta = mapping.get(option.pitchKey);
+    if (!meta) return false;
     if (selectedPitcherKeys.size) {
-      const meta = mapping.get(option.pitchKey);
       const fallbackName = option.label || singleRowByPitchKey.get(option.pitchKey)?.pitcherName || '';
       if (!isSelectedPitcherMatch(meta?.name ?? fallbackName)) return false;
     }
-    const meta = mapping.get(option.pitchKey);
     if (selectedTags.length) {
       const tagsList = meta?.tagsList ?? ['UnTagged'];
       if (!selectedTags.some((tag) => tagsList.includes(tag))) return false;
