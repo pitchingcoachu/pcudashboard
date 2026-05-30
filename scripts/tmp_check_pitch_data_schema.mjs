@@ -1,0 +1,10 @@
+import { Client } from 'pg';
+const c=new Client({connectionString:process.env.DATABASE_URL||process.env.POSTGRES_URL||process.env.NEON_DATABASE_URL});
+await c.connect();
+const t=await c.query(`select table_name from information_schema.tables where table_schema='public' and table_name in ('pitch_data','pitch_events') order by table_name`);
+console.log(t.rows);
+const cols=await c.query(`select table_name,column_name,data_type from information_schema.columns where table_schema='public' and table_name='pitch_data' order by ordinal_position`);
+console.log('pitch_data cols', cols.rows.slice(0,120));
+const sample=await c.query(`select "PitchUID"::text as pitchuid, "Time"::text as tm_time, "Date"::text as d, "Pitcher"::text as pitcher, "RelSpeed"::text as relspeed, "TaggedPitchType"::text as pt from pitch_data where "PitchUID" is not null limit 5`);
+console.log('sample', sample.rows);
+await c.end();

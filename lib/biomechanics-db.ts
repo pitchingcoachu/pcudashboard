@@ -192,10 +192,19 @@ async function getTrackmanVelocityByNameDate(args: {
     SELECT
       COALESCE(NULLIF(TRIM(pitcher), ''), '') AS pitcher_name,
       session_date::text AS session_date,
-      NULLIF(TRIM(COALESCE(time::text, '')), '') AS tm_time,
+      NULLIF(TRIM(COALESCE(time::text, pd.tm_time, '')), '') AS tm_time,
       relspeed::double precision AS velo,
       NULLIF(TRIM(COALESCE(taggedpitchtype::text, '')), '') AS pitch_type
     FROM pitch_events
+    LEFT JOIN LATERAL (
+      SELECT NULLIF(TRIM("Time"::text), '') AS tm_time
+      FROM pitch_data
+      WHERE NULLIF(TRIM("PitchUID"::text), '') IS NOT NULL
+        AND NULLIF(TRIM(COALESCE(pitch_events.pitchuid::text, pitch_events.pitch_key::text)), '') IS NOT NULL
+        AND LOWER(TRIM("PitchUID"::text)) = LOWER(TRIM(COALESCE(pitch_events.pitchuid::text, pitch_events.pitch_key::text)))
+      ORDER BY "Date" DESC NULLS LAST
+      LIMIT 1
+    ) pd ON TRUE
     WHERE school_code = $1
       ${dateSql}
       AND relspeed IS NOT NULL
@@ -205,10 +214,19 @@ async function getTrackmanVelocityByNameDate(args: {
     SELECT
       COALESCE(NULLIF(TRIM(pitcher), ''), '') AS pitcher_name,
       session_date::text AS session_date,
-      NULLIF(TRIM(COALESCE(time::text, '')), '') AS tm_time,
+      NULLIF(TRIM(COALESCE(time::text, pd.tm_time, '')), '') AS tm_time,
       relspeed::double precision AS velo,
       NULL::text AS pitch_type
     FROM pitch_events
+    LEFT JOIN LATERAL (
+      SELECT NULLIF(TRIM("Time"::text), '') AS tm_time
+      FROM pitch_data
+      WHERE NULLIF(TRIM("PitchUID"::text), '') IS NOT NULL
+        AND NULLIF(TRIM(COALESCE(pitch_events.pitchuid::text, pitch_events.pitch_key::text)), '') IS NOT NULL
+        AND LOWER(TRIM("PitchUID"::text)) = LOWER(TRIM(COALESCE(pitch_events.pitchuid::text, pitch_events.pitch_key::text)))
+      ORDER BY "Date" DESC NULLS LAST
+      LIMIT 1
+    ) pd ON TRUE
     WHERE school_code = $1
       ${dateSql}
       AND relspeed IS NOT NULL
@@ -240,12 +258,39 @@ async function getTrackmanVelocityByNameDate(args: {
       AND "RelSpeed" IS NOT NULL
       AND COALESCE(NULLIF(TRIM(pitcher), ''), '') <> ''
     `,
+    `
+    SELECT
+      COALESCE(NULLIF(TRIM("Pitcher"::text), ''), '') AS pitcher_name,
+      "Date"::text AS session_date,
+      NULLIF(TRIM(COALESCE("Time"::text, '')), '') AS tm_time,
+      "RelSpeed"::double precision AS velo,
+      NULLIF(TRIM(COALESCE("TaggedPitchType"::text, '')), '') AS pitch_type
+    FROM pitch_events
+    WHERE school_code = $1
+      ${dateSql}
+      AND "RelSpeed" IS NOT NULL
+      AND COALESCE(NULLIF(TRIM("Pitcher"::text), ''), '') <> ''
+    `,
+    `
+    SELECT
+      COALESCE(NULLIF(TRIM(COALESCE("Pitcher"::text, pitcher)), ''), '') AS pitcher_name,
+      COALESCE("Date"::text, session_date::text) AS session_date,
+      NULLIF(TRIM(COALESCE("Time"::text, time::text, '')), '') AS tm_time,
+      COALESCE("RelSpeed"::double precision, relspeed::double precision) AS velo,
+      NULLIF(TRIM(COALESCE("TaggedPitchType"::text, taggedpitchtype::text, '')), '') AS pitch_type
+    FROM pitch_events
+    WHERE school_code = $1
+      ${dateSql}
+      AND COALESCE("RelSpeed"::double precision, relspeed::double precision) IS NOT NULL
+      AND COALESCE(NULLIF(TRIM(COALESCE("Pitcher"::text, pitcher)), ''), '') <> ''
+    `,
   ];
 
   for (const sql of attempts) {
     try {
       const result = await pool.query<{ pitcher_name: string | null; session_date: string | null; tm_time: string | null; velo: number | null; pitch_type: string | null }>(sql, values);
       const map = new Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>();
+      let timedCount = 0;
       const parseTimeSec = (raw: string | null): number | null => {
         const text = String(raw ?? '').trim();
         if (!text) return null;
@@ -254,7 +299,7 @@ async function getTrackmanVelocityByNameDate(args: {
         let h = Number(m[1] ?? 0);
         const min = Number(m[2] ?? 0);
         const sec = Number(m[3] ?? 0);
-        const ap = String(m[4] ?? '').toUpperCase();
+        const ap = String(m[5] ?? '').toUpperCase();
         if (ap === 'PM' && h < 12) h += 12;
         if (ap === 'AM' && h === 12) h = 0;
         if (![h, min, sec].every(Number.isFinite)) return null;
@@ -269,11 +314,16 @@ async function getTrackmanVelocityByNameDate(args: {
         for (const nameKey of keys) {
           const key = `${nameKey}|${dateKey}`;
           const arr = map.get(key) ?? [];
-          arr.push({ tSec: parseTimeSec(row.tm_time), velo, pitchType: String(row.pitch_type ?? '').trim() || null });
+          const tSec = parseTimeSec(row.tm_time);
+          if (tSec !== null && Number.isFinite(tSec)) timedCount += 1;
+          arr.push({ tSec, velo, pitchType: String(row.pitch_type ?? '').trim() || null });
           map.set(key, arr);
         }
       }
-      return map;
+      // Some schemas allow a query variant to execute but yield zero usable rows
+      // (for example, relspeed exists but is empty while RelSpeed has data).
+      // Only accept a variant when it actually returns mapped data.
+      if (map.size > 0 && timedCount > 0) return map;
     } catch {
       // try next schema variant
     }
@@ -681,9 +731,13 @@ async function ensureBiomechanicsTables(): Promise<void> {
       `);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_date ON biomechanics_pitch_rows (organization_id, school_code, captured_at DESC);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_created_date ON biomechanics_pitch_rows (organization_id, school_code, created_at DESC);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_hash ON biomechanics_pitch_rows (organization_id, school_code, source_file_hash);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index ASC);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_date ON biomechanics_single_pitch_points (organization_id, school_code, captured_at DESC);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash_point_date ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index, captured_at DESC);`);
+      await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_uploads_scope_kind_created_hash ON biomechanics_uploads (organization_id, school_code, upload_kind, created_at DESC, source_file_hash);`);
       await client.query(`
         WITH ranked AS (
           SELECT
@@ -797,9 +851,13 @@ async function ensureBiomechanicsTables(): Promise<void> {
     await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS impulse_time DOUBLE PRECISION;`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_date ON biomechanics_pitch_rows (organization_id, school_code, captured_at DESC);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_created_date ON biomechanics_pitch_rows (organization_id, school_code, created_at DESC);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_hash ON biomechanics_pitch_rows (organization_id, school_code, source_file_hash);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index ASC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_date ON biomechanics_single_pitch_points (organization_id, school_code, captured_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash_point_date ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index, captured_at DESC);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_uploads_scope_kind_created_hash ON biomechanics_uploads (organization_id, school_code, upload_kind, created_at DESC, source_file_hash);`);
     await client.query(`
       WITH ranked AS (
         SELECT
@@ -1382,15 +1440,36 @@ export async function getBiomechanicsSnapshot(args: {
   await ensureBiomechanicsMetricsTable();
   const pool = getDbPool();
   const schoolCode = normalizeSchoolCode(args.schoolCode);
-  const selectedPitchers = Array.from(
-    new Set(
-      String(args.selectedPitcher ?? '')
-        .split(',')
-        .map((v) => v.trim())
-        .filter(Boolean)
-        .filter((v) => v.toUpperCase() !== 'ALL')
-    )
-  );
+  const parseMultiFilter = (raw: string | null | undefined, options?: { allowComma?: boolean }): string[] => {
+    const text = String(raw ?? '').trim();
+    if (!text) return [];
+    if (text.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) {
+          return Array.from(
+            new Set(
+              parsed
+                .map((value) => String(value ?? '').trim())
+                .filter(Boolean)
+            )
+          );
+        }
+      } catch {
+        // Fallback below.
+      }
+    }
+    const splitPattern = options?.allowComma === false ? /\|/ : /[|,]/;
+    return Array.from(
+      new Set(
+        text
+          .split(splitPattern)
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )
+    );
+  };
+  const selectedPitchers = parseMultiFilter(args.selectedPitcher ?? '', { allowComma: false }).filter((v) => v.toUpperCase() !== 'ALL');
   const selectedPitcherKeys = new Set(selectedPitchers.flatMap((name) => buildNameKeys(name)));
 
   const dateFilterParts: string[] = [];
@@ -1433,23 +1512,8 @@ export async function getBiomechanicsSnapshot(args: {
     summaryValues
   );
 
-  const selectedTags = Array.from(
-    new Set(
-      String(args.selectedTag ?? '')
-        .split(',')
-        .map((v) => v.trim())
-        .filter(Boolean)
-        .filter((v) => v.toUpperCase() !== 'ALL')
-    )
-  );
-  const selectedPitchTypes = Array.from(
-    new Set(
-      String(args.selectedPitchType ?? '')
-        .split(',')
-        .map((v) => v.trim())
-        .filter(Boolean)
-    )
-  );
+  const selectedTags = parseMultiFilter(args.selectedTag ?? '').filter((v) => v.toUpperCase() !== 'ALL');
+  const selectedPitchTypes = parseMultiFilter(args.selectedPitchType ?? '');
   const forceMode = args.forceMode === 'bw' ? 'bw' : 'force';
 
   const pitchOptionsResult = await pool.query<{
@@ -1556,25 +1620,13 @@ export async function getBiomechanicsSnapshot(args: {
     startDate: args.startDate ?? null,
     endDate: args.endDate ?? null,
   });
-  const trackmanFallbackCursorByNameDate = new Map<string, number>();
   const pickNearestTrackmanMatch = (nameRaw: string, dateKey: string, timeKey: number | null): { velo: number | null; pitchType: string | null } => {
     const keys = buildNameKeys(nameRaw);
     const rows = keys.flatMap((k) => trackmanVeloByNameDate.get(`${k}|${dateKey}`) ?? []);
     if (!rows.length) return { velo: null, pitchType: null };
-    const nameDateKey = `${keys[0] ?? trackmanNameNorm(nameRaw)}|${dateKey}`;
     const timedRows = rows.filter((row) => row.tSec !== null && Number.isFinite(row.tSec));
-    if (!timedRows.length) {
-      const cursor = trackmanFallbackCursorByNameDate.get(nameDateKey) ?? 0;
-      const next = rows[Math.min(cursor, rows.length - 1)] ?? null;
-      trackmanFallbackCursorByNameDate.set(nameDateKey, cursor + 1);
-      return { velo: next?.velo ?? null, pitchType: next?.pitchType ?? null };
-    }
-    if (timeKey === null || !Number.isFinite(timeKey)) {
-      const cursor = trackmanFallbackCursorByNameDate.get(nameDateKey) ?? 0;
-      const next = timedRows[Math.min(cursor, timedRows.length - 1)] ?? null;
-      trackmanFallbackCursorByNameDate.set(nameDateKey, cursor + 1);
-      return { velo: next?.velo ?? null, pitchType: next?.pitchType ?? null };
-    }
+    if (!timedRows.length) return { velo: null, pitchType: null };
+    if (timeKey === null || !Number.isFinite(timeKey)) return { velo: null, pitchType: null };
     let best: { delta: number; velo: number; pitchType: string | null } | null = null;
     for (const row of timedRows) {
       const delta = Math.abs(Number(row.tSec) - Number(timeKey));
@@ -1582,10 +1634,7 @@ export async function getBiomechanicsSnapshot(args: {
     }
     if (!best) return { velo: null, pitchType: null };
     if (best.delta <= 5) return { velo: best.velo, pitchType: best.pitchType };
-    const cursor = trackmanFallbackCursorByNameDate.get(nameDateKey) ?? 0;
-    const next = timedRows[Math.min(cursor, timedRows.length - 1)] ?? null;
-    trackmanFallbackCursorByNameDate.set(nameDateKey, cursor + 1);
-    return { velo: next?.velo ?? null, pitchType: next?.pitchType ?? null };
+    return { velo: null, pitchType: null };
   };
 
   const singleRows = pitchOptionsResult.rows.map((row) => {
@@ -1612,28 +1661,31 @@ export async function getBiomechanicsSnapshot(args: {
   });
   const singleRowByPitchKey = new Map(singleRows.map((row) => [row.pitchKey, row] as const));
 
-  const allRowsForPitcherGrouping = filteredAllRows.filter((row) => row.nameNorm);
-  const allGroups = new Map<string, Array<typeof allRowsForPitcherGrouping[number]>>();
-  for (const row of allRowsForPitcherGrouping) {
-    const key = `${row.nameNorm}|${row.dateKey}`;
-    const arr = allGroups.get(key) ?? [];
+  const allRowsByDate = new Map<string, Array<typeof filteredAllRows[number]>>();
+  for (const row of filteredAllRows) {
+    if (!row.dateKey) continue;
+    const arr = allRowsByDate.get(row.dateKey) ?? [];
     arr.push(row);
-    allGroups.set(key, arr);
+    allRowsByDate.set(row.dateKey, arr);
   }
-  for (const arr of allGroups.values()) {
+  for (const arr of allRowsByDate.values()) {
     arr.sort((a, b) => String(a.capturedAt ?? '').localeCompare(String(b.capturedAt ?? '')));
   }
 
   const singleGroups = new Map<string, Array<typeof singleRows[number]>>();
   for (const row of singleRows) {
-    if (!row.dateKey || row.timeKey === null || !Number.isFinite(row.timeKey)) continue;
-    const key = `__date_only__|${row.dateKey}`;
-    const arr = singleGroups.get(key) ?? [];
+    if (!row.dateKey) continue;
+    const arr = singleGroups.get(row.dateKey) ?? [];
     arr.push(row);
-    singleGroups.set(key, arr);
+    singleGroups.set(row.dateKey, arr);
   }
   for (const arr of singleGroups.values()) {
-    arr.sort((a, b) => Number(a.timeKey ?? 0) - Number(b.timeKey ?? 0));
+    arr.sort((a, b) => {
+      const aTime = Number.isFinite(a.timeKey) ? Number(a.timeKey) : Number.POSITIVE_INFINITY;
+      const bTime = Number.isFinite(b.timeKey) ? Number(b.timeKey) : Number.POSITIVE_INFINITY;
+      if (aTime !== bTime) return aTime - bTime;
+      return String(a.capturedAt ?? '').localeCompare(String(b.capturedAt ?? ''));
+    });
   }
 
   const mapping = new Map<string, {
@@ -1647,13 +1699,46 @@ export async function getBiomechanicsSnapshot(args: {
     bodyWeightLb: number | null;
     velocityMph: number | null;
   }>();
-  for (const [key, singles] of singleGroups.entries()) {
-    const allForGroup = allRows.filter((row) => `__date_only__|${row.dateKey}` === key);
-    const n = Math.min(singles.length, allForGroup.length);
-    for (let i = 0; i < n; i += 1) {
-      const single = singles[i];
-      const allRow = allForGroup[i];
-      if (!single || !allRow) continue;
+  for (const [dateKey, singles] of singleGroups.entries()) {
+    const allForDate = [...(allRowsByDate.get(dateKey) ?? [])];
+    if (!allForDate.length) continue;
+    const usedAll = new Set<number>();
+    for (const single of singles) {
+      if (!single) continue;
+      const singleNameKeys = buildNameKeys(single.pitcherName ?? '');
+      const singleTime = Number.isFinite(single.timeKey) ? Number(single.timeKey) : null;
+      let bestIdx = -1;
+      let bestDelta = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < allForDate.length; i += 1) {
+        if (usedAll.has(i)) continue;
+        const candidate = allForDate[i];
+        if (!candidate) continue;
+        if (singleNameKeys.length) {
+          const candidateKeys = buildNameKeys(candidate.name ?? '');
+          const hasNameMatch = singleNameKeys.some((k) => candidateKeys.includes(k));
+          if (!hasNameMatch) continue;
+        }
+        const candidateTime = secondsOfDayFromIso(candidate.capturedAt ?? null);
+        if (singleTime === null || candidateTime === null || !Number.isFinite(candidateTime)) continue;
+        const delta = Math.abs(candidateTime - singleTime);
+        if (delta < bestDelta) {
+          bestDelta = delta;
+          bestIdx = i;
+        }
+      }
+      // Use strict 5-second matching first; if none, fallback to first remaining row to keep deterministic one-to-one assignment.
+      if (bestIdx === -1 || bestDelta > 5) {
+        for (let i = 0; i < allForDate.length; i += 1) {
+          if (!usedAll.has(i)) {
+            bestIdx = i;
+            break;
+          }
+        }
+      }
+      if (bestIdx < 0) continue;
+      usedAll.add(bestIdx);
+      const allRow = allForDate[bestIdx];
+      if (!allRow) continue;
       const allRowTimeSec = secondsOfDayFromIso(allRow.capturedAt);
       const trackmanMatch = pickNearestTrackmanMatch(String(allRow.name ?? ''), String(allRow.dateKey ?? ''), allRowTimeSec);
       const filteredTagsList = splitTags(allRow.tags || 'UnTagged').filter((tag) => !isForcePlatePitchTypeTag(tag));

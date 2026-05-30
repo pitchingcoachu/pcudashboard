@@ -108,6 +108,17 @@ const PITCH_TYPE_ORDER = [
   'Splitter',
   'Knuckleball',
 ] as const;
+const PITCH_TYPE_COLOR: Record<string, string> = {
+  Fastball: 'var(--portal-fastball-color)',
+  Sinker: 'orange',
+  Cutter: 'brown',
+  Slider: 'red',
+  Sweeper: 'purple',
+  Curveball: 'blue',
+  ChangeUp: 'darkgreen',
+  Splitter: 'turquoise',
+  Knuckleball: '#6b7280',
+};
 
 function isoDateOffset(days: number): string {
   const d = new Date();
@@ -227,15 +238,22 @@ function formatBiomechTableValue(column: string, value: string | number | null, 
     || column.includes('Y Transfer')
     || column.includes('Z Transfer');
   const digits = useThreeDecimals ? 3 : 1;
+  const formatBwPercent = (raw: number): string => {
+    // Some rows are ratio-form (0.52 => 52%), others may already be percent-form (52 => 52%).
+    // Normalize display to avoid accidental double scaling.
+    const abs = Math.abs(raw);
+    const percentValue = abs > 3 ? raw : raw * 100;
+    return `${percentValue.toFixed(1)}%`;
+  };
   if (typeof value === 'number' && Number.isFinite(value)) {
     if (isMsTransferColumn) return (value * 1000).toFixed(1);
-    if (isBwPercentColumn) return `${(value * 100).toFixed(1)}%`;
+    if (isBwPercentColumn) return formatBwPercent(value);
     return value.toFixed(digits);
   }
   const parsed = Number(value);
   if (Number.isFinite(parsed) && String(value).trim() !== '') {
     if (isMsTransferColumn) return (parsed * 1000).toFixed(1);
-    if (isBwPercentColumn) return `${(parsed * 100).toFixed(1)}%`;
+    if (isBwPercentColumn) return formatBwPercent(parsed);
     return parsed.toFixed(digits);
   }
   return String(value);
@@ -919,6 +937,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [endDate, setEndDate] = useState<string>('');
   const [mode, setMode] = useState<ViewMode>('Force');
   const [forceMode, setForceMode] = useState<ForceMode>('force');
+  const [appliedStartDate, setAppliedStartDate] = useState<string>('');
+  const [appliedEndDate, setAppliedEndDate] = useState<string>('');
+  const [appliedForceMode, setAppliedForceMode] = useState<ForceMode>('force');
   const [sortColumn, setSortColumn] = useState<string>('');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -943,6 +964,10 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [pitchTypeOptions, setPitchTypeOptions] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>(['All']);
   const [selectedPitchTypes, setSelectedPitchTypes] = useState<string[]>(['All']);
+  const [appliedPitchers, setAppliedPitchers] = useState<string[]>(['All']);
+  const [appliedTags, setAppliedTags] = useState<string[]>(['All']);
+  const [appliedPitchTypes, setAppliedPitchTypes] = useState<string[]>(['All']);
+  const [hasAppliedFilters, setHasAppliedFilters] = useState<boolean>(false);
   const [selectedPitchTags, setSelectedPitchTags] = useState<string>('');
   const [selectedPitchType, setSelectedPitchType] = useState<string>('');
   const [selectedPitchPlayer, setSelectedPitchPlayer] = useState<string>('');
@@ -976,6 +1001,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [allPitchInputKey, setAllPitchInputKey] = useState<number>(0);
   const [singlePitchInputKey, setSinglePitchInputKey] = useState<number>(0);
   const summaryCardRef = useRef<HTMLDivElement | null>(null);
+  const summaryTableCardRef = useRef<HTMLDivElement | null>(null);
   const selectStyle: CSSProperties = {
     background: 'rgba(2, 6, 23, 0.72)',
     color: '#e2e8f0',
@@ -987,29 +1013,37 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const filterLabelStyle: CSSProperties = { fontSize: 14, color: '#94a3b8' };
   const filterControlMinWidth = 250;
 
-  const loadData = async (pitchKeyOverride?: string) => {
+  const loadData = async (
+    pitchKeyOverride?: string,
+    override?: {
+      startDate: string;
+      endDate: string;
+      pitchers: string[];
+      tags: string[];
+      pitchTypes: string[];
+      forceMode: ForceMode;
+    }
+  ) => {
     setIsLoading(true);
     setError('');
     try {
+      const activeStartDate = override?.startDate ?? appliedStartDate;
+      const activeEndDate = override?.endDate ?? appliedEndDate;
+      const activePitchers = override?.pitchers ?? appliedPitchers;
+      const activeTags = override?.tags ?? appliedTags;
+      const activePitchTypes = override?.pitchTypes ?? appliedPitchTypes;
+      const activeForceMode = override?.forceMode ?? appliedForceMode;
       const query = new URLSearchParams();
-      if (startDate) query.set('startDate', startDate);
-      if (endDate) query.set('endDate', endDate);
-      if (selectedPitchers.length && !selectedPitchers.includes('All')) query.set('pitcher', selectedPitchers.join(','));
-      if (selectedTags.length && !selectedTags.includes('All')) query.set('tag', selectedTags.join(','));
-      if (selectedPitchTypes.length && !selectedPitchTypes.includes('All')) query.set('pitchType', selectedPitchTypes.join(','));
-      query.set('forceMode', forceMode);
+      if (activeStartDate) query.set('startDate', activeStartDate);
+      if (activeEndDate) query.set('endDate', activeEndDate);
+      if (activePitchers.length && !activePitchers.includes('All')) query.set('pitcher', JSON.stringify(activePitchers));
+      if (activeTags.length && !activeTags.includes('All')) query.set('tag', JSON.stringify(activeTags));
+      if (activePitchTypes.length && !activePitchTypes.includes('All')) query.set('pitchType', JSON.stringify(activePitchTypes));
+      query.set('forceMode', activeForceMode);
       if (pitchKeyOverride || selectedPitchKey) query.set('pitchKey', pitchKeyOverride || selectedPitchKey);
       const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
       const payload = (await response.json().catch(() => ({}))) as Payload;
-      const debug = payload.debug;
-      if (debug) {
-        const candidateOrgIds = Array.isArray(debug.candidate_org_ids) ? debug.candidate_org_ids.join(',') : 'n/a';
-        setDebugInfo(
-          `debug org=${String(debug.selected_org_id ?? 'n/a')} candidates=[${candidateOrgIds}] dates=${String(debug.applied_start_date ?? '') || 'none'}..${String(debug.applied_end_date ?? '') || 'none'} rows=${Number(debug.table_rows_count ?? 0)} options=${Number(debug.pitch_options_count ?? 0)}`
-        );
-      } else {
-        setDebugInfo('');
-      }
+      setDebugInfo('');
       if (!response.ok) throw new Error(payload.error || 'Failed to load biomechanics data.');
       if (payload.error) throw new Error(payload.error);
       const columns = BIOMECH_TABLE_COLUMNS as unknown as string[];
@@ -1024,8 +1058,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const uploadPitchers = Array.isArray(payload.pitcher_options) ? payload.pitcher_options : [];
       const nextTags = Array.isArray(payload.tags_options) ? payload.tags_options : [];
       const nextPitchTypes = Array.isArray(payload.pitch_type_options) ? payload.pitch_type_options : [];
-      const appliedStartDate = String(payload.applied_start_date ?? '').trim();
-      const appliedEndDate = String(payload.applied_end_date ?? '').trim();
+      const responseAppliedStartDate = String(payload.applied_start_date ?? '').trim();
+      const responseAppliedEndDate = String(payload.applied_end_date ?? '').trim();
       setTableColumns(columns);
       setTableRows(rows);
       setLeaderboardIndividualColumns(lbIndividualColumns);
@@ -1047,8 +1081,6 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setSelectedPitchBodyWeightLb(typeof payload.selected_pitch_body_weight_lb === 'number' ? payload.selected_pitch_body_weight_lb : null);
       setSelectedPitchStrideLengthIn(typeof payload.selected_pitch_stride_length_in === 'number' ? payload.selected_pitch_stride_length_in : null);
       setSelectedPitchStrideDirectionIn(typeof payload.selected_pitch_stride_direction_in === 'number' ? payload.selected_pitch_stride_direction_in : null);
-      if (appliedStartDate && appliedStartDate !== startDate) setStartDate(appliedStartDate);
-      if (appliedEndDate && appliedEndDate !== endDate) setEndDate(appliedEndDate);
       setMatchSummary({
         totalSinglePitchFiles: Number(payload.match_summary?.totalSinglePitchFiles ?? 0),
         matchedSinglePitchFiles: Number(payload.match_summary?.matchedSinglePitchFiles ?? 0),
@@ -1057,6 +1089,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         matchedAllPitchRows: Number(payload.match_summary?.matchedAllPitchRows ?? 0),
         unmatchedAllPitchRows: Number(payload.match_summary?.unmatchedAllPitchRows ?? 0),
       });
+      if (responseAppliedStartDate && responseAppliedStartDate !== appliedStartDate) setAppliedStartDate(responseAppliedStartDate);
+      if (responseAppliedEndDate && responseAppliedEndDate !== appliedEndDate) setAppliedEndDate(responseAppliedEndDate);
       setSelectedTags((current) => {
         if (current.length === 1 && current[0] === 'All') return current;
         const filtered = current.filter((value) => nextTags.includes(value));
@@ -1086,9 +1120,31 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     }
   };
 
-  useEffect(() => {
-    void loadData();
-  }, [forceMode, selectedPitchers, selectedTags, selectedPitchTypes]);
+  const applyFilters = () => {
+    if (!startDate || !endDate) {
+      setError('Select both start and end dates, then click Apply Filters.');
+      return;
+    }
+    setError('');
+    const nextPitchers = normalizeMulti(selectedPitchers);
+    const nextTags = normalizeMulti(selectedTags);
+    const nextPitchTypes = normalizeMulti(selectedPitchTypes);
+    setAppliedStartDate(startDate);
+    setAppliedEndDate(endDate);
+    setAppliedPitchers(nextPitchers);
+    setAppliedTags(nextTags);
+    setAppliedPitchTypes(nextPitchTypes);
+    setAppliedForceMode(forceMode);
+    setHasAppliedFilters(true);
+    void loadData(undefined, {
+      startDate,
+      endDate,
+      pitchers: nextPitchers,
+      tags: nextTags,
+      pitchTypes: nextPitchTypes,
+      forceMode,
+    });
+  };
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -1126,6 +1182,82 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     leaderboardAverageColumns,
     leaderboardAverageRows,
   ]);
+  const isSingleAppliedPlayer = useMemo(() => {
+    const selected = (appliedPitchers ?? []).filter((value) => String(value ?? '').trim().toUpperCase() !== 'ALL');
+    return selected.length === 1;
+  }, [appliedPitchers]);
+  const summaryRowsByPitchType = useMemo(() => {
+    if (!isSingleAppliedPlayer || pageTab !== 'summary') return sortedRows;
+    const selectedPlayerRaw = (appliedPitchers ?? []).find((value) => String(value ?? '').trim().toUpperCase() !== 'ALL') ?? '';
+    const selectedPlayerFirstLast = toFirstLastName(selectedPlayerRaw);
+    const sourceRows = leaderboardIndividualRows.filter((row) => {
+      const rowName = toFirstLastName(String(row.Name ?? ''));
+      return rowName === selectedPlayerFirstLast;
+    });
+    if (!sourceRows.length) return sortedRows;
+    type Agg = {
+      pitchType: string;
+      name: string;
+      count: number;
+      dateSet: Set<string>;
+      tagsSet: Set<string>;
+      sums: Record<string, number>;
+    };
+    const byType = new Map<string, Agg>();
+    for (const row of sourceRows) {
+      const pitchTypeRaw = String(row['Pitch Type'] ?? '').trim();
+      const pitchType = pitchTypeRaw || 'Unspecified';
+      const key = pitchType;
+      const count = 1;
+      const current = byType.get(key) ?? {
+        pitchType: key,
+        name: String(row.Name ?? ''),
+        count: 0,
+        dateSet: new Set<string>(),
+        tagsSet: new Set<string>(),
+        sums: {},
+      };
+      current.count += count;
+      const dateVal = String(row.Date ?? '').trim();
+      if (dateVal) current.dateSet.add(dateVal);
+      const tagVal = String(row.Tags ?? '').trim();
+      if (tagVal) current.tagsSet.add(tagVal);
+        for (const column of BIOMECH_TABLE_COLUMNS) {
+          if (column === 'Name' || column === 'Date' || column === '#' || column === 'Pitch Type' || column === 'Tags') continue;
+          const value = toFinite(row[column] as unknown);
+          if (value === null) continue;
+          current.sums[column] = (current.sums[column] ?? 0) + value * count;
+        }
+      byType.set(key, current);
+    }
+    const rank = new Map<string, number>(PITCH_TYPE_ORDER.map((name, idx) => [name.toLowerCase(), idx]));
+    return Array.from(byType.values())
+      .sort((a, b) => {
+        const aRank = rank.get(a.pitchType.toLowerCase());
+        const bRank = rank.get(b.pitchType.toLowerCase());
+        if (aRank !== undefined || bRank !== undefined) {
+          if (aRank === undefined) return 1;
+          if (bRank === undefined) return -1;
+          if (aRank !== bRank) return aRank - bRank;
+        }
+        return a.pitchType.localeCompare(b.pitchType);
+      })
+      .map((agg) => {
+        const output: Record<string, string | number | null> = {
+          Name: agg.name,
+          Date: agg.dateSet.size === 1 ? Array.from(agg.dateSet)[0] : (agg.dateSet.size > 1 ? 'Multi' : ''),
+          '#': agg.count,
+          'Pitch Type': agg.pitchType,
+          Tags: agg.tagsSet.size === 1 ? Array.from(agg.tagsSet)[0] : (agg.tagsSet.size > 1 ? 'Multi' : ''),
+        };
+        for (const column of BIOMECH_TABLE_COLUMNS) {
+          if (column in output) continue;
+          const sum = agg.sums[column];
+          output[column] = sum === undefined || agg.count <= 0 ? null : sum / agg.count;
+        }
+        return output;
+      });
+  }, [isSingleAppliedPlayer, pageTab, sortedRows, appliedPitchers, leaderboardIndividualRows]);
 
   const displayPitchOptions = useMemo(
     () => pitchOptions.map((option) => ({ ...option, label: formatPitchOptionLabel(option, pitchOptions, pitchVelocityByKey) })),
@@ -1250,18 +1382,20 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         import('html2canvas'),
         import('jspdf'),
       ]);
+      const isSinglePlayerPdf = Boolean(isSingleAppliedPlayer);
       const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
       const pageBgHex = isLightTheme ? '#f8fafc' : '#000000';
       const exportRoot = summaryCardRef.current.cloneNode(true) as HTMLDivElement;
-      exportRoot.style.width = '920px';
+      exportRoot.style.width = isSinglePlayerPdf ? '1360px' : '920px';
       exportRoot.style.position = 'fixed';
       exportRoot.style.left = '-99999px';
       exportRoot.style.top = '0';
       exportRoot.style.zIndex = '-1';
       exportRoot.style.pointerEvents = 'none';
       exportRoot.style.background = pageBgHex;
-      exportRoot.style.padding = '14px';
+      exportRoot.style.padding = isSinglePlayerPdf ? '8px' : '14px';
       exportRoot.style.gap = '8px';
+      exportRoot.style.overflow = 'visible';
       const pdfLogoRow = document.createElement('div');
       pdfLogoRow.style.display = 'flex';
       pdfLogoRow.style.justifyContent = 'space-between';
@@ -1304,11 +1438,29 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       }
       if (graphSvg) {
         graphSvg.style.maxWidth = '100%';
-        graphSvg.style.height = '340px';
+        graphSvg.style.height = isSinglePlayerPdf ? '300px' : '340px';
       }
       if (headerTitle) {
         headerTitle.style.fontSize = '28px';
         headerTitle.style.lineHeight = '1.1';
+      }
+      if (isSingleAppliedPlayer && summaryTableCardRef.current) {
+        const tableClone = summaryTableCardRef.current.cloneNode(true) as HTMLDivElement;
+        tableClone.style.marginTop = '8px';
+        tableClone.style.paddingTop = '0';
+        tableClone.style.overflow = 'visible';
+        const tableWrap = tableClone.querySelector('.portal-table-wrap') as HTMLDivElement | null;
+        if (tableWrap) {
+          tableWrap.style.maxHeight = 'none';
+          tableWrap.style.overflow = 'visible';
+        }
+        exportRoot.appendChild(tableClone);
+      }
+      if (isSinglePlayerPdf) {
+        const cards = exportRoot.querySelectorAll('.portal-card');
+        cards.forEach((card) => {
+          (card as HTMLElement).style.overflow = 'visible';
+        });
       }
       document.body.appendChild(exportRoot);
       const canvas = await html2canvas(exportRoot, {
@@ -1318,7 +1470,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       });
       exportRoot.remove();
       const imageData = canvas.toDataURL('image/jpeg', 0.9);
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+      const pdf = new jsPDF({ orientation: isSinglePlayerPdf ? 'landscape' : 'portrait', unit: 'pt', format: 'letter' });
       const pageW = pdf.internal.pageSize.getWidth();
       const pageH = pdf.internal.pageSize.getHeight();
       const hex = pageBgHex.replace('#', '');
@@ -1327,14 +1479,14 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const b = Number.parseInt(hex.slice(4, 6), 16);
       pdf.setFillColor(r, g, b);
       pdf.rect(0, 0, pageW, pageH, 'F');
-      const margin = 8;
+      const margin = isSinglePlayerPdf ? 2 : 8;
       const usableW = pageW - margin * 2;
       const usableH = pageH - margin * 2;
       const scale = Math.min(usableW / canvas.width, usableH / canvas.height);
       const drawW = canvas.width * scale;
       const drawH = canvas.height * scale;
       const drawX = (pageW - drawW) / 2;
-      const drawY = margin;
+      const drawY = (pageH - drawH) / 2;
       pdf.addImage(imageData, 'JPEG', drawX, drawY, drawW, drawH, undefined, 'FAST');
       const player = String(selectedPitchPlayer ?? '').trim() || 'pitch';
       const date = String(selectedPitchDate ?? '').trim() || 'date';
@@ -1351,6 +1503,18 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     pageTab === 'summary'
       ? tableColumns
       : (leaderboardViewMode === 'individual' ? leaderboardIndividualColumns : leaderboardAverageColumns);
+  const displayTableColumns =
+    pageTab === 'summary' && isSingleAppliedPlayer
+      ? (() => {
+          const filtered = activeTableColumns.filter((column) => column !== 'Name' && column !== 'Date');
+          const rest = filtered.filter((column) => column !== 'Pitch Type' && column !== '#');
+          return ['Pitch Type', '#', ...rest];
+        })()
+      : activeTableColumns;
+  const activeDisplayRows =
+    pageTab === 'summary'
+      ? summaryRowsByPitchType
+      : sortedRows;
   const activeTableTitle =
     pageTab === 'summary'
       ? 'Summary Table'
@@ -1392,10 +1556,15 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             onChange={setSelectedPitchTypes}
           />
         </label>
-        <button type="button" className="btn btn-ghost" onClick={() => void loadData()} disabled={isLoading || isUploading}>
+        <button type="button" className="btn btn-ghost" onClick={applyFilters} disabled={isLoading || isUploading}>
           {isLoading ? 'Loading...' : 'Apply Filters'}
         </button>
       </div>
+      {!hasAppliedFilters ? (
+        <div style={{ color: '#94a3b8', fontSize: 13 }}>
+          Select a date range and click <strong>Apply Filters</strong> to load biomechanics data.
+        </div>
+      ) : null}
 
       {pageTab === 'summary' ? (
       <div style={{ display: 'grid', gap: 12 }}>
@@ -1458,11 +1627,11 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             className="portal-select"
             value={selectedPitchKey}
             style={selectStyle}
-            disabled={pageTab !== 'summary'}
+            disabled={pageTab !== 'summary' || !hasAppliedFilters}
             onChange={(e) => {
               const next = e.target.value;
               setSelectedPitchKey(next);
-              void loadData(next);
+              if (hasAppliedFilters) void loadData(next);
             }}
           >
             {displayPitchOptions.length ? displayPitchOptions.map((option) => (
@@ -1475,7 +1644,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             type="button"
             className="btn btn-danger"
             onClick={() => void deleteSelectedPitch()}
-            disabled={pageTab !== 'summary' || isLoading || isUploading || isDeleting || !selectedPitchKey}
+            disabled={pageTab !== 'summary' || isLoading || isUploading || isDeleting || !selectedPitchKey || !hasAppliedFilters}
           >
             {isDeleting ? 'Deleting...' : 'Delete Pitch'}
           </button>
@@ -1538,7 +1707,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       </div>
       ) : null}
 
-      <div style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12 }}>
+      <div ref={summaryTableCardRef} style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <h3 style={{ marginTop: 0, marginBottom: 0 }}>{activeTableTitle}</h3>
           {pageTab === 'leaderboard' ? (
@@ -1551,7 +1720,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
           <table className="portal-table">
             <thead>
               <tr>
-                {activeTableColumns.map((column) => {
+                {displayTableColumns.map((column) => {
                   const active = sortColumn === column;
                   const glyph = active ? (sortDirection === 'desc' ? '↓' : '↑') : '↕';
                   return (
@@ -1586,17 +1755,38 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
               </tr>
             </thead>
             <tbody>
-              {sortedRows.length ? sortedRows.map((row, rowIdx) => (
+              {activeDisplayRows.length ? activeDisplayRows.map((row, rowIdx) => (
                 <tr key={`bio-row-${rowIdx}`}>
-                  {activeTableColumns.map((column) => (
-                    <td key={`${rowIdx}-${column}`} style={{ textAlign: 'center' }}>
+                  {displayTableColumns.map((column) => (
+                    (() => {
+                      const pitchTypeCellValue = String(row['Pitch Type'] ?? '').trim();
+                      const isPitchTypeCell = isSingleAppliedPlayer && pageTab === 'summary' && column === 'Pitch Type';
+                      const pitchTypeBg = isPitchTypeCell ? (PITCH_TYPE_COLOR[pitchTypeCellValue] ?? '#6b7280') : undefined;
+                      const pitchTypeTextColor = isPitchTypeCell
+                        ? (pitchTypeCellValue.toLowerCase() === 'fastball' ? '#000000' : '#ffffff')
+                        : undefined;
+                      return (
+                    <td
+                      key={`${rowIdx}-${column}`}
+                      style={{
+                        textAlign: 'center',
+                        background: pitchTypeBg,
+                        color: pitchTypeTextColor,
+                        fontWeight:
+                          isSingleAppliedPlayer && pageTab === 'summary' && column === 'Pitch Type'
+                            ? 700
+                            : undefined,
+                      }}
+                    >
                       {formatBiomechTableValue(column, row[column] as string | number | null, forceMode)}
                     </td>
+                      );
+                    })()
                   ))}
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={Math.max(1, activeTableColumns.length)} style={{ textAlign: 'center' }}>
+                  <td colSpan={Math.max(1, displayTableColumns.length)} style={{ textAlign: 'center' }}>
                     {isLoading ? 'Loading...' : 'No rows available.'}
                   </td>
                 </tr>
@@ -1609,8 +1799,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         open={showLeaderboardCorrelation && pageTab === 'leaderboard'}
         onClose={() => setShowLeaderboardCorrelation(false)}
         title={leaderboardViewMode === 'individual' ? 'Biomechanics Leaderboard Correlation (Individual Pitches)' : 'Biomechanics Leaderboard Correlation (Averages)'}
-        columns={activeTableColumns}
-        rows={sortedRows as Array<Record<string, string | number | null | undefined>>}
+        columns={displayTableColumns}
+        rows={activeDisplayRows as Array<Record<string, string | number | null | undefined>>}
         viewByLabel="Player"
         primaryColumnName="Name"
         formatValue={(column, value) => formatBiomechTableValue(column, value as string | number | null, forceMode)}

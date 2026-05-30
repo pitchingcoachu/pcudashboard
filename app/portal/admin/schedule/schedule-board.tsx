@@ -1778,11 +1778,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               className="portal-schedule-item"
               title={item.itemName}
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 'calc(100% - 0.35rem)',
-                margin: '0 auto',
+                display: 'block',
+                width: '100%',
                 boxSizing: 'border-box',
                 textAlign: 'center',
                 color: 'var(--text-main)',
@@ -1791,6 +1788,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 padding: '0.1rem 0.34rem',
                 minHeight: '22px',
                 lineHeight: 1.1,
+                overflow: 'hidden',
                 ...categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout'),
               }}
               draggable

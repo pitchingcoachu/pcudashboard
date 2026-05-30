@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
+import { getDbPool, isDatabaseConfigured } from '../../../../lib/auth-db';
 import type { PortalSession } from '../../../../lib/portal-session';
 import {
   deleteBiomechanicsPitch,
@@ -14,6 +15,77 @@ import {
 import { resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
 
 export const maxDuration = 300;
+const BIOMECH_RESPONSE_CACHE_TTL_MS = 30_000;
+const BIOMECH_ROLLUP_CACHE_TTL_MS = 10 * 60_000;
+const biomechanicsResponseCache = new Map<string, { at: number; payload: unknown }>();
+
+let biomechRollupCacheReady = false;
+
+async function ensureBiomechRollupCacheTable() {
+  if (biomechRollupCacheReady) return;
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS biomechanics_query_rollups (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id BIGINT NOT NULL,
+      school_code TEXT NOT NULL,
+      cache_key TEXT NOT NULL,
+      payload_json JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, school_code, cache_key)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_biomech_query_rollups_scope_created ON biomechanics_query_rollups (organization_id, school_code, created_at DESC);`);
+  biomechRollupCacheReady = true;
+}
+
+async function readBiomechRollupCache(args: { organizationId: number; schoolCode: string; cacheKey: string }) {
+  if (!isDatabaseConfigured()) return null;
+  await ensureBiomechRollupCacheTable();
+  const pool = getDbPool();
+  const result = await pool.query<{ payload_json: unknown; created_at: string }>(
+    `
+    SELECT payload_json, created_at::text AS created_at
+    FROM biomechanics_query_rollups
+    WHERE organization_id = $1
+      AND school_code = $2
+      AND cache_key = $3
+    LIMIT 1
+    `,
+    [args.organizationId, args.schoolCode, args.cacheKey]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const createdAtMs = Date.parse(String(row.created_at ?? ''));
+  if (!Number.isFinite(createdAtMs) || Date.now() - createdAtMs > BIOMECH_ROLLUP_CACHE_TTL_MS) return null;
+  return row.payload_json ?? null;
+}
+
+async function writeBiomechRollupCache(args: { organizationId: number; schoolCode: string; cacheKey: string; payload: unknown }) {
+  if (!isDatabaseConfigured()) return;
+  await ensureBiomechRollupCacheTable();
+  const pool = getDbPool();
+  await pool.query(
+    `
+    INSERT INTO biomechanics_query_rollups (organization_id, school_code, cache_key, payload_json, created_at)
+    VALUES ($1, $2, $3, $4::jsonb, NOW())
+    ON CONFLICT (organization_id, school_code, cache_key)
+    DO UPDATE SET payload_json = EXCLUDED.payload_json, created_at = NOW()
+    `,
+    [args.organizationId, args.schoolCode, args.cacheKey, JSON.stringify(args.payload ?? {})]
+  );
+}
+
+async function clearBiomechRollupCache(args: { organizationId: number; schoolCode: string }) {
+  if (!isDatabaseConfigured()) return;
+  await ensureBiomechRollupCacheTable();
+  const pool = getDbPool();
+  await pool.query(
+    `DELETE FROM biomechanics_query_rollups WHERE organization_id = $1 AND school_code = $2`,
+    [args.organizationId, args.schoolCode]
+  );
+}
 
 type CsvRow = Record<string, string>;
 type PitchingFiltersPayload = { pitchers?: string[]; error?: string; detail?: string };
@@ -232,6 +304,39 @@ export async function GET(request: Request) {
   const selectedTag = String(searchParams.get('tag') ?? '').trim() || null;
   const selectedPitchType = String(searchParams.get('pitchType') ?? '').trim() || null;
   const forceMode = String(searchParams.get('forceMode') ?? '').trim().toLowerCase() === 'bw' ? 'bw' : 'force';
+  const cacheKey = [
+    'biomech:v2',
+    Number(organizationId),
+    String(schoolCode),
+    startDateParam ?? '',
+    endDateParam ?? '',
+    selectedPitchKey ?? '',
+    selectedPitcher ?? '',
+    selectedTag ?? '',
+    selectedPitchType ?? '',
+    forceMode,
+  ].join('|');
+  const cached = biomechanicsResponseCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < BIOMECH_RESPONSE_CACHE_TTL_MS) {
+    return NextResponse.json(cached.payload, {
+      headers: {
+        'cache-control': 'private, max-age=5, stale-while-revalidate=25',
+      },
+    });
+  }
+  try {
+    const rollupCached = await readBiomechRollupCache({ organizationId, schoolCode, cacheKey });
+    if (rollupCached && typeof rollupCached === 'object') {
+      biomechanicsResponseCache.set(cacheKey, { at: Date.now(), payload: rollupCached });
+      return NextResponse.json(rollupCached, {
+        headers: {
+          'cache-control': 'private, max-age=5, stale-while-revalidate=25',
+        },
+      });
+    }
+  } catch {
+    // Ignore rollup cache read errors and continue to live computation.
+  }
   try {
     const pitcherOptions = await fetchPcuPitchers().catch(() => []);
     const candidateOrgIds = Array.from(
@@ -324,7 +429,7 @@ export async function GET(request: Request) {
       appliedEndDate = endDateParam;
     }
 
-    return NextResponse.json({
+    const responsePayload = {
       table_columns: snapshot.tableColumns,
       table_rows: snapshot.tableRows,
       leaderboard_individual_columns: snapshot.leaderboardIndividualColumns,
@@ -349,13 +454,12 @@ export async function GET(request: Request) {
       applied_end_date: appliedEndDate,
       match_summary: snapshot.matchSummary,
       pitcher_options: pitcherOptions,
-      debug: {
-        candidate_org_ids: candidateOrgIds,
-        selected_org_id: selectedOrgId,
-        applied_start_date: appliedStartDate,
-        applied_end_date: appliedEndDate,
-        table_rows_count: snapshot.tableRows.length,
-        pitch_options_count: snapshot.pitchOptions.length,
+    };
+    biomechanicsResponseCache.set(cacheKey, { at: Date.now(), payload: responsePayload });
+    void writeBiomechRollupCache({ organizationId, schoolCode, cacheKey, payload: responsePayload }).catch(() => {});
+    return NextResponse.json(responsePayload, {
+      headers: {
+        'cache-control': 'private, max-age=5, stale-while-revalidate=25',
       },
     });
   } catch (error) {
@@ -458,6 +562,8 @@ export async function POST(request: Request) {
       }
     }
 
+    biomechanicsResponseCache.clear();
+    await clearBiomechRollupCache({ organizationId, schoolCode }).catch(() => {});
     return NextResponse.json({ ok: true, filesProcessed: files.length, rowsInserted: totalInserted });
   } catch (error) {
     return NextResponse.json(
@@ -491,6 +597,8 @@ export async function DELETE(request: Request) {
       schoolCode,
       pitchKey,
     });
+    biomechanicsResponseCache.clear();
+    await clearBiomechRollupCache({ organizationId, schoolCode }).catch(() => {});
     return NextResponse.json({
       ok: true,
       deleted_single_pitch: result.deletedSinglePitch,
