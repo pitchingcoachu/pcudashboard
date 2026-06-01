@@ -57,6 +57,8 @@ type Payload = {
   all_sessions_leaderboard_individual_rows?: Array<Record<string, string | number | null>>;
   applied_start_date?: string | null;
   applied_end_date?: string | null;
+  applied_velocity_min?: number | null;
+  applied_velocity_max?: number | null;
   match_summary?: {
     totalSinglePitchFiles?: number;
     matchedSinglePitchFiles?: number;
@@ -111,6 +113,17 @@ const EXCLUDED_SINGLE_PLAYER_TAGS = new Set([
   'splitter',
   'changeup',
 ]);
+
+function isExcludedSinglePlayerTagCell(value: unknown): boolean {
+  const raw = String(value ?? '').trim();
+  if (!raw) return true;
+  const parts = raw
+    .split(/[|,;]+/g)
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean);
+  if (!parts.length) return true;
+  return parts.every((tag) => EXCLUDED_SINGLE_PLAYER_TAGS.has(tag));
+}
 
 const PITCH_TYPE_ORDER = [
   'Fastball',
@@ -969,6 +982,10 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [appliedStartDate, setAppliedStartDate] = useState<string>('');
   const [appliedEndDate, setAppliedEndDate] = useState<string>('');
   const [appliedForceMode, setAppliedForceMode] = useState<ForceMode>('force');
+  const [velocityMin, setVelocityMin] = useState<string>('');
+  const [velocityMax, setVelocityMax] = useState<string>('');
+  const [appliedVelocityMin, setAppliedVelocityMin] = useState<number | null>(null);
+  const [appliedVelocityMax, setAppliedVelocityMax] = useState<number | null>(null);
   const [sortColumn, setSortColumn] = useState<string>('');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -1042,6 +1059,13 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   };
   const filterLabelStyle: CSSProperties = { fontSize: 14, color: '#94a3b8' };
   const filterControlMinWidth = 250;
+  const velocityInputStyle: CSSProperties = {
+    ...selectStyle,
+    width: 88,
+    minWidth: 88,
+    maxWidth: 88,
+    padding: '0.55rem 0.5rem',
+  };
 
   const loadData = async (
     pitchKeyOverride?: string,
@@ -1052,6 +1076,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       tags: string[];
       pitchTypes: string[];
       forceMode: ForceMode;
+      velocityMin: number | null;
+      velocityMax: number | null;
     }
   ) => {
     setIsLoading(true);
@@ -1063,12 +1089,16 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const activeTags = override?.tags ?? appliedTags;
       const activePitchTypes = override?.pitchTypes ?? appliedPitchTypes;
       const activeForceMode = override?.forceMode ?? appliedForceMode;
+      const activeVelocityMin = override?.velocityMin ?? appliedVelocityMin;
+      const activeVelocityMax = override?.velocityMax ?? appliedVelocityMax;
       const query = new URLSearchParams();
       if (activeStartDate) query.set('startDate', activeStartDate);
       if (activeEndDate) query.set('endDate', activeEndDate);
       if (activePitchers.length && !activePitchers.includes('All')) query.set('pitcher', JSON.stringify(activePitchers));
       if (activeTags.length && !activeTags.includes('All')) query.set('tag', JSON.stringify(activeTags));
       if (activePitchTypes.length && !activePitchTypes.includes('All')) query.set('pitchType', JSON.stringify(activePitchTypes));
+      if (activeVelocityMin !== null && Number.isFinite(activeVelocityMin)) query.set('velocityMin', String(activeVelocityMin));
+      if (activeVelocityMax !== null && Number.isFinite(activeVelocityMax)) query.set('velocityMax', String(activeVelocityMax));
       query.set('forceMode', activeForceMode);
       if (pitchKeyOverride || selectedPitchKey) query.set('pitchKey', pitchKeyOverride || selectedPitchKey);
       const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
@@ -1090,6 +1120,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const nextPitchTypes = Array.isArray(payload.pitch_type_options) ? payload.pitch_type_options : [];
       const responseAppliedStartDate = String(payload.applied_start_date ?? '').trim();
       const responseAppliedEndDate = String(payload.applied_end_date ?? '').trim();
+      const responseAppliedVelocityMin = typeof payload.applied_velocity_min === 'number' && Number.isFinite(payload.applied_velocity_min) ? payload.applied_velocity_min : null;
+      const responseAppliedVelocityMax = typeof payload.applied_velocity_max === 'number' && Number.isFinite(payload.applied_velocity_max) ? payload.applied_velocity_max : null;
       setTableColumns(columns);
       setTableRows(rows);
       setLeaderboardIndividualColumns(lbIndividualColumns);
@@ -1122,6 +1154,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       });
       if (responseAppliedStartDate && responseAppliedStartDate !== appliedStartDate) setAppliedStartDate(responseAppliedStartDate);
       if (responseAppliedEndDate && responseAppliedEndDate !== appliedEndDate) setAppliedEndDate(responseAppliedEndDate);
+      if (responseAppliedVelocityMin !== appliedVelocityMin) setAppliedVelocityMin(responseAppliedVelocityMin);
+      if (responseAppliedVelocityMax !== appliedVelocityMax) setAppliedVelocityMax(responseAppliedVelocityMax);
       setSelectedTags((current) => {
         if (current.length === 1 && current[0] === 'All') return current;
         const filtered = current.filter((value) => nextTags.includes(value));
@@ -1160,12 +1194,34 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     const nextPitchers = normalizeMulti(selectedPitchers);
     const nextTags = normalizeMulti(selectedTags);
     const nextPitchTypes = normalizeMulti(selectedPitchTypes);
+    const parsedVelocityMin = (() => {
+      const raw = String(velocityMin ?? '').trim();
+      if (!raw) return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : Number.NaN;
+    })();
+    const parsedVelocityMax = (() => {
+      const raw = String(velocityMax ?? '').trim();
+      if (!raw) return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : Number.NaN;
+    })();
+    if (Number.isNaN(parsedVelocityMin) || Number.isNaN(parsedVelocityMax)) {
+      setError('Velocity Min/Max must be valid numbers.');
+      return;
+    }
+    if (parsedVelocityMin !== null && parsedVelocityMax !== null && parsedVelocityMin > parsedVelocityMax) {
+      setError('Velocity Min must be less than or equal to Velocity Max.');
+      return;
+    }
     setAppliedStartDate(startDate);
     setAppliedEndDate(endDate);
     setAppliedPitchers(nextPitchers);
     setAppliedTags(nextTags);
     setAppliedPitchTypes(nextPitchTypes);
     setAppliedForceMode(forceMode);
+    setAppliedVelocityMin(parsedVelocityMin);
+    setAppliedVelocityMax(parsedVelocityMax);
     setHasAppliedFilters(true);
     void loadData(undefined, {
       startDate,
@@ -1174,6 +1230,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       tags: nextTags,
       pitchTypes: nextPitchTypes,
       forceMode,
+      velocityMin: parsedVelocityMin,
+      velocityMax: parsedVelocityMax,
     });
   };
 
@@ -1322,18 +1380,25 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
 
   const shouldHideTagsColumnForSinglePlayer = useMemo(() => {
     if (!isSingleAppliedPlayer || pageTab !== 'summary') return false;
-    if (!summaryRowsByPitchType.length) return false;
-    return summaryRowsByPitchType.every((row) => {
-      const raw = String(row.Tags ?? '').trim();
-      if (!raw) return true;
-      const parts = raw
-        .split(/[|,;]+/g)
-        .map((v) => v.trim().toLowerCase())
-        .filter(Boolean);
-      if (!parts.length) return true;
-      return parts.every((tag) => EXCLUDED_SINGLE_PLAYER_TAGS.has(tag));
+    const selectedPlayerRaw = (appliedPitchers ?? []).find((value) => String(value ?? '').trim().toUpperCase() !== 'ALL') ?? '';
+    const selectedPlayerFirstLast = toFirstLastName(selectedPlayerRaw);
+    const sourceRows = [...leaderboardIndividualRows, ...allSessionsLeaderboardIndividualRows].filter((row) => {
+      const rowName = toFirstLastName(String(row.Name ?? ''));
+      return rowName === selectedPlayerFirstLast;
     });
-  }, [isSingleAppliedPlayer, pageTab, summaryRowsByPitchType]);
+    const displayedRows = summaryRowsByPitchType;
+    if (!sourceRows.length && !displayedRows.length) return false;
+    const sourceExcluded = sourceRows.every((row) => isExcludedSinglePlayerTagCell(row.Tags));
+    const displayedExcluded = displayedRows.every((row) => isExcludedSinglePlayerTagCell(row.Tags));
+    return sourceExcluded || displayedExcluded;
+  }, [
+    isSingleAppliedPlayer,
+    pageTab,
+    appliedPitchers,
+    leaderboardIndividualRows,
+    allSessionsLeaderboardIndividualRows,
+    summaryRowsByPitchType,
+  ]);
 
   const displayPitchOptions = useMemo(
     () => pitchOptions.map((option) => ({ ...option, label: formatPitchOptionLabel(option, pitchOptions, pitchVelocityByKey) })),
@@ -1635,6 +1700,32 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             options={pitchTypeSelectOptions}
             values={selectedPitchTypes}
             onChange={setSelectedPitchTypes}
+          />
+        </label>
+        <label style={{ display: 'grid', gap: 4, minWidth: 88, width: 88, marginRight: 12 }}>
+          <span style={filterLabelStyle}>Velocity Min</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            step="0.1"
+            value={velocityMin}
+            onChange={(e) => setVelocityMin(e.target.value)}
+            className="portal-select biomechanics-filter-control"
+            style={velocityInputStyle}
+            placeholder="e.g. 80"
+          />
+        </label>
+        <label style={{ display: 'grid', gap: 4, minWidth: 88, width: 88 }}>
+          <span style={filterLabelStyle}>Velocity Max</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            step="0.1"
+            value={velocityMax}
+            onChange={(e) => setVelocityMax(e.target.value)}
+            className="portal-select biomechanics-filter-control"
+            style={velocityInputStyle}
+            placeholder="e.g. 95"
           />
         </label>
         <button type="button" className="btn btn-ghost" onClick={applyFilters} disabled={isLoading || isUploading}>

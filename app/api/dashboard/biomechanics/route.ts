@@ -319,6 +319,12 @@ export async function GET(request: Request) {
   const selectedPitcherRaw = String(searchParams.get('pitcher') ?? '').trim() || null;
   const selectedTag = String(searchParams.get('tag') ?? '').trim() || null;
   const selectedPitchType = String(searchParams.get('pitchType') ?? '').trim() || null;
+  const velocityMinRaw = String(searchParams.get('velocityMin') ?? '').trim();
+  const velocityMaxRaw = String(searchParams.get('velocityMax') ?? '').trim();
+  const velocityMin = velocityMinRaw === '' ? null : Number(velocityMinRaw);
+  const velocityMax = velocityMaxRaw === '' ? null : Number(velocityMaxRaw);
+  const selectedVelocityMin = Number.isFinite(velocityMin) ? velocityMin : null;
+  const selectedVelocityMax = Number.isFinite(velocityMax) ? velocityMax : null;
   const forceMode = String(searchParams.get('forceMode') ?? '').trim().toLowerCase() === 'bw' ? 'bw' : 'force';
   const playerScopedName = session.role === 'player' ? String(session.name ?? '').trim() : '';
   const selectedPitcher = session.role === 'player'
@@ -335,6 +341,8 @@ export async function GET(request: Request) {
     selectedPitcher ?? '',
     selectedTag ?? '',
     selectedPitchType ?? '',
+    selectedVelocityMin ?? '',
+    selectedVelocityMax ?? '',
     forceMode,
   ].join('|');
   const cached = biomechanicsResponseCache.get(cacheKey);
@@ -399,6 +407,8 @@ export async function GET(request: Request) {
         selectedPitcher,
         selectedTag,
         selectedPitchType,
+        selectedVelocityMin,
+        selectedVelocityMax,
         forceMode,
       });
 
@@ -420,6 +430,8 @@ export async function GET(request: Request) {
           selectedPitcher,
           selectedTag,
           selectedPitchType,
+          selectedVelocityMin,
+          selectedVelocityMax,
           forceMode,
         });
         if (hasSnapshotData(unboundedSnapshot)) {
@@ -447,6 +459,8 @@ export async function GET(request: Request) {
         selectedPitcher,
         selectedTag,
         selectedPitchType,
+        selectedVelocityMin,
+        selectedVelocityMax,
         forceMode,
       });
       selectedOrgId = organizationId;
@@ -465,6 +479,8 @@ export async function GET(request: Request) {
         selectedPitcher,
         selectedTag,
         selectedPitchType,
+        selectedVelocityMin,
+        selectedVelocityMax,
         forceMode,
       });
     }
@@ -492,6 +508,8 @@ export async function GET(request: Request) {
       selected_pitch_stride_direction_in: snapshot.selectedPitchStrideDirectionIn,
       applied_start_date: appliedStartDate,
       applied_end_date: appliedEndDate,
+      applied_velocity_min: selectedVelocityMin,
+      applied_velocity_max: selectedVelocityMax,
       match_summary: snapshot.matchSummary,
       pitcher_options: pitcherOptions,
       all_sessions_leaderboard_individual_rows: allSessionsSnapshot?.leaderboardIndividualRows ?? [],

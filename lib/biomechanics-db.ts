@@ -1356,6 +1356,8 @@ export async function getBiomechanicsSnapshot(args: {
   selectedPitcher?: string | null;
   selectedTag?: string | null;
   selectedPitchType?: string | null;
+  selectedVelocityMin?: number | null;
+  selectedVelocityMax?: number | null;
   forceMode?: 'force' | 'bw';
 }): Promise<{
   tableColumns: string[];
@@ -1497,6 +1499,8 @@ export async function getBiomechanicsSnapshot(args: {
 
   const selectedTags = parseMultiFilter(args.selectedTag ?? '').filter((v) => v.toUpperCase() !== 'ALL');
   const selectedPitchTypes = parseMultiFilter(args.selectedPitchType ?? '');
+  const selectedVelocityMin = typeof args.selectedVelocityMin === 'number' && Number.isFinite(args.selectedVelocityMin) ? args.selectedVelocityMin : null;
+  const selectedVelocityMax = typeof args.selectedVelocityMax === 'number' && Number.isFinite(args.selectedVelocityMax) ? args.selectedVelocityMax : null;
   const forceMode = args.forceMode === 'bw' ? 'bw' : 'force';
 
   const pitchOptionsResult = await pool.query<{
@@ -1785,6 +1789,9 @@ export async function getBiomechanicsSnapshot(args: {
     if (selectedPitchTypes.length) {
       if (!selectedPitchTypes.includes(String(meta?.pitchType ?? '').trim())) return false;
     }
+    const velo = toFinite(meta?.velocityMph);
+    if (selectedVelocityMin !== null && (velo === null || velo < selectedVelocityMin)) return false;
+    if (selectedVelocityMax !== null && (velo === null || velo > selectedVelocityMax)) return false;
     return true;
   });
   const selectedPitchKey =
