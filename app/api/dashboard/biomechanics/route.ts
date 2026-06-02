@@ -367,6 +367,11 @@ export async function GET(request: Request) {
     // Ignore rollup cache read errors and continue to live computation.
   }
   try {
+    let stage = 'fetch PCU pitcher options';
+    const failAtStage = (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      return new Error(`${stage}: ${message}`);
+    };
     const pitcherOptionsAll = await fetchPcuPitchers().catch(() => []);
     const pitcherOptions = session.role === 'player'
       ? (playerScopedName ? [playerScopedName] : [])
@@ -391,13 +396,17 @@ export async function GET(request: Request) {
       let orgStartDate = startDateParam;
       let orgEndDate = endDateParam;
       if (!orgStartDate && !orgEndDate) {
-        const latestDate = await getLatestBiomechanicsDate({ organizationId: orgId, schoolCode });
+        stage = `latest biomechanics date org ${orgId}`;
+        const latestDate = await getLatestBiomechanicsDate({ organizationId: orgId, schoolCode }).catch((error) => {
+          throw failAtStage(error);
+        });
         if (latestDate) {
           orgStartDate = latestDate;
           orgEndDate = latestDate;
         }
       }
 
+      stage = `biomechanics snapshot org ${orgId}`;
       const datedSnapshot = await getBiomechanicsSnapshot({
         organizationId: orgId,
         schoolCode,
@@ -410,6 +419,8 @@ export async function GET(request: Request) {
         selectedVelocityMin,
         selectedVelocityMax,
         forceMode,
+      }).catch((error) => {
+        throw failAtStage(error);
       });
 
       if (hasSnapshotData(datedSnapshot)) {
@@ -421,6 +432,7 @@ export async function GET(request: Request) {
       }
 
       if (!startDateParam && !endDateParam && (orgStartDate || orgEndDate)) {
+        stage = `unbounded biomechanics snapshot org ${orgId}`;
         const unboundedSnapshot = await getBiomechanicsSnapshot({
           organizationId: orgId,
           schoolCode,
@@ -433,6 +445,8 @@ export async function GET(request: Request) {
           selectedVelocityMin,
           selectedVelocityMax,
           forceMode,
+        }).catch((error) => {
+          throw failAtStage(error);
         });
         if (hasSnapshotData(unboundedSnapshot)) {
           snapshot = unboundedSnapshot;
@@ -450,6 +464,7 @@ export async function GET(request: Request) {
     }
 
     if (!snapshot) {
+      stage = `fallback biomechanics snapshot org ${organizationId}`;
       snapshot = await getBiomechanicsSnapshot({
         organizationId,
         schoolCode,
@@ -462,6 +477,8 @@ export async function GET(request: Request) {
         selectedVelocityMin,
         selectedVelocityMax,
         forceMode,
+      }).catch((error) => {
+        throw failAtStage(error);
       });
       selectedOrgId = organizationId;
       appliedStartDate = startDateParam;
@@ -470,6 +487,7 @@ export async function GET(request: Request) {
 
     const selectedPitchers = parseSelectedValues(selectedPitcher).filter((v) => v.toUpperCase() !== 'ALL');
     if (selectedPitchers.length === 1) {
+      stage = `all-sessions biomechanics snapshot org ${selectedOrgId}`;
       allSessionsSnapshot = await getBiomechanicsSnapshot({
         organizationId: selectedOrgId,
         schoolCode,
@@ -482,6 +500,8 @@ export async function GET(request: Request) {
         selectedVelocityMin,
         selectedVelocityMax,
         forceMode,
+      }).catch((error) => {
+        throw failAtStage(error);
       });
     }
 

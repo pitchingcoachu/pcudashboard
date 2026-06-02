@@ -1,4 +1,5 @@
 import { createPasswordHash, ensureAuthDbReady, getDbPool, isDatabaseConfigured, verifyPasswordAgainstHash } from './auth-db';
+import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH } from './note-attachment-limits';
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 
 declare global {
@@ -5212,8 +5213,8 @@ export async function createPlayerPlanNote(input: {
   if ((playerCheck.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
 
   const attachmentDataUrl = String(input.attachmentDataUrl ?? '').trim() || null;
-  if (attachmentDataUrl && attachmentDataUrl.length > 9_000_000) {
-    return { ok: false, error: 'Attachment is too large.' };
+  if (attachmentDataUrl && attachmentDataUrl.length > NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH) {
+    return { ok: false, error: 'Attachments are too large. Please keep uploads under about 45 MB total.' };
   }
 
   await pool.query(
@@ -5481,8 +5482,8 @@ export async function createDashboardPlayerNote(input: {
   if (!noteText) return { ok: false, error: 'Note text is required.' };
 
   const attachmentDataUrl = String(input.attachmentDataUrl ?? '').trim() || null;
-  if (attachmentDataUrl && attachmentDataUrl.length > 9_000_000) {
-    return { ok: false, error: 'Attachment is too large.' };
+  if (attachmentDataUrl && attachmentDataUrl.length > NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH) {
+    return { ok: false, error: 'Attachments are too large. Please keep uploads under about 45 MB total.' };
   }
 
   await pool.query(
@@ -5539,7 +5540,9 @@ export async function updateDashboardPlayerNote(input: {
   const noteText = String(input.noteText ?? '').trim();
   if (!noteText) return { ok: false, error: 'Note text is required.' };
   const attachmentDataUrl = String(input.attachmentDataUrl ?? '').trim() || null;
-  if (attachmentDataUrl && attachmentDataUrl.length > 9_000_000) return { ok: false, error: 'Attachment is too large.' };
+  if (attachmentDataUrl && attachmentDataUrl.length > NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH) {
+    return { ok: false, error: 'Attachments are too large. Please keep uploads under about 45 MB total.' };
+  }
 
   const result = await pool.query(
     `

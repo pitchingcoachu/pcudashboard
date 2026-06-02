@@ -271,7 +271,12 @@ async function getTrackmanVelocityByNameDate(args: {
 
   for (const sql of attempts) {
     try {
-      const result = await pool.query<{ pitcher_name: string | null; session_date: string | null; tm_time: string | null; velo: number | null; pitch_type: string | null }>(sql, values);
+      const result = await pool
+        .query<{ pitcher_name: string | null; session_date: string | null; tm_time: string | null; velo: number | null; pitch_type: string | null }>(sql, values)
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`trackman velocity lookup: ${message}`);
+        });
       const map = new Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>();
       let timedCount = 0;
       const parseTimeSec = (raw: string | null): number | null => {
@@ -307,7 +312,8 @@ async function getTrackmanVelocityByNameDate(args: {
       // (for example, relspeed exists but is empty while RelSpeed has data).
       // Only accept a variant when it actually returns mapped data.
       if (map.size > 0) return map;
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Query read timeout')) throw error;
       // try next schema variant
     }
   }
@@ -868,6 +874,28 @@ async function ensureBiomechanicsTables(): Promise<void> {
   }
 }
 
+async function ensureBiomechanicsReadTables(): Promise<void> {
+  if (global.__pcuBiomechanicsDbReady) return;
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  const result = await pool.query<{
+    uploads_table: string | null;
+    pitch_rows_table: string | null;
+    single_points_table: string | null;
+  }>(`
+    SELECT
+      to_regclass('public.biomechanics_uploads')::text AS uploads_table,
+      to_regclass('public.biomechanics_pitch_rows')::text AS pitch_rows_table,
+      to_regclass('public.biomechanics_single_pitch_points')::text AS single_points_table
+  `);
+  const row = result.rows[0];
+  if (row?.uploads_table && row.pitch_rows_table && row.single_points_table) {
+    global.__pcuBiomechanicsDbReady = true;
+    return;
+  }
+  await ensureBiomechanicsTables();
+}
+
 async function ensureBiomechanicsMetricsTable(): Promise<void> {
   if (!isDatabaseConfigured()) return;
   const pool = getDbPool();
@@ -1014,7 +1042,6 @@ export async function saveSinglePitchPoints(args: {
 }): Promise<{ insertedRows: number; pitchKey: string }> {
   if (!isDatabaseConfigured()) throw new Error('DATABASE_URL is not configured.');
   await ensureBiomechanicsTables();
-  await ensureBiomechanicsMetricsTable();
   const pool = getDbPool();
   const sourceFileHash = createHash('sha256').update(args.csvContent).digest('hex');
   const schoolCode = normalizeSchoolCode(args.schoolCode);
@@ -1421,9 +1448,21 @@ export async function getBiomechanicsSnapshot(args: {
       },
     };
   }
-  await ensureBiomechanicsTables();
+  await ensureBiomechanicsReadTables();
   await ensureBiomechanicsMetricsTable();
   const pool = getDbPool();
+  const runSnapshotQuery = async <T extends Record<string, unknown>>(
+    label: string,
+    sql: string,
+    queryValues?: unknown[]
+  ) => {
+    try {
+      return await pool.query<T>(sql, queryValues);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${label}: ${message}`);
+    }
+  };
   const schoolCode = normalizeSchoolCode(args.schoolCode);
   const parseMultiFilter = (raw: string | null | undefined, options?: { allowComma?: boolean }): string[] => {
     const text = String(raw ?? '').trim();
@@ -1474,7 +1513,8 @@ export async function getBiomechanicsSnapshot(args: {
       .join(' AND ')}`
     : '';
   const summaryValues: Array<string | number> = [...values];
-  const rowResult = await pool.query<{ row_json: Record<string, string | number | null>; captured_at: string | null; created_at: string | null }>(
+  const rowResult = await runSnapshotQuery<{ row_json: Record<string, string | number | null>; captured_at: string | null; created_at: string | null }>(
+    'biomechanics pitch rows',
     `
     SELECT row_json, captured_at::text AS captured_at, created_at::text AS created_at
     FROM biomechanics_pitch_rows
@@ -1486,7 +1526,8 @@ export async function getBiomechanicsSnapshot(args: {
     `,
     values
   );
-  const summaryAllRowsResult = await pool.query<{ total_rows: string }>(
+  const summaryAllRowsResult = await runSnapshotQuery<{ total_rows: string }>(
+    'biomechanics all-pitch summary',
     `
     SELECT COUNT(*)::text AS total_rows
     FROM biomechanics_pitch_rows
@@ -1503,13 +1544,14 @@ export async function getBiomechanicsSnapshot(args: {
   const selectedVelocityMax = typeof args.selectedVelocityMax === 'number' && Number.isFinite(args.selectedVelocityMax) ? args.selectedVelocityMax : null;
   const forceMode = args.forceMode === 'bw' ? 'bw' : 'force';
 
-  const pitchOptionsResult = await pool.query<{
+  const pitchOptionsResult = await runSnapshotQuery<{
     pitch_key: string;
     label: string;
     captured_at: string | null;
     pitcher_name: string | null;
     source_file_name: string | null;
   }>(
+    'biomechanics pitch options',
     `
     SELECT
       u.source_file_hash AS pitch_key,
@@ -1534,7 +1576,8 @@ export async function getBiomechanicsSnapshot(args: {
     `,
     summaryValues
   );
-  const summarySingleFilesResult = await pool.query<{ total_files: string }>(
+  const summarySingleFilesResult = await runSnapshotQuery<{ total_files: string }>(
+    'biomechanics single-pitch summary',
     `
     SELECT COUNT(DISTINCT u.source_file_hash)::text AS total_files
     FROM biomechanics_uploads u
@@ -1553,7 +1596,8 @@ export async function getBiomechanicsSnapshot(args: {
   const pitchKeysForTime = pitchOptionsResult.rows.map((row) => String(row.pitch_key ?? '').trim()).filter(Boolean);
   const singleTimeByHash = new Map<string, number>();
   if (pitchKeysForTime.length) {
-    const singleTimeRows = await pool.query<{ source_file_hash: string; t: number | string | null }>(
+    const singleTimeRows = await runSnapshotQuery<{ source_file_hash: string; t: number | string | null }>(
+      'biomechanics first point times',
       `
       SELECT source_file_hash, t
       FROM biomechanics_single_pitch_points
@@ -1801,7 +1845,8 @@ export async function getBiomechanicsSnapshot(args: {
 
   let selectedPitchPoints: BiomechSinglePitchPoint[] = [];
   if (selectedPitchKey) {
-    const pointsResult = await pool.query<BiomechSinglePitchPoint & { row_json?: Record<string, unknown> | null }>(
+    const pointsResult = await runSnapshotQuery<BiomechSinglePitchPoint & { row_json?: Record<string, unknown> | null }>(
+      'biomechanics selected pitch points',
       `
       SELECT t, fx, fy, fz, mx, my, mz, row_json
       FROM biomechanics_single_pitch_points
@@ -1860,7 +1905,7 @@ export async function getBiomechanicsSnapshot(args: {
   const metricKeys = pitchOptions.map((p) => p.pitchKey);
   const pitchMetricsMap = new Map<string, BiomechComputedMetrics>();
   if (metricKeys.length) {
-    const metricsAgg = await pool.query<{
+    const metricsAgg = await runSnapshotQuery<{
       source_file_hash: string;
       back_peak_fz: number | null;
       back_peak_fy: number | null;
@@ -1875,6 +1920,7 @@ export async function getBiomechanicsSnapshot(args: {
       y_transfer: number | null;
       z_transfer: number | null;
     }>(
+      'biomechanics metrics lookup',
       `
       SELECT
         source_file_hash,
@@ -1902,7 +1948,7 @@ export async function getBiomechanicsSnapshot(args: {
       const missingMetricsShape = code === '42P01' || code === '42703' || message.includes('biomechanics_pitch_metrics') || message.includes('impulse_time');
       if (!missingMetricsShape) throw error;
       await ensureBiomechanicsMetricsTable();
-      return pool.query<{
+      return runSnapshotQuery<{
         source_file_hash: string;
         back_peak_fz: number | null;
         back_peak_fy: number | null;
@@ -1917,6 +1963,7 @@ export async function getBiomechanicsSnapshot(args: {
         y_transfer: number | null;
         z_transfer: number | null;
       }>(
+        'biomechanics metrics lookup after schema refresh',
         `
         SELECT
           source_file_hash,
@@ -1958,7 +2005,8 @@ export async function getBiomechanicsSnapshot(args: {
     }
     const missingMetricKeys = metricKeys.filter((key) => !pitchMetricsMap.has(key));
     if (missingMetricKeys.length) {
-      const pointsAgg = await pool.query<BiomechSinglePitchPoint & { source_file_hash: string; row_json?: Record<string, unknown> | null }>(
+      const pointsAgg = await runSnapshotQuery<BiomechSinglePitchPoint & { source_file_hash: string; row_json?: Record<string, unknown> | null }>(
+        'biomechanics missing metrics points',
         `
         SELECT source_file_hash, t, fx, fy, fz, mx, my, mz, row_json
         FROM biomechanics_single_pitch_points
@@ -2307,7 +2355,7 @@ export async function getLatestBiomechanicsDate(args: {
   schoolCode: string;
 }): Promise<string | null> {
   if (!isDatabaseConfigured()) return null;
-  await ensureBiomechanicsTables();
+  await ensureBiomechanicsReadTables();
   const pool = getDbPool();
   const schoolCode = normalizeSchoolCode(args.schoolCode);
   const result = await pool.query<{ latest_date: string | null }>(

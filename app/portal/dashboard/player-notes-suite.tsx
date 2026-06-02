@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH, formatNoteAttachmentLimit } from '../../../lib/note-attachment-limits';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching' | 'General';
 
@@ -36,6 +37,7 @@ type NoteAttachment = {
 
 const DEFAULT_NOTE_CATEGORIES = ['Player Plan', 'Weight Room', 'Nutrition', 'Mental Training', 'Grips'];
 const MULTI_ATTACHMENT_MIME = 'application/x.pcu-note-attachments+json';
+const NOTE_ATTACHMENT_LIMIT_LABEL = formatNoteAttachmentLimit();
 
 function todayIsoDate(): string {
   const now = new Date();
@@ -172,6 +174,24 @@ function encodeAttachmentsForApi(files: NoteAttachment[]): {
     attachmentMimeType: MULTI_ATTACHMENT_MIME,
     attachmentDataUrl: JSON.stringify(files),
   };
+}
+
+function estimateDataUrlLength(file: File): number {
+  const metadataLength = `data:${file.type || 'application/octet-stream'};base64,`.length;
+  return metadataLength + Math.ceil(file.size / 3) * 4;
+}
+
+function validateSelectedAttachments(files: File[]): string {
+  const estimatedLength = files.reduce((sum, file) => sum + estimateDataUrlLength(file), 0);
+  if (files.length > 1) {
+    const jsonOverhead = files.reduce((sum, file) => sum + file.name.length + file.type.length + 48, 2);
+    if (estimatedLength + jsonOverhead > NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH) {
+      return `Attachments are too large. Please keep uploads under ${NOTE_ATTACHMENT_LIMIT_LABEL}.`;
+    }
+  } else if (estimatedLength > NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH) {
+    return `Attachment is too large. Please keep uploads under ${NOTE_ATTACHMENT_LIMIT_LABEL}.`;
+  }
+  return '';
 }
 
 export default function PlayerNotesSuite() {
@@ -326,6 +346,11 @@ export default function PlayerNotesSuite() {
       return;
     }
     if (!noteText.trim()) return;
+    const attachmentError = validateSelectedAttachments(noteFiles);
+    if (attachmentError) {
+      setMessage(attachmentError);
+      return;
+    }
     setMessage('');
     try {
       const attachments: NoteAttachment[] = await Promise.all(
@@ -336,6 +361,10 @@ export default function PlayerNotesSuite() {
         }))
       );
       const encoded = encodeAttachmentsForApi(attachments);
+      if (encoded.attachmentDataUrl.length > NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH) {
+        setMessage(`Attachments are too large. Please keep uploads under ${NOTE_ATTACHMENT_LIMIT_LABEL}.`);
+        return;
+      }
       const response = await fetch('/api/player/plan-notes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -570,7 +599,13 @@ export default function PlayerNotesSuite() {
                 type="file"
                 accept="image/*,video/*,application/pdf"
                 multiple
-                onChange={(event) => setNoteFiles(event.target.files ? Array.from(event.target.files) : [])}
+                onChange={(event) => {
+                  const files = event.target.files ? Array.from(event.target.files) : [];
+                  setNoteFiles(files);
+                  const attachmentError = validateSelectedAttachments(files);
+                  if (attachmentError) setMessage(attachmentError);
+                  else if (message.includes('too large')) setMessage('');
+                }}
               />
             </label>
             <label className="portal-inline-filter" style={{ marginTop: 8 }}>
@@ -592,6 +627,7 @@ export default function PlayerNotesSuite() {
             {noteFiles.length > 0 ? (
               <div className="portal-muted-text" style={{ margin: 0 }}>
                 {noteFiles.map((file) => file.name).join(', ')}
+                {` (${NOTE_ATTACHMENT_LIMIT_LABEL} max)`}
               </div>
             ) : null}
             {message ? <p className={message.includes('Failed') || message.includes('Unauthorized') ? 'auth-error' : 'auth-message'}>{message}</p> : null}
