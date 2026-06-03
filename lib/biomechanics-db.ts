@@ -1291,6 +1291,20 @@ export async function saveSinglePitchPoints(args: {
         back_peak_fz, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
         lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      ON CONFLICT (organization_id, school_code, source_file_hash)
+      DO UPDATE SET
+        back_peak_fz = EXCLUDED.back_peak_fz,
+        back_peak_fy = EXCLUDED.back_peak_fy,
+        mound_connection = EXCLUDED.mound_connection,
+        impulse = EXCLUDED.impulse,
+        impulse_time = EXCLUDED.impulse_time,
+        yz_transfer_back = EXCLUDED.yz_transfer_back,
+        lead_peak_fz = EXCLUDED.lead_peak_fz,
+        lead_peak_fy = EXCLUDED.lead_peak_fy,
+        clawback_time = EXCLUDED.clawback_time,
+        yz_transfer_front = EXCLUDED.yz_transfer_front,
+        y_transfer = EXCLUDED.y_transfer,
+        z_transfer = EXCLUDED.z_transfer
       `,
       [
         args.organizationId,
@@ -1637,7 +1651,7 @@ export async function getBiomechanicsSnapshot(args: {
         u.source_file_hash
       ) AS label,
       COALESCE(p.captured_at, u.created_at)::text AS captured_at,
-      NULL::text AS pitcher_name,
+      NULLIF(TRIM(COALESCE(p.pitcher_name, '')), '') AS pitcher_name,
       NULLIF(TRIM(u.source_file_name), '') AS source_file_name
     FROM biomechanics_uploads u
     LEFT JOIN biomechanics_single_pitch_points p
@@ -1834,15 +1848,9 @@ export async function getBiomechanicsSnapshot(args: {
           bestIdx = i;
         }
       }
-      // Use strict 5-second matching first; if none, fallback to first remaining row to keep deterministic one-to-one assignment.
-      if (bestIdx === -1 || bestDelta > 5) {
-        for (let i = 0; i < allForDate.length; i += 1) {
-          if (!usedAll.has(i)) {
-            bestIdx = i;
-            break;
-          }
-        }
-      }
+      // No fallback: only match if timestamp is within 5 seconds.
+      // A positional fallback would assign wrong all-pitch rows when filtering to a subset of pitchers.
+      if (bestIdx === -1 || bestDelta > 5) continue;
       if (bestIdx < 0) continue;
       usedAll.add(bestIdx);
       const allRow = allForDate[bestIdx];
@@ -1964,11 +1972,9 @@ export async function getBiomechanicsSnapshot(args: {
   const selectedPitchBodyWeightLb = selectedPitchKey ? (mapping.get(selectedPitchKey)?.bodyWeightLb ?? null) : null;
   const selectedPitchStrideLengthIn = selectedPitchKey ? (mapping.get(selectedPitchKey)?.strideLengthIn ?? null) : null;
   const selectedPitchStrideDirectionIn = selectedPitchKey ? (mapping.get(selectedPitchKey)?.strideDirectionIn ?? null) : null;
-  const totalAllRowsFromDb = Number(summaryAllRowsResult.rows[0]?.total_rows ?? 0);
-  const totalSingleFilesFromDb = Number(summarySingleFilesResult.rows[0]?.total_files ?? 0);
-  const totalAllForSummary = Math.max(allRows.length, totalAllRowsFromDb);
-  const totalSinglesForSummary = Math.max(singleRows.length, totalSingleFilesFromDb);
-  const matchedForSummary = Math.min(mapping.size, totalAllForSummary);
+  const totalAllForSummary = filteredAllRows.length;
+  const totalSinglesForSummary = pitchOptions.length;
+  const matchedForSummary = Math.min(mapping.size, totalSinglesForSummary);
   const matchSummary = {
     totalSinglePitchFiles: totalSinglesForSummary,
     matchedSinglePitchFiles: mapping.size,
@@ -2182,6 +2188,20 @@ export async function getBiomechanicsSnapshot(args: {
   ];
   const tableAgg = new Map<string, { name: string; tags: string; count: number; dates: Set<string>; pitchTypeCounts: Map<string, number>; sums: Record<string, number>; strideLen: number[]; strideDir: number[]; velo: number[] }>();
   const leaderboardPitchRows: Array<Record<string, string | number | null>> = [];
+  const avg = (sum: number | undefined, count: number) => (sum === undefined || count <= 0 ? null : sum / count);
+  const avgArr = (vals: number[]) => (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
+  // Stored metric values are in BW% units (e.g. 50 = 50% of body weight).
+  // 'force' mode: convert to lbs by multiplying by bodyWeightLb / 100.
+  // 'bw' mode: return as-is (the stored percent value).
+  const applyForceMode = (bwPercentValue: number | null, bodyWeightLb: number | null): number | null => {
+    if (bwPercentValue === null || !Number.isFinite(bwPercentValue)) return null;
+    if (forceMode === 'bw') return bwPercentValue;
+    const bwNum = typeof bodyWeightLb === 'number' && Number.isFinite(bodyWeightLb) ? bodyWeightLb : null;
+    const bwIsPlausible = bwNum !== null && bwNum >= 80 && bwNum <= 400;
+    if (!bwIsPlausible) return null;
+    return (bwPercentValue / 100) * bwNum;
+  };
+
   const leaderboardPitchCountByNameDate = new Map<string, number>();
   for (const option of pitchOptions) {
     const mappedMeta = mapping.get(option.pitchKey);
@@ -2231,6 +2251,7 @@ export async function getBiomechanicsSnapshot(args: {
       groupPitches.set(key, list);
     }
 
+    const bwForPitch = meta.bodyWeightLb ?? null;
     leaderboardPitchRows.push({
       Name: meta.name,
       Date: meta.pitchDateLabel ?? '',
@@ -2238,14 +2259,14 @@ export async function getBiomechanicsSnapshot(args: {
       'Pitch Type': meta.pitchType ?? '',
       Tags: meta.tags,
       'Pitch Velocity (mph)': meta.velocityMph,
-      'Back Leg Peak Fz (lb)': metrics.backPeakFz,
-      'Back Leg Peak Fy (lb)': metrics.backPeakFy,
-      'Mound Connection (BW%)': metrics.moundConnection,
-      'Back Leg Impulse (lb·s)': metrics.impulse,
+      'Back Leg Peak Fz (lb)': applyForceMode(metrics.backPeakFz, bwForPitch),
+      'Back Leg Peak Fy (lb)': applyForceMode(metrics.backPeakFy, bwForPitch),
+      'Mound Connection (BW%)': applyForceMode(metrics.moundConnection, bwForPitch),
+      'Back Leg Impulse (lb·s)': applyForceMode(metrics.impulse, bwForPitch),
       'Back Leg Impulse Time (s)': metrics.impulseTime,
       'Back Leg YZ Transfer (s)': metrics.yzTransferBack,
-      'Lead Leg Peak Fz (lb)': metrics.leadPeakFz,
-      'Lead Leg Peak Fy (lb)': metrics.leadPeakFy,
+      'Lead Leg Peak Fz (lb)': applyForceMode(metrics.leadPeakFz, bwForPitch),
+      'Lead Leg Peak Fy (lb)': applyForceMode(metrics.leadPeakFy, bwForPitch),
       'Lead Leg Clawback (s)': metrics.clawbackTime,
       'Lead Leg YZ Transfer (s)': metrics.yzTransferFront,
       'Y Transfer (s)': metrics.yTransfer,
@@ -2254,8 +2275,6 @@ export async function getBiomechanicsSnapshot(args: {
       'Stride Direction (in)': meta.strideDirectionIn,
     });
   }
-  const avg = (sum: number | undefined, count: number) => (sum === undefined || count <= 0 ? null : sum / count);
-  const avgArr = (vals: number[]) => (vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
   const avgBwMetric = (groupKey: string, pickMetric: (m: BiomechComputedMetrics) => number | null) => {
     const keys = groupPitches.get(groupKey) ?? [];
     let sum = 0;
@@ -2264,10 +2283,9 @@ export async function getBiomechanicsSnapshot(args: {
       const metrics = pitchMetricsMap.get(pitchKey);
       const bw = mapping.get(pitchKey)?.bodyWeightLb;
       const metricValue = metrics ? pickMetric(metrics) : null;
-      const bwNum = typeof bw === 'number' && Number.isFinite(bw) ? bw : null;
-      const bwIsPlausible = bwNum !== null && bwNum >= 80 && bwNum <= 400;
-      if (!bwIsPlausible || metricValue === null || !Number.isFinite(metricValue)) continue;
-      sum += metricValue / bwNum;
+      const converted = applyForceMode(metricValue, bw ?? null);
+      if (converted === null) continue;
+      sum += converted;
       count += 1;
     }
     return count > 0 ? sum / count : null;
@@ -2292,24 +2310,14 @@ export async function getBiomechanicsSnapshot(args: {
       })(),
       Tags: r.tags,
       'Pitch Velocity (mph)': avgArr(r.velo),
-      'Back Leg Peak Fz (lb)': forceMode === 'bw'
-        ? avgBwMetric(`${r.name}|${r.tags}`, (m) => m.backPeakFz)
-        : avg(r.sums.backPeakFz, r.count),
-      'Back Leg Peak Fy (lb)': forceMode === 'bw'
-        ? avgBwMetric(`${r.name}|${r.tags}`, (m) => m.backPeakFy)
-        : avg(r.sums.backPeakFy, r.count),
+      'Back Leg Peak Fz (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.backPeakFz),
+      'Back Leg Peak Fy (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.backPeakFy),
       'Mound Connection (BW%)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.moundConnection),
-      'Back Leg Impulse (lb·s)': forceMode === 'bw'
-        ? avgBwMetric(`${r.name}|${r.tags}`, (m) => m.impulse)
-        : avg(r.sums.impulse, r.count),
+      'Back Leg Impulse (lb·s)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.impulse),
       'Back Leg Impulse Time (s)': avg(r.sums.impulseTime, r.count),
       'Back Leg YZ Transfer (s)': avg(r.sums.yzTransferBack, r.count),
-      'Lead Leg Peak Fz (lb)': forceMode === 'bw'
-        ? avgBwMetric(`${r.name}|${r.tags}`, (m) => m.leadPeakFz)
-        : avg(r.sums.leadPeakFz, r.count),
-      'Lead Leg Peak Fy (lb)': forceMode === 'bw'
-        ? avgBwMetric(`${r.name}|${r.tags}`, (m) => m.leadPeakFy)
-        : avg(r.sums.leadPeakFy, r.count),
+      'Lead Leg Peak Fz (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.leadPeakFz),
+      'Lead Leg Peak Fy (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.leadPeakFy),
       'Lead Leg Clawback (s)': avg(r.sums.clawbackTime, r.count),
       'Lead Leg YZ Transfer (s)': avg(r.sums.yzTransferFront, r.count),
       'Y Transfer (s)': avg(r.sums.yTransfer, r.count),

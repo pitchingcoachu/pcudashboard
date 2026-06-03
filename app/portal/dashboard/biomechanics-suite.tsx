@@ -448,8 +448,14 @@ function LineChart({
       .sort((a, b) => a.t - b.t)
       .map((bucket) => {
         const avg = (values: number[]) => (values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : null);
-        const forceScale = mode === 'Force' && forceMode === 'bw' && bodyWeightLb && bodyWeightLb > 0 ? bodyWeightLb : null;
-        const scaleForce = (value: number | null) => (forceScale ? (value === null ? null : value / forceScale) : value);
+        // Raw Fz/Fy values from Axioforce CSV are in BW% units (e.g. 50 = 50% BW).
+        // bw mode: keep as-is (percent). force mode: convert to lbs via value * (bodyWeightLb / 100).
+        const scaleForce = (value: number | null): number | null => {
+          if (value === null || mode !== 'Force') return value;
+          if (forceMode === 'bw') return value;
+          if (!bodyWeightLb || bodyWeightLb <= 0) return null;
+          return (value / 100) * bodyWeightLb;
+        };
         return {
           t: bucket.t,
           fx: scaleForce(avg(bucket.fx)),
@@ -529,7 +535,7 @@ function LineChart({
   const x = (v: number) => pad.left + ((v - minX) / dx) * plotW;
   const y = (v: number) => pad.top + (1 - (v - minY) / dy) * plotH;
   const formatYAxisTick = (value: number) => {
-    if (mode === 'Force' && forceMode === 'bw') return (value * 100).toFixed(1);
+    if (mode === 'Force' && forceMode === 'bw') return value.toFixed(1);
     return value.toFixed(1);
   };
 
@@ -596,10 +602,7 @@ function LineChart({
   }, [chartPoints, domain, dx, hoverClientX, metrics, minX, plotW]);
   const yTicks = useMemo(() => {
     if (!domain) return [] as number[];
-    const isBwForceView = mode === 'Force' && forceMode === 'bw';
-    const tickStep = isBwForceView
-      ? (Math.max(Math.abs(domain.minY), Math.abs(domain.maxY)) >= 3 ? 1 : Math.max(Math.abs(domain.minY), Math.abs(domain.maxY)) >= 1 ? 0.5 : 0.25)
-      : 50;
+    const tickStep = 100;
     const start = Math.ceil(domain.minY / tickStep) * tickStep;
     const end = Math.floor(domain.maxY / tickStep) * tickStep;
     const ticks: number[] = [];
@@ -650,12 +653,13 @@ function LineChart({
     const backFzBeforeLead = firstLeadFz
       ? loading.filter((p) => p.fz !== null && p.t <= firstLeadFz.t).sort((a, b) => a.t - b.t).at(-1)?.fz ?? null
       : null;
-    const forcesAlreadyScaledToBw = mode === 'Force' && forceMode === 'bw';
+    // chartPoints fz values: bw mode = BW% (e.g. 50 = 50%), force mode = lbs.
+    // moundConnection is always displayed as BW% ratio (0.5 = 50%) via fmtBwPercent.
     const moundConnection =
       backFzBeforeLead === null
         ? null
-        : (forcesAlreadyScaledToBw
-          ? backFzBeforeLead
+        : (forceMode === 'bw'
+          ? backFzBeforeLead / 100
           : (bodyWeightLb && bodyWeightLb > 0 ? backFzBeforeLead / bodyWeightLb : null));
 
     let impulse: number | null = null;
@@ -760,14 +764,12 @@ function LineChart({
   const fmtMs = (value: number | null, digits = 1) => (value === null || !Number.isFinite(value) ? '—' : (value * 1000).toFixed(digits));
   const fmtForceOrImpulse = (value: number | null, digits = 1) => {
     if (value === null || !Number.isFinite(value)) return '—';
-    if (mode === 'Force' && forceMode === 'bw') return `${(value * 100).toFixed(1)}%`;
+    if (mode === 'Force' && forceMode === 'bw') return `${value.toFixed(1)}%`;
     return value.toFixed(digits);
   };
   const fmtBwPercent = (value: number | null) => (value === null || !Number.isFinite(value) ? '—' : `${(value * 100).toFixed(1)}%`);
-  const fmtHoverMetric = (metricKey: string, value: number | null) => {
+  const fmtHoverMetric = (_metricKey: string, value: number | null) => {
     if (value === null || !Number.isFinite(value)) return '—';
-    const isForceMetric = metricKey === 'fx' || metricKey === 'fy' || metricKey === 'fz';
-    if (mode === 'Force' && forceMode === 'bw' && isForceMetric) return (value * 100).toFixed(1);
     return value.toFixed(1);
   };
   const impulseAreaPath = useMemo(() => {
@@ -1900,14 +1902,13 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
                       key={column}
                       style={{
                         textAlign: 'center',
-                        background: active ? 'rgb(120, 10, 28)' : 'rgba(8,8,8,0.96)',
+                        backgroundColor: active ? 'rgb(120, 10, 28)' : 'rgba(8,8,8,0.96)',
                         position: 'sticky',
                         top: 0,
                         zIndex: 6,
                         boxShadow: active
                           ? '0 2px 0 rgb(120, 10, 28)'
                           : '0 2px 0 rgba(8,8,8,0.96)',
-                        backgroundClip: 'padding-box',
                       }}
                     >
                       <button

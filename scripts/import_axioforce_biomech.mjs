@@ -225,6 +225,7 @@ function computePitchMetrics(points) {
     : null;
 
   let impulse = null;
+  let impulseTime = null;
   if (loading.length > 2) {
     const peakFz = maxBy(loading.map((p) => ({ t: p.t, v: p.fz })));
     const peakZIdx = peakFz ? loading.findIndex((p) => p.t === peakFz.t && p.fz === peakFz.v) : -1;
@@ -265,6 +266,9 @@ function computePitchMetrics(points) {
         .filter((p) => p.fy !== null)
         .map((p) => ({ t: p.t, v: Math.max(0, Number(p.fy)) }));
       impulse = integrateTrapezoid(impulseWindow);
+      const startT = loading[startIdx]?.t ?? null;
+      const endT = loading[endIdx]?.t ?? null;
+      impulseTime = startT !== null && endT !== null ? Math.max(0, endT - startT) : null;
     }
   }
 
@@ -280,6 +284,7 @@ function computePitchMetrics(points) {
     backPeakFy: backPeakFy?.v ?? null,
     moundConnection: backFzBeforeLead,
     impulse,
+    impulseTime,
     yzTransferBack: backPeakFy && backPeakFz ? Math.abs(backPeakFy.t - backPeakFz.t) : null,
     leadPeakFz: leadPeakFz?.v ?? null,
     leadPeakFy: leadPeakFy?.v ?? null,
@@ -416,7 +421,21 @@ async function importSinglePitchFile(client, filePath, idx, total) {
     await client.query(
       `INSERT INTO biomechanics_pitch_metrics
       (organization_id, school_code, source_file_hash, back_peak_fz, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back, lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      ON CONFLICT (organization_id, school_code, source_file_hash)
+      DO UPDATE SET
+        back_peak_fz = EXCLUDED.back_peak_fz,
+        back_peak_fy = EXCLUDED.back_peak_fy,
+        mound_connection = EXCLUDED.mound_connection,
+        impulse = EXCLUDED.impulse,
+        impulse_time = EXCLUDED.impulse_time,
+        yz_transfer_back = EXCLUDED.yz_transfer_back,
+        lead_peak_fz = EXCLUDED.lead_peak_fz,
+        lead_peak_fy = EXCLUDED.lead_peak_fy,
+        clawback_time = EXCLUDED.clawback_time,
+        yz_transfer_front = EXCLUDED.yz_transfer_front,
+        y_transfer = EXCLUDED.y_transfer,
+        z_transfer = EXCLUDED.z_transfer`,
       [
         ORG_ID, SCHOOL_CODE, sourceFileHash, computed.backPeakFz, computed.backPeakFy, computed.moundConnection, computed.impulse,
         computed.impulseTime ?? null, computed.yzTransferBack, computed.leadPeakFz, computed.leadPeakFy, computed.clawbackTime, computed.yzTransferFront,
