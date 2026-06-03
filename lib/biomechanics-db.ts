@@ -401,6 +401,78 @@ function parseCapturedAtFromRow(row: Record<string, unknown>): string | null {
   return toDateOrNull(asString) ?? parseUsDateTimeToIso(asString);
 }
 
+async function backfillTrackmanTimesFromBiomechanicsUpload(
+  client: { query: (text: string, values?: unknown[]) => Promise<{ rowCount: number | null }> },
+  args: { organizationId: number; schoolCode: string; sourceFileHash: string }
+): Promise<number> {
+  const result = await client.query(
+    `
+    WITH force_plate AS (
+      SELECT
+        captured_at,
+        CASE
+          WHEN NULLIF(TRIM(COALESCE(row_json->>'Player', row_json->>'Name', row_json->>'Pitcher', '')), '') IS NOT NULL
+            THEN CASE
+              WHEN COALESCE(row_json->>'Player', row_json->>'Name', row_json->>'Pitcher', '') LIKE '%,%'
+                THEN regexp_replace(COALESCE(row_json->>'Player', row_json->>'Name', row_json->>'Pitcher', ''), '\\s+', ' ', 'g')
+              ELSE concat_ws(', ',
+                NULLIF(TRIM(COALESCE(row_json->>'Last Name', row_json->>'LastName', row_json->>'last_name', '')), ''),
+                NULLIF(TRIM(COALESCE(row_json->>'First Name', row_json->>'FirstName', row_json->>'first_name', '')), '')
+              )
+            END
+          ELSE concat_ws(', ',
+            NULLIF(TRIM(COALESCE(row_json->>'Last Name', row_json->>'LastName', row_json->>'last_name', '')), ''),
+            NULLIF(TRIM(COALESCE(row_json->>'First Name', row_json->>'FirstName', row_json->>'first_name', '')), '')
+          )
+        END AS pitcher_name
+      FROM biomechanics_pitch_rows
+      WHERE organization_id = $1
+        AND school_code = $2
+        AND source_file_hash = $3
+        AND captured_at IS NOT NULL
+    ),
+    fp_ranked AS (
+      SELECT
+        captured_at,
+        pitcher_name,
+        (captured_at AT TIME ZONE 'America/Phoenix')::date AS session_date,
+        ROW_NUMBER() OVER (
+          PARTITION BY (captured_at AT TIME ZONE 'America/Phoenix')::date, lower(regexp_replace(pitcher_name, '[^a-z0-9]', '', 'g'))
+          ORDER BY captured_at
+        ) AS rn
+      FROM force_plate
+      WHERE NULLIF(TRIM(pitcher_name), '') IS NOT NULL
+    ),
+    tm_ranked AS (
+      SELECT
+        id,
+        session_date,
+        pitcher,
+        ROW_NUMBER() OVER (
+          PARTITION BY session_date, lower(regexp_replace(pitcher, '[^a-z0-9]', '', 'g'))
+          ORDER BY id
+        ) AS rn
+      FROM pitch_events
+      WHERE school_code = $2
+        AND session_date IN (SELECT DISTINCT session_date FROM fp_ranked)
+        AND NULLIF(TRIM(COALESCE(time, '')), '') IS NULL
+        AND NULLIF(TRIM(COALESCE(pitcher, '')), '') IS NOT NULL
+    )
+    UPDATE pitch_events pe
+    SET time = to_char(fp.captured_at AT TIME ZONE 'America/Phoenix', 'HH24:MI:SS.MS')
+    FROM fp_ranked fp
+    JOIN tm_ranked tm
+      ON tm.session_date = fp.session_date
+      AND lower(regexp_replace(tm.pitcher, '[^a-z0-9]', '', 'g')) = lower(regexp_replace(fp.pitcher_name, '[^a-z0-9]', '', 'g'))
+      AND tm.rn = fp.rn
+    WHERE pe.id = tm.id
+      AND NULLIF(TRIM(COALESCE(pe.time, '')), '') IS NULL
+    `,
+    [args.organizationId, args.schoolCode, args.sourceFileHash]
+  );
+  return Number(result.rowCount ?? 0);
+}
+
 function parsePitchLabelFromRow(row: Record<string, unknown>, fallback: string): string {
   const pitchNo = pickValueCaseInsensitive(row, ['pitch_no', 'pitch number', 'pitch_number', 'pitch#']);
   const pitchType = pickValueCaseInsensitive(row, ['pitch_type', 'pitch type', 'type']);
@@ -932,7 +1004,7 @@ export async function saveAllPitchRows(args: {
   csvContent: string;
   rows: Array<Record<string, unknown> & NameMapping>;
   createdByUserId: number | null;
-}): Promise<{ insertedRows: number }> {
+}): Promise<{ insertedRows: number; trackmanTimesBackfilled: number }> {
   if (!isDatabaseConfigured()) throw new Error('DATABASE_URL is not configured.');
   await ensureBiomechanicsTables();
   const pool = getDbPool();
@@ -1020,8 +1092,13 @@ export async function saveAllPitchRows(args: {
       );
       insertedRows += result.rowCount ?? 0;
     }
+    const trackmanTimesBackfilled = await backfillTrackmanTimesFromBiomechanicsUpload(client, {
+      organizationId: args.organizationId,
+      schoolCode,
+      sourceFileHash,
+    });
     await client.query('COMMIT');
-    return { insertedRows };
+    return { insertedRows, trackmanTimesBackfilled };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -1780,7 +1857,6 @@ export async function getBiomechanicsSnapshot(args: {
       const hasTrackmanMatch =
         (trackmanMatch.velo !== null && Number.isFinite(trackmanMatch.velo)) ||
         Boolean(String(trackmanMatch.pitchType ?? '').trim());
-      // Ignore calibration/non-throws: no usable tags and no TrackMan association.
       if (!hasRealTag && !hasTrackmanMatch) continue;
       mapping.set(single.pitchKey, {
         name: allRow.name,
