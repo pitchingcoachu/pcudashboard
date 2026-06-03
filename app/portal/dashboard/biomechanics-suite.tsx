@@ -7,7 +7,7 @@ import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 type Role = 'admin' | 'coach' | 'player';
 type ViewMode = 'Force' | 'Moments';
 type ForceMode = 'force' | 'bw';
-type BiomechPageTab = 'summary' | 'leaderboard';
+type BiomechPageTab = 'summary' | 'leaderboard' | 'compare';
 type LeaderboardViewMode = 'individual' | 'averages';
 type OptionItem = { value: string; label: string };
 
@@ -997,6 +997,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [leaderboardViewMode, setLeaderboardViewMode] = useState<LeaderboardViewMode>('individual');
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [isExportingSummaryPdf, setIsExportingSummaryPdf] = useState<boolean>(false);
+  const [isExportingComparePdf, setIsExportingComparePdf] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [tableColumns, setTableColumns] = useState<string[]>([]);
   const [tableRows, setTableRows] = useState<Array<Record<string, string | number | null>>>([]);
@@ -1027,6 +1028,15 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [selectedPitchStrideLengthIn, setSelectedPitchStrideLengthIn] = useState<number | null>(null);
   const [selectedPitchStrideDirectionIn, setSelectedPitchStrideDirectionIn] = useState<number | null>(null);
   const [selectedPitchers, setSelectedPitchers] = useState<string[]>(['All']);
+  const [comparePitchKeyA, setComparePitchKeyA] = useState<string>('');
+  const [comparePitchKeyB, setComparePitchKeyB] = useState<string>('');
+  const [comparePitchPointsA, setComparePitchPointsA] = useState<PitchPoint[]>([]);
+  const [comparePitchPointsB, setComparePitchPointsB] = useState<PitchPoint[]>([]);
+  const [comparePitchMetaA, setComparePitchMetaA] = useState<{ player: string; date: string; velocityMph: number | null; pitchType: string; bodyWeightLb: number | null; strideLengthIn: number | null; strideDirectionIn: number | null } | null>(null);
+  const [comparePitchMetaB, setComparePitchMetaB] = useState<{ player: string; date: string; velocityMph: number | null; pitchType: string; bodyWeightLb: number | null; strideLengthIn: number | null; strideDirectionIn: number | null } | null>(null);
+  const [compareLoadingA, setCompareLoadingA] = useState<boolean>(false);
+  const [compareLoadingB, setCompareLoadingB] = useState<boolean>(false);
+
   const [matchSummary, setMatchSummary] = useState<{
     totalSinglePitchFiles: number;
     matchedSinglePitchFiles: number;
@@ -1050,6 +1060,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [allPitchInputKey, setAllPitchInputKey] = useState<number>(0);
   const [singlePitchInputKey, setSinglePitchInputKey] = useState<number>(0);
   const summaryCardRef = useRef<HTMLDivElement | null>(null);
+  const compareCardRef = useRef<HTMLDivElement | null>(null);
   const summaryTableCardRef = useRef<HTMLDivElement | null>(null);
   const selectStyle: CSSProperties = {
     background: 'rgba(2, 6, 23, 0.72)',
@@ -1186,6 +1197,39 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setIsLoading(false);
     }
   };
+
+  const loadComparePitch = async (pitchKey: string, side: 'A' | 'B') => {
+    if (!pitchKey) return;
+    const setLoading = side === 'A' ? setCompareLoadingA : setCompareLoadingB;
+    const setPoints = side === 'A' ? setComparePitchPointsA : setComparePitchPointsB;
+    const setMeta = side === 'A' ? setComparePitchMetaA : setComparePitchMetaB;
+    setLoading(true);
+    try {
+      const query = new URLSearchParams();
+      query.set('pitchKey', pitchKey);
+      query.set('forceMode', appliedForceMode);
+      // Pass the active date range so the API can find the pitch within the correct scope.
+      if (appliedStartDate) query.set('startDate', appliedStartDate);
+      if (appliedEndDate) query.set('endDate', appliedEndDate);
+      const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as Payload;
+      if (!response.ok || payload.error) return;
+      const points = Array.isArray(payload.selected_pitch_points) ? payload.selected_pitch_points : [];
+      setPoints(points);
+      setMeta({
+        player: String(payload.selected_pitch_player ?? ''),
+        date: String(payload.selected_pitch_date ?? ''),
+        velocityMph: typeof payload.selected_pitch_velocity_mph === 'number' ? payload.selected_pitch_velocity_mph : null,
+        pitchType: String(payload.selected_pitch_type ?? ''),
+        bodyWeightLb: typeof payload.selected_pitch_body_weight_lb === 'number' ? payload.selected_pitch_body_weight_lb : null,
+        strideLengthIn: typeof payload.selected_pitch_stride_length_in === 'number' ? payload.selected_pitch_stride_length_in : null,
+        strideDirectionIn: typeof payload.selected_pitch_stride_direction_in === 'number' ? payload.selected_pitch_stride_direction_in : null,
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
   const applyFilters = () => {
     if (!startDate || !endDate) {
@@ -1642,6 +1686,79 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     }
   };
 
+  const downloadComparePdf = async () => {
+    if (!compareCardRef.current || isExportingComparePdf) return;
+    setIsExportingComparePdf(true);
+    setError('');
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+      ]);
+      const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+      const pageBgHex = isLightTheme ? '#f8fafc' : '#000000';
+      const exportRoot = compareCardRef.current.cloneNode(true) as HTMLDivElement;
+      exportRoot.style.width = '1400px';
+      exportRoot.style.position = 'fixed';
+      exportRoot.style.left = '-99999px';
+      exportRoot.style.top = '0';
+      exportRoot.style.zIndex = '-1';
+      exportRoot.style.pointerEvents = 'none';
+      exportRoot.style.background = pageBgHex;
+      exportRoot.style.padding = '12px';
+      exportRoot.style.gap = '12px';
+      exportRoot.style.overflow = 'visible';
+      const pdfLogoRow = document.createElement('div');
+      pdfLogoRow.style.display = 'flex';
+      pdfLogoRow.style.justifyContent = 'space-between';
+      pdfLogoRow.style.alignItems = 'center';
+      pdfLogoRow.style.margin = '0 0 8px 0';
+      const leftLogo = document.createElement('img');
+      leftLogo.src = '/pitching-coach-u-logo.png';
+      leftLogo.alt = 'PCU logo';
+      leftLogo.style.width = '70px';
+      leftLogo.style.height = '70px';
+      leftLogo.style.objectFit = 'contain';
+      const rightLogo = document.createElement('img');
+      rightLogo.src = '/pitching-coach-u-logo.png';
+      rightLogo.alt = 'PCU logo';
+      rightLogo.style.width = '70px';
+      rightLogo.style.height = '70px';
+      rightLogo.style.objectFit = 'contain';
+      pdfLogoRow.append(leftLogo, rightLogo);
+      exportRoot.prepend(pdfLogoRow);
+      // Remove dropdowns from export
+      exportRoot.querySelectorAll('label').forEach((el) => { (el as HTMLElement).style.display = 'none'; });
+      exportRoot.querySelectorAll('[data-html2canvas-ignore]').forEach((el) => { (el as HTMLElement).style.display = 'none'; });
+      // Uncap SVG heights for export
+      exportRoot.querySelectorAll('svg').forEach((svg) => { (svg as SVGElement).style.height = '340px'; });
+      document.body.appendChild(exportRoot);
+      const canvas = await html2canvas(exportRoot, {
+        backgroundColor: pageBgHex,
+        scale: Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1),
+        useCORS: true,
+      });
+      exportRoot.remove();
+      const imageData = canvas.toDataURL('image/jpeg', 0.9);
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const hex = pageBgHex.replace('#', '');
+      pdf.setFillColor(Number.parseInt(hex.slice(0, 2), 16), Number.parseInt(hex.slice(2, 4), 16), Number.parseInt(hex.slice(4, 6), 16));
+      pdf.rect(0, 0, pageW, pageH, 'F');
+      const margin = 8;
+      const usableW = pageW - margin * 2;
+      const usableH = pageH - margin * 2;
+      const scale = Math.min(usableW / canvas.width, usableH / canvas.height);
+      pdf.addImage(imageData, 'JPEG', (pageW - canvas.width * scale) / 2, (pageH - canvas.height * scale) / 2, canvas.width * scale, canvas.height * scale, undefined, 'FAST');
+      pdf.save(`biomechanics_compare.pdf`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to download PDF.');
+    } finally {
+      setIsExportingComparePdf(false);
+    }
+  };
+
   const activeTableColumns =
     pageTab === 'summary'
       ? tableColumns
@@ -1677,6 +1794,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         </button>
         <button type="button" className={pageTab === 'leaderboard' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('leaderboard')}>
           Leaderboard
+        </button>
+        <button type="button" className={pageTab === 'compare' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setPageTab('compare')}>
+          Compare
         </button>
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap' }}>
@@ -1871,7 +1991,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       </div>
       ) : null}
 
-      <div ref={summaryTableCardRef} style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12 }}>
+      {pageTab === 'compare' ? null : <div ref={summaryTableCardRef} style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <h3 style={{ marginTop: 0, marginBottom: 0 }}>{activeTableTitle}</h3>
           {pageTab === 'leaderboard' ? (
@@ -1997,7 +2117,72 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
+      {pageTab === 'compare' ? (
+        <div ref={compareCardRef} style={{ display: 'grid', gap: 12, position: 'relative' }}>
+          <div data-html2canvas-ignore="true" style={{ position: 'absolute', top: 0, right: 0, zIndex: 2 }}>
+            <button type="button" className="btn btn-ghost" onClick={() => void downloadComparePdf()} disabled={isExportingComparePdf}>
+              {isExportingComparePdf ? 'Downloading PDF...' : 'Download PDF'}
+            </button>
+          </div>
+          {(['A', 'B'] as const).map((side) => {
+            const pitchKey = side === 'A' ? comparePitchKeyA : comparePitchKeyB;
+            const setPitchKey = side === 'A' ? setComparePitchKeyA : setComparePitchKeyB;
+            const points = side === 'A' ? comparePitchPointsA : comparePitchPointsB;
+            const meta = side === 'A' ? comparePitchMetaA : comparePitchMetaB;
+            const loading = side === 'A' ? compareLoadingA : compareLoadingB;
+            return (
+              <div key={side} style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}>
+                <label style={{ display: 'grid', gap: 4, maxWidth: 460 }}>
+                  <span style={{ fontSize: 12, color: '#94a3b8' }}>Pitch {side}</span>
+                  <select
+                    className="portal-select"
+                    value={pitchKey}
+                    style={selectStyle}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setPitchKey(next);
+                      void loadComparePitch(next, side);
+                    }}
+                  >
+                    <option value="">— Select pitch —</option>
+                    {displayPitchOptions.map((option) => (
+                      <option key={option.pitchKey} value={option.pitchKey}>
+                        {formatPitchOptionLabel(option, displayPitchOptions, pitchVelocityByKey)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {meta ? (
+                  <div style={{ display: 'grid', justifyItems: 'center', gap: 2 }}>
+                    <p style={{ margin: 0, color: '#e2e8f0', fontSize: 22, fontWeight: 700, textAlign: 'center', lineHeight: 1.1 }}>{meta.player || '—'}</p>
+                    <p style={{ margin: 0, color: '#cbd5e1', fontSize: 16, textAlign: 'center' }}>{meta.date || '—'}</p>
+                  </div>
+                ) : null}
+                {loading ? (
+                  <p style={{ margin: 0, color: '#94a3b8', fontSize: 13, textAlign: 'center', padding: '40px 0' }}>Loading...</p>
+                ) : points.length ? (
+                  <LineChart
+                    points={points}
+                    mode={mode}
+                    forceMode={forceMode}
+                    pitchVelocityMph={meta?.velocityMph ?? null}
+                    pitchType={meta?.pitchType ?? null}
+                    bodyWeightLb={meta?.bodyWeightLb ?? null}
+                    strideLengthIn={meta?.strideLengthIn ?? null}
+                    strideDirectionIn={meta?.strideDirectionIn ?? null}
+                  />
+                ) : pitchKey && !loading ? (
+                  <p style={{ margin: 0, color: '#94a3b8', fontSize: 13, textAlign: 'center', padding: '40px 0' }}>No data for this pitch.</p>
+                ) : (
+                  <p style={{ margin: 0, color: '#64748b', fontSize: 13, textAlign: 'center', padding: '40px 0' }}>Select a pitch above to display.</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
       <LeaderboardCorrelationModal
         open={showLeaderboardCorrelation && pageTab === 'leaderboard'}
         onClose={() => setShowLeaderboardCorrelation(false)}

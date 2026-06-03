@@ -1849,7 +1849,6 @@ export async function getBiomechanicsSnapshot(args: {
         }
       }
       // No fallback: only match if timestamp is within 5 seconds.
-      // A positional fallback would assign wrong all-pitch rows when filtering to a subset of pitchers.
       if (bestIdx === -1 || bestDelta > 5) continue;
       if (bestIdx < 0) continue;
       usedAll.add(bestIdx);
@@ -1858,14 +1857,11 @@ export async function getBiomechanicsSnapshot(args: {
       const allRowTimeSec = secondsOfDayFromIso(allRow.capturedAt);
       const trackmanMatch = pickNearestTrackmanMatch(String(allRow.name ?? ''), String(allRow.dateKey ?? ''), allRowTimeSec);
       const filteredTagsList = splitTags(allRow.tags || 'UnTagged').filter((tag) => !isForcePlatePitchTypeTag(tag));
-      const hasRealTag = filteredTagsList.some((tag) => {
-        const normalized = String(tag ?? '').trim().toLowerCase();
-        return Boolean(normalized) && normalized !== 'untagged';
-      });
+      // Require a TrackMan pitch within 5s to confirm this is a real throw, not a calibration.
       const hasTrackmanMatch =
         (trackmanMatch.velo !== null && Number.isFinite(trackmanMatch.velo)) ||
         Boolean(String(trackmanMatch.pitchType ?? '').trim());
-      if (!hasRealTag && !hasTrackmanMatch) continue;
+      if (!hasTrackmanMatch) continue;
       mapping.set(single.pitchKey, {
         name: allRow.name,
         tags: filteredTagsList.length ? filteredTagsList.join(' | ') : 'UnTagged',
