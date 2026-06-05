@@ -51,6 +51,7 @@ type GoalDraft = {
   teams: string[];
   hand: string;
   batterSide: string;
+  sessionType: string;
   createdAt: string | null;
 };
 
@@ -75,6 +76,7 @@ type GoalPayload = {
     teams?: string[];
     hand?: string;
     batterSide?: string;
+    sessionType?: string;
   };
 };
 
@@ -1040,6 +1042,7 @@ function parseStoredGoalDescription(category: string | null, value: string | nul
     teams: ['All'],
     hand: 'All',
     batterSide: 'All',
+    sessionType: 'Season',
     createdAt,
   };
   if (!value) return defaultGoal;
@@ -1072,6 +1075,7 @@ function parseStoredGoalDescription(category: string | null, value: string | nul
       teams: parsed.filters?.teams?.length ? parsed.filters.teams : ['All'],
       hand: String(parsed.filters?.hand ?? 'All') || 'All',
       batterSide: String(parsed.filters?.batterSide ?? 'All') || 'All',
+      sessionType: String(parsed.filters?.sessionType ?? 'Season') || 'Season',
     };
   } catch {
     return defaultGoal;
@@ -1100,6 +1104,7 @@ function serializeGoalDescription(goal: GoalDraft): string {
       teams: goal.teams,
       hand: goal.hand,
       batterSide: goal.batterSide,
+      sessionType: goal.sessionType,
     },
   };
   return JSON.stringify(payload);
@@ -1769,7 +1774,9 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
   });
   const [domainExecutionStats, setDomainExecutionStats] = useState<string[]>(DOMAIN_EXECUTION_FALLBACKS.Pitching);
   const [goalControlsVisible, setGoalControlsVisible] = useState<Record<GoalSlot, boolean>>({ 1: true, 2: true, 3: true });
+  const [goalCount, setGoalCount] = useState<1 | 2 | 3>(3);
   const [goalChartHover, setGoalChartHover] = useState<{ x: number; y: number; text: string; bg?: string } | null>(null);
+  const [goalStatPage, setGoalStatPage] = useState<Record<GoalSlot, number>>({ 1: 0, 2: 0, 3: 0 });
   const [planMode, setPlanMode] = useState<PlanMode>('Manual');
   const [planFiltersVisible, setPlanFiltersVisible] = useState(true);
   const [summaryMode, setSummaryMode] = useState<SummaryMode>('automated');
@@ -3001,7 +3008,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
       prev.map((goal) => (goal.category && !allowed.has(goal.category) ? { ...goal, category: '' } : goal))
     );
   }, [domain]);
-  const chartFetchGoals = useMemo(
+  const chartFetchGoalsRaw = useMemo(
     () => {
       if (domain === 'Pitching' && planMode === 'Automated') return [];
       return planGoals
@@ -3017,10 +3024,25 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           teams: goal.teams,
           hand: goal.hand,
           batterSide: goal.batterSide,
+          sessionType: goal.sessionType,
         }));
     },
     [domain, planGoals, planMode]
   );
+
+  // Only re-fetch a goal's chart if its own filter fields changed, not when
+  // an unrelated goal slot gets a category for the first time.
+  const prevChartFetchGoalsRef = useRef<typeof chartFetchGoalsRaw>([]);
+  const chartFetchGoals = useMemo(() => {
+    const prev = prevChartFetchGoalsRef.current;
+    const serializeGoal = (g: typeof chartFetchGoalsRaw[number]) =>
+      `${g.slotIndex}|${g.startDate}|${g.endDate}|${g.sessionType}|${g.pitchTypes.join(',')}|${g.pitchResults.join(',')}|${g.hand}|${g.batterSide}|${g.teams.join(',')}`;
+    const prevMap = new Map(prev.map((g) => [g.slotIndex, serializeGoal(g)]));
+    // Only include goals that are new or whose filters changed
+    const changed = chartFetchGoalsRaw.filter((g) => prevMap.get(g.slotIndex) !== serializeGoal(g));
+    prevChartFetchGoalsRef.current = chartFetchGoalsRaw;
+    return changed;
+  }, [chartFetchGoalsRaw]);
 
   useEffect(() => {
     let active = true;
@@ -3162,7 +3184,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
         for (const candidate of candidates) {
           const params = new URLSearchParams();
           params.set(playerParam, candidate);
-          if (domain !== 'Hitting') params.set('session_type', 'Season');
+          if (domain !== 'Hitting') params.set('session_type', goal.sessionType || 'Season');
           if (goal.startDate) params.set('start_date', goal.startDate);
           if (goal.endDate) params.set('end_date', goal.endDate);
           if (!goal.pitchTypes.includes('All')) params.set('pitch_types', goal.pitchTypes.join(','));
@@ -3312,6 +3334,33 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     };
   }, [activePlanPlayerId]);
 
+  // Auto-save goals when filters change (debounced) so settings persist on reload.
+  useEffect(() => {
+    if (!activePlanPlayerId) return;
+    const saveable = planGoals.filter((g) => g.category && isChartCapableGoal(g, domain));
+    if (!saveable.length) return;
+    const timer = setTimeout(() => {
+      for (const goal of saveable) {
+        void fetch('/api/player/plan-goals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            playerId: activePlanPlayerId,
+            slotIndex: goal.slotIndex,
+            category: goal.category,
+            goalDescription: serializeGoalDescription(goal),
+          }),
+        }).catch(() => {});
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [
+    activePlanPlayerId,
+    domain,
+    // Only watch the filter fields that need to persist, not every keystroke field
+    ...planGoals.map((g) => `${g.slotIndex}:${g.sessionType}:${g.startDate}:${g.endDate}:${g.pitchTypes.join(',')}:${g.comparator}:${g.targetValue}:${g.chartType}`),
+  ]);
+
   async function saveGoal(slotIndex: GoalSlot) {
     if (!activePlanPlayerId) {
       setMessage('Select a player first.');
@@ -3337,24 +3386,16 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
         activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
       };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to save goal.');
-      try {
-        const refreshResponse = await fetch(`/api/player/plan-goals?playerId=${activePlanPlayerId}`, { cache: 'no-store' });
-        const refreshPayload = (await refreshResponse.json().catch(() => ({}))) as {
-          activeGoals?: Array<{ slotIndex: number; category: string | null; goalDescription: string | null; createdAt: string | null }>;
-          error?: string;
-        };
-        if (!refreshResponse.ok) throw new Error(refreshPayload.error ?? 'Failed to refresh goals.');
-        const next = ([1, 2, 3] as GoalSlot[]).map((slot) => {
-          const existing = refreshPayload.activeGoals?.find((entry) => entry.slotIndex === slot);
-          return parseStoredGoalDescription(existing?.category ?? null, existing?.goalDescription ?? null, slot, existing?.createdAt ?? null);
-        });
-        setPlanGoals(next);
-      } catch {
-        const next = ([1, 2, 3] as GoalSlot[]).map((slot) => {
-          const existing = payload.activeGoals?.find((entry) => entry.slotIndex === slot);
-          return parseStoredGoalDescription(existing?.category ?? null, existing?.goalDescription ?? null, slot, existing?.createdAt ?? null);
-        });
-        setPlanGoals(next);
+      // Only update the saved slot to avoid re-flashing other goals.
+      const savedData = payload.activeGoals?.find((entry) => entry.slotIndex === slotIndex);
+      if (savedData) {
+        setPlanGoals((prev) =>
+          prev.map((entry) =>
+            entry.slotIndex === slotIndex
+              ? parseStoredGoalDescription(savedData.category ?? null, savedData.goalDescription ?? null, slotIndex, savedData.createdAt ?? null)
+              : entry
+          )
+        );
       }
       setMessage(`Goal ${slotIndex} saved.`);
     } catch (error) {
@@ -3571,8 +3612,12 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     const statLabel = goalStatLabel(goal);
     const targetValue = goal.targetValue.trim();
     const target = targetValue.length > 0 && Number.isFinite(Number(targetValue)) ? Number(targetValue) : null;
+    const PAGE_SIZE = 5;
+    const page = goalStatPage[goal.slotIndex] ?? 0;
+    const totalPages = Math.ceil(series.length / PAGE_SIZE);
+    const pageRows = series.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
     return (
-      <div style={{ marginTop: 8, border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, overflow: 'auto', maxHeight: 150 }}>
+      <div style={{ marginTop: 8, border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', margin: 0 }}>
           <thead>
             <tr>
@@ -3581,25 +3626,39 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
             </tr>
           </thead>
           <tbody>
-            {series.map((row) => (
+            {pageRows.map((row) => (
               <tr key={`goal-stat-row-${goal.slotIndex}-${row.date}`}>
                 <td style={{ textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '6px 8px', fontSize: 12 }}>{formatMdyy(row.date)}</td>
-                <td
-                  style={{
-                    textAlign: 'center',
-                    borderBottom: '1px solid rgba(255,255,255,0.08)',
-                    padding: '6px 8px',
-                    fontSize: 12,
-                    color: target === null ? 'inherit' : row.value >= target ? '#22c55e' : '#ef4444',
-                    fontWeight: target === null ? 500 : 700,
-                  }}
-                >
+                <td style={{ textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '6px 8px', fontSize: 12, color: target === null ? 'inherit' : row.value >= target ? '#22c55e' : '#ef4444', fontWeight: target === null ? 500 : 700 }}>
                   {fmtGoalValueForGoal(goal, row.value)}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        {totalPages > 1 ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: '6px 8px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ padding: '2px 8px', fontSize: 12 }}
+              disabled={page === 0}
+              onClick={() => setGoalStatPage((prev) => ({ ...prev, [goal.slotIndex]: page - 1 }))}
+            >
+              ←
+            </button>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>{page + 1} / {totalPages}</span>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ padding: '2px 8px', fontSize: 12 }}
+              disabled={page >= totalPages - 1}
+              onClick={() => setGoalStatPage((prev) => ({ ...prev, [goal.slotIndex]: page + 1 }))}
+            >
+              →
+            </button>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -4161,7 +4220,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
 
       {planFiltersVisible ? (
       <article className="portal-admin-card">
-        <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(180px, 1fr))' }}>
+        <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(160px, 1fr))' }}>
           <label>
             Domain
             <select value={domain} onChange={(event) => setDomain((event.target.value as Domain) || 'Pitching')}>
@@ -4196,6 +4255,14 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           <label>
             Header Notes
             <input value={headerNote} onChange={(event) => setHeaderNote(event.target.value)} placeholder="Date / cycle / context..." />
+          </label>
+          <label>
+            # of Goals
+            <select value={goalCount} onChange={(event) => setGoalCount(Number(event.target.value) as 1 | 2 | 3)}>
+              <option value={1}>1</option>
+              <option value={2}>2</option>
+              <option value={3}>3</option>
+            </select>
           </label>
         </div>
         <div
@@ -4561,7 +4628,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
         ) : null}
         {!(domain === 'Pitching' && planMode === 'Automated') ? (
         <div className="portal-profile-goals-grid" style={{ alignItems: 'stretch' }}>
-          {planGoals.map((goal) => {
+          {planGoals.filter((goal) => goal.slotIndex <= goalCount).map((goal) => {
             const chartCapable = isChartCapableGoal(goal, domain);
             const controlsVisible = goalControlsVisible[goal.slotIndex] ?? true;
             const stats = goalHeaderStats(goal);
@@ -4854,6 +4921,23 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           }
                         />
                       </label>
+                      {domain === 'Pitching' ? (
+                        <label className="portal-inline-filter">
+                          Session Type
+                          <select
+                            value={goal.sessionType}
+                            onChange={(event) =>
+                              setPlanGoals((prev) =>
+                                prev.map((entry) => (entry.slotIndex === goal.slotIndex ? { ...entry, sessionType: event.target.value || 'Season' } : entry))
+                              )
+                            }
+                          >
+                            <option value="Season">Season (Games)</option>
+                            <option value="Bullpen">Bullpen</option>
+                            <option value="Live">Live BP</option>
+                          </select>
+                        </label>
+                      ) : null}
                     </div>
                     <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(120px, 1fr))', gap: 8 }}>
                       <label className="portal-inline-filter">
@@ -4962,7 +5046,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                       <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 6 }}>
                         <div>{`Current: ${formatGoalValueWithUnit(goal, stats.current)}`}</div>
                         <div>
-                          <span>Last 2 games: </span>
+                          <span>{goal.sessionType === 'Bullpen' ? 'Last 2 bullpens: ' : goal.sessionType === 'Live' ? 'Last 2 live BPs: ' : 'Last 2 games: '}</span>
                           <span style={{ color: last2Color, fontWeight: 700 }}>
                             {`${last2Arrow} ${formatGoalValueWithUnit(goal, stats.recency2)}`}
                           </span>

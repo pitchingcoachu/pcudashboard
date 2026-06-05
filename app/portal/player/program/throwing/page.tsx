@@ -15,6 +15,7 @@ export default async function PlayerThrowingPage({ searchParams }: ThrowingPageP
   const canPreview = session.role === 'admin' || session.role === 'coach';
   const params = await searchParams;
   const previewPlayerIdRaw = typeof params.previewPlayerId === 'string' ? params.previewPlayerId : '';
+  const initialDate = typeof params.date === 'string' && params.date ? params.date : undefined;
   const previewPlayerId = Number(previewPlayerIdRaw ?? '0');
   const playerIdQuery = canPreview && Number.isFinite(previewPlayerId) && previewPlayerId > 0 ? `?playerId=${previewPlayerId}` : '';
 
@@ -43,7 +44,7 @@ export default async function PlayerThrowingPage({ searchParams }: ThrowingPageP
         {Object.keys(byDate).length === 0 ? (
           <p className="portal-muted-text">No throwing calendar data yet.</p>
         ) : (
-          <ThrowingReadonly byDate={byDate} weekNotes={weekNotes} />
+          <ThrowingReadonly byDate={byDate} weekNotes={weekNotes} initialDate={initialDate} />
         )}
       </section>
     </div>

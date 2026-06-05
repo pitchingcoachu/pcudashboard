@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { getDbPool, isDatabaseConfigured } from './auth-db';
+import { uploadRawCsvToR2, lttbDownsample, GRAPH_CACHE_TARGET_POINTS, isR2Configured } from './biomechanics-storage';
 
 export type BiomechanicsUploadKind = 'all_pitches' | 'single_pitch';
 
@@ -269,53 +270,47 @@ async function getTrackmanVelocityByNameDate(args: {
     `,
   ];
 
-  for (const sql of attempts) {
-    try {
-      const result = await pool
-        .query<{ pitcher_name: string | null; session_date: string | null; tm_time: string | null; velo: number | null; pitch_type: string | null }>(sql, values)
-        .catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`trackman velocity lookup: ${message}`);
-        });
-      const map = new Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>();
-      let timedCount = 0;
-      const parseTimeSec = (raw: string | null): number | null => {
-        const text = String(raw ?? '').trim();
-        if (!text) return null;
-        const m = text.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?\s*(AM|PM)?/i);
-        if (!m) return null;
-        let h = Number(m[1] ?? 0);
-        const min = Number(m[2] ?? 0);
-        const sec = Number(m[3] ?? 0);
-        const ap = String(m[5] ?? '').toUpperCase();
-        if (ap === 'PM' && h < 12) h += 12;
-        if (ap === 'AM' && h === 12) h = 0;
-        if (![h, min, sec].every(Number.isFinite)) return null;
-        return h * 3600 + min * 60 + sec;
-      };
-      for (const row of result.rows) {
-        const dateKey = String(row.session_date ?? '').trim().replace(/-/g, '');
-        const velo = toFinite(row.velo);
-        if (!dateKey || velo === null) continue;
-        const keys = buildNameKeys(row.pitcher_name);
-        if (!keys.length) continue;
-        for (const nameKey of keys) {
-          const key = `${nameKey}|${dateKey}`;
-          const arr = map.get(key) ?? [];
-          const tSec = parseTimeSec(row.tm_time);
-          if (tSec !== null && Number.isFinite(tSec)) timedCount += 1;
-          arr.push({ tSec, velo, pitchType: String(row.pitch_type ?? '').trim() || null });
-          map.set(key, arr);
-        }
+  const parseTimeSec = (raw: string | null): number | null => {
+    const text = String(raw ?? '').trim();
+    if (!text) return null;
+    const m = text.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?\s*(AM|PM)?/i);
+    if (!m) return null;
+    let h = Number(m[1] ?? 0);
+    const min = Number(m[2] ?? 0);
+    const sec = Number(m[3] ?? 0);
+    const ap = String(m[5] ?? '').toUpperCase();
+    if (ap === 'PM' && h < 12) h += 12;
+    if (ap === 'AM' && h === 12) h = 0;
+    if (![h, min, sec].every(Number.isFinite)) return null;
+    return h * 3600 + min * 60 + sec;
+  };
+  const buildMap = (rows: Array<{ pitcher_name: string | null; session_date: string | null; tm_time: string | null; velo: number | null; pitch_type: string | null }>) => {
+    const map = new Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>();
+    for (const row of rows) {
+      const dateKey = String(row.session_date ?? '').trim().replace(/-/g, '');
+      const velo = toFinite(row.velo);
+      if (!dateKey || velo === null) continue;
+      const keys = buildNameKeys(row.pitcher_name);
+      if (!keys.length) continue;
+      for (const nameKey of keys) {
+        const key = `${nameKey}|${dateKey}`;
+        const arr = map.get(key) ?? [];
+        arr.push({ tSec: parseTimeSec(row.tm_time), velo, pitchType: String(row.pitch_type ?? '').trim() || null });
+        map.set(key, arr);
       }
-      // Some schemas allow a query variant to execute but yield zero usable rows
-      // (for example, relspeed exists but is empty while RelSpeed has data).
-      // Only accept a variant when it actually returns mapped data.
-      if (map.size > 0) return map;
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('Query read timeout')) throw error;
-      // try next schema variant
     }
+    return map;
+  };
+  // Fire all schema variants in parallel — take the first that returns data.
+  const results = await Promise.all(
+    attempts.map((sql) =>
+      pool.query<{ pitcher_name: string | null; session_date: string | null; tm_time: string | null; velo: number | null; pitch_type: string | null }>(sql, values)
+        .then((r) => buildMap(r.rows))
+        .catch(() => new Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>())
+    )
+  );
+  for (const map of results) {
+    if (map.size > 0) return map;
   }
   return new Map();
 }
@@ -765,8 +760,6 @@ async function ensureBiomechanicsTables(): Promise<void> {
       await client.query('BEGIN');
       await client.query(`SET LOCAL lock_timeout = '2s';`);
       await client.query(`SET LOCAL statement_timeout = '15s';`);
-      await client.query(`ALTER TABLE biomechanics_single_pitch_points ADD COLUMN IF NOT EXISTS pitcher_name TEXT;`);
-      await client.query(`ALTER TABLE biomechanics_single_pitch_points ADD COLUMN IF NOT EXISTS pitcher_name_norm TEXT;`);
       await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS impulse_time DOUBLE PRECISION;`);
       await client.query(`
         CREATE TABLE IF NOT EXISTS biomechanics_pitch_metrics (
@@ -794,10 +787,6 @@ async function ensureBiomechanicsTables(): Promise<void> {
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_date ON biomechanics_pitch_rows (organization_id, school_code, captured_at DESC);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_created_date ON biomechanics_pitch_rows (organization_id, school_code, created_at DESC);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_hash ON biomechanics_pitch_rows (organization_id, school_code, source_file_hash);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index ASC);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_date ON biomechanics_single_pitch_points (organization_id, school_code, captured_at DESC);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash_point_date ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index, captured_at DESC);`);
       await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_uploads_scope_kind_created_hash ON biomechanics_uploads (organization_id, school_code, upload_kind, created_at DESC, source_file_hash);`);
       await client.query(`
         WITH ranked AS (
@@ -862,30 +851,6 @@ async function ensureBiomechanicsTables(): Promise<void> {
       );
     `);
     await client.query(`
-      CREATE TABLE IF NOT EXISTS biomechanics_single_pitch_points (
-        id BIGSERIAL PRIMARY KEY,
-        organization_id BIGINT NOT NULL,
-        school_code TEXT NOT NULL,
-        upload_id BIGINT NOT NULL REFERENCES biomechanics_uploads(id) ON DELETE CASCADE,
-        source_file_hash TEXT NOT NULL,
-        point_index INTEGER NOT NULL,
-        t DOUBLE PRECISION NOT NULL,
-        fx DOUBLE PRECISION,
-        fy DOUBLE PRECISION,
-        fz DOUBLE PRECISION,
-        mx DOUBLE PRECISION,
-        my DOUBLE PRECISION,
-        mz DOUBLE PRECISION,
-        row_json JSONB NOT NULL,
-        captured_at TIMESTAMPTZ,
-        pitch_label TEXT,
-        pitcher_name TEXT,
-        pitcher_name_norm TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (organization_id, school_code, source_file_hash, point_index)
-      );
-    `);
-    await client.query(`
       CREATE TABLE IF NOT EXISTS biomechanics_pitch_metrics (
         id BIGSERIAL PRIMARY KEY,
         organization_id BIGINT NOT NULL,
@@ -907,17 +872,11 @@ async function ensureBiomechanicsTables(): Promise<void> {
         UNIQUE (organization_id, school_code, source_file_hash)
       );
     `);
-    await client.query(`ALTER TABLE biomechanics_single_pitch_points ADD COLUMN IF NOT EXISTS pitcher_name TEXT;`);
-    await client.query(`ALTER TABLE biomechanics_single_pitch_points ADD COLUMN IF NOT EXISTS pitcher_name_norm TEXT;`);
     await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS impulse_time DOUBLE PRECISION;`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_date ON biomechanics_pitch_rows (organization_id, school_code, captured_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_created_date ON biomechanics_pitch_rows (organization_id, school_code, created_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_hash ON biomechanics_pitch_rows (organization_id, school_code, source_file_hash);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index ASC);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_date ON biomechanics_single_pitch_points (organization_id, school_code, captured_at DESC);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_single_points_scope_hash_point_date ON biomechanics_single_pitch_points (organization_id, school_code, source_file_hash, point_index, captured_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_uploads_scope_kind_created_hash ON biomechanics_uploads (organization_id, school_code, upload_kind, created_at DESC, source_file_hash);`);
     await client.query(`
       WITH ranked AS (
@@ -935,6 +894,36 @@ async function ensureBiomechanicsTables(): Promise<void> {
         AND r.rn > 1
     `);
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_biomech_uploads_scope_kind_hash ON biomechanics_uploads (organization_id, school_code, upload_kind, source_file_hash);`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS biomechanics_graph_cache (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id BIGINT NOT NULL,
+        school_code TEXT NOT NULL,
+        source_file_hash TEXT NOT NULL,
+        point_index INTEGER NOT NULL,
+        t DOUBLE PRECISION NOT NULL,
+        fx DOUBLE PRECISION,
+        fy DOUBLE PRECISION,
+        fz DOUBLE PRECISION,
+        mx DOUBLE PRECISION,
+        my DOUBLE PRECISION,
+        mz DOUBLE PRECISION,
+        phase_name TEXT,
+        device_id TEXT,
+        position_id TEXT,
+        r2_key TEXT,
+        captured_at TIMESTAMPTZ,
+        pitcher_name TEXT,
+        pitcher_name_norm TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id, school_code, source_file_hash, point_index)
+      );
+    `);
+    await client.query(`ALTER TABLE biomechanics_graph_cache ADD COLUMN IF NOT EXISTS captured_at TIMESTAMPTZ;`);
+    await client.query(`ALTER TABLE biomechanics_graph_cache ADD COLUMN IF NOT EXISTS pitcher_name TEXT;`);
+    await client.query(`ALTER TABLE biomechanics_graph_cache ADD COLUMN IF NOT EXISTS pitcher_name_norm TEXT;`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_graph_cache_scope ON biomechanics_graph_cache (organization_id, school_code, source_file_hash, point_index ASC);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_graph_cache_scope_date ON biomechanics_graph_cache (organization_id, school_code, captured_at DESC);`);
     await client.query('COMMIT');
     global.__pcuBiomechanicsDbReady = true;
     global.__pcuBiomechanicsDbPatched = true;
@@ -953,15 +942,15 @@ async function ensureBiomechanicsReadTables(): Promise<void> {
   const result = await pool.query<{
     uploads_table: string | null;
     pitch_rows_table: string | null;
-    single_points_table: string | null;
+    graph_cache_table: string | null;
   }>(`
     SELECT
       to_regclass('public.biomechanics_uploads')::text AS uploads_table,
       to_regclass('public.biomechanics_pitch_rows')::text AS pitch_rows_table,
-      to_regclass('public.biomechanics_single_pitch_points')::text AS single_points_table
+      to_regclass('public.biomechanics_graph_cache')::text AS graph_cache_table
   `);
   const row = result.rows[0];
-  if (row?.uploads_table && row.pitch_rows_table && row.single_points_table) {
+  if (row?.uploads_table && row.pitch_rows_table && row.graph_cache_table) {
     global.__pcuBiomechanicsDbReady = true;
     return;
   }
@@ -1127,6 +1116,7 @@ export async function saveSinglePitchPoints(args: {
     const firstRow = args.rows[0] ?? {};
     const capturedAt = parseCapturedAtFromRow(firstRow);
     const pitcherName = String(args.pitcherName ?? '').trim();
+    const pitcherNorm = normalizeName(pitcherName || '');
     const pitchLabel = pitcherName ? `${pitcherName} | ${args.sourceFileName}` : parsePitchLabelFromRow(firstRow, args.sourceFileName);
 
     await client.query('BEGIN');
@@ -1173,7 +1163,7 @@ export async function saveSinglePitchPoints(args: {
     }
     await client.query(
       `
-      DELETE FROM biomechanics_single_pitch_points
+      DELETE FROM biomechanics_graph_cache
       WHERE organization_id = $1
         AND school_code = $2
         AND source_file_hash = $3
@@ -1189,92 +1179,96 @@ export async function saveSinglePitchPoints(args: {
       `,
       [args.organizationId, schoolCode, sourceFileHash]
     );
-    let insertedRows = 0;
-    const pitcherNorm = normalizeName(pitcherName || '');
+
+    // Upload raw CSV to R2 for long-term archival before processing.
+    let r2Key: string | null = null;
+    if (isR2Configured()) {
+      r2Key = await uploadRawCsvToR2({
+        schoolCode,
+        sourceFileHash,
+        sourceFileName: args.sourceFileName,
+        csvContent: args.csvContent,
+      });
+    }
+
+    // Parse all rows into typed points for metrics computation and downsampling.
     const metricPoints: BiomechSinglePitchPoint[] = [];
+    for (let idx = 0; idx < args.rows.length; idx += 1) {
+      const row = args.rows[idx] ?? {};
+      const t =
+        toFinite(pickValueCaseInsensitive(row, [
+          'time', 't', 'time (unix ms)', 'time_unix_ms', 'time unix ms',
+          'timestamp_ms', 'unix ms', 'ms', 'frame',
+        ])) ?? idx;
+      metricPoints.push({
+        t,
+        fx: toFinite(pickValueCaseInsensitive(row, ['Fx', 'F_x'])),
+        fy: toFinite(pickValueCaseInsensitive(row, ['Fy', 'F_y'])),
+        fz: toFinite(pickValueCaseInsensitive(row, ['Fz', 'F_z'])),
+        mx: toFinite(pickValueCaseInsensitive(row, ['Mx', 'M_x'])),
+        my: toFinite(pickValueCaseInsensitive(row, ['My', 'M_y'])),
+        mz: toFinite(pickValueCaseInsensitive(row, ['Mz', 'M_z'])),
+        phase_name: pickStringCaseInsensitive(row, ['Phase Name', 'Phase']),
+        device_id: pickStringCaseInsensitive(row, ['Device Id', 'Device']),
+        position_id: pickStringCaseInsensitive(row, ['Position Id', 'Position']),
+      });
+    }
+
+    // Downsample to cache-target points using LTTB — preserves peaks and shape.
+    const graphPoints = lttbDownsample(
+      metricPoints.map((p) => ({ ...p, phase_name: p.phase_name ?? null, device_id: p.device_id ?? null, position_id: p.position_id ?? null })),
+      GRAPH_CACHE_TARGET_POINTS
+    );
+
+    // Write downsampled points to graph cache table.
+    let insertedRows = 0;
     const chunkSize = 100;
-    for (let start = 0; start < args.rows.length; start += chunkSize) {
-      const chunk = args.rows.slice(start, start + chunkSize);
+    for (let start = 0; start < graphPoints.length; start += chunkSize) {
+      const chunk = graphPoints.slice(start, start + chunkSize);
       const values: unknown[] = [];
       const rowsSql: string[] = [];
       for (let i = 0; i < chunk.length; i += 1) {
         const idx = start + i;
-        const row = chunk[i] ?? {};
-        const t =
-          toFinite(pickValueCaseInsensitive(row, [
-            'time',
-            't',
-            'time (unix ms)',
-            'time_unix_ms',
-            'time unix ms',
-            'timestamp_ms',
-            'unix ms',
-            'ms',
-            'frame',
-          ])) ??
-          idx;
-        const fx = toFinite(pickValueCaseInsensitive(row, ['Fx', 'F_x']));
-        const fy = toFinite(pickValueCaseInsensitive(row, ['Fy', 'F_y']));
-        const fz = toFinite(pickValueCaseInsensitive(row, ['Fz', 'F_z']));
-        const mx = toFinite(pickValueCaseInsensitive(row, ['Mx', 'M_x']));
-        const my = toFinite(pickValueCaseInsensitive(row, ['My', 'M_y']));
-        const mz = toFinite(pickValueCaseInsensitive(row, ['Mz', 'M_z']));
-        metricPoints.push({
-          t,
-          fx,
-          fy,
-          fz,
-          mx,
-          my,
-          mz,
-          phase_name: pickStringCaseInsensitive(row, ['Phase Name', 'Phase']),
-          device_id: pickStringCaseInsensitive(row, ['Device Id', 'Device']),
-          position_id: pickStringCaseInsensitive(row, ['Position Id', 'Position']),
-        });
+        const p = chunk[i]!;
         const base = values.length;
         rowsSql.push(
-          `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},$${base + 13}::jsonb,$${base + 14},$${base + 15},$${base + 16},$${base + 17})`
+          `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},$${base + 13},$${base + 14},$${base + 15},$${base + 16},$${base + 17},$${base + 18})`
         );
         values.push(
           args.organizationId,
           schoolCode,
-          uploadId,
           sourceFileHash,
           idx,
-          t,
-          fx,
-          fy,
-          fz,
-          mx,
-          my,
-          mz,
-          JSON.stringify(row),
+          p.t,
+          p.fx,
+          p.fy,
+          p.fz,
+          p.mx,
+          p.my,
+          p.mz,
+          p.phase_name ?? null,
+          p.device_id ?? null,
+          p.position_id ?? null,
+          r2Key,
           capturedAt,
-          pitchLabel,
           pitcherName || null,
-          pitcherNorm
+          pitcherNorm || null,
         );
       }
-
       const result = await client.query(
         `
-        INSERT INTO biomechanics_single_pitch_points (
-          organization_id, school_code, upload_id, source_file_hash, point_index, t, fx, fy, fz, mx, my, mz,
-          row_json, captured_at, pitch_label, pitcher_name, pitcher_name_norm
+        INSERT INTO biomechanics_graph_cache (
+          organization_id, school_code, source_file_hash, point_index,
+          t, fx, fy, fz, mx, my, mz, phase_name, device_id, position_id, r2_key,
+          captured_at, pitcher_name, pitcher_name_norm
         ) VALUES ${rowsSql.join(',')}
         ON CONFLICT (organization_id, school_code, source_file_hash, point_index)
         DO UPDATE SET
-          t = EXCLUDED.t,
-          fx = EXCLUDED.fx,
-          fy = EXCLUDED.fy,
-          fz = EXCLUDED.fz,
-          mx = EXCLUDED.mx,
-          my = EXCLUDED.my,
-          mz = EXCLUDED.mz,
-          row_json = EXCLUDED.row_json,
-          captured_at = EXCLUDED.captured_at,
-          pitch_label = EXCLUDED.pitch_label,
-          pitcher_name = EXCLUDED.pitcher_name,
+          t = EXCLUDED.t, fx = EXCLUDED.fx, fy = EXCLUDED.fy, fz = EXCLUDED.fz,
+          mx = EXCLUDED.mx, my = EXCLUDED.my, mz = EXCLUDED.mz,
+          phase_name = EXCLUDED.phase_name, device_id = EXCLUDED.device_id,
+          position_id = EXCLUDED.position_id, r2_key = EXCLUDED.r2_key,
+          captured_at = EXCLUDED.captured_at, pitcher_name = EXCLUDED.pitcher_name,
           pitcher_name_norm = EXCLUDED.pitcher_name_norm
         `,
         values
@@ -1376,7 +1370,7 @@ export async function deleteBiomechanicsPitch(args: {
     const firstPointResult = await client.query<{ t: number | string | null }>(
       `
       SELECT t
-      FROM biomechanics_single_pitch_points
+      FROM biomechanics_graph_cache
       WHERE organization_id = $1
         AND school_code = $2
         AND source_file_hash = $3
@@ -1654,7 +1648,7 @@ export async function getBiomechanicsSnapshot(args: {
       NULLIF(TRIM(COALESCE(p.pitcher_name, '')), '') AS pitcher_name,
       NULLIF(TRIM(u.source_file_name), '') AS source_file_name
     FROM biomechanics_uploads u
-    LEFT JOIN biomechanics_single_pitch_points p
+    LEFT JOIN biomechanics_graph_cache p
       ON p.organization_id = u.organization_id
       AND p.school_code = u.school_code
       AND p.source_file_hash = u.source_file_hash
@@ -1672,7 +1666,7 @@ export async function getBiomechanicsSnapshot(args: {
     `
     SELECT COUNT(DISTINCT u.source_file_hash)::text AS total_files
     FROM biomechanics_uploads u
-    LEFT JOIN biomechanics_single_pitch_points p
+    LEFT JOIN biomechanics_graph_cache p
       ON p.organization_id = u.organization_id
       AND p.school_code = u.school_code
       AND p.source_file_hash = u.source_file_hash
@@ -1684,28 +1678,6 @@ export async function getBiomechanicsSnapshot(args: {
     `,
     summaryValues
   );
-  const pitchKeysForTime = pitchOptionsResult.rows.map((row) => String(row.pitch_key ?? '').trim()).filter(Boolean);
-  const singleTimeByHash = new Map<string, number>();
-  if (pitchKeysForTime.length) {
-    const singleTimeRows = await runSnapshotQuery<{ source_file_hash: string; t: number | string | null }>(
-      'biomechanics first point times',
-      `
-      SELECT source_file_hash, t
-      FROM biomechanics_single_pitch_points
-      WHERE organization_id = $1
-        AND school_code = $2
-        AND point_index = 0
-        AND source_file_hash = ANY($3::text[])
-      `,
-      [args.organizationId, schoolCode, pitchKeysForTime]
-    );
-    for (const row of singleTimeRows.rows) {
-      const t = toFinite(row.t);
-      if (t === null) continue;
-      singleTimeByHash.set(String(row.source_file_hash ?? ''), t);
-    }
-  }
-
   const allRows = rowResult.rows.map((row) => {
     const json = (row.row_json ?? {}) as Record<string, unknown>;
     const playerRaw =
@@ -1761,13 +1733,11 @@ export async function getBiomechanicsSnapshot(args: {
 
   const singleRows = pitchOptionsResult.rows.map((row) => {
     const sourceFileName = String(row.source_file_name ?? '').trim();
+    // Primary: parse date + time directly from filename (e.g. 20260603_110436.csv)
     const parts = parseSingleFileNameParts(sourceFileName || String(row.label ?? ''));
+    // Fallback: use captured_at from DB if filename parse fails
     const fallbackDateKey = dateKeyPhoenixFromIso(row.captured_at);
     const fallbackTimeKey = secondsOfDayFromIso(row.captured_at);
-    const pointTimeMs = singleTimeByHash.get(String(row.pitch_key ?? '')) ?? null;
-    const pointIso = isoFromUnixMs(pointTimeMs);
-    const pointDateKey = dateKeyPhoenixFromIso(pointIso);
-    const pointTimeKey = secondsOfDayFromIso(pointIso);
     return {
       pitchKey: row.pitch_key,
       label: row.label,
@@ -1775,10 +1745,8 @@ export async function getBiomechanicsSnapshot(args: {
       pitcherName: String(row.pitcher_name ?? '').trim() || null,
       pitcherNorm: normalizeName(row.pitcher_name ?? ''),
       sourceFileName,
-      dateKey: pointDateKey ?? parts.dateKey ?? fallbackDateKey,
-      timeKey: (pointTimeKey !== null && Number.isFinite(pointTimeKey))
-        ? pointTimeKey
-        : (Number.isFinite(parts.timeKey) ? parts.timeKey : fallbackTimeKey),
+      dateKey: parts.dateKey ?? fallbackDateKey,
+      timeKey: Number.isFinite(parts.timeKey) ? parts.timeKey : fallbackTimeKey,
     };
   });
   const singleRowByPitchKey = new Map(singleRows.map((row) => [row.pitchKey, row] as const));
@@ -1925,11 +1893,15 @@ export async function getBiomechanicsSnapshot(args: {
 
   let selectedPitchPoints: BiomechSinglePitchPoint[] = [];
   if (selectedPitchKey) {
-    const pointsResult = await runSnapshotQuery<BiomechSinglePitchPoint & { row_json?: Record<string, unknown> | null }>(
+    const pointsResult = await runSnapshotQuery<{
+      t: number; fx: number | null; fy: number | null; fz: number | null;
+      mx: number | null; my: number | null; mz: number | null;
+      phase_name: string | null; device_id: string | null; position_id: string | null;
+    }>(
       'biomechanics selected pitch points',
       `
-      SELECT t, fx, fy, fz, mx, my, mz, row_json
-      FROM biomechanics_single_pitch_points
+      SELECT t, fx, fy, fz, mx, my, mz, phase_name, device_id, position_id
+      FROM biomechanics_graph_cache
       WHERE organization_id = $1
         AND school_code = $2
         AND source_file_hash = $3
@@ -1937,24 +1909,52 @@ export async function getBiomechanicsSnapshot(args: {
       `,
       [args.organizationId, schoolCode, selectedPitchKey]
     );
-    selectedPitchPoints = pointsResult.rows.map((row) => {
-      const rowJson = (row.row_json ?? {}) as Record<string, unknown>;
-      const rowTimeMs = toFinite(pickValueCaseInsensitive(rowJson, ['Time (Unix ms)', 'time_unix_ms', 'time unix ms', 'timestamp_ms', 'unix ms']));
-      const dbTime = toFinite(row.t);
-      const t = rowTimeMs !== null ? rowTimeMs : Number(dbTime ?? 0);
-      return {
-        t,
+    if (pointsResult.rows.length > 0) {
+      selectedPitchPoints = pointsResult.rows.map((row) => ({
+        t: Number(row.t ?? 0),
         fx: toFinite(row.fx),
         fy: toFinite(row.fy),
         fz: toFinite(row.fz),
         mx: toFinite(row.mx),
         my: toFinite(row.my),
         mz: toFinite(row.mz),
-        phase_name: pickStringCaseInsensitive(rowJson, ['Phase Name', 'Phase']),
-        device_id: pickStringCaseInsensitive(rowJson, ['Device Id', 'Device']),
-        position_id: pickStringCaseInsensitive(rowJson, ['Position Id', 'Position']),
-      };
-    });
+        phase_name: row.phase_name ?? null,
+        device_id: row.device_id ?? null,
+        position_id: row.position_id ?? null,
+      }));
+    } else {
+      // Fallback to raw table for pitches uploaded before graph cache existed.
+      const rawResult = await runSnapshotQuery<BiomechSinglePitchPoint & { row_json?: Record<string, unknown> | null }>(
+        'biomechanics selected pitch points (raw fallback)',
+        `
+        SELECT t, fx, fy, fz, mx, my, mz, row_json
+        FROM biomechanics_graph_cache
+        WHERE organization_id = $1
+          AND school_code = $2
+          AND source_file_hash = $3
+        ORDER BY point_index ASC
+        `,
+        [args.organizationId, schoolCode, selectedPitchKey]
+      );
+      selectedPitchPoints = rawResult.rows.map((row) => {
+        const rowJson = (row.row_json ?? {}) as Record<string, unknown>;
+        const rowTimeMs = toFinite(pickValueCaseInsensitive(rowJson, ['Time (Unix ms)', 'time_unix_ms', 'time unix ms', 'timestamp_ms', 'unix ms']));
+        const dbTime = toFinite(row.t);
+        const t = rowTimeMs !== null ? rowTimeMs : Number(dbTime ?? 0);
+        return {
+          t,
+          fx: toFinite(row.fx),
+          fy: toFinite(row.fy),
+          fz: toFinite(row.fz),
+          mx: toFinite(row.mx),
+          my: toFinite(row.my),
+          mz: toFinite(row.mz),
+          phase_name: pickStringCaseInsensitive(rowJson, ['Phase Name', 'Phase']),
+          device_id: pickStringCaseInsensitive(rowJson, ['Device Id', 'Device']),
+          position_id: pickStringCaseInsensitive(rowJson, ['Position Id', 'Position']),
+        };
+      });
+    }
   }
 
   const selectedPitchTags = selectedPitchKey ? (mapping.get(selectedPitchKey)?.tags ?? null) : null;
@@ -2087,7 +2087,7 @@ export async function getBiomechanicsSnapshot(args: {
         'biomechanics missing metrics points',
         `
         SELECT source_file_hash, t, fx, fy, fz, mx, my, mz, row_json
-        FROM biomechanics_single_pitch_points
+        FROM biomechanics_graph_cache
         WHERE organization_id = $1
           AND school_code = $2
           AND source_file_hash = ANY($3::text[])
@@ -2448,9 +2448,10 @@ export async function getLatestBiomechanicsDate(args: {
     ),
     single_pitch_dates AS (
       SELECT DISTINCT (COALESCE(captured_at, created_at))::date AS d
-      FROM biomechanics_single_pitch_points
+      FROM biomechanics_graph_cache
       WHERE organization_id = $1
         AND school_code = $2
+        AND point_index = 0
     ),
     latest_matchable AS (
       SELECT MAX(a.d)::text AS d

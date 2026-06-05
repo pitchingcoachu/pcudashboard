@@ -44,12 +44,15 @@ function makeMonthGrid(anchor: string): Array<string> {
 export default function ThrowingReadonly({
   byDate,
   weekNotes,
+  initialDate,
 }: {
   byDate: Record<string, ThrowingDayEntry>;
   weekNotes: Record<string, string>;
+  initialDate?: string;
 }) {
-  const [view, setView] = useState<'month' | 'week' | 'day'>('month');
+  const [view, setView] = useState<'month' | 'week' | 'day'>(initialDate ? 'day' : 'month');
   const [anchorDate, setAnchorDate] = useState(() => {
+    if (initialDate) return initialDate;
     const dates = Object.keys(byDate).sort();
     return dates[dates.length - 1] ?? toIsoDate(new Date());
   });

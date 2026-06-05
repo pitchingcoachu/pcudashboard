@@ -15,8 +15,8 @@ import {
 import { resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
 
 export const maxDuration = 300;
-const BIOMECH_RESPONSE_CACHE_TTL_MS = 30_000;
-const BIOMECH_ROLLUP_CACHE_TTL_MS = 10 * 60_000;
+const BIOMECH_RESPONSE_CACHE_TTL_MS = 60_000;
+const BIOMECH_ROLLUP_CACHE_TTL_MS = 60 * 60_000;
 const biomechanicsResponseCache = new Map<string, { at: number; payload: unknown }>();
 
 let biomechRollupCacheReady = false;
@@ -487,22 +487,47 @@ export async function GET(request: Request) {
 
     const selectedPitchers = parseSelectedValues(selectedPitcher).filter((v) => v.toUpperCase() !== 'ALL');
     if (selectedPitchers.length === 1) {
-      stage = `all-sessions biomechanics snapshot org ${selectedOrgId}`;
-      allSessionsSnapshot = await getBiomechanicsSnapshot({
-        organizationId: selectedOrgId,
-        schoolCode,
-        startDate: null,
-        endDate: null,
-        selectedPitchKey: null,
-        selectedPitcher,
-        selectedTag,
-        selectedPitchType,
-        selectedVelocityMin,
-        selectedVelocityMax,
+      const allSessionsCacheKey = [
+        'biomech:allsessions:v2',
+        Number(selectedOrgId),
+        String(schoolCode),
+        session.role === 'player' ? `player:${String(session.userId ?? '')}` : `role:${session.role}`,
+        selectedPitcher ?? '',
+        selectedTag ?? '',
+        selectedPitchType ?? '',
+        selectedVelocityMin ?? '',
+        selectedVelocityMax ?? '',
         forceMode,
-      }).catch((error) => {
-        throw failAtStage(error);
-      });
+      ].join('|');
+      const allSessionsMemCached = biomechanicsResponseCache.get(allSessionsCacheKey);
+      if (allSessionsMemCached && Date.now() - allSessionsMemCached.at < BIOMECH_RESPONSE_CACHE_TTL_MS) {
+        allSessionsSnapshot = allSessionsMemCached.payload as typeof allSessionsSnapshot;
+      } else {
+        const allSessionsRollupCached = await readBiomechRollupCache({ organizationId: selectedOrgId, schoolCode, cacheKey: allSessionsCacheKey }).catch(() => null);
+        if (allSessionsRollupCached && typeof allSessionsRollupCached === 'object') {
+          allSessionsSnapshot = allSessionsRollupCached as typeof allSessionsSnapshot;
+          biomechanicsResponseCache.set(allSessionsCacheKey, { at: Date.now(), payload: allSessionsRollupCached });
+        } else {
+          stage = `all-sessions biomechanics snapshot org ${selectedOrgId}`;
+          allSessionsSnapshot = await getBiomechanicsSnapshot({
+            organizationId: selectedOrgId,
+            schoolCode,
+            startDate: null,
+            endDate: null,
+            selectedPitchKey: null,
+            selectedPitcher,
+            selectedTag,
+            selectedPitchType,
+            selectedVelocityMin,
+            selectedVelocityMax,
+            forceMode,
+          }).catch((error) => {
+            throw failAtStage(error);
+          });
+          biomechanicsResponseCache.set(allSessionsCacheKey, { at: Date.now(), payload: allSessionsSnapshot });
+          void writeBiomechRollupCache({ organizationId: selectedOrgId, schoolCode, cacheKey: allSessionsCacheKey, payload: allSessionsSnapshot }).catch(() => {});
+        }
+      }
     }
 
     const responsePayload = {

@@ -512,6 +512,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     const loadThrowingState = async () => {
       throwingStateLoadedRef.current = false;
       if (!playerId) {
+        // No player selected — load shared templates only so admin can manage them.
         setThrowingByDate({});
         setThrowingWeekNotes({});
         setThrowingTemplates([]);
@@ -520,10 +521,35 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setThrowingTemplateWeekCount(4);
         setThrowingTemplateByCell({});
         setThrowingTemplateWeekNotes({});
-        setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
-        setBullpenTemplates([]);
-        setSelectedBullpenTemplateId('');
         setBullpenNotes('');
+        try {
+          const sharedResponse = await fetchWithTimeout(`/api/admin/schedule/throwing?playerId=0`, { cache: 'no-store' });
+          const sharedPayload = (await sharedResponse.json().catch(() => ({}))) as {
+            bullpenTemplates?: BullpenTemplate[];
+            velocityTemplates?: BullpenTemplate[];
+          };
+          if (cancelled) return;
+          const sharedBullpenTemplates = Array.isArray(sharedPayload.bullpenTemplates) ? sharedPayload.bullpenTemplates.map((t) => ({
+            id: String(t.id ?? ''), name: String(t.name ?? ''), rowCount: Math.max(1, Number(t.rowCount ?? 20)),
+            columns: Array.isArray(t.columns) ? t.columns.map((c) => String(c ?? '')) : [...DEFAULT_BULLPEN_COLUMNS],
+            rows: Array.isArray(t.rows) ? t.rows : [], updatedAt: String(t.updatedAt ?? ''),
+          })).filter((t) => t.id && t.name) : [];
+          const sharedVelocityTemplates = Array.isArray(sharedPayload.velocityTemplates) ? sharedPayload.velocityTemplates.map((t) => ({
+            id: String(t.id ?? ''), name: String(t.name ?? ''), rowCount: Math.max(1, Number(t.rowCount ?? 20)),
+            columns: Array.isArray(t.columns) ? t.columns.map((c) => String(c ?? '')) : [...DEFAULT_BULLPEN_COLUMNS],
+            rows: Array.isArray(t.rows) ? t.rows : [], updatedAt: String(t.updatedAt ?? ''),
+          })).filter((t) => t.id && t.name) : [];
+          setBullpenTemplates(sharedBullpenTemplates);
+          setVelocityTemplates(sharedVelocityTemplates);
+          setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
+          setSelectedBullpenTemplateId('');
+          throwingStateLoadedRef.current = true;
+        } catch {
+          setBullpenTemplates([]);
+          setVelocityTemplates([]);
+          setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
+          setSelectedBullpenTemplateId('');
+        }
         return;
       }
       try {

@@ -291,7 +291,9 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
               }}
               onClick={() => {
                 if (isThrowingCalendarWorkoutName(item.itemName)) {
-                  router.push(`/portal/player/program/throwing${query}`);
+                  const dateParam = item.dayDate ?? anchorDate;
+                  const sep = query ? '&' : '?';
+                  router.push(`/portal/player/program/throwing${query}${sep}date=${dateParam}`);
                   return;
                 }
                 if (isBullpenWorkoutName(item.itemName)) {
