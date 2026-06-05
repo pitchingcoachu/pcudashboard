@@ -177,13 +177,16 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
-  if (!Number.isFinite(playerId) || playerId <= 0) return finish(400, { error: 'playerId is required.' });
+  if (!Number.isFinite(playerId) || playerId < 0) return finish(400, { error: 'playerId is required.' });
 
-  const exists = await playerExistsInOrganization({ organizationId, playerId });
-  if (!exists) return finish(404, { error: 'Player not found in this organization.' });
+  const isSharedOnly = playerId === 0;
+  if (!isSharedOnly) {
+    const exists = await playerExistsInOrganization({ organizationId, playerId });
+    if (!exists) return finish(404, { error: 'Player not found in this organization.' });
+  }
 
   const [playerState, sharedState] = await Promise.all([
-    getScheduleThrowingState({ organizationId, playerId }),
+    isSharedOnly ? Promise.resolve({ templates: {}, byDate: {}, weekNotes: {} }) : getScheduleThrowingState({ organizationId, playerId }),
     getScheduleThrowingState({ organizationId, playerId: SHARED_PLAYER_ID }),
   ]);
 
@@ -260,13 +263,18 @@ export async function POST(request: Request) {
   if (!body) return finish(400, { error: 'Invalid JSON body.' });
 
   const playerId = Number(body.playerId ?? 0);
-  if (!Number.isFinite(playerId) || playerId <= 0) return finish(400, { error: 'playerId is required.' });
+  if (!Number.isFinite(playerId) || playerId < 0) return finish(400, { error: 'playerId is required.' });
 
-  const exists = await playerExistsInOrganization({ organizationId, playerId });
-  if (!exists) return finish(404, { error: 'Player not found in this organization.' });
+  // playerId=0 means shared/global templates only — no player-specific data.
+  const isSharedOnly = playerId === 0;
+
+  if (!isSharedOnly) {
+    const exists = await playerExistsInOrganization({ organizationId, playerId });
+    if (!exists) return finish(404, { error: 'Player not found in this organization.' });
+  }
 
   const [currentPlayer, currentShared] = await Promise.all([
-    getScheduleThrowingState({ organizationId, playerId }),
+    isSharedOnly ? Promise.resolve({ templates: {}, byDate: {}, weekNotes: {} }) : getScheduleThrowingState({ organizationId, playerId }),
     getScheduleThrowingState({ organizationId, playerId: SHARED_PLAYER_ID }),
   ]);
 
@@ -288,20 +296,22 @@ export async function POST(request: Request) {
   nextBullpenState.visibleTemplateIds = nextBullpenState.visibleTemplateIds.filter((id) => bullpenTemplateIds.has(id));
   nextVelocityState.visibleTemplateIds = nextVelocityState.visibleTemplateIds.filter((id) => velocityTemplateIds.has(id));
 
-  const savePlayer = await saveScheduleThrowingState({
-    organizationId,
-    playerId,
-    userId,
-    byDate: body.byDate ?? currentPlayer.byDate ?? {},
-    weekNotes: body.weekNotes ?? currentPlayer.weekNotes ?? {},
-    templates: {
-      throwingTemplates: Array.isArray(body.templates) ? body.templates : existingThrowingTemplates,
-      bullpen: nextBullpenState,
-      velocity: nextVelocityState,
-      drills: nextDrillsState,
-    },
-  });
-  if (!savePlayer.ok) return finish(400, { error: savePlayer.error });
+  if (!isSharedOnly) {
+    const savePlayer = await saveScheduleThrowingState({
+      organizationId,
+      playerId,
+      userId,
+      byDate: body.byDate ?? currentPlayer.byDate ?? {},
+      weekNotes: body.weekNotes ?? currentPlayer.weekNotes ?? {},
+      templates: {
+        throwingTemplates: Array.isArray(body.templates) ? body.templates : existingThrowingTemplates,
+        bullpen: nextBullpenState,
+        velocity: nextVelocityState,
+        drills: nextDrillsState,
+      },
+    });
+    if (!savePlayer.ok) return finish(400, { error: savePlayer.error });
+  }
 
   const saveShared = await saveScheduleThrowingState({
     organizationId,

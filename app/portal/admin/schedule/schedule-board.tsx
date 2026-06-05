@@ -367,6 +367,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
 
   useEffect(() => {
     if (!players.length) return;
+    if (playerId === 0) return; // Intentionally no player selected
     if (players.some((player) => player.id === playerId)) return;
     const next = initialPlayerId && players.some((player) => player.id === initialPlayerId)
       ? players.find((player) => player.id === initialPlayerId) ?? players[0]
@@ -732,7 +733,28 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   }, [playerId]);
 
   useEffect(() => {
-    if (!playerId || !throwingStateLoadedRef.current) return;
+    if (!throwingStateLoadedRef.current) return;
+    // No player: only save shared templates (bullpen + velocity).
+    if (!playerId) {
+      const handle = setTimeout(() => {
+        void fetchWithTimeout('/api/admin/schedule/throwing', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            playerId: 0,
+            byDate: {},
+            weekNotes: {},
+            templates: [],
+            bullpenState: { current: bullpenCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+            bullpenTemplates,
+            velocityState: { current: velocityCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+            velocityTemplates,
+            drillsState: { rowCount: 4, rows: [] },
+          }),
+        }).catch(() => {});
+      }, 350);
+      return () => clearTimeout(handle);
+    }
     const handle = setTimeout(() => {
       void fetchWithTimeout('/api/admin/schedule/throwing', {
         method: 'POST',
@@ -2396,8 +2418,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 onBlur={() => {
                   const q = playerQuery.trim().toLowerCase();
                   if (!q) {
-                    const selected = players.find((player) => player.id === playerId);
-                    setPlayerQuery(selected?.name ?? '');
+                    if (view === 'bullpens' || view === 'velocity') {
+                      // Allow clearing player on template-management tabs
+                      setPlayerId(0);
+                      setPlayerQuery('');
+                    } else {
+                      const selected = players.find((player) => player.id === playerId);
+                      setPlayerQuery(selected?.name ?? '');
+                    }
                     return;
                   }
                   const exact = players.find((player) => player.name.trim().toLowerCase() === q);
@@ -2419,7 +2447,12 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 ))}
               </datalist>
             </label>
-            {playerId > 0 ? (
+            {playerId > 0 && (view === 'bullpens' || view === 'velocity') ? (
+              <button type="button" className="btn btn-ghost" onClick={() => { setPlayerId(0); setPlayerQuery(''); }}>
+                Clear Player
+              </button>
+            ) : null}
+            {playerId > 0 && view !== 'bullpens' && view !== 'velocity' ? (
               <Link href={`/portal/player?previewPlayerId=${playerId}`} className="btn btn-ghost as-link">
                 View Profile
               </Link>
@@ -3117,6 +3150,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                   {label}
                 </span>
               ))}
+            </div>
+          )}
+          {builderMode === 'schedule' && (view === 'bullpens' || view === 'velocity') && !playerId && (
+            <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(200,16,46,0.12)', border: '1px solid rgba(200,16,46,0.35)', color: '#f8fafc', fontSize: 13, marginBottom: 8 }}>
+              No player selected — changes here update the <strong>shared templates</strong> visible to all players.
             </div>
           )}
           {builderMode === 'schedule' && (view === 'bullpens' || view === 'velocity') && (
