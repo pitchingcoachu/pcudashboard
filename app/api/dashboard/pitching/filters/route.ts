@@ -26,7 +26,7 @@ function schoolRosterAdditions(schoolCode: string): { pitchers: string[] } {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
   if (upper === 'PCU') {
     return {
-      pitchers: ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego'],
+      pitchers: ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke'],
     };
   }
   return { pitchers: [] };
