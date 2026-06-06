@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { ProgramItemRow } from '../../../../lib/training-db';
 import WorkoutLogModal from '../../components/workout-log-modal';
+import BullpenEntry from '../../player/program/bullpens/bullpen-entry';
 
 type PlayerChoice = { id: number; name: string };
 type WorkoutChoice = { id: number; name: string; exerciseCount: number; category: string };
@@ -2280,11 +2281,31 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       copy[idx] = next;
       return copy;
     };
+    const nextBullpenTemplates = isVelocityView ? bullpenTemplates : applyTemplates(bullpenTemplates);
+    const nextVelocityTemplates = isVelocityView ? applyTemplates(velocityTemplates) : velocityTemplates;
     if (isVelocityView) setVelocityTemplates(applyTemplates);
     else setBullpenTemplates(applyTemplates);
     if (isVelocityView) setSelectedVelocityTemplateId(templateId);
     else setSelectedBullpenTemplateId(templateId);
     setError('');
+    // When no player is selected, immediately persist to shared storage — don't rely on debounced auto-save.
+    if (!playerId) {
+      void fetchWithTimeout('/api/admin/schedule/throwing', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          playerId: 0,
+          byDate: {},
+          weekNotes: {},
+          templates: [],
+          bullpenState: { current: bullpenCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+          bullpenTemplates: nextBullpenTemplates,
+          velocityState: { current: velocityCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+          velocityTemplates: nextVelocityTemplates,
+          drillsState: { rowCount: 4, rows: [] },
+        }),
+      }).catch(() => {});
+    }
   };
 
   const downloadBullpenScript = async () => {
@@ -3328,6 +3349,17 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+          {builderMode === 'schedule' && view === 'bullpens' && playerId > 0 && bullpenTemplates.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#94a3b8' }}>Player Bullpen Entry</h4>
+              <BullpenEntry
+                templates={bullpenTemplates}
+                state={{ selectedTemplateId: selectedBullpenTemplateId, visibleTemplateIds: visibleBullpenTemplateIds }}
+                playerId={playerId}
+                previewQuery={`?previewPlayerId=${playerId}`}
+              />
             </div>
           )}
           {builderMode === 'schedule' && view === 'drills' && (

@@ -511,6 +511,20 @@ export async function ensureTrainingDbReady(): Promise<void> {
     );
   `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_schedule_throwing_state_org_player ON schedule_throwing_state (organization_id, player_id);`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS bullpen_log_entries (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        template_id TEXT NOT NULL,
+        bullpen_date DATE NOT NULL,
+        rows_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id, player_id, template_id, bullpen_date)
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bullpen_log_entries_player ON bullpen_log_entries (organization_id, player_id, template_id, bullpen_date DESC);`);
     global.__pcuTrainingDbReady = true;
   })().finally(() => {
     global.__pcuTrainingDbReadyPromise = undefined;
@@ -5951,4 +5965,64 @@ export async function listAssessmentWorkoutScoresForPlayer(input: {
       exerciseScores,
     };
   });
+}
+
+export type BullpenLogEntry = {
+  id: number;
+  templateId: string;
+  bullpenDate: string;
+  rowsJson: Array<Record<string, string>>;
+  updatedAt: string;
+};
+
+export async function saveBullpenLogEntry(input: {
+  organizationId: number;
+  playerId: number;
+  userId: number | null;
+  templateId: string;
+  bullpenDate: string;
+  rowsJson: Array<Record<string, string>>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  try {
+    await pool.query(
+      `INSERT INTO bullpen_log_entries (organization_id, player_id, template_id, bullpen_date, rows_json, created_by_user_id, updated_at)
+       VALUES ($1, $2, $3, $4::date, $5::jsonb, $6, NOW())
+       ON CONFLICT (organization_id, player_id, template_id, bullpen_date)
+       DO UPDATE SET rows_json = EXCLUDED.rows_json, updated_at = NOW(), created_by_user_id = EXCLUDED.created_by_user_id`,
+      [input.organizationId, input.playerId, input.templateId, input.bullpenDate, JSON.stringify(input.rowsJson), input.userId]
+    );
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to save bullpen log entry.' };
+  }
+}
+
+export async function getBullpenLogEntries(input: {
+  organizationId: number;
+  playerId: number;
+  templateId?: string | null;
+}): Promise<BullpenLogEntry[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const templateFilter = input.templateId ? `AND template_id = $3` : '';
+  const values: unknown[] = [input.organizationId, input.playerId];
+  if (input.templateId) values.push(input.templateId);
+  const result = await pool.query<{ id: number; template_id: string; bullpen_date: string; rows_json: unknown; updated_at: string }>(
+    `SELECT id, template_id, bullpen_date::text AS bullpen_date, rows_json, updated_at::text AS updated_at
+     FROM bullpen_log_entries
+     WHERE organization_id = $1 AND player_id = $2 ${templateFilter}
+     ORDER BY bullpen_date DESC`,
+    values
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    templateId: String(row.template_id ?? ''),
+    bullpenDate: String(row.bullpen_date ?? ''),
+    rowsJson: Array.isArray(row.rows_json) ? (row.rows_json as Array<Record<string, string>>) : [],
+    updatedAt: String(row.updated_at ?? ''),
+  }));
 }

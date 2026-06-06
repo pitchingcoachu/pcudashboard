@@ -1598,86 +1598,80 @@ export async function getBiomechanicsSnapshot(args: {
       .join(' AND ')}`
     : '';
   const summaryValues: Array<string | number> = [...values];
-  const rowResult = await runSnapshotQuery<{ row_json: Record<string, string | number | null>; captured_at: string | null; created_at: string | null }>(
-    'biomechanics pitch rows',
-    `
-    SELECT row_json, captured_at::text AS captured_at, created_at::text AS created_at
-    FROM biomechanics_pitch_rows
-    WHERE organization_id = $1
-      AND school_code = $2
-      ${dateFilterSql}
-    ORDER BY COALESCE(captured_at, created_at) DESC
-    LIMIT 1200
-    `,
-    values
-  );
-  const summaryAllRowsResult = await runSnapshotQuery<{ total_rows: string }>(
-    'biomechanics all-pitch summary',
-    `
-    SELECT COUNT(*)::text AS total_rows
-    FROM biomechanics_pitch_rows
-    WHERE organization_id = $1
-      AND school_code = $2
-      ${dateFilterSql}
-    `,
-    summaryValues
-  );
-
   const selectedTags = parseMultiFilter(args.selectedTag ?? '').filter((v) => v.toUpperCase() !== 'ALL');
   const selectedPitchTypes = parseMultiFilter(args.selectedPitchType ?? '');
   const selectedVelocityMin = typeof args.selectedVelocityMin === 'number' && Number.isFinite(args.selectedVelocityMin) ? args.selectedVelocityMin : null;
   const selectedVelocityMax = typeof args.selectedVelocityMax === 'number' && Number.isFinite(args.selectedVelocityMax) ? args.selectedVelocityMax : null;
   const forceMode = args.forceMode === 'bw' ? 'bw' : 'force';
 
-  const pitchOptionsResult = await runSnapshotQuery<{
-    pitch_key: string;
-    label: string;
-    captured_at: string | null;
-    pitcher_name: string | null;
-    source_file_name: string | null;
-  }>(
-    'biomechanics pitch options',
-    `
-    SELECT
-      u.source_file_hash AS pitch_key,
-      COALESCE(
-        NULLIF(TRIM(u.source_file_name), ''),
-        u.source_file_hash
-      ) AS label,
-      COALESCE(p.captured_at, u.created_at)::text AS captured_at,
-      NULLIF(TRIM(COALESCE(p.pitcher_name, '')), '') AS pitcher_name,
-      NULLIF(TRIM(u.source_file_name), '') AS source_file_name
-    FROM biomechanics_uploads u
-    LEFT JOIN biomechanics_graph_cache p
-      ON p.organization_id = u.organization_id
-      AND p.school_code = u.school_code
-      AND p.source_file_hash = u.source_file_hash
-      AND p.point_index = 0
-    WHERE u.organization_id = $1
-      AND u.school_code = $2
-      AND u.upload_kind = 'single_pitch'
-      ${dateFilterSqlSingle}
-    ORDER BY COALESCE(p.captured_at, u.created_at) DESC
-    `,
-    summaryValues
-  );
-  const summarySingleFilesResult = await runSnapshotQuery<{ total_files: string }>(
-    'biomechanics single-pitch summary',
-    `
-    SELECT COUNT(DISTINCT u.source_file_hash)::text AS total_files
-    FROM biomechanics_uploads u
-    LEFT JOIN biomechanics_graph_cache p
-      ON p.organization_id = u.organization_id
-      AND p.school_code = u.school_code
-      AND p.source_file_hash = u.source_file_hash
-      AND p.point_index = 0
-    WHERE u.organization_id = $1
-      AND u.school_code = $2
-      AND u.upload_kind = 'single_pitch'
-      ${dateFilterSqlSingle}
-    `,
-    summaryValues
-  );
+  // Kick off TrackMan lookup in parallel with DB queries — it needs no query results
+  const trackmanVeloPromise = getTrackmanVelocityByNameDate({
+    schoolCode,
+    startDate: args.startDate ?? null,
+    endDate: args.endDate ?? null,
+  });
+
+  // Run all independent queries in parallel
+  const [rowResult, summaryAllRowsResult, pitchOptionsResult] = await Promise.all([
+    runSnapshotQuery<{ row_json: Record<string, string | number | null>; captured_at: string | null; created_at: string | null }>(
+      'biomechanics pitch rows',
+      `
+      SELECT row_json, captured_at::text AS captured_at, created_at::text AS created_at
+      FROM biomechanics_pitch_rows
+      WHERE organization_id = $1
+        AND school_code = $2
+        ${dateFilterSql}
+      ORDER BY COALESCE(captured_at, created_at) DESC
+      LIMIT 1200
+      `,
+      values
+    ),
+    runSnapshotQuery<{ total_rows: string }>(
+      'biomechanics all-pitch summary',
+      `
+      SELECT COUNT(*)::text AS total_rows
+      FROM biomechanics_pitch_rows
+      WHERE organization_id = $1
+        AND school_code = $2
+        ${dateFilterSql}
+      `,
+      summaryValues
+    ),
+    runSnapshotQuery<{
+      pitch_key: string;
+      label: string;
+      captured_at: string | null;
+      pitcher_name: string | null;
+      source_file_name: string | null;
+    }>(
+      'biomechanics pitch options',
+      `
+      SELECT
+        u.source_file_hash AS pitch_key,
+        COALESCE(
+          NULLIF(TRIM(u.source_file_name), ''),
+          u.source_file_hash
+        ) AS label,
+        COALESCE(p.captured_at, u.created_at)::text AS captured_at,
+        NULLIF(TRIM(COALESCE(p.pitcher_name, '')), '') AS pitcher_name,
+        NULLIF(TRIM(u.source_file_name), '') AS source_file_name
+      FROM biomechanics_uploads u
+      LEFT JOIN biomechanics_graph_cache p
+        ON p.organization_id = u.organization_id
+        AND p.school_code = u.school_code
+        AND p.source_file_hash = u.source_file_hash
+        AND p.point_index = 0
+      WHERE u.organization_id = $1
+        AND u.school_code = $2
+        AND u.upload_kind = 'single_pitch'
+        ${dateFilterSqlSingle}
+      ORDER BY COALESCE(p.captured_at, u.created_at) DESC
+      `,
+      summaryValues
+    ),
+  ]);
+  // Derive single-file count from results instead of a separate query
+  const summarySingleFilesResult = { rows: [{ total_files: String(pitchOptionsResult.rows.length) }] };
   const allRows = rowResult.rows.map((row) => {
     const json = (row.row_json ?? {}) as Record<string, unknown>;
     const playerRaw =
@@ -1709,11 +1703,7 @@ export async function getBiomechanicsSnapshot(args: {
     return keys.some((k) => selectedPitcherKeys.has(k));
   };
   const filteredAllRows = allRows.filter((row) => isSelectedPitcherMatch(row.name));
-  const trackmanVeloByNameDate = await getTrackmanVelocityByNameDate({
-    schoolCode,
-    startDate: args.startDate ?? null,
-    endDate: args.endDate ?? null,
-  });
+  const trackmanVeloByNameDate = await trackmanVeloPromise;
   const pickNearestTrackmanMatch = (nameRaw: string, dateKey: string, timeKey: number | null): { velo: number | null; pitchType: string | null } => {
     const keys = buildNameKeys(nameRaw);
     const rows = keys.flatMap((k) => trackmanVeloByNameDate.get(`${k}|${dateKey}`) ?? []);
@@ -1891,6 +1881,23 @@ export async function getBiomechanicsSnapshot(args: {
       ? args.selectedPitchKey
       : (pitchOptions[0]?.pitchKey ?? null);
 
+  // Kick off metrics query in parallel with pitch points fetch — both only need pitchOptions
+  const metricKeys = pitchOptions.map((p) => p.pitchKey);
+  const metricsPromise = metricKeys.length ? runSnapshotQuery<{
+    source_file_hash: string;
+    back_peak_fz: number | null; back_peak_fy: number | null; mound_connection: number | null;
+    impulse: number | null; impulse_time: number | null; yz_transfer_back: number | null;
+    lead_peak_fz: number | null; lead_peak_fy: number | null; clawback_time: number | null;
+    yz_transfer_front: number | null; y_transfer: number | null; z_transfer: number | null;
+  }>(
+    'biomechanics metrics lookup (parallel)',
+    `SELECT source_file_hash, back_peak_fz, back_peak_fy, mound_connection, impulse, impulse_time,
+            yz_transfer_back, lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer
+     FROM biomechanics_pitch_metrics
+     WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = ANY($3::text[])`,
+    [args.organizationId, schoolCode, metricKeys]
+  ).catch(() => null) : Promise.resolve(null);
+
   let selectedPitchPoints: BiomechSinglePitchPoint[] = [];
   if (selectedPitchKey) {
     const pointsResult = await runSnapshotQuery<{
@@ -1980,10 +1987,9 @@ export async function getBiomechanicsSnapshot(args: {
     unmatchedAllPitchRows: Math.max(0, totalAllForSummary - matchedForSummary),
   };
 
-  const metricKeys = pitchOptions.map((p) => p.pitchKey);
   const pitchMetricsMap = new Map<string, BiomechComputedMetrics>();
   if (metricKeys.length) {
-    const metricsAgg = await runSnapshotQuery<{
+    const metricsAgg = (await metricsPromise) ?? await runSnapshotQuery<{
       source_file_hash: string;
       back_peak_fz: number | null;
       back_peak_fy: number | null;
