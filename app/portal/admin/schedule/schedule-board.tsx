@@ -544,13 +544,13 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           setVelocityTemplates(sharedVelocityTemplates);
           setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
           setSelectedBullpenTemplateId('');
-          throwingStateLoadedRef.current = true;
         } catch {
           setBullpenTemplates([]);
           setVelocityTemplates([]);
           setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
           setSelectedBullpenTemplateId('');
         }
+        throwingStateLoadedRef.current = true;
         return;
       }
       try {

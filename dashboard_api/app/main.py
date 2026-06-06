@@ -5867,6 +5867,11 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
             "Kaufman, Rylan",
             "Mixey, Ryan",
             "Hutchison, Daniel",
+            "Clark, Hunter",
+            "Luna, Cael",
+            "Rodriguez, Diego",
+            "Jensen, Tyler",
+            "Liguori, Luke",
         ]
         allowed_pitchers = sorted({*allowed_pitchers, *pcu_additions})
         allowed_hitters = sorted({*allowed_hitters, *pcu_additions})
