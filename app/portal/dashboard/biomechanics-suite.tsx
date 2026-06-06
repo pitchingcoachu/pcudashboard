@@ -734,7 +734,8 @@ function LineChart({
     const landingIdx = delivery.findIndex((p) => (p.fy ?? 0) < 0);
     if (landingIdx >= 0) {
       const postLanding = delivery.slice(landingIdx + 1);
-      const recover = postLanding.find((p) => (p.fy ?? Number.NEGATIVE_INFINITY) >= 0);
+      // Stop when Fy recovers back up to -20 (after peak negative), not all the way to 0.
+      const recover = postLanding.find((p) => (p.fy ?? Number.NEGATIVE_INFINITY) >= -20);
       if (recover) clawbackTime = Math.max(0, recover.t - delivery[landingIdx].t);
     }
 

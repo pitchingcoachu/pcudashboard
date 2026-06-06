@@ -731,7 +731,7 @@ function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputed
   let clawbackTime: number | null = null;
   const landingIdx = delivery.findIndex((p) => (p.fy ?? 0) < 0);
   if (landingIdx >= 0) {
-    const recover = delivery.slice(landingIdx + 1).find((p) => (p.fy ?? Number.NEGATIVE_INFINITY) >= 0);
+    const recover = delivery.slice(landingIdx + 1).find((p) => (p.fy ?? Number.NEGATIVE_INFINITY) >= -20);
     if (recover) clawbackTime = Math.max(0, recover.t - delivery[landingIdx].t);
   }
 

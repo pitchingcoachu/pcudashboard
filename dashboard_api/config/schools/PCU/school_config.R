@@ -135,14 +135,16 @@ school_config <- list(
   "Imboden, Jacob",
   "Clark, Hunter",
   "Massi, Jack",
-  "Luna, Cale",
+  "Luna, Cael",
+  "Luna, Cael",
   "Licari, Hawk",
   "Moreland, Eastin",
   "Fritz, Dominik",
   "Fink, Cooper",
   "Twichel, Ryan",
-  "Allison, Chris" 
-    
+  "Allison, Chris",
+  "Rodriguez, Diego"
+
   ),
   allowed_hitters = c(
     "Stoller, Cody",
@@ -273,14 +275,16 @@ school_config <- list(
   "Imboden, Jacob",
   "Clark, Hunter",
   "Massi, Jack",
-  "Luna, Cale",
+  "Luna, Cael",
+  "Luna, Cael",
   "Licari, Hawk",
   "Moreland, Eastin",
   "Fritz, Dominik",
   "Fink, Cooper",
   "Mixey, Ryan",
   "Hutchison, Daniel",
-  "Twichel, Ryan" 
+  "Twichel, Ryan",
+  "Rodriguez, Diego"
   ),
   allowed_campers = character(0),
   colors = list(
