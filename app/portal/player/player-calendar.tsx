@@ -115,7 +115,7 @@ function categoryBubbleStyle(category: string): CSSProperties {
 
 function isThrowingCalendarWorkoutName(value: string): boolean {
   const normalized = value.trim().toLowerCase();
-  return normalized === 'throwing calendar' || normalized.includes('throwing calendar');
+  return normalized === 'throwing calendar' || normalized === 'throwing' || normalized.includes('throwing calendar');
 }
 
 function isBullpenWorkoutName(value: string): boolean {

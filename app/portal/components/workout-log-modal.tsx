@@ -243,6 +243,11 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
             {item.workoutDescription}
           </p>
         )}
+        {item.itemType === 'workout' && item.prescribedNotes && (
+          <p className="portal-muted-text" style={{ marginBottom: '0.3rem', whiteSpace: 'pre-wrap' }}>
+            <strong>Notes:</strong> {item.prescribedNotes}
+          </p>
+        )}
         <p className="portal-muted-text" style={{ fontStyle: 'italic' }}>
           {isCycleItem
             ? `3-Day Cycle${item.cycleSlot ? ` - ${cycleSlotLabel(item.cycleSlot)}` : ''}`
@@ -332,6 +337,11 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
                         {exercise.prescribedSets ?? '-'} x{' '}
                         {formatRepTarget(exercise.repMeasure, exercise.repsPerSide, exercise.prescribedReps)}
                       </p>
+                      {exercise.notes && (
+                        <p className="portal-muted-text" style={{ whiteSpace: 'pre-wrap' }}>
+                          <strong>Notes:</strong> {exercise.notes}
+                        </p>
+                      )}
                       {isPlyoCategory(exercise.category) && String(exercise.prescribedLoad ?? '').trim() ? (
                         <p className="portal-muted-text">
                           <strong>Plyo Ball:</strong> {String(exercise.prescribedLoad ?? '').trim()}
@@ -441,6 +451,11 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
               <p className="portal-muted-text">
                 {item.prescribedSets ?? '-'} x {formatRepTarget(item.repMeasure, item.repsPerSide, item.prescribedReps)}
               </p>
+              {item.prescribedNotes && (
+                <p className="portal-muted-text" style={{ whiteSpace: 'pre-wrap' }}>
+                  <strong>Notes:</strong> {item.prescribedNotes}
+                </p>
+              )}
               {item.exerciseId && historyByExercise[item.exerciseId]?.length
                 ? (() => {
                     const maxEntry = formatMaxHistory(historyByExercise[item.exerciseId], item.trackingType);

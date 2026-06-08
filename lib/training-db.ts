@@ -3359,7 +3359,7 @@ export async function addProgramItem(input: {
   prescribedLoad?: string;
   prescribedNotes?: string;
   programName?: string;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true; itemId: number } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
@@ -3424,7 +3424,7 @@ export async function addProgramItem(input: {
     [day.rows[0].id]
   );
 
-  await pool.query(
+  const insertResult = await pool.query<{ id: number }>(
     `
       INSERT INTO program_day_items (
         program_day_id,
@@ -3437,6 +3437,7 @@ export async function addProgramItem(input: {
         sort_order
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING id
     `,
     [
       day.rows[0].id,
@@ -3450,7 +3451,7 @@ export async function addProgramItem(input: {
     ]
   );
 
-  return { ok: true };
+  return { ok: true, itemId: Number(insertResult.rows[0].id) };
 }
 
 export async function replaceProgramItemsForDates(input: {

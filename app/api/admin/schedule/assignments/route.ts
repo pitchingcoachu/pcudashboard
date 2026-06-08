@@ -83,5 +83,5 @@ export async function POST(request: Request) {
   });
 
   if (!result.ok) return finish(400, { error: result.error });
-  return finish(200, { ok: true }, { playerId, dayDate, workoutId });
+  return finish(200, { ok: true, itemId: result.itemId }, { playerId, dayDate, workoutId, itemId: result.itemId });
 }

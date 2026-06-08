@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ChangeEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type {
@@ -104,6 +105,21 @@ type ProfileDashboardProps = {
   initialExerciseId: number | null;
   initialTrend: ExerciseTrendPoint[];
 };
+
+function isThrowingCalendarWorkoutName(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'throwing calendar' || normalized === 'throwing' || normalized.includes('throwing calendar');
+}
+
+function isBullpenWorkoutName(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'bullpen' || normalized === 'bullpens' || normalized.includes('bullpen');
+}
+
+function isVelocityWorkoutName(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'velocity plan' || normalized === 'velocity' || normalized.includes('velocity');
+}
 
 function formatDate(isoDate: string): string {
   const date = new Date(`${isoDate}T00:00:00Z`);
@@ -377,8 +393,10 @@ export default function ProfileDashboard({
   initialExerciseId,
   initialTrend,
 }: ProfileDashboardProps) {
+  const router = useRouter();
   const canManageGoals = sessionRole === 'admin' || sessionRole === 'coach';
   const showProfileDetailsPanel = sessionRole !== 'player';
+  const programPreviewQuery = isAdminPreview ? `?previewPlayerId=${playerId}` : '';
   const [profile, setProfile] = useState({
     fullName: initialProfile.fullName,
     email: initialProfile.email,
@@ -1441,7 +1459,22 @@ export default function ProfileDashboard({
                   className="portal-schedule-item"
                   title={item.itemName}
                   style={categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout')}
-                  onClick={() => setSelectedItem(item)}
+                  onClick={() => {
+                    if (isThrowingCalendarWorkoutName(item.itemName)) {
+                      const sep = programPreviewQuery ? '&' : '?';
+                      router.push(`/portal/player/program/throwing${programPreviewQuery}${sep}date=${item.dayDate}`);
+                      return;
+                    }
+                    if (isBullpenWorkoutName(item.itemName)) {
+                      router.push(`/portal/player/program/bullpens${programPreviewQuery}`);
+                      return;
+                    }
+                    if (isVelocityWorkoutName(item.itemName)) {
+                      router.push(`/portal/player/program/velocity${programPreviewQuery}`);
+                      return;
+                    }
+                    setSelectedItem(item);
+                  }}
                 >
                   <strong>{item.itemName}</strong>
                 </button>

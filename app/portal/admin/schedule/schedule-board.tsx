@@ -317,6 +317,9 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(new Set());
+  const [bulkReplaceOpen, setBulkReplaceOpen] = useState(false);
+  const [bulkReplaceQuery, setBulkReplaceQuery] = useState('');
   const [copiedPlan, setCopiedPlan] = useState<CopiedPlanBuffer | null>(null);
   const [copiedThrowing, setCopiedThrowing] = useState<ThrowingCopiedBuffer | null>(null);
   const [menu, setMenu] = useState<{ dayDate: string; x: number; y: number } | null>(null);
@@ -1620,6 +1623,87 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     await loadItems();
   };
 
+  const bulkDeleteItems = async () => {
+    if (!playerId || selectedItemIds.size === 0) return;
+    setError('');
+    try {
+      await Promise.all(Array.from(selectedItemIds).map((itemId) =>
+        fetchWithTimeout('/api/admin/schedule/delete', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ playerId, itemId, mode: 'item' }),
+        })
+      ));
+      setSelectedItemIds(new Set());
+      await loadItems();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete items.');
+    }
+  };
+
+  const bulkReplaceItems = async (workoutId: number) => {
+    if (!playerId || selectedItemIds.size === 0) return;
+    setError('');
+    try {
+      const selectedItems = items.filter((item) => selectedItemIds.has(item.itemId));
+      const selectedByDay = new Map<string, ProgramItemRow[]>();
+      const orderedIdsByDay = new Map<string, number[]>();
+
+      for (const item of selectedItems) {
+        selectedByDay.set(item.dayDate, [...(selectedByDay.get(item.dayDate) ?? []), item]);
+      }
+      for (const dayDate of selectedByDay.keys()) {
+        orderedIdsByDay.set(
+          dayDate,
+          items
+            .filter((candidate) => candidate.dayDate === dayDate)
+            .map((candidate) => candidate.itemId)
+        );
+      }
+
+      for (const [dayDate, daySelectedItems] of selectedByDay.entries()) {
+        let orderedItemIds = orderedIdsByDay.get(dayDate) ?? [];
+
+        for (const item of daySelectedItems) {
+          const deleteResponse = await fetchWithTimeout('/api/admin/schedule/delete', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ playerId, itemId: item.itemId, mode: 'item' }),
+          });
+          const deletePayload = (await deleteResponse.json().catch(() => ({}))) as { error?: string };
+          if (!deleteResponse.ok) throw new Error(deletePayload.error ?? 'Failed to delete item.');
+
+          const assignResponse = await fetchWithTimeout('/api/admin/schedule/assignments', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ playerId, dayDate, workoutId }),
+          });
+          const assignPayload = (await assignResponse.json().catch(() => ({}))) as { error?: string; itemId?: number };
+          if (!assignResponse.ok) throw new Error(assignPayload.error ?? 'Failed to assign replacement.');
+          const replacementItemId = Number(assignPayload.itemId ?? 0);
+          if (!Number.isFinite(replacementItemId) || replacementItemId <= 0) {
+            throw new Error('Replacement was created without an item id.');
+          }
+          orderedItemIds = orderedItemIds.map((id) => (id === item.itemId ? replacementItemId : id));
+        }
+
+        const reorderResponse = await fetchWithTimeout('/api/admin/schedule/reorder', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ playerId, dayDate, orderedItemIds }),
+        });
+        const reorderPayload = (await reorderResponse.json().catch(() => ({}))) as { error?: string };
+        if (!reorderResponse.ok) throw new Error(reorderPayload.error ?? 'Failed to preserve workout order.');
+      }
+      setSelectedItemIds(new Set());
+      setBulkReplaceOpen(false);
+      setBulkReplaceQuery('');
+      await loadItems();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to replace items.');
+    }
+  };
+
   const clearCalendarDay = async (dayDate: string) => {
     if (!playerId) return;
     setError('');
@@ -1821,57 +1905,86 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         </header>
         <div className="portal-schedule-day-body">
           {dayItems.map((item) => (
-            <button
-              key={item.itemId}
-              type="button"
-              className="portal-schedule-item"
-              title={item.itemName}
-              style={{
-                display: 'block',
-                width: '100%',
-                boxSizing: 'border-box',
-                textAlign: 'center',
-                color: 'var(--text-main)',
-                border: '1px solid var(--calendar-grid-border, var(--border))',
-                borderRadius: '6px',
-                padding: '0.1rem 0.34rem',
-                minHeight: '22px',
-                lineHeight: 1.1,
-                overflow: 'hidden',
-                ...categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout'),
-              }}
-              draggable
-              onDragStart={(event) => {
-                event.dataTransfer.setData('scheduleItemId', String(item.itemId));
-                event.dataTransfer.setData('scheduleItemDay', item.dayDate);
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => void onItemDrop(event, dayDate, item.itemId)}
-              onClick={() => {
-                if (isThrowingCalendarWorkoutName(item.itemName)) {
-                  setAnchorDate(item.dayDate);
-                  setView('throwing');
-                  setThrowingBuilderMode('month');
-                  setThrowingCalendarView('day');
-                  return;
-                }
-                if (isBullpenWorkoutName(item.itemName)) {
-                  setView('bullpens');
-                  return;
-                }
-                if (isVelocityWorkoutName(item.itemName)) {
-                  setView('velocity');
-                  return;
-                }
-                if (isDrillsWorkoutName(item.itemName)) {
-                  setView('drills');
-                  return;
-                }
-                setSelectedItem(item);
-              }}
-            >
-              <strong style={{ lineHeight: 1.1 }}>{item.itemName}</strong>
-            </button>
+            <div key={item.itemId} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              {builderMode === 'schedule' && (view === 'day' || view === 'week' || view === 'month') ? (
+                <input
+                  type="checkbox"
+                  checked={selectedItemIds.has(item.itemId)}
+                  onChange={(e) => {
+                    e.stopPropagation();
+                    setSelectedItemIds((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(item.itemId);
+                      else next.delete(item.itemId);
+                      return next;
+                    });
+                  }}
+                  style={{ flexShrink: 0, accentColor: '#c8102e', cursor: 'pointer' }}
+                />
+              ) : null}
+              <button
+                type="button"
+                className="portal-schedule-item"
+                title={item.itemName}
+                style={{
+                  flex: 1,
+                  display: 'block',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  textAlign: 'center',
+                  color: 'var(--text-main)',
+                  borderWidth: '1px',
+                  borderStyle: 'solid',
+                  borderRadius: '6px',
+                  padding: '0.1rem 0.34rem',
+                  minHeight: '22px',
+                  lineHeight: 1.1,
+                  overflow: 'hidden',
+                  ...categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout'),
+                  ...(selectedItemIds.has(item.itemId) ? { borderColor: '#c8102e' } : {}),
+                }}
+                draggable={!selectedItemIds.has(item.itemId)}
+                onDragStart={(event) => {
+                  event.dataTransfer.setData('scheduleItemId', String(item.itemId));
+                  event.dataTransfer.setData('scheduleItemDay', item.dayDate);
+                }}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => void onItemDrop(event, dayDate, item.itemId)}
+                onClick={() => {
+                  if (selectedItemIds.size > 0) {
+                    setSelectedItemIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(item.itemId)) next.delete(item.itemId);
+                      else next.add(item.itemId);
+                      return next;
+                    });
+                    return;
+                  }
+                  if (isThrowingCalendarWorkoutName(item.itemName)) {
+                    setAnchorDate(item.dayDate);
+                    setView('throwing');
+                    setThrowingBuilderMode('month');
+                    setThrowingCalendarView('day');
+                    return;
+                  }
+                  if (isBullpenWorkoutName(item.itemName)) {
+                    setView('bullpens');
+                    return;
+                  }
+                  if (isVelocityWorkoutName(item.itemName)) {
+                    setView('velocity');
+                    return;
+                  }
+                  if (isDrillsWorkoutName(item.itemName)) {
+                    setView('drills');
+                    return;
+                  }
+                  setSelectedItem(item);
+                }}
+              >
+                <strong style={{ lineHeight: 1.1 }}>{item.itemName}</strong>
+              </button>
+            </div>
           ))}
         </div>
       </article>
@@ -3708,7 +3821,9 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                           width: '100%',
                           textAlign: 'center',
                           color: 'var(--text-main)',
-                          border: '1px solid var(--calendar-grid-border, var(--border))',
+                          borderWidth: '1px',
+                          borderStyle: 'solid',
+                          borderColor: 'var(--calendar-grid-border, var(--border))',
                           borderRadius: '6px',
                           padding: '0.28rem 0.42rem',
                           ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
@@ -3815,6 +3930,72 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       </div>
 
       {error && <p className="auth-error">{error}</p>}
+
+      {/* Bulk action bar */}
+      {selectedItemIds.size > 0 && (
+        <div style={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 200, display: 'flex', alignItems: 'center', gap: 10,
+          background: 'rgba(10,12,18,0.97)', border: '1px solid rgba(200,16,46,0.5)',
+          borderRadius: 12, padding: '10px 18px', boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+        }}>
+          <span style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>
+            {selectedItemIds.size} workout{selectedItemIds.size > 1 ? 's' : ''} selected
+          </span>
+          <button type="button" className="btn btn-ghost" style={{ fontSize: 13 }}
+            onClick={() => setBulkReplaceOpen(true)}>
+            Replace
+          </button>
+          <button type="button" className="btn btn-ghost" style={{ fontSize: 13, color: '#ef4444' }}
+            onClick={() => { if (window.confirm(`Delete ${selectedItemIds.size} workout${selectedItemIds.size > 1 ? 's' : ''}?`)) void bulkDeleteItems(); }}>
+            Delete
+          </button>
+          <button type="button" className="btn btn-ghost" style={{ fontSize: 12, opacity: 0.7 }}
+            onClick={() => setSelectedItemIds(new Set())}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Bulk replace modal */}
+      {bulkReplaceOpen && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => { setBulkReplaceOpen(false); setBulkReplaceQuery(''); }}>
+          <div style={{ background: 'rgba(10,12,18,0.99)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 14, padding: 20, width: 360, maxHeight: '70vh', display: 'flex', flexDirection: 'column', gap: 12 }}
+            onClick={(e) => e.stopPropagation()}>
+            <h4 style={{ margin: 0, fontSize: 15, color: '#e2e8f0' }}>
+              Replace {selectedItemIds.size} workout{selectedItemIds.size > 1 ? 's' : ''} with:
+            </h4>
+            <input
+              className="portal-schedule-control"
+              placeholder="Search workouts..."
+              value={bulkReplaceQuery}
+              onChange={(e) => setBulkReplaceQuery(e.target.value)}
+              autoFocus
+            />
+            <div style={{ overflowY: 'auto', display: 'grid', gap: 4, flex: 1 }}>
+              {workouts
+                .filter((w) => !bulkReplaceQuery.trim() || w.name.toLowerCase().includes(bulkReplaceQuery.trim().toLowerCase()))
+                .slice(0, 60)
+                .map((w) => (
+                  <button key={w.id} type="button" className="btn btn-ghost"
+                    style={{ textAlign: 'left', fontSize: 13, padding: '6px 10px' }}
+                    onClick={() => void bulkReplaceItems(w.id)}>
+                    {w.name}
+                    {w.category ? <span style={{ marginLeft: 8, fontSize: 11, color: '#64748b' }}>{w.category}</span> : null}
+                  </button>
+                ))}
+              {workouts.filter((w) => !bulkReplaceQuery.trim() || w.name.toLowerCase().includes(bulkReplaceQuery.trim().toLowerCase())).length === 0 && (
+                <p className="portal-muted-text" style={{ margin: 0, fontSize: 13 }}>No workouts found.</p>
+              )}
+            </div>
+            <button type="button" className="btn btn-ghost" style={{ fontSize: 13 }}
+              onClick={() => { setBulkReplaceOpen(false); setBulkReplaceQuery(''); }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {selectedItem && (
         <WorkoutLogModal
