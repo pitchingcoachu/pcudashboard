@@ -4936,7 +4936,11 @@ body.theme-light .portal-corr-tooltip {
   background: rgba(0, 0, 0, 0.3);
 }
 
-.portal-profile-line-chart .portal-profile-line-chart-path,
+.portal-profile-line-chart .portal-profile-line-chart-path {
+  stroke: rgba(200, 16, 46, 0.96);
+  fill: none;
+}
+
 .portal-profile-line-chart .portal-profile-line-chart-point {
   stroke: rgba(200, 16, 46, 0.96);
   fill: rgba(200, 16, 46, 0.96);
@@ -4962,6 +4966,7 @@ body.theme-light .portal-profile-line-chart .portal-profile-line-chart-label {
 
 body.theme-light .portal-profile-line-chart .portal-profile-line-chart-path {
   stroke: rgba(200, 16, 46, 0.98) !important;
+  fill: none !important;
 }
 
 body.theme-light .portal-profile-line-chart .portal-profile-line-chart-point {

@@ -116,6 +116,7 @@ const DEFAULT_SNAPSHOT_CACHE_TTL_MS = 300_000;
 const DEFAULT_TRIAL_FETCH_LIMIT = 4;
 const DEFAULT_MULTI_PLAYER_TRIAL_FETCH_LIMIT = 0;
 const DEFAULT_RECENT_TEST_LIMIT = 150;
+const VALD_TEST_PAGE_LIMIT = 50;
 
 const regionBases: Record<ValdRegion, { profiles: string; forcedecks: string }> = {
   use: {
@@ -285,14 +286,29 @@ async function valdGetJson<T>(baseUrl: string, path: string, query: Record<strin
     url.searchParams.set(key, value);
   }
   const maxAttempts = 4;
+  const timeoutMs = Math.max(5_000, Number(process.env.VALD_REQUEST_TIMEOUT_MS ?? 30_000));
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const response = await fetch(url.toString(), {
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: 'application/json',
-      },
-      cache: 'no-store',
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), {
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: 'application/json',
+        },
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(12_000, 1000 * (2 ** (attempt - 1)))));
+        continue;
+      }
+      throw new Error(error instanceof Error ? `VALD request failed: ${error.message}` : 'VALD request failed.');
+    } finally {
+      clearTimeout(timeout);
+    }
     if (response.status === 204) return {} as T;
     const payload = (await response.json().catch(() => ({}))) as T & { message?: string; error?: string };
     if (response.ok) return payload;
@@ -337,7 +353,7 @@ async function fetchTrialMetricsForTest(
       const definition = (row.definition as Record<string, unknown> | undefined) ?? {};
       const metricName = String(definition.name ?? definition.result ?? `Metric ${resultId}`).trim() || `Metric ${resultId}`;
       const metricUnit = String(definition.unit ?? '').trim();
-      const normalizedValue = normalizeMetricValue(metricName, value);
+      const normalizedValue = normalizeMetricValue(metricName, metricUnit, value);
       const current = aggregate.get(resultId) ?? { metricName, metricUnit, sum: 0, count: 0 };
       current.sum += normalizedValue;
       current.count += 1;
@@ -443,18 +459,31 @@ async function fetchAllTestsWindowed(
   const all: unknown[] = [];
   const seen = new Set<string>();
   const WINDOW_DAYS = Math.max(1, Number.isFinite(windowDays) ? Math.floor(windowDays) : DEFAULT_TESTS_WINDOW_DAYS);
-  let cursor = modifiedFromUtc;
-  while (new Date(cursor).getTime() < now.getTime()) {
-    const next = addUtcDays(cursor, WINDOW_DAYS);
-    const upper = new Date(next).getTime() > now.getTime() ? now.toISOString() : next;
+  const fetchRange = async (fromUtc: string, toUtc: string, depth = 0): Promise<unknown[]> => {
     const payload = await valdGetJson<unknown>(baseUrl, '/tests', {
       tenantId,
-      modifiedFromUtc: cursor,
-      modifiedToUtc: upper,
+      modifiedFromUtc: fromUtc,
+      modifiedToUtc: toUtc,
     });
     const rows = Array.isArray((payload as { tests?: unknown[] })?.tests)
       ? ((payload as { tests: unknown[] }).tests as unknown[])
       : [];
+    const fromMs = new Date(fromUtc).getTime();
+    const toMs = new Date(toUtc).getTime();
+    const canSplit = Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs - fromMs > 3_600_000;
+    if (rows.length >= VALD_TEST_PAGE_LIMIT && canSplit && depth < 20) {
+      const midpoint = new Date(fromMs + Math.floor((toMs - fromMs) / 2)).toISOString();
+      const left = await fetchRange(fromUtc, midpoint, depth + 1);
+      const right = await fetchRange(midpoint, toUtc, depth + 1);
+      return [...left, ...right];
+    }
+    return rows;
+  };
+  let cursor = modifiedFromUtc;
+  while (new Date(cursor).getTime() < now.getTime()) {
+    const next = addUtcDays(cursor, WINDOW_DAYS);
+    const upper = new Date(next).getTime() > now.getTime() ? now.toISOString() : next;
+    const rows = await fetchRange(cursor, upper);
     for (const row of rows) {
       const id = String((row as Record<string, unknown>)?.testId ?? '').trim();
       if (!id) continue;
@@ -473,9 +502,15 @@ function fmtValue(value: number | null, decimals: number): string {
   return value.toFixed(Math.min(1, safeDecimals));
 }
 
-function normalizeMetricValue(metricName: string, value: number): number {
+function normalizeMetricValue(metricName: string, metricUnit: string, value: number): number {
   const normalized = String(metricName ?? '').trim().toLowerCase();
-  if (normalized === 'bodyweight in pounds') return value * 2.2;
+  const unit = String(metricUnit ?? '').trim().toLowerCase();
+  if (
+    normalized === 'bodyweight in pounds' &&
+    (value < 130 || unit === 'kg' || unit === 'kilo' || unit === 'kilogram' || unit === 'kilograms')
+  ) {
+    return value * 2.20462262185;
+  }
   return value;
 }
 

@@ -404,6 +404,7 @@ export default function PlayerNotesSuite() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           noteId: note.id,
+          playerId: note.playerId,
           noteDate: note.noteDate,
           category: note.category,
           noteText: editingText.trim(),
@@ -431,16 +432,20 @@ export default function PlayerNotesSuite() {
     }
   }
 
-  async function deleteNote(noteId: number) {
+  async function deleteNote(note: PlayerPlanNote) {
     setMessage('');
     try {
-      const response = await fetch(`/api/player/plan-notes?noteId=${noteId}`, {
+      const params = new URLSearchParams({ noteId: String(note.id) });
+      if (note.playerId && note.playerId > 0) params.set('playerId', String(note.playerId));
+      const response = await fetch(`/api/player/plan-notes?${params.toString()}`, {
         method: 'DELETE',
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to delete note.');
-      if (editingNoteId === noteId) setEditingNoteId(null);
-      setNotes((current) => current.filter((note) => note.id !== noteId));
+      if (editingNoteId === note.id) setEditingNoteId(null);
+      setNotes((current) =>
+        current.filter((item) => !(item.id === note.id && Number(item.playerId ?? 0) === Number(note.playerId ?? 0)))
+      );
       setMessage('Note deleted.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to delete note.');
@@ -668,7 +673,7 @@ export default function PlayerNotesSuite() {
                     </div>
                     <div style={{ display: 'grid', gap: 8 }}>
                       {dayNotes.map((note) => (
-                        <article key={`note-${note.id}`} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.16)' }}>
+                        <article key={`note-${note.playerId ?? 'dashboard'}-${note.id}`} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.16)' }}>
                           <div className="portal-row-between" style={{ alignItems: 'center', gap: 12 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                               {selectedPlayerName === 'All' ? (
@@ -738,7 +743,7 @@ export default function PlayerNotesSuite() {
                                 Edit
                               </button>
                             )}
-                            <button type="button" className="btn btn-ghost" onClick={() => void deleteNote(note.id)}>
+                            <button type="button" className="btn btn-ghost" onClick={() => void deleteNote(note)}>
                               Delete
                             </button>
                           </div>

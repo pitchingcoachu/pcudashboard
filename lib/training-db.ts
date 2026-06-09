@@ -5263,6 +5263,91 @@ export async function createPlayerPlanNote(input: {
   return { ok: true };
 }
 
+export async function updatePlayerPlanNote(input: {
+  organizationId: number;
+  playerId: number;
+  noteId: number;
+  noteDate: string;
+  category: string;
+  noteText: string;
+  attachmentName?: string;
+  attachmentMimeType?: string;
+  attachmentDataUrl?: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  if (!Number.isFinite(input.playerId) || input.playerId <= 0) return { ok: false, error: 'Valid playerId is required.' };
+  if (!Number.isFinite(input.noteId) || input.noteId <= 0) return { ok: false, error: 'Valid noteId is required.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(input.noteDate ?? '').trim())) return { ok: false, error: 'Date must be YYYY-MM-DD.' };
+  const category = String(input.category ?? '').trim();
+  if (!category) return { ok: false, error: 'Category is required.' };
+  if (category.length > 80) return { ok: false, error: 'Category must be 80 characters or fewer.' };
+  const noteText = String(input.noteText ?? '').trim();
+  if (!noteText) return { ok: false, error: 'Note text is required.' };
+  const attachmentDataUrl = String(input.attachmentDataUrl ?? '').trim() || null;
+  if (attachmentDataUrl && attachmentDataUrl.length > NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH) {
+    return { ok: false, error: 'Attachments are too large. Please keep uploads under about 45 MB total.' };
+  }
+
+  const result = await pool.query(
+    `
+      UPDATE player_plan_notes AS n
+      SET
+        note_date = $1::date,
+        category = $2,
+        note_text = $3,
+        attachment_name = $4,
+        attachment_mime_type = $5,
+        attachment_data_url = $6,
+        updated_at = NOW()
+      FROM players p
+      WHERE n.id = $7
+        AND n.player_id = $8
+        AND p.id = n.player_id
+        AND p.organization_id = $9
+    `,
+    [
+      String(input.noteDate).trim(),
+      category,
+      noteText,
+      String(input.attachmentName ?? '').trim() || null,
+      String(input.attachmentMimeType ?? '').trim() || null,
+      attachmentDataUrl,
+      input.noteId,
+      input.playerId,
+      input.organizationId,
+    ]
+  );
+  if ((result.rowCount ?? 0) < 1) return { ok: false, error: 'Note not found.' };
+  return { ok: true };
+}
+
+export async function deletePlayerPlanNote(input: {
+  organizationId: number;
+  playerId: number;
+  noteId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  if (!Number.isFinite(input.playerId) || input.playerId <= 0) return { ok: false, error: 'Valid playerId is required.' };
+  if (!Number.isFinite(input.noteId) || input.noteId <= 0) return { ok: false, error: 'Valid noteId is required.' };
+  const result = await pool.query(
+    `
+      DELETE FROM player_plan_notes AS n
+      USING players p
+      WHERE n.id = $1
+        AND n.player_id = $2
+        AND p.id = n.player_id
+        AND p.organization_id = $3
+    `,
+    [input.noteId, input.playerId, input.organizationId]
+  );
+  if ((result.rowCount ?? 0) < 1) return { ok: false, error: 'Note not found.' };
+  return { ok: true };
+}
+
 export async function listDashboardPlayerNotes(input: {
   organizationId: number;
   dashboardPlayerName: string;

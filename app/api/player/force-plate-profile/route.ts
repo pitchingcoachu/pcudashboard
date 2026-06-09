@@ -47,6 +47,29 @@ function metricKey(metricName: string, metricUnit: string): string {
   return `${String(metricName ?? '').trim()}__${String(metricUnit ?? '').trim()}`;
 }
 
+function bodyWeightLbsFromMetric(metricName: string, metricUnit: string, value: number): number | null {
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const name = String(metricName ?? '').trim().toLowerCase();
+  const unit = String(metricUnit ?? '').trim().toLowerCase();
+  if (name === 'bodyweight in pounds' || unit === 'pound' || unit === 'pounds' || unit === 'lb' || unit === 'lbs') {
+    if (value < 130) return value * 2.20462262185;
+    return value;
+  }
+  if (name === 'body weight' && (unit === 'kg' || unit === 'kilo' || unit === 'kilogram' || unit === 'kilograms')) {
+    return value * 2.20462262185;
+  }
+  if (
+    name === 'bodyweight in kilograms' ||
+    unit === 'kg' ||
+    unit === 'kilo' ||
+    unit === 'kilogram' ||
+    unit === 'kilograms'
+  ) {
+    return value * 2.20462262185;
+  }
+  return null;
+}
+
 export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -126,11 +149,11 @@ export async function GET(request: Request) {
       metricDates.set(isoDay, dateBucket);
       trendBuckets.set(key, metricDates);
 
-      const metricLower = String(row.metricName ?? '').trim().toLowerCase();
-      if (metricLower === 'bodyweight in pounds' || metricLower === 'body weight') {
+      const bodyWeight = bodyWeightLbsFromMetric(row.metricName, row.metricUnit, Number(row.value));
+      if (bodyWeight !== null && Number.isFinite(bodyWeight)) {
         const current = weightByDate.get(isoDay);
-        if (!Number.isFinite(current ?? NaN) || Number(row.value) > Number(current)) {
-          weightByDate.set(isoDay, Number(row.value));
+        if (!Number.isFinite(current ?? NaN) || Number(bodyWeight) > Number(current)) {
+          weightByDate.set(isoDay, bodyWeight);
         }
       }
     }

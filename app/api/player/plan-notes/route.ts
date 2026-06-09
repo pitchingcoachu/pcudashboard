@@ -5,6 +5,7 @@ import { resolveProgrammingOrganizationId } from '../../../../lib/programming-sc
 import { canManagePlayer } from '../../../../lib/portal-access';
 import {
   deleteDashboardPlayerNote,
+  deletePlayerPlanNote,
   createDashboardPlayerNote,
   createPlayerPlanNote,
   getPlayerByIdInOrganization,
@@ -14,6 +15,7 @@ import {
   listPlayerSummariesByOrganization,
   listPlayerPlanNotesForPlayer,
   updateDashboardPlayerNote,
+  updatePlayerPlanNote,
 } from '../../../../lib/training-db';
 
 function withAuthorPrefix(rawText: string, authorName: string): string {
@@ -207,6 +209,7 @@ export async function PATCH(request: Request) {
 
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const noteId = Number(body.noteId ?? 0);
+  const playerId = Number(body.playerId ?? 0);
   const noteDate = String(body.noteDate ?? '');
   const category = String(body.category ?? '').trim();
   const noteText = String(body.noteText ?? '');
@@ -214,6 +217,24 @@ export async function PATCH(request: Request) {
   const attachmentMimeType = String(body.attachmentMimeType ?? '');
   const attachmentDataUrl = String(body.attachmentDataUrl ?? '');
   const authoredNoteText = withAuthorPrefix(noteText, String(session.name ?? session.email ?? '').trim());
+
+  if (Number.isFinite(playerId) && playerId > 0) {
+    const allowed = await resolveAllowedPlayerId(session, playerId);
+    if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+    const updated = await updatePlayerPlanNote({
+      organizationId,
+      playerId: allowed.playerId,
+      noteId,
+      noteDate,
+      category,
+      noteText: authoredNoteText,
+      attachmentName,
+      attachmentMimeType,
+      attachmentDataUrl,
+    });
+    if (!updated.ok) return NextResponse.json({ error: updated.error }, { status: 400 });
+    return NextResponse.json({ ok: true });
+  }
 
   const updated = await updateDashboardPlayerNote({
     organizationId,
@@ -239,6 +260,19 @@ export async function DELETE(request: Request) {
 
   const url = new URL(request.url);
   const noteId = Number(url.searchParams.get('noteId') ?? '0');
+  const playerId = Number(url.searchParams.get('playerId') ?? '0');
+  if (Number.isFinite(playerId) && playerId > 0) {
+    const allowed = await resolveAllowedPlayerId(session, playerId);
+    if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+    const deleted = await deletePlayerPlanNote({
+      organizationId,
+      playerId: allowed.playerId,
+      noteId,
+    });
+    if (!deleted.ok) return NextResponse.json({ error: deleted.error }, { status: 400 });
+    return NextResponse.json({ ok: true });
+  }
+
   const deleted = await deleteDashboardPlayerNote({
     organizationId,
     noteId,

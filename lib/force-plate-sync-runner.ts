@@ -22,13 +22,14 @@ export async function runForcePlateSync(args: {
   assignedCoachUserId?: number | null;
   forceFullSync?: boolean;
 }): Promise<{ ok: true; playerCount: number; fetchedAt: string; lookbackDaysUsed: number; forceFullSync: boolean } | { ok: false; error: string }> {
-  const syncTrialFetchLimit = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_TRIAL_FETCH_LIMIT ?? 25));
+  const syncTrialFetchLimit = Math.max(0, Number(process.env.FORCE_PLATE_SYNC_TRIAL_FETCH_LIMIT ?? 100));
   const fullSyncLookbackDays = Math.max(30, Number(process.env.FORCE_PLATE_SYNC_LOOKBACK_DAYS ?? 3650));
   const incrementalPaddingDays = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_PADDING_DAYS ?? 2));
+  const minIncrementalLookbackDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_MIN_INCREMENTAL_LOOKBACK_DAYS ?? 60));
   const maxIncrementalLookbackDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_MAX_INCREMENTAL_LOOKBACK_DAYS ?? 180));
   const syncRecentTestLimit = Math.max(100, Number(process.env.FORCE_PLATE_SYNC_RECENT_TEST_LIMIT ?? 10000));
-  const syncWindowDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_WINDOW_DAYS ?? 60));
-  const playerBatchSize = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_PLAYER_BATCH_SIZE ?? 2));
+  const syncWindowDays = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_WINDOW_DAYS ?? 60));
+  const playerBatchSize = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_PLAYER_BATCH_SIZE ?? 6));
   const maxRunSeconds = Math.max(20, Number(process.env.FORCE_PLATE_SYNC_MAX_RUN_SECONDS ?? 90));
   const forceFullSync = Boolean(args.forceFullSync);
 
@@ -51,13 +52,13 @@ export async function runForcePlateSync(args: {
     const syncLookbackDays = forceFullSync
       ? fullSyncLookbackDays
       : Math.max(
-          incrementalPaddingDays + 1,
+          minIncrementalLookbackDays,
           Math.min(maxIncrementalLookbackDays, derivedDays > 0 ? derivedDays : fullSyncLookbackDays)
         );
 
     const orderedNames = [...names].sort((a, b) => a.localeCompare(b));
     const startCursor = Math.max(0, Number(syncState?.playerCursor ?? 0)) % orderedNames.length;
-    const effectiveBatchSize = Math.min(playerBatchSize, orderedNames.length);
+    const effectiveBatchSize = forceFullSync ? orderedNames.length : Math.min(playerBatchSize, orderedNames.length);
     const batchNames: string[] = [];
     for (let i = 0; i < effectiveBatchSize; i += 1) {
       batchNames.push(orderedNames[(startCursor + i) % orderedNames.length]);
@@ -67,26 +68,48 @@ export async function runForcePlateSync(args: {
     const snapshotPlayers: ValdSnapshot['players'] = [];
     let fetchedAt = new Date(0).toISOString();
     let processed = 0;
-    for (const name of batchNames) {
-      if (Date.now() >= deadlineMs) break;
+    if (syncTrialFetchLimit === 0 && batchNames.length) {
       try {
-        const one = await fetchValdForceDecksSnapshot([name], {
+        const batch = await fetchValdForceDecksSnapshot(batchNames, {
           trialFetchLimitOverride: syncTrialFetchLimit,
+          multiPlayerTrialFetchLimitOverride: 0,
           lookbackDaysOverride: syncLookbackDays,
           recentTestLimitOverride: syncRecentTestLimit,
           testsWindowDaysOverride: syncWindowDays,
           disableInMemoryCache: true,
         });
-        const row = one.players[0];
-        if (row) snapshotPlayers.push(row);
-        if (String(one.fetchedAt) > fetchedAt) fetchedAt = one.fetchedAt;
+        snapshotPlayers.push(...batch.players);
+        fetchedAt = batch.fetchedAt;
       } catch (error) {
-        console.error('[force-plate-sync] player sync failed', {
-          name,
+        console.error('[force-plate-sync] batch sync failed', {
+          playerCount: batchNames.length,
           error: error instanceof Error ? error.message : String(error),
         });
       } finally {
-        processed += 1;
+        processed = batchNames.length;
+      }
+    } else {
+      for (const name of batchNames) {
+        if (Date.now() >= deadlineMs) break;
+        try {
+          const one = await fetchValdForceDecksSnapshot([name], {
+            trialFetchLimitOverride: syncTrialFetchLimit,
+            lookbackDaysOverride: syncLookbackDays,
+            recentTestLimitOverride: syncRecentTestLimit,
+            testsWindowDaysOverride: syncWindowDays,
+            disableInMemoryCache: true,
+          });
+          const row = one.players[0];
+          if (row) snapshotPlayers.push(row);
+          if (String(one.fetchedAt) > fetchedAt) fetchedAt = one.fetchedAt;
+        } catch (error) {
+          console.error('[force-plate-sync] player sync failed', {
+            name,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          processed += 1;
+        }
       }
     }
     const snapshot: ValdSnapshot = {

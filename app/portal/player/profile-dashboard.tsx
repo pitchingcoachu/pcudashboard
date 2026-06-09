@@ -314,7 +314,14 @@ function LineChart({
         ))}
         <line className="portal-profile-line-chart-axis" x1={leftPad} y1={topPad} x2={leftPad} y2={height - bottomPad} stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
         <line className="portal-profile-line-chart-axis" x1={leftPad} y1={height - bottomPad} x2={width - rightPad} y2={height - bottomPad} stroke="rgba(255,255,255,0.25)" strokeWidth="1" />
-        <path className="portal-profile-line-chart-path" d={path} fill="none" stroke="rgba(200, 16, 46, 0.95)" strokeWidth="2.6" />
+        <path
+          className="portal-profile-line-chart-path"
+          d={path}
+          fill="none"
+          stroke="rgba(200, 16, 46, 0.95)"
+          strokeWidth="2.6"
+          style={{ fill: 'none' }}
+        />
         {xTicks.map((point) => (
           <text
             className="portal-profile-line-chart-tick"
