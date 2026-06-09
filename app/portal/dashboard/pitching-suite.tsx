@@ -352,6 +352,10 @@ const TEAM_CODE_PREFIX_LABELS: Record<string, string> = {
   CRE: 'Creighton',
   PCU: 'Pitching Coach U',
 };
+const TREND_SCHOOL_TEAM_CODE_ALIASES: Record<string, string[]> = {
+  OSU: ['OKLCOW', 'OKLCPR'],
+  UNM: ['MEX_LOB'],
+};
 const LEAGUE_TEAM_CODE_BY_LABEL_TOKEN: Record<string, string> = Object.fromEntries(
   Object.entries(LEAGUE_TEAM_NAME_BY_CODE).map(([code, label]) => [normalizeLeagueTeamToken(label), code])
 );
@@ -3126,7 +3130,10 @@ export default function PitchingSuite({
           const chartParams = new URLSearchParams(params);
           chartParams.delete('force_raw');
           chartParams.set('include_chart_points', '1');
-          chartParams.set('chart_points_limit', shouldForceProFastSummary ? '350' : (isPlayerRole ? '300' : (isPro ? '500' : '1000')));
+          chartParams.set(
+            'chart_points_limit',
+            shouldForceProFastSummary ? '350' : (isPlayerRole ? '300' : (isTrendPage && !isPro ? '6000' : (isPro ? '500' : '1000')))
+          );
           chartParams.set('chart_only', '1');
           chartParams.set('include_row_pitches', '0');
           chartParams.set('include_trend_rows', '0');
@@ -5976,9 +5983,9 @@ export default function PitchingSuite({
     const selectedSchoolCode = normalizeTeamCode(filters?.school_code);
     const schoolCodes = new Set<string>();
     if (selectedSchoolCode) schoolCodes.add(selectedSchoolCode);
-    if (selectedSchoolCode === 'OSU') {
-      schoolCodes.add('OKLCOW');
-      schoolCodes.add('OKLCPR');
+    for (const alias of TREND_SCHOOL_TEAM_CODE_ALIASES[selectedSchoolCode] ?? []) {
+      const normalizedAlias = normalizeTeamCode(alias);
+      if (normalizedAlias) schoolCodes.add(normalizedAlias);
     }
     const isSchoolCode = (value: string | null | undefined): boolean => schoolCodes.has(normalizeTeamCode(value));
     const readPointString = (point: PitchActionPoint, keys: string[]): string => {

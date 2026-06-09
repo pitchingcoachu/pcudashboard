@@ -744,6 +744,7 @@ export async function GET(request: Request) {
   const forceLeagueLight = isLeague && daySpan >= 14;
   const includeChartsRequested = isTruthy(includeChartPoints);
   const includeChartsExplicitlyDisabled = hasValue(includeChartPoints) && !includeChartsRequested;
+  const includeTrendRowsRequested = isTruthy(includeTrendRows);
   const requestedPitcher = percentileBaseline ? '' : pitcher;
   const broadScope =
     !scopedPitcher &&
@@ -774,7 +775,7 @@ export async function GET(request: Request) {
     // Default League calls to lighter payload unless explicitly requested for short windows.
     url.searchParams.set('include_row_pitches', '0');
   }
-  if (!includeChartsRequested && broadScope && daySpan >= 21 && !chartOnly) {
+  if (!includeChartsRequested && !includeTrendRowsRequested && broadScope && daySpan >= 21 && !chartOnly) {
     url.searchParams.set('include_chart_points', '0');
     url.searchParams.set('include_row_pitches', '0');
     url.searchParams.set('include_trend_rows', '0');
@@ -787,7 +788,7 @@ export async function GET(request: Request) {
     url.searchParams.set('include_row_pitches', '0');
   } else if (isTruthy(url.searchParams.get('include_chart_points') ?? '')) {
     const requestedLimit = Number(url.searchParams.get('chart_points_limit') ?? '0');
-    const maxLimit = broadScope ? 600 : 2000;
+    const maxLimit = isTruthy(chartOnly) ? 6000 : (broadScope ? 600 : 2000);
     const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, maxLimit) : maxLimit;
     url.searchParams.set('chart_points_limit', String(cappedLimit));
   }
