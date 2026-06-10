@@ -22,7 +22,13 @@ jobs:
             echo "FORCE_PLATE_SYNC_CRON_KEY secret is missing"
             exit 1
           fi
-          curl -fsS -X GET "$FORCE_PLATE_SYNC_URL" \
+          SYNC_URL="$FORCE_PLATE_SYNC_URL"
+          SYNC_PARAMS="playerBatchSize=1&maxRunSeconds=25&lookbackDays=21&testsWindowDays=7&recentTestLimit=250&trialFetchLimit=25&requestTimeoutMs=8000&requestMaxAttempts=2"
+          case "$SYNC_URL" in
+            *\?*) SYNC_URL="${SYNC_URL}&${SYNC_PARAMS}" ;;
+            *) SYNC_URL="${SYNC_URL}?${SYNC_PARAMS}" ;;
+          esac
+          curl -fsS --retry 2 --retry-delay 10 --retry-all-errors --max-time 70 -X GET "$SYNC_URL" \
             -H "Authorization: Bearer $FORCE_PLATE_SYNC_CRON_KEY" \
             -H "x-cron-key: $FORCE_PLATE_SYNC_CRON_KEY" \
             -H "Accept: application/json"

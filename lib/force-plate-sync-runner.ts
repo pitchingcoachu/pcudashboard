@@ -21,16 +21,22 @@ export async function runForcePlateSync(args: {
   schoolCode: string;
   assignedCoachUserId?: number | null;
   forceFullSync?: boolean;
+  maxRunSecondsOverride?: number | null;
+  playerBatchSizeOverride?: number | null;
+  trialFetchLimitOverride?: number | null;
+  lookbackDaysOverride?: number | null;
+  recentTestLimitOverride?: number | null;
+  testsWindowDaysOverride?: number | null;
 }): Promise<{ ok: true; playerCount: number; fetchedAt: string; lookbackDaysUsed: number; forceFullSync: boolean } | { ok: false; error: string }> {
-  const syncTrialFetchLimit = Math.max(0, Number(process.env.FORCE_PLATE_SYNC_TRIAL_FETCH_LIMIT ?? 100));
+  const syncTrialFetchLimit = Math.max(0, Number(args.trialFetchLimitOverride ?? process.env.FORCE_PLATE_SYNC_TRIAL_FETCH_LIMIT ?? 100));
   const fullSyncLookbackDays = Math.max(30, Number(process.env.FORCE_PLATE_SYNC_LOOKBACK_DAYS ?? 3650));
   const incrementalPaddingDays = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_PADDING_DAYS ?? 2));
   const minIncrementalLookbackDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_MIN_INCREMENTAL_LOOKBACK_DAYS ?? 60));
   const maxIncrementalLookbackDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_MAX_INCREMENTAL_LOOKBACK_DAYS ?? 180));
-  const syncRecentTestLimit = Math.max(100, Number(process.env.FORCE_PLATE_SYNC_RECENT_TEST_LIMIT ?? 10000));
-  const syncWindowDays = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_WINDOW_DAYS ?? 60));
-  const playerBatchSize = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_PLAYER_BATCH_SIZE ?? 6));
-  const maxRunSeconds = Math.max(20, Number(process.env.FORCE_PLATE_SYNC_MAX_RUN_SECONDS ?? 90));
+  const syncRecentTestLimit = Math.max(25, Number(args.recentTestLimitOverride ?? process.env.FORCE_PLATE_SYNC_RECENT_TEST_LIMIT ?? 10000));
+  const syncWindowDays = Math.max(1, Number(args.testsWindowDaysOverride ?? process.env.FORCE_PLATE_SYNC_WINDOW_DAYS ?? 60));
+  const playerBatchSize = Math.max(1, Number(args.playerBatchSizeOverride ?? process.env.FORCE_PLATE_SYNC_PLAYER_BATCH_SIZE ?? 6));
+  const maxRunSeconds = Math.max(10, Number(args.maxRunSecondsOverride ?? process.env.FORCE_PLATE_SYNC_MAX_RUN_SECONDS ?? 90));
   const forceFullSync = Boolean(args.forceFullSync);
 
   await markForcePlateSyncRunStarted({ organizationId: args.organizationId, schoolCode: args.schoolCode });
@@ -49,7 +55,9 @@ export async function runForcePlateSync(args: {
       Number.isFinite(lastSyncedMs) && lastSyncedMs > 0
         ? Math.ceil((nowMs - lastSyncedMs) / 86_400_000) + incrementalPaddingDays
         : fullSyncLookbackDays;
-    const syncLookbackDays = forceFullSync
+    const syncLookbackDays = Number.isFinite(Number(args.lookbackDaysOverride)) && Number(args.lookbackDaysOverride) > 0
+      ? Math.max(1, Number(args.lookbackDaysOverride))
+      : forceFullSync
       ? fullSyncLookbackDays
       : Math.max(
           minIncrementalLookbackDays,

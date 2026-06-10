@@ -3023,6 +3023,11 @@ body:not(.theme-light) .portal-schedule-toolbar select option {
   min-height: 0;
 }
 
+.portal-custom-reports-velocity--main {
+  min-height: 430px;
+  height: 430px;
+}
+
 .portal-custom-reports-ab-list {
   display: grid;
   gap: 0.2rem;
@@ -5492,6 +5497,11 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   .portal-custom-reports-velocity {
     min-height: 320px;
     height: 320px;
+  }
+
+  .portal-custom-reports-velocity--main {
+    min-height: 360px;
+    height: 360px;
   }
 
   .portal-day-card {

@@ -285,7 +285,7 @@ async function valdGetJson<T>(baseUrl: string, path: string, query: Record<strin
     if (!value) continue;
     url.searchParams.set(key, value);
   }
-  const maxAttempts = 4;
+  const maxAttempts = Math.max(1, Math.min(4, Number(process.env.VALD_REQUEST_MAX_ATTEMPTS ?? 4)));
   const timeoutMs = Math.max(5_000, Number(process.env.VALD_REQUEST_TIMEOUT_MS ?? 30_000));
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const controller = new AbortController();

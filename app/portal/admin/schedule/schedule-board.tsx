@@ -530,10 +530,12 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         try {
           const sharedResponse = await fetchWithTimeout(`/api/admin/schedule/throwing?playerId=0`, { cache: 'no-store' });
           const sharedPayload = (await sharedResponse.json().catch(() => ({}))) as {
+            templates?: ThrowingTemplate[];
             bullpenTemplates?: BullpenTemplate[];
             velocityTemplates?: BullpenTemplate[];
           };
           if (cancelled) return;
+          const sharedThrowingTemplates = Array.isArray(sharedPayload.templates) ? sharedPayload.templates : [];
           const sharedBullpenTemplates = Array.isArray(sharedPayload.bullpenTemplates) ? sharedPayload.bullpenTemplates.map((t) => ({
             id: String(t.id ?? ''), name: String(t.name ?? ''), rowCount: Math.max(1, Number(t.rowCount ?? 20)),
             columns: Array.isArray(t.columns) ? t.columns.map((c) => String(c ?? '')) : [...DEFAULT_BULLPEN_COLUMNS],
@@ -544,6 +546,21 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             columns: Array.isArray(t.columns) ? t.columns.map((c) => String(c ?? '')) : [...DEFAULT_BULLPEN_COLUMNS],
             rows: Array.isArray(t.rows) ? t.rows : [], updatedAt: String(t.updatedAt ?? ''),
           })).filter((t) => t.id && t.name) : [];
+          setThrowingTemplates(sharedThrowingTemplates);
+          if (sharedThrowingTemplates.length > 0) {
+            const first = sharedThrowingTemplates[0];
+            setSelectedThrowingTemplateId(first.id);
+            setThrowingTemplateName(first.name);
+            setThrowingTemplateWeekCount(first.weekCount);
+            setThrowingTemplateByCell(normalizeThrowingTemplateCells(first.byCell));
+            setThrowingTemplateWeekNotes(first.weekNotes ?? {});
+          } else {
+            setSelectedThrowingTemplateId('');
+            setThrowingTemplateName('');
+            setThrowingTemplateWeekCount(4);
+            setThrowingTemplateByCell({});
+            setThrowingTemplateWeekNotes({});
+          }
           setBullpenTemplates(sharedBullpenTemplates);
           setVelocityTemplates(sharedVelocityTemplates);
           setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
@@ -581,7 +598,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           setSelectedThrowingTemplateId(first.id);
           setThrowingTemplateName(first.name);
           setThrowingTemplateWeekCount(first.weekCount);
-          setThrowingTemplateByCell(first.byCell ?? {});
+          setThrowingTemplateByCell(normalizeThrowingTemplateCells(first.byCell));
           setThrowingTemplateWeekNotes(first.weekNotes ?? {});
         } else {
           setSelectedThrowingTemplateId('');
@@ -748,7 +765,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             playerId: 0,
             byDate: {},
             weekNotes: {},
-            templates: [],
+            templates: throwingTemplates,
             bullpenState: { current: bullpenCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
             bullpenTemplates,
             velocityState: { current: velocityCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
@@ -912,6 +929,17 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
 
   const getThrowingTemplateCellKey = (weekIndex: number, dayIndex: number) => `w${weekIndex + 1}-d${dayIndex}`;
   const emptyThrowingEntry: ThrowingDayEntry = { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' };
+  const normalizeThrowingEntry = (entry: Partial<ThrowingDayEntry> | undefined | null): ThrowingDayEntry => ({
+    intensity: String(entry?.intensity ?? ''),
+    distance: String(entry?.distance ?? ''),
+    throwsText: String(entry?.throwsText ?? ''),
+    drills: String(entry?.drills ?? ''),
+    bullpen: String(entry?.bullpen ?? ''),
+  });
+  const normalizeThrowingTemplateCells = (cells: Record<string, Partial<ThrowingDayEntry>> | undefined | null): Record<string, ThrowingDayEntry> =>
+    Object.fromEntries(
+      Object.entries(cells ?? {}).map(([key, entry]) => [key, normalizeThrowingEntry(entry)])
+    );
   const hasThrowingEntry = (entry: ThrowingDayEntry | undefined): boolean =>
     Boolean(
       entry &&
@@ -2048,23 +2076,23 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.28rem' }}>
           <div style={throwingRowStyle}>
             <span style={throwingLabelStyle}>Intensity:</span>
-            <input className="portal-throwing-field" value={entry.intensity} onChange={(event) => setField('intensity', event.target.value)} style={throwingInputBaseStyle} />
+            <input className="portal-throwing-field" value={String(entry.intensity ?? '')} onChange={(event) => setField('intensity', event.target.value)} style={throwingInputBaseStyle} />
           </div>
           <div style={throwingRowStyle}>
             <span style={throwingLabelStyle}>Distance:</span>
-            <input className="portal-throwing-field" value={entry.distance} onChange={(event) => setField('distance', event.target.value)} style={throwingInputBaseStyle} />
+            <input className="portal-throwing-field" value={String(entry.distance ?? '')} onChange={(event) => setField('distance', event.target.value)} style={throwingInputBaseStyle} />
           </div>
           <div style={throwingRowStyle}>
             <span style={throwingLabelStyle}>Throws:</span>
-            <input className="portal-throwing-field" value={entry.throwsText} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
+            <input className="portal-throwing-field" value={String(entry.throwsText ?? '')} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
           </div>
           <div style={throwingRowStyle}>
             <span style={throwingLabelStyle}>Drills:</span>
-            <input className="portal-throwing-field" value={entry.drills} onChange={(event) => setField('drills', event.target.value)} style={throwingInputBaseStyle} />
+            <input className="portal-throwing-field" value={String(entry.drills ?? '')} onChange={(event) => setField('drills', event.target.value)} style={throwingInputBaseStyle} />
           </div>
           <div style={throwingRowStyle}>
             <span style={throwingLabelStyle}>Bullpen:</span>
-            <input className="portal-throwing-field" value={entry.bullpen} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
+            <input className="portal-throwing-field" value={String(entry.bullpen ?? '')} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
           </div>
         </div>
       </article>
@@ -2090,7 +2118,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       id: nextId,
       name,
       weekCount: normalizedWeekCount,
-      byCell: throwingTemplateByCell,
+      byCell: normalizeThrowingTemplateCells(throwingTemplateByCell),
       weekNotes: throwingTemplateWeekNotes,
       updatedAt: nowIso,
     };
@@ -2119,7 +2147,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     setSelectedThrowingTemplateId(found.id);
     setThrowingTemplateName(found.name);
     setThrowingTemplateWeekCount(found.weekCount);
-    setThrowingTemplateByCell(found.byCell ?? {});
+    setThrowingTemplateByCell(normalizeThrowingTemplateCells(found.byCell));
     setThrowingTemplateWeekNotes(found.weekNotes ?? {});
   };
 
@@ -2179,11 +2207,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
 
   const renderThrowingTemplateDay = (weekIndex: number, dayIndex: number) => {
     const cellKey = getThrowingTemplateCellKey(weekIndex, dayIndex);
-    const entry = throwingTemplateByCell[cellKey] ?? { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' };
+    const entry = normalizeThrowingEntry(throwingTemplateByCell[cellKey]);
     const setField = (field: keyof ThrowingDayEntry, value: string) => {
       setThrowingTemplateByCell((prev) => ({
         ...prev,
-        [cellKey]: { ...(prev[cellKey] ?? { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' }), [field]: value },
+        [cellKey]: { ...normalizeThrowingEntry(prev[cellKey]), [field]: value },
       }));
     };
     return (
@@ -2212,23 +2240,23 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         <div className="portal-schedule-day-body" style={{ display: 'grid', gap: '0.28rem' }}>
           <div style={throwingRowStyle}>
             <span style={throwingLabelStyle}>Intensity:</span>
-            <input className="portal-throwing-field" value={entry.intensity} onChange={(event) => setField('intensity', event.target.value)} style={throwingInputBaseStyle} />
+            <input className="portal-throwing-field" value={String(entry.intensity ?? '')} onChange={(event) => setField('intensity', event.target.value)} style={throwingInputBaseStyle} />
           </div>
           <div style={throwingRowStyle}>
             <span style={throwingLabelStyle}>Distance:</span>
-            <input className="portal-throwing-field" value={entry.distance} onChange={(event) => setField('distance', event.target.value)} style={throwingInputBaseStyle} />
+            <input className="portal-throwing-field" value={String(entry.distance ?? '')} onChange={(event) => setField('distance', event.target.value)} style={throwingInputBaseStyle} />
           </div>
           <div style={throwingRowStyle}>
             <span style={throwingLabelStyle}>Throws:</span>
-            <input className="portal-throwing-field" value={entry.throwsText} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
+            <input className="portal-throwing-field" value={String(entry.throwsText ?? '')} onChange={(event) => setField('throwsText', event.target.value)} style={throwingInputBaseStyle} />
           </div>
           <div style={throwingRowStyle}>
             <span style={throwingLabelStyle}>Drills:</span>
-            <input className="portal-throwing-field" value={entry.drills} onChange={(event) => setField('drills', event.target.value)} style={throwingInputBaseStyle} />
+            <input className="portal-throwing-field" value={String(entry.drills ?? '')} onChange={(event) => setField('drills', event.target.value)} style={throwingInputBaseStyle} />
           </div>
           <div style={throwingRowStyle}>
             <span style={throwingLabelStyle}>Bullpen:</span>
-            <input className="portal-throwing-field" value={entry.bullpen} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
+            <input className="portal-throwing-field" value={String(entry.bullpen ?? '')} onChange={(event) => setField('bullpen', event.target.value)} style={throwingInputBaseStyle} />
           </div>
         </div>
       </article>

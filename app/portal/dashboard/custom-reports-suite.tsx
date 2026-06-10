@@ -6892,8 +6892,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                           </svg>
                         </div>
                       ) : contentType === 'Velocity Chart' ? (
-                        <div className="portal-custom-reports-velocity">
-                          <svg viewBox="0 0 620 360" role="img" aria-label="Velocity chart" onMouseLeave={() => setChartHover(null)}>
+                        <div className="portal-custom-reports-velocity portal-custom-reports-velocity--main">
+                          <svg viewBox="0 0 620 430" role="img" aria-label="Velocity chart" onMouseLeave={() => setChartHover(null)}>
                             {(() => {
                               const raw = chartPoints
                                 .map((point) => ({
@@ -6926,9 +6926,9 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 );
                               if (!raw.length) return null;
                               const mode = config.velocityChart || 'Velocity Chart (Game/Inning)';
-                              const m = { l: 46, r: 14, t: 10, b: mode === 'Average Velocity by Game' ? 64 : 30 };
+                              const m = { l: 46, r: 14, t: 8, b: mode === 'Average Velocity by Game' ? 64 : 30 };
                               const w = 620;
-                              const h = 360;
+                              const h = 430;
                               const pw = w - m.l - m.r;
                               const ph = h - m.t - m.b;
                               const byType = new Map<string, Array<{ xKey: string; x: number; y: number }>>();
@@ -7051,12 +7051,13 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const gridXColor = isLightTheme ? 'rgba(15,23,42,0.16)' : 'rgba(255,255,255,0.08)';
                               const tickColor = isLightTheme ? 'rgba(15,23,42,0.92)' : 'rgba(255,255,255,0.8)';
                               const boundaryColor = isLightTheme ? 'rgba(15,23,42,0.82)' : 'rgba(255,255,255,0.92)';
+                              const tickFontSize = 15;
                               return (
                                 <>
                                   {yTicks.map((tick) => (
                                     <g key={`${cellId}-vv-y-${tick}`}>
                                       <line x1={m.l} y1={py(tick)} x2={w - m.r} y2={py(tick)} stroke={gridYColor} />
-                                      <text x={m.l - 8} y={py(tick) + 4} textAnchor="end" fill={tickColor} fontSize={11}>
+                                      <text x={m.l - 8} y={py(tick) + 5} textAnchor="end" fill={tickColor} fontSize={tickFontSize} fontWeight={700}>
                                         {Number.isInteger(tick) ? tick : tick.toFixed(1)}
                                       </text>
                                     </g>
@@ -7108,9 +7109,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                         key={`${cellId}-vl-pt-${pitchType}-${idx}`}
                                         cx={px(row.x)}
                                         cy={py(row.y)}
-                                        r={5}
+                                        r={6.75}
                                         fill={PITCH_COLORS[pitchType] ?? '#9ca3af'}
                                         stroke="rgba(0,0,0,0.55)"
+                                        strokeWidth={1.1}
                                         onMouseMove={(event) =>
                                           setChartHover({
                                             x: event.clientX,
@@ -7129,7 +7131,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     ))
                                   )}
                                   {xTicks.map((tick) => (
-                                    <text key={`${cellId}-vv-xlab-${tick}`} x={px(tick)} y={h - (mode === 'Average Velocity by Game' ? 24 : 14)} textAnchor="middle" fill={tickColor} fontSize={11}>
+                                    <text key={`${cellId}-vv-xlab-${tick}`} x={px(tick)} y={h - (mode === 'Average Velocity by Game' ? 24 : 14)} textAnchor="middle" fill={tickColor} fontSize={tickFontSize} fontWeight={700}>
                                       {mode === 'Average Velocity by Inning'
                                         ? tick
                                         : mode === 'Velocity Chart (Game/Inning)'

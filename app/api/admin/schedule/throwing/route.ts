@@ -193,8 +193,8 @@ export async function GET(request: Request) {
   const playerTemplatesObj = parseTemplatesObject(playerState.templates);
   const sharedTemplatesObj = parseTemplatesObject(sharedState.templates);
 
-  const throwingTemplates = Array.isArray(playerTemplatesObj.throwingTemplates)
-    ? (playerTemplatesObj.throwingTemplates as unknown[])
+  const throwingTemplates = Array.isArray(sharedTemplatesObj.throwingTemplates)
+    ? (sharedTemplatesObj.throwingTemplates as unknown[])
     : [];
 
   const legacyBullpen = normalizeScriptState(playerTemplatesObj.bullpen);
@@ -281,7 +281,7 @@ export async function POST(request: Request) {
   const playerObj = parseTemplatesObject(currentPlayer.templates);
   const sharedObj = parseTemplatesObject(currentShared.templates);
 
-  const existingThrowingTemplates = Array.isArray(playerObj.throwingTemplates) ? (playerObj.throwingTemplates as unknown[]) : [];
+  const existingThrowingTemplates = Array.isArray(sharedObj.throwingTemplates) ? (sharedObj.throwingTemplates as unknown[]) : [];
 
   const nextBullpenTemplates = normalizeTemplateList(Array.isArray(body.bullpenTemplates) ? body.bullpenTemplates : sharedObj.bullpenTemplates);
   const nextVelocityTemplates = normalizeTemplateList(Array.isArray(body.velocityTemplates) ? body.velocityTemplates : sharedObj.velocityTemplates);
@@ -304,7 +304,6 @@ export async function POST(request: Request) {
       byDate: body.byDate ?? currentPlayer.byDate ?? {},
       weekNotes: body.weekNotes ?? currentPlayer.weekNotes ?? {},
       templates: {
-        throwingTemplates: Array.isArray(body.templates) ? body.templates : existingThrowingTemplates,
         bullpen: nextBullpenState,
         velocity: nextVelocityState,
         drills: nextDrillsState,
@@ -320,6 +319,7 @@ export async function POST(request: Request) {
     byDate: currentShared.byDate ?? {},
     weekNotes: currentShared.weekNotes ?? {},
     templates: {
+      throwingTemplates: Array.isArray(body.templates) ? body.templates : existingThrowingTemplates,
       bullpenTemplates: nextBullpenTemplates,
       velocityTemplates: nextVelocityTemplates,
     },
