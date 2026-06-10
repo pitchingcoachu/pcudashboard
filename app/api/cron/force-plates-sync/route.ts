@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { runForcePlateSync } from '../../../../lib/force-plate-sync-runner';
 
+export const maxDuration = 300;
+
 function parsePositiveInt(value: string): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
