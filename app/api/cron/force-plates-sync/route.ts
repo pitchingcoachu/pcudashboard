@@ -2,6 +2,7 @@ import { after, NextResponse } from 'next/server';
 import { runForcePlateSync } from '../../../../lib/force-plate-sync-runner';
 
 export const maxDuration = 300;
+const ROUTE_VERSION = 'force-plate-sync-async-2026-06-11';
 
 function parsePositiveInt(value: string): number {
   const parsed = Number(value);
@@ -36,6 +37,9 @@ export async function GET(request: Request) {
   const requestMaxAttempts = parsePositiveInt(String(url.searchParams.get('requestMaxAttempts') ?? ''));
   const orgId = parsePositiveInt(String(process.env.FORCE_PLATE_SYNC_ORGANIZATION_ID ?? ''));
   const schoolCode = String(process.env.FORCE_PLATE_SYNC_SCHOOL_CODE ?? 'PCU').trim().toUpperCase();
+  if (String(url.searchParams.get('ping') ?? '').trim() === '1') {
+    return NextResponse.json({ ok: true, routeVersion: ROUTE_VERSION, asyncSupported: true });
+  }
   if (!orgId) return NextResponse.json({ error: 'FORCE_PLATE_SYNC_ORGANIZATION_ID missing.' }, { status: 400 });
   const runWithOverrides = async () => {
     const previousValdRequestTimeoutMs = process.env.VALD_REQUEST_TIMEOUT_MS;
@@ -74,6 +78,7 @@ export async function GET(request: Request) {
       {
         ok: true,
         accepted: true,
+        routeVersion: ROUTE_VERSION,
         forceFullSync,
         maxRunSeconds: maxRunSeconds || null,
         playerBatchSize: playerBatchSize || null,
@@ -87,6 +92,7 @@ export async function GET(request: Request) {
   if (!synced.ok) return NextResponse.json({ error: synced.error }, { status: 500 });
   return NextResponse.json({
     ok: true,
+    routeVersion: ROUTE_VERSION,
     playerCount: synced.playerCount,
     fetchedAt: synced.fetchedAt,
     lookbackDaysUsed: synced.lookbackDaysUsed,
