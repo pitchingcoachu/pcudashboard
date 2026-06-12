@@ -1478,6 +1478,7 @@ export async function getBiomechanicsSnapshot(args: {
   leaderboardIndividualRows: Array<Record<string, string | number | null>>;
   leaderboardAverageColumns: string[];
   leaderboardAverageRows: Array<Record<string, string | number | null>>;
+  allPitchCorrelationColumns: string[];
   pitchOptions: BiomechPitchOption[];
   selectedPitchKey: string | null;
   selectedPitchPoints: BiomechSinglePitchPoint[];
@@ -1509,6 +1510,7 @@ export async function getBiomechanicsSnapshot(args: {
       leaderboardIndividualRows: [],
       leaderboardAverageColumns: [],
       leaderboardAverageRows: [],
+      allPitchCorrelationColumns: [],
       pitchOptions: [],
       selectedPitchKey: null,
       selectedPitchPoints: [],
@@ -1622,7 +1624,6 @@ export async function getBiomechanicsSnapshot(args: {
         AND school_code = $2
         ${dateFilterSql}
       ORDER BY COALESCE(captured_at, created_at) DESC
-      LIMIT 1200
       `,
       values
     ),
@@ -1684,6 +1685,11 @@ export async function getBiomechanicsSnapshot(args: {
     const strideWidthCm = toFinite(pickValueCaseInsensitive(json, ['strideWidth (cm)', 'strideWidth', 'Stride Width (cm)']));
     const systemWeightN = toFinite(pickValueCaseInsensitive(json, ['systemWeight (N)', 'systemWeight', 'System Weight (N)']));
     const velocityMph = pickVelocityFromRow(json);
+    const rawNumericValues = Object.fromEntries(
+      Object.entries(json)
+        .map(([key, value]) => [String(key ?? '').trim(), toFinite(value)] as const)
+        .filter(([key, value]) => Boolean(key) && value !== null && Number.isFinite(value))
+    ) as Record<string, number>;
     return {
       name: toFirstLastName(playerRaw || 'Unknown'),
       nameNorm: normalizeName(playerRaw),
@@ -1695,6 +1701,7 @@ export async function getBiomechanicsSnapshot(args: {
       strideLengthIn: strideLengthCm === null ? null : strideLengthCm / 2.54,
       strideDirectionIn: strideWidthCm === null ? null : strideWidthCm / 2.54,
       bodyWeightLb: systemWeightN === null ? null : systemWeightN * 0.22480894387096,
+      rawNumericValues,
     };
   }).filter((row) => row.dateKey);
   const isSelectedPitcherMatch = (nameRaw: string): boolean => {
@@ -1778,7 +1785,9 @@ export async function getBiomechanicsSnapshot(args: {
     pitchDateLabel: string | null;
     bodyWeightLb: number | null;
     velocityMph: number | null;
+    allPitchValues: Record<string, number>;
   }>();
+  const matchedAllPitchCorrelationColumns = new Set<string>();
   for (const [dateKey, singles] of singleGroups.entries()) {
     const allForDate = [...(allRowsByDate.get(dateKey) ?? [])];
     if (!allForDate.length) continue;
@@ -1831,7 +1840,11 @@ export async function getBiomechanicsSnapshot(args: {
         bodyWeightLb: allRow.bodyWeightLb,
         // Use TrackMan-only velo for pitch association (no force-plate fallback).
         velocityMph: trackmanMatch.velo,
+        allPitchValues: allRow.rawNumericValues,
       });
+      for (const column of Object.keys(allRow.rawNumericValues)) {
+        matchedAllPitchCorrelationColumns.add(column);
+      }
     }
   }
 
@@ -2228,6 +2241,7 @@ export async function getBiomechanicsSnapshot(args: {
       pitchDateLabel: formatDateKeyMddyy(fallbackSingle?.dateKey ?? null),
       bodyWeightLb: null,
       velocityMph: null,
+      allPitchValues: {},
     };
     const metrics = pitchMetricsMap.get(option.pitchKey);
     if (!metrics) continue;
@@ -2275,8 +2289,12 @@ export async function getBiomechanicsSnapshot(args: {
       'Z Transfer (s)': metrics.zTransfer,
       'Stride Length (in)': meta.strideLengthIn,
       'Stride Direction (in)': meta.strideDirectionIn,
+      ...meta.allPitchValues,
     });
   }
+  const allPitchCorrelationColumns = Array.from(matchedAllPitchCorrelationColumns)
+    .filter((column) => !tableColumnNames.includes(column))
+    .sort((a, b) => a.localeCompare(b));
   const avgBwMetric = (groupKey: string, pickMetric: (m: BiomechComputedMetrics) => number | null) => {
     const keys = groupPitches.get(groupKey) ?? [];
     let sum = 0;
@@ -2418,6 +2436,7 @@ export async function getBiomechanicsSnapshot(args: {
     leaderboardIndividualRows: leaderboardPitchRows,
     leaderboardAverageColumns,
     leaderboardAverageRows,
+    allPitchCorrelationColumns,
     pitchOptions,
     selectedPitchKey,
     selectedPitchPoints,

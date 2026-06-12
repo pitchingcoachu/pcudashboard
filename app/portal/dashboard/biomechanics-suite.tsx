@@ -39,6 +39,7 @@ type Payload = {
   leaderboard_individual_rows?: Array<Record<string, string | number | null>>;
   leaderboard_average_columns?: string[];
   leaderboard_average_rows?: Array<Record<string, string | number | null>>;
+  all_pitch_correlation_columns?: string[];
   pitch_options?: PitchOption[];
   selected_pitch_key?: string | null;
   selected_pitch_points?: PitchPoint[];
@@ -1006,6 +1007,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [leaderboardIndividualRows, setLeaderboardIndividualRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [leaderboardAverageColumns, setLeaderboardAverageColumns] = useState<string[]>([]);
   const [leaderboardAverageRows, setLeaderboardAverageRows] = useState<Array<Record<string, string | number | null>>>([]);
+  const [allPitchCorrelationColumns, setAllPitchCorrelationColumns] = useState<string[]>([]);
   const [allSessionsLeaderboardIndividualRows, setAllSessionsLeaderboardIndividualRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [pitchOptions, setPitchOptions] = useState<PitchOption[]>([]);
   const [selectedPitchKey, setSelectedPitchKey] = useState<string>('');
@@ -1126,6 +1128,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const lbIndividualRows = Array.isArray(payload.leaderboard_individual_rows) ? payload.leaderboard_individual_rows : [];
       const lbAverageColumns = Array.isArray(payload.leaderboard_average_columns) ? payload.leaderboard_average_columns : [];
       const lbAverageRows = Array.isArray(payload.leaderboard_average_rows) ? payload.leaderboard_average_rows : [];
+      const rawCorrelationColumns = Array.isArray(payload.all_pitch_correlation_columns) ? payload.all_pitch_correlation_columns : [];
       const options = Array.isArray(payload.pitch_options) ? payload.pitch_options : [];
       const pitchKey = String(payload.selected_pitch_key ?? options[0]?.pitchKey ?? '');
       const points = Array.isArray(payload.selected_pitch_points) ? payload.selected_pitch_points : [];
@@ -1142,6 +1145,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setLeaderboardIndividualRows(lbIndividualRows);
       setLeaderboardAverageColumns(lbAverageColumns);
       setLeaderboardAverageRows(lbAverageRows);
+      setAllPitchCorrelationColumns(rawCorrelationColumns);
       setAllSessionsLeaderboardIndividualRows(Array.isArray(payload.all_sessions_leaderboard_individual_rows) ? payload.all_sessions_leaderboard_individual_rows : []);
       setPitchOptions(options);
       setSelectedPitchKey(pitchKey);
@@ -1777,6 +1781,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
           return ['Pitch Type', '#', 'Session', ...rest];
         })()
       : activeTableColumns;
+  const correlationAxisColumns = pageTab === 'leaderboard' && leaderboardViewMode === 'individual'
+    ? Array.from(new Set([...displayTableColumns, ...allPitchCorrelationColumns]))
+    : displayTableColumns;
   const activeDisplayRows =
     pageTab === 'summary'
       ? summaryRowsByPitchType
@@ -2189,6 +2196,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         onClose={() => setShowLeaderboardCorrelation(false)}
         title={leaderboardViewMode === 'individual' ? 'Biomechanics Leaderboard Correlation (Individual Pitches)' : 'Biomechanics Leaderboard Correlation (Averages)'}
         columns={displayTableColumns}
+        axisColumns={correlationAxisColumns}
         rows={activeDisplayRows as Array<Record<string, string | number | null | undefined>>}
         viewByLabel="Player"
         primaryColumnName="Name"

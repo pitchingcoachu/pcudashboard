@@ -47,51 +47,271 @@ function buildEmptyRows(rowCount: number, columns: string[], templateRows: strin
   });
 }
 
-// Simple line chart SVG
-function TrendChart({ data, label, color, format }: {
-  data: { date: string; value: number }[];
-  label: string;
-  color: string;
-  format: (v: number) => string;
+type BullpenTrendMetric = 'velocity' | 'execution' | 'strike';
+
+type BullpenTrendBucket = {
+  key: string;
+  date: string;
+  pitchType: string;
+  ballType: string;
+  value: number;
+  count: number;
+};
+
+type BullpenVelocityPoint = {
+  key: string;
+  date: string;
+  pitchType: string;
+  ballType: string;
+  value: number;
+  pitchNumber: number;
+};
+
+function formatTrendDate(value: string) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '—';
+  const [, month = '', day = ''] = raw.match(/^\d{4}-(\d{2})-(\d{2})$/) ?? [];
+  return month && day ? `${Number(month)}/${Number(day)}` : raw;
+}
+
+function trendMetricLabel(metric: BullpenTrendMetric) {
+  if (metric === 'velocity') return 'Avg Velocity';
+  if (metric === 'execution') return 'Execution';
+  return 'Strike';
+}
+
+function trendMetricFormat(metric: BullpenTrendMetric, value: number) {
+  if (metric === 'velocity') return `${value.toFixed(1)} mph`;
+  return `${value.toFixed(0)}%`;
+}
+
+function TrendBarChart({ data, metric }: {
+  data: BullpenTrendBucket[];
+  metric: BullpenTrendMetric;
 }) {
-  if (data.length < 2) {
+  if (data.length < 1) {
     return (
       <div style={{ padding: '12px 0', color: '#94a3b8', fontSize: 13 }}>
-        Need at least 2 entries to show trend.
+        No trend data yet.
       </div>
     );
   }
-  const W = 340, H = 120, pad = { top: 12, right: 16, bottom: 28, left: 40 };
+  const dates = Array.from(new Set(data.map((d) => d.date))).sort((a, b) => a.localeCompare(b));
+  const combos = Array.from(new Set(data.map((d) => `${d.pitchType}|${d.ballType}`))).sort((a, b) => a.localeCompare(b));
+  const comboLabel = (combo: string) => {
+    const [pitchType = 'Pitch', ballType = 'Ball'] = combo.split('|');
+    return `${pitchType} / ${ballType}`;
+  };
+  const groupW = Math.max(96, combos.length * 18 + 34);
+  const W = Math.max(720, dates.length * groupW + 92);
+  const H = 310;
+  const pad = { top: 28, right: 22, bottom: 68, left: 58 };
   const vals = data.map((d) => d.value);
-  const minV = Math.min(...vals);
-  const maxV = Math.max(...vals);
-  const range = maxV - minV || 1;
-  const scaleX = (i: number) => pad.left + (i / (data.length - 1)) * (W - pad.left - pad.right);
-  const scaleY = (v: number) => pad.top + (1 - (v - minV) / range) * (H - pad.top - pad.bottom);
-  const points = data.map((d, i) => `${scaleX(i)},${scaleY(d.value)}`).join(' ');
+  const minV = metric === 'velocity' ? Math.max(0, Math.floor(Math.min(...vals) - 2)) : 0;
+  const maxRaw = Math.max(...vals);
+  const maxV = metric === 'velocity' ? Math.ceil(maxRaw + 2) : 100;
+  const range = Math.max(1, maxV - minV);
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+  const dateBand = chartW / dates.length;
+  const barW = Math.max(10, Math.min(20, (dateBand - 28) / Math.max(1, combos.length)));
+  const barGap = 0;
+  const scaleY = (v: number) => pad.top + (1 - (v - minV) / range) * chartH;
+  const baselineY = scaleY(minV);
+  const palette = ['#60a5fa', '#f59e0b', '#22c55e', '#e11d48', '#a78bfa', '#14b8a6', '#f97316', '#38bdf8'];
+  const colorByCombo = new Map(combos.map((combo, index) => [combo, palette[index % palette.length]] as const));
+  const dataByDateCombo = new Map(data.map((d) => [`${d.date}|${d.pitchType}|${d.ballType}`, d] as const));
+  const ticks = metric === 'velocity'
+    ? [minV, minV + range / 2, maxV]
+    : [0, 50, 100];
   return (
-    <div>
-      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>{label}</div>
-      <svg width={W} height={H} style={{ overflow: 'visible' }}>
-        {[minV, (minV + maxV) / 2, maxV].map((tick, i) => (
-          <g key={i}>
-            <line x1={pad.left} x2={W - pad.right} y1={scaleY(tick)} y2={scaleY(tick)} stroke="rgba(255,255,255,0.07)" strokeWidth={1} />
-            <text x={pad.left - 4} y={scaleY(tick) + 4} textAnchor="end" fontSize={9} fill="#64748b">{format(tick)}</text>
-          </g>
+    <div style={{ display: 'grid', gap: 10 }}>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        {combos.map((combo) => (
+          <span key={combo} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: '#cbd5e1', fontSize: 12 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: colorByCombo.get(combo) ?? '#94a3b8' }} />
+            {comboLabel(combo)}
+          </span>
         ))}
-        <polyline points={points} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-        {data.map((d, i) => (
-          <g key={i}>
-            <circle cx={scaleX(i)} cy={scaleY(d.value)} r={3.5} fill={color} />
-            <text x={scaleX(i)} y={H - pad.bottom + 14} textAnchor="middle" fontSize={9} fill="#64748b">
-              {d.date.slice(5)}
-            </text>
-            <title>{`${d.date}: ${format(d.value)}`}</title>
-          </g>
-        ))}
-      </svg>
+      </div>
+      <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+        <svg width={W} height={H} role="img" aria-label={`${trendMetricLabel(metric)} by date, pitch type, and ball type`} style={{ display: 'block' }}>
+          <rect x={0} y={0} width={W} height={H} rx={8} fill="rgba(2,6,23,0.18)" />
+          {ticks.map((tick) => (
+            <g key={tick}>
+              <line x1={pad.left} x2={W - pad.right} y1={scaleY(tick)} y2={scaleY(tick)} stroke="rgba(148,163,184,0.14)" strokeWidth={1} />
+              <text x={pad.left - 8} y={scaleY(tick) + 4} textAnchor="end" fontSize={11} fontWeight={700} fill="#94a3b8">
+                {trendMetricFormat(metric, tick)}
+              </text>
+            </g>
+          ))}
+          <line x1={pad.left} x2={W - pad.right} y1={baselineY} y2={baselineY} stroke="rgba(226,232,240,0.28)" strokeWidth={1} />
+          {dates.map((date, dateIndex) => {
+            const groupLeft = pad.left + dateIndex * dateBand;
+            const groupCenter = groupLeft + dateBand / 2;
+            const dateBars = combos
+              .map((combo) => {
+                const [pitchType = 'Pitch', ballType = 'Ball'] = combo.split('|');
+                const bucket = dataByDateCombo.get(`${date}|${pitchType}|${ballType}`);
+                return bucket ? { combo, bucket } : null;
+              })
+              .filter((row): row is { combo: string; bucket: BullpenTrendBucket } => row !== null);
+            const dateBarsWidth = dateBars.length * barW + Math.max(0, dateBars.length - 1) * barGap;
+            const barsLeft = groupCenter - dateBarsWidth / 2;
+            return (
+              <g key={`trend-date-${date}`}>
+                {dateIndex > 0 ? (
+                  <line x1={groupLeft} x2={groupLeft} y1={pad.top} y2={baselineY + 10} stroke="rgba(148,163,184,0.12)" strokeWidth={1} />
+                ) : null}
+                {dateBars.map(({ combo, bucket: d }, comboIndex) => {
+                  const cx = barsLeft + comboIndex * (barW + barGap) + barW / 2;
+                  const y = scaleY(d.value);
+                  const h = Math.max(2, baselineY - y);
+                  const fill = colorByCombo.get(combo) ?? '#94a3b8';
+                  return (
+                    <g key={d.key}>
+                      <rect
+                        x={cx - barW / 2}
+                        y={y}
+                        width={barW}
+                        height={h}
+                        rx={4}
+                        fill={fill}
+                        stroke="rgba(255,255,255,0.22)"
+                        strokeWidth={1}
+                      />
+                      <title>{`${d.date}\nPitch Type: ${d.pitchType}\nBall Type: ${d.ballType}\n${trendMetricLabel(metric)}: ${trendMetricFormat(metric, d.value)}\nPitches: ${d.count}`}</title>
+                    </g>
+                  );
+                })}
+                <text x={groupCenter} y={H - 38} textAnchor="middle" fontSize={11} fontWeight={800} fill="#e2e8f0">
+                  {formatTrendDate(date)}
+                </text>
+              </g>
+            );
+          })}
+          <text x={pad.left} y={18} fontSize={12} fontWeight={800} fill="#cbd5e1">
+            {trendMetricLabel(metric)} by Date / Pitch Type / Ball Type
+          </text>
+        </svg>
+      </div>
     </div>
   );
+}
+
+function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
+  if (data.length < 1) {
+    return (
+      <div style={{ padding: '12px 0', color: '#94a3b8', fontSize: 13 }}>
+        No individual velocity data yet.
+      </div>
+    );
+  }
+  const dates = Array.from(new Set(data.map((d) => d.date))).sort((a, b) => a.localeCompare(b));
+  const combos = Array.from(new Set(data.map((d) => `${d.pitchType}|${d.ballType}`))).sort((a, b) => a.localeCompare(b));
+  const comboLabel = (combo: string) => {
+    const [pitchType = 'Pitch', ballType = 'Ball'] = combo.split('|');
+    return `${pitchType} / ${ballType}`;
+  };
+  const maxPointsPerDate = Math.max(1, ...dates.map((date) => data.filter((point) => point.date === date).length));
+  const groupW = Math.max(112, maxPointsPerDate * 14 + 42);
+  const W = Math.max(720, dates.length * groupW + 92);
+  const H = 310;
+  const pad = { top: 28, right: 22, bottom: 68, left: 58 };
+  const vals = data.map((d) => d.value);
+  const minV = Math.max(0, Math.floor(Math.min(...vals) - 2));
+  const maxV = Math.ceil(Math.max(...vals) + 2);
+  const range = Math.max(1, maxV - minV);
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+  const dateBand = chartW / dates.length;
+  const scaleY = (v: number) => pad.top + (1 - (v - minV) / range) * chartH;
+  const baselineY = scaleY(minV);
+  const palette = ['#60a5fa', '#f59e0b', '#22c55e', '#e11d48', '#a78bfa', '#14b8a6', '#f97316', '#38bdf8'];
+  const colorByCombo = new Map(combos.map((combo, index) => [combo, palette[index % palette.length]] as const));
+  const pointsByDate = new Map<string, BullpenVelocityPoint[]>();
+  for (const point of data) {
+    const arr = pointsByDate.get(point.date) ?? [];
+    arr.push(point);
+    pointsByDate.set(point.date, arr);
+  }
+  for (const arr of pointsByDate.values()) {
+    arr.sort((a, b) => a.pitchNumber - b.pitchNumber || a.pitchType.localeCompare(b.pitchType) || a.ballType.localeCompare(b.ballType));
+  }
+  const ticks = [minV, minV + range / 2, maxV];
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        {combos.map((combo) => (
+          <span key={combo} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', color: '#cbd5e1', fontSize: 12 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 999, background: colorByCombo.get(combo) ?? '#94a3b8' }} />
+            {comboLabel(combo)}
+          </span>
+        ))}
+      </div>
+      <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+        <svg width={W} height={H} role="img" aria-label="Individual pitch velocity scatter plot" style={{ display: 'block' }}>
+          <rect x={0} y={0} width={W} height={H} rx={8} fill="rgba(2,6,23,0.18)" />
+          {ticks.map((tick) => (
+            <g key={tick}>
+              <line x1={pad.left} x2={W - pad.right} y1={scaleY(tick)} y2={scaleY(tick)} stroke="rgba(148,163,184,0.14)" strokeWidth={1} />
+              <text x={pad.left - 8} y={scaleY(tick) + 4} textAnchor="end" fontSize={11} fontWeight={700} fill="#94a3b8">
+                {trendMetricFormat('velocity', tick)}
+              </text>
+            </g>
+          ))}
+          <line x1={pad.left} x2={W - pad.right} y1={baselineY} y2={baselineY} stroke="rgba(226,232,240,0.28)" strokeWidth={1} />
+          {dates.map((date, dateIndex) => {
+            const groupLeft = pad.left + dateIndex * dateBand;
+            const groupCenter = groupLeft + dateBand / 2;
+            const points = pointsByDate.get(date) ?? [];
+            const pointGap = 12;
+            const pointsWidth = Math.max(0, (points.length - 1) * pointGap);
+            const pointsLeft = groupCenter - pointsWidth / 2;
+            return (
+              <g key={`velocity-date-${date}`}>
+                {dateIndex > 0 ? (
+                  <line x1={groupLeft} x2={groupLeft} y1={pad.top} y2={baselineY + 10} stroke="rgba(148,163,184,0.12)" strokeWidth={1} />
+                ) : null}
+                {points.map((point, pointIndex) => {
+                  const combo = `${point.pitchType}|${point.ballType}`;
+                  const cx = pointsLeft + pointIndex * pointGap;
+                  const cy = scaleY(point.value);
+                  const fill = colorByCombo.get(combo) ?? '#94a3b8';
+                  return (
+                    <g key={point.key}>
+                      <circle cx={cx} cy={cy} r={5.5} fill={fill} stroke="rgba(255,255,255,0.8)" strokeWidth={1.2} />
+                      <title>{`${point.date}\nPitch #: ${point.pitchNumber}\nPitch Type: ${point.pitchType}\nBall Type: ${point.ballType}\nVelocity: ${trendMetricFormat('velocity', point.value)}`}</title>
+                    </g>
+                  );
+                })}
+                <text x={groupCenter} y={H - 38} textAnchor="middle" fontSize={11} fontWeight={800} fill="#e2e8f0">
+                  {formatTrendDate(date)}
+                </text>
+              </g>
+            );
+          })}
+          <text x={pad.left} y={18} fontSize={12} fontWeight={800} fill="#cbd5e1">
+            Individual Pitch Velocity by Date / Pitch Type / Ball Type
+          </text>
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function getColumn(columns: string[], wanted: string) {
+  const target = wanted.trim().toLowerCase();
+  return columns.find((column) => column.trim().toLowerCase() === target) ?? null;
+}
+
+function getColumnValue(row: Record<string, string>, column: string | null, fallback: string) {
+  if (!column) return fallback;
+  return String(row[column] ?? '').trim() || fallback;
+}
+
+function isYes(value: string) {
+  return value.trim().toLowerCase() === 'yes';
 }
 
 export default function BullpenEntry({
@@ -136,18 +356,23 @@ export default function BullpenEntry({
     setRows(buildEmptyRows(template.rowCount, template.columns, template.rows));
   }, [template?.id]);
 
-  // Load existing entries when template changes
+  const templateById = useMemo(() => new Map(visibleTemplates.map((row) => [row.id, row] as const)), [visibleTemplates]);
+
+  // Load existing entries for all visible templates. The selected template still
+  // controls the editable grid, but trends use the full bullpen history.
   useEffect(() => {
-    if (!selectedTemplateId) return;
+    if (!visibleTemplates.length) return;
     setLoadingEntries(true);
-    fetch(`/api/player/bullpen-log?playerId=${playerId}&templateId=${encodeURIComponent(selectedTemplateId)}${previewQuery ? `&${previewQuery.slice(1)}` : ''}`, { cache: 'no-store' })
+    fetch(`/api/player/bullpen-log?playerId=${playerId}${previewQuery ? `&${previewQuery.slice(1)}` : ''}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((payload: { entries?: LogEntry[] }) => {
-        setLogEntries(Array.isArray(payload.entries) ? payload.entries : []);
+        const visibleIds = new Set(visibleTemplates.map((row) => row.id));
+        const entries = Array.isArray(payload.entries) ? payload.entries : [];
+        setLogEntries(entries.filter((entry) => visibleIds.has(entry.templateId)));
       })
       .catch(() => {})
       .finally(() => setLoadingEntries(false));
-  }, [selectedTemplateId, playerId]);
+  }, [visibleTemplates, playerId, previewQuery]);
 
   // Load existing entry for selected date+template
   useEffect(() => {
@@ -184,99 +409,132 @@ export default function BullpenEntry({
       if (!res.ok) { setSaveMsg(payload.error ?? 'Failed to save.'); return; }
       setSaveMsg('Saved!');
       // Refresh entries
-      const refresh = await fetch(`/api/player/bullpen-log?playerId=${playerId}&templateId=${encodeURIComponent(selectedTemplateId)}`, { cache: 'no-store' });
+      const refresh = await fetch(`/api/player/bullpen-log?playerId=${playerId}${previewQuery ? `&${previewQuery.slice(1)}` : ''}`, { cache: 'no-store' });
       const refreshPayload: { entries?: LogEntry[] } = await refresh.json();
-      setLogEntries(Array.isArray(refreshPayload.entries) ? refreshPayload.entries : []);
+      const visibleIds = new Set(visibleTemplates.map((row) => row.id));
+      const entries = Array.isArray(refreshPayload.entries) ? refreshPayload.entries : [];
+      setLogEntries(entries.filter((entry) => visibleIds.has(entry.templateId)));
       setTimeout(() => setSaveMsg(''), 2500);
     } finally {
       setSaving(false);
     }
   };
 
-  type TrendView = 'by-date' | 'by-pitch-type' | 'by-ball-type';
-  const [veloView, setVeloView] = useState<'individual' | 'avg-date'>('avg-date');
-  const [checkboxView, setCheckboxView] = useState<TrendView>('by-date');
+  const [trendMetric, setTrendMetric] = useState<BullpenTrendMetric>('velocity');
+  const [velocityTrendMode, setVelocityTrendMode] = useState<'average' | 'individual'>('average');
+  const [trendStartDate, setTrendStartDate] = useState('');
+  const [trendEndDate, setTrendEndDate] = useState('');
 
   // All rows across all entries, each annotated with date
   const allRows = useMemo(() => {
-    return logEntries.flatMap((entry) =>
-      (entry.rowsJson ?? []).map((row): Record<string, string> => ({ ...row, __date: entry.bullpenDate }))
-    );
-  }, [logEntries]);
+    return logEntries
+      .filter((entry) => {
+        const date = String(entry.bullpenDate ?? '').trim();
+        if (!date) return false;
+        if (trendStartDate && date < trendStartDate) return false;
+        if (trendEndDate && date > trendEndDate) return false;
+        return true;
+      })
+      .flatMap((entry) => {
+        const sourceTemplate = templateById.get(entry.templateId);
+        const columns = sourceTemplate?.columns ?? [];
+        const velocityCol = columns.find(isVelocityCol) ?? '';
+        const executionCol = columns.find(isExecutionCol) ?? '';
+        const strikeCol = columns.find(isStrikeCol) ?? '';
+        const pitchTypeCol = getColumn(columns, 'pitch type') ?? '';
+        const ballTypeCol = getColumn(columns, 'ball type') ?? '';
+        return (entry.rowsJson ?? []).map((row, index): Record<string, string> => ({
+          ...row,
+          __date: entry.bullpenDate,
+          __pitchNumber: String(index + 1),
+          __templateId: entry.templateId,
+          __velocityCol: velocityCol,
+          __executionCol: executionCol,
+          __strikeCol: strikeCol,
+          __pitchTypeCol: pitchTypeCol,
+          __ballTypeCol: ballTypeCol,
+        }));
+      });
+  }, [logEntries, templateById, trendStartDate, trendEndDate]);
 
-  // Group rows by a grouping key and compute avg/pct for a column
-  function groupAndCompute(col: string, groupKey: string, isVelo: boolean): { label: string; value: number }[] {
-    const groups = new Map<string, { sum: number; count: number; yes: number }>();
-    allRows.forEach((row) => {
-      const key = String(row[groupKey] ?? '').trim() || '—';
-      const val = String(row[col] ?? '').trim();
-      if (!val) return;
-      const existing = groups.get(key) ?? { sum: 0, count: 0, yes: 0 };
-      if (isVelo) {
-        const n = Number(val);
-        if (Number.isFinite(n) && n > 0) { existing.sum += n; existing.count += 1; }
+  const trendMetricOptions = useMemo(() => {
+    const options: Array<{ value: BullpenTrendMetric; label: string }> = [];
+    if (visibleTemplates.some((row) => row.columns.some(isVelocityCol))) options.push({ value: 'velocity', label: 'Velocity' });
+    if (visibleTemplates.some((row) => row.columns.some(isExecutionCol))) options.push({ value: 'execution', label: 'Execution %' });
+    if (visibleTemplates.some((row) => row.columns.some(isStrikeCol))) options.push({ value: 'strike', label: 'Strike %' });
+    return options;
+  }, [visibleTemplates]);
+
+  useEffect(() => {
+    if (!trendMetricOptions.length) return;
+    if (trendMetricOptions.some((option) => option.value === trendMetric)) return;
+    setTrendMetric(trendMetricOptions[0]?.value ?? 'velocity');
+  }, [trendMetric, trendMetricOptions]);
+
+  const combinedTrendData = useMemo(() => {
+    const groups = new Map<string, { date: string; pitchType: string; ballType: string; sum: number; count: number; yes: number }>();
+    for (const row of allRows) {
+      const valueCol = trendMetric === 'velocity' ? row.__velocityCol : trendMetric === 'execution' ? row.__executionCol : row.__strikeCol;
+      if (!valueCol) continue;
+      const date = String(row.__date ?? '').trim();
+      if (!date) continue;
+      const pitchType = getColumnValue(row, row.__pitchTypeCol || null, 'Pitch');
+      const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Ball');
+      const rawValue = String(row[valueCol] ?? '').trim();
+      if (!rawValue) continue;
+      const key = `${date}|${pitchType}|${ballType}`;
+      const group = groups.get(key) ?? { date, pitchType, ballType, sum: 0, count: 0, yes: 0 };
+      if (trendMetric === 'velocity') {
+        const value = Number(rawValue);
+        if (!Number.isFinite(value) || value <= 0) continue;
+        group.sum += value;
+        group.count += 1;
       } else {
-        existing.count += 1;
-        if (val.toLowerCase() === 'yes') existing.yes += 1;
+        group.count += 1;
+        if (isYes(rawValue)) group.yes += 1;
       }
-      groups.set(key, existing);
-    });
+      groups.set(key, group);
+    }
     return Array.from(groups.entries())
-      .map(([label, { sum, count, yes }]) => ({
-        label,
-        value: isVelo ? (count ? sum / count : 0) : (count ? (yes / count) * 100 : 0),
+      .map(([key, group]) => ({
+        key,
+        date: group.date,
+        pitchType: group.pitchType,
+        ballType: group.ballType,
+        count: group.count,
+        value: trendMetric === 'velocity'
+          ? (group.count ? group.sum / group.count : 0)
+          : (group.count ? (group.yes / group.count) * 100 : 0),
       }))
-      .filter((d) => d.value > 0)
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }
+      .filter((bucket) => bucket.count > 0 && bucket.value > 0)
+      .sort((a, b) =>
+        a.date.localeCompare(b.date) ||
+        a.pitchType.localeCompare(b.pitchType) ||
+        a.ballType.localeCompare(b.ballType)
+      );
+  }, [allRows, trendMetric]);
 
-  // Velocity by date (avg per session)
-  const veloByDate = useMemo(() => {
-    if (!template) return [];
-    const veloCol = template.columns.find(isVelocityCol);
-    if (!veloCol) return [];
-    const byDate = new Map<string, { sum: number; count: number }>();
-    allRows.forEach((row) => {
-      const date = row.__date ?? '';
-      const val = Number(row[veloCol] ?? '');
-      if (!Number.isFinite(val) || val <= 0) return;
-      const existing = byDate.get(date) ?? { sum: 0, count: 0 };
-      existing.sum += val; existing.count += 1;
-      byDate.set(date, existing);
-    });
-    return Array.from(byDate.entries())
-      .map(([date, { sum, count }]) => ({ date, value: count ? sum / count : 0 }))
-      .filter((d) => d.value > 0)
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }, [allRows, template]);
-
-  // Individual velocity points (all pitches) with ball type label
-  const veloIndividual = useMemo(() => {
-    if (!template) return [];
-    const veloCol = template.columns.find(isVelocityCol);
-    const ballTypeCol = template.columns.find((c) => c.trim().toLowerCase() === 'ball type');
-    if (!veloCol) return [];
-    return allRows.map((row, i) => {
-      const val = Number(row[veloCol] ?? '');
-      if (!Number.isFinite(val) || val <= 0) return null;
-      const ballType = ballTypeCol ? String(row[ballTypeCol] ?? '').trim() : '';
-      return { index: i, date: row['__date'] ?? '', value: val, label: (ballType || row['__date']) ?? '' };
-    }).filter((d): d is NonNullable<typeof d> => d !== null);
-  }, [allRows, template]);
-
-  // Checkbox pct grouped by chosen view
-  const checkboxTrendData = useMemo(() => {
-    if (!template) return {};
-    const result: Record<string, { label: string; value: number }[]> = {};
-    template.columns.forEach((col) => {
-      if (!isExecutionCol(col) && !isStrikeCol(col)) return;
-      const groupKey = checkboxView === 'by-date' ? '__date'
-        : checkboxView === 'by-pitch-type' ? template.columns.find((c) => c.trim().toLowerCase() === 'pitch type') ?? '__date'
-        : template.columns.find((c) => c.trim().toLowerCase() === 'ball type') ?? '__date';
-      result[col] = groupAndCompute(col, groupKey, false);
-    });
-    return result;
-  }, [allRows, template, checkboxView]);
+  const individualVelocityPoints = useMemo(() => {
+    return allRows
+      .map((row, index) => {
+        const velocityCol = row.__velocityCol || '';
+        if (!velocityCol) return null;
+        const value = Number(String(row[velocityCol] ?? '').trim());
+        if (!Number.isFinite(value) || value <= 0) return null;
+        const date = String(row.__date ?? '').trim();
+        if (!date) return null;
+        return {
+          key: `${date}|${index}|${value}`,
+          date,
+          pitchType: getColumnValue(row, row.__pitchTypeCol || null, 'Pitch'),
+          ballType: getColumnValue(row, row.__ballTypeCol || null, 'Ball'),
+          value,
+          pitchNumber: Number(row.__pitchNumber) || index + 1,
+        };
+      })
+      .filter((point): point is BullpenVelocityPoint => point !== null)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.pitchNumber - b.pitchNumber);
+  }, [allRows]);
 
   if (!visibleTemplates.length) {
     return <p className="portal-muted-text" style={{ margin: 0 }}>No bullpen scripts assigned yet.</p>;
@@ -338,7 +596,7 @@ export default function BullpenEntry({
                     Pitch #
                   </th>
                   {template.columns.map((col) => (
-                    <th key={col} style={{ textAlign: 'center', fontSize: '0.9rem', fontWeight: 800, padding: '0.4rem 0.35rem', borderBottom: '1px solid var(--calendar-grid-border, var(--border))', borderRight: '1px solid var(--calendar-grid-border, var(--border))', whiteSpace: 'nowrap', color: isEditableCol(col) ? '#c8102e' : 'inherit' }}>
+                    <th key={col} style={{ textAlign: 'center', fontSize: '0.9rem', fontWeight: 800, padding: isVelocityCol(col) ? '0.35rem 0.2rem' : '0.4rem 0.35rem', borderBottom: '1px solid var(--calendar-grid-border, var(--border))', borderRight: '1px solid var(--calendar-grid-border, var(--border))', whiteSpace: 'nowrap', color: isEditableCol(col) ? '#c8102e' : 'inherit', width: isVelocityCol(col) ? 72 : undefined, minWidth: isVelocityCol(col) ? 72 : undefined, maxWidth: isVelocityCol(col) ? 72 : undefined }}>
                       {col}
                     </th>
                   ))}
@@ -354,14 +612,14 @@ export default function BullpenEntry({
                       const val = row[col] ?? '';
                       if (isVelocityCol(col)) {
                         return (
-                          <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))' }}>
+                          <td key={ci} style={{ padding: '0.16rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', width: 72, minWidth: 72, maxWidth: 72 }}>
                             <input
                               type="number"
                               className="portal-schedule-control"
                               value={val}
                               onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
                               placeholder="mph"
-                              style={{ width: '100%', minWidth: 70, textAlign: 'center', fontWeight: 600 }}
+                              style={{ width: '100%', minWidth: 0, textAlign: 'center', fontWeight: 600, padding: '0.35rem 0.25rem' }}
                             />
                           </td>
                         );
@@ -404,102 +662,85 @@ export default function BullpenEntry({
         </div>
       ) : null}
 
-      {/* Trend charts */}
-      {template && logEntries.length > 0 && !loadingEntries ? (
-        <div className="portal-panel" style={{ minHeight: 'unset', padding: '1rem', display: 'grid', gap: 28 }}>
-          <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#e2e8f0' }}>Trends</h4>
-
-          {/* Velocity charts */}
-          {template.columns.some(isVelocityCol) ? (
-            <div style={{ display: 'grid', gap: 12 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 600 }}>Velocity</span>
-                <button type="button" className={veloView === 'avg-date' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setVeloView('avg-date')}>Avg by Date</button>
-                <button type="button" className={veloView === 'individual' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setVeloView('individual')}>Individual Pitches</button>
+      {/* Trend chart */}
+      {template && logEntries.length > 0 && !loadingEntries && trendMetricOptions.length > 0 ? (
+        <div className="portal-panel" style={{ minHeight: 'unset', padding: '1rem', display: 'grid', gap: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: '#e2e8f0' }}>Trends</h4>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'end' }}>
+              <label style={{ display: 'grid', gap: 3 }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Start</span>
+                <input
+                  type="date"
+                  className="portal-schedule-control"
+                  value={trendStartDate}
+                  onChange={(e) => setTrendStartDate(e.target.value)}
+                  style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 3 }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>End</span>
+                <input
+                  type="date"
+                  className="portal-schedule-control"
+                  value={trendEndDate}
+                  onChange={(e) => setTrendEndDate(e.target.value)}
+                  style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
+                />
+              </label>
+              {(trendStartDate || trendEndDate) ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{ padding: '3px 10px', fontSize: 12, minHeight: 30 }}
+                  onClick={() => {
+                    setTrendStartDate('');
+                    setTrendEndDate('');
+                  }}
+                >
+                  All Dates
+                </button>
+              ) : null}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                {trendMetricOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={trendMetric === option.value ? 'btn btn-primary' : 'btn btn-ghost'}
+                    style={{ padding: '3px 10px', fontSize: 12, minHeight: 30 }}
+                    onClick={() => setTrendMetric(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
               </div>
-              {veloView === 'avg-date' ? (
-                <TrendChart data={veloByDate} label="Avg Velocity by Date (mph)" color="#60a5fa" format={(v) => `${v.toFixed(1)} mph`} />
-              ) : (
-                <div>
-                  <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>Individual Pitches by Ball Type &amp; Date</div>
-                  {veloIndividual.length === 0 ? (
-                    <p className="portal-muted-text" style={{ margin: 0 }}>No velocity data yet.</p>
-                  ) : (
-                    <div style={{ overflowX: 'auto' }}>
-                      <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 340 }}>
-                        <thead>
-                          <tr>
-                            <th style={{ padding: '4px 10px', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.12)', color: '#94a3b8' }}>#</th>
-                            <th style={{ padding: '4px 10px', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.12)', color: '#94a3b8' }}>Date</th>
-                            <th style={{ padding: '4px 10px', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.12)', color: '#94a3b8' }}>Ball Type</th>
-                            <th style={{ padding: '4px 10px', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.12)', color: '#94a3b8' }}>Velocity</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {veloIndividual.map((p, i) => (
-                            <tr key={i}>
-                              <td style={{ padding: '3px 10px', borderBottom: '1px solid rgba(255,255,255,0.06)', color: '#64748b' }}>{i + 1}</td>
-                              <td style={{ padding: '3px 10px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>{p.date}</td>
-                              <td style={{ padding: '3px 10px', borderBottom: '1px solid rgba(255,255,255,0.06)', color: '#94a3b8' }}>{p.label !== p.date ? p.label : '—'}</td>
-                              <td style={{ padding: '3px 10px', borderBottom: '1px solid rgba(255,255,255,0.06)', textAlign: 'right', fontWeight: 700, color: '#60a5fa' }}>{p.value.toFixed(1)} mph</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+              {trendMetric === 'velocity' ? (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    className={velocityTrendMode === 'average' ? 'btn btn-primary' : 'btn btn-ghost'}
+                    style={{ padding: '3px 10px', fontSize: 12, minHeight: 30 }}
+                    onClick={() => setVelocityTrendMode('average')}
+                  >
+                    Average
+                  </button>
+                  <button
+                    type="button"
+                    className={velocityTrendMode === 'individual' ? 'btn btn-primary' : 'btn btn-ghost'}
+                    style={{ padding: '3px 10px', fontSize: 12, minHeight: 30 }}
+                    onClick={() => setVelocityTrendMode('individual')}
+                  >
+                    Individual Pitches
+                  </button>
                 </div>
-              )}
+              ) : null}
             </div>
-          ) : null}
-
-          {/* Execution / Strike % charts */}
-          {template.columns.some((c) => isExecutionCol(c) || isStrikeCol(c)) ? (
-            <div style={{ display: 'grid', gap: 12 }}>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 600 }}>Execution / Strike %</span>
-                <button type="button" className={checkboxView === 'by-date' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setCheckboxView('by-date')}>By Date</button>
-                <button type="button" className={checkboxView === 'by-pitch-type' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setCheckboxView('by-pitch-type')}>By Pitch Type</button>
-                <button type="button" className={checkboxView === 'by-ball-type' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ padding: '2px 10px', fontSize: 12 }} onClick={() => setCheckboxView('by-ball-type')}>By Ball Type</button>
-              </div>
-              {template.columns.filter((c) => isExecutionCol(c) || isStrikeCol(c)).map((col) => {
-                const series = checkboxTrendData[col] ?? [];
-                const isExec = isExecutionCol(col);
-                const color = isExec ? '#22c55e' : '#f59e0b';
-                const label = `${isExec ? 'Execution' : 'Strike'} % — ${checkboxView === 'by-date' ? 'by Date' : checkboxView === 'by-pitch-type' ? 'by Pitch Type' : 'by Ball Type'}`;
-                if (checkboxView === 'by-date') {
-                  // Use line chart for date view
-                  const dateSeries = [...logEntries].sort((a, b) => a.bullpenDate.localeCompare(b.bullpenDate)).map((entry) => {
-                    const colRows = (entry.rowsJson ?? []).map((r) => String(r[col] ?? '').trim()).filter(Boolean);
-                    const yes = colRows.filter((v) => v.toLowerCase() === 'yes').length;
-                    return colRows.length ? { date: entry.bullpenDate, value: (yes / colRows.length) * 100 } : null;
-                  }).filter((d): d is { date: string; value: number } => d !== null);
-                  return <TrendChart key={col} data={dateSeries} label={label} color={color} format={(v) => `${v.toFixed(0)}%`} />;
-                }
-                // Bar-style table for pitch type / ball type groupings
-                return (
-                  <div key={col}>
-                    <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>{label}</div>
-                    {series.length === 0 ? (
-                      <p className="portal-muted-text" style={{ margin: 0, fontSize: 12 }}>No data yet.</p>
-                    ) : (
-                      <div style={{ display: 'grid', gap: 6 }}>
-                        {series.map((item) => (
-                          <div key={item.label} style={{ display: 'grid', gridTemplateColumns: '140px 1fr 48px', alignItems: 'center', gap: 8 }}>
-                            <span style={{ fontSize: 12, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.label}</span>
-                            <div style={{ height: 14, borderRadius: 4, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
-                              <div style={{ height: '100%', width: `${Math.min(100, item.value)}%`, background: color, borderRadius: 4, transition: 'width 0.3s' }} />
-                            </div>
-                            <span style={{ fontSize: 12, fontWeight: 700, color, textAlign: 'right' }}>{item.value.toFixed(0)}%</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
+          </div>
+          {trendMetric === 'velocity' && velocityTrendMode === 'individual' ? (
+            <VelocityScatterChart data={individualVelocityPoints} />
+          ) : (
+            <TrendBarChart data={combinedTrendData} metric={trendMetric} />
+          )}
         </div>
       ) : null}
     </div>

@@ -289,6 +289,7 @@ export async function GET(request: Request) {
       leaderboard_individual_rows: [],
       leaderboard_average_columns: [],
       leaderboard_average_rows: [],
+      all_pitch_correlation_columns: [],
       pitch_options: [],
       selected_pitch_key: null,
       selected_pitch_points: [],
@@ -331,7 +332,7 @@ export async function GET(request: Request) {
     ? (playerScopedName ? JSON.stringify([playerScopedName]) : null)
     : selectedPitcherRaw;
   const cacheKey = [
-    'biomech:v2',
+    'biomech:v3',
     Number(organizationId),
     String(schoolCode),
     session.role === 'player' ? `player:${String(session.userId ?? '')}` : `role:${session.role}`,
@@ -488,7 +489,7 @@ export async function GET(request: Request) {
     const selectedPitchers = parseSelectedValues(selectedPitcher).filter((v) => v.toUpperCase() !== 'ALL');
     if (selectedPitchers.length === 1) {
       const allSessionsCacheKey = [
-        'biomech:allsessions:v2',
+        'biomech:allsessions:v3',
         Number(selectedOrgId),
         String(schoolCode),
         session.role === 'player' ? `player:${String(session.userId ?? '')}` : `role:${session.role}`,
@@ -537,6 +538,7 @@ export async function GET(request: Request) {
       leaderboard_individual_rows: snapshot.leaderboardIndividualRows,
       leaderboard_average_columns: snapshot.leaderboardAverageColumns,
       leaderboard_average_rows: snapshot.leaderboardAverageRows,
+      all_pitch_correlation_columns: snapshot.allPitchCorrelationColumns ?? [],
       pitch_options: snapshot.pitchOptions,
       selected_pitch_key: snapshot.selectedPitchKey,
       selected_pitch_points: snapshot.selectedPitchPoints,
