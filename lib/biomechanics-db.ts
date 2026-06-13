@@ -177,7 +177,7 @@ async function getTrackmanVelocityByNameDate(args: {
 }): Promise<Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>> {
   if (!isDatabaseConfigured()) return new Map();
   const pool = getDbPool();
-  const values: Array<string> = [normalizeSchoolCode(args.schoolCode)];
+  const values: unknown[] = [normalizeSchoolCode(args.schoolCode)];
   const dateParts: string[] = [];
   if (args.startDate) {
     values.push(args.startDate);
@@ -1471,6 +1471,7 @@ export async function getBiomechanicsSnapshot(args: {
   selectedVelocityMin?: number | null;
   selectedVelocityMax?: number | null;
   forceMode?: 'force' | 'bw';
+  includeAllPitchValues?: boolean;
 }): Promise<{
   tableColumns: string[];
   tableRows: Array<Record<string, string | number | null>>;
@@ -1582,9 +1583,10 @@ export async function getBiomechanicsSnapshot(args: {
   };
   const selectedPitchers = parseMultiFilter(args.selectedPitcher ?? '', { allowComma: false }).filter((v) => v.toUpperCase() !== 'ALL');
   const selectedPitcherKeys = new Set(selectedPitchers.flatMap((name) => buildNameKeys(name)));
+  const selectedPitcherKeyList = Array.from(selectedPitcherKeys);
 
   const dateFilterParts: string[] = [];
-  const values: Array<string | number> = [args.organizationId, schoolCode];
+  const values: unknown[] = [args.organizationId, schoolCode];
   if (args.startDate) {
     values.push(args.startDate);
     dateFilterParts.push(`COALESCE(captured_at, created_at) >= $${values.length}::date`);
@@ -1599,12 +1601,14 @@ export async function getBiomechanicsSnapshot(args: {
       .map((part) => part.replace(/COALESCE\(captured_at,\s*created_at\)/g, 'COALESCE(p.captured_at, u.created_at)'))
       .join(' AND ')}`
     : '';
-  const summaryValues: Array<string | number> = [...values];
+  const allPitchValues: unknown[] = [...values];
+  const singlePitchValues: unknown[] = [...values];
   const selectedTags = parseMultiFilter(args.selectedTag ?? '').filter((v) => v.toUpperCase() !== 'ALL');
   const selectedPitchTypes = parseMultiFilter(args.selectedPitchType ?? '');
   const selectedVelocityMin = typeof args.selectedVelocityMin === 'number' && Number.isFinite(args.selectedVelocityMin) ? args.selectedVelocityMin : null;
   const selectedVelocityMax = typeof args.selectedVelocityMax === 'number' && Number.isFinite(args.selectedVelocityMax) ? args.selectedVelocityMax : null;
   const forceMode = args.forceMode === 'bw' ? 'bw' : 'force';
+  const includeAllPitchValues = Boolean(args.includeAllPitchValues);
 
   // Kick off TrackMan lookup in parallel with DB queries — it needs no query results
   const trackmanVeloPromise = getTrackmanVelocityByNameDate({
@@ -1614,7 +1618,7 @@ export async function getBiomechanicsSnapshot(args: {
   });
 
   // Run all independent queries in parallel
-  const [rowResult, summaryAllRowsResult, pitchOptionsResult] = await Promise.all([
+  const [rowResult, pitchOptionsResult] = await Promise.all([
     runSnapshotQuery<{ row_json: Record<string, string | number | null>; captured_at: string | null; created_at: string | null }>(
       'biomechanics pitch rows',
       `
@@ -1625,18 +1629,7 @@ export async function getBiomechanicsSnapshot(args: {
         ${dateFilterSql}
       ORDER BY COALESCE(captured_at, created_at) DESC
       `,
-      values
-    ),
-    runSnapshotQuery<{ total_rows: string }>(
-      'biomechanics all-pitch summary',
-      `
-      SELECT COUNT(*)::text AS total_rows
-      FROM biomechanics_pitch_rows
-      WHERE organization_id = $1
-        AND school_code = $2
-        ${dateFilterSql}
-      `,
-      summaryValues
+      allPitchValues
     ),
     runSnapshotQuery<{
       pitch_key: string;
@@ -1668,7 +1661,7 @@ export async function getBiomechanicsSnapshot(args: {
         ${dateFilterSqlSingle}
       ORDER BY COALESCE(p.captured_at, u.created_at) DESC
       `,
-      summaryValues
+      singlePitchValues
     ),
   ]);
   // Derive single-file count from results instead of a separate query
@@ -1685,11 +1678,13 @@ export async function getBiomechanicsSnapshot(args: {
     const strideWidthCm = toFinite(pickValueCaseInsensitive(json, ['strideWidth (cm)', 'strideWidth', 'Stride Width (cm)']));
     const systemWeightN = toFinite(pickValueCaseInsensitive(json, ['systemWeight (N)', 'systemWeight', 'System Weight (N)']));
     const velocityMph = pickVelocityFromRow(json);
-    const rawNumericValues = Object.fromEntries(
-      Object.entries(json)
-        .map(([key, value]) => [String(key ?? '').trim(), toFinite(value)] as const)
-        .filter(([key, value]) => Boolean(key) && value !== null && Number.isFinite(value))
-    ) as Record<string, number>;
+    const rawNumericValues = includeAllPitchValues
+      ? Object.fromEntries(
+          Object.entries(json)
+            .map(([key, value]) => [String(key ?? '').trim(), toFinite(value)] as const)
+            .filter(([key, value]) => Boolean(key) && value !== null && Number.isFinite(value))
+        ) as Record<string, number>
+      : {};
     return {
       name: toFirstLastName(playerRaw || 'Unknown'),
       nameNorm: normalizeName(playerRaw),
@@ -1842,8 +1837,10 @@ export async function getBiomechanicsSnapshot(args: {
         velocityMph: trackmanMatch.velo,
         allPitchValues: allRow.rawNumericValues,
       });
-      for (const column of Object.keys(allRow.rawNumericValues)) {
-        matchedAllPitchCorrelationColumns.add(column);
+      if (includeAllPitchValues) {
+        for (const column of Object.keys(allRow.rawNumericValues)) {
+          matchedAllPitchCorrelationColumns.add(column);
+        }
       }
     }
   }

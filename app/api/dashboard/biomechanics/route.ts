@@ -327,12 +327,13 @@ export async function GET(request: Request) {
   const selectedVelocityMin = Number.isFinite(velocityMin) ? velocityMin : null;
   const selectedVelocityMax = Number.isFinite(velocityMax) ? velocityMax : null;
   const forceMode = String(searchParams.get('forceMode') ?? '').trim().toLowerCase() === 'bw' ? 'bw' : 'force';
+  const includeAllPitchValues = String(searchParams.get('includeAllPitchValues') ?? '').trim() === '1';
   const playerScopedName = session.role === 'player' ? String(session.name ?? '').trim() : '';
   const selectedPitcher = session.role === 'player'
     ? (playerScopedName ? JSON.stringify([playerScopedName]) : null)
     : selectedPitcherRaw;
   const cacheKey = [
-    'biomech:v3',
+    'biomech:v7',
     Number(organizationId),
     String(schoolCode),
     session.role === 'player' ? `player:${String(session.userId ?? '')}` : `role:${session.role}`,
@@ -345,6 +346,7 @@ export async function GET(request: Request) {
     selectedVelocityMin ?? '',
     selectedVelocityMax ?? '',
     forceMode,
+    includeAllPitchValues ? 'raw:1' : 'raw:0',
   ].join('|');
   const cached = biomechanicsResponseCache.get(cacheKey);
   if (cached && Date.now() - cached.at < BIOMECH_RESPONSE_CACHE_TTL_MS) {
@@ -420,6 +422,7 @@ export async function GET(request: Request) {
         selectedVelocityMin,
         selectedVelocityMax,
         forceMode,
+        includeAllPitchValues,
       }).catch((error) => {
         throw failAtStage(error);
       });
@@ -446,6 +449,7 @@ export async function GET(request: Request) {
           selectedVelocityMin,
           selectedVelocityMax,
           forceMode,
+          includeAllPitchValues,
         }).catch((error) => {
           throw failAtStage(error);
         });
@@ -478,6 +482,7 @@ export async function GET(request: Request) {
         selectedVelocityMin,
         selectedVelocityMax,
         forceMode,
+        includeAllPitchValues,
       }).catch((error) => {
         throw failAtStage(error);
       });
@@ -489,7 +494,7 @@ export async function GET(request: Request) {
     const selectedPitchers = parseSelectedValues(selectedPitcher).filter((v) => v.toUpperCase() !== 'ALL');
     if (selectedPitchers.length === 1) {
       const allSessionsCacheKey = [
-        'biomech:allsessions:v3',
+        'biomech:allsessions:v7',
         Number(selectedOrgId),
         String(schoolCode),
         session.role === 'player' ? `player:${String(session.userId ?? '')}` : `role:${session.role}`,
@@ -499,6 +504,7 @@ export async function GET(request: Request) {
         selectedVelocityMin ?? '',
         selectedVelocityMax ?? '',
         forceMode,
+        includeAllPitchValues ? 'raw:1' : 'raw:0',
       ].join('|');
       const allSessionsMemCached = biomechanicsResponseCache.get(allSessionsCacheKey);
       if (allSessionsMemCached && Date.now() - allSessionsMemCached.at < BIOMECH_RESPONSE_CACHE_TTL_MS) {
@@ -522,11 +528,15 @@ export async function GET(request: Request) {
             selectedVelocityMin,
             selectedVelocityMax,
             forceMode,
+            includeAllPitchValues,
           }).catch((error) => {
-            throw failAtStage(error);
+            console.warn(failAtStage(error).message);
+            return null;
           });
-          biomechanicsResponseCache.set(allSessionsCacheKey, { at: Date.now(), payload: allSessionsSnapshot });
-          void writeBiomechRollupCache({ organizationId: selectedOrgId, schoolCode, cacheKey: allSessionsCacheKey, payload: allSessionsSnapshot }).catch(() => {});
+          if (allSessionsSnapshot) {
+            biomechanicsResponseCache.set(allSessionsCacheKey, { at: Date.now(), payload: allSessionsSnapshot });
+            void writeBiomechRollupCache({ organizationId: selectedOrgId, schoolCode, cacheKey: allSessionsCacheKey, payload: allSessionsSnapshot }).catch(() => {});
+          }
         }
       }
     }

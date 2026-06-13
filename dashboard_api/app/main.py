@@ -5930,7 +5930,8 @@ _PRO_DAILY_ROLLUP_REFRESH_RUNNING = False
 _ROLLUP_HEARTBEAT_SECONDS = max(
     30.0, float(os.getenv("DASHBOARD_ROLLUP_HEARTBEAT_SECONDS", "90"))
 )
-_ROLLUP_SCHEDULER_ENABLED = str(os.getenv("DASHBOARD_ROLLUP_SCHEDULER_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
+_ROLLUP_SCHEDULER_ENABLED = str(os.getenv("DASHBOARD_ROLLUP_SCHEDULER_ENABLED", "0")).strip().lower() not in {"0", "false", "no", "off"}
+_ROLLUP_SCHEDULER_FORCE_ON_BOOT = str(os.getenv("DASHBOARD_ROLLUP_SCHEDULER_FORCE_ON_BOOT", "0")).strip().lower() in {"1", "true", "yes", "on"}
 _ROLLUP_SCHEDULER_LOCK = threading.Lock()
 _ROLLUP_SCHEDULER_RUNNING = False
 _LEAGUE_ROLLUP_ADVISORY_LOCK_KEY = 910001
@@ -6872,22 +6873,44 @@ def _ensure_performance_indexes() -> None:
 
     def _run_perf_index_sync() -> None:
         global _PERF_INDEX_LAST_AT, _PERF_INDEX_SYNC_RUNNING
+        got_league_lock = False
+        got_pro_lock = False
         try:
             with get_conn() as conn, conn.cursor() as cur:
                 cur.execute("SET LOCAL lock_timeout = '2s'")
                 cur.execute("SET LOCAL statement_timeout = '20s'")
-                for statement in statements:
-                    cur.execute("SAVEPOINT perf_stmt")
-                    try:
-                        cur.execute(statement)
-                    except Exception:
-                        cur.execute("ROLLBACK TO SAVEPOINT perf_stmt")
-                    finally:
-                        cur.execute("RELEASE SAVEPOINT perf_stmt")
+                cur.execute("SELECT pg_try_advisory_lock(%(k)s) AS locked", {"k": _LEAGUE_ROLLUP_ADVISORY_LOCK_KEY})
+                got_league_lock = bool((cur.fetchone() or {}).get("locked"))
+                cur.execute("SELECT pg_try_advisory_lock(%(k)s) AS locked", {"k": _PRO_ROLLUP_ADVISORY_LOCK_KEY})
+                got_pro_lock = bool((cur.fetchone() or {}).get("locked"))
+                if got_league_lock and got_pro_lock:
+                    for statement in statements:
+                        cur.execute("SAVEPOINT perf_stmt")
+                        try:
+                            cur.execute(statement)
+                        except Exception:
+                            cur.execute("ROLLBACK TO SAVEPOINT perf_stmt")
+                        finally:
+                            cur.execute("RELEASE SAVEPOINT perf_stmt")
+                if got_pro_lock:
+                    cur.execute("SELECT pg_advisory_unlock(%(k)s)", {"k": _PRO_ROLLUP_ADVISORY_LOCK_KEY})
+                    got_pro_lock = False
+                if got_league_lock:
+                    cur.execute("SELECT pg_advisory_unlock(%(k)s)", {"k": _LEAGUE_ROLLUP_ADVISORY_LOCK_KEY})
+                    got_league_lock = False
         except Exception:
             # Keep API serving even if index create fails due permissions/locks.
             pass
         finally:
+            if got_pro_lock or got_league_lock:
+                try:
+                    with get_conn() as conn, conn.cursor() as cur:
+                        if got_pro_lock:
+                            cur.execute("SELECT pg_advisory_unlock(%(k)s)", {"k": _PRO_ROLLUP_ADVISORY_LOCK_KEY})
+                        if got_league_lock:
+                            cur.execute("SELECT pg_advisory_unlock(%(k)s)", {"k": _LEAGUE_ROLLUP_ADVISORY_LOCK_KEY})
+                except Exception:
+                    pass
             _PERF_INDEX_LAST_AT = time.monotonic()
             with _PERF_INDEX_SYNC_LOCK:
                 _PERF_INDEX_SYNC_RUNNING = False
@@ -7006,6 +7029,18 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
             cur.execute(
                 """
                 SELECT
+                  to_regclass('public.pitch_events_daily_rollup_league')::text AS base_tbl,
+                  to_regclass('public.pitch_events_daily_rollup_league_split')::text AS split_tbl,
+                  to_regclass('public.pitch_events_game_rollup_league')::text AS game_tbl
+                """
+            )
+            rollup_tables = cur.fetchone() or {}
+            if not rollup_tables.get("base_tbl") or not rollup_tables.get("split_tbl") or not rollup_tables.get("game_tbl"):
+                _ensure_performance_indexes()
+                return
+            cur.execute(
+                """
+                SELECT
                   MIN(session_date)::date AS min_date,
                   MAX(session_date)::date AS max_date
                 FROM public.pitch_events
@@ -7065,36 +7100,6 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
                   AND session_date >= %(refresh_start)s::date
                 """,
                 {"school_code": school_filter, "refresh_start": refresh_start},
-            )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS public.pitch_events_game_rollup_league
-                (LIKE public.pitch_events_daily_rollup_league_split INCLUDING DEFAULTS INCLUDING GENERATED INCLUDING STORAGE INCLUDING COMMENTS)
-                """
-            )
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date
-                ON public.pitch_events_game_rollup_league (school_code, session_date)
-                """
-            )
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date_pitcher
-                ON public.pitch_events_game_rollup_league (school_code, session_date, pitcher_norm)
-                """
-            )
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date_team
-                ON public.pitch_events_game_rollup_league (school_code, session_date, pitcher_team_norm)
-                """
-            )
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date_value
-                ON public.pitch_events_game_rollup_league (school_code, session_date, split_value)
-                """
             )
             cur.execute(
                 """
@@ -7911,7 +7916,7 @@ def _kick_league_rollup_refresh_background() -> None:
     def _worker() -> None:
         global _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING
         try:
-            _refresh_league_daily_rollup(force=True)
+            _refresh_league_daily_rollup(force=False)
         finally:
             with _LEAGUE_DAILY_ROLLUP_REFRESH_LOCK:
                 _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING = False
@@ -10681,15 +10686,15 @@ def _start_rollup_scheduler_background() -> None:
         _ROLLUP_SCHEDULER_RUNNING = True
 
     def _worker() -> None:
-        # Run one immediate catch-up pass on boot, then keep rollups hot.
-        try:
-            _refresh_league_daily_rollup(force=True)
-        except Exception:
-            pass
-        try:
-            _refresh_pro_daily_rollup(force=True)
-        except Exception:
-            pass
+        if _ROLLUP_SCHEDULER_FORCE_ON_BOOT:
+            try:
+                _refresh_league_daily_rollup(force=True)
+            except Exception:
+                pass
+            try:
+                _refresh_pro_daily_rollup(force=True)
+            except Exception:
+                pass
         while True:
             try:
                 _refresh_league_daily_rollup(force=False)

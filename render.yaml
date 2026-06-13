@@ -7,8 +7,10 @@ services:
     autoDeploy: true
     buildCommand: pip install -r dashboard_api/requirements.txt
     startCommand: python -m uvicorn dashboard_api.app.main:app --host 0.0.0.0 --port $PORT --workers 1
-    postDeployCommand: python scripts/refresh_college_rollups.py --school LEAGUE
     healthCheckPath: /health
+    envVars:
+      - key: DASHBOARD_ROLLUP_SCHEDULER_ENABLED
+        value: "0"
   - type: cron
     name: pcudashboard-league-rollup-refresh
     env: python
@@ -17,3 +19,11 @@ services:
     schedule: "*/30 * * * *"
     buildCommand: pip install -r dashboard_api/requirements.txt
     startCommand: python scripts/refresh_college_rollups.py --school LEAGUE
+  - type: cron
+    name: pcudashboard-pro-rollup-refresh
+    env: python
+    plan: starter
+    branch: main
+    schedule: "*/30 * * * *"
+    buildCommand: pip install -r dashboard_api/requirements.txt
+    startCommand: python scripts/refresh_pro_rollups.py

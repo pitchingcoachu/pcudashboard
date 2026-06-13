@@ -1094,6 +1094,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       forceMode: ForceMode;
       velocityMin: number | null;
       velocityMax: number | null;
+    },
+    loadOptions?: {
+      includeAllPitchCorrelation?: boolean;
     }
   ) => {
     setIsLoading(true);
@@ -1116,6 +1119,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       if (activeVelocityMin !== null && Number.isFinite(activeVelocityMin)) query.set('velocityMin', String(activeVelocityMin));
       if (activeVelocityMax !== null && Number.isFinite(activeVelocityMax)) query.set('velocityMax', String(activeVelocityMax));
       query.set('forceMode', activeForceMode);
+      if (loadOptions?.includeAllPitchCorrelation) query.set('includeAllPitchValues', '1');
       if (pitchKeyOverride || selectedPitchKey) query.set('pitchKey', pitchKeyOverride || selectedPitchKey);
       const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
       const payload = (await response.json().catch(() => ({}))) as Payload;
@@ -1200,6 +1204,13 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setError(e instanceof Error ? e.message : 'Failed to load biomechanics data.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const openLeaderboardCorrelation = async () => {
+    setShowLeaderboardCorrelation(true);
+    if (pageTab === 'leaderboard' && leaderboardViewMode === 'individual' && !allPitchCorrelationColumns.length) {
+      await loadData(undefined, undefined, { includeAllPitchCorrelation: true });
     }
   };
 
@@ -2003,7 +2014,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <h3 style={{ marginTop: 0, marginBottom: 0 }}>{activeTableTitle}</h3>
           {pageTab === 'leaderboard' ? (
-            <button type="button" className="btn btn-ghost" onClick={() => setShowLeaderboardCorrelation(true)}>
+            <button type="button" className="btn btn-ghost" onClick={() => void openLeaderboardCorrelation()}>
               View Chart
             </button>
           ) : null}
