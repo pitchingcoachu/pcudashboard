@@ -1,0 +1,4 @@
+Axioforce/
+*.log
+coverage/
+__pycache__/

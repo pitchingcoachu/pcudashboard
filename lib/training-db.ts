@@ -1253,12 +1253,6 @@ export async function resolveOrganizationIdForSchool(input: {
   const cacheKey = `resolve_org_id_for_school:${schoolCode}:${normalizedFallback}:${input.createIfMissing ? 1 : 0}`;
   return _withTrainingReadCache(cacheKey, 45_000, async () => {
     const schoolByOrgId = parseOrgSchoolMap();
-    const mapped = Object.entries(schoolByOrgId).find(([, code]) => code === schoolCode);
-    if (mapped) {
-      const orgId = Number(mapped[0]);
-      if (Number.isFinite(orgId) && orgId > 0) return orgId;
-    }
-
     const pool = getDbPool();
     if (normalizedFallback > 0) {
       const fallbackMappedSchool = String(schoolByOrgId[normalizedFallback] ?? '').trim().toUpperCase();
@@ -1269,6 +1263,12 @@ export async function resolveOrganizationIdForSchool(input: {
       );
       const fallbackName = String(fallbackOrg.rows[0]?.name ?? '').trim();
       if (orgNameLikelyMatchesSchoolCode(fallbackName, schoolCode)) return normalizedFallback;
+    }
+
+    const mapped = Object.entries(schoolByOrgId).find(([, code]) => code === schoolCode);
+    if (mapped) {
+      const orgId = Number(mapped[0]);
+      if (Number.isFinite(orgId) && orgId > 0) return orgId;
     }
 
     const byName = await pool.query<{ id: number }>(

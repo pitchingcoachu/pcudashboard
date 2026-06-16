@@ -53,6 +53,7 @@ function parseGlobalAdminEmails(): string[] {
     'jchipman@pitchingcoachu.com',
     'patrick.jones@rosterpilot.com',
     'corralf34@gmail.com',
+    'jgarza@pitchingcoachu.com',
   ];
   const values = [...base, ...String(process.env.GLOBAL_ADMIN_EMAILS ?? '').split(',')]
     .map((entry) => entry.trim().toLowerCase())
