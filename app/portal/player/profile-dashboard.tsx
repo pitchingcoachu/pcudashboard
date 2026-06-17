@@ -7,11 +7,12 @@ import type { CSSProperties, MouseEvent, ChangeEvent, PointerEvent as ReactPoint
 import type {
   AssessmentWorkoutScoreRow,
   BodyWeightLogRow,
-  CompletedPlayerPlanGoalRow,
   PlayerPlanGoalRow,
   ProgramItemRow,
 } from '../../../lib/training-db';
 import WorkoutLogModal from '../components/workout-log-modal';
+import PlayerNotesSuite from '../dashboard/player-notes-suite';
+import ProfilePlanGoalsPanel from './profile-plan-goals-panel';
 
 type TrackedExercise = {
   exerciseId: number;
@@ -41,19 +42,6 @@ type ForcePlateProfilePayload = {
   defaultMetricKey?: string;
   error?: string;
 };
-
-const PLAN_GOAL_CATEGORIES = [
-  'Mechanical',
-  'Stuff',
-  'Execution',
-  'Mental Side',
-  'Strength',
-  'Mobility',
-  'Weight',
-  'Swing Decisions',
-  'Batted Ball',
-  'Pre-Pitch Routine',
-] as const;
 
 type GoalDraft = {
   slotIndex: 1 | 2 | 3;
@@ -100,7 +88,6 @@ type ProfileDashboardProps = {
   initialWeightLogs: BodyWeightLogRow[];
   initialAssessmentScores: AssessmentWorkoutScoreRow[];
   initialPlanGoals: PlayerPlanGoalRow[];
-  initialCompletedPlanGoals: CompletedPlayerPlanGoalRow[];
   trackedExercises: TrackedExercise[];
   initialExerciseId: number | null;
   initialTrend: ExerciseTrendPoint[];
@@ -395,13 +382,11 @@ export default function ProfileDashboard({
   initialWeightLogs,
   initialAssessmentScores,
   initialPlanGoals,
-  initialCompletedPlanGoals,
   trackedExercises,
   initialExerciseId,
   initialTrend,
 }: ProfileDashboardProps) {
   const router = useRouter();
-  const canManageGoals = sessionRole === 'admin' || sessionRole === 'coach';
   const showProfileDetailsPanel = sessionRole !== 'player';
   const programPreviewQuery = isAdminPreview ? `?previewPlayerId=${playerId}` : '';
   const [profile, setProfile] = useState({
@@ -477,16 +462,10 @@ export default function ProfileDashboard({
       };
     })
   );
-  const [completedPlanGoals, setCompletedPlanGoals] = useState<CompletedPlayerPlanGoalRow[]>(initialCompletedPlanGoals);
-  const [goalSavingSlot, setGoalSavingSlot] = useState<1 | 2 | 3 | null>(null);
-  const [goalMessage, setGoalMessage] = useState('');
-  const [showCompletedGoals, setShowCompletedGoals] = useState(false);
-  const [completeModal, setCompleteModal] = useState<{ slotIndex: 1 | 2 | 3; details: string } | null>(null);
-  const [completingGoal, setCompletingGoal] = useState(false);
-  const [planGoalsExpanded, setPlanGoalsExpanded] = useState(sessionRole !== 'player');
   const [selectedAssessmentDate, setSelectedAssessmentDate] = useState(
     initialAssessmentScores[0]?.dayDate ?? ''
   );
+  const [playerNotesExpanded, setPlayerNotesExpanded] = useState(false);
 
   const sortedWeightLogs = useMemo(() => {
     const merged = new Map<string, BodyWeightLogRow>();
@@ -734,126 +713,6 @@ export default function ProfileDashboard({
       cancelled = true;
     };
   }, [playerId, selectedTrendKey, forceTrendByMetric]);
-
-  const saveGoal = async (slotIndex: 1 | 2 | 3) => {
-    if (!canManageGoals) return;
-    const goal = planGoals.find((entry) => entry.slotIndex === slotIndex);
-    if (!goal) return;
-    setGoalSavingSlot(slotIndex);
-    setGoalMessage('');
-    try {
-      const response = await fetch('/api/player/plan-goals', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          playerId,
-          slotIndex,
-          category: goal.category,
-          goalDescription: goal.goalDescription,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as {
-        error?: string;
-        activeGoals?: PlayerPlanGoalRow[];
-        completedGoals?: CompletedPlayerPlanGoalRow[];
-      };
-      if (!response.ok) throw new Error(payload.error ?? 'Failed to save goal.');
-      const nextActive = Array.isArray(payload.activeGoals) ? payload.activeGoals : [];
-      setPlanGoals((prev) =>
-        [1, 2, 3].map((slot) => {
-          const local = prev.find((entry) => entry.slotIndex === slot) ?? {
-            slotIndex: slot as 1 | 2 | 3,
-            category: '',
-            goalDescription: '',
-            createdAt: null,
-          };
-          const server = nextActive.find((entry) => entry.slotIndex === slot);
-          if (slot === slotIndex) {
-            return {
-              slotIndex: slot as 1 | 2 | 3,
-              category: server?.category ?? local.category,
-              goalDescription: server?.goalDescription ?? local.goalDescription,
-              createdAt: server?.createdAt ?? local.createdAt,
-            };
-          }
-          if (server?.category || server?.goalDescription || server?.createdAt) {
-            return {
-              slotIndex: slot as 1 | 2 | 3,
-              category: server.category ?? '',
-              goalDescription: server.goalDescription ?? '',
-              createdAt: server.createdAt ?? null,
-            };
-          }
-          return local;
-        })
-      );
-      if (Array.isArray(payload.completedGoals)) setCompletedPlanGoals(payload.completedGoals);
-      setGoalMessage(`Goal ${slotIndex} saved.`);
-    } catch (error) {
-      setGoalMessage(error instanceof Error ? error.message : 'Failed to save goal.');
-    } finally {
-      setGoalSavingSlot(null);
-    }
-  };
-
-  const saveGoalCompletion = async () => {
-    if (!canManageGoals || !completeModal) return;
-    setCompletingGoal(true);
-    setGoalMessage('');
-    try {
-      const response = await fetch('/api/player/plan-goals', {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          playerId,
-          slotIndex: completeModal.slotIndex,
-          completionDetails: completeModal.details,
-        }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as {
-        error?: string;
-        activeGoals?: PlayerPlanGoalRow[];
-        completedGoals?: CompletedPlayerPlanGoalRow[];
-      };
-      if (!response.ok) throw new Error(payload.error ?? 'Failed to complete goal.');
-      const nextActive = Array.isArray(payload.activeGoals) ? payload.activeGoals : [];
-      setPlanGoals((prev) =>
-        [1, 2, 3].map((slot) => {
-          const local = prev.find((entry) => entry.slotIndex === slot) ?? {
-            slotIndex: slot as 1 | 2 | 3,
-            category: '',
-            goalDescription: '',
-            createdAt: null,
-          };
-          const server = nextActive.find((entry) => entry.slotIndex === slot);
-          if (slot === completeModal.slotIndex) {
-            return {
-              slotIndex: slot as 1 | 2 | 3,
-              category: server?.category ?? '',
-              goalDescription: server?.goalDescription ?? '',
-              createdAt: server?.createdAt ?? null,
-            };
-          }
-          if (server?.category || server?.goalDescription || server?.createdAt) {
-            return {
-              slotIndex: slot as 1 | 2 | 3,
-              category: server.category ?? '',
-              goalDescription: server.goalDescription ?? '',
-              createdAt: server.createdAt ?? null,
-            };
-          }
-          return local;
-        })
-      );
-      if (Array.isArray(payload.completedGoals)) setCompletedPlanGoals(payload.completedGoals);
-      setCompleteModal(null);
-      setGoalMessage(`Goal ${completeModal.slotIndex} marked complete.`);
-    } catch (error) {
-      setGoalMessage(error instanceof Error ? error.message : 'Failed to complete goal.');
-    } finally {
-      setCompletingGoal(false);
-    }
-  };
 
   const saveProfilePayload = async (nextProfile: typeof profile) => {
     const response = await fetch('/api/player/profile', {
@@ -1254,113 +1113,37 @@ export default function ProfileDashboard({
         </article>
       )}
 
-      <article className="portal-admin-card">
-        <div className="portal-row-between">
-          <h3>Player Plan Goals</h3>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => setPlanGoalsExpanded((current) => !current)}
-            aria-expanded={planGoalsExpanded}
-          >
-            {planGoalsExpanded ? 'Collapse' : 'Expand'}
-          </button>
-        </div>
-        {!planGoalsExpanded ? null : (
-          <>
-            <div className="portal-profile-goals-grid">
-              {planGoals.map((goal) => (
-                <article key={`goal-slot-${goal.slotIndex}`} className="portal-day-card">
-                  <div className="portal-row-between">
-                    <h4 style={{ margin: 0 }}>Goal {goal.slotIndex}</h4>
-                    <p className="portal-muted-text">Created: {formatTimestampDate(goal.createdAt)}</p>
-                  </div>
-                  <label className="portal-inline-filter">
-                    Category
-                    <select
-                      value={goal.category}
-                      disabled={!canManageGoals}
-                      onChange={(event) =>
-                        setPlanGoals((prev) =>
-                          prev.map((entry) =>
-                            entry.slotIndex === goal.slotIndex ? { ...entry, category: event.target.value } : entry
-                          )
-                        )
-                      }
-                    >
-                      <option value="">Select category</option>
-                      {PLAN_GOAL_CATEGORIES.map((category) => (
-                        <option key={`${goal.slotIndex}-${category}`} value={category}>
-                          {category}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="portal-inline-filter">
-                    Goal
-                    <textarea
-                      rows={4}
-                      value={goal.goalDescription}
-                      readOnly={!canManageGoals}
-                      onChange={(event) =>
-                        setPlanGoals((prev) =>
-                          prev.map((entry) =>
-                            entry.slotIndex === goal.slotIndex ? { ...entry, goalDescription: event.target.value } : entry
-                          )
-                        )
-                      }
-                    />
-                  </label>
-                  {canManageGoals ? (
-                    <div className="portal-choice-line-actions">
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() => void saveGoal(goal.slotIndex)}
-                        disabled={goalSavingSlot === goal.slotIndex}
-                      >
-                        {goalSavingSlot === goal.slotIndex ? 'Saving...' : 'Save Goal'}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        disabled={!goal.category || !goal.goalDescription.trim()}
-                        onClick={() => setCompleteModal({ slotIndex: goal.slotIndex, details: '' })}
-                      >
-                        Completed Goal
-                      </button>
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-            <div className="portal-choice-line-actions">
-              <button type="button" className="btn btn-ghost" onClick={() => setShowCompletedGoals((current) => !current)}>
-                {showCompletedGoals ? 'Hide Completed Goals' : 'View Completed Goals'}
-              </button>
-              {goalMessage ? <p className={goalMessage.includes('Failed') ? 'auth-error' : 'auth-message'}>{goalMessage}</p> : null}
-            </div>
-            {showCompletedGoals ? (
-              completedPlanGoals.length === 0 ? (
-                <p className="portal-muted-text">No completed goals yet.</p>
-              ) : (
-                <div className="portal-admin-stack">
-                  {completedPlanGoals.map((goal) => (
-                    <article key={`completed-goal-${goal.id}`} className="portal-day-card">
-                      <div className="portal-row-between">
-                        <h4 style={{ margin: 0 }}>{goal.category}</h4>
-                        <p className="portal-muted-text">{formatTimestampDate(goal.completedAt)}</p>
-                      </div>
-                      <p style={{ margin: 0 }}>{goal.goalDescription}</p>
-                      {goal.completionDetails ? <p className="portal-muted-text">Details: {goal.completionDetails}</p> : null}
-                    </article>
-                  ))}
-                </div>
-              )
-            ) : null}
-          </>
-        )}
-      </article>
+      {sessionRole === 'admin' || sessionRole === 'coach' ? (
+        <article className="portal-admin-card">
+          <div className="portal-row-between">
+            <h3>Player Notes</h3>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setPlayerNotesExpanded((current) => !current)}
+              aria-expanded={playerNotesExpanded}
+            >
+              {playerNotesExpanded ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
+          {playerNotesExpanded ? (
+            <PlayerNotesSuite
+              fixedPlayer={{
+                playerId,
+                fullName: profile.fullName,
+              }}
+              embedded
+            />
+          ) : null}
+        </article>
+      ) : null}
+
+      <ProfilePlanGoalsPanel
+        playerId={playerId}
+        playerName={profile.fullName}
+        goals={planGoals}
+        canEditGoals={sessionRole === 'admin' || sessionRole === 'coach'}
+      />
 
       <article className="portal-admin-card">
         <div className="portal-row-between">
@@ -1643,53 +1426,6 @@ export default function ProfileDashboard({
               </button>
               <button type="button" className="btn btn-primary" onClick={() => void saveCroppedPhoto()} disabled={photoUploading}>
                 {photoUploading ? 'Saving...' : 'Use Photo'}
-              </button>
-            </div>
-          </article>
-        </div>
-      ) : null}
-
-      {completeModal ? (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 9998,
-            background: 'rgba(0,0,0,0.86)',
-            display: 'grid',
-            placeItems: 'center',
-            padding: '1rem',
-          }}
-          onClick={() => {
-            if (completingGoal) return;
-            setCompleteModal(null);
-          }}
-        >
-          <article
-            className="portal-admin-card"
-            style={{ width: 'min(560px, 96vw)' }}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h3 style={{ marginTop: 0 }}>Details of Goal Completion</h3>
-            <label className="portal-inline-filter">
-              Notes
-              <textarea
-                rows={5}
-                value={completeModal.details}
-                onChange={(event) =>
-                  setCompleteModal((current) =>
-                    current ? { ...current, details: event.target.value } : current
-                  )
-                }
-                placeholder="Enter details..."
-              />
-            </label>
-            <div className="portal-choice-line-actions">
-              <button type="button" className="btn btn-primary" disabled={completingGoal} onClick={() => void saveGoalCompletion()}>
-                {completingGoal ? 'Saving...' : 'Save'}
-              </button>
-              <button type="button" className="btn btn-ghost" disabled={completingGoal} onClick={() => setCompleteModal(null)}>
-                Cancel
               </button>
             </div>
           </article>

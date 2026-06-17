@@ -16,12 +16,15 @@ type PortalDashboardPageProps = {
 
 function readSuiteParam(
   value: string | string[] | undefined
-): 'Player Notes' | null {
+): 'Player Notes' | 'Player Plans' | null {
   const raw = Array.isArray(value) ? value[0] : value;
   const normalized = String(raw ?? '').trim().toLowerCase();
   if (!normalized) return null;
   if (normalized === 'player-notes' || normalized === 'player_notes' || normalized === 'player notes') {
     return 'Player Notes';
+  }
+  if (normalized === 'player-plans' || normalized === 'player_plans' || normalized === 'player plans') {
+    return 'Player Plans';
   }
   return null;
 }
@@ -79,8 +82,8 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
                 Dashboard
               </Link>
               {(session.role === 'admin' || session.role === 'coach') && (
-                <Link href="/tutorials" className="portal-nav-link">
-                  Tutorials
+                <Link href="/profiles" className="portal-nav-link">
+                  Profiles
                 </Link>
               )}
             </nav>
@@ -94,7 +97,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
                 ? [...(canAccessProgramming ? [{ href: '/portal/player', label: 'Profile' }, { href: '/portal/player/program', label: 'Program' }] : [])]
                 : [...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : [])]),
               { href: '/portal/dashboard', label: 'Dashboard' },
-              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/tutorials', label: 'Tutorials' }] : []),
+              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/profiles', label: 'Profiles' }] : []),
             ]}
           />
         </div>

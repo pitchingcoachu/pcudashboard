@@ -59,6 +59,10 @@ export type PlayerChoiceRow = {
   assignedCoachUserId: number | null;
 };
 
+export type PlayerProfileListRow = PlayerChoiceRow & {
+  goals: PlayerPlanGoalRow[];
+};
+
 export type PlayerSummaryRow = {
   playerId: number;
   fullName: string;
@@ -980,6 +984,72 @@ export async function listPlayerChoicesByOrganization(input: {
       fullName: row.full_name,
       assignedCoachUserId: row.assigned_coach_user_id,
     }));
+  });
+}
+
+export async function listPlayerProfilesWithPlanGoals(input: {
+  organizationId: number;
+  assignedCoachUserId?: number | null;
+}): Promise<PlayerProfileListRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const assignedCoachUserId = Number(input.assignedCoachUserId ?? 0);
+  const useCoachFilter = Number.isFinite(assignedCoachUserId) && assignedCoachUserId > 0;
+  const cacheKey = `player_profiles_goals:${input.organizationId}:${useCoachFilter ? assignedCoachUserId : 0}`;
+  return _withTrainingReadCache(cacheKey, 20_000, async () => {
+    const pool = getDbPool();
+    const result = await pool.query<{
+      player_id: number;
+      full_name: string;
+      assigned_coach_user_id: number | null;
+      slot_index: number | null;
+      category: string | null;
+      goal_description: string | null;
+      created_at: string | null;
+    }>(
+      `
+        SELECT
+          p.id AS player_id,
+          p.full_name,
+          p.assigned_coach_user_id,
+          g.slot_index,
+          g.category,
+          g.goal_description,
+          g.created_at::text
+        FROM players p
+        LEFT JOIN player_plan_goals g
+          ON g.player_id = p.id
+          AND g.slot_index BETWEEN 1 AND 3
+        WHERE p.organization_id = $1
+        ${useCoachFilter ? 'AND p.assigned_coach_user_id = $2' : ''}
+        ORDER BY p.full_name ASC, g.slot_index ASC
+      `,
+      useCoachFilter ? [input.organizationId, assignedCoachUserId] : [input.organizationId]
+    );
+
+    const byPlayer = new Map<number, PlayerProfileListRow>();
+    for (const row of result.rows) {
+      let player = byPlayer.get(row.player_id);
+      if (!player) {
+        player = {
+          playerId: row.player_id,
+          fullName: row.full_name,
+          assignedCoachUserId: row.assigned_coach_user_id,
+          goals: [],
+        };
+        byPlayer.set(row.player_id, player);
+      }
+      if (row.slot_index && row.slot_index >= 1 && row.slot_index <= 3) {
+        player.goals.push({
+          slotIndex: row.slot_index as 1 | 2 | 3,
+          category: row.category,
+          goalDescription: row.goal_description,
+          createdAt: row.created_at,
+        });
+      }
+    }
+
+    return Array.from(byPlayer.values());
   });
 }
 

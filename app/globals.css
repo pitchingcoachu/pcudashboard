@@ -3669,6 +3669,17 @@ body.theme-light .portal-color-toggle .portal-color-toggle-btn.is-on::before {
   font-size: 0.88rem;
 }
 
+.portal-table-link {
+  color: var(--text-primary);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.portal-table-link:hover,
+.portal-table-link:focus-visible {
+  color: var(--accent-primary);
+}
+
 .portal-table-actions {
   display: flex;
   gap: 0.4rem;

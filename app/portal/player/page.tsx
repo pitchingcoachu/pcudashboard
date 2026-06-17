@@ -236,8 +236,8 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
               Profile
             </Link>
             {canAccessProgramming ? (
-              <Link href={fullProgramHref} className="portal-nav-link">
-                Program
+              <Link href={session.role === 'admin' || session.role === 'coach' ? '/portal/admin/schedule' : fullProgramHref} className="portal-nav-link">
+                {session.role === 'admin' || session.role === 'coach' ? 'Schedule' : 'Program'}
               </Link>
             ) : null}
             {session.role === 'player' ? (
@@ -245,8 +245,8 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
                 Dashboard
               </Link>
             ) : (
-              <Link href="/tutorials" className="portal-nav-link">
-                Tutorials
+              <Link href="/profiles" className="portal-nav-link">
+                Profiles
               </Link>
             )}
           </nav>
@@ -256,10 +256,16 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             items={[
               ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Admin' }] : []),
               { href: '/portal/player', label: 'Profile' },
-              ...(canAccessProgramming ? [{ href: fullProgramHref, label: 'Program' }] : []),
+              ...(canAccessProgramming
+                ? [
+                    session.role === 'admin' || session.role === 'coach'
+                      ? { href: '/portal/admin/schedule', label: 'Schedule' }
+                      : { href: fullProgramHref, label: 'Program' },
+                  ]
+                : []),
               ...(session.role === 'player'
                 ? [{ href: '/portal/dashboard', label: 'Dashboard' }]
-                : [{ href: '/tutorials', label: 'Tutorials' }]),
+                : [{ href: '/profiles', label: 'Profiles' }]),
             ]}
           />
         </div>
@@ -323,7 +329,6 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
           initialTrend={[]}
           sessionRole={session.role}
           initialPlanGoals={planGoals.activeGoals}
-          initialCompletedPlanGoals={planGoals.completedGoals}
         />
       </section>
     </div>

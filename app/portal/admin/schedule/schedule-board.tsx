@@ -293,7 +293,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       const matched = players.find((player) => player.id === initialPlayerId)!;
       return { id: matched.id, name: matched.name };
     }
-    return { id: players[0]?.id ?? 0, name: players[0]?.name ?? '' };
+    return { id: 0, name: '' };
   };
   const initialPlayer = resolveInitialPlayer();
   const [playerId, setPlayerId] = useState<number>(initialPlayer.id);

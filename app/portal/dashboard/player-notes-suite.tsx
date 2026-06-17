@@ -35,6 +35,14 @@ type NoteAttachment = {
   dataUrl: string;
 };
 
+type PlayerNotesSuiteProps = {
+  fixedPlayer?: {
+    playerId: number;
+    fullName: string;
+  } | null;
+  embedded?: boolean;
+};
+
 const DEFAULT_NOTE_CATEGORIES = ['Player Plan', 'Weight Room', 'Nutrition', 'Mental Training', 'Grips'];
 const MULTI_ATTACHMENT_MIME = 'application/x.pcu-note-attachments+json';
 const NOTE_ATTACHMENT_LIMIT_LABEL = formatNoteAttachmentLimit();
@@ -194,11 +202,14 @@ function validateSelectedAttachments(files: File[]): string {
   return '';
 }
 
-export default function PlayerNotesSuite() {
+export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false }: PlayerNotesSuiteProps = {}) {
+  const fixedPlayerId = Number(fixedPlayer?.playerId ?? 0);
+  const fixedPlayerName = String(fixedPlayer?.fullName ?? '').trim();
+  const isFixedPlayerMode = fixedPlayerId > 0 && fixedPlayerName.length > 0;
   const [dashboardPlayerOptions, setDashboardPlayerOptions] = useState<string[]>([]);
   const [linkedPlayers, setLinkedPlayers] = useState<LinkedPlayerOption[]>([]);
-  const [selectedPlayerName, setSelectedPlayerName] = useState('All');
-  const [playerInputName, setPlayerInputName] = useState('All');
+  const [selectedPlayerName, setSelectedPlayerName] = useState(isFixedPlayerMode ? fixedPlayerName : 'All');
+  const [playerInputName, setPlayerInputName] = useState(isFixedPlayerMode ? fixedPlayerName : 'All');
   const [loadingPlayers, setLoadingPlayers] = useState(false);
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [message, setMessage] = useState('');
@@ -222,12 +233,14 @@ export default function PlayerNotesSuite() {
     [customCategories, notes]
   );
   const selectedLinkedPlayerId = useMemo(() => {
+    if (isFixedPlayerMode) return fixedPlayerId;
     const selectedNorm = normalizePersonName(selectedPlayerName);
     if (!selectedNorm || selectedPlayerName === 'All') return 0;
     const match = linkedPlayers.find((player) => normalizePersonName(player.fullName) === selectedNorm);
     return Number(match?.playerId ?? 0);
-  }, [linkedPlayers, selectedPlayerName]);
+  }, [fixedPlayerId, isFixedPlayerMode, linkedPlayers, selectedPlayerName]);
   const commitPlayerInput = () => {
+    if (isFixedPlayerMode) return;
     const resolved = resolveTypedPlayerInput(playerInputName, dashboardPlayerOptions);
     const match = dashboardPlayerOptions.find((name) => normalizePersonName(name) === normalizePersonName(resolved));
     const next = match ?? 'All';
@@ -239,6 +252,14 @@ export default function PlayerNotesSuite() {
   }, [selectedPlayerName]);
 
   useEffect(() => {
+    if (isFixedPlayerMode) {
+      setDashboardPlayerOptions([fixedPlayerName]);
+      setLinkedPlayers([{ playerId: fixedPlayerId, fullName: fixedPlayerName }]);
+      setSelectedPlayerName(fixedPlayerName);
+      setPlayerInputName(fixedPlayerName);
+      setLoadingPlayers(false);
+      return;
+    }
     let active = true;
     setLoadingPlayers(true);
     Promise.all([
@@ -286,7 +307,7 @@ export default function PlayerNotesSuite() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [fixedPlayerId, fixedPlayerName, isFixedPlayerMode]);
 
   useEffect(() => {
     if (!selectedPlayerName.trim()) {
@@ -296,7 +317,9 @@ export default function PlayerNotesSuite() {
     let active = true;
     setLoadingNotes(true);
     const notesUrl =
-      selectedPlayerName === 'All'
+      isFixedPlayerMode
+        ? `/api/player/plan-notes?domain=General&playerId=${fixedPlayerId}`
+        : selectedPlayerName === 'All'
         ? '/api/player/plan-notes?domain=General'
         : selectedLinkedPlayerId > 0
           ? `/api/player/plan-notes?domain=General&playerId=${selectedLinkedPlayerId}`
@@ -318,7 +341,7 @@ export default function PlayerNotesSuite() {
     return () => {
       active = false;
     };
-  }, [selectedLinkedPlayerId, selectedPlayerName]);
+  }, [fixedPlayerId, isFixedPlayerMode, selectedLinkedPlayerId, selectedPlayerName]);
 
   useEffect(() => {
     if (!notes.length) {
@@ -502,31 +525,38 @@ export default function PlayerNotesSuite() {
   };
 
   return (
-    <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
+    <section className={embedded ? 'portal-admin-card' : 'portal-panel portal-admin-panel'} style={{ padding: '1rem' }}>
       <div style={{ display: 'grid', gap: 12 }}>
         <article className="portal-admin-card">
           <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(180px, 1fr))' }}>
-            <label>
-              Player
-              <input
-                list="player-notes-player-options"
-                value={playerInputName}
-                onChange={(event) => setPlayerInputName(event.target.value)}
-                onBlur={commitPlayerInput}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    commitPlayerInput();
-                  }
-                }}
-                placeholder={dashboardPlayerOptions.length ? 'Type or choose player...' : 'No players available'}
-              />
-              <datalist id="player-notes-player-options">
-                {dashboardPlayerOptions.map((playerName) => (
-                  <option key={playerName} value={playerName} />
-                ))}
-              </datalist>
-            </label>
+            {isFixedPlayerMode ? (
+              <label>
+                Player
+                <input value={fixedPlayerName} readOnly />
+              </label>
+            ) : (
+              <label>
+                Player
+                <input
+                  list="player-notes-player-options"
+                  value={playerInputName}
+                  onChange={(event) => setPlayerInputName(event.target.value)}
+                  onBlur={commitPlayerInput}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      commitPlayerInput();
+                    }
+                  }}
+                  placeholder={dashboardPlayerOptions.length ? 'Type or choose player...' : 'No players available'}
+                />
+                <datalist id="player-notes-player-options">
+                  {dashboardPlayerOptions.map((playerName) => (
+                    <option key={playerName} value={playerName} />
+                  ))}
+                </datalist>
+              </label>
+            )}
             <label>
               Search Notes
               <input value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search text, category, attachment..." />
@@ -599,11 +629,11 @@ export default function PlayerNotesSuite() {
               </div>
             ) : null}
             <label className="portal-inline-filter" style={{ marginTop: 8 }}>
-              Attachment (Photo/Video/PDF)
+              Attachments (Photos/Videos/PDFs)
               <input
                 type="file"
-                accept="image/*,video/*,application/pdf"
-                multiple
+                accept="image/*,video/*,application/pdf,.pdf"
+                multiple={true}
                 onChange={(event) => {
                   const files = event.target.files ? Array.from(event.target.files) : [];
                   setNoteFiles(files);

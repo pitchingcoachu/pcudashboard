@@ -182,6 +182,13 @@ export function getDbPool(): Pool {
   return global.__pcuPool;
 }
 
+export async function resetDbPool(): Promise<void> {
+  const pool = global.__pcuPool;
+  global.__pcuPool = undefined;
+  if (!pool) return;
+  await pool.end().catch(() => {});
+}
+
 function parseConfiguredUsers(): UserRecord[] {
   const rawJson = process.env.APP_USERS_JSON;
   if (rawJson) {

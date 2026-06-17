@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { formatTableDisplayValue } from '../../../lib/table-sort';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching';
@@ -1743,6 +1744,8 @@ function SearchableMultiSelect({
 
 export default function PlayerPlansSuite(props: { selectedSchoolCode?: string }) {
   const pageRef = useRef<HTMLElement | null>(null);
+  const searchParams = useSearchParams();
+  const deepLinkedPlayerId = Number(searchParams.get('playerPlanPlayerId') ?? 0);
   const selectedSchoolCode = String(props.selectedSchoolCode ?? '').trim().toUpperCase();
   const [domain, setDomain] = useState<Domain>('Pitching');
   const [linkedPlayers, setLinkedPlayers] = useState<PlayerOption[]>([]);
@@ -3066,6 +3069,14 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
       active = false;
     };
   }, [selectedSchoolCode]);
+
+  useEffect(() => {
+    if (!Number.isFinite(deepLinkedPlayerId) || deepLinkedPlayerId <= 0) return;
+    const linked = linkedPlayers.find((player) => player.playerId === deepLinkedPlayerId);
+    if (!linked?.fullName) return;
+    setSelectedPlayerName(linked.fullName);
+    setPlayerInputName(linked.fullName);
+  }, [deepLinkedPlayerId, linkedPlayers]);
 
   useEffect(() => {
     let active = true;

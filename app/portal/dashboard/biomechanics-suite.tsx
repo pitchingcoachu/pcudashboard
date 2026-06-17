@@ -17,6 +17,12 @@ type PitchOption = {
   capturedAt: string | null;
   velocityMph?: number | null;
   pitchType?: string | null;
+  tags?: string | null;
+  playerName?: string | null;
+  pitchDate?: string | null;
+  bodyWeightLb?: number | null;
+  strideLengthIn?: number | null;
+  strideDirectionIn?: number | null;
 };
 
 type PitchPoint = {
@@ -42,19 +48,10 @@ type Payload = {
   all_pitch_correlation_columns?: string[];
   pitch_options?: PitchOption[];
   selected_pitch_key?: string | null;
-  selected_pitch_points?: PitchPoint[];
   pitcher_options?: string[];
   tags_options?: string[];
   pitch_type_options?: string[];
-  selected_pitch_tags?: string | null;
-  selected_pitch_type?: string | null;
-  selected_pitch_player?: string | null;
-  selected_pitch_date?: string | null;
-  selected_pitch_velocity_mph?: number | null;
   pitch_velocity_by_key?: Record<string, number | null>;
-  selected_pitch_body_weight_lb?: number | null;
-  selected_pitch_stride_length_in?: number | null;
-  selected_pitch_stride_direction_in?: number | null;
   all_sessions_leaderboard_individual_rows?: Array<Record<string, string | number | null>>;
   applied_start_date?: string | null;
   applied_end_date?: string | null;
@@ -79,6 +76,11 @@ type Payload = {
   };
 };
 
+type PitchPointsPayload = {
+  pitch_points?: PitchPoint[];
+  error?: string;
+};
+
 const BIOMECH_TABLE_COLUMNS = [
   'Name',
   'Date',
@@ -87,6 +89,8 @@ const BIOMECH_TABLE_COLUMNS = [
   'Tags',
   'Pitch Velocity (mph)',
   'Back Leg Peak Fz (lb)',
+  'Peak De-Weighting (lb)',
+  'Z-Force Gain (lb)',
   'Back Leg Peak Fy (lb)',
   'Mound Connection (BW%)',
   'Back Leg Impulse (lb·s)',
@@ -255,7 +259,7 @@ function formatBiomechTableValue(column: string, value: string | number | null, 
     column.includes('Lead Leg YZ Transfer') ||
     column === 'Y Transfer (s)' ||
     column === 'Z Transfer (s)';
-  const isForceColumn = column.includes('Peak Fz') || column.includes('Peak Fy');
+  const isForceColumn = column.includes('Peak Fz') || column.includes('Peak Fy') || column.includes('Peak De-Weighting') || column.includes('Z-Force Gain');
   const isImpulseColumn = column.includes('Impulse');
   const isMoundConnectionColumn = column.includes('Mound Connection');
   const isBwPercentColumn = isMoundConnectionColumn || (forceMode === 'bw' && (isForceColumn || isImpulseColumn));
@@ -666,6 +670,7 @@ function LineChart({
     let impulse: number | null = null;
     let impulseStartT: number | null = null;
     let impulseEndT: number | null = null;
+    let peakDeWeighting: number | null = null;
     if (loading.length > 2) {
       // Start logic:
       // Use the lowest Back Leg Fz in the final pre-peak window
@@ -728,6 +733,7 @@ function LineChart({
         impulse = integrateTrapezoid(impulseWindow);
         impulseStartT = loading[startIdx]?.t ?? null;
         impulseEndT = loading[endIdx]?.t ?? null;
+        peakDeWeighting = loading[startIdx]?.fz ?? null;
       }
     }
 
@@ -747,6 +753,8 @@ function LineChart({
 
     return {
       backPeakFz: backPeakFz?.v ?? null,
+      peakDeWeighting,
+      zForceGain: backPeakFz?.v !== undefined && peakDeWeighting !== null ? backPeakFz.v - peakDeWeighting : null,
       backPeakFy: backPeakFy?.v ?? null,
       moundConnection,
       impulse,
@@ -943,6 +951,8 @@ function LineChart({
         <div style={{ display: 'grid', alignContent: 'start', gap: 5, fontSize: 12, padding: 10, borderRadius: 10, background: 'rgba(17,17,20,0.88)', border: '1px solid rgba(200,16,46,0.3)', height: '100%' }}>
           <strong style={{ textAlign: 'left', fontSize: 12, color: '#e2e8f0', letterSpacing: '0.02em' }}>Back Leg</strong>
           <span style={{ color: '#cbd5e1' }}>Peak Fz ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.backPeakFz, 1)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Peak De-Weighting ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.peakDeWeighting, 1)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Z-Force Gain ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.zForceGain, 1)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>Peak Fy ({mode === 'Force' && forceMode === 'bw' ? 'BW%' : 'lb'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.backPeakFy, 1)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>Mound Connection (BW%): <strong style={{ color: '#f8fafc' }}>{fmtBwPercent(keyMetrics.moundConnection)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>Impulse ({mode === 'Force' && forceMode === 'bw' ? 'BW%·s' : 'lb·s'}): <strong style={{ color: '#f8fafc' }}>{fmtForceOrImpulse(keyMetrics.impulse, 1)}</strong></span>
@@ -1012,6 +1022,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
   const [pitchOptions, setPitchOptions] = useState<PitchOption[]>([]);
   const [selectedPitchKey, setSelectedPitchKey] = useState<string>('');
   const [selectedPitchPoints, setSelectedPitchPoints] = useState<PitchPoint[]>([]);
+  const [selectedPitchPointsError, setSelectedPitchPointsError] = useState<string>('');
   const [pitcherOptions, setPitcherOptions] = useState<string[]>([]);
   const [tagsOptions, setTagsOptions] = useState<string[]>([]);
   const [pitchTypeOptions, setPitchTypeOptions] = useState<string[]>([]);
@@ -1083,6 +1094,40 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
     padding: '0.55rem 0.5rem',
   };
 
+  const applyPitchMeta = (key: string, options: PitchOption[]) => {
+    const meta = options.find((o) => o.pitchKey === key);
+    setSelectedPitchTags(String(meta?.tags ?? ''));
+    setSelectedPitchType(String(meta?.pitchType ?? ''));
+    setSelectedPitchPlayer(String(meta?.playerName ?? ''));
+    setSelectedPitchDate(String(meta?.pitchDate ?? ''));
+    setSelectedPitchVelocityMph(typeof meta?.velocityMph === 'number' ? meta.velocityMph : null);
+    setSelectedPitchBodyWeightLb(typeof meta?.bodyWeightLb === 'number' ? meta.bodyWeightLb : null);
+    setSelectedPitchStrideLengthIn(typeof meta?.strideLengthIn === 'number' ? meta.strideLengthIn : null);
+    setSelectedPitchStrideDirectionIn(typeof meta?.strideDirectionIn === 'number' ? meta.strideDirectionIn : null);
+  };
+
+  const loadPitchPoints = async (pitchKey: string, activeForceMode: ForceMode) => {
+    if (!pitchKey) return;
+    setSelectedPitchPointsError('');
+    const query = new URLSearchParams();
+    query.set('pitchKey', pitchKey);
+    query.set('forceMode', activeForceMode);
+    try {
+      const response = await fetch(`/api/dashboard/biomechanics/pitch-points?${query.toString()}`, { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as PitchPointsPayload;
+      if (!response.ok || payload.error) {
+        setSelectedPitchPoints([]);
+        setSelectedPitchPointsError(payload.error || 'Failed to load single-pitch graph data.');
+        return;
+      }
+      const points = Array.isArray(payload.pitch_points) ? payload.pitch_points : [];
+      setSelectedPitchPoints(points);
+    } catch (error) {
+      setSelectedPitchPoints([]);
+      setSelectedPitchPointsError(error instanceof Error ? error.message : 'Failed to load single-pitch graph data.');
+    }
+  };
+
   const loadData = async (
     pitchKeyOverride?: string,
     override?: {
@@ -1120,7 +1165,6 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       if (activeVelocityMax !== null && Number.isFinite(activeVelocityMax)) query.set('velocityMax', String(activeVelocityMax));
       query.set('forceMode', activeForceMode);
       if (loadOptions?.includeAllPitchCorrelation) query.set('includeAllPitchValues', '1');
-      if (pitchKeyOverride || selectedPitchKey) query.set('pitchKey', pitchKeyOverride || selectedPitchKey);
       const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
       const payload = (await response.json().catch(() => ({}))) as Payload;
       setDebugInfo('');
@@ -1134,8 +1178,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const lbAverageRows = Array.isArray(payload.leaderboard_average_rows) ? payload.leaderboard_average_rows : [];
       const rawCorrelationColumns = Array.isArray(payload.all_pitch_correlation_columns) ? payload.all_pitch_correlation_columns : [];
       const options = Array.isArray(payload.pitch_options) ? payload.pitch_options : [];
-      const pitchKey = String(payload.selected_pitch_key ?? options[0]?.pitchKey ?? '');
-      const points = Array.isArray(payload.selected_pitch_points) ? payload.selected_pitch_points : [];
+      const pitchKey = pitchKeyOverride && options.some((o) => o.pitchKey === pitchKeyOverride)
+        ? pitchKeyOverride
+        : String(payload.selected_pitch_key ?? options[0]?.pitchKey ?? '');
       const uploadPitchers = Array.isArray(payload.pitcher_options) ? payload.pitcher_options : [];
       const nextTags = Array.isArray(payload.tags_options) ? payload.tags_options : [];
       const nextPitchTypes = Array.isArray(payload.pitch_type_options) ? payload.pitch_type_options : [];
@@ -1153,19 +1198,11 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       setAllSessionsLeaderboardIndividualRows(Array.isArray(payload.all_sessions_leaderboard_individual_rows) ? payload.all_sessions_leaderboard_individual_rows : []);
       setPitchOptions(options);
       setSelectedPitchKey(pitchKey);
-      setSelectedPitchPoints(points);
       setPitcherOptions(uploadPitchers);
       setTagsOptions(nextTags);
       setPitchTypeOptions(nextPitchTypes);
-      setSelectedPitchTags(String(payload.selected_pitch_tags ?? ''));
-      setSelectedPitchType(String(payload.selected_pitch_type ?? ''));
-      setSelectedPitchPlayer(String(payload.selected_pitch_player ?? ''));
-      setSelectedPitchDate(String(payload.selected_pitch_date ?? ''));
-      setSelectedPitchVelocityMph(typeof payload.selected_pitch_velocity_mph === 'number' ? payload.selected_pitch_velocity_mph : null);
       setPitchVelocityByKey(payload.pitch_velocity_by_key && typeof payload.pitch_velocity_by_key === 'object' ? payload.pitch_velocity_by_key : {});
-      setSelectedPitchBodyWeightLb(typeof payload.selected_pitch_body_weight_lb === 'number' ? payload.selected_pitch_body_weight_lb : null);
-      setSelectedPitchStrideLengthIn(typeof payload.selected_pitch_stride_length_in === 'number' ? payload.selected_pitch_stride_length_in : null);
-      setSelectedPitchStrideDirectionIn(typeof payload.selected_pitch_stride_direction_in === 'number' ? payload.selected_pitch_stride_direction_in : null);
+      applyPitchMeta(pitchKey, options);
       setMatchSummary({
         totalSinglePitchFiles: Number(payload.match_summary?.totalSinglePitchFiles ?? 0),
         matchedSinglePitchFiles: Number(payload.match_summary?.matchedSinglePitchFiles ?? 0),
@@ -1200,6 +1237,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         return next;
       });
       if (!sortColumn && columns.length) setSortColumn(columns[0]);
+      // Fetch graph points separately — lightweight call, not part of the heavy snapshot cache
+      if (pitchKey) void loadPitchPoints(pitchKey, activeForceMode);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load biomechanics data.');
     } finally {
@@ -1224,22 +1263,20 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const query = new URLSearchParams();
       query.set('pitchKey', pitchKey);
       query.set('forceMode', appliedForceMode);
-      // Pass the active date range so the API can find the pitch within the correct scope.
-      if (appliedStartDate) query.set('startDate', appliedStartDate);
-      if (appliedEndDate) query.set('endDate', appliedEndDate);
-      const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
-      const payload = (await response.json().catch(() => ({}))) as Payload;
+      const response = await fetch(`/api/dashboard/biomechanics/pitch-points?${query.toString()}`, { cache: 'no-store' });
+      const payload = (await response.json().catch(() => ({}))) as PitchPointsPayload;
       if (!response.ok || payload.error) return;
-      const points = Array.isArray(payload.selected_pitch_points) ? payload.selected_pitch_points : [];
+      const points = Array.isArray(payload.pitch_points) ? payload.pitch_points : [];
       setPoints(points);
+      const meta = pitchOptions.find((o) => o.pitchKey === pitchKey);
       setMeta({
-        player: String(payload.selected_pitch_player ?? ''),
-        date: String(payload.selected_pitch_date ?? ''),
-        velocityMph: typeof payload.selected_pitch_velocity_mph === 'number' ? payload.selected_pitch_velocity_mph : null,
-        pitchType: String(payload.selected_pitch_type ?? ''),
-        bodyWeightLb: typeof payload.selected_pitch_body_weight_lb === 'number' ? payload.selected_pitch_body_weight_lb : null,
-        strideLengthIn: typeof payload.selected_pitch_stride_length_in === 'number' ? payload.selected_pitch_stride_length_in : null,
-        strideDirectionIn: typeof payload.selected_pitch_stride_direction_in === 'number' ? payload.selected_pitch_stride_direction_in : null,
+        player: String(meta?.playerName ?? ''),
+        date: String(meta?.pitchDate ?? ''),
+        velocityMph: typeof meta?.velocityMph === 'number' ? meta.velocityMph : null,
+        pitchType: String(meta?.pitchType ?? ''),
+        bodyWeightLb: typeof meta?.bodyWeightLb === 'number' ? meta.bodyWeightLb : null,
+        strideLengthIn: typeof meta?.strideLengthIn === 'number' ? meta.strideLengthIn : null,
+        strideDirectionIn: typeof meta?.strideDirectionIn === 'number' ? meta.strideDirectionIn : null,
       });
     } finally {
       setLoading(false);
@@ -1945,7 +1982,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
               onChange={(e) => {
                 const next = e.target.value;
                 setSelectedPitchKey(next);
-                if (hasAppliedFilters) void loadData(next);
+                applyPitchMeta(next, pitchOptions);
+                if (hasAppliedFilters) void loadPitchPoints(next, appliedForceMode);
               }}
             >
               {displayPitchOptions.length ? displayPitchOptions.map((option) => (
@@ -2007,6 +2045,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
           strideLengthIn={selectedPitchStrideLengthIn}
           strideDirectionIn={selectedPitchStrideDirectionIn}
         />
+        {selectedPitchPointsError ? (
+          <p style={{ color: '#fca5a5', margin: 0, fontSize: 13 }}>{selectedPitchPointsError}</p>
+        ) : null}
       </div>
       ) : null}
 
@@ -2068,7 +2109,7 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
                           setSortDirection((prev) => (active && prev === 'desc' ? 'asc' : 'desc'));
                         }}
                       >
-                        {(forceMode === 'bw' && (column.includes('Peak Fz') || column.includes('Peak Fy') || column.includes('Impulse')))
+                        {(forceMode === 'bw' && (column.includes('Peak Fz') || column.includes('Peak Fy') || column.includes('Peak De-Weighting') || column.includes('Z-Force Gain') || column.includes('Impulse')))
                           ? column.replace('(lb·s)', '(BW%·s)').replace('(lb)', '(BW%)')
                           : (column.includes('Back Leg Impulse Time') || column.includes('Back Leg YZ Transfer') || column.includes('Lead Leg YZ Transfer') || column === 'Y Transfer (s)' || column === 'Z Transfer (s)')
                             ? column.replace('(s)', '(ms)')

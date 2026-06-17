@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { getDbPool, isDatabaseConfigured } from './auth-db';
+import { getDbPool, isDatabaseConfigured, resetDbPool } from './auth-db';
 import { uploadRawCsvToR2, lttbDownsample, GRAPH_CACHE_TARGET_POINTS, isR2Configured } from './biomechanics-storage';
 
 export type BiomechanicsUploadKind = 'all_pitches' | 'single_pitch';
@@ -10,6 +10,12 @@ export type BiomechPitchOption = {
   capturedAt: string | null;
   velocityMph?: number | null;
   pitchType?: string | null;
+  tags?: string | null;
+  playerName?: string | null;
+  pitchDate?: string | null;
+  bodyWeightLb?: number | null;
+  strideLengthIn?: number | null;
+  strideDirectionIn?: number | null;
 };
 
 export type BiomechSinglePitchPoint = {
@@ -27,6 +33,8 @@ export type BiomechSinglePitchPoint = {
 
 type BiomechComputedMetrics = {
   backPeakFz: number | null;
+  peakDeWeighting: number | null;
+  zForceGain: number | null;
   backPeakFy: number | null;
   moundConnection: number | null;
   impulse: number | null;
@@ -48,6 +56,8 @@ type BiomechTableSummaryRow = {
   Tags: string;
   'Pitch Velocity (mph)': number | null;
   'Back Leg Peak Fz (lb)': number | null;
+  'Peak De-Weighting (lb)': number | null;
+  'Z-Force Gain (lb)': number | null;
   'Back Leg Peak Fy (lb)': number | null;
   'Mound Connection (BW%)': number | null;
   'Back Leg Impulse (lb·s)': number | null;
@@ -174,6 +184,7 @@ async function getTrackmanVelocityByNameDate(args: {
   schoolCode: string;
   startDate?: string | null;
   endDate?: string | null;
+  knownTimesOfDaySec?: number[];
 }): Promise<Map<string, Array<{ tSec: number | null; velo: number; pitchType: string | null }>>> {
   if (!isDatabaseConfigured()) return new Map();
   const pool = getDbPool();
@@ -189,6 +200,24 @@ async function getTrackmanVelocityByNameDate(args: {
   }
   const dateSql = dateParts.length ? `AND ${dateParts.join(' AND ')}` : '';
 
+  // When we know the exact seconds-of-day for each pitch, restrict to a ±90s window
+  // around each known time. This avoids fetching all TrackMan rows for a wide date range.
+  let timeSql = '';
+  const knownTimes = (args.knownTimesOfDaySec ?? []).filter((t) => Number.isFinite(t));
+  if (knownTimes.length) {
+    // Build OR clauses: EXTRACT(EPOCH FROM time::time) BETWEEN lo AND hi
+    // Use a 90s window (>5s matching threshold + generous buffer for clock drift)
+    const WINDOW = 90;
+    const timeClauses = knownTimes.map((t) => {
+      const lo = Math.max(0, t - WINDOW);
+      const hi = Math.min(86399, t + WINDOW);
+      return `EXTRACT(EPOCH FROM time::time) BETWEEN ${lo} AND ${hi}`;
+    });
+    // Deduplicate overlapping windows by merging — but with potentially many pitches
+    // a simple OR is fine; the DB optimizer handles it.
+    timeSql = `AND (${timeClauses.join(' OR ')})`;
+  }
+
   const attempts = [
     `
     SELECT
@@ -200,6 +229,7 @@ async function getTrackmanVelocityByNameDate(args: {
     FROM pitch_events
     WHERE school_code = $1
       ${dateSql}
+      ${timeSql}
       AND relspeed IS NOT NULL
       AND COALESCE(NULLIF(TRIM(pitcher), ''), '') <> ''
     `,
@@ -213,6 +243,7 @@ async function getTrackmanVelocityByNameDate(args: {
     FROM pitch_events
     WHERE school_code = $1
       ${dateSql}
+      ${timeSql}
       AND relspeed IS NOT NULL
       AND COALESCE(NULLIF(TRIM(pitcher), ''), '') <> ''
     `,
@@ -226,6 +257,7 @@ async function getTrackmanVelocityByNameDate(args: {
     FROM pitch_events
     WHERE school_code = $1
       ${dateSql}
+      ${timeSql}
       AND "RelSpeed" IS NOT NULL
       AND COALESCE(NULLIF(TRIM(pitcher), ''), '') <> ''
     `,
@@ -239,6 +271,7 @@ async function getTrackmanVelocityByNameDate(args: {
     FROM pitch_events
     WHERE school_code = $1
       ${dateSql}
+      ${timeSql}
       AND "RelSpeed" IS NOT NULL
       AND COALESCE(NULLIF(TRIM(pitcher), ''), '') <> ''
     `,
@@ -252,6 +285,7 @@ async function getTrackmanVelocityByNameDate(args: {
     FROM pitch_events
     WHERE school_code = $1
       ${dateSql}
+      ${timeSql}
       AND "RelSpeed" IS NOT NULL
       AND COALESCE(NULLIF(TRIM("Pitcher"::text), ''), '') <> ''
     `,
@@ -265,6 +299,7 @@ async function getTrackmanVelocityByNameDate(args: {
     FROM pitch_events
     WHERE school_code = $1
       ${dateSql}
+      ${timeSql}
       AND COALESCE("RelSpeed"::double precision, relspeed::double precision) IS NOT NULL
       AND COALESCE(NULLIF(TRIM(COALESCE("Pitcher"::text, pitcher)), ''), '') <> ''
     `,
@@ -598,6 +633,8 @@ function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputed
   if (!rawTimes.length) {
     return {
       backPeakFz: null,
+      peakDeWeighting: null,
+      zForceGain: null,
       backPeakFy: null,
       moundConnection: null,
       impulse: null,
@@ -678,6 +715,7 @@ function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputed
 
   let impulse: number | null = null;
   let impulseTime: number | null = null;
+  let peakDeWeighting: number | null = null;
   if (loading.length > 2) {
     const peakFz = maxBy(loading.map((p) => ({ t: p.t, v: p.fz })));
     const peakZIdx = peakFz ? loading.findIndex((p) => p.t === peakFz.t && p.fz === peakFz.v) : -1;
@@ -724,6 +762,7 @@ function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputed
       impulse = integrateTrapezoid(impulseWindow);
       const startT = loading[startIdx]?.t ?? null;
       const endT = loading[endIdx]?.t ?? null;
+      peakDeWeighting = loading[startIdx]?.fz ?? null;
       impulseTime = startT !== null && endT !== null ? Math.max(0, endT - startT) : null;
     }
   }
@@ -737,6 +776,8 @@ function computePitchMetrics(points: BiomechSinglePitchPoint[]): BiomechComputed
 
   return {
     backPeakFz: backPeakFz?.v ?? null,
+    peakDeWeighting,
+    zForceGain: backPeakFz?.v !== undefined && peakDeWeighting !== null ? backPeakFz.v - peakDeWeighting : null,
     backPeakFy: backPeakFy?.v ?? null,
     moundConnection: backFzBeforeLead,
     impulse,
@@ -761,6 +802,8 @@ async function ensureBiomechanicsTables(): Promise<void> {
       await client.query(`SET LOCAL lock_timeout = '2s';`);
       await client.query(`SET LOCAL statement_timeout = '15s';`);
       await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS impulse_time DOUBLE PRECISION;`);
+      await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS peak_de_weighting DOUBLE PRECISION;`);
+      await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS z_force_gain DOUBLE PRECISION;`);
       await client.query(`
         CREATE TABLE IF NOT EXISTS biomechanics_pitch_metrics (
           id BIGSERIAL PRIMARY KEY,
@@ -768,6 +811,8 @@ async function ensureBiomechanicsTables(): Promise<void> {
           school_code TEXT NOT NULL,
           source_file_hash TEXT NOT NULL,
           back_peak_fz DOUBLE PRECISION,
+          peak_de_weighting DOUBLE PRECISION,
+          z_force_gain DOUBLE PRECISION,
           back_peak_fy DOUBLE PRECISION,
           mound_connection DOUBLE PRECISION,
           impulse DOUBLE PRECISION,
@@ -857,6 +902,8 @@ async function ensureBiomechanicsTables(): Promise<void> {
         school_code TEXT NOT NULL,
         source_file_hash TEXT NOT NULL,
         back_peak_fz DOUBLE PRECISION,
+        peak_de_weighting DOUBLE PRECISION,
+        z_force_gain DOUBLE PRECISION,
         back_peak_fy DOUBLE PRECISION,
         mound_connection DOUBLE PRECISION,
         impulse DOUBLE PRECISION,
@@ -873,6 +920,8 @@ async function ensureBiomechanicsTables(): Promise<void> {
       );
     `);
     await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS impulse_time DOUBLE PRECISION;`);
+    await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS peak_de_weighting DOUBLE PRECISION;`);
+    await client.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS z_force_gain DOUBLE PRECISION;`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_date ON biomechanics_pitch_rows (organization_id, school_code, captured_at DESC);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_rows_scope_created_date ON biomechanics_pitch_rows (organization_id, school_code, created_at DESC);`);
@@ -967,6 +1016,8 @@ async function ensureBiomechanicsMetricsTable(): Promise<void> {
       school_code TEXT NOT NULL,
       source_file_hash TEXT NOT NULL,
       back_peak_fz DOUBLE PRECISION,
+      peak_de_weighting DOUBLE PRECISION,
+      z_force_gain DOUBLE PRECISION,
       back_peak_fy DOUBLE PRECISION,
       mound_connection DOUBLE PRECISION,
       impulse DOUBLE PRECISION,
@@ -983,6 +1034,8 @@ async function ensureBiomechanicsMetricsTable(): Promise<void> {
     );
   `);
   await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS impulse_time DOUBLE PRECISION;`);
+  await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS peak_de_weighting DOUBLE PRECISION;`);
+  await pool.query(`ALTER TABLE biomechanics_pitch_metrics ADD COLUMN IF NOT EXISTS z_force_gain DOUBLE PRECISION;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_biomech_pitch_metrics_scope_hash ON biomechanics_pitch_metrics (organization_id, school_code, source_file_hash);`);
 }
 
@@ -1282,12 +1335,14 @@ export async function saveSinglePitchPoints(args: {
       `
       INSERT INTO biomechanics_pitch_metrics (
         organization_id, school_code, source_file_hash,
-        back_peak_fz, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
+        back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
         lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
       ON CONFLICT (organization_id, school_code, source_file_hash)
       DO UPDATE SET
         back_peak_fz = EXCLUDED.back_peak_fz,
+        peak_de_weighting = EXCLUDED.peak_de_weighting,
+        z_force_gain = EXCLUDED.z_force_gain,
         back_peak_fy = EXCLUDED.back_peak_fy,
         mound_connection = EXCLUDED.mound_connection,
         impulse = EXCLUDED.impulse,
@@ -1305,6 +1360,8 @@ export async function saveSinglePitchPoints(args: {
         schoolCode,
         sourceFileHash,
         computed.backPeakFz,
+        computed.peakDeWeighting,
+        computed.zForceGain,
         computed.backPeakFy,
         computed.moundConnection,
         computed.impulse,
@@ -1464,7 +1521,6 @@ export async function getBiomechanicsSnapshot(args: {
   schoolCode: string;
   startDate?: string | null;
   endDate?: string | null;
-  selectedPitchKey?: string | null;
   selectedPitcher?: string | null;
   selectedTag?: string | null;
   selectedPitchType?: string | null;
@@ -1482,18 +1538,9 @@ export async function getBiomechanicsSnapshot(args: {
   allPitchCorrelationColumns: string[];
   pitchOptions: BiomechPitchOption[];
   selectedPitchKey: string | null;
-  selectedPitchPoints: BiomechSinglePitchPoint[];
   tagsOptions: string[];
   pitchTypeOptions: string[];
-  selectedPitchTags: string | null;
-  selectedPitchType: string | null;
-  selectedPitchPlayer: string | null;
-  selectedPitchDate: string | null;
-  selectedPitchVelocityMph: number | null;
   pitchVelocityByKey: Record<string, number | null>;
-  selectedPitchBodyWeightLb: number | null;
-  selectedPitchStrideLengthIn: number | null;
-  selectedPitchStrideDirectionIn: number | null;
   matchSummary: {
     totalSinglePitchFiles: number;
     matchedSinglePitchFiles: number;
@@ -1514,18 +1561,9 @@ export async function getBiomechanicsSnapshot(args: {
       allPitchCorrelationColumns: [],
       pitchOptions: [],
       selectedPitchKey: null,
-      selectedPitchPoints: [],
       tagsOptions: [],
       pitchTypeOptions: [],
-      selectedPitchTags: null,
-      selectedPitchType: null,
-      selectedPitchPlayer: null,
-      selectedPitchDate: null,
-      selectedPitchVelocityMph: null,
       pitchVelocityByKey: {},
-      selectedPitchBodyWeightLb: null,
-      selectedPitchStrideLengthIn: null,
-      selectedPitchStrideDirectionIn: null,
       matchSummary: {
         totalSinglePitchFiles: 0,
         matchedSinglePitchFiles: 0,
@@ -1610,14 +1648,7 @@ export async function getBiomechanicsSnapshot(args: {
   const forceMode = args.forceMode === 'bw' ? 'bw' : 'force';
   const includeAllPitchValues = Boolean(args.includeAllPitchValues);
 
-  // Kick off TrackMan lookup in parallel with DB queries — it needs no query results
-  const trackmanVeloPromise = getTrackmanVelocityByNameDate({
-    schoolCode,
-    startDate: args.startDate ?? null,
-    endDate: args.endDate ?? null,
-  });
-
-  // Run all independent queries in parallel
+  // Run pitch rows + pitch options in parallel; TrackMan fires after with known timestamps
   const [rowResult, pitchOptionsResult] = await Promise.all([
     runSnapshotQuery<{ row_json: Record<string, string | number | null>; captured_at: string | null; created_at: string | null }>(
       'biomechanics pitch rows',
@@ -1705,7 +1736,31 @@ export async function getBiomechanicsSnapshot(args: {
     return keys.some((k) => selectedPitcherKeys.has(k));
   };
   const filteredAllRows = allRows.filter((row) => isSelectedPitcherMatch(row.name));
-  const trackmanVeloByNameDate = await trackmanVeloPromise;
+
+  // Extract known times-of-day from single-pitch filenames to narrow the TrackMan query
+  const knownTimesOfDaySec: number[] = [];
+  for (const row of pitchOptionsResult.rows) {
+    const sourceFileName = String(row.source_file_name ?? '').trim();
+    const parts = parseSingleFileNameParts(sourceFileName || String(row.label ?? ''));
+    if (Number.isFinite(parts.timeKey) && parts.timeKey !== null) {
+      knownTimesOfDaySec.push(Number(parts.timeKey));
+    } else {
+      const fallback = secondsOfDayFromIso(row.captured_at);
+      if (fallback !== null) knownTimesOfDaySec.push(fallback);
+    }
+  }
+  // Also include times from all-pitch rows (captured_at) as a fallback source
+  for (const row of allRows) {
+    const t = secondsOfDayFromIso(row.capturedAt);
+    if (t !== null) knownTimesOfDaySec.push(t);
+  }
+
+  const trackmanVeloByNameDate = await getTrackmanVelocityByNameDate({
+    schoolCode,
+    startDate: args.startDate ?? null,
+    endDate: args.endDate ?? null,
+    knownTimesOfDaySec: knownTimesOfDaySec.length ? knownTimesOfDaySec : undefined,
+  });
   const pickNearestTrackmanMatch = (nameRaw: string, dateKey: string, timeKey: number | null): { velo: number | null; pitchType: string | null } => {
     const keys = buildNameKeys(nameRaw);
     const rows = keys.flatMap((k) => trackmanVeloByNameDate.get(`${k}|${dateKey}`) ?? []);
@@ -1857,14 +1912,21 @@ export async function getBiomechanicsSnapshot(args: {
   ).sort((a, b) => a.localeCompare(b));
 
   const pitchOptionsUnfiltered: BiomechPitchOption[] = singleRows.map((row) => {
-    const mappedName = mapping.get(row.pitchKey)?.name ?? '';
+    const meta = mapping.get(row.pitchKey);
+    const mappedName = meta?.name ?? '';
     const fallback = toFirstLastName(String(row.pitcherName ?? '').trim());
     return {
       pitchKey: row.pitchKey,
       label: mappedName || fallback || 'Unknown Pitcher',
       capturedAt: row.capturedAt,
-      velocityMph: mapping.get(row.pitchKey)?.velocityMph ?? null,
-      pitchType: mapping.get(row.pitchKey)?.pitchType ?? null,
+      velocityMph: meta?.velocityMph ?? null,
+      pitchType: meta?.pitchType ?? null,
+      tags: meta?.tags ?? null,
+      playerName: mappedName || fallback || null,
+      pitchDate: meta?.pitchDateLabel ?? null,
+      bodyWeightLb: meta?.bodyWeightLb ?? null,
+      strideLengthIn: meta?.strideLengthIn ?? null,
+      strideDirectionIn: meta?.strideDirectionIn ?? null,
     };
   });
   const pitchOptions = pitchOptionsUnfiltered.filter((option) => {
@@ -1886,105 +1948,29 @@ export async function getBiomechanicsSnapshot(args: {
     if (selectedVelocityMax !== null && (velo === null || velo > selectedVelocityMax)) return false;
     return true;
   });
-  const selectedPitchKey =
-    args.selectedPitchKey && pitchOptions.some((option) => option.pitchKey === args.selectedPitchKey)
-      ? args.selectedPitchKey
-      : (pitchOptions[0]?.pitchKey ?? null);
+  const selectedPitchKey = pitchOptions[0]?.pitchKey ?? null;
 
   // Kick off metrics query in parallel with pitch points fetch — both only need pitchOptions
   const metricKeys = pitchOptions.map((p) => p.pitchKey);
   const metricsPromise = metricKeys.length ? runSnapshotQuery<{
     source_file_hash: string;
-    back_peak_fz: number | null; back_peak_fy: number | null; mound_connection: number | null;
+    back_peak_fz: number | null; peak_de_weighting: number | null; z_force_gain: number | null;
+    back_peak_fy: number | null; mound_connection: number | null;
     impulse: number | null; impulse_time: number | null; yz_transfer_back: number | null;
     lead_peak_fz: number | null; lead_peak_fy: number | null; clawback_time: number | null;
     yz_transfer_front: number | null; y_transfer: number | null; z_transfer: number | null;
   }>(
     'biomechanics metrics lookup (parallel)',
-    `SELECT source_file_hash, back_peak_fz, back_peak_fy, mound_connection, impulse, impulse_time,
+    `SELECT source_file_hash, back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time,
             yz_transfer_back, lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer
      FROM biomechanics_pitch_metrics
      WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = ANY($3::text[])`,
     [args.organizationId, schoolCode, metricKeys]
   ).catch(() => null) : Promise.resolve(null);
 
-  let selectedPitchPoints: BiomechSinglePitchPoint[] = [];
-  if (selectedPitchKey) {
-    const pointsResult = await runSnapshotQuery<{
-      t: number; fx: number | null; fy: number | null; fz: number | null;
-      mx: number | null; my: number | null; mz: number | null;
-      phase_name: string | null; device_id: string | null; position_id: string | null;
-    }>(
-      'biomechanics selected pitch points',
-      `
-      SELECT t, fx, fy, fz, mx, my, mz, phase_name, device_id, position_id
-      FROM biomechanics_graph_cache
-      WHERE organization_id = $1
-        AND school_code = $2
-        AND source_file_hash = $3
-      ORDER BY point_index ASC
-      `,
-      [args.organizationId, schoolCode, selectedPitchKey]
-    );
-    if (pointsResult.rows.length > 0) {
-      selectedPitchPoints = pointsResult.rows.map((row) => ({
-        t: Number(row.t ?? 0),
-        fx: toFinite(row.fx),
-        fy: toFinite(row.fy),
-        fz: toFinite(row.fz),
-        mx: toFinite(row.mx),
-        my: toFinite(row.my),
-        mz: toFinite(row.mz),
-        phase_name: row.phase_name ?? null,
-        device_id: row.device_id ?? null,
-        position_id: row.position_id ?? null,
-      }));
-    } else {
-      // Fallback to raw table for pitches uploaded before graph cache existed.
-      const rawResult = await runSnapshotQuery<BiomechSinglePitchPoint & { row_json?: Record<string, unknown> | null }>(
-        'biomechanics selected pitch points (raw fallback)',
-        `
-        SELECT t, fx, fy, fz, mx, my, mz, row_json
-        FROM biomechanics_graph_cache
-        WHERE organization_id = $1
-          AND school_code = $2
-          AND source_file_hash = $3
-        ORDER BY point_index ASC
-        `,
-        [args.organizationId, schoolCode, selectedPitchKey]
-      );
-      selectedPitchPoints = rawResult.rows.map((row) => {
-        const rowJson = (row.row_json ?? {}) as Record<string, unknown>;
-        const rowTimeMs = toFinite(pickValueCaseInsensitive(rowJson, ['Time (Unix ms)', 'time_unix_ms', 'time unix ms', 'timestamp_ms', 'unix ms']));
-        const dbTime = toFinite(row.t);
-        const t = rowTimeMs !== null ? rowTimeMs : Number(dbTime ?? 0);
-        return {
-          t,
-          fx: toFinite(row.fx),
-          fy: toFinite(row.fy),
-          fz: toFinite(row.fz),
-          mx: toFinite(row.mx),
-          my: toFinite(row.my),
-          mz: toFinite(row.mz),
-          phase_name: pickStringCaseInsensitive(rowJson, ['Phase Name', 'Phase']),
-          device_id: pickStringCaseInsensitive(rowJson, ['Device Id', 'Device']),
-          position_id: pickStringCaseInsensitive(rowJson, ['Position Id', 'Position']),
-        };
-      });
-    }
-  }
-
-  const selectedPitchTags = selectedPitchKey ? (mapping.get(selectedPitchKey)?.tags ?? null) : null;
-  const selectedPitchType = selectedPitchKey ? (mapping.get(selectedPitchKey)?.pitchType ?? null) : null;
-  const selectedPitchPlayer = selectedPitchKey ? (mapping.get(selectedPitchKey)?.name ?? null) : null;
-  const selectedPitchDate = selectedPitchKey ? (mapping.get(selectedPitchKey)?.pitchDateLabel ?? null) : null;
-  const selectedPitchVelocityMph = selectedPitchKey ? (mapping.get(selectedPitchKey)?.velocityMph ?? null) : null;
   const pitchVelocityByKey = Object.fromEntries(
     pitchOptions.map((option) => [option.pitchKey, mapping.get(option.pitchKey)?.velocityMph ?? null])
   ) as Record<string, number | null>;
-  const selectedPitchBodyWeightLb = selectedPitchKey ? (mapping.get(selectedPitchKey)?.bodyWeightLb ?? null) : null;
-  const selectedPitchStrideLengthIn = selectedPitchKey ? (mapping.get(selectedPitchKey)?.strideLengthIn ?? null) : null;
-  const selectedPitchStrideDirectionIn = selectedPitchKey ? (mapping.get(selectedPitchKey)?.strideDirectionIn ?? null) : null;
   const totalAllForSummary = filteredAllRows.length;
   const totalSinglesForSummary = pitchOptions.length;
   const matchedForSummary = Math.min(mapping.size, totalSinglesForSummary);
@@ -2002,6 +1988,8 @@ export async function getBiomechanicsSnapshot(args: {
     const metricsAgg = (await metricsPromise) ?? await runSnapshotQuery<{
       source_file_hash: string;
       back_peak_fz: number | null;
+      peak_de_weighting: number | null;
+      z_force_gain: number | null;
       back_peak_fy: number | null;
       mound_connection: number | null;
       impulse: number | null;
@@ -2019,6 +2007,8 @@ export async function getBiomechanicsSnapshot(args: {
       SELECT
         source_file_hash,
         back_peak_fz,
+        peak_de_weighting,
+        z_force_gain,
         back_peak_fy,
         mound_connection,
         impulse,
@@ -2039,12 +2029,14 @@ export async function getBiomechanicsSnapshot(args: {
     ).catch(async (error) => {
       const code = String((error as { code?: unknown } | null)?.code ?? '');
       const message = String((error as { message?: unknown } | null)?.message ?? '').toLowerCase();
-      const missingMetricsShape = code === '42P01' || code === '42703' || message.includes('biomechanics_pitch_metrics') || message.includes('impulse_time');
+      const missingMetricsShape = code === '42P01' || code === '42703' || message.includes('biomechanics_pitch_metrics') || message.includes('impulse_time') || message.includes('peak_de_weighting') || message.includes('z_force_gain');
       if (!missingMetricsShape) throw error;
       await ensureBiomechanicsMetricsTable();
       return runSnapshotQuery<{
         source_file_hash: string;
         back_peak_fz: number | null;
+        peak_de_weighting: number | null;
+        z_force_gain: number | null;
         back_peak_fy: number | null;
         mound_connection: number | null;
         impulse: number | null;
@@ -2062,6 +2054,8 @@ export async function getBiomechanicsSnapshot(args: {
         SELECT
           source_file_hash,
           back_peak_fz,
+          peak_de_weighting,
+          z_force_gain,
           back_peak_fy,
           mound_connection,
           impulse,
@@ -2084,6 +2078,8 @@ export async function getBiomechanicsSnapshot(args: {
     for (const row of metricsAgg.rows) {
       pitchMetricsMap.set(row.source_file_hash, {
         backPeakFz: toFinite(row.back_peak_fz),
+        peakDeWeighting: toFinite(row.peak_de_weighting),
+        zForceGain: toFinite(row.z_force_gain),
         backPeakFy: toFinite(row.back_peak_fy),
         moundConnection: toFinite(row.mound_connection),
         impulse: toFinite(row.impulse),
@@ -2097,12 +2093,15 @@ export async function getBiomechanicsSnapshot(args: {
         zTransfer: toFinite(row.z_transfer),
       });
     }
-    const missingMetricKeys = metricKeys.filter((key) => !pitchMetricsMap.has(key));
+    const missingMetricKeys = metricKeys.filter((key) => {
+      const metrics = pitchMetricsMap.get(key);
+      return !metrics || metrics.peakDeWeighting === null || metrics.zForceGain === null;
+    });
     if (missingMetricKeys.length) {
-      const pointsAgg = await runSnapshotQuery<BiomechSinglePitchPoint & { source_file_hash: string; row_json?: Record<string, unknown> | null }>(
+      const pointsAgg = await runSnapshotQuery<BiomechSinglePitchPoint & { source_file_hash: string }>(
         'biomechanics missing metrics points',
         `
-        SELECT source_file_hash, t, fx, fy, fz, mx, my, mz, row_json
+        SELECT source_file_hash, t, fx, fy, fz, mx, my, mz, phase_name, device_id, position_id
         FROM biomechanics_graph_cache
         WHERE organization_id = $1
           AND school_code = $2
@@ -2121,9 +2120,9 @@ export async function getBiomechanicsSnapshot(args: {
           mx: toFinite(row.mx),
           my: toFinite(row.my),
           mz: toFinite(row.mz),
-          phase_name: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Phase Name', 'Phase']),
-          device_id: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Device Id', 'Device']),
-          position_id: pickStringCaseInsensitive((row.row_json ?? {}) as Record<string, unknown>, ['Position Id', 'Position']),
+          phase_name: row.phase_name,
+          device_id: row.device_id,
+          position_id: row.position_id,
         };
         const arr = grouped.get(row.source_file_hash) ?? [];
         arr.push(point);
@@ -2136,12 +2135,14 @@ export async function getBiomechanicsSnapshot(args: {
           `
       INSERT INTO biomechanics_pitch_metrics (
         organization_id, school_code, source_file_hash,
-        back_peak_fz, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
+        back_peak_fz, peak_de_weighting, z_force_gain, back_peak_fy, mound_connection, impulse, impulse_time, yz_transfer_back,
         lead_peak_fz, lead_peak_fy, clawback_time, yz_transfer_front, y_transfer, z_transfer
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
       ON CONFLICT (organization_id, school_code, source_file_hash)
       DO UPDATE SET
         back_peak_fz = EXCLUDED.back_peak_fz,
+        peak_de_weighting = EXCLUDED.peak_de_weighting,
+        z_force_gain = EXCLUDED.z_force_gain,
         back_peak_fy = EXCLUDED.back_peak_fy,
         mound_connection = EXCLUDED.mound_connection,
         impulse = EXCLUDED.impulse,
@@ -2159,6 +2160,8 @@ export async function getBiomechanicsSnapshot(args: {
             schoolCode,
             pitchKey,
         computed.backPeakFz,
+        computed.peakDeWeighting,
+        computed.zForceGain,
         computed.backPeakFy,
         computed.moundConnection,
         computed.impulse,
@@ -2184,6 +2187,8 @@ export async function getBiomechanicsSnapshot(args: {
     'Tags',
     'Pitch Velocity (mph)',
     'Back Leg Peak Fz (lb)',
+    'Peak De-Weighting (lb)',
+    'Z-Force Gain (lb)',
     'Back Leg Peak Fy (lb)',
     'Mound Connection (BW%)',
     'Back Leg Impulse (lb·s)',
@@ -2252,7 +2257,7 @@ export async function getBiomechanicsSnapshot(args: {
         const v = metrics[k];
         if (v !== null && Number.isFinite(v)) curr.sums[k] = (curr.sums[k] ?? 0) + v;
       };
-      add('backPeakFz'); add('backPeakFy'); add('moundConnection'); add('impulse'); add('impulseTime'); add('yzTransferBack');
+      add('backPeakFz'); add('peakDeWeighting'); add('zForceGain'); add('backPeakFy'); add('moundConnection'); add('impulse'); add('impulseTime'); add('yzTransferBack');
       add('leadPeakFz'); add('leadPeakFy'); add('clawbackTime'); add('yzTransferFront');
       add('yTransfer'); add('zTransfer');
       if (meta.strideLengthIn !== null && Number.isFinite(meta.strideLengthIn)) curr.strideLen.push(meta.strideLengthIn);
@@ -2273,6 +2278,8 @@ export async function getBiomechanicsSnapshot(args: {
       Tags: meta.tags,
       'Pitch Velocity (mph)': meta.velocityMph,
       'Back Leg Peak Fz (lb)': applyForceMode(metrics.backPeakFz, bwForPitch),
+      'Peak De-Weighting (lb)': applyForceMode(metrics.peakDeWeighting, bwForPitch),
+      'Z-Force Gain (lb)': applyForceMode(metrics.zForceGain, bwForPitch),
       'Back Leg Peak Fy (lb)': applyForceMode(metrics.backPeakFy, bwForPitch),
       'Mound Connection (BW%)': applyForceMode(metrics.moundConnection, bwForPitch),
       'Back Leg Impulse (lb·s)': applyForceMode(metrics.impulse, bwForPitch),
@@ -2328,6 +2335,8 @@ export async function getBiomechanicsSnapshot(args: {
       Tags: r.tags,
       'Pitch Velocity (mph)': avgArr(r.velo),
       'Back Leg Peak Fz (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.backPeakFz),
+      'Peak De-Weighting (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.peakDeWeighting),
+      'Z-Force Gain (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.zForceGain),
       'Back Leg Peak Fy (lb)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.backPeakFy),
       'Mound Connection (BW%)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.moundConnection),
       'Back Leg Impulse (lb·s)': avgBwMetric(`${r.name}|${r.tags}`, (m) => m.impulse),
@@ -2371,6 +2380,8 @@ export async function getBiomechanicsSnapshot(args: {
       bucket[key] = (bucket[key] ?? 0) + v;
     };
     addNum('Back Leg Peak Fz (lb)', curr.sums);
+    addNum('Peak De-Weighting (lb)', curr.sums);
+    addNum('Z-Force Gain (lb)', curr.sums);
     addNum('Back Leg Peak Fy (lb)', curr.sums);
     addNum('Mound Connection (BW%)', curr.sums);
     addNum('Back Leg Impulse (lb·s)', curr.sums);
@@ -2411,6 +2422,8 @@ export async function getBiomechanicsSnapshot(args: {
       Tags: selectedTags.length ? selectedTags.join(', ') : 'All',
       'Pitch Velocity (mph)': avgArr(r.velo),
       'Back Leg Peak Fz (lb)': avg(r.sums['Back Leg Peak Fz (lb)'], r.count),
+      'Peak De-Weighting (lb)': avg(r.sums['Peak De-Weighting (lb)'], r.count),
+      'Z-Force Gain (lb)': avg(r.sums['Z-Force Gain (lb)'], r.count),
       'Back Leg Peak Fy (lb)': avg(r.sums['Back Leg Peak Fy (lb)'], r.count),
       'Mound Connection (BW%)': avg(r.sums['Mound Connection (BW%)'], r.count),
       'Back Leg Impulse (lb·s)': avg(r.sums['Back Leg Impulse (lb·s)'], r.count),
@@ -2436,20 +2449,61 @@ export async function getBiomechanicsSnapshot(args: {
     allPitchCorrelationColumns,
     pitchOptions,
     selectedPitchKey,
-    selectedPitchPoints,
     tagsOptions,
     pitchTypeOptions,
-    selectedPitchTags,
-    selectedPitchType,
-    selectedPitchPlayer,
-    selectedPitchDate,
-    selectedPitchVelocityMph,
     pitchVelocityByKey,
-    selectedPitchBodyWeightLb,
-    selectedPitchStrideLengthIn,
-    selectedPitchStrideDirectionIn,
     matchSummary,
   };
+}
+
+export async function getBiomechanicsPitchPoints(args: {
+  organizationId: number;
+  schoolCode: string;
+  pitchKey: string;
+}): Promise<BiomechSinglePitchPoint[]> {
+  if (!isDatabaseConfigured()) return [];
+  const schoolCode = normalizeSchoolCode(args.schoolCode);
+  const queryPitchPoints = () => {
+    const pool = getDbPool();
+    return pool.query<{
+      t: number; fx: number | null; fy: number | null; fz: number | null;
+      mx: number | null; my: number | null; mz: number | null;
+      phase_name: string | null; device_id: string | null; position_id: string | null;
+    }>(
+      `SELECT t, fx, fy, fz, mx, my, mz, phase_name, device_id, position_id
+       FROM biomechanics_graph_cache
+       WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = $3
+       ORDER BY point_index ASC`,
+      [args.organizationId, schoolCode, args.pitchKey]
+    );
+  };
+  const isTransientConnectionError = (error: unknown): boolean => {
+    const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code ?? '') : '';
+    if (['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', '57P01', '57P02', '57P03', '08000', '08003', '08006'].includes(code)) return true;
+    const message = typeof error === 'object' && error && 'message' in error ? String((error as { message?: unknown }).message ?? '').toLowerCase() : '';
+    return message.includes('connection terminated') || message.includes('connection timeout') || message.includes('timeout expired');
+  };
+  const result = await queryPitchPoints().catch(async (error) => {
+    if (!isTransientConnectionError(error)) throw error;
+    await resetDbPool();
+    return queryPitchPoints();
+  });
+  if (!result.rows.length) return [];
+  return result.rows.map((row) => {
+    const hasDirectCols = row.fx !== null || row.fy !== null || row.fz !== null;
+    return {
+      t: Number(row.t ?? 0),
+      fx: hasDirectCols ? toFinite(row.fx) : null,
+      fy: hasDirectCols ? toFinite(row.fy) : null,
+      fz: hasDirectCols ? toFinite(row.fz) : null,
+      mx: hasDirectCols ? toFinite(row.mx) : null,
+      my: hasDirectCols ? toFinite(row.my) : null,
+      mz: hasDirectCols ? toFinite(row.mz) : null,
+      phase_name: row.phase_name,
+      device_id: row.device_id,
+      position_id: row.position_id,
+    };
+  });
 }
 
 export async function getLatestBiomechanicsDate(args: {

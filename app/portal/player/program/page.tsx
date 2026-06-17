@@ -247,8 +247,8 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
                 Dashboard
               </Link>
             ) : (
-              <Link href="/tutorials" className="portal-nav-link">
-                Tutorials
+              <Link href="/profiles" className="portal-nav-link">
+                Profiles
               </Link>
             )}
           </nav>
@@ -267,7 +267,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
               { href: '/portal/player/program', label: 'Program' },
               ...(session.role === 'player'
                 ? [{ href: '/portal/dashboard', label: 'Dashboard' }]
-                : [{ href: '/tutorials', label: 'Tutorials' }]),
+                : [{ href: '/profiles', label: 'Profiles' }]),
             ]}
           />
         </div>
