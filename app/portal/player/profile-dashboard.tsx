@@ -67,6 +67,7 @@ type ProfileDashboardProps = {
   initialProfile: {
     fullName: string;
     email: string;
+    status: string;
     dateOfBirth: string | null;
     schoolTeam: string | null;
     phone: string | null;
@@ -392,6 +393,7 @@ export default function ProfileDashboard({
   const [profile, setProfile] = useState({
     fullName: initialProfile.fullName,
     email: initialProfile.email,
+    status: initialProfile.status || 'active',
     dateOfBirth: initialProfile.dateOfBirth ?? '',
     schoolTeam: initialProfile.schoolTeam ?? '',
     phone: initialProfile.phone ?? '',
@@ -410,6 +412,8 @@ export default function ProfileDashboard({
   });
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMessage, setProfileMessage] = useState('');
+  const [statusSaving, setStatusSaving] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
   const [photoUploading, setPhotoUploading] = useState(false);
   const [photoMessage, setPhotoMessage] = useState('');
   const [photoCropState, setPhotoCropState] = useState<PhotoCropState | null>(null);
@@ -466,6 +470,20 @@ export default function ProfileDashboard({
     initialAssessmentScores[0]?.dayDate ?? ''
   );
   const [playerNotesExpanded, setPlayerNotesExpanded] = useState(false);
+  const normalizedPlayerStatus = String(profile.status ?? '').trim().toLowerCase() === 'inactive' ? 'inactive' : 'active';
+  const playerStatusLabel = normalizedPlayerStatus === 'inactive' ? 'Inactive' : 'Active';
+  const playerStatusBadgeStyle: CSSProperties = {
+    border: `1px solid ${normalizedPlayerStatus === 'inactive' ? 'rgba(255, 95, 95, 0.45)' : 'rgba(64, 211, 120, 0.45)'}`,
+    background: normalizedPlayerStatus === 'inactive' ? 'rgba(255, 95, 95, 0.12)' : 'rgba(64, 211, 120, 0.12)',
+    color: normalizedPlayerStatus === 'inactive' ? '#ff8b8b' : '#6fe58e',
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 0,
+    lineHeight: 1,
+    padding: '7px 10px',
+    textTransform: 'uppercase',
+  };
 
   const sortedWeightLogs = useMemo(() => {
     const merged = new Map<string, BodyWeightLogRow>();
@@ -740,6 +758,27 @@ export default function ProfileDashboard({
     if (!response.ok) throw new Error(payload.error ?? 'Failed to save profile.');
   };
 
+  const savePlayerStatus = async (nextStatus: 'active' | 'inactive') => {
+    setStatusSaving(true);
+    setStatusMessage('');
+    try {
+      const response = await fetch('/api/player/profile', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, status: nextStatus }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; status?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to update player status.');
+      setProfile((prev) => ({ ...prev, status: payload.status === 'inactive' ? 'inactive' : 'active' }));
+      setStatusMessage(nextStatus === 'inactive' ? 'Player deactivated.' : 'Player reactivated.');
+      router.refresh();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Failed to update player status.');
+    } finally {
+      setStatusSaving(false);
+    }
+  };
+
   const onPhotoSelected = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -900,6 +939,7 @@ export default function ProfileDashboard({
         <div className="portal-profile-hero-main">
           <div className="portal-profile-hero-name">
             <h2>{profile.fullName}</h2>
+            {showProfileDetailsPanel ? <span style={playerStatusBadgeStyle}>{playerStatusLabel}</span> : null}
           </div>
           {heroGradPositionLine ? <p className="portal-profile-hero-line">{heroGradPositionLine}</p> : null}
           {heroHeightWeightLine ? <p className="portal-profile-hero-line">{heroHeightWeightLine}</p> : null}
@@ -911,16 +951,34 @@ export default function ProfileDashboard({
       {showProfileDetailsPanel && (
         <article className="portal-admin-card">
         <div className="portal-row-between">
-          <h3>Profile Details</h3>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => setProfileExpanded((current) => !current)}
-            aria-expanded={profileExpanded}
-          >
-            {profileExpanded ? 'Collapse' : 'Expand'}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <h3>Profile Details</h3>
+            <span style={playerStatusBadgeStyle}>{playerStatusLabel}</span>
+          </div>
+          <div className="portal-choice-line-actions">
+            {canEditProfile ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={statusSaving}
+                onClick={() => savePlayerStatus(normalizedPlayerStatus === 'inactive' ? 'active' : 'inactive')}
+              >
+                {statusSaving ? 'Saving...' : normalizedPlayerStatus === 'inactive' ? 'Reactivate' : 'Deactivate'}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setProfileExpanded((current) => !current)}
+              aria-expanded={profileExpanded}
+            >
+              {profileExpanded ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
         </div>
+        {statusMessage ? (
+          <p className={statusMessage.startsWith('Player ') ? 'auth-message' : 'auth-error'}>{statusMessage}</p>
+        ) : null}
         {canEditProfile && profileExpanded ? (
           <form
             className="portal-form-grid"

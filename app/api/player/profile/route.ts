@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
-import { getPlayerByIdInOrganization, getPlayerForUser, updatePlayerProfile } from '../../../../lib/training-db';
+import { getPlayerByIdInOrganization, getPlayerForUser, setPlayerStatus, updatePlayerProfile } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
 
 async function resolveAllowedPlayerId(session: { role?: string; organizationId?: number; userId?: number; playerId?: number | null } | null, requestedPlayerId: number) {
@@ -74,4 +74,36 @@ export async function POST(request: Request) {
 
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json({ ok: true });
+}
+
+export async function PATCH(request: Request) {
+  const cookieStore = await cookies();
+  const session = getSessionFromCookies(cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.role !== 'admin' && session.role !== 'coach') {
+    return NextResponse.json({ error: 'Only coaches and admins can update player status.' }, { status: 403 });
+  }
+
+  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const playerId = Number(body.playerId ?? 0);
+  const status = String(body.status ?? '').trim().toLowerCase();
+
+  if (!Number.isFinite(playerId) || playerId <= 0) {
+    return NextResponse.json({ error: 'Valid playerId is required.' }, { status: 400 });
+  }
+  if (status !== 'active' && status !== 'inactive') {
+    return NextResponse.json({ error: 'Status must be active or inactive.' }, { status: 400 });
+  }
+
+  const allowed = await resolveAllowedPlayerId(session, playerId);
+  if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+
+  const result = await setPlayerStatus({
+    organizationId: resolveProgrammingOrganizationId(session),
+    playerId: allowed.playerId,
+    status,
+  });
+
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+  return NextResponse.json({ ok: true, status });
 }

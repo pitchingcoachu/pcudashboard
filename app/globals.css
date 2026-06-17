@@ -3669,6 +3669,14 @@ body.theme-light .portal-color-toggle .portal-color-toggle-btn.is-on::before {
   font-size: 0.88rem;
 }
 
+.portal-table-row-inactive {
+  background: rgba(255, 95, 95, 0.1);
+}
+
+.portal-table-row-inactive td {
+  border-bottom-color: rgba(255, 95, 95, 0.22);
+}
+
 .portal-table-link {
   color: var(--text-primary);
   font-weight: 700;
@@ -3684,6 +3692,24 @@ body.theme-light .portal-color-toggle .portal-color-toggle-btn.is-on::before {
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
+}
+
+.profiles-toolbar-actions {
+  display: grid;
+  grid-template-columns: minmax(180px, 320px) auto;
+  align-items: end;
+  justify-content: end;
+  gap: 0.5rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.profiles-search-filter {
+  min-width: 0;
+}
+
+.profiles-pdf-button {
+  white-space: nowrap;
 }
 
 .portal-exercise-grid {
@@ -5221,6 +5247,16 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 
   .portal-shell::before {
     height: calc(env(safe-area-inset-top, 0px) + 1px);
+  }
+
+  .profiles-toolbar-actions {
+    grid-template-columns: minmax(0, 1fr);
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .profiles-pdf-button {
+    width: 100%;
   }
 
   .portal-header {

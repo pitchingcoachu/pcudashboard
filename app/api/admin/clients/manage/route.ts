@@ -2,7 +2,8 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveClientManagementOrganizationId } from '../../../../../lib/programming-scope';
-import { deleteClientUser } from '../../../../../lib/training-db';
+import { deleteClientUser, setPlayerStatus } from '../../../../../lib/training-db';
+import { canManagePlayer } from '../../../../../lib/portal-access';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -17,7 +18,7 @@ export async function POST(request: Request) {
     if (!session) {
       return NextResponse.redirect(new URL('/login', request.url), 303);
     }
-    if ((session.role ?? 'admin') !== 'admin') {
+    if (session.role !== 'admin' && session.role !== 'coach') {
       return NextResponse.redirect(new URL('/portal/player', request.url), 303);
     }
 
@@ -33,8 +34,24 @@ export async function POST(request: Request) {
     if (!Number.isFinite(playerId) || playerId <= 0) {
       return redirectWithMessage(request, redirectTo, 'error', 'Valid player is required.');
     }
-    if (action !== 'delete') {
+    if (action !== 'delete' && action !== 'activate' && action !== 'deactivate') {
       return redirectWithMessage(request, redirectTo, 'error', 'Invalid action.');
+    }
+
+    if (action === 'delete' && session.role !== 'admin') {
+      return redirectWithMessage(request, redirectTo, 'error', 'Only admins can delete players.');
+    }
+
+    const allowed = await canManagePlayer(session, playerId);
+    if (!allowed) {
+      return redirectWithMessage(request, redirectTo, 'error', 'You do not have access to manage this player.');
+    }
+
+    if (action === 'activate' || action === 'deactivate') {
+      const nextStatus = action === 'deactivate' ? 'inactive' : 'active';
+      const result = await setPlayerStatus({ organizationId, playerId, status: nextStatus });
+      if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);
+      return redirectWithMessage(request, redirectTo, 'ok', nextStatus === 'inactive' ? 'Player deactivated.' : 'Player activated.');
     }
 
     const result = await deleteClientUser({ organizationId, playerId });

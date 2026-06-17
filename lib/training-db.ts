@@ -83,6 +83,7 @@ export type PlayerProfileRow = {
   id: number;
   fullName: string;
   email: string;
+  status: string;
   dateOfBirth: string | null;
   schoolTeam: string | null;
   phone: string | null;
@@ -835,7 +836,9 @@ export async function listClientsByOrganizationPaged(input: {
         LEFT JOIN auth_users u ON u.id = p.user_id
         LEFT JOIN auth_users coach ON coach.id = p.assigned_coach_user_id
         WHERE ${whereSql}
-        ORDER BY p.full_name ASC
+        ORDER BY
+          CASE WHEN LOWER(COALESCE(NULLIF(TRIM(p.status), ''), 'active')) = 'inactive' THEN 1 ELSE 0 END ASC,
+          p.full_name ASC
         LIMIT $${nextParamIndex}
         OFFSET $${nextParamIndex + 1}
       `,
@@ -957,12 +960,14 @@ export async function listCoachAssignedPlayersByOrganization(organizationId: num
 export async function listPlayerChoicesByOrganization(input: {
   organizationId: number;
   assignedCoachUserId?: number | null;
+  activeOnly?: boolean;
 }): Promise<PlayerChoiceRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
   const assignedCoachUserId = Number(input.assignedCoachUserId ?? 0);
   const useCoachFilter = Number.isFinite(assignedCoachUserId) && assignedCoachUserId > 0;
-  const cacheKey = `player_choices:${input.organizationId}:${useCoachFilter ? assignedCoachUserId : 0}`;
+  const activeOnly = input.activeOnly === true;
+  const cacheKey = `player_choices:${input.organizationId}:${useCoachFilter ? assignedCoachUserId : 0}:${activeOnly ? 1 : 0}`;
   return _withTrainingReadCache(cacheKey, 20_000, async () => {
     const pool = getDbPool();
     const result = await pool.query<{
@@ -974,6 +979,7 @@ export async function listPlayerChoicesByOrganization(input: {
         SELECT p.id AS player_id, p.full_name, p.assigned_coach_user_id
         FROM players p
         WHERE p.organization_id = $1
+        ${activeOnly ? "AND LOWER(COALESCE(NULLIF(TRIM(p.status), ''), 'active')) = 'active'" : ''}
         ${useCoachFilter ? 'AND p.assigned_coach_user_id = $2' : ''}
         ORDER BY p.full_name ASC
       `,
@@ -1021,6 +1027,7 @@ export async function listPlayerProfilesWithPlanGoals(input: {
           ON g.player_id = p.id
           AND g.slot_index BETWEEN 1 AND 3
         WHERE p.organization_id = $1
+        AND LOWER(COALESCE(NULLIF(TRIM(p.status), ''), 'active')) = 'active'
         ${useCoachFilter ? 'AND p.assigned_coach_user_id = $2' : ''}
         ORDER BY p.full_name ASC, g.slot_index ASC
       `,
@@ -4742,6 +4749,7 @@ export async function getPlayerByIdInOrganization(input: {
     id: number;
     full_name: string;
     email: string;
+    status: string | null;
     date_of_birth: string | null;
     school_team: string | null;
     phone: string | null;
@@ -4762,6 +4770,7 @@ export async function getPlayerByIdInOrganization(input: {
         p.id,
         p.full_name,
         p.email,
+        p.status,
         p.date_of_birth::text,
         p.school_team,
         p.phone,
@@ -4792,6 +4801,7 @@ export async function getPlayerByIdInOrganization(input: {
     id: result.rows[0].id,
     fullName: result.rows[0].full_name,
     email: result.rows[0].email,
+    status: result.rows[0].status || 'active',
     dateOfBirth: result.rows[0].date_of_birth,
     schoolTeam: result.rows[0].school_team,
     phone: result.rows[0].phone,
@@ -4821,6 +4831,7 @@ export async function getPlayerForUser(input: {
     id: number;
     full_name: string;
     email: string;
+    status: string | null;
     date_of_birth: string | null;
     school_team: string | null;
     phone: string | null;
@@ -4841,6 +4852,7 @@ export async function getPlayerForUser(input: {
         p.id,
         p.full_name,
         p.email,
+        p.status,
         p.date_of_birth::text,
         p.school_team,
         p.phone,
@@ -4871,6 +4883,7 @@ export async function getPlayerForUser(input: {
     id: result.rows[0].id,
     fullName: result.rows[0].full_name,
     email: result.rows[0].email,
+    status: result.rows[0].status || 'active',
     dateOfBirth: result.rows[0].date_of_birth,
     schoolTeam: result.rows[0].school_team,
     phone: result.rows[0].phone,
@@ -4990,6 +5003,33 @@ export async function updatePlayerProfile(input: {
 
   if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
   _invalidateTrainingReadCacheForOrganization(input.organizationId);
+  _invalidateTrainingReadCacheForPlayer(input.playerId);
+  return { ok: true };
+}
+
+export async function setPlayerStatus(input: {
+  organizationId: number;
+  playerId: number;
+  status: 'active' | 'inactive';
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const status = input.status === 'inactive' ? 'inactive' : 'active';
+  const updated = await pool.query<{ id: number }>(
+    `
+      UPDATE players
+      SET status = $1, updated_at = NOW()
+      WHERE id = $2 AND organization_id = $3
+      RETURNING id
+    `,
+    [status, input.playerId, input.organizationId]
+  );
+
+  if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
+  _invalidateTrainingReadCacheForOrganization(input.organizationId);
+  _invalidateTrainingReadCacheForPlayer(input.playerId);
   return { ok: true };
 }
 

@@ -225,12 +225,14 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
                   </tr>
                 </thead>
                 <tbody>
-                  {pagedClients.map((client) => (
-                    <tr key={client.playerId}>
+                  {pagedClients.map((client) => {
+                    const isInactive = String(client.status ?? '').trim().toLowerCase() === 'inactive';
+                    return (
+                    <tr key={client.playerId} className={isInactive ? 'portal-table-row-inactive' : undefined}>
                       <td>{client.fullName}</td>
                       <td>{client.email}</td>
                       <td>{client.assignedCoachName ?? '-'}</td>
-                      <td>{client.status}</td>
+                      <td>{isInactive ? 'Inactive' : 'Active'}</td>
                       <td className="portal-table-actions">
                         {canAccessProgramming ? (
                           <>
@@ -246,6 +248,18 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
                             <Link className="btn btn-ghost as-link" href={`/portal/player/program?previewPlayerId=${client.playerId}`}>
                               Preview Program
                             </Link>
+                            <form method="post" action="/api/admin/clients/manage" style={{ display: 'inline' }}>
+                              <input type="hidden" name="redirectTo" value={pageHref(safePage)} />
+                              <input
+                                type="hidden"
+                                name="action"
+                                value={isInactive ? 'activate' : 'deactivate'}
+                              />
+                              <input type="hidden" name="playerId" value={String(client.playerId)} />
+                              <button type="submit" className="btn btn-ghost">
+                                {isInactive ? 'Activate' : 'Deactivate'}
+                              </button>
+                            </form>
                             {session.role === 'admin' ? (
                               <form method="post" action="/api/admin/clients/manage" style={{ display: 'inline' }}>
                                 <input type="hidden" name="redirectTo" value="/portal/admin/clients" />
@@ -262,6 +276,18 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
                             <Link className="btn btn-ghost as-link" href={`/portal/player?previewPlayerId=${client.playerId}`}>
                               Edit Player
                             </Link>
+                            <form method="post" action="/api/admin/clients/manage" style={{ display: 'inline' }}>
+                              <input type="hidden" name="redirectTo" value={pageHref(safePage)} />
+                              <input
+                                type="hidden"
+                                name="action"
+                                value={isInactive ? 'activate' : 'deactivate'}
+                              />
+                              <input type="hidden" name="playerId" value={String(client.playerId)} />
+                              <button type="submit" className="btn btn-ghost">
+                                {isInactive ? 'Activate' : 'Deactivate'}
+                              </button>
+                            </form>
                             {session.role === 'admin' ? (
                               <form method="post" action="/api/admin/clients/manage" style={{ display: 'inline' }}>
                                 <input type="hidden" name="redirectTo" value="/portal/admin/clients" />
@@ -276,7 +302,8 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
                         )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -304,6 +304,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
           initialProfile={{
             fullName: player.fullName,
             email: player.email,
+            status: player.status,
             dateOfBirth: player.dateOfBirth,
             schoolTeam: player.schoolTeam,
             phone: player.phone,
