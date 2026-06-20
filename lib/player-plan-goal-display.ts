@@ -70,6 +70,7 @@ function formatStoredGoal(parsed: StoredGoalPayload): string {
   const statLabel = goalStatLabel(parsed);
   const pitchTypes = nonAll(valueList(filters.pitchTypes));
   const target = formatTarget(parsed, statLabel);
+  const objectiveText = trimString(parsed.objectiveText);
   const parts: string[] = [];
 
   const pitchTypePhrase = pitchTypes.length === 1 ? `${pitchTypes[0]} ` : '';
@@ -96,7 +97,8 @@ function formatStoredGoal(parsed: StoredGoalPayload): string {
   if (teams.length) parts.push(`for team filter ${teams.join(', ')}`);
 
   const suffix = parts.length ? ` ${parts.join(' ')}` : '';
-  return `${comparator} ${pitchTypePhrase}${statLabel} to ${target}${suffix}`.replace(/\s+/g, ' ').trim();
+  const summary = `${comparator} ${pitchTypePhrase}${statLabel} to ${target}${suffix}`.replace(/\s+/g, ' ').trim();
+  return objectiveText ? `${summary} | ${objectiveText}` : summary;
 }
 
 export function formatPlayerPlanGoalSummary(goal: Pick<PlayerPlanGoalRow, 'category' | 'goalDescription'>): string {

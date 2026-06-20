@@ -1575,6 +1575,11 @@ function formatGoalTargetWithUnit(goal: GoalDraft): string {
   return formatGoalValueWithUnit(goal, n);
 }
 
+function goalMeetsTarget(goal: GoalDraft, value: number | null, target: number | null): boolean | null {
+  if (value === null || target === null || !Number.isFinite(value) || !Number.isFinite(target)) return null;
+  return goal.comparator === 'Less Than' ? value < target : value > target;
+}
+
 function nonAll(values: string[]): string[] {
   return values.filter((value) => String(value ?? '').trim().length > 0 && value !== 'All');
 }
@@ -1744,6 +1749,7 @@ function SearchableMultiSelect({
 
 export default function PlayerPlansSuite(props: { selectedSchoolCode?: string }) {
   const pageRef = useRef<HTMLElement | null>(null);
+  const goalsExportRef = useRef<HTMLDivElement | null>(null);
   const searchParams = useSearchParams();
   const deepLinkedPlayerId = Number(searchParams.get('playerPlanPlayerId') ?? 0);
   const selectedSchoolCode = String(props.selectedSchoolCode ?? '').trim().toUpperCase();
@@ -1971,44 +1977,119 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
   }, [manualSummaryNote, summaryMode, summaryStorageKey]);
 
   async function downloadPlayerPlanPdf() {
-    if (!pageRef.current || isExportingPlanPdf) return;
+    if (!goalsExportRef.current || isExportingPlanPdf) return;
     setIsExportingPlanPdf(true);
+    let exportRoot: HTMLDivElement | null = null;
     try {
       const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
         import('html2canvas'),
         import('jspdf'),
       ]);
-      const canvas = await html2canvas(pageRef.current, {
-        backgroundColor: '#05070d',
+      const isLightMode = document.body.classList.contains('theme-light');
+      const pageBg = isLightMode ? '#ffffff' : '#05070d';
+      const textColor = isLightMode ? '#111827' : '#f8fafc';
+      const mutedColor = isLightMode ? '#475569' : '#cbd5e1';
+      const source = goalsExportRef.current.cloneNode(true) as HTMLDivElement;
+      source.querySelectorAll('button,label,[data-player-plan-pdf-ignore="true"]').forEach((node) => node.remove());
+      source.querySelectorAll<HTMLElement>('.portal-day-card').forEach((card) => {
+        card.style.height = 'auto';
+        card.style.minHeight = '0';
+        card.style.overflow = 'visible';
+        card.style.breakInside = 'avoid';
+        card.style.pageBreakInside = 'avoid';
+        card.style.padding = '12px';
+      });
+      source.querySelectorAll<HTMLElement>('*').forEach((node) => {
+        if (node.style.overflowY === 'auto' || node.style.overflowY === 'scroll') node.style.overflowY = 'visible';
+        if (node.style.overflow === 'auto' || node.style.overflow === 'scroll') node.style.overflow = 'visible';
+        if (node.style.height === `${GOAL_PANEL_HEIGHT}px`) {
+          node.style.height = '300px';
+          node.style.minHeight = '300px';
+        }
+        if (node.style.height === `${GOAL_VISUAL_HEIGHT}px`) {
+          node.style.height = '230px';
+          node.style.minHeight = '230px';
+        }
+      });
+      exportRoot = document.createElement('div');
+      exportRoot.style.position = 'fixed';
+      exportRoot.style.left = '-10000px';
+      exportRoot.style.top = '0';
+      exportRoot.style.width = '1040px';
+      exportRoot.style.padding = '28px 30px 34px';
+      exportRoot.style.background = pageBg;
+      exportRoot.style.color = textColor;
+      exportRoot.style.fontFamily = 'Manrope, Arial, sans-serif';
+      exportRoot.style.boxSizing = 'border-box';
+      const header = document.createElement('div');
+      header.style.display = 'grid';
+      header.style.gridTemplateColumns = '72px 1fr 72px';
+      header.style.alignItems = 'center';
+      header.style.gap = '18px';
+      header.style.marginBottom = '22px';
+      const leftLogo = document.createElement('img');
+      leftLogo.src = '/pitching-coach-u-logo.png';
+      leftLogo.alt = 'PCU';
+      leftLogo.style.width = '56px';
+      leftLogo.style.height = '56px';
+      leftLogo.style.objectFit = 'contain';
+      const rightLogo = leftLogo.cloneNode() as HTMLImageElement;
+      const titleWrap = document.createElement('div');
+      titleWrap.style.textAlign = 'center';
+      const title = document.createElement('h1');
+      title.textContent = 'Player Plan Goals';
+      title.style.margin = '0';
+      title.style.fontSize = '24px';
+      title.style.lineHeight = '1.15';
+      title.style.fontWeight = '800';
+      title.style.letterSpacing = '0';
+      title.style.color = textColor;
+      const subtitle = document.createElement('div');
+      subtitle.textContent = centeredName || 'Player';
+      subtitle.style.marginTop = '4px';
+      subtitle.style.fontSize = '17px';
+      subtitle.style.fontWeight = '800';
+      subtitle.style.color = mutedColor;
+      titleWrap.append(title, subtitle);
+      header.append(leftLogo, titleWrap, rightLogo);
+      source.style.display = 'grid';
+      source.style.gridTemplateColumns = 'repeat(3, minmax(0, 1fr))';
+      source.style.alignItems = 'start';
+      source.style.gap = '12px';
+      source.style.width = '100%';
+      exportRoot.append(header, source);
+      document.body.appendChild(exportRoot);
+      await Promise.all(
+        Array.from(exportRoot.querySelectorAll('img')).map((img) =>
+          img.complete ? Promise.resolve() : new Promise<void>((resolve) => {
+            img.onload = () => resolve();
+            img.onerror = () => resolve();
+          })
+        )
+      );
+      const canvas = await html2canvas(exportRoot, {
+        backgroundColor: pageBg,
         scale: 2,
         useCORS: true,
       });
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 24;
+      const margin = 16;
       const contentWidth = pageWidth - margin * 2;
-      const pxPerPt = canvas.width / contentWidth;
-      const pageSliceHeightPx = Math.floor((pageHeight - margin * 2) * pxPerPt);
-      let offsetPx = 0;
-      let first = true;
-      while (offsetPx < canvas.height - 1) {
-        const sliceHeightPx = Math.min(pageSliceHeightPx, canvas.height - offsetPx);
-        const sliceCanvas = document.createElement('canvas');
-        sliceCanvas.width = canvas.width;
-        sliceCanvas.height = sliceHeightPx;
-        const ctx = sliceCanvas.getContext('2d');
-        if (!ctx) break;
-        ctx.drawImage(canvas, 0, offsetPx, canvas.width, sliceHeightPx, 0, 0, canvas.width, sliceHeightPx);
-        if (!first) pdf.addPage();
-        const drawHeight = sliceHeightPx / pxPerPt;
-        pdf.addImage(sliceCanvas.toDataURL('image/jpeg', 0.84), 'JPEG', margin, margin, contentWidth, drawHeight, undefined, 'FAST');
-        first = false;
-        offsetPx += sliceHeightPx;
-      }
+      const contentHeight = pageHeight - margin * 2;
+      const scale = Math.min(contentWidth / canvas.width, contentHeight / canvas.height);
+      const drawWidth = canvas.width * scale;
+      const drawHeight = canvas.height * scale;
+      const x = (pageWidth - drawWidth) / 2;
+      const y = (pageHeight - drawHeight) / 2;
+      pdf.setFillColor(pageBg);
+      pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, y, drawWidth, drawHeight, undefined, 'FAST');
       const safeName = normalizeNameKey(centeredName || 'player-plan') || 'player-plan';
       pdf.save(`${safeName}-development-plan.pdf`);
     } finally {
+      exportRoot?.remove();
       setIsExportingPlanPdf(false);
     }
   }
@@ -3606,14 +3687,14 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     }
   }
 
-  function goalHeaderStats(goal: GoalDraft): { current: number | null; recency2: number | null; statLabel: string } {
+  function goalHeaderStats(goal: GoalDraft): { average: number | null; recency2: number | null; statLabel: string } {
     const points = goalCharts[goal.slotIndex]?.points ?? [];
     const series = buildGoalMetricSeries(goal, points);
-    if (!series.length) return { current: null, recency2: null, statLabel: goalStatLabel(goal) };
-    const current = series[series.length - 1]?.value ?? null;
+    if (!series.length) return { average: null, recency2: null, statLabel: goalStatLabel(goal) };
+    const average = series.reduce((sum, row) => sum + row.value, 0) / series.length;
     const lastTwo = series.slice(-2);
     const recency2 = lastTwo.length ? lastTwo.reduce((sum, row) => sum + row.value, 0) / lastTwo.length : null;
-    return { current, recency2, statLabel: goalStatLabel(goal) };
+    return { average, recency2, statLabel: goalStatLabel(goal) };
   }
 
   function renderGoalStatTable(goal: GoalDraft) {
@@ -3637,14 +3718,17 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
             </tr>
           </thead>
           <tbody>
-            {pageRows.map((row) => (
-              <tr key={`goal-stat-row-${goal.slotIndex}-${row.date}`}>
-                <td style={{ textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '6px 8px', fontSize: 12 }}>{formatMdyy(row.date)}</td>
-                <td style={{ textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '6px 8px', fontSize: 12, color: target === null ? 'inherit' : row.value >= target ? '#22c55e' : '#ef4444', fontWeight: target === null ? 500 : 700 }}>
-                  {fmtGoalValueForGoal(goal, row.value)}
-                </td>
-              </tr>
-            ))}
+            {pageRows.map((row) => {
+              const meetsTarget = goalMeetsTarget(goal, row.value, target);
+              return (
+                <tr key={`goal-stat-row-${goal.slotIndex}-${row.date}`}>
+                  <td style={{ textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '6px 8px', fontSize: 12 }}>{formatMdyy(row.date)}</td>
+                  <td style={{ textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '6px 8px', fontSize: 12, color: meetsTarget === null ? 'inherit' : meetsTarget ? '#22c55e' : '#ef4444', fontWeight: meetsTarget === null ? 500 : 700 }}>
+                    {fmtGoalValueForGoal(goal, row.value)}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {totalPages > 1 ? (
@@ -4638,7 +4722,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           </div>
         ) : null}
         {!(domain === 'Pitching' && planMode === 'Automated') ? (
-        <div className="portal-profile-goals-grid" style={{ alignItems: 'stretch' }}>
+        <div ref={goalsExportRef} className="portal-profile-goals-grid" style={{ alignItems: 'stretch' }}>
           {planGoals.filter((goal) => goal.slotIndex <= goalCount).map((goal) => {
             const chartCapable = isChartCapableGoal(goal, domain);
             const controlsVisible = goalControlsVisible[goal.slotIndex] ?? true;
@@ -4647,18 +4731,16 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
               goal.targetValue.trim().length > 0 && Number.isFinite(Number(goal.targetValue.trim()))
                 ? Number(goal.targetValue.trim())
                 : null;
-            const last2Higher = stats.recency2 !== null && goalTarget !== null ? stats.recency2 > goalTarget : null;
-            const last2Lower = stats.recency2 !== null && goalTarget !== null ? stats.recency2 < goalTarget : null;
-            const last2AtTarget = stats.recency2 !== null && goalTarget !== null ? Math.abs(stats.recency2 - goalTarget) < 1e-9 : null;
-            const meetsGoal =
-              stats.recency2 !== null && goalTarget !== null
-                ? goal.comparator === 'Less Than'
-                  ? stats.recency2 < goalTarget
-                  : stats.recency2 > goalTarget
-                : null;
+            const averageMeetsGoal = goalMeetsTarget(goal, stats.average, goalTarget);
+            const averageColor =
+              averageMeetsGoal === null ? 'rgba(255,255,255,0.9)' : averageMeetsGoal ? '#22c55e' : '#ef4444';
+            const last2Higher = stats.recency2 !== null && stats.average !== null ? stats.recency2 > stats.average : null;
+            const last2Lower = stats.recency2 !== null && stats.average !== null ? stats.recency2 < stats.average : null;
+            const last2AtAverage = stats.recency2 !== null && stats.average !== null ? Math.abs(stats.recency2 - stats.average) < 1e-9 : null;
+            const last2BetterThanAverage = last2AtAverage ? null : goalMeetsTarget(goal, stats.recency2, stats.average);
             const last2Color =
-              meetsGoal === null ? 'rgba(255,255,255,0.9)' : meetsGoal ? '#22c55e' : '#ef4444';
-            const last2Arrow = last2AtTarget ? '→' : last2Higher ? '↑' : last2Lower ? '↓' : '→';
+              last2BetterThanAverage === null ? 'rgba(255,255,255,0.9)' : last2BetterThanAverage ? '#22c55e' : '#ef4444';
+            const last2Arrow = last2AtAverage ? '→' : last2Higher ? '↑' : last2Lower ? '↓' : '→';
             const summaryTitle = chartCapable
               ? buildChartGoalHeadline(goal)
               : `Category: ${goal.category || '-'} | Goal Type: ${goalTypeLabel(goal)} | Target: ${goal.targetValue.trim() || '-'}`;
@@ -5054,8 +5136,18 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                       }}
                     >
                       <div style={{ fontWeight: 700, marginBottom: 2 }}>{summaryTitle}</div>
+                      {!controlsVisible && goal.objectiveText.trim() ? (
+                        <div style={{ fontSize: 12, color: '#cbd5e1', marginBottom: 6, whiteSpace: 'pre-wrap' }}>
+                          {goal.objectiveText.trim()}
+                        </div>
+                      ) : null}
                       <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 6 }}>
-                        <div>{`Current: ${formatGoalValueWithUnit(goal, stats.current)}`}</div>
+                        <div>
+                          <span>Average: </span>
+                          <span style={{ color: averageColor, fontWeight: 700 }}>
+                            {formatGoalValueWithUnit(goal, stats.average)}
+                          </span>
+                        </div>
                         <div>
                           <span>{goal.sessionType === 'Bullpen' ? 'Last 2 bullpens: ' : goal.sessionType === 'Live' ? 'Last 2 live BPs: ' : 'Last 2 games: '}</span>
                           <span style={{ color: last2Color, fontWeight: 700 }}>

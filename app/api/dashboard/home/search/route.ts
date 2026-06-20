@@ -4,6 +4,7 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
+import { appendRosterNames, schoolRosterAdditions } from '../../../../../lib/dashboard-roster-config';
 
 type FiltersPayload = {
   min_date?: string | null;
@@ -42,6 +43,7 @@ type HomeSearchBaseSnapshot = {
 
 const homeSearchBaseCache = new Map<string, { at: number; payload: HomeSearchBaseSnapshot }>();
 const homeSearchBaseInflight = new Map<string, Promise<HomeSearchBaseSnapshot>>();
+const HOME_SEARCH_ROSTER_CACHE_VERSION = 'pcu-roster-2026-06-19-2';
 
 function resolveHomeSearchBaseTtlMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -222,7 +224,7 @@ async function fetchFilters(apiBase: string, schoolCode: string): Promise<{ pitc
   hittingUrl.searchParams.set('school_code', schoolCode);
 
   const [pitchingResult, hittingResult] = await Promise.all([
-    fetchJsonWithCache(pitchingUrl, `home:filters:pitching:${pitchingUrl.toString()}`, 15000, 0),
+    fetchJsonWithCache(pitchingUrl, `home:filters:pitching:${HOME_SEARCH_ROSTER_CACHE_VERSION}:${pitchingUrl.toString()}`, 15000, 0),
     fetchJsonWithCache(hittingUrl, `home:filters:hitting:${hittingUrl.toString()}`, 15000, 0),
   ]);
 
@@ -233,8 +235,14 @@ async function fetchFilters(apiBase: string, schoolCode: string): Promise<{ pitc
     throw new Error(String(hittingResult.payload.detail ?? hittingResult.payload.error ?? 'Hitting filters request failed.'));
   }
 
+  const pitching = pitchingResult.payload as FiltersPayload;
+  const additions = schoolRosterAdditions(schoolCode);
+  if (Array.isArray(pitching.pitchers) && additions.pitchers.length > 0) {
+    pitching.pitchers = appendRosterNames(pitching.pitchers, additions.pitchers);
+  }
+
   return {
-    pitching: pitchingResult.payload as FiltersPayload,
+    pitching,
     hitting: hittingResult.payload as FiltersPayload,
   };
 }
@@ -382,7 +390,7 @@ export async function GET(request: Request) {
   try {
     const scopedPitcher = shouldScopePlayer && playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Pitching') : '';
     const scopedHitter = shouldScopePlayer && playerIdentity ? scopedPlayerQueryName(playerIdentity, 'Hitting') : '';
-    const snapshotKey = `${schoolCode}|${session.role}|${shouldScopePlayer ? 'scoped' : 'all'}|${scopedPitcher.toLowerCase()}|${scopedHitter.toLowerCase()}`;
+    const snapshotKey = `${HOME_SEARCH_ROSTER_CACHE_VERSION}|${schoolCode}|${session.role}|${shouldScopePlayer ? 'scoped' : 'all'}|${scopedPitcher.toLowerCase()}|${scopedHitter.toLowerCase()}`;
     const ttlMs = resolveHomeSearchBaseTtlMs(schoolCode);
     const now = Date.now();
     const cachedBase = homeSearchBaseCache.get(snapshotKey);

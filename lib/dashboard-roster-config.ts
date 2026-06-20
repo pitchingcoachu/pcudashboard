@@ -43,8 +43,9 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
     };
     if (upper === 'PCU') {
       const additions = ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke'];
+      const pitcherAdditions = [...additions, 'Masi, Jack', 'Jacobs, Brody', 'Stevenson, Townsend'];
       return {
-        allowedPitchers: uniqueNames([...base.allowedPitchers, ...additions]),
+        allowedPitchers: uniqueNames([...base.allowedPitchers, ...pitcherAdditions]),
         allowedHitters: uniqueNames([...base.allowedHitters, ...additions]),
       };
     }
@@ -70,7 +71,7 @@ export function schoolRosterAdditions(schoolCode: string): { pitchers: string[];
   const upper = String(schoolCode ?? '').trim().toUpperCase();
   if (upper === 'PCU') {
     return {
-      pitchers: ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke'],
+      pitchers: ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke', 'Masi, Jack', 'Jacobs, Brody', 'Stevenson, Townsend'],
       hitters: ['King, Stan', 'Jones, Grady', 'Birt, Henry'],
     };
   }

@@ -10,6 +10,7 @@ const RESPONSE_CACHE_HEADERS = {
   vary: 'Cookie',
 } as const;
 const SLOW_ROUTE_MS = 2500;
+const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'pcu-roster-2026-06-19-2';
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -26,7 +27,7 @@ function schoolRosterAdditions(schoolCode: string): { pitchers: string[] } {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
   if (upper === 'PCU') {
     return {
-      pitchers: ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke'],
+      pitchers: ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke', 'Masi, Jack', 'Jacobs, Brody', 'Stevenson, Townsend'],
     };
   }
   return { pitchers: [] };
@@ -81,7 +82,7 @@ export async function GET(request: Request) {
     }
 
     const result = await fetchDashboardJsonWithCache({
-      cacheKey: `pitching:filters:${url.toString()}`,
+      cacheKey: `pitching:filters:${PITCHING_FILTERS_ROSTER_CACHE_VERSION}:${url.toString()}`,
       ttlMs: 120000,
       staleTtlMs: 300000,
       timeoutMs: resolveFiltersTimeoutMs(schoolCode),
