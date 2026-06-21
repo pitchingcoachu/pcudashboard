@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { formatTableDisplayValue } from '../../../lib/table-sort';
 import { formatPlayerPlanGoalSummary } from '../../../lib/player-plan-goal-display';
+import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import type { PlayerPlanGoalRow } from '../../../lib/training-db';
 
 type GoalSlot = 1 | 2 | 3;
@@ -188,20 +189,6 @@ function metricValue(goal: ParsedGoal, point: Record<string, unknown>): number |
   return num(goal.executionStat, key);
 }
 
-function inZoneLabel(x: number | null, y: number | null): string {
-  if (x === null || y === null) return 'No';
-  const strikeLeft = -0.88;
-  const strikeRight = 0.88;
-  const strikeBottom = 1.5;
-  const strikeTop = 3.6;
-  if (x >= strikeLeft && x <= strikeRight && y >= strikeBottom && y <= strikeTop) return 'Yes';
-  const edgeBuffer = 0.25;
-  if (x >= strikeLeft - edgeBuffer && x <= strikeRight + edgeBuffer && y >= strikeBottom - edgeBuffer && y <= strikeTop + edgeBuffer) {
-    return 'Competitive';
-  }
-  return 'No';
-}
-
 function buildSeries(goal: ParsedGoal, points: Array<Record<string, unknown>>): Array<{ date: string; value: number }> {
   const grouped = new Map<string, Array<Record<string, unknown>>>();
   for (const point of points) {
@@ -336,10 +323,16 @@ function buildSeries(goal: ParsedGoal, points: Array<Record<string, unknown>>): 
         if ((swing && green) || (!swing && outside)) posSdPoints += 1;
       }
 
-      const compN = rows.filter((row) => {
-        const label = inZoneLabel(toNum(row.plate_side), toNum(row.plate_height));
-        return label === 'Yes' || label === 'Competitive';
-      }).length;
+      let locN = 0;
+      let compN = 0;
+      for (const row of rows) {
+        const x = toNum(row.plate_side);
+        const y = toNum(row.plate_height);
+        if (x === null || y === null) continue;
+        locN += 1;
+        const label = inZoneLabel(x, y);
+        if (label === 'Yes' || label === 'Competitive') compN += 1;
+      }
       const fpsDen = rows.filter((row) => toNum(row.balls_num) === 0 && toNum(row.strikes_num) === 0).length;
       const fpsNum = rows.filter((row) => toNum(row.balls_num) === 0 && toNum(row.strikes_num) === 0 && isStrike(String(row.pitch_call ?? ''))).length;
       const earlyDen = rows.filter((row) => {
@@ -476,7 +469,7 @@ function buildSeries(goal: ParsedGoal, points: Array<Record<string, unknown>>): 
           inPlayN
         ),
         hardhitpct: pct(hardHitN, inPlayN),
-        comppct: pct(compN, rows.length),
+        comppct: pct(compN, locN),
         fpspct: pct(fpsNum, fpsDen),
         earlypct: pct(earlyNum, earlyDen),
         aheadpct: pct(aheadNum, aheadDen),
@@ -558,9 +551,11 @@ function TrendChart({ goal, series }: { goal: ParsedGoal; series: Array<{ date: 
   const width = 620;
   const height = 260;
   const pad = { left: 58, right: 18, top: 22, bottom: 54 };
+  const target = goal.targetValue && Number.isFinite(Number(goal.targetValue)) ? Number(goal.targetValue) : null;
   const values = series.map((point) => point.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const domainValues = target === null ? values : [...values, target];
+  const min = Math.min(...domainValues);
+  const max = Math.max(...domainValues);
   const rawSpan = max === min ? Math.max(1, Math.abs(max) * 0.08) : max - min;
   const yMin = min - rawSpan * 0.08;
   const yMax = max + rawSpan * 0.08;
@@ -568,7 +563,6 @@ function TrendChart({ goal, series }: { goal: ParsedGoal; series: Array<{ date: 
   const xFor = (index: number) => pad.left + (index / Math.max(1, series.length - 1)) * (width - pad.left - pad.right);
   const yFor = (value: number) => pad.top + ((yMax - value) / span) * (height - pad.top - pad.bottom);
   const d = series.map((point, index) => `${index === 0 ? 'M' : 'L'} ${xFor(index)} ${yFor(point.value)}`).join(' ');
-  const target = goal.targetValue && Number.isFinite(Number(goal.targetValue)) ? Number(goal.targetValue) : null;
   const targetY = target === null ? null : yFor(target);
   const chartColor = '#ef4444';
   const yTicks = [yMax, yMin + span / 2, yMin];

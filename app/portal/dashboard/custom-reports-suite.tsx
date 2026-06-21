@@ -5,6 +5,7 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
@@ -1519,15 +1520,6 @@ const swingColorFor = (
   if (mode === 'exit_velocity') return EV_COLOR_PALETTE[evBin(toNum(point.exit_speed))];
   return RESULT_COLOR_PALETTE[resultLabelForSwing(point.play_result)] ?? RESULT_COLOR_PALETTE.Unknown;
 };
-const inZoneLabel = (x: number | null, y: number | null): string => {
-  if (x === null || y === null) return 'No';
-  const inZone = x >= -0.88 && x <= 0.88 && y >= 1.5 && y <= 3.6;
-  const comp = x >= -1.5 && x <= 1.5 && y >= 1.05 && y <= 4.05;
-  if (inZone) return 'Yes';
-  if (comp) return 'Competitive';
-  return 'No';
-};
-
 function toNum(value: unknown): number | null {
   const out = Number(value);
   return Number.isFinite(out) ? out : null;

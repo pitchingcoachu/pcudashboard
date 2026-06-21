@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { formatTableDisplayValue } from '../../../lib/table-sort';
+import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching';
 type GoalSlot = 1 | 2 | 3;
@@ -809,15 +810,6 @@ function resolvePitchResultLabel(pitchCallRaw: string | null | undefined, playRe
   return '-';
 }
 
-function inZoneLabel(x: number | null, y: number | null): string {
-  if (x === null || y === null) return 'No';
-  const inZone = x >= -0.88 && x <= 0.88 && y >= 1.5 && y <= 3.6;
-  const comp = x >= -1.5 && x <= 1.5 && y >= (2.65 - 1.5) && y <= (2.65 + 1.5);
-  if (inZone) return 'Yes';
-  if (comp) return 'Competitive';
-  return 'No';
-}
-
 function chartTooltipText(point: Record<string, unknown>): string {
   const sessionType = String(point.session_type ?? '-');
   const pitchCall = String(point.pitch_call ?? '');
@@ -1330,12 +1322,16 @@ function buildGoalMetricSeries(goal: GoalDraft, points: Array<Record<string, unk
         }
         if ((swing && green) || (!swing && outside)) posSdPoints += 1;
       }
-      const compN = dayRows.filter((row) => {
+      let locN = 0;
+      let compN = 0;
+      for (const row of dayRows) {
         const x = toNum(row.plate_side);
         const y = toNum(row.plate_height);
+        if (x === null || y === null) continue;
+        locN += 1;
         const label = inZoneLabel(x, y);
-        return label === 'Yes' || label === 'Competitive';
-      }).length;
+        if (label === 'Yes' || label === 'Competitive') compN += 1;
+      }
       const fpsDen = dayRows.filter((row) => toNum(row.balls_num) === 0 && toNum(row.strikes_num) === 0).length;
       const fpsNum = dayRows.filter((row) => toNum(row.balls_num) === 0 && toNum(row.strikes_num) === 0 && isStrike(String(row.pitch_call ?? ''))).length;
       const earlyDen = dayRows.filter((row) => {
@@ -1485,7 +1481,7 @@ function buildGoalMetricSeries(goal: GoalDraft, points: Array<Record<string, unk
           inPlayN
         ),
         hardhitpct: pct(hardHitN, inPlayN),
-        comppct: pct(compN, dayRows.length),
+        comppct: pct(compN, locN),
         fpspct: pct(fpsNum, fpsDen),
         earlypct: pct(earlyNum, earlyDen),
         aheadpct: pct(aheadNum, aheadDen),
@@ -4234,15 +4230,18 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     const right = 20;
     const top = 24;
     const bottom = 70;
-    const min = Math.min(...series.map((point) => point.value));
-    const max = Math.max(...series.map((point) => point.value));
-    const yMin = min === max ? min - 1 : min;
-    const yMax = min === max ? max + 1 : max;
+    const targetRaw = goal.targetValue.trim();
+    const target = targetRaw.length > 0 ? Number(targetRaw) : Number.NaN;
+    const values = series.map((point) => point.value);
+    const domainValues = Number.isFinite(target) ? [...values, target] : values;
+    const domainMin = Math.min(...domainValues);
+    const domainMax = Math.max(...domainValues);
+    const rawSpan = domainMin === domainMax ? Math.max(1, Math.abs(domainMax) * 0.08) : domainMax - domainMin;
+    const yMin = domainMin - rawSpan * 0.08;
+    const yMax = domainMax + rawSpan * 0.08;
     const px = (index: number) =>
       series.length === 1 ? width / 2 : left + (index / (series.length - 1)) * (width - left - right);
     const py = (value: number) => top + ((yMax - value) / Math.max(1e-6, yMax - yMin)) * (height - top - bottom);
-    const targetRaw = goal.targetValue.trim();
-    const target = targetRaw.length > 0 ? Number(targetRaw) : Number.NaN;
     const targetY = Number.isFinite(target) ? py(target) : null;
     const path = series.map((point, idx) => `${idx === 0 ? 'M' : 'L'} ${px(idx).toFixed(1)} ${py(point.value).toFixed(1)}`).join(' ');
     const xTickIndexes = Array.from(new Set([0, Math.floor((series.length - 1) * 0.25), Math.floor((series.length - 1) * 0.5), Math.floor((series.length - 1) * 0.75), series.length - 1]))

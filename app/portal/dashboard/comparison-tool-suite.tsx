@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
+import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
 
@@ -462,14 +463,6 @@ function subjectLabel(domain: Domain): string {
   if (domain === 'Pitching') return 'Pitcher';
   if (domain === 'Hitting') return 'Hitter';
   return 'Catcher';
-}
-function inZoneLabel(x: number | null, y: number | null): string {
-  if (x === null || y === null) return 'No';
-  const inZone = x >= -0.88 && x <= 0.88 && y >= 1.5 && y <= 3.6;
-  const comp = x >= -1.5 && x <= 1.5 && y >= (2.65 - 1.5) && y <= (2.65 + 1.5);
-  if (inZone) return 'Yes';
-  if (comp) return 'Competitive';
-  return 'No';
 }
 function resultShape(pitchCallRaw: string | null | undefined, playResultRaw: string | null | undefined): string {
   const pitchCall = String(pitchCallRaw ?? '');

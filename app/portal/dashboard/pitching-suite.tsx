@@ -9,6 +9,7 @@ import { calcPitchValue } from './pitch-value';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
+import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 
 type FiltersPayload = {
   school_code: string;
@@ -4911,14 +4912,6 @@ export default function PitchingSuite({
     if (pitchCall === 'InPlay' && playResult === 'Error') return 'Error';
     return '';
   };
-  const inZoneLabel = (x: number | null, y: number | null): string => {
-    if (x === null || y === null) return 'No';
-    const inZone = x >= -0.88 && x <= 0.88 && y >= 1.5 && y <= 3.6;
-    const comp = x >= -1.5 && x <= 1.5 && y >= (2.65 - 1.5) && y <= (2.65 + 1.5);
-    if (inZone) return 'Yes';
-    if (comp) return 'Competitive';
-    return 'No';
-  };
   const fmt1 = (value: unknown): string => {
     const n = Number(value);
     return Number.isFinite(n) ? n.toFixed(1) : '-';
@@ -5797,6 +5790,7 @@ export default function PitchingSuite({
       stuffN: number;
       qpSum: number;
       qpN: number;
+      locN: number;
       inZoneN: number;
       compN: number;
       strikeN: number;
@@ -5903,6 +5897,7 @@ export default function PitchingSuite({
       stuffN: 0,
       qpSum: 0,
       qpN: 0,
+      locN: 0,
       inZoneN: 0,
       compN: 0,
       strikeN: 0,
@@ -5949,8 +5944,8 @@ export default function PitchingSuite({
         HB: agg.hbN > 0 ? agg.hbSum / agg.hbN : null,
         'Stuff+': agg.stuffN > 0 ? agg.stuffSum / agg.stuffN : null,
         'QP+': agg.qpN > 0 ? agg.qpSum / agg.qpN : null,
-        'InZone%': pct(agg.inZoneN, agg.pitches),
-        'Comp%': pct(agg.compN, agg.pitches),
+        'InZone%': pct(agg.inZoneN, agg.locN),
+        'Comp%': pct(agg.compN, agg.locN),
         'Strike%': pct(agg.strikeN, agg.pitches),
         'Swing%': pct(agg.swingN, agg.pitches),
         'FPS%': pct(agg.fpsNum, agg.fpsDen),
@@ -6080,6 +6075,14 @@ export default function PitchingSuite({
       }
 
       const inZone = inZoneLabel(point.plate_side, point.plate_height);
+      if (
+        typeof point.plate_side === 'number' &&
+        Number.isFinite(point.plate_side) &&
+        typeof point.plate_height === 'number' &&
+        Number.isFinite(point.plate_height)
+      ) {
+        agg.locN += 1;
+      }
       if (inZone === 'Yes') agg.inZoneN += 1;
       if (inZone === 'Yes' || inZone === 'Competitive') agg.compN += 1;
 
