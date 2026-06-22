@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 
+export { appendRosterNames, schoolRosterAdditions } from './dashboard-roster-additions';
+
 function uniqueNames(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
 }
@@ -61,19 +63,4 @@ export function filterNamesByAllowed(values: string[], allowed: string[]): strin
   if (!cleanedAllowed.length) return cleanedValues;
   const allowedLower = new Set(cleanedAllowed.map((entry) => entry.toLowerCase()));
   return cleanedValues.filter((entry) => allowedLower.has(entry.toLowerCase()));
-}
-
-export function appendRosterNames(values: string[], additions: string[]): string[] {
-  return uniqueNames([...values, ...additions]);
-}
-
-export function schoolRosterAdditions(schoolCode: string): { pitchers: string[]; hitters: string[] } {
-  const upper = String(schoolCode ?? '').trim().toUpperCase();
-  if (upper === 'PCU') {
-    return {
-      pitchers: ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke', 'Masi, Jack', 'Jacobs, Brody', 'Stevenson, Townsend'],
-      hitters: ['King, Stan', 'Jones, Grady', 'Birt, Henry'],
-    };
-  }
-  return { pitchers: [], hitters: [] };
 }

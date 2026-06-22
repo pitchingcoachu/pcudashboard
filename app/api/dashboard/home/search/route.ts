@@ -4,7 +4,7 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
-import { appendRosterNames, schoolRosterAdditions } from '../../../../../lib/dashboard-roster-config';
+import { appendRosterNames, schoolRosterAdditions } from '../../../../../lib/dashboard-roster-additions';
 
 type FiltersPayload = {
   min_date?: string | null;
