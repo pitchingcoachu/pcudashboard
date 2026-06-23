@@ -298,6 +298,9 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const initialPlayer = resolveInitialPlayer();
   const [playerId, setPlayerId] = useState<number>(initialPlayer.id);
   const [playerQuery, setPlayerQuery] = useState(initialPlayer.name);
+  const [playerPickerOpen, setPlayerPickerOpen] = useState(false);
+  const [playerPickerShowAll, setPlayerPickerShowAll] = useState(false);
+  const playerPickerRef = useRef<HTMLDivElement | null>(null);
   const [isMobileSchedule, setIsMobileSchedule] = useState(false);
   const [view, setView] = useState<ViewMode>('month');
   const [mobilePaletteCollapsed, setMobilePaletteCollapsed] = useState(true);
@@ -394,10 +397,32 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   };
 
   const filteredPlayers = useMemo(() => {
+    if (playerPickerShowAll) return [...players].sort((a, b) => a.name.localeCompare(b.name));
     const q = playerQuery.trim().toLowerCase();
-    if (!q) return players;
-    return players.filter((player) => player.name.toLowerCase().includes(q));
-  }, [playerQuery, players]);
+    const matches = q
+      ? players.filter((player) => player.name.toLowerCase().includes(q))
+      : players;
+    return [...matches].sort((a, b) => a.name.localeCompare(b.name));
+  }, [playerPickerShowAll, playerQuery, players]);
+
+  const selectPlayer = useCallback((player: PlayerChoice) => {
+    setPlayerId(player.id);
+    setPlayerQuery(player.name);
+    setPlayerPickerOpen(false);
+    setPlayerPickerShowAll(false);
+  }, []);
+
+  useEffect(() => {
+    if (!playerPickerOpen) return;
+    const closePlayerPicker = (event: PointerEvent) => {
+      if (!playerPickerRef.current?.contains(event.target as Node)) {
+        setPlayerPickerOpen(false);
+        setPlayerPickerShowAll(false);
+      }
+    };
+    document.addEventListener('pointerdown', closePlayerPicker);
+    return () => document.removeEventListener('pointerdown', closePlayerPicker);
+  }, [playerPickerOpen]);
 
   useEffect(() => {
     setDrillExerciseOptions((previous) => {
@@ -2569,46 +2594,81 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         </div>
         {builderMode === 'schedule' ? (
           <>
-            <label className="portal-schedule-player-picker">
-              Player
-              <input
-                className="portal-schedule-control"
-                value={playerQuery}
-                onChange={(event) => {
-                  setPlayerQuery(event.target.value);
-                }}
-                onBlur={() => {
-                  const q = playerQuery.trim().toLowerCase();
-                  if (!q) {
-                    if (view === 'bullpens' || view === 'velocity') {
-                      // Allow clearing player on template-management tabs
-                      setPlayerId(0);
-                      setPlayerQuery('');
-                    } else {
-                      const selected = players.find((player) => player.id === playerId);
-                      setPlayerQuery(selected?.name ?? '');
+            <div className="portal-schedule-player-picker" ref={playerPickerRef}>
+              <label htmlFor="schedule-player-search">Player</label>
+              <div className="portal-schedule-player-combobox">
+                <input
+                  id="schedule-player-search"
+                  className="portal-schedule-control"
+                  value={playerQuery}
+                  onFocus={() => {
+                    setPlayerPickerOpen(true);
+                    setPlayerPickerShowAll(false);
+                  }}
+                  onChange={(event) => {
+                    setPlayerQuery(event.target.value);
+                    setPlayerPickerOpen(true);
+                    setPlayerPickerShowAll(false);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'ArrowDown') {
+                      event.preventDefault();
+                      setPlayerPickerOpen(true);
+                    } else if (event.key === 'Escape') {
+                      setPlayerPickerOpen(false);
+                      setPlayerPickerShowAll(false);
+                    } else if (event.key === 'Enter') {
+                      event.preventDefault();
+                      const q = playerQuery.trim().toLowerCase();
+                      const exact = players.find((player) => player.name.trim().toLowerCase() === q);
+                      const nextPlayer = exact ?? filteredPlayers[0];
+                      if (nextPlayer) selectPlayer(nextPlayer);
                     }
-                    return;
-                  }
-                  const exact = players.find((player) => player.name.trim().toLowerCase() === q);
-                  if (exact) {
-                    setPlayerId(exact.id);
-                    setPlayerQuery(exact.name);
-                    return;
-                  }
-                  const selected = players.find((player) => player.id === playerId);
-                  setPlayerQuery(selected?.name ?? '');
-                }}
-                placeholder="Search player..."
-                list="schedule-player-search-options"
-                aria-label="Search player"
-              />
-              <datalist id="schedule-player-search-options">
-                {(filteredPlayers.length > 0 ? filteredPlayers : players).map((player) => (
-                  <option key={player.id} value={player.name} />
-                ))}
-              </datalist>
-            </label>
+                  }}
+                  placeholder="Search player..."
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={playerPickerOpen}
+                  aria-controls="schedule-player-search-options"
+                  aria-label="Search player"
+                />
+                <button
+                  type="button"
+                  className="portal-schedule-player-toggle"
+                  aria-label={playerPickerOpen ? 'Close player list' : 'Show all players'}
+                  aria-expanded={playerPickerOpen}
+                  aria-controls="schedule-player-search-options"
+                  onClick={() => {
+                    setPlayerPickerOpen((open) => !open);
+                    setPlayerPickerShowAll(!playerPickerOpen);
+                  }}
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="m5 7.5 5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                {playerPickerOpen ? (
+                  <div id="schedule-player-search-options" className="portal-schedule-player-options" role="listbox" aria-label="Players">
+                    {filteredPlayers.length > 0 ? filteredPlayers.map((player) => (
+                      <button
+                        key={player.id}
+                        type="button"
+                        role="option"
+                        aria-selected={player.id === playerId}
+                        className={`portal-schedule-player-option${player.id === playerId ? ' is-selected' : ''}`}
+                        onPointerDown={(event) => event.preventDefault()}
+                        onClick={() => selectPlayer(player)}
+                      >
+                        <span>{player.name}</span>
+                        {player.id === playerId ? <span aria-hidden="true">✓</span> : null}
+                      </button>
+                    )) : (
+                      <p className="portal-schedule-player-empty">No matching players.</p>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </div>
             {playerId > 0 && (view === 'bullpens' || view === 'velocity') ? (
               <button type="button" className="btn btn-ghost" onClick={() => { setPlayerId(0); setPlayerQuery(''); }}>
                 Clear Player
