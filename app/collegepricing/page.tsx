@@ -19,9 +19,9 @@ const sharedFeatures = [
   'Pro data access',
 ];
 
-const starterFeatures = [
+const platformFeatures = [
   {
-    title: 'Dashboard platform',
+    title: 'Dashboard Platform',
     items: [
       'Comprehensive ball flight and batted ball data',
       'Custom table and report builder',
@@ -32,35 +32,45 @@ const starterFeatures = [
     ],
   },
   {
-    title: 'Limited support',
+    title: 'Limited Support',
     items: [],
   },
 ];
 
-const eliteFeatures = [
+const platformDevelopmentFeatures = [
   {
-    title: 'Dashboard access',
-    items: ['School', 'League', 'Pro'],
+    title: 'Dashboard Platform',
+    items: [
+      'Comprehensive ball flight and batted ball data',
+      'Custom table and report builder',
+      'Leaderboards and trend charts',
+      'Player plan goal center',
+      'Player notes and performance tracking',
+      'Access to MLB and AAA data',
+    ],
   },
   {
-    title: 'Schedule and programming',
-    items: ['Throwing', 'Lifting'],
+    title: 'Program and Schedule Builder',
+    items: [
+      'Throwing calendar',
+      'Workout builder and tracker',
+      'Custom bullpen and drill scripts',
+    ],
   },
   {
-    title: 'Player development consulting',
+    title: 'Player Development Consulting',
     subtitle: 'Pitching and hitting',
     items: [
-      '3 Zoom calls in the fall',
-      'Custom postgame reports',
-      'Weekly advance report on opposing hitters',
-      '3 Zoom calls in the spring',
+      'x5, 1-hour zoom calls',
+      'Done-for-you postgame reports',
+      'Weekly advance reports on opposing pitchers and hitters',
     ],
   },
 ];
 
 const addOns = [
   {
-    title: 'MOCAP at your school',
+    title: 'On Campus MOCAP Analysis',
     price: '$15,000',
     items: [
       'All pitchers',
@@ -70,10 +80,10 @@ const addOns = [
     ],
   },
   {
-    title: 'Biomechanics consulting',
+    title: 'Biomechanics Consulting',
     price: '$10,000',
     items: [
-      'Work directly with biomechanist Martijn',
+      'Work directly with a MLB experienced biomechanist',
       'Weekly reports',
       'Data available on the dashboard',
       'Monthly player-data Zoom calls (8 total)',
@@ -81,7 +91,17 @@ const addOns = [
     ],
   },
   {
-    title: 'Extra Zoom calls',
+    title: 'Program and Schedule Builder',
+    subtitle: 'Only necessary for teams on the Platform plan',
+    price: '$3,000',
+    items: [
+      'Throwing calendar',
+      'Workout builder and tracker',
+      'Custom bullpen and drill scripts',
+    ],
+  },
+  {
+    title: 'Extra Zoom Calls',
     price: '$300',
     suffix: '/ hour',
     items: [],
@@ -114,7 +134,41 @@ export default function CollegePricingPage() {
               <small>College programs</small>
             </span>
           </Link>
-          <Link href="/" className={styles.backLink}>Back to website</Link>
+          <div className={styles.headerActions}>
+            <nav className={styles.socialNav} aria-label="PCU social media">
+              <Link
+                href="https://x.com/pitchingcoachu"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="PCU on X"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18.244 2H21l-6.528 7.462L22.148 22h-6.012l-4.708-6.163L6.035 22H3.277l6.983-7.979L2 2h6.166l4.255 5.617L18.244 2Zm-2.108 18h1.58L7.308 3.896H5.612L16.136 20Z" />
+                </svg>
+              </Link>
+              <Link
+                href="https://instagram.com/pitchingcoachu"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="PCU on Instagram"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7.75 2h8.5A5.75 5.75 0 0 1 22 7.75v8.5A5.75 5.75 0 0 1 16.25 22h-8.5A5.75 5.75 0 0 1 2 16.25v-8.5A5.75 5.75 0 0 1 7.75 2Zm0 1.75A4 4 0 0 0 3.75 7.75v8.5a4 4 0 0 0 4 4h8.5a4 4 0 0 0 4-4v-8.5a4 4 0 0 0-4-4h-8.5Zm9.063 1.312a1.188 1.188 0 1 1 0 2.375 1.188 1.188 0 0 1 0-2.375ZM12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10Zm0 1.75a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Z" />
+                </svg>
+              </Link>
+              <Link
+                href="https://youtube.com/@pitchingcoachu?si=rstmKgKPdnzbLv6q"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="PCU on YouTube"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M23 12s0-3.2-.4-4.6a3 3 0 0 0-2.1-2.1C19 5 12 5 12 5s-7 0-8.5.3a3 3 0 0 0-2.1 2.1C1 8.8 1 12 1 12s0 3.2.4 4.6a3 3 0 0 0 2.1 2.1C5 19 12 19 12 19s7 0 8.5-.3a3 3 0 0 0 2.1-2.1C23 15.2 23 12 23 12ZM10 15.5v-7l6 3.5-6 3.5Z" />
+                </svg>
+              </Link>
+            </nav>
+            <Link href="/" className={styles.backLink}>Back to website</Link>
+          </div>
         </header>
 
         <section className={styles.intro}>
@@ -125,7 +179,7 @@ export default function CollegePricingPage() {
 
         <section className={styles.shared} aria-labelledby="shared-title">
           <div className={styles.sharedHeading}>
-            <span>Included with Starter and Elite</span>
+            <span>Included with both plans</span>
             <h2 id="shared-title">Every dashboard plan includes</h2>
           </div>
           <ul>
@@ -140,7 +194,7 @@ export default function CollegePricingPage() {
             <div className={styles.cardHeader}>
               <div>
                 <span className={styles.planLabel}>Dashboard plan</span>
-                <h2>Starter</h2>
+                <h2>Platform</h2>
               </div>
               <div className={styles.price}>$7,500<small>/ year</small></div>
             </div>
@@ -148,7 +202,7 @@ export default function CollegePricingPage() {
               Full dashboard access for programs that want the data platform and essential support.
             </p>
             <div className={styles.featureGroups}>
-              {starterFeatures.map((group) => (
+              {platformFeatures.map((group) => (
                 <div className={styles.featureGroup} key={group.title}>
                   <h3>{group.title}</h3>
                   {group.items.length > 0 ? (
@@ -159,7 +213,9 @@ export default function CollegePricingPage() {
                 </div>
               ))}
             </div>
-            <a href={contactHref} className={styles.secondaryButton}>Ask about Starter</a>
+            <div className={styles.buttonSlot}>
+              <a href={contactHref} className={styles.secondaryButton}>Ask about Platform</a>
+            </div>
           </article>
 
           <article className={`${styles.planCard} ${styles.featuredCard}`}>
@@ -167,7 +223,7 @@ export default function CollegePricingPage() {
             <div className={styles.cardHeader}>
               <div>
                 <span className={styles.planLabel}>Dashboard + consulting</span>
-                <h2>Elite</h2>
+                <h2>Platform + Development</h2>
               </div>
               <div className={styles.price}>$12,000<small>/ year</small></div>
             </div>
@@ -175,7 +231,7 @@ export default function CollegePricingPage() {
               Dashboard access plus programming and ongoing pitching and hitting development support.
             </p>
             <div className={styles.featureGroups}>
-              {eliteFeatures.map((group) => (
+              {platformDevelopmentFeatures.map((group) => (
                 <div className={styles.featureGroup} key={group.title}>
                   <h3>{group.title}</h3>
                   {'subtitle' in group && group.subtitle ? <p>{group.subtitle}</p> : null}
@@ -185,7 +241,9 @@ export default function CollegePricingPage() {
                 </div>
               ))}
             </div>
-            <a href={contactHref} className={styles.primaryButton}>Ask about Elite</a>
+            <div className={styles.buttonSlot}>
+              <a href={contactHref} className={styles.primaryButton}>Ask about Platform + Development</a>
+            </div>
           </article>
 
           <article className={`${styles.planCard} ${styles.addOnCard}`}>
@@ -202,7 +260,10 @@ export default function CollegePricingPage() {
               {addOns.map((addOn) => (
                 <section className={styles.addOn} key={addOn.title}>
                   <div className={styles.addOnHeading}>
-                    <h3>{addOn.title}</h3>
+                    <div>
+                      <h3>{addOn.title}</h3>
+                      {'subtitle' in addOn && addOn.subtitle ? <p>{addOn.subtitle}</p> : null}
+                    </div>
                     <strong>{addOn.price}<small>{addOn.suffix}</small></strong>
                   </div>
                   {addOn.items.length > 0 ? (
@@ -213,7 +274,9 @@ export default function CollegePricingPage() {
                 </section>
               ))}
             </div>
-            <a href={contactHref} className={styles.secondaryButton}>Ask about add-ons</a>
+            <div className={styles.buttonSlot}>
+              <a href={contactHref} className={styles.secondaryButton}>Ask about add-ons</a>
+            </div>
           </article>
         </section>
 

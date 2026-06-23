@@ -417,7 +417,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const media = window.matchMedia('(max-width: 780px)');
+    const media = window.matchMedia('(max-width: 900px)');
     const sync = () => {
       const mobile = media.matches;
       setIsMobileSchedule(mobile);
@@ -2604,7 +2604,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 aria-label="Search player"
               />
               <datalist id="schedule-player-search-options">
-                {(filteredPlayers.length > 0 ? filteredPlayers : players).slice(0, 50).map((player) => (
+                {(filteredPlayers.length > 0 ? filteredPlayers : players).map((player) => (
                   <option key={player.id} value={player.name} />
                 ))}
               </datalist>

@@ -62,6 +62,12 @@ function normalizeRows(raw: unknown, rowCount: number, columnCount: number): str
   return rows;
 }
 
+function extractLegacyTemplates(scriptRaw: unknown): ScriptTemplate[] {
+  if (!scriptRaw || typeof scriptRaw !== 'object') return [];
+  const data = scriptRaw as Record<string, unknown>;
+  return normalizeTemplateList(data.templates);
+}
+
 function normalizeScriptState(raw: unknown): ScriptState {
   if (!raw || typeof raw !== 'object') return DEFAULT_SCRIPT_STATE;
   const data = raw as Record<string, unknown>;
@@ -143,10 +149,17 @@ export async function GET(request: Request) {
 
   const playerTemplatesObj = parseTemplatesObject(playerState.templates);
   const sharedTemplatesObj = parseTemplatesObject(sharedState.templates);
-  const bullpenTemplates = normalizeTemplateList(sharedTemplatesObj.bullpenTemplates);
+  let bullpenTemplates = normalizeTemplateList(sharedTemplatesObj.bullpenTemplates);
   const bullpenState = normalizeScriptState(playerTemplatesObj.bullpen);
-  const velocityTemplates = normalizeTemplateList(sharedTemplatesObj.velocityTemplates);
+  let velocityTemplates = normalizeTemplateList(sharedTemplatesObj.velocityTemplates);
   const velocityState = normalizeScriptState(playerTemplatesObj.velocity);
+
+  if (bullpenTemplates.length === 0) {
+    bullpenTemplates = extractLegacyTemplates(playerTemplatesObj.bullpen);
+  }
+  if (velocityTemplates.length === 0) {
+    velocityTemplates = extractLegacyTemplates(playerTemplatesObj.velocity);
+  }
   if (bullpenState.visibleTemplateIds.length === 0) {
     bullpenState.visibleTemplateIds = bullpenTemplates.map((row) => row.id);
   }

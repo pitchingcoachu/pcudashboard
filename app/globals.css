@@ -2508,7 +2508,8 @@ body:not(.theme-light) .portal-inline-filter select,
 body:not(.theme-light) .portal-assessment-trend-select,
 body:not(.theme-light) .portal-preview-form select,
 body:not(.theme-light) .portal-schedule-player-picker select,
-body:not(.theme-light) .portal-schedule-toolbar select {
+body:not(.theme-light) .portal-schedule-toolbar select,
+body:not(.theme-light) .portal-set-weights select {
   color-scheme: dark;
   background: rgba(8, 8, 8, 0.96);
   color: rgba(245, 247, 255, 0.96);
@@ -2520,7 +2521,8 @@ body:not(.theme-light) .portal-inline-filter select option,
 body:not(.theme-light) .portal-assessment-trend-select option,
 body:not(.theme-light) .portal-preview-form select option,
 body:not(.theme-light) .portal-schedule-player-picker select option,
-body:not(.theme-light) .portal-schedule-toolbar select option {
+body:not(.theme-light) .portal-schedule-toolbar select option,
+body:not(.theme-light) .portal-set-weights select option {
   background: #0a0a0a;
   color: #f4f7ff;
 }
@@ -4156,7 +4158,9 @@ body.theme-light .portal-color-toggle .portal-color-toggle-btn.is-on::before {
   color: var(--text-muted);
 }
 
-.portal-set-weights input {
+.portal-set-weights input,
+.portal-set-weights select,
+.portal-set-weights textarea {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 10px;
@@ -5233,6 +5237,177 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   }
 }
 
+/* Tablet navigation: keep the complete user identity and primary controls visible
+   without forcing the desktop nav into iPad portrait or landscape widths. */
+@media (min-width: 781px) and (max-width: 1240px) {
+  .portal-header,
+  body.biomechanics-suite-active .portal-header {
+    grid-template-columns: 64px minmax(220px, 1fr) minmax(260px, auto) !important;
+    align-items: center;
+    justify-items: stretch;
+    gap: 0.6rem;
+    padding: 0.55rem 0.7rem;
+  }
+
+  .portal-header-left {
+    justify-self: start;
+    width: 64px;
+  }
+
+  .portal-header-center,
+  body.biomechanics-suite-active .portal-header-center {
+    display: flex !important;
+    justify-self: stretch;
+    justify-content: center !important;
+    min-width: 0;
+  }
+
+  .portal-header-nav-stack {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .portal-nav,
+  body.biomechanics-suite-active .portal-nav {
+    display: none !important;
+  }
+
+  .portal-nav-mobile-wrap,
+  body.biomechanics-suite-active .portal-nav-mobile-wrap {
+    display: block !important;
+    width: min(100%, 320px);
+    min-width: 0;
+    margin-inline: auto;
+  }
+
+  .portal-header-right,
+  body.biomechanics-suite-active .portal-header-right {
+    display: inline-flex !important;
+    justify-self: end;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    width: auto !important;
+    min-width: 0;
+    gap: 0.4rem !important;
+  }
+
+  .portal-header-right .portal-user-meta,
+  body.biomechanics-suite-active .portal-header-right .portal-user-meta {
+    display: grid !important;
+    min-width: 0;
+  }
+
+  .portal-user-meta h1 {
+    max-width: 18ch;
+    text-align: right;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .portal-header-right .portal-social-row,
+  .portal-header-right .portal-header-logo-link,
+  body.biomechanics-suite-active .portal-header-right .portal-social-row,
+  body.biomechanics-suite-active .portal-header-right .portal-header-logo-link {
+    display: none !important;
+  }
+
+  .portal-dashboard-suite-select-wrap {
+    display: block;
+  }
+
+  .portal-dashboard-suite-tabs,
+  body.biomechanics-suite-active .portal-dashboard-suite-tabs {
+    display: none !important;
+  }
+
+  .portal-dashboard-suite-layout > *,
+  .portal-dashboard-suite-layout--double > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .portal-dashboard-suite-layout .portal-admin-grid,
+  .portal-dashboard-suite-layout--double .portal-admin-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .portal-panel .portal-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .portal-player-plans-suite,
+  .portal-comparison-suite {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .portal-player-plans-suite > *,
+  .portal-comparison-suite > *,
+  .portal-player-plans-suite .portal-admin-card,
+  .portal-comparison-suite .portal-admin-card {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .portal-player-plans-suite .portal-form-grid,
+  .portal-comparison-suite .portal-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .portal-admin-headline {
+    flex-wrap: wrap !important;
+  }
+
+  .portal-schedule-toolbar,
+  .portal-schedule-layout,
+  .portal-schedule-calendar,
+  .portal-admin-panel,
+  .portal-dashboard-suite {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .portal-schedule-toolbar {
+    overflow-x: clip;
+  }
+
+  .portal-schedule-view-switch,
+  .portal-schedule-nav {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .portal-table-wrap,
+  .portal-day-card,
+  .portal-schedule-calendar {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+}
+
+@media (min-width: 781px) and (max-width: 900px) {
+  .portal-dashboard-suite-layout .portal-admin-grid,
+  .portal-dashboard-suite-layout--double .portal-admin-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .portal-player-plans-suite .portal-form-grid,
+  .portal-comparison-suite .portal-form-grid,
+  .portal-player-plans-suite div[style*='grid-template-columns'],
+  .portal-comparison-suite div[style*='grid-template-columns'] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .portal-dashboard-suite-layout .portal-day-card,
+  .portal-dashboard-suite-layout .portal-admin-card,
+  .portal-dashboard-suite-layout .portal-admin-stack {
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
 @media (max-width: 780px) {
   html,
   body {
@@ -5267,6 +5442,10 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
     padding: 0.4rem 0.55rem;
   }
 
+  body.biomechanics-suite-active .portal-header {
+    grid-template-columns: 64px minmax(0, 1fr) 64px !important;
+  }
+
   .portal-header-left {
     display: inline-flex;
     align-items: center;
@@ -5285,11 +5464,27 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
     width: 64px;
   }
 
+  body.biomechanics-suite-active .portal-header-right {
+    width: 64px !important;
+    gap: 0 !important;
+  }
+
   .portal-header-right .portal-user-meta,
   .portal-header-right .portal-social-row,
   .portal-header-right .btn,
   .portal-header-right .portal-theme-toggle {
     display: none;
+  }
+
+  body.biomechanics-suite-active .portal-header-right .portal-user-meta,
+  body.biomechanics-suite-active .portal-header-right .portal-social-row,
+  body.biomechanics-suite-active .portal-header-right .btn,
+  body.biomechanics-suite-active .portal-header-right .portal-theme-toggle {
+    display: none !important;
+  }
+
+  body.biomechanics-suite-active .portal-header-right .portal-header-logo-link {
+    display: inline-flex !important;
   }
 
   .portal-header-right .portal-header-logo-link {
@@ -5318,11 +5513,19 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
     display: none;
   }
 
+  body.biomechanics-suite-active .portal-nav {
+    display: none !important;
+  }
+
   .portal-nav-mobile-wrap {
     display: block;
     width: min(100%, 320px);
     min-width: 0;
     margin-inline: auto;
+  }
+
+  body.biomechanics-suite-active .portal-nav-mobile-wrap {
+    display: block !important;
   }
 
   .portal-dashboard-suite-select-wrap {
@@ -5331,6 +5534,10 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 
   .portal-dashboard-suite-tabs {
     display: none;
+  }
+
+  body.biomechanics-suite-active .portal-dashboard-suite-tabs {
+    display: none !important;
   }
 
   .portal-header-center {
@@ -5405,6 +5612,10 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   .portal-panel {
     padding: 0.8rem;
     border-radius: 12px;
+  }
+
+  .portal-panel .portal-form-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 
   .portal-admin-card {
@@ -5632,5 +5843,37 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 
   .portal-cycle-grid {
     grid-template-columns: 1fr !important;
+  }
+}
+
+@media (min-width: 601px) and (max-width: 780px) {
+  .portal-header,
+  body.biomechanics-suite-active .portal-header {
+    grid-template-columns: 64px minmax(180px, 1fr) minmax(140px, auto) !important;
+  }
+
+  .portal-header-right,
+  body.biomechanics-suite-active .portal-header-right {
+    justify-self: end;
+    justify-content: flex-end;
+    width: auto !important;
+  }
+
+  .portal-header-right .portal-user-meta,
+  body.biomechanics-suite-active .portal-header-right .portal-user-meta {
+    display: grid !important;
+    justify-items: end;
+  }
+
+  .portal-header-right .portal-header-logo-link,
+  body.biomechanics-suite-active .portal-header-right .portal-header-logo-link {
+    display: none !important;
+  }
+
+  .portal-user-meta h1 {
+    max-width: 16ch;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: right;
   }
 }

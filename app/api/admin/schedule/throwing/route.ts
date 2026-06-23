@@ -127,6 +127,12 @@ function normalizeScriptState(raw: unknown): ScriptState {
   };
 }
 
+function extractLegacyTemplates(scriptRaw: unknown): ScriptTemplate[] {
+  if (!scriptRaw || typeof scriptRaw !== 'object') return [];
+  const data = scriptRaw as Record<string, unknown>;
+  return normalizeTemplateList(data.templates);
+}
+
 function parseTemplatesObject(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
   if (Array.isArray(raw)) {
@@ -200,8 +206,15 @@ export async function GET(request: Request) {
   const legacyBullpen = normalizeScriptState(playerTemplatesObj.bullpen);
   const legacyVelocity = normalizeScriptState(playerTemplatesObj.velocity);
 
-  const bullpenTemplates = normalizeTemplateList(sharedTemplatesObj.bullpenTemplates);
-  const velocityTemplates = normalizeTemplateList(sharedTemplatesObj.velocityTemplates);
+  let bullpenTemplates = normalizeTemplateList(sharedTemplatesObj.bullpenTemplates);
+  let velocityTemplates = normalizeTemplateList(sharedTemplatesObj.velocityTemplates);
+
+  if (bullpenTemplates.length === 0 && !isSharedOnly) {
+    bullpenTemplates = extractLegacyTemplates(playerTemplatesObj.bullpen);
+  }
+  if (velocityTemplates.length === 0 && !isSharedOnly) {
+    velocityTemplates = extractLegacyTemplates(playerTemplatesObj.velocity);
+  }
 
   const bullpenState = normalizeScriptState(playerTemplatesObj.bullpen);
   const velocityState = normalizeScriptState(playerTemplatesObj.velocity);
@@ -283,8 +296,15 @@ export async function POST(request: Request) {
 
   const existingThrowingTemplates = Array.isArray(sharedObj.throwingTemplates) ? (sharedObj.throwingTemplates as unknown[]) : [];
 
-  const nextBullpenTemplates = normalizeTemplateList(Array.isArray(body.bullpenTemplates) ? body.bullpenTemplates : sharedObj.bullpenTemplates);
-  const nextVelocityTemplates = normalizeTemplateList(Array.isArray(body.velocityTemplates) ? body.velocityTemplates : sharedObj.velocityTemplates);
+  let nextBullpenTemplates = normalizeTemplateList(Array.isArray(body.bullpenTemplates) ? body.bullpenTemplates : sharedObj.bullpenTemplates);
+  let nextVelocityTemplates = normalizeTemplateList(Array.isArray(body.velocityTemplates) ? body.velocityTemplates : sharedObj.velocityTemplates);
+
+  if (nextBullpenTemplates.length === 0 && !isSharedOnly) {
+    nextBullpenTemplates = extractLegacyTemplates(playerObj.bullpen);
+  }
+  if (nextVelocityTemplates.length === 0 && !isSharedOnly) {
+    nextVelocityTemplates = extractLegacyTemplates(playerObj.velocity);
+  }
 
   const bullpenTemplateIds = new Set(nextBullpenTemplates.map((row) => row.id));
   const velocityTemplateIds = new Set(nextVelocityTemplates.map((row) => row.id));

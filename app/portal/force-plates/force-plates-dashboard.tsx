@@ -904,7 +904,8 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
           </div>
         </div>
         {playerAggregateRows.length ? (
-          <table className="portal-table">
+          <div className="portal-table-wrap">
+            <table className="portal-table">
             <thead>
               <tr>
                 {playerColumns.map((column) => {
@@ -967,7 +968,8 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
                 </tr>
               ))}
             </tbody>
-          </table>
+            </table>
+          </div>
         ) : (
           <p className="portal-muted-text">No metric rows available for this filter.</p>
         )}
@@ -1063,7 +1065,8 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
             </div>
           </label>
         </div>
-        <table className="portal-table">
+        <div className="portal-table-wrap">
+          <table className="portal-table">
           <thead>
             <tr>
               <th
@@ -1166,7 +1169,8 @@ export default function ForcePlatesDashboard({ snapshot }: { snapshot: Snapshot 
               </tr>
             ))}
           </tbody>
-        </table>
+          </table>
+        </div>
       </article>
       ) : null}
 
