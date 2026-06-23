@@ -2635,12 +2635,18 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 <button
                   type="button"
                   className="portal-schedule-player-toggle"
-                  aria-label={playerPickerOpen ? 'Close player list' : 'Show all players'}
+                  aria-label={playerPickerOpen && playerPickerShowAll ? 'Close player list' : 'Show all players'}
                   aria-expanded={playerPickerOpen}
+                  aria-haspopup="listbox"
                   aria-controls="schedule-player-search-options"
                   onClick={() => {
-                    setPlayerPickerOpen((open) => !open);
-                    setPlayerPickerShowAll(!playerPickerOpen);
+                    if (playerPickerOpen && playerPickerShowAll) {
+                      setPlayerPickerOpen(false);
+                      setPlayerPickerShowAll(false);
+                    } else {
+                      setPlayerPickerOpen(true);
+                      setPlayerPickerShowAll(true);
+                    }
                   }}
                 >
                   <svg viewBox="0 0 20 20" aria-hidden="true">
