@@ -27,7 +27,8 @@ function isExecutionCol(col: string) {
   return col.trim().toLowerCase() === 'execution' || col.trim().toLowerCase() === 'executed';
 }
 function isStrikeCol(col: string) {
-  return col.trim().toLowerCase() === 'strike' || col.trim().toLowerCase() === 'strikes';
+  const normalized = col.trim().toLowerCase();
+  return normalized === 'strike' || normalized === 'strikes' || normalized === 'strike or ball';
 }
 function isEditableCol(col: string) {
   return isVelocityCol(col) || isExecutionCol(col) || isStrikeCol(col);
@@ -330,6 +331,30 @@ function isYesNo(value: string) {
   return normalized === 'yes' || normalized === 'no';
 }
 
+function isStrike(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'yes' || normalized === 'strike';
+}
+
+function isStrikeResult(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'yes' || normalized === 'no' || normalized === 'strike' || normalized === 'ball';
+}
+
+function getLogEntryColumns(entry: LogEntry) {
+  const firstRow = entry.rowsJson.find((row) => row && typeof row === 'object');
+  const savedColumns = String(firstRow?.__templateColumns ?? '').trim();
+  if (savedColumns) {
+    try {
+      const parsed = JSON.parse(savedColumns);
+      if (Array.isArray(parsed)) return parsed.map((column) => String(column ?? '').trim()).filter(Boolean);
+    } catch {
+      // Fall through to the self-describing row keys used by older saved entries.
+    }
+  }
+  return firstRow ? Object.keys(firstRow).filter((column) => !column.startsWith('__')) : [];
+}
+
 function formatSummaryNumber(value: number | null, suffix = '') {
   return value === null ? '—' : `${value.toFixed(1)}${suffix}`;
 }
@@ -361,7 +386,7 @@ export default function BullpenEntry({
       ? state.selectedTemplateId
       : visibleTemplates[0]?.id ?? '';
     if (preferred) setSelectedTemplateId(preferred);
-  }, [visibleTemplates, state.selectedTemplateId]);
+  }, [visibleTemplates, state.selectedTemplateId, selectedTemplateId]);
   const [rows, setRows] = useState<Array<Record<string, string>>>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
   const [saving, setSaving] = useState(false);
@@ -374,7 +399,7 @@ export default function BullpenEntry({
   useEffect(() => {
     if (!template) { setRows([]); return; }
     setRows(buildEmptyRows(template.rowCount, template.columns, template.rows));
-  }, [template?.id]);
+  }, [template]);
 
   const templateById = useMemo(() => new Map(visibleTemplates.map((row) => [row.id, row] as const)), [visibleTemplates]);
 
@@ -386,9 +411,8 @@ export default function BullpenEntry({
     fetch(`/api/player/bullpen-log?playerId=${playerId}${previewQuery ? `&${previewQuery.slice(1)}` : ''}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((payload: { entries?: LogEntry[] }) => {
-        const visibleIds = new Set(visibleTemplates.map((row) => row.id));
         const entries = Array.isArray(payload.entries) ? payload.entries : [];
-        setLogEntries(entries.filter((entry) => visibleIds.has(entry.templateId)));
+        setLogEntries(entries);
       })
       .catch(() => {})
       .finally(() => setLoadingEntries(false));
@@ -413,7 +437,7 @@ export default function BullpenEntry({
     } else {
       setRows(buildEmptyRows(template.rowCount, template.columns, template.rows));
     }
-  }, [bullpenDate, selectedTemplateId, logEntries]);
+  }, [bullpenDate, selectedTemplateId, logEntries, template]);
 
   const handleSave = async () => {
     if (!template || !bullpenDate) return;
@@ -423,7 +447,16 @@ export default function BullpenEntry({
       const res = await fetch('/api/player/bullpen-log', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ playerId, templateId: selectedTemplateId, bullpenDate, rowsJson: rows }),
+        body: JSON.stringify({
+          playerId,
+          templateId: selectedTemplateId,
+          bullpenDate,
+          rowsJson: rows.map((row) => ({
+            ...row,
+            __templateName: template.name,
+            __templateColumns: JSON.stringify(template.columns),
+          })),
+        }),
       });
       const payload = await res.json();
       if (!res.ok) { setSaveMsg(payload.error ?? 'Failed to save.'); return; }
@@ -431,9 +464,8 @@ export default function BullpenEntry({
       // Refresh entries
       const refresh = await fetch(`/api/player/bullpen-log?playerId=${playerId}${previewQuery ? `&${previewQuery.slice(1)}` : ''}`, { cache: 'no-store' });
       const refreshPayload: { entries?: LogEntry[] } = await refresh.json();
-      const visibleIds = new Set(visibleTemplates.map((row) => row.id));
       const entries = Array.isArray(refreshPayload.entries) ? refreshPayload.entries : [];
-      setLogEntries(entries.filter((entry) => visibleIds.has(entry.templateId)));
+      setLogEntries(entries);
       setTimeout(() => setSaveMsg(''), 2500);
     } finally {
       setSaving(false);
@@ -457,7 +489,8 @@ export default function BullpenEntry({
       })
       .flatMap((entry) => {
         const sourceTemplate = templateById.get(entry.templateId);
-        const columns = sourceTemplate?.columns ?? [];
+        const savedColumns = getLogEntryColumns(entry);
+        const columns = savedColumns.length ? savedColumns : sourceTemplate?.columns ?? [];
         const velocityCol = columns.find(isVelocityCol) ?? '';
         const executionCol = columns.find(isExecutionCol) ?? '';
         const strikeCol = columns.find(isStrikeCol) ?? '';
@@ -479,11 +512,12 @@ export default function BullpenEntry({
 
   const trendMetricOptions = useMemo(() => {
     const options: Array<{ value: BullpenTrendMetric; label: string }> = [];
-    if (visibleTemplates.some((row) => row.columns.some(isVelocityCol))) options.push({ value: 'velocity', label: 'Velocity' });
-    if (visibleTemplates.some((row) => row.columns.some(isExecutionCol))) options.push({ value: 'execution', label: 'Execution %' });
-    if (visibleTemplates.some((row) => row.columns.some(isStrikeCol))) options.push({ value: 'strike', label: 'Strike %' });
+    const allColumns = [...visibleTemplates.flatMap((row) => row.columns), ...logEntries.flatMap(getLogEntryColumns)];
+    if (allColumns.some(isVelocityCol)) options.push({ value: 'velocity', label: 'Velocity' });
+    if (allColumns.some(isExecutionCol)) options.push({ value: 'execution', label: 'Execution %' });
+    if (allColumns.some(isStrikeCol)) options.push({ value: 'strike', label: 'Strike %' });
     return options;
-  }, [visibleTemplates]);
+  }, [visibleTemplates, logEntries]);
 
   useEffect(() => {
     if (!trendMetricOptions.length) return;
@@ -510,8 +544,10 @@ export default function BullpenEntry({
         group.sum += value;
         group.count += 1;
       } else {
+        if (trendMetric === 'strike' && !isStrikeResult(rawValue)) continue;
+        if (trendMetric === 'execution' && !isYesNo(rawValue)) continue;
         group.count += 1;
-        if (isYes(rawValue)) group.yes += 1;
+        if (trendMetric === 'strike' ? isStrike(rawValue) : isYes(rawValue)) group.yes += 1;
       }
       groups.set(key, group);
     }
@@ -593,9 +629,9 @@ export default function BullpenEntry({
         group.executionCount += 1;
         if (isYes(execution)) group.executionYes += 1;
       }
-      if (isYesNo(strike)) {
+      if (isStrikeResult(strike)) {
         group.strikeCount += 1;
-        if (isYes(strike)) group.strikeYes += 1;
+        if (isStrike(strike)) group.strikeYes += 1;
       }
     };
 
@@ -605,7 +641,7 @@ export default function BullpenEntry({
       const velocity = velocityRaw && Number.isFinite(velocityValue) && velocityValue > 0 ? velocityValue : null;
       const execution = row.__executionCol ? String(row[row.__executionCol] ?? '').trim() : '';
       const strike = row.__strikeCol ? String(row[row.__strikeCol] ?? '').trim() : '';
-      if (velocity === null && !isYesNo(execution) && !isYesNo(strike)) continue;
+      if (velocity === null && !isYesNo(execution) && !isStrikeResult(strike)) continue;
 
       const pitchType = getColumnValue(row, row.__pitchTypeCol || null, 'Unspecified');
       const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Unspecified');
@@ -645,6 +681,41 @@ export default function BullpenEntry({
       rows: summaryRows,
     };
   }, [allRows]);
+
+  const savedEntrySummaries = useMemo(() => logEntries.map((entry) => {
+    const sourceTemplate = templateById.get(entry.templateId);
+    const savedColumns = getLogEntryColumns(entry);
+    const columns = savedColumns.length ? savedColumns : sourceTemplate?.columns ?? [];
+    const velocityCol = columns.find(isVelocityCol) ?? '';
+    const strikeCol = columns.find(isStrikeCol) ?? '';
+    let velocitySum = 0;
+    let velocityCount = 0;
+    let maxVelocity: number | null = null;
+    let strikeCount = 0;
+    let strikeYes = 0;
+    for (const row of entry.rowsJson) {
+      const velocity = Number(String(velocityCol ? row[velocityCol] ?? '' : '').trim());
+      if (Number.isFinite(velocity) && velocity > 0) {
+        velocitySum += velocity;
+        velocityCount += 1;
+        maxVelocity = maxVelocity === null ? velocity : Math.max(maxVelocity, velocity);
+      }
+      const strike = String(strikeCol ? row[strikeCol] ?? '' : '').trim();
+      if (isStrikeResult(strike)) {
+        strikeCount += 1;
+        if (isStrike(strike)) strikeYes += 1;
+      }
+    }
+    const savedName = String(entry.rowsJson[0]?.__templateName ?? '').trim();
+    return {
+      key: `${entry.templateId}|${entry.bullpenDate}`,
+      date: entry.bullpenDate,
+      name: sourceTemplate?.name || savedName || 'Saved Bullpen',
+      strikePct: strikeCount > 0 ? (strikeYes / strikeCount) * 100 : null,
+      avgVelocity: velocityCount > 0 ? velocitySum / velocityCount : null,
+      maxVelocity,
+    };
+  }), [logEntries, templateById]);
 
   const summaryHasVelocity = trendMetricOptions.some((option) => option.value === 'velocity');
   const summaryHasExecution = trendMetricOptions.some((option) => option.value === 'execution');
@@ -768,6 +839,36 @@ export default function BullpenEntry({
                         </td>
                       );
                     })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {savedEntrySummaries.length > 0 && !loadingEntries ? (
+        <div className="portal-panel" style={{ minHeight: 'unset', padding: '1rem' }}>
+          <h4 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 800, color: '#e2e8f0' }}>Saved Bullpen Entries</h4>
+          <div className="portal-table-wrap">
+            <table className="portal-table portal-bullpen-summary-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Script</th>
+                  <th className="portal-bullpen-summary-number">Strike %</th>
+                  <th className="portal-bullpen-summary-number">Avg Velo</th>
+                  <th className="portal-bullpen-summary-number">Max Velo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {savedEntrySummaries.map((entry) => (
+                  <tr key={entry.key}>
+                    <td>{entry.date}</td>
+                    <td>{entry.name}</td>
+                    <td className="portal-bullpen-summary-number">{formatSummaryNumber(entry.strikePct, '%')}</td>
+                    <td className="portal-bullpen-summary-number">{formatSummaryNumber(entry.avgVelocity)}</td>
+                    <td className="portal-bullpen-summary-number">{formatSummaryNumber(entry.maxVelocity)}</td>
                   </tr>
                 ))}
               </tbody>
