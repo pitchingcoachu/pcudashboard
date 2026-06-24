@@ -2,7 +2,12 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
-import { getScheduleThrowingState, playerExistsInOrganization, saveScheduleThrowingState } from '../../../../../lib/training-db';
+import {
+  getRecoverableBullpenScripts,
+  getScheduleThrowingState,
+  playerExistsInOrganization,
+  saveScheduleThrowingState,
+} from '../../../../../lib/training-db';
 import { logApiTiming } from '../../../../../lib/request-timing';
 import { normalizeDrillsState, normalizeDrillTemplates } from '../../../../../lib/drills-program';
 
@@ -125,6 +130,22 @@ function extractLegacyTemplates(scriptRaw: unknown): ScriptTemplate[] {
   return normalizeTemplateList(data.templates);
 }
 
+function recoverBullpenTemplates(raw: unknown): ScriptTemplate[] {
+  const source = Array.isArray(raw) ? raw : [];
+  return normalizeTemplateList(
+    source.map((value) => {
+      const script = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+      const name = String(script.title ?? '').trim();
+      return {
+        ...script,
+        id: name ? `recovered-bullpen:${name.toLowerCase()}` : '',
+        name,
+        updatedAt: '',
+      };
+    })
+  );
+}
+
 function normalizeCatchPlayNotes(raw: unknown): { highDay: string; mediumDay: string; lowDay: string } {
   if (!raw || typeof raw !== 'object') return { highDay: '', mediumDay: '', lowDay: '' };
   const value = raw as Record<string, unknown>;
@@ -197,6 +218,9 @@ export async function GET(request: Request) {
 
   if (bullpenTemplates.length === 0 && !isSharedOnly) {
     bullpenTemplates = extractLegacyTemplates(playerTemplatesObj.bullpen);
+  }
+  if (bullpenTemplates.length === 0) {
+    bullpenTemplates = recoverBullpenTemplates(await getRecoverableBullpenScripts({ organizationId }));
   }
   if (velocityTemplates.length === 0 && !isSharedOnly) {
     velocityTemplates = extractLegacyTemplates(playerTemplatesObj.velocity);
@@ -299,6 +323,9 @@ export async function POST(request: Request) {
 
   if (nextBullpenTemplates.length === 0 && !isSharedOnly) {
     nextBullpenTemplates = extractLegacyTemplates(playerObj.bullpen);
+  }
+  if (nextBullpenTemplates.length === 0) {
+    nextBullpenTemplates = recoverBullpenTemplates(await getRecoverableBullpenScripts({ organizationId }));
   }
   if (nextVelocityTemplates.length === 0 && !isSharedOnly) {
     nextVelocityTemplates = extractLegacyTemplates(playerObj.velocity);

@@ -2904,6 +2904,30 @@ export async function getScheduleThrowingState(input: {
   };
 }
 
+export async function getRecoverableBullpenScripts(input: {
+  organizationId: number;
+}): Promise<unknown[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ script: unknown }>(
+    `
+      SELECT DISTINCT ON (LOWER(TRIM(templates_json #>> '{bullpen,current,title}')))
+        templates_json #> '{bullpen,current}' AS script
+      FROM schedule_throwing_state
+      WHERE organization_id = $1
+        AND player_id > 0
+        AND jsonb_typeof(templates_json #> '{bullpen,current}') = 'object'
+        AND TRIM(COALESCE(templates_json #>> '{bullpen,current,title}', '')) <> ''
+      ORDER BY
+        LOWER(TRIM(templates_json #>> '{bullpen,current,title}')),
+        updated_at DESC
+    `,
+    [input.organizationId]
+  );
+  return result.rows.map((row) => row.script).filter(Boolean);
+}
+
 export async function saveScheduleThrowingState(input: {
   organizationId: number;
   playerId: number;
