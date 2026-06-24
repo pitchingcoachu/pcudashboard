@@ -10,6 +10,7 @@ type WorkoutLogModalProps = {
   onClose: () => void;
   onSaved?: () => Promise<void> | void;
   onDelete?: (item: ProgramItemRow) => Promise<void> | void;
+  catchPlayNote?: string;
 };
 
 const ASSESSMENT_NOTES_TOKEN = '[ASSESSMENT_NOTES]';
@@ -116,7 +117,7 @@ function formatMaxHistory(
   return best;
 }
 
-export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDelete }: WorkoutLogModalProps) {
+export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDelete, catchPlayNote }: WorkoutLogModalProps) {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
@@ -248,11 +249,20 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
             <strong>Notes:</strong> {item.prescribedNotes}
           </p>
         )}
-        <p className="portal-muted-text" style={{ fontStyle: 'italic' }}>
-          {isCycleItem
-            ? `3-Day Cycle${item.cycleSlot ? ` - ${cycleSlotLabel(item.cycleSlot)}` : ''}`
-            : dateTitle(item.dayDate)}
-        </p>
+        {!(catchPlayNote && item.itemType === 'workout' && item.workoutExercises.length === 0) && (
+          <p className="portal-muted-text" style={{ fontStyle: 'italic' }}>
+            {isCycleItem
+              ? `3-Day Cycle${item.cycleSlot ? ` - ${cycleSlotLabel(item.cycleSlot)}` : ''}`
+              : dateTitle(item.dayDate)}
+          </p>
+        )}
+
+        {catchPlayNote && (
+          <div style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', padding: '0.65rem 0.85rem', marginBottom: '0.4rem' }}>
+            <strong style={{ fontSize: '0.85rem' }}>Catch Play Routine</strong>
+            <p style={{ margin: '0.3rem 0 0', whiteSpace: 'pre-wrap', fontSize: '0.92rem' }}>{catchPlayNote}</p>
+          </div>
+        )}
 
         <form
           ref={formRef}
@@ -298,7 +308,7 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
         >
           <input type="hidden" name="scheduleType" value={item.scheduleType} />
           <input type="hidden" name="completed" value={item.completed ? 'on' : ''} />
-          {item.itemType === 'workout' && item.workoutExercises.length > 0 ? (
+          {catchPlayNote && item.itemType === 'workout' && item.workoutExercises.length === 0 ? null : item.itemType === 'workout' && item.workoutExercises.length > 0 ? (
             <div className="portal-workout-player-block">
               {(() => {
                 let loadIndex = 0;
@@ -501,18 +511,22 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
             </div>
           )}
 
-          <div className="portal-log-grid">
-            <label className="portal-form-span-2">
-              Notes
-              <textarea name="notes" rows={2} defaultValue={notesPayload.generalNotes} />
-            </label>
-          </div>
+          {catchPlayNote && item.itemType === 'workout' && item.workoutExercises.length === 0 ? null : (
+            <div className="portal-log-grid">
+              <label className="portal-form-span-2">
+                Notes
+                <textarea name="notes" rows={2} defaultValue={notesPayload.generalNotes} />
+              </label>
+            </div>
+          )}
 
           {error && <p className="auth-error">{error}</p>}
           <div className="portal-choice-line-actions">
-            <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? 'Saving...' : 'Save Log'}
-            </button>
+            {!(catchPlayNote && item.itemType === 'workout' && item.workoutExercises.length === 0) && (
+              <button type="submit" className="btn btn-primary" disabled={saving}>
+                {saving ? 'Saving...' : 'Save Log'}
+              </button>
+            )}
             {onDelete && (
               <button
                 type="button"

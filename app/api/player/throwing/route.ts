@@ -4,8 +4,19 @@ import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import { getPlayerForUser, getScheduleThrowingState, playerExistsInOrganization } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
+import { normalizeDrillsState } from '../../../../lib/drills-program';
 
 const SHARED_PLAYER_ID = 0;
+
+function normalizeCatchPlayNotes(raw: unknown): { highDay: string; mediumDay: string; lowDay: string } {
+  if (!raw || typeof raw !== 'object') return { highDay: '', mediumDay: '', lowDay: '' };
+  const value = raw as Record<string, unknown>;
+  return {
+    highDay: String(value.highDay ?? ''),
+    mediumDay: String(value.mediumDay ?? ''),
+    lowDay: String(value.lowDay ?? ''),
+  };
+}
 
 function parseTemplatesObject(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
@@ -153,6 +164,7 @@ export async function GET(request: Request) {
   const bullpenState = normalizeScriptState(playerTemplatesObj.bullpen);
   let velocityTemplates = normalizeTemplateList(sharedTemplatesObj.velocityTemplates);
   const velocityState = normalizeScriptState(playerTemplatesObj.velocity);
+  const drillsState = normalizeDrillsState(playerTemplatesObj.drills);
 
   if (bullpenTemplates.length === 0) {
     bullpenTemplates = extractLegacyTemplates(playerTemplatesObj.bullpen);
@@ -174,5 +186,7 @@ export async function GET(request: Request) {
     bullpenTemplates,
     velocityState,
     velocityTemplates,
+    drillsState,
+    catchPlayNotes: normalizeCatchPlayNotes(playerTemplatesObj.catchPlayNotes),
   });
 }

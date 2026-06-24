@@ -109,6 +109,14 @@ function isVelocityWorkoutName(value: string): boolean {
   return normalized === 'velocity plan' || normalized === 'velocity' || normalized.includes('velocity');
 }
 
+function isDrillsWorkoutName(value: string): boolean {
+  const normalized = value.trim().toLowerCase().replace(/[‐‑‒–—−-]+/g, ' ').replace(/\s+/g, ' ');
+  return normalized === 'drills'
+    || normalized.includes('throwing drills')
+    || normalized.includes('pre throw drills')
+    || normalized.includes('mound drills');
+}
+
 function formatDate(isoDate: string): string {
   const date = new Date(`${isoDate}T00:00:00Z`);
   const month = date.getUTCMonth() + 1;
@@ -1319,6 +1327,10 @@ export default function ProfileDashboard({
                     }
                     if (isVelocityWorkoutName(item.itemName)) {
                       router.push(`/portal/player/program/velocity${programPreviewQuery}`);
+                      return;
+                    }
+                    if (isDrillsWorkoutName(item.itemName)) {
+                      router.push(`/portal/player/program/drills${programPreviewQuery}`);
                       return;
                     }
                     setSelectedItem(item);

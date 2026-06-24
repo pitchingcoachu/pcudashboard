@@ -128,6 +128,14 @@ function isVelocityWorkoutName(value: string): boolean {
   return normalized === 'velocity plan' || normalized === 'velocity' || normalized.includes('velocity');
 }
 
+function isDrillsWorkoutName(value: string): boolean {
+  const normalized = value.trim().toLowerCase().replace(/[‐‑‒–—−-]+/g, ' ').replace(/\s+/g, ' ');
+  return normalized === 'drills'
+    || normalized.includes('throwing drills')
+    || normalized.includes('pre throw drills')
+    || normalized.includes('mound drills');
+}
+
 
 export default function PlayerCalendar({ playerId, initialItems, initialStartDate, initialEndDate, previewPlayerId = null }: PlayerCalendarProps) {
   const router = useRouter();
@@ -138,6 +146,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
+  const [catchPlayNotes, setCatchPlayNotes] = useState<{ highDay: string; mediumDay: string; lowDay: string }>({ highDay: '', mediumDay: '', lowDay: '' });
   const consumedInitialRef = useRef(false);
 
   const visibleRange = useMemo(() => {
@@ -188,6 +197,24 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
   useEffect(() => {
     void loadItems();
   }, [loadItems]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const playerIdParam = previewPlayerId && Number.isFinite(previewPlayerId) && previewPlayerId > 0
+      ? `?playerId=${previewPlayerId}`
+      : '';
+    fetch(`/api/player/throwing${playerIdParam}`, { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        const notes = data.catchPlayNotes;
+        if (notes && typeof notes === 'object') {
+          setCatchPlayNotes({ highDay: String(notes.highDay ?? ''), mediumDay: String(notes.mediumDay ?? ''), lowDay: String(notes.lowDay ?? '') });
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [previewPlayerId]);
 
   const itemsByDate = useMemo(() => {
     const map = new Map<string, ProgramItemRow[]>();
@@ -302,6 +329,10 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                 }
                 if (isVelocityWorkoutName(item.itemName)) {
                   router.push(`/portal/player/program/velocity${query}`);
+                  return;
+                }
+                if (isDrillsWorkoutName(item.itemName)) {
+                  router.push(`/portal/player/program/drills${query}`);
                   return;
                 }
                 setSelectedItem(item);
@@ -451,6 +482,10 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                             router.push(`/portal/player/program/velocity${query}`);
                             return;
                           }
+                          if (isDrillsWorkoutName(item.itemName)) {
+                            router.push(`/portal/player/program/drills${query}`);
+                            return;
+                          }
                           setSelectedItem(item);
                         }}
                       >
@@ -480,6 +515,12 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
           onSaved={async () => {
             await loadItems();
           }}
+          catchPlayNote={
+            selectedItem.cycleSlot === 'high' || /\bhigh\b/i.test(selectedItem.itemName) ? catchPlayNotes.highDay
+              : selectedItem.cycleSlot === 'medium' || /\bmedium\b/i.test(selectedItem.itemName) ? catchPlayNotes.mediumDay
+              : selectedItem.cycleSlot === 'low' || /\blow\b/i.test(selectedItem.itemName) ? catchPlayNotes.lowDay
+              : undefined
+          }
         />
       )}
     </div>

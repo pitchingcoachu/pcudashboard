@@ -316,6 +316,12 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
                 <Link href="/portal/player/program/velocity" className="btn btn-ghost">
                   Velocity
                 </Link>
+                <Link
+                  href={session.role === 'admin' || session.role === 'coach' ? `/portal/player/program/drills?previewPlayerId=${effectivePlayerId}` : '/portal/player/program/drills'}
+                  className="btn btn-ghost"
+                >
+                  Plyos and Drills
+                </Link>
               </div>
             ) : null}
             {session.role === 'admin' || session.role === 'coach' ? (

@@ -67,6 +67,17 @@ type BullpenVelocityPoint = {
   pitchNumber: number;
 };
 
+type BullpenSummaryRow = {
+  key: string;
+  pitchType: string;
+  ballType: string;
+  count: number;
+  avgVelocity: number | null;
+  maxVelocity: number | null;
+  executionPct: number | null;
+  strikePct: number | null;
+};
+
 function formatTrendDate(value: string) {
   const raw = String(value ?? '').trim();
   if (!raw) return '—';
@@ -314,6 +325,15 @@ function isYes(value: string) {
   return value.trim().toLowerCase() === 'yes';
 }
 
+function isYesNo(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'yes' || normalized === 'no';
+}
+
+function formatSummaryNumber(value: number | null, suffix = '') {
+  return value === null ? '—' : `${value.toFixed(1)}${suffix}`;
+}
+
 export default function BullpenEntry({
   templates,
   state,
@@ -536,6 +556,100 @@ export default function BullpenEntry({
       .sort((a, b) => a.date.localeCompare(b.date) || a.pitchNumber - b.pitchNumber);
   }, [allRows]);
 
+  const bullpenSummary = useMemo(() => {
+    type SummaryAccumulator = {
+      pitchType: string;
+      ballType: string;
+      count: number;
+      velocitySum: number;
+      velocityCount: number;
+      maxVelocity: number | null;
+      executionYes: number;
+      executionCount: number;
+      strikeYes: number;
+      strikeCount: number;
+    };
+    const groups = new Map<string, SummaryAccumulator>();
+    const total: SummaryAccumulator = {
+      pitchType: 'All',
+      ballType: 'All',
+      count: 0,
+      velocitySum: 0,
+      velocityCount: 0,
+      maxVelocity: null,
+      executionYes: 0,
+      executionCount: 0,
+      strikeYes: 0,
+      strikeCount: 0,
+    };
+    const addPitch = (group: SummaryAccumulator, velocity: number | null, execution: string, strike: string) => {
+      group.count += 1;
+      if (velocity !== null) {
+        group.velocitySum += velocity;
+        group.velocityCount += 1;
+        group.maxVelocity = group.maxVelocity === null ? velocity : Math.max(group.maxVelocity, velocity);
+      }
+      if (isYesNo(execution)) {
+        group.executionCount += 1;
+        if (isYes(execution)) group.executionYes += 1;
+      }
+      if (isYesNo(strike)) {
+        group.strikeCount += 1;
+        if (isYes(strike)) group.strikeYes += 1;
+      }
+    };
+
+    for (const row of allRows) {
+      const velocityRaw = row.__velocityCol ? String(row[row.__velocityCol] ?? '').trim() : '';
+      const velocityValue = Number(velocityRaw);
+      const velocity = velocityRaw && Number.isFinite(velocityValue) && velocityValue > 0 ? velocityValue : null;
+      const execution = row.__executionCol ? String(row[row.__executionCol] ?? '').trim() : '';
+      const strike = row.__strikeCol ? String(row[row.__strikeCol] ?? '').trim() : '';
+      if (velocity === null && !isYesNo(execution) && !isYesNo(strike)) continue;
+
+      const pitchType = getColumnValue(row, row.__pitchTypeCol || null, 'Unspecified');
+      const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Unspecified');
+      const key = `${pitchType}|${ballType}`;
+      const group = groups.get(key) ?? {
+        pitchType,
+        ballType,
+        count: 0,
+        velocitySum: 0,
+        velocityCount: 0,
+        maxVelocity: null,
+        executionYes: 0,
+        executionCount: 0,
+        strikeYes: 0,
+        strikeCount: 0,
+      };
+      addPitch(group, velocity, execution, strike);
+      addPitch(total, velocity, execution, strike);
+      groups.set(key, group);
+    }
+
+    const toSummaryRow = (key: string, group: SummaryAccumulator): BullpenSummaryRow => ({
+      key,
+      pitchType: group.pitchType,
+      ballType: group.ballType,
+      count: group.count,
+      avgVelocity: group.velocityCount > 0 ? group.velocitySum / group.velocityCount : null,
+      maxVelocity: group.maxVelocity,
+      executionPct: group.executionCount > 0 ? (group.executionYes / group.executionCount) * 100 : null,
+      strikePct: group.strikeCount > 0 ? (group.strikeYes / group.strikeCount) * 100 : null,
+    });
+    const summaryRows = Array.from(groups.entries())
+      .map(([key, group]) => toSummaryRow(key, group))
+      .sort((a, b) => b.count - a.count || a.pitchType.localeCompare(b.pitchType) || a.ballType.localeCompare(b.ballType));
+    return {
+      total: total.count > 0 ? toSummaryRow('all', total) : null,
+      rows: summaryRows,
+    };
+  }, [allRows]);
+
+  const summaryHasVelocity = trendMetricOptions.some((option) => option.value === 'velocity');
+  const summaryHasExecution = trendMetricOptions.some((option) => option.value === 'execution');
+  const summaryHasStrike = trendMetricOptions.some((option) => option.value === 'strike');
+
   if (!visibleTemplates.length) {
     return <p className="portal-muted-text" style={{ margin: 0 }}>No bullpen scripts assigned yet.</p>;
   }
@@ -741,6 +855,42 @@ export default function BullpenEntry({
           ) : (
             <TrendBarChart data={combinedTrendData} metric={trendMetric} />
           )}
+          {bullpenSummary.total ? (
+            <div className="portal-bullpen-summary">
+              <div>
+                <h4>Pitch Summary</h4>
+                <p>Pitch totals and results for the selected date range.</p>
+              </div>
+              <div className="portal-table-wrap">
+                <table className="portal-table portal-bullpen-summary-table">
+                  <thead>
+                    <tr>
+                      <th>Pitch Type</th>
+                      <th>Ball Type</th>
+                      <th className="portal-bullpen-summary-number">#</th>
+                      {summaryHasStrike ? <th className="portal-bullpen-summary-number">Strike %</th> : null}
+                      {summaryHasVelocity ? <th className="portal-bullpen-summary-number">Avg Velo</th> : null}
+                      {summaryHasVelocity ? <th className="portal-bullpen-summary-number">Max Velo</th> : null}
+                      {summaryHasExecution ? <th className="portal-bullpen-summary-number">Execution %</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...bullpenSummary.rows, bullpenSummary.total].map((summaryRow) => (
+                      <tr key={summaryRow.key} className={summaryRow.key === 'all' ? 'portal-bullpen-summary-all' : undefined}>
+                        <td>{summaryRow.pitchType}</td>
+                        <td>{summaryRow.ballType}</td>
+                        <td className="portal-bullpen-summary-number">{summaryRow.count}</td>
+                        {summaryHasStrike ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.strikePct, '%')}</td> : null}
+                        {summaryHasVelocity ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.avgVelocity)}</td> : null}
+                        {summaryHasVelocity ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.maxVelocity)}</td> : null}
+                        {summaryHasExecution ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.executionPct, '%')}</td> : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

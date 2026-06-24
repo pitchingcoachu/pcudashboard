@@ -4,6 +4,7 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { getScheduleThrowingState, playerExistsInOrganization, saveScheduleThrowingState } from '../../../../../lib/training-db';
 import { logApiTiming } from '../../../../../lib/request-timing';
+import { normalizeDrillsState, normalizeDrillTemplates } from '../../../../../lib/drills-program';
 
 type ScriptGrid = {
   title: string;
@@ -27,11 +28,6 @@ type ScriptState = {
   visibleTemplateIds: string[];
   notes?: string;
 };
-type DrillsState = {
-  rowCount: number;
-  rows: Array<{ drill: string; sets: string; reps: string; weight: string; notes: string }>;
-};
-
 const SHARED_PLAYER_ID = 0;
 const DEFAULT_COLUMNS = ['Pitch Type', 'Ball Type', 'Stretch/Windup', 'Location', 'Situation', 'Notes'];
 
@@ -40,10 +36,6 @@ const DEFAULT_SCRIPT_STATE: ScriptState = {
   selectedTemplateId: '',
   visibleTemplateIds: [],
   notes: '',
-};
-const DEFAULT_DRILLS_STATE: DrillsState = {
-  rowCount: 4,
-  rows: [],
 };
 
 function normalizeColumns(raw: unknown): string[] {
@@ -133,6 +125,16 @@ function extractLegacyTemplates(scriptRaw: unknown): ScriptTemplate[] {
   return normalizeTemplateList(data.templates);
 }
 
+function normalizeCatchPlayNotes(raw: unknown): { highDay: string; mediumDay: string; lowDay: string } {
+  if (!raw || typeof raw !== 'object') return { highDay: '', mediumDay: '', lowDay: '' };
+  const value = raw as Record<string, unknown>;
+  return {
+    highDay: String(value.highDay ?? ''),
+    mediumDay: String(value.mediumDay ?? ''),
+    lowDay: String(value.lowDay ?? ''),
+  };
+}
+
 function parseTemplatesObject(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
   if (Array.isArray(raw)) {
@@ -140,32 +142,14 @@ function parseTemplatesObject(raw: unknown): Record<string, unknown> {
       throwingTemplates: raw,
       bullpen: DEFAULT_SCRIPT_STATE,
       velocity: DEFAULT_SCRIPT_STATE,
-      drills: DEFAULT_DRILLS_STATE,
       bullpenTemplates: [],
       velocityTemplates: [],
+      preThrowDrillTemplates: [],
+      postThrowDrillTemplates: [],
     };
   }
   return {};
 }
-function normalizeDrillsState(raw: unknown): DrillsState {
-  if (!raw || typeof raw !== 'object') return DEFAULT_DRILLS_STATE;
-  const data = raw as Record<string, unknown>;
-  const rowCount = Math.max(1, Math.min(200, Number(data.rowCount ?? 4) || 4));
-  const sourceRows = Array.isArray(data.rows) ? data.rows : [];
-  const rows = sourceRows.slice(0, rowCount).map((row) => {
-    const value = row && typeof row === 'object' ? (row as Record<string, unknown>) : {};
-    return {
-      drill: String(value.drill ?? ''),
-      sets: String(value.sets ?? ''),
-      reps: String(value.reps ?? ''),
-      weight: String(value.weight ?? ''),
-      notes: String(value.notes ?? ''),
-    };
-  });
-  while (rows.length < rowCount) rows.push({ drill: '', sets: '', reps: '', weight: '', notes: '' });
-  return { rowCount, rows };
-}
-
 export async function GET(request: Request) {
   const startedAtMs = Date.now();
   const finish = (status: number, payload: Record<string, unknown>, meta?: Record<string, unknown>) => {
@@ -208,6 +192,8 @@ export async function GET(request: Request) {
 
   let bullpenTemplates = normalizeTemplateList(sharedTemplatesObj.bullpenTemplates);
   let velocityTemplates = normalizeTemplateList(sharedTemplatesObj.velocityTemplates);
+  const preThrowDrillTemplates = normalizeDrillTemplates(sharedTemplatesObj.preThrowDrillTemplates);
+  const postThrowDrillTemplates = normalizeDrillTemplates(sharedTemplatesObj.postThrowDrillTemplates);
 
   if (bullpenTemplates.length === 0 && !isSharedOnly) {
     bullpenTemplates = extractLegacyTemplates(playerTemplatesObj.bullpen);
@@ -237,6 +223,9 @@ export async function GET(request: Request) {
       bullpenTemplates,
       velocityTemplates,
       drillsState: normalizeDrillsState(playerTemplatesObj.drills),
+      preThrowDrillTemplates,
+      postThrowDrillTemplates,
+      catchPlayNotes: normalizeCatchPlayNotes(playerTemplatesObj.catchPlayNotes),
     },
     { organizationId, playerId }
   );
@@ -271,6 +260,9 @@ export async function POST(request: Request) {
         bullpenTemplates?: unknown[];
         velocityTemplates?: unknown[];
         drillsState?: unknown;
+        preThrowDrillTemplates?: unknown[];
+        postThrowDrillTemplates?: unknown[];
+        catchPlayNotes?: unknown;
       }
     | null;
   if (!body) return finish(400, { error: 'Invalid JSON body.' });
@@ -298,6 +290,12 @@ export async function POST(request: Request) {
 
   let nextBullpenTemplates = normalizeTemplateList(Array.isArray(body.bullpenTemplates) ? body.bullpenTemplates : sharedObj.bullpenTemplates);
   let nextVelocityTemplates = normalizeTemplateList(Array.isArray(body.velocityTemplates) ? body.velocityTemplates : sharedObj.velocityTemplates);
+  const nextPreThrowDrillTemplates = normalizeDrillTemplates(
+    Array.isArray(body.preThrowDrillTemplates) ? body.preThrowDrillTemplates : sharedObj.preThrowDrillTemplates
+  );
+  const nextPostThrowDrillTemplates = normalizeDrillTemplates(
+    Array.isArray(body.postThrowDrillTemplates) ? body.postThrowDrillTemplates : sharedObj.postThrowDrillTemplates
+  );
 
   if (nextBullpenTemplates.length === 0 && !isSharedOnly) {
     nextBullpenTemplates = extractLegacyTemplates(playerObj.bullpen);
@@ -313,6 +311,11 @@ export async function POST(request: Request) {
   const nextVelocityState = normalizeScriptState(body.velocityState ?? playerObj.velocity);
   const nextDrillsState = normalizeDrillsState(body.drillsState ?? playerObj.drills);
 
+  const preTemplateIds = new Set(nextPreThrowDrillTemplates.map((template) => template.id));
+  const postTemplateIds = new Set(nextPostThrowDrillTemplates.map((template) => template.id));
+  if (!preTemplateIds.has(nextDrillsState.pre.selectedTemplateId)) nextDrillsState.pre.selectedTemplateId = '';
+  if (!postTemplateIds.has(nextDrillsState.post.selectedTemplateId)) nextDrillsState.post.selectedTemplateId = '';
+
   nextBullpenState.visibleTemplateIds = nextBullpenState.visibleTemplateIds.filter((id) => bullpenTemplateIds.has(id));
   nextVelocityState.visibleTemplateIds = nextVelocityState.visibleTemplateIds.filter((id) => velocityTemplateIds.has(id));
 
@@ -327,6 +330,7 @@ export async function POST(request: Request) {
         bullpen: nextBullpenState,
         velocity: nextVelocityState,
         drills: nextDrillsState,
+        catchPlayNotes: normalizeCatchPlayNotes(body.catchPlayNotes ?? playerObj.catchPlayNotes),
       },
     });
     if (!savePlayer.ok) return finish(400, { error: savePlayer.error });
@@ -342,6 +346,8 @@ export async function POST(request: Request) {
       throwingTemplates: Array.isArray(body.templates) ? body.templates : existingThrowingTemplates,
       bullpenTemplates: nextBullpenTemplates,
       velocityTemplates: nextVelocityTemplates,
+      preThrowDrillTemplates: nextPreThrowDrillTemplates,
+      postThrowDrillTemplates: nextPostThrowDrillTemplates,
     },
   });
   if (!saveShared.ok) return finish(400, { error: saveShared.error });
