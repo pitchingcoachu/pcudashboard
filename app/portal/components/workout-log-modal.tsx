@@ -10,6 +10,8 @@ type WorkoutLogModalProps = {
   onClose: () => void;
   onSaved?: () => Promise<void> | void;
   onDelete?: (item: ProgramItemRow) => Promise<void> | void;
+  allowWorkoutCustomization?: boolean;
+  onWorkoutCustomized?: (item: ProgramItemRow) => Promise<void> | void;
   catchPlayNote?: string;
 };
 
@@ -117,13 +119,45 @@ function formatMaxHistory(
   return best;
 }
 
-export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDelete, catchPlayNote }: WorkoutLogModalProps) {
+type WorkoutExerciseDraft = {
+  workoutExerciseIndex: number;
+  exerciseId: number | null;
+  prescribedSets: string;
+  prescribedReps: string;
+  prescribedLoad: string;
+  notes: string;
+};
+
+function buildWorkoutExerciseDrafts(item: ProgramItemRow): WorkoutExerciseDraft[] {
+  return item.workoutExercises.map((exercise, index) => ({
+    workoutExerciseIndex: Number.isFinite(Number(exercise.workoutExerciseIndex)) ? Number(exercise.workoutExerciseIndex) : index,
+    exerciseId: exercise.exerciseId,
+    prescribedSets: exercise.prescribedSets ?? '',
+    prescribedReps: exercise.prescribedReps ?? '',
+    prescribedLoad: exercise.prescribedLoad ?? '',
+    notes: exercise.notes ?? '',
+  }));
+}
+
+export default function WorkoutLogModal({
+  item,
+  playerId,
+  onClose,
+  onSaved,
+  onDelete,
+  allowWorkoutCustomization = false,
+  onWorkoutCustomized,
+  catchPlayNote,
+}: WorkoutLogModalProps) {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [savingCustomization, setSavingCustomization] = useState(false);
   const [error, setError] = useState('');
   const [mounted, setMounted] = useState(false);
   const [historyByExercise, setHistoryByExercise] = useState<Record<number, ExerciseLoadHistoryEntry[]>>({});
   const [videoPreview, setVideoPreview] = useState<{ title: string; url: string } | null>(null);
+  const [customizingWorkout, setCustomizingWorkout] = useState(false);
+  const [exerciseDrafts, setExerciseDrafts] = useState<WorkoutExerciseDraft[]>(() => buildWorkoutExerciseDrafts(item));
   const formRef = useRef<HTMLFormElement | null>(null);
 
   const isCycleItem = item.scheduleType === 'cycle';
@@ -179,6 +213,39 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
     setMounted(true);
     return () => setMounted(false);
   }, []);
+
+  useEffect(() => {
+    setCustomizingWorkout(false);
+    setExerciseDrafts(buildWorkoutExerciseDrafts(item));
+    setError('');
+  }, [item]);
+
+  const saveWorkoutCustomization = async () => {
+    if (item.itemType !== 'workout' || item.scheduleType !== 'calendar') return;
+    setSavingCustomization(true);
+    setError('');
+    try {
+      const response = await fetch('/api/admin/schedule/workout-overrides', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          playerId,
+          itemId: item.itemId,
+          dayDate: item.dayDate,
+          overrides: exerciseDrafts,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; item?: ProgramItemRow };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to save workout customization.');
+      if (payload.item && onWorkoutCustomized) await onWorkoutCustomized(payload.item);
+      if (onSaved) await onSaved();
+      setCustomizingWorkout(false);
+    } catch (customizeError) {
+      setError(customizeError instanceof Error ? customizeError.message : 'Failed to save workout customization.');
+    } finally {
+      setSavingCustomization(false);
+    }
+  };
 
   const embedVideoUrl = (raw: string): string => {
     try {
@@ -308,6 +375,98 @@ export default function WorkoutLogModal({ item, playerId, onClose, onSaved, onDe
         >
           <input type="hidden" name="scheduleType" value={item.scheduleType} />
           <input type="hidden" name="completed" value={item.completed ? 'on' : ''} />
+          {allowWorkoutCustomization && item.itemType === 'workout' && item.scheduleType === 'calendar' && item.workoutExercises.length > 0 ? (
+            <div className="portal-workout-customize-panel">
+              <div className="portal-choice-line-actions">
+                <div>
+                  <strong>Player-Specific Prescription</strong>
+                  <p className="portal-muted-text" style={{ margin: '0.15rem 0 0' }}>
+                    Edit sets, reps, load, or notes for this player/date. Future assignments of this same workout to this player will reuse the latest saved edits.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setCustomizingWorkout((previous) => !previous)}
+                  disabled={saving || savingCustomization}
+                >
+                  {customizingWorkout ? 'Hide Customization' : 'Customize for Player'}
+                </button>
+              </div>
+              {customizingWorkout ? (
+                <div className="portal-workout-customize-list">
+                  {item.workoutExercises.map((exercise, exerciseIdx) => {
+                    const draft = exerciseDrafts[exerciseIdx] ?? {
+                      workoutExerciseIndex: Number.isFinite(Number(exercise.workoutExerciseIndex)) ? Number(exercise.workoutExerciseIndex) : exerciseIdx,
+                      exerciseId: exercise.exerciseId,
+                      prescribedSets: exercise.prescribedSets ?? '',
+                      prescribedReps: exercise.prescribedReps ?? '',
+                      prescribedLoad: exercise.prescribedLoad ?? '',
+                      notes: exercise.notes ?? '',
+                    };
+                    const setDraftValue = (patch: Partial<WorkoutExerciseDraft>) => {
+                      setExerciseDrafts((previous) =>
+                        previous.map((entry, index) => (index === exerciseIdx ? { ...entry, ...patch } : entry))
+                      );
+                    };
+                    const resetDraft = () => {
+                      setDraftValue({
+                        prescribedSets: exercise.templatePrescribedSets ?? '',
+                        prescribedReps: exercise.templatePrescribedReps ?? '',
+                        prescribedLoad: exercise.templatePrescribedLoad ?? '',
+                        notes: exercise.templateNotes ?? '',
+                      });
+                    };
+                    return (
+                      <div className="portal-workout-customize-row" key={`${item.itemId}-custom-${exerciseIdx}`}>
+                        <div className="portal-workout-customize-row-head">
+                          <strong>
+                            {exercise.prefix ? `${exercise.prefix} ` : ''}
+                            {exercise.name}
+                          </strong>
+                          {exercise.isCustomized ? <span>custom</span> : null}
+                        </div>
+                        <div className="portal-workout-customize-grid">
+                          <label>
+                            Sets
+                            <input value={draft.prescribedSets} onChange={(event) => setDraftValue({ prescribedSets: event.target.value })} />
+                          </label>
+                          <label>
+                            Reps
+                            <input value={draft.prescribedReps} onChange={(event) => setDraftValue({ prescribedReps: event.target.value })} />
+                          </label>
+                          <label>
+                            Load
+                            <input value={draft.prescribedLoad} onChange={(event) => setDraftValue({ prescribedLoad: event.target.value })} />
+                          </label>
+                          <button type="button" className="btn btn-ghost" onClick={resetDraft} disabled={savingCustomization}>
+                            Reset Row
+                          </button>
+                        </div>
+                        <label className="portal-inline-filter">
+                          Notes / Cues
+                          <textarea value={draft.notes} onChange={(event) => setDraftValue({ notes: event.target.value })} rows={2} />
+                        </label>
+                      </div>
+                    );
+                  })}
+                  <div className="portal-choice-line-actions">
+                    <button type="button" className="btn btn-primary" onClick={saveWorkoutCustomization} disabled={savingCustomization}>
+                      {savingCustomization ? 'Saving Customization...' : 'Save Player Customization'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => setExerciseDrafts(buildWorkoutExerciseDrafts(item))}
+                      disabled={savingCustomization}
+                    >
+                      Undo Unsaved Edits
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {catchPlayNote && item.itemType === 'workout' && item.workoutExercises.length === 0 ? null : item.itemType === 'workout' && item.workoutExercises.length > 0 ? (
             <div className="portal-workout-player-block">
               {(() => {

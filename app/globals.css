@@ -4255,6 +4255,73 @@ body.theme-light .portal-bullpen-summary-table th {
   gap: 0.75rem;
 }
 
+.portal-workout-customize-panel {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.75rem;
+  margin-bottom: 0.85rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.portal-workout-customize-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.portal-workout-customize-row {
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 0.65rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.portal-workout-customize-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.portal-workout-customize-row-head span {
+  border: 1px solid rgba(200, 16, 46, 0.45);
+  border-radius: 999px;
+  padding: 0.12rem 0.45rem;
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.portal-workout-customize-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 0.45rem;
+  align-items: end;
+}
+
+.portal-workout-customize-grid label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.portal-workout-customize-grid input,
+.portal-workout-customize-row textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 0.56rem 0.66rem;
+  font: 500 0.88rem/1.2 Manrope, sans-serif;
+  color: var(--text-main);
+  background: rgba(10, 10, 10, 0.9);
+}
+
 .portal-loading-panel {
   display: grid;
   place-items: center;
@@ -5688,6 +5755,10 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 
   .portal-questionnaire-layout,
   .portal-questionnaire-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-workout-customize-grid {
     grid-template-columns: 1fr;
   }
 

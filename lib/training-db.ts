@@ -237,6 +237,7 @@ export type ScheduleTemplateRow = {
 };
 
 export type WorkoutExerciseAssignment = {
+  workoutExerciseIndex?: number;
   exerciseId: number | null;
   prefix: string | null;
   name: string;
@@ -248,9 +249,23 @@ export type WorkoutExerciseAssignment = {
   prescribedReps: string | null;
   prescribedLoad: string | null;
   notes: string | null;
+  templatePrescribedSets?: string | null;
+  templatePrescribedReps?: string | null;
+  templatePrescribedLoad?: string | null;
+  templateNotes?: string | null;
+  isCustomized?: boolean;
   instructionVideoUrl: string | null;
   description: string | null;
   coachingCues: string | null;
+};
+
+export type WorkoutExerciseOverrideInput = {
+  workoutExerciseIndex: number;
+  exerciseId: number | null;
+  prescribedSets: string | null;
+  prescribedReps: string | null;
+  prescribedLoad: string | null;
+  notes: string | null;
 };
 
 export type ProgramItemRow = {
@@ -574,6 +589,28 @@ export async function ensureTrainingDbReady(): Promise<void> {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_questionnaire_responses_org_submitted ON questionnaire_responses (organization_id, submitted_at DESC);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_questionnaire_responses_player_due ON questionnaire_responses (player_id, due_date DESC);`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS program_workout_exercise_overrides (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        workout_id INTEGER NOT NULL REFERENCES workout_library(id) ON DELETE CASCADE,
+        program_day_item_id BIGINT NOT NULL REFERENCES program_day_items(id) ON DELETE CASCADE,
+        workout_exercise_index INTEGER NOT NULL,
+        exercise_id INTEGER REFERENCES exercise_library(id) ON DELETE SET NULL,
+        prescribed_sets TEXT,
+        prescribed_reps TEXT,
+        prescribed_load TEXT,
+        notes TEXT,
+        updated_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (program_day_item_id, workout_exercise_index)
+      );
+    `);
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS idx_program_workout_exercise_overrides_player_workout_updated
+       ON program_workout_exercise_overrides (organization_id, player_id, workout_id, updated_at DESC);`
+    );
     global.__pcuTrainingDbReady = true;
   })().finally(() => {
     global.__pcuTrainingDbReadyPromise = undefined;
@@ -637,6 +674,71 @@ function parseLoadValues(value: string | null): string[] {
     .split(',')
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
+}
+
+function cleanOverrideText(value: string | null | undefined): string | null {
+  const trimmed = String(value ?? '').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+async function copyLatestWorkoutExerciseOverridesForNewItem(input: {
+  db: Queryable;
+  organizationId: number;
+  playerId: number;
+  workoutId: number;
+  programDayItemId: number;
+  userId: number | null;
+}): Promise<void> {
+  await input.db.query(
+    `
+      INSERT INTO program_workout_exercise_overrides (
+        organization_id,
+        player_id,
+        workout_id,
+        program_day_item_id,
+        workout_exercise_index,
+        exercise_id,
+        prescribed_sets,
+        prescribed_reps,
+        prescribed_load,
+        notes,
+        updated_by_user_id,
+        updated_at
+      )
+      SELECT
+        $1,
+        $2,
+        $3,
+        $4,
+        latest.workout_exercise_index,
+        latest.exercise_id,
+        latest.prescribed_sets,
+        latest.prescribed_reps,
+        latest.prescribed_load,
+        latest.notes,
+        $5,
+        NOW()
+      FROM (
+        SELECT DISTINCT ON (workout_exercise_index)
+          workout_exercise_index,
+          exercise_id,
+          prescribed_sets,
+          prescribed_reps,
+          prescribed_load,
+          notes,
+          updated_at
+        FROM program_workout_exercise_overrides
+        WHERE organization_id = $1
+          AND player_id = $2
+          AND workout_id = $3
+          AND program_day_item_id <> $4
+        ORDER BY workout_exercise_index, updated_at DESC, id DESC
+      ) latest
+      ON CONFLICT (program_day_item_id, workout_exercise_index)
+      DO NOTHING
+    `,
+    [input.organizationId, input.playerId, input.workoutId, input.programDayItemId, input.userId]
+  );
 }
 
 const ASSESSMENT_NOTES_TOKEN = '[ASSESSMENT_NOTES]';
@@ -3596,7 +3698,19 @@ export async function addProgramItem(input: {
     ]
   );
 
-  return { ok: true, itemId: Number(insertResult.rows[0].id) };
+  const itemId = Number(insertResult.rows[0].id);
+  if (workoutId) {
+    await copyLatestWorkoutExerciseOverridesForNewItem({
+      db: pool,
+      organizationId: input.organizationId,
+      playerId: input.playerId,
+      workoutId,
+      programDayItemId: itemId,
+      userId: input.userId,
+    });
+  }
+
+  return { ok: true, itemId };
 }
 
 export async function replaceProgramItemsForDates(input: {
@@ -3713,7 +3827,7 @@ export async function replaceProgramItemsForDates(input: {
         if (assignmentType === 'exercise' && (!Number.isFinite(exerciseIdValue) || exerciseIdValue <= 0)) continue;
         if (assignmentType === 'workout' && (!Number.isFinite(workoutIdValue) || workoutIdValue <= 0)) continue;
 
-        await client.query(
+        const insertedProgramItem = await client.query<{ id: number }>(
           `
             INSERT INTO program_day_items (
               program_day_id,
@@ -3726,6 +3840,7 @@ export async function replaceProgramItemsForDates(input: {
               sort_order
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id
           `,
           [
             programDayId,
@@ -3738,6 +3853,16 @@ export async function replaceProgramItemsForDates(input: {
             sortOrder,
           ]
         );
+        if (assignmentType === 'workout') {
+          await copyLatestWorkoutExerciseOverridesForNewItem({
+            db: client,
+            organizationId: input.organizationId,
+            playerId: input.playerId,
+            workoutId: workoutIdValue,
+            programDayItemId: Number(insertedProgramItem.rows[0].id),
+            userId: input.userId,
+          });
+        }
         sortOrder += 1;
       }
     }
@@ -3747,6 +3872,146 @@ export async function replaceProgramItemsForDates(input: {
   } catch (error) {
     await client.query('ROLLBACK');
     return { ok: false, error: error instanceof Error ? error.message : 'Failed to paste copied schedule.' };
+  } finally {
+    client.release();
+  }
+}
+
+export async function saveProgramWorkoutExerciseOverrides(input: {
+  organizationId: number;
+  playerId: number;
+  programDayItemId: number;
+  userId: number | null;
+  overrides: WorkoutExerciseOverrideInput[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const itemCheck = await pool.query<{ workout_id: number | null }>(
+    `
+      SELECT i.workout_id
+      FROM program_day_items i
+      JOIN program_days d ON d.id = i.program_day_id
+      JOIN programs p ON p.id = d.program_id
+      WHERE i.id = $1
+        AND p.player_id = $2
+        AND p.organization_id = $3
+      LIMIT 1
+    `,
+    [input.programDayItemId, input.playerId, input.organizationId]
+  );
+  const workoutId = Number(itemCheck.rows[0]?.workout_id ?? 0);
+  if ((itemCheck.rowCount ?? 0) !== 1 || !Number.isFinite(workoutId) || workoutId <= 0) {
+    return { ok: false, error: 'Scheduled workout was not found.' };
+  }
+
+  const cleaned = input.overrides
+    .map((override) => ({
+      workoutExerciseIndex: Math.floor(Number(override.workoutExerciseIndex)),
+      exerciseId: Number.isFinite(Number(override.exerciseId ?? 0)) && Number(override.exerciseId ?? 0) > 0 ? Math.floor(Number(override.exerciseId)) : null,
+      prescribedSets: cleanOverrideText(override.prescribedSets),
+      prescribedReps: cleanOverrideText(override.prescribedReps),
+      prescribedLoad: cleanOverrideText(override.prescribedLoad),
+      notes: cleanOverrideText(override.notes),
+    }))
+    .filter((override) => Number.isFinite(override.workoutExerciseIndex) && override.workoutExerciseIndex >= 0)
+    .slice(0, 200);
+
+  const templateRows = await pool.query<{
+    workout_exercise_index: number;
+    prescribed_sets: string | null;
+    prescribed_reps: string | null;
+    prescribed_load: string | null;
+    notes: string | null;
+  }>(
+    `
+      SELECT
+        ROW_NUMBER() OVER (ORDER BY we.sort_order, e.name) - 1 AS workout_exercise_index,
+        we.prescribed_sets,
+        we.prescribed_reps,
+        we.prescribed_load,
+        we.notes
+      FROM workout_exercises we
+      LEFT JOIN exercise_library e ON e.id = we.exercise_id
+      WHERE we.workout_id = $1
+      ORDER BY we.sort_order, e.name
+    `,
+    [workoutId]
+  );
+  const templateByIndex = new Map(
+    templateRows.rows.map((row) => [
+      Number(row.workout_exercise_index),
+      {
+        prescribedSets: cleanOverrideText(row.prescribed_sets),
+        prescribedReps: cleanOverrideText(row.prescribed_reps),
+        prescribedLoad: cleanOverrideText(row.prescribed_load),
+        notes: cleanOverrideText(row.notes),
+      },
+    ])
+  );
+  const changed = cleaned.filter((override) => {
+    const template = templateByIndex.get(override.workoutExerciseIndex);
+    if (!template) return true;
+    return (
+      override.prescribedSets !== template.prescribedSets ||
+      override.prescribedReps !== template.prescribedReps ||
+      override.prescribedLoad !== template.prescribedLoad ||
+      override.notes !== template.notes
+    );
+  });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM program_workout_exercise_overrides WHERE program_day_item_id = $1`, [input.programDayItemId]);
+    for (const override of changed) {
+      await client.query(
+        `
+          INSERT INTO program_workout_exercise_overrides (
+            organization_id,
+            player_id,
+            workout_id,
+            program_day_item_id,
+            workout_exercise_index,
+            exercise_id,
+            prescribed_sets,
+            prescribed_reps,
+            prescribed_load,
+            notes,
+            updated_by_user_id,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+          ON CONFLICT (program_day_item_id, workout_exercise_index)
+          DO UPDATE SET
+            exercise_id = EXCLUDED.exercise_id,
+            prescribed_sets = EXCLUDED.prescribed_sets,
+            prescribed_reps = EXCLUDED.prescribed_reps,
+            prescribed_load = EXCLUDED.prescribed_load,
+            notes = EXCLUDED.notes,
+            updated_by_user_id = EXCLUDED.updated_by_user_id,
+            updated_at = NOW()
+        `,
+        [
+          input.organizationId,
+          input.playerId,
+          workoutId,
+          input.programDayItemId,
+          override.workoutExerciseIndex,
+          override.exerciseId,
+          override.prescribedSets,
+          override.prescribedReps,
+          override.prescribedLoad,
+          override.notes,
+          input.userId,
+        ]
+      );
+    }
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to save workout customizations.' };
   } finally {
     client.release();
   }
@@ -3808,8 +4073,8 @@ export async function listProgramItemsForPlayerByDateRange(input: {
     program_name: string;
   }>(
     `
-      WITH selected_workout_ids AS (
-        SELECT DISTINCT i.workout_id
+      WITH selected_items AS (
+        SELECT i.id AS item_id, i.workout_id
         FROM programs p
         JOIN program_days d ON d.program_id = p.id
         JOIN program_day_items i ON i.program_day_id = d.id
@@ -3818,44 +4083,75 @@ export async function listProgramItemsForPlayerByDateRange(input: {
           AND d.day_date < $3::date
           AND i.workout_id IS NOT NULL
       ),
+      workout_rows AS (
+        SELECT
+          si.item_id,
+          si.workout_id,
+          we2.exercise_id,
+          we2.exercise_prefix,
+          we2.prescribed_sets,
+          we2.prescribed_reps,
+          we2.prescribed_load,
+          we2.notes,
+          we2.sort_order,
+          e2.name,
+          e2.category,
+          e2.rep_measure,
+          e2.tracking_type,
+          e2.reps_per_side,
+          e2.instruction_video_url,
+          e2.description,
+          e2.coaching_cues,
+          ROW_NUMBER() OVER (PARTITION BY si.item_id ORDER BY we2.sort_order, e2.name) - 1 AS workout_exercise_index
+        FROM selected_items si
+        LEFT JOIN workout_exercises we2 ON we2.workout_id = si.workout_id
+        LEFT JOIN exercise_library e2 ON e2.id = we2.exercise_id
+      ),
       workout_summaries AS (
         SELECT
-          sw.workout_id,
+          wr.item_id,
           STRING_AGG(
             CASE
-              WHEN we2.exercise_prefix IS NOT NULL AND LENGTH(TRIM(we2.exercise_prefix)) > 0
-                THEN CONCAT(TRIM(we2.exercise_prefix), ': ', e2.name)
-              ELSE e2.name
+              WHEN wr.exercise_prefix IS NOT NULL AND LENGTH(TRIM(wr.exercise_prefix)) > 0
+                THEN CONCAT(TRIM(wr.exercise_prefix), ': ', wr.name)
+              ELSE wr.name
             END,
             ', '
-            ORDER BY we2.sort_order, e2.name
+            ORDER BY wr.sort_order, wr.name
           ) AS exercise_names,
           COALESCE(
             JSON_AGG(
               JSON_BUILD_OBJECT(
-                'exerciseId', e2.id,
-                'prefix', we2.exercise_prefix,
-                'name', e2.name,
-                'category', e2.category,
-                'repMeasure', e2.rep_measure,
-                'trackingType', e2.tracking_type,
-                'repsPerSide', e2.reps_per_side,
-                'prescribedSets', we2.prescribed_sets,
-                'prescribedReps', we2.prescribed_reps,
-                'prescribedLoad', we2.prescribed_load,
-                'notes', we2.notes,
-                'instructionVideoUrl', e2.instruction_video_url,
-                'description', e2.description,
-                'coachingCues', e2.coaching_cues
+                'workoutExerciseIndex', wr.workout_exercise_index,
+                'exerciseId', wr.exercise_id,
+                'prefix', wr.exercise_prefix,
+                'name', wr.name,
+                'category', wr.category,
+                'repMeasure', wr.rep_measure,
+                'trackingType', wr.tracking_type,
+                'repsPerSide', wr.reps_per_side,
+                'prescribedSets', COALESCE(o.prescribed_sets, wr.prescribed_sets),
+                'prescribedReps', COALESCE(o.prescribed_reps, wr.prescribed_reps),
+                'prescribedLoad', COALESCE(o.prescribed_load, wr.prescribed_load),
+                'notes', COALESCE(o.notes, wr.notes),
+                'templatePrescribedSets', wr.prescribed_sets,
+                'templatePrescribedReps', wr.prescribed_reps,
+                'templatePrescribedLoad', wr.prescribed_load,
+                'templateNotes', wr.notes,
+                'isCustomized', o.id IS NOT NULL,
+                'instructionVideoUrl', wr.instruction_video_url,
+                'description', wr.description,
+                'coachingCues', wr.coaching_cues
               )
-              ORDER BY we2.sort_order, e2.name
-            ) FILTER (WHERE e2.id IS NOT NULL),
+              ORDER BY wr.sort_order, wr.name
+            ) FILTER (WHERE wr.exercise_id IS NOT NULL),
             '[]'::json
           ) AS exercise_json
-        FROM selected_workout_ids sw
-        LEFT JOIN workout_exercises we2 ON we2.workout_id = sw.workout_id
-        LEFT JOIN exercise_library e2 ON e2.id = we2.exercise_id
-        GROUP BY sw.workout_id
+        FROM workout_rows wr
+        LEFT JOIN program_workout_exercise_overrides o
+          ON o.program_day_item_id = wr.item_id
+          AND o.workout_exercise_index = wr.workout_exercise_index
+        GROUP BY wr.item_id
       )
       SELECT
         i.id AS item_id,
@@ -3890,7 +4186,7 @@ export async function listProgramItemsForPlayerByDateRange(input: {
       JOIN program_day_items i ON i.program_day_id = d.id
       LEFT JOIN exercise_library e ON e.id = i.exercise_id
       LEFT JOIN workout_library w ON w.id = i.workout_id
-      LEFT JOIN workout_summaries ws ON ws.workout_id = i.workout_id
+      LEFT JOIN workout_summaries ws ON ws.item_id = i.id
       LEFT JOIN exercise_logs l ON l.program_day_item_id = i.id AND l.player_id = p.player_id
       WHERE p.player_id = $1
         AND d.day_date >= $2::date

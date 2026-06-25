@@ -4284,6 +4284,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           onSaved={async () => {
             await loadItems();
           }}
+          allowWorkoutCustomization={selectedItem.scheduleType === 'calendar' && selectedItem.itemType === 'workout'}
+          onWorkoutCustomized={async (item) => {
+            setSelectedItem(item);
+            setItems((previous) => previous.map((current) => (current.itemId === item.itemId ? item : current)));
+          }}
           onDelete={
             selectedItem.scheduleType === 'calendar'
               ? async (item) => {
