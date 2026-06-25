@@ -33,7 +33,7 @@ export default async function AdminQuestionnairesPage() {
     <div className="portal-admin-stack">
       <div className="portal-admin-headline">
         <h2>Questionnaires</h2>
-        <p>Create required player questionnaires, assign them by player/group, and review submitted answers.</p>
+        <p>Create player questionnaires, assign them by player/group, and review submitted answers.</p>
       </div>
       {organizationId <= 0 ? (
         <article className="portal-admin-card">
