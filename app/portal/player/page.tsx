@@ -21,6 +21,7 @@ import LogoutButton from '../logout-button';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalThemeToggle from '../theme-toggle';
 import ProfileDashboard from './profile-dashboard';
+import PlayerQuestionnaireGate from './player-questionnaire-gate';
 
 type PlayerPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -297,6 +298,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
       </header>
 
       <section className="portal-panel portal-player-panel">
+        {session.role === 'player' ? <PlayerQuestionnaireGate playerId={player.id} /> : null}
         <ProfileDashboard
           playerId={player.id}
           isAdminPreview={session.role === 'admin' || session.role === 'coach'}

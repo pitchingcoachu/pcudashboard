@@ -189,6 +189,13 @@ export default async function AdminHomePage() {
               Open Testing
             </Link>
           </article>
+          <article className="portal-admin-card">
+            <h2>Questionnaires</h2>
+            <p>Create required player questionnaires and review submitted answers.</p>
+            <Link href="/portal/admin/questionnaires" className="btn btn-primary as-link">
+              Open Questionnaires
+            </Link>
+          </article>
         </>
       ) : null}
       <article className="portal-admin-card">

@@ -80,6 +80,9 @@ export default async function AdminLayout({ children }: { children: React.ReactN
                   <Link href="/profiles" className="portal-nav-link">
                     Profiles
                   </Link>
+                  <Link href="/portal/admin/questionnaires" className="portal-nav-link">
+                    Questionnaires
+                  </Link>
                 </>
               ) : (
                 <>
@@ -112,6 +115,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
                     { href: '/portal/dashboard', label: 'Dashboard' },
                     { href: '/portal/admin/schedule', label: 'Schedule' },
                     { href: '/profiles', label: 'Profiles' },
+                    { href: '/portal/admin/questionnaires', label: 'Questionnaires' },
                   ]
                 : [
                     { href: '/portal/admin', label: 'Home' },

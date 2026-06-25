@@ -530,6 +530,50 @@ export async function ensureTrainingDbReady(): Promise<void> {
       );
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_bullpen_log_entries_player ON bullpen_log_entries (organization_id, player_id, template_id, bullpen_date DESC);`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS questionnaires (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        questions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_questionnaires_org_updated ON questionnaires (organization_id, updated_at DESC);`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS questionnaire_assignments (
+        id BIGSERIAL PRIMARY KEY,
+        questionnaire_id BIGINT NOT NULL REFERENCES questionnaires(id) ON DELETE CASCADE,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        group_name TEXT NOT NULL DEFAULT '',
+        player_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        notify_start_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        frequency TEXT NOT NULL DEFAULT 'once',
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_questionnaire_assignments_org_active ON questionnaire_assignments (organization_id, is_active, notify_start_date);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_questionnaire_assignments_questionnaire ON questionnaire_assignments (questionnaire_id);`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS questionnaire_responses (
+        id BIGSERIAL PRIMARY KEY,
+        questionnaire_id BIGINT NOT NULL REFERENCES questionnaires(id) ON DELETE CASCADE,
+        assignment_id BIGINT NOT NULL REFERENCES questionnaire_assignments(id) ON DELETE CASCADE,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        due_date DATE NOT NULL,
+        answers_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (assignment_id, player_id, due_date)
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_questionnaire_responses_org_submitted ON questionnaire_responses (organization_id, submitted_at DESC);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_questionnaire_responses_player_due ON questionnaire_responses (player_id, due_date DESC);`);
     global.__pcuTrainingDbReady = true;
   })().finally(() => {
     global.__pcuTrainingDbReadyPromise = undefined;
@@ -6195,6 +6239,59 @@ export type BullpenLogEntry = {
   updatedAt: string;
 };
 
+export type QuestionnaireQuestionType = 'text' | 'multiple_choice' | 'scale' | 'number' | 'yes_no';
+
+export type QuestionnaireQuestion = {
+  id: string;
+  prompt: string;
+  type: QuestionnaireQuestionType;
+  options: string[];
+  scaleMin: number;
+  scaleMax: number;
+};
+
+export type QuestionnaireAssignmentRow = {
+  id: number;
+  groupName: string;
+  playerIds: number[];
+  notifyStartDate: string;
+  frequency: 'once' | 'daily' | 'weekly' | 'monthly';
+  isActive: boolean;
+};
+
+export type QuestionnaireRow = {
+  id: number;
+  organizationId: number;
+  name: string;
+  questions: QuestionnaireQuestion[];
+  assignments: QuestionnaireAssignmentRow[];
+  createdByUserId: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type QuestionnaireResponseRow = {
+  id: number;
+  questionnaireId: number;
+  questionnaireName: string;
+  assignmentId: number;
+  groupName: string;
+  playerId: number;
+  playerName: string;
+  dueDate: string;
+  answers: Record<string, string>;
+  submittedAt: string;
+};
+
+export type PendingQuestionnaireRow = {
+  questionnaireId: number;
+  questionnaireName: string;
+  assignmentId: number;
+  groupName: string;
+  dueDate: string;
+  questions: QuestionnaireQuestion[];
+};
+
 export async function saveBullpenLogEntry(input: {
   organizationId: number;
   playerId: number;
@@ -6245,4 +6342,392 @@ export async function getBullpenLogEntries(input: {
     rowsJson: Array.isArray(row.rows_json) ? (row.rows_json as Array<Record<string, string>>) : [],
     updatedAt: String(row.updated_at ?? ''),
   }));
+}
+
+function normalizeQuestionnaireFrequency(value: unknown): QuestionnaireAssignmentRow['frequency'] {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'daily' || normalized === 'weekly' || normalized === 'monthly') return normalized;
+  return 'once';
+}
+
+function normalizeQuestionType(value: unknown): QuestionnaireQuestionType {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'multiple_choice' || normalized === 'scale' || normalized === 'number' || normalized === 'yes_no') return normalized;
+  return 'text';
+}
+
+function normalizeQuestionnaireQuestions(value: unknown): QuestionnaireQuestion[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((question, index) => {
+      const entry = question && typeof question === 'object' ? (question as Record<string, unknown>) : {};
+      const prompt = String(entry.prompt ?? '').trim();
+      if (!prompt) return null;
+      const type = normalizeQuestionType(entry.type);
+      const options = Array.isArray(entry.options)
+        ? entry.options.map((option) => String(option ?? '').trim()).filter(Boolean).slice(0, 12)
+        : [];
+      const scaleMinRaw = Number(entry.scaleMin ?? 1);
+      const scaleMaxRaw = Number(entry.scaleMax ?? 10);
+      const scaleMin = Number.isFinite(scaleMinRaw) ? Math.max(0, Math.min(99, Math.floor(scaleMinRaw))) : 1;
+      const scaleMax = Number.isFinite(scaleMaxRaw) ? Math.max(scaleMin + 1, Math.min(100, Math.floor(scaleMaxRaw))) : 10;
+      return {
+        id: String(entry.id ?? `q-${index + 1}`).trim() || `q-${index + 1}`,
+        prompt,
+        type,
+        options,
+        scaleMin,
+        scaleMax,
+      };
+    })
+    .filter((question): question is QuestionnaireQuestion => question !== null)
+    .slice(0, 40);
+}
+
+function normalizePlayerIds(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .map((id) => Math.floor(id))
+    )
+  );
+}
+
+function todayIsoForQuestionnaires(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addQuestionnaireDays(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function addQuestionnaireMonths(value: string, months: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCMonth(date.getUTCMonth() + months);
+  return date.toISOString().slice(0, 10);
+}
+
+function currentQuestionnaireDueDate(startDate: string, frequency: QuestionnaireAssignmentRow['frequency'], today = todayIsoForQuestionnaires()): string {
+  if (!startDate || startDate > today || frequency === 'once') return startDate;
+  if (frequency === 'daily') return today;
+  if (frequency === 'weekly') {
+    let dueDate = startDate;
+    while (addQuestionnaireDays(dueDate, 7) <= today) dueDate = addQuestionnaireDays(dueDate, 7);
+    return dueDate;
+  }
+  let dueDate = startDate;
+  while (addQuestionnaireMonths(dueDate, 1) <= today) dueDate = addQuestionnaireMonths(dueDate, 1);
+  return dueDate;
+}
+
+export async function createQuestionnaire(input: {
+  organizationId: number;
+  userId: number | null;
+  name: string;
+  questions: unknown;
+  assignments: Array<{
+    groupName?: string;
+    playerIds?: unknown;
+    notifyStartDate?: string;
+    frequency?: unknown;
+  }>;
+}): Promise<{ ok: true; id: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const name = input.name.trim().replace(/\s+/g, ' ');
+  const questions = normalizeQuestionnaireQuestions(input.questions);
+  if (!name) return { ok: false, error: 'Questionnaire name is required.' };
+  if (!questions.length) return { ok: false, error: 'Add at least one question.' };
+
+  const assignments = input.assignments
+    .map((assignment) => ({
+      groupName: String(assignment.groupName ?? '').trim().replace(/\s+/g, ' '),
+      playerIds: normalizePlayerIds(assignment.playerIds),
+      notifyStartDate: /^\d{4}-\d{2}-\d{2}$/.test(String(assignment.notifyStartDate ?? ''))
+        ? String(assignment.notifyStartDate)
+        : todayIsoForQuestionnaires(),
+      frequency: normalizeQuestionnaireFrequency(assignment.frequency),
+    }))
+    .filter((assignment) => assignment.playerIds.length > 0)
+    .slice(0, 20);
+  if (!assignments.length) return { ok: false, error: 'Choose at least one player to receive this questionnaire.' };
+
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const created = await client.query<{ id: string }>(
+      `INSERT INTO questionnaires (organization_id, name, questions_json, created_by_user_id, updated_at)
+       VALUES ($1, $2, $3::jsonb, $4, NOW())
+       RETURNING id::text AS id`,
+      [input.organizationId, name, JSON.stringify(questions), input.userId]
+    );
+    const questionnaireId = Number(created.rows[0]?.id ?? 0);
+    for (const assignment of assignments) {
+      await client.query(
+        `INSERT INTO questionnaire_assignments
+          (questionnaire_id, organization_id, group_name, player_ids_json, notify_start_date, frequency, created_by_user_id, updated_at)
+         VALUES ($1, $2, $3, $4::jsonb, $5::date, $6, $7, NOW())`,
+        [
+          questionnaireId,
+          input.organizationId,
+          assignment.groupName,
+          JSON.stringify(assignment.playerIds),
+          assignment.notifyStartDate,
+          assignment.frequency,
+          input.userId,
+        ]
+      );
+    }
+    await client.query('COMMIT');
+    return { ok: true, id: questionnaireId };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to create questionnaire.' };
+  } finally {
+    client.release();
+  }
+}
+
+export async function listQuestionnairesForOrganization(organizationId: number): Promise<QuestionnaireRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: string;
+    organization_id: number;
+    name: string;
+    questions_json: unknown;
+    created_by_user_id: number | null;
+    created_at: string;
+    updated_at: string;
+    assignment_id: string | null;
+    group_name: string | null;
+    player_ids_json: unknown;
+    notify_start_date: string | null;
+    frequency: string | null;
+    is_active: boolean | null;
+  }>(
+    `SELECT
+       q.id::text AS id,
+       q.organization_id,
+       q.name,
+       q.questions_json,
+       q.created_by_user_id,
+       q.created_at::text AS created_at,
+       q.updated_at::text AS updated_at,
+       a.id::text AS assignment_id,
+       a.group_name,
+       a.player_ids_json,
+       a.notify_start_date::text AS notify_start_date,
+       a.frequency,
+       a.is_active
+     FROM questionnaires q
+     LEFT JOIN questionnaire_assignments a ON a.questionnaire_id = q.id
+     WHERE q.organization_id = $1
+     ORDER BY q.updated_at DESC, a.id ASC`,
+    [organizationId]
+  );
+  const byQuestionnaire = new Map<number, QuestionnaireRow>();
+  for (const row of result.rows) {
+    const id = Number(row.id);
+    let questionnaire = byQuestionnaire.get(id);
+    if (!questionnaire) {
+      questionnaire = {
+        id,
+        organizationId: row.organization_id,
+        name: row.name,
+        questions: normalizeQuestionnaireQuestions(row.questions_json),
+        assignments: [],
+        createdByUserId: row.created_by_user_id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+      byQuestionnaire.set(id, questionnaire);
+    }
+    if (row.assignment_id) {
+      questionnaire.assignments.push({
+        id: Number(row.assignment_id),
+        groupName: String(row.group_name ?? ''),
+        playerIds: normalizePlayerIds(row.player_ids_json),
+        notifyStartDate: String(row.notify_start_date ?? ''),
+        frequency: normalizeQuestionnaireFrequency(row.frequency),
+        isActive: row.is_active !== false,
+      });
+    }
+  }
+  return Array.from(byQuestionnaire.values());
+}
+
+export async function listQuestionnaireResponses(input: {
+  organizationId: number;
+  questionnaireId?: number | null;
+  playerId?: number | null;
+  groupName?: string | null;
+}): Promise<QuestionnaireResponseRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const values: unknown[] = [input.organizationId];
+  const filters: string[] = [`r.organization_id = $1`];
+  const questionnaireId = Number(input.questionnaireId ?? 0);
+  if (Number.isFinite(questionnaireId) && questionnaireId > 0) {
+    values.push(questionnaireId);
+    filters.push(`r.questionnaire_id = $${values.length}`);
+  }
+  const playerId = Number(input.playerId ?? 0);
+  if (Number.isFinite(playerId) && playerId > 0) {
+    values.push(playerId);
+    filters.push(`r.player_id = $${values.length}`);
+  }
+  const groupName = String(input.groupName ?? '').trim();
+  if (groupName) {
+    values.push(groupName.toLowerCase());
+    filters.push(`LOWER(a.group_name) = $${values.length}`);
+  }
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: string;
+    questionnaire_id: string;
+    questionnaire_name: string;
+    assignment_id: string;
+    group_name: string | null;
+    player_id: number;
+    player_name: string;
+    due_date: string;
+    answers_json: unknown;
+    submitted_at: string;
+  }>(
+    `SELECT
+       r.id::text AS id,
+       r.questionnaire_id::text AS questionnaire_id,
+       q.name AS questionnaire_name,
+       r.assignment_id::text AS assignment_id,
+       a.group_name,
+       r.player_id,
+       p.full_name AS player_name,
+       r.due_date::text AS due_date,
+       r.answers_json,
+       r.submitted_at::text AS submitted_at
+     FROM questionnaire_responses r
+     JOIN questionnaires q ON q.id = r.questionnaire_id
+     JOIN questionnaire_assignments a ON a.id = r.assignment_id
+     JOIN players p ON p.id = r.player_id
+     WHERE ${filters.join(' AND ')}
+     ORDER BY r.submitted_at DESC
+     LIMIT 1000`,
+    values
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    questionnaireId: Number(row.questionnaire_id),
+    questionnaireName: row.questionnaire_name,
+    assignmentId: Number(row.assignment_id),
+    groupName: String(row.group_name ?? ''),
+    playerId: row.player_id,
+    playerName: row.player_name,
+    dueDate: row.due_date,
+    answers: row.answers_json && typeof row.answers_json === 'object' && !Array.isArray(row.answers_json) ? (row.answers_json as Record<string, string>) : {},
+    submittedAt: row.submitted_at,
+  }));
+}
+
+export async function listPendingQuestionnairesForPlayer(input: {
+  organizationId: number;
+  playerId: number;
+}): Promise<PendingQuestionnaireRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const today = todayIsoForQuestionnaires();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    questionnaire_id: string;
+    questionnaire_name: string;
+    questions_json: unknown;
+    assignment_id: string;
+    group_name: string | null;
+    notify_start_date: string;
+    frequency: string;
+  }>(
+    `SELECT
+       q.id::text AS questionnaire_id,
+       q.name AS questionnaire_name,
+       q.questions_json,
+       a.id::text AS assignment_id,
+       a.group_name,
+       a.notify_start_date::text AS notify_start_date,
+       a.frequency
+     FROM questionnaire_assignments a
+     JOIN questionnaires q ON q.id = a.questionnaire_id
+     WHERE a.organization_id = $1
+       AND a.is_active = TRUE
+       AND a.notify_start_date <= $2::date
+       AND a.player_ids_json @> $3::jsonb
+     ORDER BY a.notify_start_date ASC, a.id ASC`,
+    [input.organizationId, today, JSON.stringify([input.playerId])]
+  );
+  const pending: PendingQuestionnaireRow[] = [];
+  for (const row of result.rows) {
+    const dueDate = currentQuestionnaireDueDate(row.notify_start_date, normalizeQuestionnaireFrequency(row.frequency), today);
+    if (!dueDate || dueDate > today) continue;
+    const response = await pool.query<{ id: string }>(
+      `SELECT id::text AS id
+       FROM questionnaire_responses
+       WHERE assignment_id = $1 AND player_id = $2 AND due_date = $3::date
+       LIMIT 1`,
+      [Number(row.assignment_id), input.playerId, dueDate]
+    );
+    if (response.rowCount) continue;
+    pending.push({
+      questionnaireId: Number(row.questionnaire_id),
+      questionnaireName: row.questionnaire_name,
+      assignmentId: Number(row.assignment_id),
+      groupName: String(row.group_name ?? ''),
+      dueDate,
+      questions: normalizeQuestionnaireQuestions(row.questions_json),
+    });
+  }
+  return pending;
+}
+
+export async function saveQuestionnaireResponse(input: {
+  organizationId: number;
+  playerId: number;
+  assignmentId: number;
+  questionnaireId: number;
+  dueDate: string;
+  answers: Record<string, string>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.dueDate)) return { ok: false, error: 'Invalid due date.' };
+  const pool = getDbPool();
+  const assignment = await pool.query<{ player_ids_json: unknown }>(
+    `SELECT player_ids_json
+     FROM questionnaire_assignments
+     WHERE id = $1 AND questionnaire_id = $2 AND organization_id = $3 AND is_active = TRUE
+     LIMIT 1`,
+    [input.assignmentId, input.questionnaireId, input.organizationId]
+  );
+  if (!assignment.rowCount) return { ok: false, error: 'Questionnaire is no longer available.' };
+  const playerIds = normalizePlayerIds(assignment.rows[0]?.player_ids_json);
+  if (!playerIds.includes(input.playerId)) return { ok: false, error: 'Questionnaire is not assigned to this player.' };
+  const cleanAnswers = Object.fromEntries(
+    Object.entries(input.answers ?? {})
+      .map(([key, value]) => [String(key).trim(), String(value ?? '').trim()])
+      .filter(([key]) => key.length > 0)
+  );
+  await pool.query(
+    `INSERT INTO questionnaire_responses
+       (questionnaire_id, assignment_id, organization_id, player_id, due_date, answers_json, submitted_at)
+     VALUES ($1, $2, $3, $4, $5::date, $6::jsonb, NOW())
+     ON CONFLICT (assignment_id, player_id, due_date)
+     DO UPDATE SET answers_json = EXCLUDED.answers_json, submitted_at = NOW()`,
+    [input.questionnaireId, input.assignmentId, input.organizationId, input.playerId, input.dueDate, JSON.stringify(cleanAnswers)]
+  );
+  return { ok: true };
 }

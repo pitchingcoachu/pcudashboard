@@ -4118,6 +4118,143 @@ body.theme-light .portal-bullpen-summary-table th {
   overflow: hidden;
 }
 
+.portal-questionnaire-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.15fr);
+  gap: 0.9rem;
+  align-items: start;
+}
+
+.portal-questionnaire-builder-card,
+.portal-questionnaire-results-card,
+.portal-questionnaire-section,
+.portal-question-card,
+.portal-questionnaire-response {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.portal-questionnaire-section,
+.portal-question-card,
+.portal-questionnaire-response {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.24);
+  padding: 0.75rem;
+}
+
+.portal-questionnaire-section-head,
+.portal-questionnaire-filters {
+  display: flex;
+  gap: 0.65rem;
+  align-items: end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.portal-questionnaire-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+}
+
+.portal-questionnaire-player-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 0.45rem;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.portal-questionnaire-player-option {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 0.45rem 0.55rem;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.86rem;
+}
+
+.portal-questionnaire-message {
+  margin: 0;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.portal-questionnaire-message--error {
+  color: #ff7b7b;
+}
+
+.portal-questionnaire-response-list {
+  display: grid;
+  gap: 0.65rem;
+  max-height: 760px;
+  overflow: auto;
+}
+
+.portal-questionnaire-response h4,
+.portal-questionnaire-response p {
+  margin: 0;
+}
+
+.portal-questionnaire-answer-grid {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.portal-questionnaire-answer-grid div {
+  display: grid;
+  gap: 0.16rem;
+}
+
+.portal-questionnaire-answer-grid span {
+  color: var(--text-muted);
+}
+
+.portal-questionnaire-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.78);
+  backdrop-filter: blur(8px);
+}
+
+.portal-questionnaire-modal {
+  width: min(720px, 100%);
+  max-height: min(84vh, 820px);
+  overflow: auto;
+  display: grid;
+  gap: 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 18px;
+  background: #101114;
+  padding: 1rem;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
+}
+
+.portal-questionnaire-modal h2,
+.portal-questionnaire-modal p {
+  margin: 0;
+}
+
+.portal-questionnaire-kicker {
+  color: var(--accent);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+}
+
+.portal-questionnaire-modal-questions {
+  display: grid;
+  gap: 0.75rem;
+}
+
 .portal-loading-panel {
   display: grid;
   place-items: center;
@@ -5547,6 +5684,11 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 
   .portal-testing-panels {
     grid-template-columns: 1fr !important;
+  }
+
+  .portal-questionnaire-layout,
+  .portal-questionnaire-filters {
+    grid-template-columns: 1fr;
   }
 
   .portal-profile-goals-grid {
