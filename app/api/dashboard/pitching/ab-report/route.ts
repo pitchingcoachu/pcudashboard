@@ -52,6 +52,7 @@ export async function GET(request: Request) {
     'batter_side',
     'session_type',
     'pitch_types',
+    'ball_types',
     'start_date',
     'end_date',
   ];

@@ -1,4 +1,7 @@
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { createReadStream } from 'node:fs';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Cloudflare R2 client
@@ -30,6 +33,26 @@ export function isR2Configured(): boolean {
     process.env.R2_ACCESS_KEY_ID?.trim() &&
     process.env.R2_SECRET_ACCESS_KEY?.trim()
   );
+}
+
+function canUseLocalMotionCaptureStorage(): boolean {
+  return process.env.VERCEL !== '1' && process.env.NODE_ENV !== 'production';
+}
+
+function localMotionCaptureRoot(): string {
+  return path.join(process.cwd(), '.motion-capture-uploads');
+}
+
+export function isMotionCaptureVideoStorageConfigured(): boolean {
+  return isR2Configured() || canUseLocalMotionCaptureStorage();
+}
+
+function inferVideoContentTypeFromKey(key: string): string {
+  const lower = key.toLowerCase();
+  if (lower.endsWith('.mp4') || lower.endsWith('.m4v')) return 'video/mp4';
+  if (lower.endsWith('.mov') || lower.endsWith('.qt')) return 'video/quicktime';
+  if (lower.endsWith('.webm')) return 'video/webm';
+  return 'application/octet-stream';
 }
 
 export async function uploadRawCsvToR2(args: {
@@ -80,6 +103,104 @@ export async function getRawCsvFromR2(args: {
     return Buffer.concat(chunks).toString('utf-8');
   } catch {
     return null;
+  }
+}
+
+export async function uploadMotionCaptureVideoToR2(args: {
+  organizationId: number;
+  playerId: number;
+  throwId: number;
+  viewType: string;
+  fileName: string;
+  contentType: string;
+  body: Buffer;
+}): Promise<string | null> {
+  const safeView = String(args.viewType ?? 'video').toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+  const safeName = String(args.fileName ?? 'clip.mov').replace(/[^a-zA-Z0-9._-]+/g, '-');
+  const key = `motion-capture/org-${args.organizationId}/player-${args.playerId}/throw-${args.throwId}/${safeView}-${Date.now()}-${safeName}`;
+  const client = getR2Client();
+  if (!client) {
+    if (!canUseLocalMotionCaptureStorage()) return null;
+    try {
+      const filePath = path.join(localMotionCaptureRoot(), key);
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, args.body);
+      return `local:${key}`;
+    } catch {
+      return null;
+    }
+  }
+  const bucket = getR2Bucket();
+  try {
+    await client.send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: args.body,
+      ContentType: args.contentType || 'application/octet-stream',
+      Metadata: {
+        organization_id: String(args.organizationId),
+        player_id: String(args.playerId),
+        throw_id: String(args.throwId),
+        view_type: safeView,
+        source_file_name: safeName,
+      },
+    }));
+    return key;
+  } catch {
+    return null;
+  }
+}
+
+export async function getObjectFromR2(key: string): Promise<{ body: AsyncIterable<Uint8Array>; contentType: string; contentLength: number | null } | null> {
+  if (key.startsWith('local:')) {
+    if (!canUseLocalMotionCaptureStorage()) return null;
+    const localKey = key.slice('local:'.length);
+    const filePath = path.join(localMotionCaptureRoot(), localKey);
+    try {
+      const info = await stat(filePath);
+      return {
+        body: createReadStream(filePath) as unknown as AsyncIterable<Uint8Array>,
+        contentType: inferVideoContentTypeFromKey(localKey),
+        contentLength: info.size,
+      };
+    } catch {
+      return null;
+    }
+  }
+  const client = getR2Client();
+  if (!client) return null;
+  const bucket = getR2Bucket();
+  try {
+    const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    if (!response.Body) return null;
+    return {
+      body: response.Body as AsyncIterable<Uint8Array>,
+      contentType: response.ContentType ?? 'application/octet-stream',
+      contentLength: typeof response.ContentLength === 'number' ? response.ContentLength : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteObjectFromR2(key: string): Promise<void> {
+  if (key.startsWith('local:')) {
+    if (!canUseLocalMotionCaptureStorage()) return;
+    const localKey = key.slice('local:'.length);
+    try {
+      await rm(path.join(localMotionCaptureRoot(), localKey), { force: true });
+    } catch {
+      // Deleting the DB record should not be blocked by a missing local file.
+    }
+    return;
+  }
+  const client = getR2Client();
+  if (!client || !key) return;
+  const bucket = getR2Bucket();
+  try {
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  } catch {
+    // Deleting the DB record should not be blocked by a missing storage object.
   }
 }
 

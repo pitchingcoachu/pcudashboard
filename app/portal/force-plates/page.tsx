@@ -181,9 +181,6 @@ export default async function ForcePlatesPage({
             <Link href="/portal/dashboard" className="portal-nav-link">
               Dashboard
             </Link>
-            <Link href="/portal/force-plates" className="portal-nav-link active">
-              Force Plates
-            </Link>
           </nav>
           <MobileNavSelect
             currentHref="/portal/force-plates"
@@ -197,7 +194,6 @@ export default async function ForcePlatesPage({
                   ]
                 : []),
               { href: '/portal/dashboard', label: 'Dashboard' },
-              { href: '/portal/force-plates', label: 'Force Plates' },
             ]}
           />
         </div>

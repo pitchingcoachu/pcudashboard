@@ -27,6 +27,7 @@ type FiltersPayload = {
   batter_sides: string[];
   session_types: string[];
   pitch_types: string[];
+  ball_types?: string[];
   zone_locations: string[];
   in_zone_options: string[];
   qp_location_options: string[];
@@ -2214,6 +2215,7 @@ export default function PitchingSuite({
   const [selectedPitchers, setSelectedPitchers] = useState<string[]>(['All']);
   const [selectedHitters, setSelectedHitters] = useState<string[]>(['All']);
   const [selectedPitchTypes, setSelectedPitchTypes] = useState<string[]>(['All']);
+  const [selectedBallTypes, setSelectedBallTypes] = useState<string[]>(['Baseball']);
   const [selectedZoneLocations, setSelectedZoneLocations] = useState<string[]>(['All']);
   const [selectedPitchResults, setSelectedPitchResults] = useState<string[]>(['All']);
   const [selectedCountFilters, setSelectedCountFilters] = useState<string[]>(['All']);
@@ -2304,6 +2306,7 @@ export default function PitchingSuite({
       setVenue('All');
       setQpLocations('All');
       setSelectedPitchTypes(['All']);
+      setSelectedBallTypes(['Baseball']);
       setSelectedZoneLocations(['All']);
       setSelectedPitchResults(['All']);
       setSelectedCountFilters(['All']);
@@ -2411,6 +2414,7 @@ export default function PitchingSuite({
   const pitcherOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filteredPitchers, true)] : []), [filters, filteredPitchers]);
   const hitterOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filteredOppHitters, true)] : []), [filters, filteredOppHitters]);
   const pitchTypeOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filters.pitch_types)] : []), [filters]);
+  const ballTypeOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filters.ball_types ?? [])] : []), [filters]);
   const zoneLocationOptions = useMemo(
     () => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filters.zone_locations)] : []),
     [filters]
@@ -2946,6 +2950,7 @@ export default function PitchingSuite({
     const pitchersParam = toParamValue(selectedPitchers);
     const hittersParam = toParamValue(selectedHitters);
     const pitchTypesParam = toParamValue(selectedPitchTypes);
+    const ballTypesParam = toParamValue(selectedBallTypes);
     const zoneParam = toParamValue(selectedZoneLocations);
     const resultsParam = toParamValue(selectedPitchResults);
     const countParam = toParamValue(selectedCountFilters);
@@ -2955,6 +2960,7 @@ export default function PitchingSuite({
     if (pitchersParam) params.set('pitcher', pitchersParam);
     if (hittersParam) params.set('opp_hitter', hittersParam);
     if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
+    if (!isPro && !isLeague && ballTypesParam) params.set('ball_types', ballTypesParam);
     if (zoneParam) params.set('zone_locations', zoneParam);
     if (resultsParam) params.set('pitch_results', resultsParam);
     if (countParam) params.set('count_filter', countParam);
@@ -3426,6 +3432,7 @@ export default function PitchingSuite({
     selectedPitchers,
     selectedPitchResults,
     selectedPitchTypes,
+    selectedBallTypes,
     selectedZoneLocations,
     sessionType,
     startDate,
@@ -3790,6 +3797,7 @@ export default function PitchingSuite({
       const pitchersParam = toParamValue(selectedPitchers);
       const hittersParam = toParamValue(selectedHitters);
       const pitchTypesParam = toParamValue(selectedPitchTypes);
+      const ballTypesParam = toParamValue(selectedBallTypes);
       const zoneParam = toParamValue(selectedZoneLocations);
       const resultsParam = toParamValue(selectedPitchResults);
       const countParam = toParamValue(selectedCountFilters);
@@ -3817,6 +3825,7 @@ export default function PitchingSuite({
       if (pitchersParam) params.set('pitcher', pitchersParam);
       if (hittersParam) params.set('opp_hitter', hittersParam);
       if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
+      if (!isPro && !isLeague && ballTypesParam) params.set('ball_types', ballTypesParam);
       if (zoneParam) params.set('zone_locations', zoneParam);
       if (resultsParam) params.set('pitch_results', resultsParam);
       if (countParam) params.set('count_filter', countParam);
@@ -4026,6 +4035,7 @@ export default function PitchingSuite({
     selectedPitchers,
     selectedHitters,
     selectedPitchTypes,
+    selectedBallTypes,
     selectedZoneLocations,
     selectedPitchResults,
     selectedCountFilters,
@@ -4084,6 +4094,7 @@ export default function PitchingSuite({
       const pitchersParam = toParamValue(selectedPitchers);
       const hittersParam = toParamValue(selectedHitters);
       const pitchTypesParam = toParamValue(selectedPitchTypes);
+      const ballTypesParam = toParamValue(selectedBallTypes);
       const zoneParam = toParamValue(selectedZoneLocations);
       const resultsParam = toParamValue(selectedPitchResults);
       const countParam = toParamValue(selectedCountFilters);
@@ -4110,6 +4121,7 @@ export default function PitchingSuite({
       if (pitchersParam) params.set('pitcher', pitchersParam);
       if (hittersParam) params.set('opp_hitter', hittersParam);
       if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
+      if (!isPro && !isLeague && ballTypesParam) params.set('ball_types', ballTypesParam);
       if (zoneParam) params.set('zone_locations', zoneParam);
       if (resultsParam) params.set('pitch_results', resultsParam);
       if (countParam) params.set('count_filter', countParam);
@@ -4350,6 +4362,7 @@ export default function PitchingSuite({
     selectedPitchers,
     selectedHitters,
     selectedPitchTypes,
+    selectedBallTypes,
     selectedZoneLocations,
     selectedPitchResults,
     selectedCountFilters,
@@ -4408,6 +4421,8 @@ export default function PitchingSuite({
     if (hittersParam) params.set('opp_hitter', hittersParam);
     const pitchTypesParam = toParamValue(selectedPitchTypes);
     if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
+    const ballTypesParam = toParamValue(selectedBallTypes);
+    if (!isPro && !isLeague && ballTypesParam) params.set('ball_types', ballTypesParam);
 
     fetch(`/api/dashboard/pitching/ab-report?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
@@ -4442,6 +4457,7 @@ export default function PitchingSuite({
     batterSide,
     selectedHitters,
     selectedPitchTypes,
+    selectedBallTypes,
   ]);
 
   useEffect(() => {
@@ -8860,6 +8876,16 @@ export default function PitchingSuite({
                     onChange={setSelectedPitchTypes}
                   />
                 </label>
+                {!isPro && !isLeague ? (
+                  <label>
+                    Ball Type
+                    <SearchableMultiSelect
+                      options={ballTypeOptions}
+                      values={selectedBallTypes}
+                      onChange={setSelectedBallTypes}
+                    />
+                  </label>
+                ) : null}
                 <label>
                   Pitch Results
                   <SearchableMultiSelect

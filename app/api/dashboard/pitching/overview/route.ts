@@ -228,6 +228,7 @@ async function maybeAttachPitchingHeatmapRollup(params: {
   pitcher: string;
   teamType: string;
   pitchTypes: string;
+  ballTypes?: string;
   includeChartPoints: string;
   chartOnly: string;
   splitBy: string;
@@ -259,6 +260,7 @@ async function maybeAttachPitchingHeatmapRollup(params: {
     pitcher,
     teamType,
     pitchTypes,
+    ballTypes = '',
     includeChartPoints,
     chartOnly,
     splitBy,
@@ -287,6 +289,7 @@ async function maybeAttachPitchingHeatmapRollup(params: {
   const hasUnsupportedFilters =
     hasValue(inZone) ||
     hasValue(qpLocations) ||
+    hasValue(ballTypes) ||
     hasValue(zoneLocations) ||
     hasValue(pitchResults) ||
     hasValue(countFilter) ||
@@ -595,6 +598,7 @@ export async function GET(request: Request) {
   const inZone = inputUrl.searchParams.get('in_zone')?.trim() ?? '';
   const qpLocations = inputUrl.searchParams.get('qp_locations')?.trim() ?? '';
   const pitchTypes = inputUrl.searchParams.get('pitch_types')?.trim() ?? '';
+  const ballTypes = inputUrl.searchParams.get('ball_types')?.trim() ?? '';
   const zoneLocations = inputUrl.searchParams.get('zone_locations')?.trim() ?? '';
   const pitchResults = inputUrl.searchParams.get('pitch_results')?.trim() ?? '';
   const countFilter = inputUrl.searchParams.get('count_filter')?.trim() ?? '';
@@ -715,6 +719,10 @@ export async function GET(request: Request) {
   if (inZone) url.searchParams.set('in_zone', inZone);
   if (qpLocations) url.searchParams.set('qp_locations', qpLocations);
   if (pitchTypes) url.searchParams.set('pitch_types', pitchTypes);
+  if (ballTypes && String(schoolCode ?? '').trim().toUpperCase() !== 'PRO' && String(schoolCode ?? '').trim().toUpperCase() !== 'LEAGUE') {
+    url.searchParams.set('ball_types', ballTypes);
+    url.searchParams.set('force_raw', '1');
+  }
   if (zoneLocations) url.searchParams.set('zone_locations', zoneLocations);
   if (pitchResults) url.searchParams.set('pitch_results', pitchResults);
   if (countFilter) url.searchParams.set('count_filter', countFilter);
@@ -813,6 +821,7 @@ export async function GET(request: Request) {
     hasValue(visualOption) ||
     hasValue(inZone) ||
     hasValue(pitchTypes) ||
+    hasValue(ballTypes) ||
     hasValue(zoneLocations) ||
     hasValue(pitchResults) ||
     hasValue(countFilter) ||
@@ -844,6 +853,7 @@ export async function GET(request: Request) {
     hasValue(visualOption) ||
     hasValue(inZone) ||
     hasValue(pitchTypes) ||
+    hasValue(ballTypes) ||
     hasValue(zoneLocations) ||
     hasValue(pitchResults) ||
     hasValue(countFilter) ||
@@ -936,6 +946,7 @@ export async function GET(request: Request) {
       'visual_option',
       'in_zone',
       'pitch_types',
+      'ball_types',
       'zone_locations',
       'pitch_results',
       'count_filter',
@@ -989,6 +1000,7 @@ export async function GET(request: Request) {
       'visual_option',
       'in_zone',
       'pitch_types',
+      'ball_types',
       'zone_locations',
       'pitch_results',
       'count_filter',
@@ -1161,6 +1173,7 @@ export async function GET(request: Request) {
       pitcher: scopedPitcher || pitcher,
       teamType,
       pitchTypes,
+      ballTypes,
       includeChartPoints: url.searchParams.get('include_chart_points') ?? includeChartPoints,
       chartOnly: url.searchParams.get('chart_only') ?? chartOnly,
       splitBy,

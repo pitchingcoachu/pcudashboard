@@ -18279,7 +18279,7 @@ def pitching_filters(
         _sync_modifications_into_pitch_events(school_code)
     level_norm = _pro_level_norm(level)
     filters_cache_key = _filters_cache_key(
-        f"pitching_filters:{level_norm}" if school_code == "PRO" else "pitching_filters",
+        f"pitching_filters:{level_norm}" if school_code == "PRO" else "pitching_filters:ball_types_v1",
         school_code,
     )
     snapshot_level = level_norm if school_code == "PRO" else "All"
@@ -18294,6 +18294,8 @@ def pitching_filters(
         )
         if isinstance(snapshot_payload, dict):
             try:
+                if school_code not in {"LEAGUE", "PRO"} and "ball_types" not in snapshot_payload:
+                    raise ValueError("pitching filters snapshot missing ball_types")
                 snapshot_response = PitchingFiltersResponse(**snapshot_payload)
                 _filters_cache_set(filters_cache_key, snapshot_response)
                 if _filters_snapshot_is_stale(snapshot_updated_at):
@@ -18322,6 +18324,7 @@ def pitching_filters(
     team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
     pitchers_by_team_code: Dict[str, List[str]] = {}
     opp_hitters_by_team_code: Dict[str, List[str]] = {}
+    ball_types: List[str] = []
     try:
         with get_conn() as conn, conn.cursor() as cur:
             session_types = ["Season", "All"] if school_code == "LEAGUE" else ["Season", "Bullpen", "Live BP", "All"]
@@ -18417,6 +18420,31 @@ def pitching_filters(
                     {"school_code": school_code},
                 )
                 pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
+                if school_code not in {"LEAGUE", "PRO"}:
+                    cur.execute(
+                        """
+                        SELECT ball_type
+                        FROM (
+                          SELECT DISTINCT COALESCE(
+                            NULLIF(TRIM(COALESCE(
+                              to_jsonb(pe)->>'customlabel',
+                              to_jsonb(pe)->>'CustomLabel',
+                              to_jsonb(pe)->>'custom_label',
+                              to_jsonb(pe)->>'Custom Label',
+                              ''
+                            )), ''),
+                            'Baseball'
+                          ) AS ball_type
+                          FROM public.pitch_events pe
+                          WHERE school_code = %(school_code)s
+                            AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                        ) t
+                        WHERE ball_type <> ''
+                        ORDER BY CASE WHEN ball_type = 'Baseball' THEN 0 ELSE 1 END, ball_type ASC
+                        """,
+                        {"school_code": school_code, "team_markers_norm": team_markers_norm},
+                    )
+                    ball_types = [str(row["ball_type"]) for row in cur.fetchall() if str(row.get("ball_type") or "").strip()]
 
                 cur.execute(
                     """
@@ -18542,6 +18570,31 @@ def pitching_filters(
                     {"school_code": school_code, "team_markers_norm": team_markers_norm},
                 )
                 pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
+                if school_code not in {"LEAGUE", "PRO"}:
+                    cur.execute(
+                        """
+                        SELECT ball_type
+                        FROM (
+                          SELECT DISTINCT COALESCE(
+                            NULLIF(TRIM(COALESCE(
+                              to_jsonb(pe)->>'customlabel',
+                              to_jsonb(pe)->>'CustomLabel',
+                              to_jsonb(pe)->>'custom_label',
+                              to_jsonb(pe)->>'Custom Label',
+                              ''
+                            )), ''),
+                            'Baseball'
+                          ) AS ball_type
+                          FROM public.pitch_events pe
+                          WHERE school_code = %(school_code)s
+                            AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                        ) t
+                        WHERE ball_type <> ''
+                        ORDER BY CASE WHEN ball_type = 'Baseball' THEN 0 ELSE 1 END, ball_type ASC
+                        """,
+                        {"school_code": school_code, "team_markers_norm": team_markers_norm},
+                    )
+                    ball_types = [str(row["ball_type"]) for row in cur.fetchall() if str(row.get("ball_type") or "").strip()]
                 if school_code == "LEAGUE":
                     cur.execute(_league_team_codes_sql_expr(), {"school_code": school_code})
                     league_team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
@@ -18585,6 +18638,7 @@ def pitching_filters(
         batter_sides=["All", "Left", "Right"],
         session_types=session_types,
         pitch_types=pitch_types,
+        ball_types=ball_types,
         zone_locations=ZONE_LOCATION_CHOICES,
         in_zone_options=["All", "Yes", "No", "Competitive"],
         qp_location_options=["All", "Yes", "No"],
@@ -18698,6 +18752,7 @@ def pitching_overview(
     in_zone: Optional[str] = Query(default=None),
     qp_locations: Optional[str] = Query(default=None),
     pitch_types: Optional[str] = Query(default=None),
+    ball_types: Optional[str] = Query(default=None),
     zone_locations: Optional[str] = Query(default=None),
     pitch_results: Optional[str] = Query(default=None),
     count_filter: Optional[str] = Query(default=None),
@@ -18784,6 +18839,11 @@ def pitching_overview(
         qp_locations = None
 
     selected_pitch_types = _valid_pitch_types(_parse_csv_list(pitch_types))
+    selected_ball_types = [
+        value
+        for value in _parse_csv_list(ball_types)
+        if value and value.lower() != "all"
+    ] if school_code not in {"LEAGUE", "PRO"} else []
     selected_zone_locations = _parse_csv_list(zone_locations)
     selected_pitch_results = _parse_csv_list(pitch_results)
     selected_count_filters = _parse_csv_list(count_filter)
@@ -19104,6 +19164,8 @@ def pitching_overview(
         "qp_locations": qp_locations,
         "pitch_types": selected_pitch_types,
         "pitch_types_count": len(selected_pitch_types),
+        "ball_types": selected_ball_types,
+        "ball_types_count": len(selected_ball_types),
         "zone_locations": selected_zone_locations,
         "zone_locations_count": len(selected_zone_locations),
         "pitch_results": selected_pitch_results,
@@ -19159,6 +19221,7 @@ def pitching_overview(
             "in_zone": selected_in_zone,
             "qp_locations": qp_locations,
             "pitch_types": selected_pitch_types,
+            "ball_types": selected_ball_types,
             "zone_locations": selected_zone_locations,
             "pitch_results": selected_pitch_results,
             "count_filter": selected_count_filters,
@@ -19389,6 +19452,7 @@ def pitching_overview(
     should_try_league_rollup_fast = (
         school_code != "PRO"
         and not force_raw
+        and not selected_ball_types
     )
     rollup_fast_response: Optional[PitchingOverviewResponse] = None
     if should_try_league_rollup_fast:
@@ -19542,6 +19606,16 @@ def pitching_overview(
           """ + PITCHER_TEAM_NORM_SQL + """ AS pitcher_team_norm,
           """ + BATTER_TEAM_NORM_EFF_SQL + """ AS batter_team_norm_eff,
           """ + PITCH_TYPE_NORMALIZE_SQL + """ AS pitch_type,
+          COALESCE(
+            NULLIF(TRIM(COALESCE(
+              to_jsonb(pe)->>'customlabel',
+              to_jsonb(pe)->>'CustomLabel',
+              to_jsonb(pe)->>'custom_label',
+              to_jsonb(pe)->>'Custom Label',
+              ''
+            )), ''),
+            'Baseball'
+          ) AS ball_type,
           COALESCE(NULLIF(TRIM(pitchcall), ''), '') AS pitch_call,
           COALESCE(NULLIF(TRIM(korbb), ''), '') AS korbb,
           COALESCE(NULLIF(TRIM(playresult), ''), '') AS play_result,
@@ -19763,6 +19837,10 @@ def pitching_overview(
           AND (
             %(pitch_types_count)s::int = 0 OR
             pitch_type = ANY(%(pitch_types)s::text[])
+          )
+          AND (
+            %(ball_types_count)s::int = 0 OR
+            ball_type = ANY(%(ball_types)s::text[])
           )
           AND (
             %(zone_locations_count)s::int = 0 OR
@@ -20296,6 +20374,7 @@ def pitching_ab_report(
     batter_side: Optional[str] = Query(default=None),
     session_type: Optional[str] = Query(default=None),
     pitch_types: Optional[str] = Query(default=None),
+    ball_types: Optional[str] = Query(default=None),
     start_date: Optional[date] = Query(default=None),
     end_date: Optional[date] = Query(default=None),
 ) -> PitchingAbReportResponse:
@@ -20319,6 +20398,11 @@ def pitching_ab_report(
     session_type_filter = _normalize_session_type_filter(session_type)
     use_osu_date_session_rules = school_code.upper() == "OSU"
     selected_pitch_types = _valid_pitch_types(_parse_csv_list(pitch_types))
+    selected_ball_types = [
+        value
+        for value in _parse_csv_list(ball_types)
+        if value and value.lower() != "all"
+    ] if school_code not in {"LEAGUE", "PRO"} else []
     game_key = (game_key or "").strip() or None
 
     params = {
@@ -20335,6 +20419,8 @@ def pitching_ab_report(
         "osu_season_end": OSU_SEASON_END,
         "pitch_types": selected_pitch_types,
         "pitch_types_count": len(selected_pitch_types),
+        "ball_types": selected_ball_types,
+        "ball_types_count": len(selected_ball_types),
         "start_date": start_date,
         "end_date": end_date,
         "team_markers_norm": team_markers_norm,
@@ -20567,6 +20653,19 @@ def pitching_ab_report(
                     AND (
                       %(pitch_types_count)s::int = 0 OR
                       (""" + PITCH_TYPE_NORMALIZE_SQL + """) = ANY(%(pitch_types)s::text[])
+                    )
+                    AND (
+                      %(ball_types_count)s::int = 0 OR
+                      COALESCE(
+                        NULLIF(TRIM(COALESCE(
+                          to_jsonb(pe)->>'customlabel',
+                          to_jsonb(pe)->>'CustomLabel',
+                          to_jsonb(pe)->>'custom_label',
+                          to_jsonb(pe)->>'Custom Label',
+                          ''
+                        )), ''),
+                        'Baseball'
+                      ) = ANY(%(ball_types)s::text[])
                     )
                     AND (
                       %(session_type_filter)s::text IS NULL OR

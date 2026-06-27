@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import BiomechanicsSuite from './biomechanics-suite';
+import BiomechanicsHub from './biomechanics-hub';
 import CatchingSuite from './catching-suite';
 import ComparisonToolSuite from './comparison-tool-suite';
 import CustomReportsSuite from './custom-reports-suite';
@@ -495,7 +495,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       ) : null}
       {mountedSuites.Biomechanics ? (
         <div style={{ display: showSuite('Biomechanics') ? 'block' : 'none' }}>
-          <BiomechanicsSuite role={role} isActive={showSuite('Biomechanics')} />
+          <BiomechanicsHub role={role} isActive={showSuite('Biomechanics')} />
         </div>
       ) : null}
       {!isLeague && mountedSuites['Player Plans'] ? (

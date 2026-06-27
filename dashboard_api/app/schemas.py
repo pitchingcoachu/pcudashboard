@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class PitchingFiltersResponse(BaseModel):
@@ -20,6 +20,7 @@ class PitchingFiltersResponse(BaseModel):
     batter_sides: List[str]
     session_types: List[str]
     pitch_types: List[str]
+    ball_types: List[str] = Field(default_factory=list)
     zone_locations: List[str]
     in_zone_options: List[str]
     qp_location_options: List[str]
