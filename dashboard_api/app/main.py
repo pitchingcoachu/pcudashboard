@@ -5875,6 +5875,9 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
             "Masi, Jack",
             "Jacobs, Brody",
             "Stevenson, Townsend",
+            "Tipton, Jonathan",
+            "Lambright, Gavin",
+            "Moorhouse, Richard",
         ]
         allowed_pitchers = sorted({*allowed_pitchers, *pcu_additions})
         allowed_hitters = sorted({*allowed_hitters, *pcu_additions})

@@ -13,6 +13,7 @@ type StoredGoalPayload = {
     startDate?: unknown;
     endDate?: unknown;
     pitchTypes?: unknown;
+    ballTypes?: unknown;
     pitchResults?: unknown;
     countOptions?: unknown;
     afterCountOptions?: unknown;
@@ -75,6 +76,9 @@ function formatStoredGoal(parsed: StoredGoalPayload): string {
 
   const pitchTypePhrase = pitchTypes.length === 1 ? `${pitchTypes[0]} ` : '';
   if (pitchTypes.length > 1) parts.push(`for ${pitchTypes.join(', ')}`);
+
+  const ballTypes = nonAll(valueList(filters.ballTypes));
+  if (ballTypes.length) parts.push(`with ${ballTypes.join(', ')}`);
 
   const pitchResults = nonAll(valueList(filters.pitchResults));
   if (pitchResults.length) parts.push(`on ${pitchResults.join(', ')} results`);

@@ -408,6 +408,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   }, [players, playerId, initialPlayerId]);
   const [bullpenFillDrag, setBullpenFillDrag] = useState<{ sourceRow: number; sourceField: BullpenFieldKey; value: string } | null>(null);
   const [bullpenColumnDragIndex, setBullpenColumnDragIndex] = useState<number | null>(null);
+  const [scriptTemplateBuilderCollapsed, setScriptTemplateBuilderCollapsed] = useState(true);
   const bullpenFillTargetsRef = useRef<Set<string>>(new Set());
   const throwingCalendarRef = useRef<HTMLDivElement | null>(null);
   const throwingStateLoadedRef = useRef(false);
@@ -3031,78 +3032,106 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             )}
             {(view === 'bullpens' || view === 'velocity') && (
               <div style={{ display: 'grid', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <label style={{ display: 'grid', gap: 4 }}>
-                  Script Template
-                  <select
-                    className="portal-schedule-control"
-                    value={activeSelectedTemplateId}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      if (isVelocityView) setSelectedVelocityTemplateId(value);
-                      else setSelectedBullpenTemplateId(value);
-                      if (value) applyBullpenTemplate(value);
-                    }}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    aria-expanded={!scriptTemplateBuilderCollapsed}
+                    onClick={() => setScriptTemplateBuilderCollapsed((previous) => !previous)}
+                    style={{ minWidth: 188, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
                   >
-                    <option value="">Current Player Script</option>
-                    {activeTemplates.map((template) => (
-                      <option key={template.id} value={template.id}>
-                        {template.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label style={{ display: 'grid', gap: 4 }}>
-                  Script Title
-                  <input
-                    className="portal-schedule-control"
-                    value={activeCurrent.title}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      if (isVelocityView) setVelocityCurrent((prev) => ({ ...prev, title: value }));
-                      else setBullpenCurrent((prev) => ({ ...prev, title: value }));
-                    }}
-                    placeholder={view === 'velocity' ? 'Velocity Script Title' : 'Bullpen Script Title'}
-                  />
-                </label>
-                <label style={{ display: 'grid', gap: 4 }}>
-                  Pitches (Rows)
-                  <input
-                    className="portal-schedule-control"
-                    type="number"
-                    min={BULLPEN_MIN_ROWS}
-                    max={BULLPEN_MAX_ROWS}
-                    value={activeCurrent.rowCount}
-                    onChange={(event) => updateBullpenRowCount(Number(event.target.value))}
-                    style={{ width: 110 }}
-                  />
-                </label>
-                <label style={{ display: 'grid', gap: 4 }}>
-                  Columns
-                  <input
-                    className="portal-schedule-control"
-                    type="number"
-                    min={1}
-                    max={16}
-                    value={activeCurrent.columns.length}
-                    onChange={(event) => updateBullpenColumnCount(Number(event.target.value))}
-                    style={{ width: 90 }}
-                  />
-                </label>
-                <button type="button" className="btn btn-primary" onClick={saveBullpenTemplate}>
-                  Save Template
-                </button>
-                <button type="button" className="btn btn-ghost" onClick={startNewBullpenScript}>
-                  New Script
-                </button>
-                <button type="button" className="btn btn-ghost" onClick={() => void downloadBullpenScript()}>
-                  Download PDF
-                </button>
+                    {scriptTemplateBuilderCollapsed ? 'Show Script Builder' : 'Hide Script Builder'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => void downloadBullpenScript()}
+                    style={{ minWidth: 154, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
+                  >
+                    Download PDF
+                  </button>
                 </div>
-                <div style={{ display: 'grid', gap: 6 }}>
-                  <label style={{ display: 'grid', gap: 4 }}>
-                    {view === 'velocity' ? 'Velocity Notes (player can see)' : 'Bullpen Notes (player can see)'}
-                    <textarea
+                {!scriptTemplateBuilderCollapsed ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <label style={{ display: 'grid', gap: 4 }}>
+                        Script Template
+                        <select
+                          className="portal-schedule-control"
+                          value={activeSelectedTemplateId}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            if (isVelocityView) setSelectedVelocityTemplateId(value);
+                            else setSelectedBullpenTemplateId(value);
+                            if (value) applyBullpenTemplate(value);
+                          }}
+                        >
+                          <option value="">Current Player Script</option>
+                          {activeTemplates.map((template) => (
+                            <option key={template.id} value={template.id}>
+                              {template.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={{ display: 'grid', gap: 4 }}>
+                        Script Title
+                        <input
+                          className="portal-schedule-control"
+                          value={activeCurrent.title}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            if (isVelocityView) setVelocityCurrent((prev) => ({ ...prev, title: value }));
+                            else setBullpenCurrent((prev) => ({ ...prev, title: value }));
+                          }}
+                          placeholder={view === 'velocity' ? 'Velocity Script Title' : 'Bullpen Script Title'}
+                        />
+                      </label>
+                      <label style={{ display: 'grid', gap: 4 }}>
+                        Pitches (Rows)
+                        <input
+                          className="portal-schedule-control"
+                          type="number"
+                          min={BULLPEN_MIN_ROWS}
+                          max={BULLPEN_MAX_ROWS}
+                          value={activeCurrent.rowCount}
+                          onChange={(event) => updateBullpenRowCount(Number(event.target.value))}
+                          style={{ width: 110 }}
+                        />
+                      </label>
+                      <label style={{ display: 'grid', gap: 4 }}>
+                        Columns
+                        <input
+                          className="portal-schedule-control"
+                          type="number"
+                          min={1}
+                          max={16}
+                          value={activeCurrent.columns.length}
+                          onChange={(event) => updateBullpenColumnCount(Number(event.target.value))}
+                          style={{ width: 90 }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={saveBullpenTemplate}
+                        style={{ minWidth: 154, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
+                      >
+                        Save Template
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={startNewBullpenScript}
+                        style={{ minWidth: 154, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
+                      >
+                        New Script
+                      </button>
+                    </div>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                      <label style={{ display: 'grid', gap: 4 }}>
+                        {view === 'velocity' ? 'Velocity Notes (player can see)' : 'Bullpen Notes (player can see)'}
+                        <textarea
                       className="portal-schedule-control"
                       rows={3}
                       value={isVelocityView ? velocityNotes : bullpenNotes}
@@ -3113,66 +3142,68 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                       }}
                       placeholder="Write notes for player..."
                     />
-                  </label>
-                  <span style={{ fontSize: '0.8rem', opacity: 0.85 }}>Player can view templates</span>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    {activeTemplates.map((template) => {
-                      const checked = activeVisibleTemplateIds.includes(template.id);
-                      return (
-                        <label key={`bp-visible-${template.id}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(event) => {
-                              const isChecked = event.target.checked;
-                              const updater = (prev: string[]) => {
-                                if (isChecked) return Array.from(new Set([...prev, template.id]));
-                                return prev.filter((id) => id !== template.id);
-                              };
-                              if (isVelocityView) setVisibleVelocityTemplateIds(updater);
-                              else setVisibleBullpenTemplateIds(updater);
-                            }}
-                          />
-                          <span>{template.name}</span>
-                        </label>
-                      );
-                    })}
-                    {activeTemplates.length === 0 ? <span className="portal-muted-text">No templates saved yet.</span> : null}
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gap: 4 }}>
-                  <span style={{ fontSize: '0.8rem', opacity: 0.85 }}>Column Titles (drag to reorder)</span>
-                  <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, activeCurrent.columns.length)}, minmax(120px, 1fr))`, gap: 6 }}>
-                    {activeCurrent.columns.map((column, idx) => (
-                      <div
-                        key={`bp-col-control-${idx}`}
-                        draggable
-                        onDragStart={() => setBullpenColumnDragIndex(idx)}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          event.dataTransfer.dropEffect = 'move';
-                        }}
-                        onDrop={(event) => {
-                          event.preventDefault();
-                          if (bullpenColumnDragIndex === null) return;
-                          moveBullpenColumn(bullpenColumnDragIndex, idx);
-                          setBullpenColumnDragIndex(null);
-                        }}
-                        onDragEnd={() => setBullpenColumnDragIndex(null)}
-                        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
-                      >
-                        <span style={{ fontSize: '0.82rem', opacity: 0.72, cursor: 'grab', userSelect: 'none' }}>⋮⋮</span>
-                        <input
-                          className="portal-schedule-control"
-                          value={column}
-                          onChange={(event) => updateBullpenColumnTitle(idx, event.target.value)}
-                          placeholder={`Column ${idx + 1}`}
-                          style={{ textAlign: 'center', fontWeight: 700 }}
-                        />
+                      </label>
+                      <span style={{ fontSize: '0.8rem', opacity: 0.85 }}>Player can view templates</span>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {activeTemplates.map((template) => {
+                          const checked = activeVisibleTemplateIds.includes(template.id);
+                          return (
+                            <label key={`bp-visible-${template.id}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  const isChecked = event.target.checked;
+                                  const updater = (prev: string[]) => {
+                                    if (isChecked) return Array.from(new Set([...prev, template.id]));
+                                    return prev.filter((id) => id !== template.id);
+                                  };
+                                  if (isVelocityView) setVisibleVelocityTemplateIds(updater);
+                                  else setVisibleBullpenTemplateIds(updater);
+                                }}
+                              />
+                              <span>{template.name}</span>
+                            </label>
+                          );
+                        })}
+                        {activeTemplates.length === 0 ? <span className="portal-muted-text">No templates saved yet.</span> : null}
                       </div>
-                    ))}
-                  </div>
-                </div>
+                    </div>
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <span style={{ fontSize: '0.8rem', opacity: 0.85 }}>Column Titles (drag to reorder)</span>
+                      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, activeCurrent.columns.length)}, minmax(120px, 1fr))`, gap: 6 }}>
+                        {activeCurrent.columns.map((column, idx) => (
+                          <div
+                            key={`bp-col-control-${idx}`}
+                            draggable
+                            onDragStart={() => setBullpenColumnDragIndex(idx)}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = 'move';
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              if (bullpenColumnDragIndex === null) return;
+                              moveBullpenColumn(bullpenColumnDragIndex, idx);
+                              setBullpenColumnDragIndex(null);
+                            }}
+                            onDragEnd={() => setBullpenColumnDragIndex(null)}
+                            style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+                          >
+                            <span style={{ fontSize: '0.82rem', opacity: 0.72, cursor: 'grab', userSelect: 'none' }}>⋮⋮</span>
+                            <input
+                              className="portal-schedule-control"
+                              value={column}
+                              onChange={(event) => updateBullpenColumnTitle(idx, event.target.value)}
+                              placeholder={`Column ${idx + 1}`}
+                              style={{ textAlign: 'center', fontWeight: 700 }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                ) : null}
               </div>
             )}
             {view === 'drills' && (
@@ -3623,7 +3654,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               No player selected — changes here update the <strong>shared templates</strong> visible to all players.
             </div>
           )}
-          {builderMode === 'schedule' && (view === 'bullpens' || view === 'velocity') && (
+          {builderMode === 'schedule' && (view === 'bullpens' || view === 'velocity') && !scriptTemplateBuilderCollapsed && (
             <div
               className="portal-panel"
               style={{
@@ -4285,6 +4316,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             await loadItems();
           }}
           allowWorkoutCustomization={selectedItem.scheduleType === 'calendar' && selectedItem.itemType === 'workout'}
+          exerciseOptions={exercises.map((exercise) => ({
+            id: exercise.id,
+            name: exercise.name,
+            category: exercise.category,
+          }))}
           onWorkoutCustomized={async (item) => {
             setSelectedItem(item);
             setItems((previous) => previous.map((current) => (current.itemId === item.itemId ? item : current)));

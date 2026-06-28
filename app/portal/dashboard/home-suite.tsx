@@ -299,9 +299,9 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
     () => (isHeavySchool ? orderedQuickPanels.slice(2) : []),
     [isHeavySchool, orderedQuickPanels]
   );
-  const schoolPanelsWithoutStuff = useMemo(() => {
+  const schoolPanels = useMemo(() => {
     if (isHeavySchool) return [] as Array<{ suite: string; title: string }>;
-    const panels = orderedQuickPanels.filter((panel) => panel.suite !== 'Stuff+ Calculator');
+    const panels = orderedQuickPanels;
     const comparisonIndex = panels.findIndex((panel) => panel.suite === 'Comparison Tool');
     const gameLogPanel = { suite: '__game_log__', title: 'Game Log' };
     if (comparisonIndex >= 0) {
@@ -309,10 +309,6 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
     }
     return [...panels, gameLogPanel];
   }, [isHeavySchool, orderedQuickPanels]);
-  const hasSchoolStuffPanel = useMemo(
-    () => !isHeavySchool && orderedQuickPanels.some((panel) => panel.suite === 'Stuff+ Calculator'),
-    [isHeavySchool, orderedQuickPanels]
-  );
   const sortedPitchingAlerts = useMemo(() => {
     const rows = [...(alertsPayload?.pitching ?? [])];
     const metric = pitchingSort.metric;
@@ -695,7 +691,7 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
           </>
         ) : (
           <>
-            {schoolPanelsWithoutStuff.map((panel) => (
+            {schoolPanels.map((panel) => (
               <button
                 key={panel.suite}
                 type="button"
@@ -725,33 +721,6 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
                 <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: '0.01em' }}>{panel.title}</span>
               </button>
             ))}
-            {hasSchoolStuffPanel ? (
-              <button
-                key="school-stuff-bottom"
-                type="button"
-                className="home-suite-panel-card"
-                onClick={() => onOpenSuite('Stuff+ Calculator')}
-                style={{
-                  textAlign: 'center',
-                  borderRadius: 14,
-                  border: homePanelBorder,
-                  background: homePanelBackground,
-                  padding: '14px 14px 13px',
-                  cursor: 'pointer',
-                  color: '#f8fafc',
-                  boxShadow: homePanelShadow,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: activeSuite === 'Stuff+ Calculator' ? 0.9 : 1,
-                  gridColumn: '1 / -1',
-                  justifySelf: 'center',
-                  width: 'min(520px, 100%)',
-                }}
-              >
-                <span style={{ fontSize: 16, fontWeight: 800, letterSpacing: '0.01em' }}>Stuff+ Calculator</span>
-              </button>
-            ) : null}
           </>
         )}
       </div>

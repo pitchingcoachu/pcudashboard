@@ -11,6 +11,7 @@ type WorkoutLogModalProps = {
   onSaved?: () => Promise<void> | void;
   onDelete?: (item: ProgramItemRow) => Promise<void> | void;
   allowWorkoutCustomization?: boolean;
+  exerciseOptions?: Array<{ id: number; name: string; category: string }>;
   onWorkoutCustomized?: (item: ProgramItemRow) => Promise<void> | void;
   catchPlayNote?: string;
 };
@@ -139,6 +140,30 @@ function buildWorkoutExerciseDrafts(item: ProgramItemRow): WorkoutExerciseDraft[
   }));
 }
 
+function buildExerciseSelectOptions(
+  exercise: ProgramItemRow['workoutExercises'][number],
+  exerciseOptions: Array<{ id: number; name: string; category: string }>
+): Array<{ id: number; label: string }> {
+  const options = new Map<number, string>();
+  const currentExerciseId = Number(exercise.exerciseId ?? 0);
+  const templateExerciseId = Number(exercise.templateExerciseId ?? 0);
+
+  if (currentExerciseId > 0) {
+    options.set(currentExerciseId, exercise.name);
+  }
+
+  for (const option of exerciseOptions) {
+    if (!Number.isFinite(option.id) || option.id <= 0) continue;
+    options.set(option.id, `${option.name}${option.category ? ` (${option.category})` : ''}`);
+  }
+
+  if (templateExerciseId > 0 && !options.has(templateExerciseId)) {
+    options.set(templateExerciseId, `Original Exercise #${templateExerciseId}`);
+  }
+
+  return Array.from(options, ([id, label]) => ({ id, label }));
+}
+
 export default function WorkoutLogModal({
   item,
   playerId,
@@ -146,6 +171,7 @@ export default function WorkoutLogModal({
   onSaved,
   onDelete,
   allowWorkoutCustomization = false,
+  exerciseOptions = [],
   onWorkoutCustomized,
   catchPlayNote,
 }: WorkoutLogModalProps) {
@@ -411,12 +437,14 @@ export default function WorkoutLogModal({
                     };
                     const resetDraft = () => {
                       setDraftValue({
+                        exerciseId: exercise.templateExerciseId ?? exercise.exerciseId,
                         prescribedSets: exercise.templatePrescribedSets ?? '',
                         prescribedReps: exercise.templatePrescribedReps ?? '',
                         prescribedLoad: exercise.templatePrescribedLoad ?? '',
                         notes: exercise.templateNotes ?? '',
                       });
                     };
+                    const exerciseSelectOptions = buildExerciseSelectOptions(exercise, exerciseOptions);
                     return (
                       <div className="portal-workout-customize-row" key={`${item.itemId}-custom-${exerciseIdx}`}>
                         <div className="portal-workout-customize-row-head">
@@ -427,6 +455,24 @@ export default function WorkoutLogModal({
                           {exercise.isCustomized ? <span>custom</span> : null}
                         </div>
                         <div className="portal-workout-customize-grid">
+                          <label>
+                            Exercise
+                            <select
+                              value={draft.exerciseId ?? ''}
+                              onChange={(event) => {
+                                const nextExerciseId = Number(event.target.value);
+                                setDraftValue({
+                                  exerciseId: Number.isFinite(nextExerciseId) && nextExerciseId > 0 ? nextExerciseId : exercise.exerciseId,
+                                });
+                              }}
+                            >
+                              {exerciseSelectOptions.map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
                           <label>
                             Sets
                             <input value={draft.prescribedSets} onChange={(event) => setDraftValue({ prescribedSets: event.target.value })} />

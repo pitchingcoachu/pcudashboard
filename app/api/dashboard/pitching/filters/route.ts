@@ -10,7 +10,7 @@ const RESPONSE_CACHE_HEADERS = {
   vary: 'Cookie',
 } as const;
 const SLOW_ROUTE_MS = 2500;
-const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'pcu-roster-2026-06-26-ball-type';
+const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'pcu-roster-2026-06-27-new-pitchers';
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -27,7 +27,24 @@ function schoolRosterAdditions(schoolCode: string): { pitchers: string[] } {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
   if (upper === 'PCU') {
     return {
-      pitchers: ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke', 'Masi, Jack', 'Jacobs, Brody', 'Stevenson, Townsend'],
+      pitchers: [
+        'Heather, Connor',
+        'Carr, Jordan',
+        'King, Stan',
+        'Jones, Grady',
+        'Birt, Henry',
+        'Clark, Hunter',
+        'Luna, Cael',
+        'Rodriguez, Diego',
+        'Jensen, Tyler',
+        'Liguori, Luke',
+        'Masi, Jack',
+        'Jacobs, Brody',
+        'Stevenson, Townsend',
+        'Tipton, Jonathan',
+        'Lambright, Gavin',
+        'Moorhouse, Richard',
+      ],
     };
   }
   return { pitchers: [] };
@@ -63,9 +80,13 @@ export async function GET(request: Request) {
   const apiBase = resolveDashboardApiBaseUrl();
   const inputUrl = new URL(request.url);
   const level = inputUrl.searchParams.get('level')?.trim() ?? '';
+  const forceRefresh = inputUrl.searchParams.get('force_refresh') === '1' || inputUrl.searchParams.get('force_refresh') === 'true';
+  const schoolUpper = String(schoolCode ?? '').trim().toUpperCase();
+  const shouldRefreshBallTypes = forceRefresh || (schoolUpper !== 'LEAGUE' && schoolUpper !== 'PRO' && schoolUpper !== 'MLB');
   const url = new URL(`${apiBase}/v1/pitching/filters`);
   url.searchParams.set('school_code', schoolCode);
   if (level) url.searchParams.set('level', level);
+  if (shouldRefreshBallTypes) url.searchParams.set('force_refresh', 'true');
 
   try {
     const shouldScopePlayer = shouldScopeDashboardPlayer(session.role, schoolCode);
@@ -82,9 +103,9 @@ export async function GET(request: Request) {
     }
 
     const result = await fetchDashboardJsonWithCache({
-      cacheKey: `pitching:filters:${PITCHING_FILTERS_ROSTER_CACHE_VERSION}:${url.toString()}`,
-      ttlMs: 120000,
-      staleTtlMs: 300000,
+      cacheKey: `pitching:filters:${PITCHING_FILTERS_ROSTER_CACHE_VERSION}:${shouldRefreshBallTypes ? 'force-ball-types' : 'cached'}:${url.toString()}`,
+      ttlMs: forceRefresh ? 1000 : 120000,
+      staleTtlMs: forceRefresh ? 0 : 300000,
       timeoutMs: resolveFiltersTimeoutMs(schoolCode),
       retries: 1,
       fetcher: () => fetch(url.toString(), { cache: 'no-store' }),

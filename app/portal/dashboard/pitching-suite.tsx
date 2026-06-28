@@ -41,6 +41,8 @@ type FiltersPayload = {
 
 type OptionItem = { value: string; label: string };
 
+const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-06-27-new-pitchers';
+
 type PitchTypeRow = {
   pitch_type: string;
   pitches: number;
@@ -2075,6 +2077,8 @@ export default function PitchingSuite({
 }) {
   const canUsePitchEdits = role === 'admin' || role === 'coach';
   const isPlayerRole = role === 'player';
+  const initialSchoolCode = String(selectedSchoolCode ?? '').trim().toUpperCase();
+  const shouldUsePcuDefaults = initialSchoolCode === 'PCU';
   const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
@@ -2123,7 +2127,7 @@ export default function PitchingSuite({
   const [sessionType, setSessionType] = useState('');
   const [level, setLevel] = useState('MLB');
   const [qpLocations, setQpLocations] = useState('All');
-  const [tableMode, setTableMode] = useState('Live');
+  const [tableMode, setTableMode] = useState(shouldUsePcuDefaults ? 'Bullpen' : 'Live');
   const [splitBy, setSplitBy] = useState('Pitch Types');
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
@@ -2165,7 +2169,7 @@ export default function PitchingSuite({
   const [manualProgressSortDirection, setManualProgressSortDirection] = useState<SortDirection>('desc');
   const [visualOption, setVisualOption] = useState('Play Video');
   const [pitchEditSelectMode, setPitchEditSelectMode] = useState<PitchEditSelectMode>('single');
-  const [enableTableColors, setEnableTableColors] = useState(true);
+  const [enableTableColors, setEnableTableColors] = useState(!shouldUsePcuDefaults);
   const [showCellPercentiles, setShowCellPercentiles] = useState(false);
   const [percentileBaselineRequestKey, setPercentileBaselineRequestKey] = useState('');
   const [percentileBaselineRows, setPercentileBaselineRows] = useState<Array<Record<string, string | number | null>>>([]);
@@ -2187,6 +2191,7 @@ export default function PitchingSuite({
   const [selectedCustomTableId, setSelectedCustomTableId] = useState<number | null>(null);
   const proDefaultTableAppliedRef = useRef(false);
   const gcuDefaultTableAppliedRef = useRef(false);
+  const pcuDefaultTableAppliedRef = useRef(false);
   const proLeaderboardDefaultAppliedRef = useRef(false);
   const proLeaderboardDateDefaultAppliedRef = useRef(false);
 
@@ -2374,6 +2379,9 @@ export default function PitchingSuite({
   const isGcu =
     String(selectedSchoolCode ?? '').toUpperCase() === 'GCU' ||
     String(filters?.school_code ?? '').toUpperCase() === 'GCU';
+  const isPcu =
+    String(selectedSchoolCode ?? '').toUpperCase() === 'PCU' ||
+    String(filters?.school_code ?? '').toUpperCase() === 'PCU';
   const isPitchEditDisplay = canUsePitchEdits && visualOption === 'Pitch Edit';
   const isPitchEditLassoEnabled = isPitchEditDisplay && pitchEditSelectMode === 'lasso';
   const orientX = (x: number): number => (isPro ? -x : x);
@@ -2592,6 +2600,7 @@ export default function PitchingSuite({
     setError('');
     const filterParams = new URLSearchParams();
     if (level) filterParams.set('level', level);
+    filterParams.set('client_cache_version', PITCHING_FILTER_CLIENT_CACHE_VERSION);
     const filterKey = `/api/dashboard/pitching/filters?${filterParams.toString()}`;
     const filterTtlMs = 120000;
     const applyFiltersPayload = (payload: FiltersPayload) => {
@@ -4581,6 +4590,20 @@ export default function PitchingSuite({
     setAppliedFilterVersion((current) => current + 1);
     proLeaderboardDateDefaultAppliedRef.current = true;
   }, [dashboardPage, isPro, startDate, endDate]);
+
+  useEffect(() => {
+    if (!isPcu) {
+      pcuDefaultTableAppliedRef.current = false;
+      return;
+    }
+    if (pcuDefaultTableAppliedRef.current) return;
+    if (tableMode === 'Live') {
+      setTableMode('Bullpen');
+      setAppliedFilterVersion((current) => current + 1);
+    }
+    setEnableTableColors(false);
+    pcuDefaultTableAppliedRef.current = true;
+  }, [isPcu, tableMode]);
 
   useEffect(() => {
     if (!isGcu) {

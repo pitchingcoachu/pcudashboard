@@ -48,6 +48,30 @@ function buildEmptyRows(rowCount: number, columns: string[], templateRows: strin
   });
 }
 
+function hasTrackingValue(col: string, value: string) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return false;
+  if (isVelocityCol(col)) {
+    const velocity = Number(raw);
+    return Number.isFinite(velocity) && velocity > 0;
+  }
+  if (isExecutionCol(col)) return isYesNo(raw);
+  if (isStrikeCol(col)) return isStrikeResult(raw);
+  return false;
+}
+
+function getCurrentTrackingRowIndex(rows: Array<Record<string, string>>, columns: string[]) {
+  if (!rows.length) return -1;
+  let latestFilledIndex = -1;
+  rows.forEach((row, rowIndex) => {
+    if (columns.some((col) => hasTrackingValue(col, row[col] ?? ''))) {
+      latestFilledIndex = rowIndex;
+    }
+  });
+  const nextIndex = latestFilledIndex + 1;
+  return nextIndex < rows.length ? nextIndex : -1;
+}
+
 type BullpenTrendMetric = 'velocity' | 'execution' | 'strike';
 
 type BullpenTrendBucket = {
@@ -394,6 +418,10 @@ export default function BullpenEntry({
   const [loadingEntries, setLoadingEntries] = useState(false);
 
   const template = visibleTemplates.find((t) => t.id === selectedTemplateId) ?? null;
+  const currentTrackingRowIndex = useMemo(() => {
+    if (!template) return -1;
+    return getCurrentTrackingRowIndex(rows, template.columns);
+  }, [rows, template]);
 
   // Init rows when template changes
   useEffect(() => {
@@ -788,59 +816,68 @@ export default function BullpenEntry({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row, ri) => (
-                  <tr key={ri}>
-                    <td style={{ textAlign: 'center', fontWeight: 700, padding: '0.32rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))' }}>
-                      {ri + 1}
-                    </td>
-                    {template.columns.map((col, ci) => {
-                      const val = row[col] ?? '';
-                      if (isVelocityCol(col)) {
+                {rows.map((row, ri) => {
+                  const isCurrentRow = ri === currentTrackingRowIndex;
+                  const currentRowCellStyle = isCurrentRow
+                    ? { background: 'rgba(34,197,94,0.12)' }
+                    : {};
+                  return (
+                    <tr key={ri} aria-current={isCurrentRow ? 'step' : undefined}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, padding: '0.32rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', boxShadow: isCurrentRow ? 'inset 4px 0 0 #22c55e' : undefined, ...currentRowCellStyle }}>
+                        <div style={{ display: 'grid', justifyItems: 'center', gap: 2, lineHeight: 1.05 }}>
+                          <span>{ri + 1}</span>
+                          {isCurrentRow ? <span style={{ fontSize: 10, fontWeight: 900, color: '#86efac', textTransform: 'uppercase' }}>Now</span> : null}
+                        </div>
+                      </td>
+                      {template.columns.map((col, ci) => {
+                        const val = row[col] ?? '';
+                        if (isVelocityCol(col)) {
+                          return (
+                            <td key={ci} style={{ padding: '0.16rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', width: 72, minWidth: 72, maxWidth: 72, ...currentRowCellStyle }}>
+                              <input
+                                type="number"
+                                className="portal-schedule-control"
+                                value={val}
+                                onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
+                                placeholder="mph"
+                                style={{ width: '100%', minWidth: 0, textAlign: 'center', fontWeight: 600, padding: '0.35rem 0.25rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
+                              />
+                            </td>
+                          );
+                        }
+                        if (isExecutionCol(col) || isStrikeCol(col)) {
+                          return (
+                            <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
+                              <div style={{ display: 'flex', gap: 12, justifyContent: 'center', padding: '4px 0' }}>
+                                {(['Yes', 'No'] as const).map((opt) => (
+                                  <label key={opt} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, cursor: 'pointer', fontSize: 11, color: isCurrentRow ? '#d1fae5' : '#94a3b8', fontWeight: isCurrentRow ? 800 : 400 }}>
+                                    {opt}
+                                    <input
+                                      type="radio"
+                                      name={`row-${ri}-col-${ci}`}
+                                      value={opt}
+                                      checked={val === opt}
+                                      onChange={() => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: opt } : r))}
+                                      style={{ accentColor: opt === 'Yes' ? '#22c55e' : '#ef4444' }}
+                                    />
+                                  </label>
+                                ))}
+                              </div>
+                            </td>
+                          );
+                        }
+                        // Readonly cell
                         return (
-                          <td key={ci} style={{ padding: '0.16rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', width: 72, minWidth: 72, maxWidth: 72 }}>
-                            <input
-                              type="number"
-                              className="portal-schedule-control"
-                              value={val}
-                              onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
-                              placeholder="mph"
-                              style={{ width: '100%', minWidth: 0, textAlign: 'center', fontWeight: 600, padding: '0.35rem 0.25rem' }}
-                            />
-                          </td>
-                        );
-                      }
-                      if (isExecutionCol(col) || isStrikeCol(col)) {
-                        return (
-                          <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))' }}>
-                            <div style={{ display: 'flex', gap: 12, justifyContent: 'center', padding: '4px 0' }}>
-                              {(['Yes', 'No'] as const).map((opt) => (
-                                <label key={opt} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, cursor: 'pointer', fontSize: 11, color: '#94a3b8' }}>
-                                  {opt}
-                                  <input
-                                    type="radio"
-                                    name={`row-${ri}-col-${ci}`}
-                                    value={opt}
-                                    checked={val === opt}
-                                    onChange={() => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: opt } : r))}
-                                    style={{ accentColor: opt === 'Yes' ? '#22c55e' : '#ef4444' }}
-                                  />
-                                </label>
-                              ))}
+                          <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
+                            <div style={{ padding: '0.35rem 0.45rem', textAlign: 'center', fontSize: '0.95rem', fontWeight: 600, color: isCurrentRow ? '#f8fafc' : '#e2e8f0', opacity: isCurrentRow ? 1 : 0.85 }}>
+                              {val || '—'}
                             </div>
                           </td>
                         );
-                      }
-                      // Readonly cell
-                      return (
-                        <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))' }}>
-                          <div style={{ padding: '0.35rem 0.45rem', textAlign: 'center', fontSize: '0.95rem', fontWeight: 600, color: '#e2e8f0', opacity: 0.85 }}>
-                            {val || '—'}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

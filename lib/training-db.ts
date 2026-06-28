@@ -249,6 +249,7 @@ export type WorkoutExerciseAssignment = {
   prescribedReps: string | null;
   prescribedLoad: string | null;
   notes: string | null;
+  templateExerciseId?: number | null;
   templatePrescribedSets?: string | null;
   templatePrescribedReps?: string | null;
   templatePrescribedLoad?: string | null;
@@ -3917,8 +3918,26 @@ export async function saveProgramWorkoutExerciseOverrides(input: {
     .filter((override) => Number.isFinite(override.workoutExerciseIndex) && override.workoutExerciseIndex >= 0)
     .slice(0, 200);
 
+  const replacementExerciseIds = Array.from(new Set(cleaned.map((override) => override.exerciseId).filter((id): id is number => Number.isFinite(Number(id)) && Number(id) > 0)));
+  if (replacementExerciseIds.length > 0) {
+    const validExerciseRows = await pool.query<{ id: number }>(
+      `
+        SELECT id
+        FROM exercise_library
+        WHERE organization_id = $1
+          AND id = ANY($2::int[])
+      `,
+      [input.organizationId, replacementExerciseIds]
+    );
+    const validExerciseIds = new Set(validExerciseRows.rows.map((row) => Number(row.id)));
+    if (replacementExerciseIds.some((exerciseId) => !validExerciseIds.has(exerciseId))) {
+      return { ok: false, error: 'Replacement exercise was not found in your organization.' };
+    }
+  }
+
   const templateRows = await pool.query<{
     workout_exercise_index: number;
+    exercise_id: number | null;
     prescribed_sets: string | null;
     prescribed_reps: string | null;
     prescribed_load: string | null;
@@ -3927,6 +3946,7 @@ export async function saveProgramWorkoutExerciseOverrides(input: {
     `
       SELECT
         ROW_NUMBER() OVER (ORDER BY we.sort_order, e.name) - 1 AS workout_exercise_index,
+        we.exercise_id,
         we.prescribed_sets,
         we.prescribed_reps,
         we.prescribed_load,
@@ -3942,6 +3962,7 @@ export async function saveProgramWorkoutExerciseOverrides(input: {
     templateRows.rows.map((row) => [
       Number(row.workout_exercise_index),
       {
+        exerciseId: Number(row.exercise_id ?? 0) > 0 ? Number(row.exercise_id) : null,
         prescribedSets: cleanOverrideText(row.prescribed_sets),
         prescribedReps: cleanOverrideText(row.prescribed_reps),
         prescribedLoad: cleanOverrideText(row.prescribed_load),
@@ -3953,6 +3974,7 @@ export async function saveProgramWorkoutExerciseOverrides(input: {
     const template = templateByIndex.get(override.workoutExerciseIndex);
     if (!template) return true;
     return (
+      override.exerciseId !== template.exerciseId ||
       override.prescribedSets !== template.prescribedSets ||
       override.prescribedReps !== template.prescribedReps ||
       override.prescribedLoad !== template.prescribedLoad ||
@@ -4113,44 +4135,46 @@ export async function listProgramItemsForPlayerByDateRange(input: {
           STRING_AGG(
             CASE
               WHEN wr.exercise_prefix IS NOT NULL AND LENGTH(TRIM(wr.exercise_prefix)) > 0
-                THEN CONCAT(TRIM(wr.exercise_prefix), ': ', wr.name)
-              ELSE wr.name
+                THEN CONCAT(TRIM(wr.exercise_prefix), ': ', COALESCE(oe.name, wr.name))
+              ELSE COALESCE(oe.name, wr.name)
             END,
             ', '
-            ORDER BY wr.sort_order, wr.name
+            ORDER BY wr.sort_order, COALESCE(oe.name, wr.name)
           ) AS exercise_names,
           COALESCE(
             JSON_AGG(
               JSON_BUILD_OBJECT(
                 'workoutExerciseIndex', wr.workout_exercise_index,
-                'exerciseId', wr.exercise_id,
+                'exerciseId', COALESCE(o.exercise_id, wr.exercise_id),
                 'prefix', wr.exercise_prefix,
-                'name', wr.name,
-                'category', wr.category,
-                'repMeasure', wr.rep_measure,
-                'trackingType', wr.tracking_type,
-                'repsPerSide', wr.reps_per_side,
+                'name', COALESCE(oe.name, wr.name),
+                'category', COALESCE(oe.category, wr.category),
+                'repMeasure', COALESCE(oe.rep_measure, wr.rep_measure),
+                'trackingType', COALESCE(oe.tracking_type, wr.tracking_type),
+                'repsPerSide', COALESCE(oe.reps_per_side, wr.reps_per_side),
                 'prescribedSets', COALESCE(o.prescribed_sets, wr.prescribed_sets),
                 'prescribedReps', COALESCE(o.prescribed_reps, wr.prescribed_reps),
                 'prescribedLoad', COALESCE(o.prescribed_load, wr.prescribed_load),
                 'notes', COALESCE(o.notes, wr.notes),
+                'templateExerciseId', wr.exercise_id,
                 'templatePrescribedSets', wr.prescribed_sets,
                 'templatePrescribedReps', wr.prescribed_reps,
                 'templatePrescribedLoad', wr.prescribed_load,
                 'templateNotes', wr.notes,
                 'isCustomized', o.id IS NOT NULL,
-                'instructionVideoUrl', wr.instruction_video_url,
-                'description', wr.description,
-                'coachingCues', wr.coaching_cues
+                'instructionVideoUrl', COALESCE(oe.instruction_video_url, wr.instruction_video_url),
+                'description', COALESCE(oe.description, wr.description),
+                'coachingCues', COALESCE(oe.coaching_cues, wr.coaching_cues)
               )
-              ORDER BY wr.sort_order, wr.name
-            ) FILTER (WHERE wr.exercise_id IS NOT NULL),
+              ORDER BY wr.sort_order, COALESCE(oe.name, wr.name)
+            ) FILTER (WHERE COALESCE(o.exercise_id, wr.exercise_id) IS NOT NULL),
             '[]'::json
           ) AS exercise_json
         FROM workout_rows wr
         LEFT JOIN program_workout_exercise_overrides o
           ON o.program_day_item_id = wr.item_id
           AND o.workout_exercise_index = wr.workout_exercise_index
+        LEFT JOIN exercise_library oe ON oe.id = o.exercise_id
         GROUP BY wr.item_id
       )
       SELECT

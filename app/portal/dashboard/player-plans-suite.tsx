@@ -47,6 +47,7 @@ type GoalDraft = {
   startDate: string;
   endDate: string;
   pitchTypes: string[];
+  ballTypes: string[];
   pitchResults: string[];
   countOptions: string[];
   afterCountOptions: string[];
@@ -72,6 +73,7 @@ type GoalPayload = {
     startDate?: string;
     endDate?: string;
     pitchTypes?: string[];
+    ballTypes?: string[];
     pitchResults?: string[];
     countOptions?: string[];
     afterCountOptions?: string[];
@@ -100,6 +102,7 @@ type DashboardFilterOptions = {
   hitters?: string[];
   catchers?: string[];
   pitch_types: string[];
+  ball_types?: string[];
   pitch_results: string[];
   count_options: string[];
   after_count_options: string[];
@@ -1029,6 +1032,7 @@ function parseStoredGoalDescription(category: string | null, value: string | nul
     startDate: '',
     endDate: '',
     pitchTypes: ['All'],
+    ballTypes: ['All'],
     pitchResults: ['All'],
     countOptions: ['All'],
     afterCountOptions: ['All'],
@@ -1062,6 +1066,7 @@ function parseStoredGoalDescription(category: string | null, value: string | nul
       startDate: String(parsed.filters?.startDate ?? ''),
       endDate: String(parsed.filters?.endDate ?? ''),
       pitchTypes: parsed.filters?.pitchTypes?.length ? parsed.filters.pitchTypes : ['All'],
+      ballTypes: parsed.filters?.ballTypes?.length ? parsed.filters.ballTypes : ['All'],
       pitchResults: parsed.filters?.pitchResults?.length ? parsed.filters.pitchResults : ['All'],
       countOptions: parsed.filters?.countOptions?.length ? parsed.filters.countOptions : ['All'],
       afterCountOptions: parsed.filters?.afterCountOptions?.length ? parsed.filters.afterCountOptions : ['All'],
@@ -1091,6 +1096,7 @@ function serializeGoalDescription(goal: GoalDraft): string {
       startDate: goal.startDate,
       endDate: goal.endDate,
       pitchTypes: goal.pitchTypes,
+      ballTypes: goal.ballTypes,
       pitchResults: goal.pitchResults,
       countOptions: goal.countOptions,
       afterCountOptions: goal.afterCountOptions,
@@ -1765,6 +1771,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     hitters: ['All'],
     catchers: ['All'],
     pitch_types: ['All'],
+    ball_types: ['All'],
     pitch_results: ['All'],
     count_options: ['All'],
     after_count_options: ['All'],
@@ -3098,6 +3105,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           startDate: goal.startDate,
           endDate: goal.endDate,
           pitchTypes: goal.pitchTypes,
+          ballTypes: goal.ballTypes,
           pitchResults: goal.pitchResults,
           countOptions: goal.countOptions,
           afterCountOptions: goal.afterCountOptions,
@@ -3116,7 +3124,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
   const chartFetchGoals = useMemo(() => {
     const prev = prevChartFetchGoalsRef.current;
     const serializeGoal = (g: typeof chartFetchGoalsRaw[number]) =>
-      `${g.slotIndex}|${g.startDate}|${g.endDate}|${g.sessionType}|${g.pitchTypes.join(',')}|${g.pitchResults.join(',')}|${g.hand}|${g.batterSide}|${g.teams.join(',')}`;
+      `${g.slotIndex}|${g.startDate}|${g.endDate}|${g.sessionType}|${g.pitchTypes.join(',')}|${g.ballTypes.join(',')}|${g.pitchResults.join(',')}|${g.hand}|${g.batterSide}|${g.teams.join(',')}`;
     const prevMap = new Map(prev.map((g) => [g.slotIndex, serializeGoal(g)]));
     // Only include goals that are new or whose filters changed
     const changed = chartFetchGoalsRaw.filter((g) => prevMap.get(g.slotIndex) !== serializeGoal(g));
@@ -3276,6 +3284,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           if (goal.startDate) params.set('start_date', goal.startDate);
           if (goal.endDate) params.set('end_date', goal.endDate);
           if (!goal.pitchTypes.includes('All')) params.set('pitch_types', goal.pitchTypes.join(','));
+          if (domain === 'Pitching' && !goal.ballTypes.includes('All')) params.set('ball_types', goal.ballTypes.join(','));
           if (!goal.pitchResults.includes('All')) params.set('pitch_results', goal.pitchResults.join(','));
           if (!goal.countOptions.includes('All')) params.set('count_filter', goal.countOptions.join(','));
           if (!goal.afterCountOptions.includes('All')) params.set('after_count_filter', goal.afterCountOptions.join(','));
@@ -3343,7 +3352,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
   useEffect(() => {
     let active = true;
     const domainPath = domain.toLowerCase();
-    fetch(`/api/dashboard/${domainPath}/filters`, { cache: 'no-store' })
+    const filterUrl = domain === 'Pitching' ? `/api/dashboard/${domainPath}/filters?force_refresh=1` : `/api/dashboard/${domainPath}/filters`;
+    fetch(filterUrl, { cache: 'no-store' })
       .then(async (response) => {
         if (!response.ok) throw new Error('Failed to load dashboard filters.');
         const payload = (await response.json().catch(() => ({}))) as Partial<DashboardFilterOptions>;
@@ -3353,6 +3363,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           hitters: payload.hitters?.length ? ['All', ...payload.hitters.filter((value) => value !== 'All')] : ['All'],
           catchers: payload.catchers?.length ? ['All', ...payload.catchers.filter((value) => value !== 'All')] : ['All'],
           pitch_types: payload.pitch_types?.length ? ['All', ...payload.pitch_types.filter((value) => value !== 'All')] : ['All'],
+          ball_types: payload.ball_types?.length ? ['All', ...payload.ball_types.filter((value) => value !== 'All')] : ['All'],
           pitch_results: payload.pitch_results?.length ? ['All', ...payload.pitch_results.filter((value) => value !== 'All')] : ['All'],
           count_options: payload.count_options?.length ? ['All', ...payload.count_options.filter((value) => value !== 'All')] : ['All'],
           after_count_options: payload.after_count_options?.length ? ['All', ...payload.after_count_options.filter((value) => value !== 'All')] : ['All'],
@@ -3368,6 +3379,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
           hitters: ['All'],
           catchers: ['All'],
           pitch_types: ['All'],
+          ball_types: ['All'],
           pitch_results: ['All'],
           count_options: ['All'],
           after_count_options: ['All'],
@@ -3446,7 +3458,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     activePlanPlayerId,
     domain,
     // Only watch the filter fields that need to persist, not every keystroke field
-    ...planGoals.map((g) => `${g.slotIndex}:${g.sessionType}:${g.startDate}:${g.endDate}:${g.pitchTypes.join(',')}:${g.comparator}:${g.targetValue}:${g.chartType}`),
+    ...planGoals.map((g) => `${g.slotIndex}:${g.sessionType}:${g.startDate}:${g.endDate}:${g.pitchTypes.join(',')}:${g.ballTypes.join(',')}:${g.comparator}:${g.targetValue}:${g.chartType}`),
   ]);
 
   async function saveGoal(slotIndex: GoalSlot) {
@@ -4229,7 +4241,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     const left = 58;
     const right = 20;
     const top = 24;
-    const bottom = 70;
+    const bottom = series.length > 4 ? 88 : 70;
     const targetRaw = goal.targetValue.trim();
     const target = targetRaw.length > 0 ? Number(targetRaw) : Number.NaN;
     const values = series.map((point) => point.value);
@@ -4244,8 +4256,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     const py = (value: number) => top + ((yMax - value) / Math.max(1e-6, yMax - yMin)) * (height - top - bottom);
     const targetY = Number.isFinite(target) ? py(target) : null;
     const path = series.map((point, idx) => `${idx === 0 ? 'M' : 'L'} ${px(idx).toFixed(1)} ${py(point.value).toFixed(1)}`).join(' ');
-    const xTickIndexes = Array.from(new Set([0, Math.floor((series.length - 1) * 0.25), Math.floor((series.length - 1) * 0.5), Math.floor((series.length - 1) * 0.75), series.length - 1]))
-      .filter((index) => index >= 0 && index < series.length);
+    const xTickIndexes = series.map((_, index) => index);
+    const rotateDateLabels = series.length > 4;
     const yTicks = Array.from({ length: 5 }, (_, i) => yMin + (i / 4) * (yMax - yMin));
     const yLabel = goalStatLabel(goal);
 
@@ -4262,7 +4274,14 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
         {xTickIndexes.map((index) => (
           <g key={`goal-trend-x-${goal.slotIndex}-${index}`}>
             <line x1={px(index)} y1={top} x2={px(index)} y2={height - bottom} stroke="rgba(255,255,255,0.12)" />
-            <text x={px(index)} y={height - bottom + 16} textAnchor="middle" fontSize={10.5} fill="rgba(255,255,255,0.9)">
+            <text
+              x={px(index)}
+              y={height - bottom + (rotateDateLabels ? 22 : 16)}
+              textAnchor={rotateDateLabels ? 'end' : 'middle'}
+              fontSize={10.5}
+              fill="rgba(255,255,255,0.9)"
+              transform={rotateDateLabels ? `rotate(-35 ${px(index)} ${height - bottom + 22})` : undefined}
+            >
               {formatMdyy(series[index].date)}
             </text>
           </g>
@@ -4291,7 +4310,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
             onMouseLeave={() => setGoalChartHover(null)}
           />
         ))}
-        <text x={(left + width - right) / 2} y={height - 10} textAnchor="middle" fontSize={12} fill="rgba(255,255,255,0.9)">
+        <text x={(left + width - right) / 2} y={height - 8} textAnchor="middle" fontSize={12} fill="rgba(255,255,255,0.9)">
           Date
         </text>
         <text transform={`translate(16 ${(top + height - bottom) / 2}) rotate(-90)`} textAnchor="middle" fontSize={12} fill="rgba(255,255,255,0.9)">
@@ -5070,6 +5089,20 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                           }
                         />
                       </label>
+                      {domain === 'Pitching' ? (
+                        <label className="portal-inline-filter">
+                          Ball Type
+                          <SearchableMultiSelect
+                            options={toOptions(filterOptions.ball_types ?? ['All'])}
+                            values={goal.ballTypes}
+                            onChange={(next) =>
+                              setPlanGoals((prev) =>
+                                prev.map((entry) => (entry.slotIndex === goal.slotIndex ? { ...entry, ballTypes: next } : entry))
+                              )
+                            }
+                          />
+                        </label>
+                      ) : null}
                       <label className="portal-inline-filter">
                         Pitch Results
                         <SearchableMultiSelect

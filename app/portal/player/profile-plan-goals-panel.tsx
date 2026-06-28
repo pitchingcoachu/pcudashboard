@@ -29,6 +29,7 @@ type ParsedGoal = {
   startDate: string;
   endDate: string;
   pitchTypes: string[];
+  ballTypes: string[];
   pitchResults: string[];
   countOptions: string[];
   afterCountOptions: string[];
@@ -94,6 +95,7 @@ function parseGoal(row: PlayerPlanGoalRow): ParsedGoal | null {
     startDate: '',
     endDate: '',
     pitchTypes: ['All'],
+    ballTypes: ['All'],
     pitchResults: ['All'],
     countOptions: ['All'],
     afterCountOptions: ['All'],
@@ -122,6 +124,7 @@ function parseGoal(row: PlayerPlanGoalRow): ParsedGoal | null {
       startDate: String(filters.startDate ?? ''),
       endDate: String(filters.endDate ?? ''),
       pitchTypes: valueList(filters.pitchTypes),
+      ballTypes: valueList(filters.ballTypes),
       pitchResults: valueList(filters.pitchResults),
       countOptions: valueList(filters.countOptions),
       afterCountOptions: valueList(filters.afterCountOptions),
@@ -710,6 +713,7 @@ export default function ProfilePlanGoalsPanel({ playerId, playerName, goals, can
           if (goal.startDate) params.set('start_date', goal.startDate);
           if (goal.endDate) params.set('end_date', goal.endDate);
           if (!goal.pitchTypes.includes('All')) params.set('pitch_types', goal.pitchTypes.join(','));
+          if (domain === 'pitching' && !goal.ballTypes.includes('All')) params.set('ball_types', goal.ballTypes.join(','));
           if (!goal.pitchResults.includes('All')) params.set('pitch_results', goal.pitchResults.join(','));
           if (!goal.countOptions.includes('All')) params.set('count_filter', goal.countOptions.join(','));
           if (!goal.afterCountOptions.includes('All')) params.set('after_count_filter', goal.afterCountOptions.join(','));

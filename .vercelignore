@@ -1,4 +1,5 @@
 Axioforce/
+trackman files/
 *.log
 coverage/
 __pycache__/

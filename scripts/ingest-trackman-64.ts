@@ -59,6 +59,7 @@ async function main() {
       const batter = row['Batter']?.trim() || null;
       const balls = row['Balls']?.trim() || null;
       const strikes = row['Strikes']?.trim() || null;
+      const customLabel = row['CustomLabel']?.trim() || null;
 
       // Generate file_id from source file hash
       const fileHash = createHash('sha256').update(path).digest('hex').slice(0, 16);
@@ -75,15 +76,15 @@ async function main() {
         `INSERT INTO pitch_events (school_code, file_id, session_date, session_type, source_file, pitch_key,
            pitcher, pitcherthrows, relspeed, taggedpitchtype, time, inducedvertbreak, horzbreak,
            spinrate, extension, relheight, relside, platelocheight, platelocside,
-           vertapprangle, horzapprangle, pitchcall, batter, balls, strikes)
-         VALUES ($1,$2,$3::date,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+           vertapprangle, horzapprangle, pitchcall, batter, balls, strikes, customlabel)
+         VALUES ($1,$2,$3::date,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
          ON CONFLICT DO NOTHING`,
         ['PCU', fileId, sessionDate, 'Live', 'Pitching_2026-06-04T193307_verified.csv', pitchUid,
          pitcher, pitcherThrows, relspeed || null, taggedPitchType || null, time || null,
          inducedVertBreak || null, horzBreak || null, spinRate || null, extension || null,
          relHeight || null, relSide || null, plateLocHeight || null, plateLocSide || null,
          vertApprAngle || null, horzApprAngle || null, pitchCall || null, batter || null,
-         balls || null, strikes || null]
+         balls || null, strikes || null, customLabel]
       );
       inserted++;
     }
