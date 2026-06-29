@@ -43,7 +43,7 @@ type PlayerNotesSuiteProps = {
   embedded?: boolean;
 };
 
-const DEFAULT_NOTE_CATEGORIES = ['Player Plan', 'Weight Room', 'Nutrition', 'Mental Training', 'Grips'];
+const DEFAULT_NOTE_CATEGORIES = ['Player Plan', 'Weight Room', 'Nutrition', 'Mental Training', 'Grips', 'Questionnaires'];
 const MULTI_ATTACHMENT_MIME = 'application/x.pcu-note-attachments+json';
 const NOTE_ATTACHMENT_LIMIT_LABEL = formatNoteAttachmentLimit();
 
@@ -137,6 +137,7 @@ function categoryBadgeStyle(category: string): React.CSSProperties {
   if (category === 'Weight Room') return { background: 'rgba(249,115,22,0.2)', color: '#fdba74' };
   if (category === 'Nutrition') return { background: 'rgba(34,197,94,0.2)', color: '#86efac' };
   if (category === 'Mental Training') return { background: 'rgba(168,85,247,0.2)', color: '#d8b4fe' };
+  if (category === 'Questionnaires') return { background: 'rgba(20,184,166,0.2)', color: '#5eead4' };
   return { background: 'rgba(14,165,233,0.2)', color: '#7dd3fc' };
 }
 

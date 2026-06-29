@@ -73,6 +73,7 @@ export async function POST(request: Request) {
     questionnaireId,
     dueDate,
     answers,
+    submittedByUserId: session.userId ?? null,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
 

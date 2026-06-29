@@ -147,6 +147,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
   const [error, setError] = useState('');
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
   const [catchPlayNotes, setCatchPlayNotes] = useState<{ highDay: string; mediumDay: string; lowDay: string }>({ highDay: '', mediumDay: '', lowDay: '' });
+  const [cycleNotes, setCycleNotes] = useState('');
   const consumedInitialRef = useRef(false);
 
   const visibleRange = useMemo(() => {
@@ -211,6 +212,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
         if (notes && typeof notes === 'object') {
           setCatchPlayNotes({ highDay: String(notes.highDay ?? ''), mediumDay: String(notes.mediumDay ?? ''), lowDay: String(notes.lowDay ?? '') });
         }
+        setCycleNotes(String(data.cycleNotes ?? ''));
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -441,66 +443,74 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
 
         {view === 'day' && <div className="portal-schedule-day-grid">{dayCells.map((date) => renderDayCell(date, false, undefined, true))}</div>}
         {view === 'cycle' && (
-          <div
-            className="portal-cycle-grid"
-            style={{
-              gap: '0.75rem',
-            }}
-          >
-            {CYCLE_COLUMNS.map((column) => {
-              const slotItems = items.filter((item) => item.scheduleType === 'cycle' && item.cycleSlot === column.key);
-              return (
-                <article key={column.key} className="portal-panel" style={{ minHeight: '300px' }}>
-                  <h4 style={{ marginTop: 0 }}>{column.label}</h4>
-                  <div style={{ display: 'grid', gap: '0.45rem' }}>
-                    {slotItems.map((item) => (
-                      <button
-                        key={item.itemId}
-                        type="button"
-                        className="portal-schedule-item"
-                        title={item.itemName}
-                        style={{
-                          display: 'block',
-                          width: '100%',
-                          textAlign: 'center',
-                          color: 'var(--text-main)',
-                          border: '1px solid rgba(255,255,255,0.2)',
-                          borderRadius: '6px',
-                          padding: '0.28rem 0.42rem',
-                          ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
-                        }}
-                        onClick={() => {
-                          if (isThrowingCalendarWorkoutName(item.itemName)) {
-                            router.push(`/portal/player/program/throwing${query}`);
-                            return;
-                          }
-                          if (isBullpenWorkoutName(item.itemName)) {
-                            router.push(`/portal/player/program/bullpens${query}`);
-                            return;
-                          }
-                          if (isVelocityWorkoutName(item.itemName)) {
-                            router.push(`/portal/player/program/velocity${query}`);
-                            return;
-                          }
-                          if (isDrillsWorkoutName(item.itemName)) {
-                            router.push(`/portal/player/program/drills${query}`);
-                            return;
-                          }
-                          setSelectedItem(item);
-                        }}
-                      >
-                        <strong>{item.itemName}</strong>
-                      </button>
-                    ))}
-                    {slotItems.length === 0 && (
-                      <p className="portal-muted-text" style={{ margin: 0 }}>
-                        No workouts assigned
-                      </p>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
+          <div style={{ display: 'grid', gap: '0.75rem' }}>
+            {cycleNotes.trim() ? (
+              <section className="portal-cycle-notes-panel">
+                <strong>Notes</strong>
+                <p className="portal-muted-text" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{cycleNotes.trim()}</p>
+              </section>
+            ) : null}
+            <div
+              className="portal-cycle-grid"
+              style={{
+                gap: '0.75rem',
+              }}
+            >
+              {CYCLE_COLUMNS.map((column) => {
+                const slotItems = items.filter((item) => item.scheduleType === 'cycle' && item.cycleSlot === column.key);
+                return (
+                  <article key={column.key} className="portal-panel" style={{ minHeight: '300px' }}>
+                    <h4 style={{ marginTop: 0 }}>{column.label}</h4>
+                    <div style={{ display: 'grid', gap: '0.45rem' }}>
+                      {slotItems.map((item) => (
+                        <button
+                          key={item.itemId}
+                          type="button"
+                          className="portal-schedule-item"
+                          title={item.itemName}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            textAlign: 'center',
+                            color: 'var(--text-main)',
+                            border: '1px solid rgba(255,255,255,0.2)',
+                            borderRadius: '6px',
+                            padding: '0.28rem 0.42rem',
+                            ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
+                          }}
+                          onClick={() => {
+                            if (isThrowingCalendarWorkoutName(item.itemName)) {
+                              router.push(`/portal/player/program/throwing${query}`);
+                              return;
+                            }
+                            if (isBullpenWorkoutName(item.itemName)) {
+                              router.push(`/portal/player/program/bullpens${query}`);
+                              return;
+                            }
+                            if (isVelocityWorkoutName(item.itemName)) {
+                              router.push(`/portal/player/program/velocity${query}`);
+                              return;
+                            }
+                            if (isDrillsWorkoutName(item.itemName)) {
+                              router.push(`/portal/player/program/drills${query}`);
+                              return;
+                            }
+                            setSelectedItem(item);
+                          }}
+                        >
+                          <strong>{item.itemName}</strong>
+                        </button>
+                      ))}
+                      {slotItems.length === 0 && (
+                        <p className="portal-muted-text" style={{ margin: 0 }}>
+                          No workouts assigned
+                        </p>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
           </div>
         )}
       </section>

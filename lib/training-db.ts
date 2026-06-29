@@ -452,12 +452,17 @@ export async function ensureTrainingDbReady(): Promise<void> {
       attachment_name TEXT,
       attachment_mime_type TEXT,
       attachment_data_url TEXT,
+      source_type TEXT,
+      source_id TEXT,
       created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+    await pool.query(`ALTER TABLE player_plan_notes ADD COLUMN IF NOT EXISTS source_type TEXT;`);
+    await pool.query(`ALTER TABLE player_plan_notes ADD COLUMN IF NOT EXISTS source_id TEXT;`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_plan_notes_player_date ON player_plan_notes (player_id, note_date DESC, created_at DESC);`);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_player_plan_notes_source ON player_plan_notes (player_id, source_type, source_id);`);
     await pool.query(`
     CREATE TABLE IF NOT EXISTS dashboard_player_notes (
       id BIGSERIAL PRIMARY KEY,
@@ -4534,6 +4539,51 @@ export async function moveCycleProgramItem(input: {
   }
 }
 
+export async function deleteCycleProgramItem(input: {
+  organizationId: number;
+  playerId: number;
+  itemId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  if (!Number.isFinite(input.itemId) || input.itemId <= 0) return { ok: false, error: 'Valid itemId is required.' };
+
+  const deleted = await pool.query<{ cycle_slot: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c' }>(
+    `
+      DELETE FROM program_cycle_items
+      WHERE id = $1
+        AND organization_id = $2
+        AND player_id = $3
+      RETURNING cycle_slot
+    `,
+    [input.itemId, input.organizationId, input.playerId]
+  );
+  if ((deleted.rowCount ?? 0) !== 1) return { ok: false, error: 'Cycle item not found.' };
+
+  const slot = deleted.rows[0]?.cycle_slot;
+  if (slot) {
+    await pool.query(
+      `
+        WITH ordered AS (
+          SELECT id, ROW_NUMBER() OVER (ORDER BY sort_order ASC, id ASC) AS next_order
+          FROM program_cycle_items
+          WHERE player_id = $1
+            AND cycle_slot = $2
+        )
+        UPDATE program_cycle_items AS i
+        SET sort_order = ordered.next_order,
+            updated_at = NOW()
+        FROM ordered
+        WHERE i.id = ordered.id
+      `,
+      [input.playerId, slot]
+    );
+  }
+
+  return { ok: true };
+}
+
 export async function listExerciseLoadHistoryForPlayer(input: {
   playerId: number;
   exerciseIds: number[];
@@ -5705,6 +5755,8 @@ export async function createPlayerPlanNote(input: {
   attachmentName?: string;
   attachmentMimeType?: string;
   attachmentDataUrl?: string;
+  sourceType?: string;
+  sourceId?: string;
   createdByUserId: number;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
@@ -5741,9 +5793,11 @@ export async function createPlayerPlanNote(input: {
         attachment_name,
         attachment_mime_type,
         attachment_data_url,
+        source_type,
+        source_id,
         created_by_user_id
       )
-      VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9, $10, $11)
     `,
     [
       input.playerId,
@@ -5754,6 +5808,8 @@ export async function createPlayerPlanNote(input: {
       String(input.attachmentName ?? '').trim() || null,
       String(input.attachmentMimeType ?? '').trim() || null,
       attachmentDataUrl,
+      String(input.sourceType ?? '').trim() || null,
+      String(input.sourceId ?? '').trim() || null,
       input.createdByUserId,
     ]
   );
@@ -7021,6 +7077,7 @@ export async function saveQuestionnaireResponse(input: {
   questionnaireId: number;
   dueDate: string;
   answers: Record<string, string>;
+  submittedByUserId?: number | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
@@ -7041,13 +7098,128 @@ export async function saveQuestionnaireResponse(input: {
       .map(([key, value]) => [String(key).trim(), String(value ?? '').trim()])
       .filter(([key]) => key.length > 0)
   );
-  await pool.query(
+  const saved = await pool.query<{ id: string }>(
     `INSERT INTO questionnaire_responses
        (questionnaire_id, assignment_id, organization_id, player_id, due_date, answers_json, submitted_at)
      VALUES ($1, $2, $3, $4, $5::date, $6::jsonb, NOW())
      ON CONFLICT (assignment_id, player_id, due_date)
-     DO UPDATE SET answers_json = EXCLUDED.answers_json, submitted_at = NOW()`,
+     DO UPDATE SET answers_json = EXCLUDED.answers_json, submitted_at = NOW()
+     RETURNING id::text AS id`,
     [input.questionnaireId, input.assignmentId, input.organizationId, input.playerId, input.dueDate, JSON.stringify(cleanAnswers)]
   );
+  const responseId = Number(saved.rows[0]?.id ?? 0);
+  if (Number.isFinite(responseId) && responseId > 0) {
+    await upsertQuestionnaireResponsePlayerNote({
+      organizationId: input.organizationId,
+      responseId,
+      createdByUserId: Number(input.submittedByUserId ?? 0) || null,
+    });
+  }
+  return { ok: true };
+}
+
+function formatQuestionnaireResponseNote(input: {
+  questionnaireName: string;
+  dueDate: string;
+  submittedAt: string;
+  groupName: string;
+  questions: QuestionnaireQuestion[];
+  answers: Record<string, string>;
+}): string {
+  const lines: string[] = [
+    `Questionnaire: ${input.questionnaireName}`,
+    `Submitted: ${input.submittedAt}`,
+    `Due Date: ${input.dueDate}`,
+  ];
+  if (input.groupName.trim()) lines.push(`Group: ${input.groupName.trim()}`);
+  lines.push('');
+  for (const question of input.questions) {
+    const answer = String(input.answers[question.id] ?? '').trim();
+    lines.push(question.prompt);
+    lines.push(answer || 'No answer');
+    lines.push('');
+  }
+  return lines.join('\n').trim();
+}
+
+export async function upsertQuestionnaireResponsePlayerNote(input: {
+  organizationId: number;
+  responseId: number;
+  createdByUserId?: number | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const response = await pool.query<{
+    id: string;
+    player_id: number;
+    questionnaire_name: string;
+    questions_json: unknown;
+    group_name: string | null;
+    due_date: string;
+    answers_json: unknown;
+    submitted_at: string;
+  }>(
+    `
+      SELECT
+        r.id::text AS id,
+        r.player_id,
+        q.name AS questionnaire_name,
+        q.questions_json,
+        a.group_name,
+        r.due_date::text AS due_date,
+        r.answers_json,
+        r.submitted_at::text AS submitted_at
+      FROM questionnaire_responses r
+      JOIN questionnaires q ON q.id = r.questionnaire_id
+      JOIN questionnaire_assignments a ON a.id = r.assignment_id
+      JOIN players p ON p.id = r.player_id
+      WHERE r.id = $1
+        AND r.organization_id = $2
+        AND p.organization_id = $2
+      LIMIT 1
+    `,
+    [input.responseId, input.organizationId]
+  );
+  if ((response.rowCount ?? 0) !== 1) return { ok: false, error: 'Questionnaire response not found.' };
+
+  const row = response.rows[0];
+  const answers = row.answers_json && typeof row.answers_json === 'object' && !Array.isArray(row.answers_json) ? (row.answers_json as Record<string, string>) : {};
+  const noteText = formatQuestionnaireResponseNote({
+    questionnaireName: row.questionnaire_name,
+    dueDate: row.due_date,
+    submittedAt: row.submitted_at,
+    groupName: String(row.group_name ?? ''),
+    questions: normalizeQuestionnaireQuestions(row.questions_json),
+    answers,
+  });
+  const sourceType = 'questionnaire_response';
+  const sourceId = String(row.id);
+  const noteDate = String(row.submitted_at ?? '').slice(0, 10) || row.due_date;
+
+  await pool.query(
+    `
+      INSERT INTO player_plan_notes (
+        player_id,
+        domain,
+        note_date,
+        category,
+        note_text,
+        source_type,
+        source_id,
+        created_by_user_id
+      )
+      VALUES ($1, 'General', $2::date, 'Questionnaires', $3, $4, $5, $6)
+      ON CONFLICT (player_id, source_type, source_id)
+      DO UPDATE SET
+        note_date = EXCLUDED.note_date,
+        category = EXCLUDED.category,
+        note_text = EXCLUDED.note_text,
+        updated_at = NOW(),
+        created_by_user_id = COALESCE(EXCLUDED.created_by_user_id, player_plan_notes.created_by_user_id)
+    `,
+    [row.player_id, noteDate, noteText, sourceType, sourceId, input.createdByUserId ?? null]
+  );
+
   return { ok: true };
 }

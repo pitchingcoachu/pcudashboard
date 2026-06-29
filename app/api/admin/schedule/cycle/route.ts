@@ -4,6 +4,7 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import {
   addCycleWorkoutAssignment,
+  deleteCycleProgramItem,
   getPlayerByIdInOrganization,
   listCycleProgramItemsForPlayer,
   moveCycleProgramItem,
@@ -109,6 +110,36 @@ export async function PATCH(request: Request) {
     playerId,
     itemId,
     targetSlot: cycleSlot,
+  });
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+  return NextResponse.json({ ok: true });
+}
+
+export async function DELETE(request: Request) {
+  const cookieStore = await cookies();
+  const session = getSessionFromCookies(cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  const body = (await request.json().catch(() => null)) as
+    | { playerId?: number; itemId?: number }
+    | null;
+  if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+
+  const organizationId = resolveProgrammingOrganizationId(session);
+  const playerId = Number(body.playerId ?? 0);
+  const itemId = Number(body.itemId ?? 0);
+  if (organizationId <= 0 || !Number.isFinite(playerId) || playerId <= 0 || !Number.isFinite(itemId) || itemId <= 0) {
+    return NextResponse.json({ error: 'playerId and itemId are required.' }, { status: 400 });
+  }
+
+  const allowed = await canManagePlayer(session, playerId);
+  if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  const result = await deleteCycleProgramItem({
+    organizationId,
+    playerId,
+    itemId,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json({ ok: true });

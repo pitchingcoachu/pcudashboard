@@ -114,6 +114,13 @@ type CopiedPlanBuffer = {
   days: Array<{ offset: number; items: CopiedAssignment[] }>;
 };
 
+type CycleSlotKey = 'medium' | 'high' | 'low' | 'mobility' | 's_and_c';
+
+type CopiedCycleBuffer = {
+  sourceSlot: CycleSlotKey;
+  items: Array<{ workoutId: number }>;
+};
+
 type ThrowingCopiedBuffer = {
   mode: 'day' | 'week';
   days: Array<{ offset: number; entry: ThrowingDayEntry }>;
@@ -338,8 +345,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [bulkReplaceOpen, setBulkReplaceOpen] = useState(false);
   const [bulkReplaceQuery, setBulkReplaceQuery] = useState('');
   const [copiedPlan, setCopiedPlan] = useState<CopiedPlanBuffer | null>(null);
+  const [copiedCycle, setCopiedCycle] = useState<CopiedCycleBuffer | null>(null);
   const [copiedThrowing, setCopiedThrowing] = useState<ThrowingCopiedBuffer | null>(null);
   const [menu, setMenu] = useState<{ dayDate: string; x: number; y: number } | null>(null);
+  const [cycleMenu, setCycleMenu] = useState<{ cycleSlot: CycleSlotKey; x: number; y: number } | null>(null);
   const [throwingMenu, setThrowingMenu] = useState<ThrowingMenuState | null>(null);
   const [throwingByDate, setThrowingByDate] = useState<Record<string, ThrowingDayEntry>>({});
   const [throwingWeekNotes, setThrowingWeekNotes] = useState<Record<string, string>>({});
@@ -394,6 +403,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [catchPlayHighDay, setCatchPlayHighDay] = useState('');
   const [catchPlayMediumDay, setCatchPlayMediumDay] = useState('');
   const [catchPlayLowDay, setCatchPlayLowDay] = useState('');
+  const [cycleNotes, setCycleNotes] = useState('');
 
   useEffect(() => {
     if (!players.length) return;
@@ -576,6 +586,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setThrowingTemplateByCell({});
         setThrowingTemplateWeekNotes({});
         setBullpenNotes('');
+        setCycleNotes('');
         setDrillsRowCount(DEFAULT_DRILL_ROW_COUNT);
         setDrillsRows(normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
         setPostDrillsRowCount(DEFAULT_DRILL_ROW_COUNT);
@@ -651,6 +662,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           preThrowDrillTemplates?: DrillTemplate[];
           postThrowDrillTemplates?: DrillTemplate[];
           catchPlayNotes?: { highDay?: string; mediumDay?: string; lowDay?: string };
+          cycleNotes?: string;
           error?: string;
         };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load throwing calendar.');
@@ -785,6 +797,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setCatchPlayHighDay(String(payload.catchPlayNotes?.highDay ?? ''));
         setCatchPlayMediumDay(String(payload.catchPlayNotes?.mediumDay ?? ''));
         setCatchPlayLowDay(String(payload.catchPlayNotes?.lowDay ?? ''));
+        setCycleNotes(String(payload.cycleNotes ?? ''));
         throwingStateLoadedRef.current = true;
       } catch (requestError) {
         if (cancelled) return;
@@ -818,6 +831,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setCatchPlayHighDay('');
         setCatchPlayMediumDay('');
         setCatchPlayLowDay('');
+        setCycleNotes('');
         throwingStateLoadedRef.current = true;
       }
     };
@@ -882,11 +896,12 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           preThrowDrillTemplates,
           postThrowDrillTemplates,
           catchPlayNotes: { highDay: catchPlayHighDay, mediumDay: catchPlayMediumDay, lowDay: catchPlayLowDay },
+          cycleNotes,
         }),
       }).catch(() => {});
     }, 350);
     return () => clearTimeout(handle);
-  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, bullpenNotes, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, velocityNotes, drillsRowCount, drillsRows, postDrillsRowCount, postDrillsRows, selectedPreDrillTemplateId, selectedPostDrillTemplateId, preThrowDrillTemplates, postThrowDrillTemplates, catchPlayHighDay, catchPlayMediumDay, catchPlayLowDay]);
+  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, bullpenNotes, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, velocityNotes, drillsRowCount, drillsRows, postDrillsRowCount, postDrillsRows, selectedPreDrillTemplateId, selectedPostDrillTemplateId, preThrowDrillTemplates, postThrowDrillTemplates, catchPlayHighDay, catchPlayMediumDay, catchPlayLowDay, cycleNotes]);
 
   useEffect(() => {
     if (!selectedTemplateId) {
@@ -1329,7 +1344,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     }
   };
 
-  const assignCycleWorkout = async (cycleSlot: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c', workoutId: number) => {
+  const assignCycleWorkout = async (cycleSlot: CycleSlotKey, workoutId: number) => {
     if (!playerId) return;
     setError('');
     try {
@@ -1346,7 +1361,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     }
   };
 
-  const moveCycleItem = async (itemId: number, cycleSlot: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c') => {
+  const moveCycleItem = async (itemId: number, cycleSlot: CycleSlotKey) => {
     if (!playerId) return;
     setError('');
     try {
@@ -1497,6 +1512,80 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       await loadItems();
     } catch (pasteError) {
       setError(pasteError instanceof Error ? pasteError.message : 'Failed to paste copied schedule.');
+    }
+  };
+
+  const deleteCycleItem = async (itemId: number) => {
+    if (!playerId) return;
+    setError('');
+    const response = await fetchWithTimeout('/api/admin/schedule/cycle', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ playerId, itemId }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? 'Failed to delete cycle workout.');
+    await loadItems();
+  };
+
+  const serializeCycleSlot = (cycleSlot: CycleSlotKey): Array<{ workoutId: number }> => {
+    return cycleItemsBySlot[cycleSlot]
+      .map((item) => Number(item.workoutId ?? 0))
+      .filter((workoutId) => Number.isFinite(workoutId) && workoutId > 0)
+      .map((workoutId) => ({ workoutId }));
+  };
+
+  const copyCycleSlot = (cycleSlot: CycleSlotKey) => {
+    setCopiedCycle({
+      sourceSlot: cycleSlot,
+      items: serializeCycleSlot(cycleSlot),
+    });
+    setCycleMenu(null);
+  };
+
+  const deleteCycleSlotItems = async (cycleSlot: CycleSlotKey) => {
+    if (!playerId) return;
+    const slotItems = cycleItemsBySlot[cycleSlot];
+    for (const item of slotItems) {
+      const response = await fetchWithTimeout('/api/admin/schedule/cycle', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, itemId: item.itemId }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to delete cycle workout.');
+    }
+  };
+
+  const clearCycleSlot = async (cycleSlot: CycleSlotKey) => {
+    if (!playerId) return;
+    setError('');
+    try {
+      await deleteCycleSlotItems(cycleSlot);
+      await loadItems();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Failed to delete cycle workouts.');
+    }
+  };
+
+  const pasteCycleSlot = async (targetSlot: CycleSlotKey) => {
+    if (!playerId || !copiedCycle) return;
+    setCycleMenu(null);
+    setError('');
+    try {
+      await deleteCycleSlotItems(targetSlot);
+      for (const item of copiedCycle.items) {
+        const response = await fetchWithTimeout('/api/admin/schedule/cycle', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ playerId, cycleSlot: targetSlot, workoutId: item.workoutId }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to paste cycle workout.');
+      }
+      await loadItems();
+    } catch (pasteError) {
+      setError(pasteError instanceof Error ? pasteError.message : 'Failed to paste cycle workouts.');
     }
   };
 
@@ -1737,11 +1826,15 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     if (!playerId || selectedItemIds.size === 0) return;
     setError('');
     try {
-      await Promise.all(Array.from(selectedItemIds).map((itemId) =>
-        fetchWithTimeout('/api/admin/schedule/delete', {
-          method: 'POST',
+      const selectedItems = items.filter((item) => selectedItemIds.has(item.itemId));
+      await Promise.all(selectedItems.map((item) =>
+        fetchWithTimeout(item.scheduleType === 'cycle' ? '/api/admin/schedule/cycle' : '/api/admin/schedule/delete', {
+          method: item.scheduleType === 'cycle' ? 'DELETE' : 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ playerId, itemId, mode: 'item' }),
+          body: JSON.stringify({ playerId, itemId: item.itemId, mode: 'item' }),
+        }).then(async (response) => {
+          const payload = (await response.json().catch(() => ({}))) as { error?: string };
+          if (!response.ok) throw new Error(payload.error ?? 'Failed to delete item.');
         })
       ));
       setSelectedItemIds(new Set());
@@ -1751,15 +1844,41 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     }
   };
 
+  const replaceCycleItem = async (item: ProgramItemRow, workoutId: number) => {
+    if (!item.cycleSlot) throw new Error('Cycle slot missing for selected workout.');
+    const deleteResponse = await fetchWithTimeout('/api/admin/schedule/cycle', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ playerId, itemId: item.itemId }),
+    });
+    const deletePayload = (await deleteResponse.json().catch(() => ({}))) as { error?: string };
+    if (!deleteResponse.ok) throw new Error(deletePayload.error ?? 'Failed to delete cycle item.');
+
+    const assignResponse = await fetchWithTimeout('/api/admin/schedule/cycle', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ playerId, cycleSlot: item.cycleSlot, workoutId }),
+    });
+    const assignPayload = (await assignResponse.json().catch(() => ({}))) as { error?: string };
+    if (!assignResponse.ok) throw new Error(assignPayload.error ?? 'Failed to assign replacement.');
+  };
+
   const bulkReplaceItems = async (workoutId: number) => {
     if (!playerId || selectedItemIds.size === 0) return;
     setError('');
     try {
       const selectedItems = items.filter((item) => selectedItemIds.has(item.itemId));
+      const selectedCalendarItems = selectedItems.filter((item) => item.scheduleType !== 'cycle');
+      const selectedCycleItems = selectedItems.filter((item) => item.scheduleType === 'cycle');
+
+      for (const item of selectedCycleItems) {
+        await replaceCycleItem(item, workoutId);
+      }
+
       const selectedByDay = new Map<string, ProgramItemRow[]>();
       const orderedIdsByDay = new Map<string, number[]>();
 
-      for (const item of selectedItems) {
+      for (const item of selectedCalendarItems) {
         selectedByDay.set(item.dayDate, [...(selectedByDay.get(item.dayDate) ?? []), item]);
       }
       for (const dayDate of selectedByDay.keys()) {
@@ -1832,16 +1951,19 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   };
 
   useEffect(() => {
-    if (!menu && !throwingMenu) return;
+    if (!menu && !throwingMenu && !cycleMenu) return;
     const onPointerDown = () => setMenu(null);
     const onThrowingPointerDown = () => setThrowingMenu(null);
+    const onCyclePointerDown = () => setCycleMenu(null);
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointerdown', onThrowingPointerDown);
+    window.addEventListener('pointerdown', onCyclePointerDown);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointerdown', onThrowingPointerDown);
+      window.removeEventListener('pointerdown', onCyclePointerDown);
     };
-  }, [menu, throwingMenu]);
+  }, [menu, throwingMenu, cycleMenu]);
 
   const onItemDrop = async (event: React.DragEvent<HTMLElement>, dayDate: string, targetItemId: number) => {
     event.preventDefault();
@@ -4104,72 +4226,113 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           )}
           {builderMode === 'schedule' && view === 'day' && <div className="portal-schedule-day-grid">{dayCells.map((date) => renderDayCell(date, false, undefined, true))}</div>}
           {builderMode === 'schedule' && view === 'cycle' && (
-            <div
-              className="portal-cycle-grid"
-              style={{
-                gap: '0.75rem',
-              }}
-            >
-              {CYCLE_COLUMNS.map((column) => (
-                <article
-                  key={column.key}
-                  className="portal-panel"
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => void onCycleDrop(event, column.key)}
-                  style={{ minHeight: '320px' }}
-                >
-                  <h4 style={{ marginTop: 0 }}>{column.label}</h4>
-                  <div style={{ display: 'grid', gap: '0.45rem' }}>
-                    {cycleItemsBySlot[column.key].map((item) => (
-                      <button
-                        key={item.itemId}
-                        type="button"
-                        className="portal-schedule-item"
-                        title={item.itemName}
-                        style={{
-                          display: 'block',
-                          width: '100%',
-                          textAlign: 'center',
-                          color: 'var(--text-main)',
-                          borderWidth: '1px',
-                          borderStyle: 'solid',
-                          borderColor: 'var(--calendar-grid-border, var(--border))',
-                          borderRadius: '6px',
-                          padding: '0.28rem 0.42rem',
-                          ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
-                        }}
-                        draggable
-                        onDragStart={(event) => {
-                          event.dataTransfer.setData('cycleItemId', String(item.itemId));
-                          event.dataTransfer.setData('cycleItemSlot', item.cycleSlot ?? '');
-                        }}
-                        onClick={() => {
-                          if (isBullpenWorkoutName(item.itemName)) {
-                            setView('bullpens');
-                            return;
-                          }
-                          if (isVelocityWorkoutName(item.itemName)) {
-                            setView('bullpens');
-                            return;
-                          }
-                          if (isDrillsWorkoutName(item.itemName)) {
-                            setView('drills');
-                            return;
-                          }
-                          setSelectedItem(item);
-                        }}
-                      >
-                        <strong>{item.itemName}</strong>
-                      </button>
-                    ))}
-                    {cycleItemsBySlot[column.key].length === 0 && (
-                      <p className="portal-muted-text" style={{ margin: 0 }}>
-                        Drag workouts here
-                      </p>
-                    )}
-                  </div>
-                </article>
-              ))}
+            <div style={{ display: 'grid', gap: '0.75rem' }}>
+              <label className="portal-cycle-notes-panel">
+                <span>3-Day Cycle Notes</span>
+                <textarea
+                  className="portal-schedule-control"
+                  rows={3}
+                  value={cycleNotes}
+                  onChange={(event) => setCycleNotes(event.target.value)}
+                  placeholder="Write notes for player..."
+                />
+              </label>
+              <div
+                className="portal-cycle-grid"
+                style={{
+                  gap: '0.75rem',
+                }}
+              >
+                {CYCLE_COLUMNS.map((column) => (
+                  <article
+                    key={column.key}
+                    className="portal-panel"
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => void onCycleDrop(event, column.key)}
+                    onDoubleClick={(event) => {
+                      if ((event.target as HTMLElement).closest('.portal-schedule-item')) return;
+                      setCycleMenu({ cycleSlot: column.key, x: event.clientX, y: event.clientY });
+                    }}
+                    style={{ minHeight: '320px' }}
+                  >
+                    <h4 style={{ marginTop: 0 }}>{column.label}</h4>
+                    <div style={{ display: 'grid', gap: '0.45rem' }}>
+                      {cycleItemsBySlot[column.key].map((item) => (
+                        <div key={item.itemId} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedItemIds.has(item.itemId)}
+                            onChange={(event) => {
+                              event.stopPropagation();
+                              setSelectedItemIds((prev) => {
+                                const next = new Set(prev);
+                                if (event.target.checked) next.add(item.itemId);
+                                else next.delete(item.itemId);
+                                return next;
+                              });
+                            }}
+                            style={{ flexShrink: 0, accentColor: '#c8102e', cursor: 'pointer' }}
+                          />
+                          <button
+                            type="button"
+                            className="portal-schedule-item"
+                            title={item.itemName}
+                            style={{
+                              display: 'block',
+                              width: '100%',
+                              textAlign: 'center',
+                              color: 'var(--text-main)',
+                              borderWidth: '1px',
+                              borderStyle: 'solid',
+                              borderColor: 'var(--calendar-grid-border, var(--border))',
+                              borderRadius: '6px',
+                              padding: '0.28rem 0.42rem',
+                              ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
+                              ...(selectedItemIds.has(item.itemId) ? { borderColor: '#c8102e' } : {}),
+                            }}
+                            draggable={!selectedItemIds.has(item.itemId)}
+                            onDragStart={(event) => {
+                              event.dataTransfer.setData('cycleItemId', String(item.itemId));
+                              event.dataTransfer.setData('cycleItemSlot', item.cycleSlot ?? '');
+                            }}
+                            onClick={() => {
+                              if (selectedItemIds.size > 0) {
+                                setSelectedItemIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(item.itemId)) next.delete(item.itemId);
+                                  else next.add(item.itemId);
+                                  return next;
+                                });
+                                return;
+                              }
+                              if (isBullpenWorkoutName(item.itemName)) {
+                                setView('bullpens');
+                                return;
+                              }
+                              if (isVelocityWorkoutName(item.itemName)) {
+                                setView('bullpens');
+                                return;
+                              }
+                              if (isDrillsWorkoutName(item.itemName)) {
+                                setView('drills');
+                                return;
+                              }
+                              setSelectedItem(item);
+                            }}
+                          >
+                            <strong>{item.itemName}</strong>
+                          </button>
+                        </div>
+                      ))}
+                      {cycleItemsBySlot[column.key].length === 0 && (
+                        <p className="portal-muted-text" style={{ margin: 0 }}>
+                          Drag workouts here
+                        </p>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
           )}
           {builderMode === 'template' ? (
@@ -4326,10 +4489,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             setItems((previous) => previous.map((current) => (current.itemId === item.itemId ? item : current)));
           }}
           onDelete={
-            selectedItem.scheduleType === 'calendar'
+            selectedItem.scheduleType === 'calendar' || selectedItem.scheduleType === 'cycle'
               ? async (item) => {
-                  if (!window.confirm(`Delete "${item.itemName}" from this day?`)) return;
-                  await deleteCalendarItem(item.itemId);
+                  if (!window.confirm(`Delete "${item.itemName}"?`)) return;
+                  if (item.scheduleType === 'cycle') await deleteCycleItem(item.itemId);
+                  else await deleteCalendarItem(item.itemId);
                 }
               : undefined
           }
@@ -4380,6 +4544,46 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           {copiedPlan && (
             <button type="button" className="btn btn-primary" onClick={() => void pasteCopiedPlan(menu.dayDate)}>
               Paste
+            </button>
+          )}
+        </div>
+      )}
+
+      {cycleMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: cycleMenu.x,
+            top: cycleMenu.y,
+            zIndex: 80,
+            border: '1px solid rgba(255,255,255,0.22)',
+            borderRadius: '10px',
+            background: 'rgba(0,0,0,0.95)',
+            padding: '0.35rem',
+            display: 'grid',
+            gap: '0.25rem',
+            minWidth: '180px',
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button type="button" className="btn btn-ghost" onClick={() => copyCycleSlot(cycleMenu.cycleSlot)}>
+            Copy Column
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => {
+              const ok = window.confirm('Delete all workouts in this cycle column?');
+              if (!ok) return;
+              void clearCycleSlot(cycleMenu.cycleSlot);
+              setCycleMenu(null);
+            }}
+          >
+            Delete Column
+          </button>
+          {copiedCycle && (
+            <button type="button" className="btn btn-primary" onClick={() => void pasteCycleSlot(cycleMenu.cycleSlot)}>
+              Paste Column
             </button>
           )}
         </div>

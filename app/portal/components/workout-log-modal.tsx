@@ -164,6 +164,92 @@ function buildExerciseSelectOptions(
   return Array.from(options, ([id, label]) => ({ id, label }));
 }
 
+function ExerciseReplacementSelect({
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  value: number | null;
+  options: Array<{ id: number; label: string }>;
+  disabled?: boolean;
+  onChange: (exerciseId: number) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const selected = options.find((option) => option.id === value) ?? options[0] ?? null;
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = normalizedQuery
+    ? options.filter((option) => option.label.toLowerCase().includes(normalizedQuery))
+    : options;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [open]);
+
+  return (
+    <div className="portal-workout-exercise-select" ref={rootRef}>
+      <button
+        type="button"
+        className="portal-workout-exercise-select-trigger"
+        onClick={() => {
+          if (disabled) return;
+          setOpen((current) => !current);
+        }}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span>{selected?.label ?? 'Select exercise'}</span>
+        <span aria-hidden="true">⌄</span>
+      </button>
+      {open ? (
+        <div className="portal-workout-exercise-select-menu">
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search exercises..."
+            autoFocus
+          />
+          <div className="portal-workout-exercise-select-options" role="listbox">
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className="portal-workout-exercise-select-option"
+                  data-selected={option.id === value ? 'true' : 'false'}
+                  onClick={() => {
+                    onChange(option.id);
+                    setOpen(false);
+                    setQuery('');
+                  }}
+                  role="option"
+                  aria-selected={option.id === value}
+                >
+                  {option.label}
+                </button>
+              ))
+            ) : (
+              <div className="portal-workout-exercise-select-empty">No matching exercises.</div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function WorkoutLogModal({
   item,
   playerId,
@@ -455,23 +541,18 @@ export default function WorkoutLogModal({
                           {exercise.isCustomized ? <span>custom</span> : null}
                         </div>
                         <div className="portal-workout-customize-grid">
-                          <label>
+                          <label className="portal-workout-exercise-field">
                             Exercise
-                            <select
-                              value={draft.exerciseId ?? ''}
-                              onChange={(event) => {
-                                const nextExerciseId = Number(event.target.value);
+                            <ExerciseReplacementSelect
+                              value={draft.exerciseId}
+                              options={exerciseSelectOptions}
+                              disabled={savingCustomization}
+                              onChange={(nextExerciseId) => {
                                 setDraftValue({
                                   exerciseId: Number.isFinite(nextExerciseId) && nextExerciseId > 0 ? nextExerciseId : exercise.exerciseId,
                                 });
                               }}
-                            >
-                              {exerciseSelectOptions.map((option) => (
-                                <option key={option.id} value={option.id}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
+                            />
                           </label>
                           <label>
                             Sets

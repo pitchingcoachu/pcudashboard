@@ -156,6 +156,10 @@ function normalizeCatchPlayNotes(raw: unknown): { highDay: string; mediumDay: st
   };
 }
 
+function normalizeCycleNotes(raw: unknown): string {
+  return String(raw ?? '').slice(0, 5000);
+}
+
 function parseTemplatesObject(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
   if (Array.isArray(raw)) {
@@ -250,6 +254,7 @@ export async function GET(request: Request) {
       preThrowDrillTemplates,
       postThrowDrillTemplates,
       catchPlayNotes: normalizeCatchPlayNotes(playerTemplatesObj.catchPlayNotes),
+      cycleNotes: normalizeCycleNotes(playerTemplatesObj.cycleNotes),
     },
     { organizationId, playerId }
   );
@@ -287,6 +292,7 @@ export async function POST(request: Request) {
         preThrowDrillTemplates?: unknown[];
         postThrowDrillTemplates?: unknown[];
         catchPlayNotes?: unknown;
+        cycleNotes?: unknown;
       }
     | null;
   if (!body) return finish(400, { error: 'Invalid JSON body.' });
@@ -358,6 +364,7 @@ export async function POST(request: Request) {
         velocity: nextVelocityState,
         drills: nextDrillsState,
         catchPlayNotes: normalizeCatchPlayNotes(body.catchPlayNotes ?? playerObj.catchPlayNotes),
+        cycleNotes: normalizeCycleNotes(body.cycleNotes ?? playerObj.cycleNotes),
       },
     });
     if (!savePlayer.ok) return finish(400, { error: savePlayer.error });

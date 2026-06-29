@@ -18,6 +18,10 @@ function normalizeCatchPlayNotes(raw: unknown): { highDay: string; mediumDay: st
   };
 }
 
+function normalizeCycleNotes(raw: unknown): string {
+  return String(raw ?? '').slice(0, 5000);
+}
+
 function parseTemplatesObject(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
   if (Array.isArray(raw)) return { throwingTemplates: raw, bullpenTemplates: [] };
@@ -188,5 +192,6 @@ export async function GET(request: Request) {
     velocityTemplates,
     drillsState,
     catchPlayNotes: normalizeCatchPlayNotes(playerTemplatesObj.catchPlayNotes),
+    cycleNotes: normalizeCycleNotes(playerTemplatesObj.cycleNotes),
   });
 }
