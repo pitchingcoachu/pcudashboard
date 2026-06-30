@@ -643,7 +643,7 @@ export default function BullpenEntry({
       const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Ball');
       const drill = trendMetric === 'velocity' ? getColumnValue(row, row.__drillCol || null, 'All') : 'All';
       const ballWeight = trendMetric === 'velocity' ? getColumnValue(row, row.__ballWeightCol || null, 'All') : 'All';
-      const comboParts = trendMetric === 'velocity' ? [pitchType, ballType, drill, ballWeight] : [pitchType, ballType];
+      const comboParts = trendMetric === 'velocity' ? [drill, ballWeight] : [pitchType, ballType];
       const comboKey = getFactorKey(comboParts);
       const comboLabel = trendMetric === 'velocity' ? getVelocityFactorLabel(drill, ballWeight) : getFactorLabel(comboParts);
       const rawValue = String(row[valueCol] ?? '').trim();
@@ -697,7 +697,7 @@ export default function BullpenEntry({
         const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Ball');
         const drill = getColumnValue(row, row.__drillCol || null, 'All');
         const ballWeight = getColumnValue(row, row.__ballWeightCol || null, 'All');
-        const comboParts = [pitchType, ballType, drill, ballWeight];
+        const comboParts = [drill, ballWeight];
         return {
           key: `${date}|${index}|${value}`,
           date,
