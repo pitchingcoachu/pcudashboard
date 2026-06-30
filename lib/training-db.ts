@@ -77,6 +77,7 @@ export type WorkoutChoiceRow = {
   name: string;
   category: string;
   exerciseCount: number;
+  calendarLinkTarget: CalendarLinkTarget;
 };
 
 export type PlayerProfileRow = {
@@ -181,6 +182,7 @@ export type WorkoutRow = {
   name: string;
   category: string;
   description: string | null;
+  calendarLinkTarget: CalendarLinkTarget;
   exerciseCount: number;
   exerciseNames: string[];
 };
@@ -205,8 +207,11 @@ export type WorkoutDetailRow = {
   name: string;
   category: string;
   description: string | null;
+  calendarLinkTarget: CalendarLinkTarget;
   items: WorkoutEditorItem[];
 };
+
+export type CalendarLinkTarget = 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
 
 export type ScheduleTemplateItemRow = {
   id: number;
@@ -280,6 +285,7 @@ export type ProgramItemRow = {
   exerciseId: number | null;
   workoutId: number | null;
   workoutCategory: string | null;
+  calendarLinkTarget: CalendarLinkTarget;
   exerciseCategory: string;
   instructionVideoUrl: string | null;
   workoutExerciseNames: string[];
@@ -415,6 +421,8 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_players_org_assigned_full_name ON players (organization_id, assigned_coach_user_id, full_name);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_users_org_role_name ON auth_users (organization_id, role, name);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_exercise_library_org_name ON exercise_library (organization_id, name);`);
+    await pool.query(`ALTER TABLE workout_library ADD COLUMN IF NOT EXISTS calendar_link_target TEXT NOT NULL DEFAULT 'none';`);
+    await pool.query(`UPDATE workout_library SET calendar_link_target = 'none' WHERE calendar_link_target IS NULL OR LENGTH(TRIM(calendar_link_target)) = 0;`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_library_org_name ON workout_library (organization_id, name);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_workout_exercises_workout_sort ON workout_exercises (workout_id, sort_order);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_programs_org ON programs (organization_id);`);
@@ -652,6 +660,19 @@ function normalizeTrackingType(value: string | null | undefined): 'lbs' | 'secon
   if (normalized === 'body_weight' || normalized === 'body weight' || normalized === 'bodyweight') return 'body_weight';
   if (normalized === 'velocity') return 'velocity';
   return 'lbs';
+}
+
+function normalizeCalendarLinkTarget(value: string | null | undefined): CalendarLinkTarget {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[‐‑‒–—−-]+/g, '_')
+    .replace(/\s+/g, '_');
+  if (normalized === 'throwing' || normalized === 'throwing_calendar') return 'throwing';
+  if (normalized === 'bullpen' || normalized === 'bullpens') return 'bullpens';
+  if (normalized === 'velocity' || normalized === 'velocity_plan') return 'velocity';
+  if (normalized === 'drill' || normalized === 'drills') return 'drills';
+  return 'none';
 }
 
 function normalizeCycleSlot(value: string): 'medium' | 'high' | 'low' | 'mobility' | 's_and_c' | null {
@@ -1322,6 +1343,7 @@ export async function listWorkoutChoicesByOrganization(organizationId: number): 
       id: number;
       name: string;
       category: string;
+      calendar_link_target: string | null;
       exercise_count: string;
     }>(
       `
@@ -1329,11 +1351,12 @@ export async function listWorkoutChoicesByOrganization(organizationId: number): 
           w.id,
           w.name,
           w.category,
+          w.calendar_link_target,
           COUNT(we.id)::text AS exercise_count
         FROM workout_library w
         LEFT JOIN workout_exercises we ON we.workout_id = w.id
         WHERE w.organization_id = $1
-        GROUP BY w.id, w.name, w.category
+        GROUP BY w.id, w.name, w.category, w.calendar_link_target
         ORDER BY w.name ASC
       `,
       [organizationId]
@@ -1342,6 +1365,7 @@ export async function listWorkoutChoicesByOrganization(organizationId: number): 
       id: row.id,
       name: row.name,
       category: row.category,
+      calendarLinkTarget: normalizeCalendarLinkTarget(row.calendar_link_target),
       exerciseCount: Number(row.exercise_count ?? '0') || 0,
     }));
   });
@@ -2649,6 +2673,7 @@ export async function listWorkoutsByOrganization(organizationId: number): Promis
     name: string;
     category: string;
     description: string | null;
+    calendar_link_target: string | null;
     exercise_count: string;
     exercise_names: string | null;
   }>(
@@ -2658,6 +2683,7 @@ export async function listWorkoutsByOrganization(organizationId: number): Promis
         w.name,
         w.category,
         w.description,
+        w.calendar_link_target,
         COUNT(we.id)::text AS exercise_count,
         STRING_AGG(
           CASE
@@ -2672,7 +2698,7 @@ export async function listWorkoutsByOrganization(organizationId: number): Promis
       LEFT JOIN workout_exercises we ON we.workout_id = w.id
       LEFT JOIN exercise_library e ON e.id = we.exercise_id
       WHERE w.organization_id = $1
-      GROUP BY w.id, w.name, w.category, w.description
+      GROUP BY w.id, w.name, w.category, w.description, w.calendar_link_target
       ORDER BY w.name ASC
     `,
     [organizationId]
@@ -2683,6 +2709,7 @@ export async function listWorkoutsByOrganization(organizationId: number): Promis
     name: row.name,
     category: row.category,
     description: row.description,
+    calendarLinkTarget: normalizeCalendarLinkTarget(row.calendar_link_target),
     exerciseCount: Number(row.exercise_count),
     exerciseNames: row.exercise_names ? row.exercise_names.split(', ').filter(Boolean) : [],
   }));
@@ -2696,9 +2723,9 @@ export async function getWorkoutByIdInOrganization(input: {
   await ensureTrainingDbReady();
   const pool = getDbPool();
 
-  const workoutResult = await pool.query<{ id: number; name: string; category: string; description: string | null }>(
+  const workoutResult = await pool.query<{ id: number; name: string; category: string; description: string | null; calendar_link_target: string | null }>(
     `
-      SELECT id, name, category, description
+      SELECT id, name, category, description, calendar_link_target
       FROM workout_library
       WHERE id = $1 AND organization_id = $2
       LIMIT 1
@@ -2749,6 +2776,7 @@ export async function getWorkoutByIdInOrganization(input: {
     name: workout.name,
     category: workout.category,
     description: workout.description,
+    calendarLinkTarget: normalizeCalendarLinkTarget(workout.calendar_link_target),
     items: itemsResult.rows.map((row) => ({
       exerciseId: row.exercise_id,
       exerciseName: row.exercise_name,
@@ -3262,6 +3290,7 @@ export async function createWorkout(input: {
   name: string;
   category: string;
   description?: string;
+  calendarLinkTarget?: string;
   exerciseItems: Array<{
     exerciseId: number;
     prefix?: string;
@@ -3279,6 +3308,7 @@ export async function createWorkout(input: {
   if (!name) return { ok: false, error: 'Workout name is required.' };
   const category = input.category.trim();
   if (!category) return { ok: false, error: 'Workout category is required.' };
+  const calendarLinkTarget = normalizeCalendarLinkTarget(input.calendarLinkTarget);
 
   const uniqueExerciseIds = Array.from(
     new Set(
@@ -3309,10 +3339,10 @@ export async function createWorkout(input: {
   if (uniqueExerciseIds.length === 0) {
     await pool.query(
       `
-        INSERT INTO workout_library (organization_id, name, category, description, created_by)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO workout_library (organization_id, name, category, description, created_by, calendar_link_target)
+        VALUES ($1, $2, $3, $4, $5, $6)
       `,
-      [input.organizationId, name, category, (input.description ?? '').trim() || null, input.userId]
+      [input.organizationId, name, category, (input.description ?? '').trim() || null, input.userId, calendarLinkTarget]
     );
     _invalidateTrainingReadCacheForOrganization(input.organizationId);
     return { ok: true };
@@ -3324,11 +3354,11 @@ export async function createWorkout(input: {
 
     const workout = await client.query<{ id: number }>(
       `
-        INSERT INTO workout_library (organization_id, name, category, description, created_by)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO workout_library (organization_id, name, category, description, created_by, calendar_link_target)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
       `,
-      [input.organizationId, name, category, (input.description ?? '').trim() || null, input.userId]
+      [input.organizationId, name, category, (input.description ?? '').trim() || null, input.userId, calendarLinkTarget]
     );
 
     if (validItems.length > 0) {
@@ -3406,6 +3436,7 @@ export async function updateWorkout(input: {
   name: string;
   category: string;
   description?: string;
+  calendarLinkTarget?: string;
   exerciseItems: Array<{
     exerciseId: number;
     prefix?: string;
@@ -3425,6 +3456,7 @@ export async function updateWorkout(input: {
   const category = input.category.trim();
   if (!category) return { ok: false, error: 'Workout category is required.' };
   if (!Number.isFinite(input.workoutId) || input.workoutId <= 0) return { ok: false, error: 'Workout ID is required.' };
+  const calendarLinkTarget = normalizeCalendarLinkTarget(input.calendarLinkTarget);
 
   const uniqueExerciseIds = Array.from(
     new Set(
@@ -3459,11 +3491,12 @@ export async function updateWorkout(input: {
           name = $1,
           category = $2,
           description = $3,
+          calendar_link_target = $4,
           updated_at = NOW()
-        WHERE id = $4 AND organization_id = $5
+        WHERE id = $5 AND organization_id = $6
         RETURNING id
       `,
-      [name, category, (input.description ?? '').trim() || null, input.workoutId, input.organizationId]
+      [name, category, (input.description ?? '').trim() || null, calendarLinkTarget, input.workoutId, input.organizationId]
     );
     if ((updatedWorkout.rowCount ?? 0) !== 1) {
       return { ok: false, error: 'Workout was not found in your organization.' };
@@ -3484,11 +3517,12 @@ export async function updateWorkout(input: {
           name = $1,
           category = $2,
           description = $3,
+          calendar_link_target = $4,
           updated_at = NOW()
-        WHERE id = $4 AND organization_id = $5
+        WHERE id = $5 AND organization_id = $6
         RETURNING id
       `,
-      [name, category, (input.description ?? '').trim() || null, input.workoutId, input.organizationId]
+      [name, category, (input.description ?? '').trim() || null, calendarLinkTarget, input.workoutId, input.organizationId]
     );
 
     if ((updatedWorkout.rowCount ?? 0) !== 1) {
@@ -4077,6 +4111,7 @@ export async function listProgramItemsForPlayerByDateRange(input: {
     exercise_id: number | null;
     workout_id: number | null;
     workout_category: string | null;
+    calendar_link_target: string | null;
     item_name: string;
     workout_description: string | null;
     exercise_category: string;
@@ -4189,6 +4224,7 @@ export async function listProgramItemsForPlayerByDateRange(input: {
         i.exercise_id,
         i.workout_id,
         w.category AS workout_category,
+        w.calendar_link_target,
         COALESCE(w.name, e.name, 'Assignment') AS item_name,
         w.description AS workout_description,
         CASE WHEN i.workout_id IS NOT NULL THEN 'workout' ELSE COALESCE(e.category, 'exercise') END AS exercise_category,
@@ -4240,6 +4276,7 @@ export async function listProgramItemsForPlayerByDateRange(input: {
     exerciseId: row.exercise_id,
     workoutId: row.workout_id,
     workoutCategory: row.workout_category,
+    calendarLinkTarget: normalizeCalendarLinkTarget(row.calendar_link_target),
     exerciseCategory: row.exercise_category,
     repMeasure: row.rep_measure === 'seconds' ? 'seconds' : row.rep_measure === 'distance' ? 'distance' : 'reps',
     trackingType: normalizeTrackingType(row.tracking_type),
@@ -4273,6 +4310,7 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
     workout_name: string;
     workout_category: string | null;
     workout_description: string | null;
+    calendar_link_target: string | null;
     workout_exercise_names: string | null;
     workout_exercise_json: unknown;
     completed: boolean | null;
@@ -4333,6 +4371,7 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
         w.name AS workout_name,
         w.category AS workout_category,
         w.description AS workout_description,
+        w.calendar_link_target,
         ws.exercise_names AS workout_exercise_names,
         ws.exercise_json AS workout_exercise_json,
         h.completed,
@@ -4392,6 +4431,7 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
     exerciseId: null,
     workoutId: row.workout_id,
     workoutCategory: row.workout_category,
+    calendarLinkTarget: normalizeCalendarLinkTarget(row.calendar_link_target),
     exerciseCategory: 'workout',
     repMeasure: 'reps',
     trackingType: 'lbs',

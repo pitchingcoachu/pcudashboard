@@ -41,7 +41,7 @@ type FiltersPayload = {
 
 type OptionItem = { value: string; label: string };
 
-const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-06-27-new-pitchers';
+const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-06-30-cached-ball-types';
 
 type PitchTypeRow = {
   pitch_type: string;

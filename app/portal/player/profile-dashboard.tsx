@@ -117,6 +117,15 @@ function isDrillsWorkoutName(value: string): boolean {
     || normalized.includes('mound drills');
 }
 
+function getCalendarLinkTarget(item: ProgramItemRow): 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills' {
+  if (item.calendarLinkTarget && item.calendarLinkTarget !== 'none') return item.calendarLinkTarget;
+  if (isThrowingCalendarWorkoutName(item.itemName)) return 'throwing';
+  if (isBullpenWorkoutName(item.itemName)) return 'bullpens';
+  if (isVelocityWorkoutName(item.itemName)) return 'velocity';
+  if (isDrillsWorkoutName(item.itemName)) return 'drills';
+  return 'none';
+}
+
 function formatDate(isoDate: string): string {
   const date = new Date(`${isoDate}T00:00:00Z`);
   const month = date.getUTCMonth() + 1;
@@ -1316,20 +1325,21 @@ export default function ProfileDashboard({
                   title={item.itemName}
                   style={categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout')}
                   onClick={() => {
-                    if (isThrowingCalendarWorkoutName(item.itemName)) {
+                    const linkTarget = getCalendarLinkTarget(item);
+                    if (linkTarget === 'throwing') {
                       const sep = programPreviewQuery ? '&' : '?';
                       router.push(`/portal/player/program/throwing${programPreviewQuery}${sep}date=${item.dayDate}`);
                       return;
                     }
-                    if (isBullpenWorkoutName(item.itemName)) {
+                    if (linkTarget === 'bullpens') {
                       router.push(`/portal/player/program/bullpens${programPreviewQuery}`);
                       return;
                     }
-                    if (isVelocityWorkoutName(item.itemName)) {
+                    if (linkTarget === 'velocity') {
                       router.push(`/portal/player/program/velocity${programPreviewQuery}`);
                       return;
                     }
-                    if (isDrillsWorkoutName(item.itemName)) {
+                    if (linkTarget === 'drills') {
                       router.push(`/portal/player/program/drills${programPreviewQuery}`);
                       return;
                     }

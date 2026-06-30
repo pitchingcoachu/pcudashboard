@@ -136,6 +136,14 @@ function isDrillsWorkoutName(value: string): boolean {
     || normalized.includes('mound drills');
 }
 
+function getCalendarLinkTarget(item: ProgramItemRow): 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills' {
+  if (item.calendarLinkTarget && item.calendarLinkTarget !== 'none') return item.calendarLinkTarget;
+  if (isThrowingCalendarWorkoutName(item.itemName)) return 'throwing';
+  if (isBullpenWorkoutName(item.itemName)) return 'bullpens';
+  if (isVelocityWorkoutName(item.itemName)) return 'velocity';
+  if (isDrillsWorkoutName(item.itemName)) return 'drills';
+  return 'none';
+}
 
 export default function PlayerCalendar({ playerId, initialItems, initialStartDate, initialEndDate, previewPlayerId = null }: PlayerCalendarProps) {
   const router = useRouter();
@@ -319,21 +327,22 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                 ...categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout'),
               }}
               onClick={() => {
-                if (isThrowingCalendarWorkoutName(item.itemName)) {
+                const linkTarget = getCalendarLinkTarget(item);
+                if (linkTarget === 'throwing') {
                   const dateParam = item.dayDate ?? anchorDate;
                   const sep = query ? '&' : '?';
                   router.push(`/portal/player/program/throwing${query}${sep}date=${dateParam}`);
                   return;
                 }
-                if (isBullpenWorkoutName(item.itemName)) {
+                if (linkTarget === 'bullpens') {
                   router.push(`/portal/player/program/bullpens${query}`);
                   return;
                 }
-                if (isVelocityWorkoutName(item.itemName)) {
+                if (linkTarget === 'velocity') {
                   router.push(`/portal/player/program/velocity${query}`);
                   return;
                 }
-                if (isDrillsWorkoutName(item.itemName)) {
+                if (linkTarget === 'drills') {
                   router.push(`/portal/player/program/drills${query}`);
                   return;
                 }
@@ -479,19 +488,21 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                             ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
                           }}
                           onClick={() => {
-                            if (isThrowingCalendarWorkoutName(item.itemName)) {
-                              router.push(`/portal/player/program/throwing${query}`);
+                            const linkTarget = getCalendarLinkTarget(item);
+                            if (linkTarget === 'throwing') {
+                              const sep = query ? '&' : '?';
+                              router.push(`/portal/player/program/throwing${query}${sep}date=${item.dayDate}`);
                               return;
                             }
-                            if (isBullpenWorkoutName(item.itemName)) {
+                            if (linkTarget === 'bullpens') {
                               router.push(`/portal/player/program/bullpens${query}`);
                               return;
                             }
-                            if (isVelocityWorkoutName(item.itemName)) {
+                            if (linkTarget === 'velocity') {
                               router.push(`/portal/player/program/velocity${query}`);
                               return;
                             }
-                            if (isDrillsWorkoutName(item.itemName)) {
+                            if (linkTarget === 'drills') {
                               router.push(`/portal/player/program/drills${query}`);
                               return;
                             }

@@ -46,6 +46,7 @@ export default async function AdminWorkoutsPage({ searchParams }: WorkoutPagePro
   const duplicateName = duplicateWorkout ? `${duplicateWorkout.name} (copy)` : '';
   const duplicateCategory = duplicateWorkout?.category ?? '';
   const duplicateDescription = duplicateWorkout?.description ?? '';
+  const duplicateCalendarLinkTarget = duplicateWorkout?.calendarLinkTarget ?? 'none';
   const duplicateSelectedExerciseIds = duplicateWorkout ? duplicateWorkout.items.map((item) => item.exerciseId) : [];
   const duplicateValuesByExerciseId = duplicateWorkout
     ? Object.fromEntries(
@@ -85,6 +86,7 @@ export default async function AdminWorkoutsPage({ searchParams }: WorkoutPagePro
           initialName={duplicateName}
           initialCategory={duplicateCategory}
           initialDescription={duplicateDescription}
+          initialCalendarLinkTarget={duplicateCalendarLinkTarget}
           initialSelectedExerciseIds={duplicateSelectedExerciseIds}
           initialValuesByExerciseId={duplicateValuesByExerciseId}
         />

@@ -32,6 +32,7 @@ type ScriptGrid = {
   title: string;
   rowCount: number;
   columns: string[];
+  columnTypes?: BullpenColumnType[];
   rows: string[][];
 };
 type ScriptTemplate = {
@@ -39,6 +40,7 @@ type ScriptTemplate = {
   name: string;
   rowCount: number;
   columns: string[];
+  columnTypes?: BullpenColumnType[];
   rows: string[][];
   updatedAt: string;
 };
@@ -50,6 +52,9 @@ type ScriptState = {
 };
 
 const DEFAULT_COLUMNS = ['Pitch Type', 'Ball Type', 'Stretch/Windup', 'Location', 'Situation', 'Notes'];
+type BullpenColumnType = 'auto' | 'text' | 'velocity' | 'strike';
+const DEFAULT_COLUMN_TYPE: BullpenColumnType = 'auto';
+const ALLOWED_COLUMN_TYPES = new Set<BullpenColumnType>(['auto', 'text', 'velocity', 'strike']);
 const DEFAULT_SCRIPT_STATE: ScriptState = {
   current: { title: '', rowCount: 20, columns: [...DEFAULT_COLUMNS], rows: [] },
   selectedTemplateId: '',
@@ -61,6 +66,17 @@ function normalizeColumns(raw: unknown): string[] {
   const source = Array.isArray(raw) ? raw : [];
   const cols = source.map((value) => String(value ?? '').trim()).filter(Boolean).slice(0, 16);
   return cols.length ? cols : [...DEFAULT_COLUMNS];
+}
+
+function normalizeColumnTypes(raw: unknown, columnCount: number): BullpenColumnType[] {
+  const source = Array.isArray(raw) ? raw : [];
+  const types = source.slice(0, columnCount).map((value) => {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'yes-no') return 'strike';
+    return ALLOWED_COLUMN_TYPES.has(normalized as BullpenColumnType) ? normalized as BullpenColumnType : DEFAULT_COLUMN_TYPE;
+  });
+  while (types.length < columnCount) types.push(DEFAULT_COLUMN_TYPE);
+  return types;
 }
 
 function normalizeRows(raw: unknown, rowCount: number, columnCount: number): string[][] {
@@ -98,6 +114,7 @@ function normalizeScriptState(raw: unknown): ScriptState {
       title: String(currentRaw.title ?? '').trim(),
       rowCount,
       columns,
+      columnTypes: normalizeColumnTypes(currentRaw.columnTypes, columns.length),
       rows: normalizeRows(currentRaw.rows, rowCount, columns.length),
     },
     selectedTemplateId,
@@ -118,6 +135,7 @@ function normalizeTemplateList(raw: unknown): ScriptTemplate[] {
         name: String(t.name ?? ''),
         rowCount: count,
         columns: cols,
+        columnTypes: normalizeColumnTypes(t.columnTypes, cols.length),
         rows: normalizeRows(t.rows, count, cols.length),
         updatedAt: String(t.updatedAt ?? ''),
       };

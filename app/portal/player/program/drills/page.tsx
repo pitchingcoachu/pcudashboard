@@ -2,8 +2,9 @@ import Link from 'next/link';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../../../lib/portal-session';
-import { canUseProgrammingData } from '../../../../../lib/programming-scope';
+import { canUseProgrammingData, resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { normalizeDrillsState } from '../../../../../lib/drills-program';
+import { listExercisesByOrganization } from '../../../../../lib/training-db';
 import DrillsReadonly from './drills-readonly';
 
 type DrillsPageProps = {
@@ -27,6 +28,15 @@ export default async function PlayerDrillsPage({ searchParams }: DrillsPageProps
   }).catch(() => null);
   const payload = response ? await response.json().catch(() => ({})) : {};
   const drillsState = normalizeDrillsState((payload as { drillsState?: unknown }).drillsState);
+  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const drillVideos = programmingOrganizationId > 0
+    ? (await listExercisesByOrganization(programmingOrganizationId))
+        .map((exercise) => ({
+          name: exercise.name,
+          instructionVideoUrl: String(exercise.instructionVideoUrl ?? '').trim(),
+        }))
+        .filter((exercise) => exercise.name.trim() && exercise.instructionVideoUrl)
+    : [];
   const backHref = canPreview && previewPlayerId > 0
     ? `/portal/player/program?previewPlayerId=${previewPlayerId}`
     : '/portal/player/program';
@@ -38,7 +48,7 @@ export default async function PlayerDrillsPage({ searchParams }: DrillsPageProps
           <h2 style={{ marginTop: 0 }}>Plyos and Drills</h2>
           <Link href={backHref} className="btn btn-ghost as-link">Back to Program</Link>
         </div>
-        <DrillsReadonly state={drillsState} />
+        <DrillsReadonly state={drillsState} drillVideos={drillVideos} />
       </section>
     </div>
   );

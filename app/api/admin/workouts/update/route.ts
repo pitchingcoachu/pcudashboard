@@ -51,6 +51,7 @@ export async function POST(request: Request) {
       name: String(form.get('name') ?? ''),
       category: String(form.get('category') ?? ''),
       description: String(form.get('description') ?? ''),
+      calendarLinkTarget: String(form.get('calendarLinkTarget') ?? ''),
       exerciseItems,
     });
 

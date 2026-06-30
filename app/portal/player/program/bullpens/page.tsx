@@ -41,7 +41,7 @@ export default async function PlayerBullpensPage({ searchParams }: BullpensPageP
   }).catch(() => null);
   const payload = response ? await response.json().catch(() => ({})) : {};
 
-  type Template = { id: string; name: string; rowCount: number; columns: string[]; rows: string[][] };
+  type Template = { id: string; name: string; rowCount: number; columns: string[]; columnTypes?: Array<'auto' | 'text' | 'velocity' | 'strike'>; rows: string[][] };
   const bullpenTemplates: Template[] = Array.isArray((payload as { bullpenTemplates?: Template[] }).bullpenTemplates)
     ? ((payload as { bullpenTemplates?: Template[] }).bullpenTemplates ?? [])
     : [];

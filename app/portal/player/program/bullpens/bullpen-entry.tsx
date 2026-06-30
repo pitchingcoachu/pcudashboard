@@ -7,6 +7,7 @@ type ScriptTemplate = {
   name: string;
   rowCount: number;
   columns: string[];
+  columnTypes?: BullpenColumnType[];
   rows: string[][];
 };
 
@@ -20,25 +21,47 @@ function toIsoDate(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
+type BullpenColumnType = 'auto' | 'text' | 'velocity' | 'strike';
+const DEFAULT_COLUMN_TYPE: BullpenColumnType = 'auto';
+const ALLOWED_COLUMN_TYPES = new Set<BullpenColumnType>(['auto', 'text', 'velocity', 'strike']);
+
+function normalizeColumnTypes(raw: unknown, columnCount: number): BullpenColumnType[] {
+  const source = Array.isArray(raw) ? raw : [];
+  const types = source.slice(0, columnCount).map((value) => {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'yes-no') return 'strike';
+    return ALLOWED_COLUMN_TYPES.has(normalized as BullpenColumnType) ? normalized as BullpenColumnType : DEFAULT_COLUMN_TYPE;
+  });
+  while (types.length < columnCount) types.push(DEFAULT_COLUMN_TYPE);
+  return types;
+}
+
 function isVelocityCol(col: string) {
   return col.trim().toLowerCase() === 'velocity';
-}
-function isExecutionCol(col: string) {
-  return col.trim().toLowerCase() === 'execution' || col.trim().toLowerCase() === 'executed';
 }
 function isStrikeCol(col: string) {
   const normalized = col.trim().toLowerCase();
   return normalized === 'strike' || normalized === 'strikes' || normalized === 'strike or ball';
 }
-function isEditableCol(col: string) {
-  return isVelocityCol(col) || isExecutionCol(col) || isStrikeCol(col);
+
+function resolveColumnType(col: string, type: BullpenColumnType = DEFAULT_COLUMN_TYPE): BullpenColumnType {
+  if (type !== 'auto') return type;
+  if (isVelocityCol(col)) return 'velocity';
+  if (isStrikeCol(col)) return 'strike';
+  return 'text';
 }
 
-function buildEmptyRows(rowCount: number, columns: string[], templateRows: string[][]): Array<Record<string, string>> {
+function isEditableColumn(col: string, type: BullpenColumnType = DEFAULT_COLUMN_TYPE) {
+  const resolvedType = resolveColumnType(col, type);
+  return resolvedType === 'velocity' || resolvedType === 'strike';
+}
+
+function buildEmptyRows(rowCount: number, columns: string[], templateRows: string[][], columnTypes?: BullpenColumnType[]): Array<Record<string, string>> {
+  const types = normalizeColumnTypes(columnTypes, columns.length);
   return Array.from({ length: rowCount }, (_, i) => {
     const obj: Record<string, string> = {};
     columns.forEach((col, ci) => {
-      if (isEditableCol(col)) {
+      if (isEditableColumn(col, types[ci])) {
         obj[col] = '';
       } else {
         obj[col] = templateRows[i]?.[ci] ?? '';
@@ -48,23 +71,32 @@ function buildEmptyRows(rowCount: number, columns: string[], templateRows: strin
   });
 }
 
-function hasTrackingValue(col: string, value: string) {
+function buildAdditionalRow(columns: string[], saved?: Record<string, string>): Record<string, string> {
+  const obj: Record<string, string> = {};
+  columns.forEach((col) => {
+    obj[col] = String(saved?.[col] ?? '');
+  });
+  return obj;
+}
+
+function hasTrackingValue(col: string, value: string, type: BullpenColumnType = DEFAULT_COLUMN_TYPE) {
   const raw = String(value ?? '').trim();
   if (!raw) return false;
-  if (isVelocityCol(col)) {
+  const resolvedType = resolveColumnType(col, type);
+  if (resolvedType === 'velocity') {
     const velocity = Number(raw);
     return Number.isFinite(velocity) && velocity > 0;
   }
-  if (isExecutionCol(col)) return isYesNo(raw);
-  if (isStrikeCol(col)) return isStrikeResult(raw);
+  if (resolvedType === 'strike') return isStrikeResult(raw);
   return false;
 }
 
-function getCurrentTrackingRowIndex(rows: Array<Record<string, string>>, columns: string[]) {
+function getCurrentTrackingRowIndex(rows: Array<Record<string, string>>, columns: string[], columnTypes?: BullpenColumnType[]) {
   if (!rows.length) return -1;
+  const types = normalizeColumnTypes(columnTypes, columns.length);
   let latestFilledIndex = -1;
   rows.forEach((row, rowIndex) => {
-    if (columns.some((col) => hasTrackingValue(col, row[col] ?? ''))) {
+    if (columns.some((col, colIndex) => hasTrackingValue(col, row[col] ?? '', types[colIndex]))) {
       latestFilledIndex = rowIndex;
     }
   });
@@ -72,13 +104,17 @@ function getCurrentTrackingRowIndex(rows: Array<Record<string, string>>, columns
   return nextIndex < rows.length ? nextIndex : -1;
 }
 
-type BullpenTrendMetric = 'velocity' | 'execution' | 'strike';
+type BullpenTrendMetric = 'velocity' | 'strike';
 
 type BullpenTrendBucket = {
   key: string;
   date: string;
+  comboKey: string;
+  comboLabel: string;
   pitchType: string;
   ballType: string;
+  drill: string;
+  ballWeight: string;
   value: number;
   count: number;
 };
@@ -86,8 +122,12 @@ type BullpenTrendBucket = {
 type BullpenVelocityPoint = {
   key: string;
   date: string;
+  comboKey: string;
+  comboLabel: string;
   pitchType: string;
   ballType: string;
+  drill: string;
+  ballWeight: string;
   value: number;
   pitchNumber: number;
 };
@@ -96,10 +136,11 @@ type BullpenSummaryRow = {
   key: string;
   pitchType: string;
   ballType: string;
+  drill: string;
+  ballWeight: string;
   count: number;
   avgVelocity: number | null;
   maxVelocity: number | null;
-  executionPct: number | null;
   strikePct: number | null;
 };
 
@@ -112,7 +153,6 @@ function formatTrendDate(value: string) {
 
 function trendMetricLabel(metric: BullpenTrendMetric) {
   if (metric === 'velocity') return 'Avg Velocity';
-  if (metric === 'execution') return 'Execution';
   return 'Strike';
 }
 
@@ -133,11 +173,9 @@ function TrendBarChart({ data, metric }: {
     );
   }
   const dates = Array.from(new Set(data.map((d) => d.date))).sort((a, b) => a.localeCompare(b));
-  const combos = Array.from(new Set(data.map((d) => `${d.pitchType}|${d.ballType}`))).sort((a, b) => a.localeCompare(b));
-  const comboLabel = (combo: string) => {
-    const [pitchType = 'Pitch', ballType = 'Ball'] = combo.split('|');
-    return `${pitchType} / ${ballType}`;
-  };
+  const labelByCombo = new Map(data.map((d) => [d.comboKey, d.comboLabel] as const));
+  const combos = Array.from(new Set(data.map((d) => d.comboKey))).sort((a, b) => (labelByCombo.get(a) ?? a).localeCompare(labelByCombo.get(b) ?? b));
+  const comboLabel = (combo: string) => labelByCombo.get(combo) ?? combo;
   const groupW = Math.max(96, combos.length * 18 + 34);
   const W = Math.max(720, dates.length * groupW + 92);
   const H = 310;
@@ -156,7 +194,7 @@ function TrendBarChart({ data, metric }: {
   const baselineY = scaleY(minV);
   const palette = ['#60a5fa', '#f59e0b', '#22c55e', '#e11d48', '#a78bfa', '#14b8a6', '#f97316', '#38bdf8'];
   const colorByCombo = new Map(combos.map((combo, index) => [combo, palette[index % palette.length]] as const));
-  const dataByDateCombo = new Map(data.map((d) => [`${d.date}|${d.pitchType}|${d.ballType}`, d] as const));
+  const dataByDateCombo = new Map(data.map((d) => [`${d.date}|${d.comboKey}`, d] as const));
   const ticks = metric === 'velocity'
     ? [minV, minV + range / 2, maxV]
     : [0, 50, 100];
@@ -187,8 +225,7 @@ function TrendBarChart({ data, metric }: {
             const groupCenter = groupLeft + dateBand / 2;
             const dateBars = combos
               .map((combo) => {
-                const [pitchType = 'Pitch', ballType = 'Ball'] = combo.split('|');
-                const bucket = dataByDateCombo.get(`${date}|${pitchType}|${ballType}`);
+                const bucket = dataByDateCombo.get(`${date}|${combo}`);
                 return bucket ? { combo, bucket } : null;
               })
               .filter((row): row is { combo: string; bucket: BullpenTrendBucket } => row !== null);
@@ -216,7 +253,7 @@ function TrendBarChart({ data, metric }: {
                         stroke="rgba(255,255,255,0.22)"
                         strokeWidth={1}
                       />
-                      <title>{`${d.date}\nPitch Type: ${d.pitchType}\nBall Type: ${d.ballType}\n${trendMetricLabel(metric)}: ${trendMetricFormat(metric, d.value)}\nPitches: ${d.count}`}</title>
+                      <title>{`${d.date}\nPitch Type: ${d.pitchType}\nBall Type: ${d.ballType}${d.drill !== 'All' ? `\nDrill: ${d.drill}` : ''}${d.ballWeight !== 'All' ? `\nBall Weight: ${d.ballWeight}` : ''}\n${trendMetricLabel(metric)}: ${trendMetricFormat(metric, d.value)}\nPitches: ${d.count}`}</title>
                     </g>
                   );
                 })}
@@ -227,7 +264,7 @@ function TrendBarChart({ data, metric }: {
             );
           })}
           <text x={pad.left} y={18} fontSize={12} fontWeight={800} fill="#cbd5e1">
-            {trendMetricLabel(metric)} by Date / Pitch Type / Ball Type
+            {trendMetricLabel(metric)} by Date / Pitch Type / Ball Type{metric === 'velocity' ? ' / Drill / Ball Weight' : ''}
           </text>
         </svg>
       </div>
@@ -244,11 +281,9 @@ function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
     );
   }
   const dates = Array.from(new Set(data.map((d) => d.date))).sort((a, b) => a.localeCompare(b));
-  const combos = Array.from(new Set(data.map((d) => `${d.pitchType}|${d.ballType}`))).sort((a, b) => a.localeCompare(b));
-  const comboLabel = (combo: string) => {
-    const [pitchType = 'Pitch', ballType = 'Ball'] = combo.split('|');
-    return `${pitchType} / ${ballType}`;
-  };
+  const labelByCombo = new Map(data.map((d) => [d.comboKey, d.comboLabel] as const));
+  const combos = Array.from(new Set(data.map((d) => d.comboKey))).sort((a, b) => (labelByCombo.get(a) ?? a).localeCompare(labelByCombo.get(b) ?? b));
+  const comboLabel = (combo: string) => labelByCombo.get(combo) ?? combo;
   const maxPointsPerDate = Math.max(1, ...dates.map((date) => data.filter((point) => point.date === date).length));
   const groupW = Math.max(112, maxPointsPerDate * 14 + 42);
   const W = Math.max(720, dates.length * groupW + 92);
@@ -272,7 +307,7 @@ function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
     pointsByDate.set(point.date, arr);
   }
   for (const arr of pointsByDate.values()) {
-    arr.sort((a, b) => a.pitchNumber - b.pitchNumber || a.pitchType.localeCompare(b.pitchType) || a.ballType.localeCompare(b.ballType));
+    arr.sort((a, b) => a.pitchNumber - b.pitchNumber || a.comboLabel.localeCompare(b.comboLabel));
   }
   const ticks = [minV, minV + range / 2, maxV];
   return (
@@ -310,14 +345,14 @@ function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
                   <line x1={groupLeft} x2={groupLeft} y1={pad.top} y2={baselineY + 10} stroke="rgba(148,163,184,0.12)" strokeWidth={1} />
                 ) : null}
                 {points.map((point, pointIndex) => {
-                  const combo = `${point.pitchType}|${point.ballType}`;
+                  const combo = point.comboKey;
                   const cx = pointsLeft + pointIndex * pointGap;
                   const cy = scaleY(point.value);
                   const fill = colorByCombo.get(combo) ?? '#94a3b8';
                   return (
                     <g key={point.key}>
                       <circle cx={cx} cy={cy} r={5.5} fill={fill} stroke="rgba(255,255,255,0.8)" strokeWidth={1.2} />
-                      <title>{`${point.date}\nPitch #: ${point.pitchNumber}\nPitch Type: ${point.pitchType}\nBall Type: ${point.ballType}\nVelocity: ${trendMetricFormat('velocity', point.value)}`}</title>
+                      <title>{`${point.date}\nPitch #: ${point.pitchNumber}\nPitch Type: ${point.pitchType}\nBall Type: ${point.ballType}${point.drill !== 'All' ? `\nDrill: ${point.drill}` : ''}${point.ballWeight !== 'All' ? `\nBall Weight: ${point.ballWeight}` : ''}\nVelocity: ${trendMetricFormat('velocity', point.value)}`}</title>
                     </g>
                   );
                 })}
@@ -328,7 +363,7 @@ function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
             );
           })}
           <text x={pad.left} y={18} fontSize={12} fontWeight={800} fill="#cbd5e1">
-            Individual Pitch Velocity by Date / Pitch Type / Ball Type
+            Individual Pitch Velocity by Date / Pitch Type / Ball Type / Drill / Ball Weight
           </text>
         </svg>
       </div>
@@ -341,18 +376,21 @@ function getColumn(columns: string[], wanted: string) {
   return columns.find((column) => column.trim().toLowerCase() === target) ?? null;
 }
 
+function getFactorKey(parts: string[]) {
+  return parts.map((part) => part.replaceAll('|', '/').trim() || 'Unspecified').join('|');
+}
+
+function getFactorLabel(parts: string[]) {
+  return parts.filter((part) => part && part !== 'All').join(' / ') || 'All';
+}
+
+function getVelocityFactorLabel(drill: string, ballWeight: string) {
+  return getFactorLabel([drill, ballWeight]);
+}
+
 function getColumnValue(row: Record<string, string>, column: string | null, fallback: string) {
   if (!column) return fallback;
   return String(row[column] ?? '').trim() || fallback;
-}
-
-function isYes(value: string) {
-  return value.trim().toLowerCase() === 'yes';
-}
-
-function isYesNo(value: string) {
-  const normalized = value.trim().toLowerCase();
-  return normalized === 'yes' || normalized === 'no';
 }
 
 function isStrike(value: string) {
@@ -377,6 +415,24 @@ function getLogEntryColumns(entry: LogEntry) {
     }
   }
   return firstRow ? Object.keys(firstRow).filter((column) => !column.startsWith('__')) : [];
+}
+
+function getLogEntryColumnTypes(entry: LogEntry, columns: string[], fallback?: BullpenColumnType[]) {
+  const firstRow = entry.rowsJson.find((row) => row && typeof row === 'object');
+  const savedColumnTypes = String(firstRow?.__templateColumnTypes ?? '').trim();
+  if (savedColumnTypes) {
+    try {
+      return normalizeColumnTypes(JSON.parse(savedColumnTypes), columns.length);
+    } catch {
+      // Fall through to the selected template or auto defaults.
+    }
+  }
+  return normalizeColumnTypes(fallback, columns.length);
+}
+
+function findColumnByType(columns: string[], columnTypes: BullpenColumnType[], wanted: BullpenColumnType) {
+  const idx = columns.findIndex((column, columnIndex) => resolveColumnType(column, columnTypes[columnIndex]) === wanted);
+  return idx >= 0 ? columns[idx] : '';
 }
 
 function formatSummaryNumber(value: number | null, suffix = '') {
@@ -418,16 +474,23 @@ export default function BullpenEntry({
   const [loadingEntries, setLoadingEntries] = useState(false);
 
   const template = visibleTemplates.find((t) => t.id === selectedTemplateId) ?? null;
+  const templateColumnTypes = useMemo(() => (
+    template ? normalizeColumnTypes(template.columnTypes, template.columns.length) : []
+  ), [template]);
   const currentTrackingRowIndex = useMemo(() => {
     if (!template) return -1;
-    return getCurrentTrackingRowIndex(rows, template.columns);
-  }, [rows, template]);
+    return getCurrentTrackingRowIndex(rows, template.columns, templateColumnTypes);
+  }, [rows, template, templateColumnTypes]);
+  const addBullpenRow = () => {
+    if (!template) return;
+    setRows((prev) => [...prev, buildAdditionalRow(template.columns)]);
+  };
 
   // Init rows when template changes
   useEffect(() => {
     if (!template) { setRows([]); return; }
-    setRows(buildEmptyRows(template.rowCount, template.columns, template.rows));
-  }, [template]);
+    setRows(buildEmptyRows(template.rowCount, template.columns, template.rows, templateColumnTypes));
+  }, [template, templateColumnTypes]);
 
   const templateById = useMemo(() => new Map(visibleTemplates.map((row) => [row.id, row] as const)), [visibleTemplates]);
 
@@ -452,20 +515,23 @@ export default function BullpenEntry({
     const existing = logEntries.find((e) => e.templateId === selectedTemplateId && e.bullpenDate === bullpenDate);
     if (existing) {
       // Merge saved editable values into fresh rows (keep template's readonly values)
-      const merged = buildEmptyRows(template.rowCount, template.columns, template.rows).map((row, i) => {
+      const merged = buildEmptyRows(template.rowCount, template.columns, template.rows, templateColumnTypes).map((row, i) => {
         const saved = existing.rowsJson[i];
         if (!saved) return row;
         const out = { ...row };
-        template.columns.forEach((col) => {
-          if (isEditableCol(col) && saved[col] !== undefined) out[col] = saved[col];
+        template.columns.forEach((col, colIndex) => {
+          if (isEditableColumn(col, templateColumnTypes[colIndex]) && saved[col] !== undefined) out[col] = saved[col];
         });
         return out;
       });
-      setRows(merged);
+      const additionalRows = existing.rowsJson
+        .slice(template.rowCount)
+        .map((saved) => buildAdditionalRow(template.columns, saved));
+      setRows([...merged, ...additionalRows]);
     } else {
-      setRows(buildEmptyRows(template.rowCount, template.columns, template.rows));
+      setRows(buildEmptyRows(template.rowCount, template.columns, template.rows, templateColumnTypes));
     }
-  }, [bullpenDate, selectedTemplateId, logEntries, template]);
+  }, [bullpenDate, selectedTemplateId, logEntries, template, templateColumnTypes]);
 
   const handleSave = async () => {
     if (!template || !bullpenDate) return;
@@ -483,6 +549,7 @@ export default function BullpenEntry({
             ...row,
             __templateName: template.name,
             __templateColumns: JSON.stringify(template.columns),
+            __templateColumnTypes: JSON.stringify(templateColumnTypes),
           })),
         }),
       });
@@ -519,33 +586,45 @@ export default function BullpenEntry({
         const sourceTemplate = templateById.get(entry.templateId);
         const savedColumns = getLogEntryColumns(entry);
         const columns = savedColumns.length ? savedColumns : sourceTemplate?.columns ?? [];
-        const velocityCol = columns.find(isVelocityCol) ?? '';
-        const executionCol = columns.find(isExecutionCol) ?? '';
-        const strikeCol = columns.find(isStrikeCol) ?? '';
+        const columnTypes = getLogEntryColumnTypes(entry, columns, sourceTemplate?.columnTypes);
+        const velocityCol = findColumnByType(columns, columnTypes, 'velocity');
+        const strikeCol = findColumnByType(columns, columnTypes, 'strike');
         const pitchTypeCol = getColumn(columns, 'pitch type') ?? '';
         const ballTypeCol = getColumn(columns, 'ball type') ?? '';
+        const drillCol = getColumn(columns, 'drill') ?? '';
+        const ballWeightCol = getColumn(columns, 'ball weight') ?? '';
         return (entry.rowsJson ?? []).map((row, index): Record<string, string> => ({
           ...row,
           __date: entry.bullpenDate,
           __pitchNumber: String(index + 1),
           __templateId: entry.templateId,
           __velocityCol: velocityCol,
-          __executionCol: executionCol,
           __strikeCol: strikeCol,
           __pitchTypeCol: pitchTypeCol,
           __ballTypeCol: ballTypeCol,
+          __drillCol: drillCol,
+          __ballWeightCol: ballWeightCol,
         }));
       });
   }, [logEntries, templateById, trendStartDate, trendEndDate]);
 
   const trendMetricOptions = useMemo(() => {
     const options: Array<{ value: BullpenTrendMetric; label: string }> = [];
-    const allColumns = [...visibleTemplates.flatMap((row) => row.columns), ...logEntries.flatMap(getLogEntryColumns)];
-    if (allColumns.some(isVelocityCol)) options.push({ value: 'velocity', label: 'Velocity' });
-    if (allColumns.some(isExecutionCol)) options.push({ value: 'execution', label: 'Execution %' });
-    if (allColumns.some(isStrikeCol)) options.push({ value: 'strike', label: 'Strike %' });
+    const templateColumns = visibleTemplates.flatMap((row) => {
+      const types = normalizeColumnTypes(row.columnTypes, row.columns.length);
+      return row.columns.map((column, index) => resolveColumnType(column, types[index]));
+    });
+    const savedColumns = logEntries.flatMap((entry) => {
+      const sourceTemplate = templateById.get(entry.templateId);
+      const columns = getLogEntryColumns(entry);
+      const types = getLogEntryColumnTypes(entry, columns, sourceTemplate?.columnTypes);
+      return columns.map((column, index) => resolveColumnType(column, types[index]));
+    });
+    const allTypes = [...templateColumns, ...savedColumns];
+    if (allTypes.includes('velocity')) options.push({ value: 'velocity', label: 'Velocity' });
+    if (allTypes.includes('strike')) options.push({ value: 'strike', label: 'Strike %' });
     return options;
-  }, [visibleTemplates, logEntries]);
+  }, [visibleTemplates, logEntries, templateById]);
 
   useEffect(() => {
     if (!trendMetricOptions.length) return;
@@ -554,28 +633,32 @@ export default function BullpenEntry({
   }, [trendMetric, trendMetricOptions]);
 
   const combinedTrendData = useMemo(() => {
-    const groups = new Map<string, { date: string; pitchType: string; ballType: string; sum: number; count: number; yes: number }>();
+    const groups = new Map<string, { date: string; comboKey: string; comboLabel: string; pitchType: string; ballType: string; drill: string; ballWeight: string; sum: number; count: number; yes: number }>();
     for (const row of allRows) {
-      const valueCol = trendMetric === 'velocity' ? row.__velocityCol : trendMetric === 'execution' ? row.__executionCol : row.__strikeCol;
+      const valueCol = trendMetric === 'velocity' ? row.__velocityCol : row.__strikeCol;
       if (!valueCol) continue;
       const date = String(row.__date ?? '').trim();
       if (!date) continue;
       const pitchType = getColumnValue(row, row.__pitchTypeCol || null, 'Pitch');
       const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Ball');
+      const drill = trendMetric === 'velocity' ? getColumnValue(row, row.__drillCol || null, 'All') : 'All';
+      const ballWeight = trendMetric === 'velocity' ? getColumnValue(row, row.__ballWeightCol || null, 'All') : 'All';
+      const comboParts = trendMetric === 'velocity' ? [pitchType, ballType, drill, ballWeight] : [pitchType, ballType];
+      const comboKey = getFactorKey(comboParts);
+      const comboLabel = trendMetric === 'velocity' ? getVelocityFactorLabel(drill, ballWeight) : getFactorLabel(comboParts);
       const rawValue = String(row[valueCol] ?? '').trim();
       if (!rawValue) continue;
-      const key = `${date}|${pitchType}|${ballType}`;
-      const group = groups.get(key) ?? { date, pitchType, ballType, sum: 0, count: 0, yes: 0 };
+      const key = `${date}|${comboKey}`;
+      const group = groups.get(key) ?? { date, comboKey, comboLabel, pitchType, ballType, drill, ballWeight, sum: 0, count: 0, yes: 0 };
       if (trendMetric === 'velocity') {
         const value = Number(rawValue);
         if (!Number.isFinite(value) || value <= 0) continue;
         group.sum += value;
         group.count += 1;
       } else {
-        if (trendMetric === 'strike' && !isStrikeResult(rawValue)) continue;
-        if (trendMetric === 'execution' && !isYesNo(rawValue)) continue;
+        if (!isStrikeResult(rawValue)) continue;
         group.count += 1;
-        if (trendMetric === 'strike' ? isStrike(rawValue) : isYes(rawValue)) group.yes += 1;
+        if (isStrike(rawValue)) group.yes += 1;
       }
       groups.set(key, group);
     }
@@ -583,8 +666,12 @@ export default function BullpenEntry({
       .map(([key, group]) => ({
         key,
         date: group.date,
+        comboKey: group.comboKey,
+        comboLabel: group.comboLabel,
         pitchType: group.pitchType,
         ballType: group.ballType,
+        drill: group.drill,
+        ballWeight: group.ballWeight,
         count: group.count,
         value: trendMetric === 'velocity'
           ? (group.count ? group.sum / group.count : 0)
@@ -593,8 +680,7 @@ export default function BullpenEntry({
       .filter((bucket) => bucket.count > 0 && bucket.value > 0)
       .sort((a, b) =>
         a.date.localeCompare(b.date) ||
-        a.pitchType.localeCompare(b.pitchType) ||
-        a.ballType.localeCompare(b.ballType)
+        a.comboLabel.localeCompare(b.comboLabel)
       );
   }, [allRows, trendMetric]);
 
@@ -607,11 +693,20 @@ export default function BullpenEntry({
         if (!Number.isFinite(value) || value <= 0) return null;
         const date = String(row.__date ?? '').trim();
         if (!date) return null;
+        const pitchType = getColumnValue(row, row.__pitchTypeCol || null, 'Pitch');
+        const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Ball');
+        const drill = getColumnValue(row, row.__drillCol || null, 'All');
+        const ballWeight = getColumnValue(row, row.__ballWeightCol || null, 'All');
+        const comboParts = [pitchType, ballType, drill, ballWeight];
         return {
           key: `${date}|${index}|${value}`,
           date,
-          pitchType: getColumnValue(row, row.__pitchTypeCol || null, 'Pitch'),
-          ballType: getColumnValue(row, row.__ballTypeCol || null, 'Ball'),
+          comboKey: getFactorKey(comboParts),
+          comboLabel: getVelocityFactorLabel(drill, ballWeight),
+          pitchType,
+          ballType,
+          drill,
+          ballWeight,
           value,
           pitchNumber: Number(row.__pitchNumber) || index + 1,
         };
@@ -624,12 +719,12 @@ export default function BullpenEntry({
     type SummaryAccumulator = {
       pitchType: string;
       ballType: string;
+      drill: string;
+      ballWeight: string;
       count: number;
       velocitySum: number;
       velocityCount: number;
       maxVelocity: number | null;
-      executionYes: number;
-      executionCount: number;
       strikeYes: number;
       strikeCount: number;
     };
@@ -637,25 +732,21 @@ export default function BullpenEntry({
     const total: SummaryAccumulator = {
       pitchType: 'All',
       ballType: 'All',
+      drill: 'All',
+      ballWeight: 'All',
       count: 0,
       velocitySum: 0,
       velocityCount: 0,
       maxVelocity: null,
-      executionYes: 0,
-      executionCount: 0,
       strikeYes: 0,
       strikeCount: 0,
     };
-    const addPitch = (group: SummaryAccumulator, velocity: number | null, execution: string, strike: string) => {
+    const addPitch = (group: SummaryAccumulator, velocity: number | null, strike: string) => {
       group.count += 1;
       if (velocity !== null) {
         group.velocitySum += velocity;
         group.velocityCount += 1;
         group.maxVelocity = group.maxVelocity === null ? velocity : Math.max(group.maxVelocity, velocity);
-      }
-      if (isYesNo(execution)) {
-        group.executionCount += 1;
-        if (isYes(execution)) group.executionYes += 1;
       }
       if (isStrikeResult(strike)) {
         group.strikeCount += 1;
@@ -667,27 +758,28 @@ export default function BullpenEntry({
       const velocityRaw = row.__velocityCol ? String(row[row.__velocityCol] ?? '').trim() : '';
       const velocityValue = Number(velocityRaw);
       const velocity = velocityRaw && Number.isFinite(velocityValue) && velocityValue > 0 ? velocityValue : null;
-      const execution = row.__executionCol ? String(row[row.__executionCol] ?? '').trim() : '';
       const strike = row.__strikeCol ? String(row[row.__strikeCol] ?? '').trim() : '';
-      if (velocity === null && !isYesNo(execution) && !isStrikeResult(strike)) continue;
+      if (velocity === null && !isStrikeResult(strike)) continue;
 
       const pitchType = getColumnValue(row, row.__pitchTypeCol || null, 'Unspecified');
       const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Unspecified');
-      const key = `${pitchType}|${ballType}`;
+      const drill = getColumnValue(row, row.__drillCol || null, 'All');
+      const ballWeight = getColumnValue(row, row.__ballWeightCol || null, 'All');
+      const key = getFactorKey([pitchType, ballType, drill, ballWeight]);
       const group = groups.get(key) ?? {
         pitchType,
         ballType,
+        drill,
+        ballWeight,
         count: 0,
         velocitySum: 0,
         velocityCount: 0,
         maxVelocity: null,
-        executionYes: 0,
-        executionCount: 0,
         strikeYes: 0,
         strikeCount: 0,
       };
-      addPitch(group, velocity, execution, strike);
-      addPitch(total, velocity, execution, strike);
+      addPitch(group, velocity, strike);
+      addPitch(total, velocity, strike);
       groups.set(key, group);
     }
 
@@ -695,15 +787,16 @@ export default function BullpenEntry({
       key,
       pitchType: group.pitchType,
       ballType: group.ballType,
+      drill: group.drill,
+      ballWeight: group.ballWeight,
       count: group.count,
       avgVelocity: group.velocityCount > 0 ? group.velocitySum / group.velocityCount : null,
       maxVelocity: group.maxVelocity,
-      executionPct: group.executionCount > 0 ? (group.executionYes / group.executionCount) * 100 : null,
       strikePct: group.strikeCount > 0 ? (group.strikeYes / group.strikeCount) * 100 : null,
     });
     const summaryRows = Array.from(groups.entries())
       .map(([key, group]) => toSummaryRow(key, group))
-      .sort((a, b) => b.count - a.count || a.pitchType.localeCompare(b.pitchType) || a.ballType.localeCompare(b.ballType));
+      .sort((a, b) => b.count - a.count || getFactorLabel([a.pitchType, a.ballType, a.drill, a.ballWeight]).localeCompare(getFactorLabel([b.pitchType, b.ballType, b.drill, b.ballWeight])));
     return {
       total: total.count > 0 ? toSummaryRow('all', total) : null,
       rows: summaryRows,
@@ -714,8 +807,9 @@ export default function BullpenEntry({
     const sourceTemplate = templateById.get(entry.templateId);
     const savedColumns = getLogEntryColumns(entry);
     const columns = savedColumns.length ? savedColumns : sourceTemplate?.columns ?? [];
-    const velocityCol = columns.find(isVelocityCol) ?? '';
-    const strikeCol = columns.find(isStrikeCol) ?? '';
+    const columnTypes = getLogEntryColumnTypes(entry, columns, sourceTemplate?.columnTypes);
+    const velocityCol = findColumnByType(columns, columnTypes, 'velocity');
+    const strikeCol = findColumnByType(columns, columnTypes, 'strike');
     let velocitySum = 0;
     let velocityCount = 0;
     let maxVelocity: number | null = null;
@@ -746,8 +840,9 @@ export default function BullpenEntry({
   }), [logEntries, templateById]);
 
   const summaryHasVelocity = trendMetricOptions.some((option) => option.value === 'velocity');
-  const summaryHasExecution = trendMetricOptions.some((option) => option.value === 'execution');
   const summaryHasStrike = trendMetricOptions.some((option) => option.value === 'strike');
+  const summaryHasDrill = summaryHasVelocity && allRows.some((row) => String(row.__drillCol ?? '').trim());
+  const summaryHasBallWeight = summaryHasVelocity && allRows.some((row) => String(row.__ballWeightCol ?? '').trim());
 
   if (!visibleTemplates.length) {
     return <p className="portal-muted-text" style={{ margin: 0 }}>No bullpen scripts assigned yet.</p>;
@@ -808,16 +903,21 @@ export default function BullpenEntry({
                   <th style={{ textAlign: 'center', fontSize: '0.9rem', fontWeight: 800, padding: '0.4rem 0.35rem', borderBottom: '1px solid var(--calendar-grid-border, var(--border))', borderRight: '1px solid var(--calendar-grid-border, var(--border))' }}>
                     Pitch #
                   </th>
-                  {template.columns.map((col) => (
-                    <th key={col} style={{ textAlign: 'center', fontSize: '0.9rem', fontWeight: 800, padding: isVelocityCol(col) ? '0.35rem 0.2rem' : '0.4rem 0.35rem', borderBottom: '1px solid var(--calendar-grid-border, var(--border))', borderRight: '1px solid var(--calendar-grid-border, var(--border))', whiteSpace: 'nowrap', color: isEditableCol(col) ? '#c8102e' : 'inherit', width: isVelocityCol(col) ? 72 : undefined, minWidth: isVelocityCol(col) ? 72 : undefined, maxWidth: isVelocityCol(col) ? 72 : undefined }}>
-                      {col}
-                    </th>
-                  ))}
+                  {template.columns.map((col, colIndex) => {
+                    const columnType = resolveColumnType(col, templateColumnTypes[colIndex]);
+                    const isVelocityColumn = columnType === 'velocity';
+                    return (
+                      <th key={`${col}-${colIndex}`} style={{ textAlign: 'center', fontSize: '0.9rem', fontWeight: 800, padding: isVelocityColumn ? '0.35rem 0.2rem' : '0.4rem 0.35rem', borderBottom: '1px solid var(--calendar-grid-border, var(--border))', borderRight: '1px solid var(--calendar-grid-border, var(--border))', whiteSpace: 'nowrap', color: isEditableColumn(col, templateColumnTypes[colIndex]) ? '#c8102e' : 'inherit', width: isVelocityColumn ? 72 : undefined, minWidth: isVelocityColumn ? 72 : undefined, maxWidth: isVelocityColumn ? 72 : undefined }}>
+                        {col}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row, ri) => {
                   const isCurrentRow = ri === currentTrackingRowIndex;
+                  const isAdditionalRow = ri >= template.rowCount;
                   const currentRowCellStyle = isCurrentRow
                     ? { background: 'rgba(34,197,94,0.12)' }
                     : {};
@@ -827,11 +927,13 @@ export default function BullpenEntry({
                         <div style={{ display: 'grid', justifyItems: 'center', gap: 2, lineHeight: 1.05 }}>
                           <span>{ri + 1}</span>
                           {isCurrentRow ? <span style={{ fontSize: 10, fontWeight: 900, color: '#86efac', textTransform: 'uppercase' }}>Now</span> : null}
+                          {isAdditionalRow && !isCurrentRow ? <span style={{ fontSize: 9, fontWeight: 900, color: '#fbbf24', textTransform: 'uppercase' }}>Extra</span> : null}
                         </div>
                       </td>
                       {template.columns.map((col, ci) => {
                         const val = row[col] ?? '';
-                        if (isVelocityCol(col)) {
+                        const columnType = resolveColumnType(col, templateColumnTypes[ci]);
+                        if (columnType === 'velocity') {
                           return (
                             <td key={ci} style={{ padding: '0.16rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', width: 72, minWidth: 72, maxWidth: 72, ...currentRowCellStyle }}>
                               <input
@@ -845,7 +947,7 @@ export default function BullpenEntry({
                             </td>
                           );
                         }
-                        if (isExecutionCol(col) || isStrikeCol(col)) {
+                        if (columnType === 'strike') {
                           return (
                             <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
                               <div style={{ display: 'flex', gap: 12, justifyContent: 'center', padding: '4px 0' }}>
@@ -867,6 +969,19 @@ export default function BullpenEntry({
                           );
                         }
                         // Readonly cell
+                        if (isAdditionalRow) {
+                          return (
+                            <td key={ci} style={{ padding: '0.16rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
+                              <input
+                                type="text"
+                                className="portal-schedule-control"
+                                value={val}
+                                onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
+                                style={{ width: '100%', minWidth: 0, textAlign: 'center', fontWeight: 600, padding: '0.35rem 0.45rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
+                              />
+                            </td>
+                          );
+                        }
                         return (
                           <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
                             <div style={{ padding: '0.35rem 0.45rem', textAlign: 'center', fontSize: '0.95rem', fontWeight: 600, color: isCurrentRow ? '#f8fafc' : '#e2e8f0', opacity: isCurrentRow ? 1 : 0.85 }}>
@@ -878,6 +993,31 @@ export default function BullpenEntry({
                     </tr>
                   );
                 })}
+                <tr>
+                  <td
+                    colSpan={template.columns.length + 1}
+                    style={{ padding: '0.45rem 0.2rem 0', borderTop: '1px solid rgba(255,255,255,0.08)' }}
+                  >
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={addBullpenRow}
+                      disabled={!template}
+                      aria-label="Add bullpen row"
+                      style={{
+                        width: '100%',
+                        minHeight: 38,
+                        justifyContent: 'center',
+                        borderStyle: 'dashed',
+                        color: '#d1fae5',
+                        fontSize: '0.95rem',
+                        fontWeight: 600,
+                      }}
+                    >
+                      + Add Row
+                    </button>
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -997,7 +1137,7 @@ export default function BullpenEntry({
             <div className="portal-bullpen-summary">
               <div>
                 <h4>Pitch Summary</h4>
-                <p>Pitch totals and results for the selected date range.</p>
+                <p>Pitch totals, results, and velocity factors for the selected date range.</p>
               </div>
               <div className="portal-table-wrap">
                 <table className="portal-table portal-bullpen-summary-table">
@@ -1005,11 +1145,12 @@ export default function BullpenEntry({
                     <tr>
                       <th>Pitch Type</th>
                       <th>Ball Type</th>
+                      {summaryHasDrill ? <th>Drill</th> : null}
+                      {summaryHasBallWeight ? <th>Ball Weight</th> : null}
                       <th className="portal-bullpen-summary-number">#</th>
                       {summaryHasStrike ? <th className="portal-bullpen-summary-number">Strike %</th> : null}
                       {summaryHasVelocity ? <th className="portal-bullpen-summary-number">Avg Velo</th> : null}
                       {summaryHasVelocity ? <th className="portal-bullpen-summary-number">Max Velo</th> : null}
-                      {summaryHasExecution ? <th className="portal-bullpen-summary-number">Execution %</th> : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -1017,11 +1158,12 @@ export default function BullpenEntry({
                       <tr key={summaryRow.key} className={summaryRow.key === 'all' ? 'portal-bullpen-summary-all' : undefined}>
                         <td>{summaryRow.pitchType}</td>
                         <td>{summaryRow.ballType}</td>
+                        {summaryHasDrill ? <td>{summaryRow.drill}</td> : null}
+                        {summaryHasBallWeight ? <td>{summaryRow.ballWeight}</td> : null}
                         <td className="portal-bullpen-summary-number">{summaryRow.count}</td>
                         {summaryHasStrike ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.strikePct, '%')}</td> : null}
                         {summaryHasVelocity ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.avgVelocity)}</td> : null}
                         {summaryHasVelocity ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.maxVelocity)}</td> : null}
-                        {summaryHasExecution ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.executionPct, '%')}</td> : null}
                       </tr>
                     ))}
                   </tbody>

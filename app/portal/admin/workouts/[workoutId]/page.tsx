@@ -97,6 +97,15 @@ export default async function EditWorkoutPage({ params, searchParams }: EditWork
             Description
             <textarea name="description" rows={2} defaultValue={workout.description ?? ''} />
           </label>
+          <label className="portal-form-span-2">
+            Calendar Click Target
+            <select name="calendarLinkTarget" defaultValue={workout.calendarLinkTarget}>
+              <option value="none">Open workout details</option>
+              <option value="throwing">Throwing Calendar</option>
+              <option value="bullpens">Bullpens</option>
+              <option value="drills">Drills</option>
+            </select>
+          </label>
           <div className="portal-form-span-2">
             <WorkoutExerciseSelector
               exercises={exercises}

@@ -15,6 +15,7 @@ type ScriptGrid = {
   title: string;
   rowCount: number;
   columns: string[];
+  columnTypes?: BullpenColumnType[];
   rows: string[][];
 };
 
@@ -23,6 +24,7 @@ type ScriptTemplate = {
   name: string;
   rowCount: number;
   columns: string[];
+  columnTypes?: BullpenColumnType[];
   rows: string[][];
   updatedAt: string;
 };
@@ -35,6 +37,9 @@ type ScriptState = {
 };
 const SHARED_PLAYER_ID = 0;
 const DEFAULT_COLUMNS = ['Pitch Type', 'Ball Type', 'Stretch/Windup', 'Location', 'Situation', 'Notes'];
+type BullpenColumnType = 'auto' | 'text' | 'velocity' | 'strike';
+const DEFAULT_COLUMN_TYPE: BullpenColumnType = 'auto';
+const ALLOWED_COLUMN_TYPES = new Set<BullpenColumnType>(['auto', 'text', 'velocity', 'strike']);
 
 const DEFAULT_SCRIPT_STATE: ScriptState = {
   current: { title: '', rowCount: 20, columns: [...DEFAULT_COLUMNS], rows: [] },
@@ -50,6 +55,17 @@ function normalizeColumns(raw: unknown): string[] {
     .filter(Boolean)
     .slice(0, 16);
   return cols.length ? cols : [...DEFAULT_COLUMNS];
+}
+
+function normalizeColumnTypes(raw: unknown, columnCount: number): BullpenColumnType[] {
+  const source = Array.isArray(raw) ? raw : [];
+  const types = source.slice(0, columnCount).map((value) => {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'yes-no') return 'strike';
+    return ALLOWED_COLUMN_TYPES.has(normalized as BullpenColumnType) ? normalized as BullpenColumnType : DEFAULT_COLUMN_TYPE;
+  });
+  while (types.length < columnCount) types.push(DEFAULT_COLUMN_TYPE);
+  return types;
 }
 
 function toLegacyRowArray(row: Record<string, unknown>): string[] {
@@ -94,6 +110,7 @@ function normalizeTemplateList(raw: unknown): ScriptTemplate[] {
         name: String(t.name ?? ''),
         rowCount: count,
         columns: cols,
+        columnTypes: normalizeColumnTypes(t.columnTypes, cols.length),
         rows: normalizeRows(t.rows, count, cols.length),
         updatedAt: String(t.updatedAt ?? ''),
       };
@@ -116,6 +133,7 @@ function normalizeScriptState(raw: unknown): ScriptState {
       title: String(currentRaw.title ?? '').trim(),
       rowCount,
       columns,
+      columnTypes: normalizeColumnTypes(currentRaw.columnTypes, columns.length),
       rows: normalizeRows(currentRaw.rows, rowCount, columns.length),
     },
     selectedTemplateId,
@@ -318,8 +336,10 @@ export async function POST(request: Request) {
 
   const existingThrowingTemplates = Array.isArray(sharedObj.throwingTemplates) ? (sharedObj.throwingTemplates as unknown[]) : [];
 
-  let nextBullpenTemplates = normalizeTemplateList(Array.isArray(body.bullpenTemplates) ? body.bullpenTemplates : sharedObj.bullpenTemplates);
-  let nextVelocityTemplates = normalizeTemplateList(Array.isArray(body.velocityTemplates) ? body.velocityTemplates : sharedObj.velocityTemplates);
+  const hasBullpenTemplatesInput = Array.isArray(body.bullpenTemplates);
+  const hasVelocityTemplatesInput = Array.isArray(body.velocityTemplates);
+  let nextBullpenTemplates = normalizeTemplateList(hasBullpenTemplatesInput ? body.bullpenTemplates : sharedObj.bullpenTemplates);
+  let nextVelocityTemplates = normalizeTemplateList(hasVelocityTemplatesInput ? body.velocityTemplates : sharedObj.velocityTemplates);
   const nextPreThrowDrillTemplates = normalizeDrillTemplates(
     Array.isArray(body.preThrowDrillTemplates) ? body.preThrowDrillTemplates : sharedObj.preThrowDrillTemplates
   );
@@ -327,13 +347,13 @@ export async function POST(request: Request) {
     Array.isArray(body.postThrowDrillTemplates) ? body.postThrowDrillTemplates : sharedObj.postThrowDrillTemplates
   );
 
-  if (nextBullpenTemplates.length === 0 && !isSharedOnly) {
+  if (nextBullpenTemplates.length === 0 && !hasBullpenTemplatesInput && !isSharedOnly) {
     nextBullpenTemplates = extractLegacyTemplates(playerObj.bullpen);
   }
-  if (nextBullpenTemplates.length === 0) {
+  if (nextBullpenTemplates.length === 0 && !hasBullpenTemplatesInput) {
     nextBullpenTemplates = recoverBullpenTemplates(await getRecoverableBullpenScripts({ organizationId }));
   }
-  if (nextVelocityTemplates.length === 0 && !isSharedOnly) {
+  if (nextVelocityTemplates.length === 0 && !hasVelocityTemplatesInput && !isSharedOnly) {
     nextVelocityTemplates = extractLegacyTemplates(playerObj.velocity);
   }
 

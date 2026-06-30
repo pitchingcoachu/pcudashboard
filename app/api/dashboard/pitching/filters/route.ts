@@ -10,7 +10,7 @@ const RESPONSE_CACHE_HEADERS = {
   vary: 'Cookie',
 } as const;
 const SLOW_ROUTE_MS = 2500;
-const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'pcu-roster-2026-06-27-new-pitchers';
+const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'pcu-roster-2026-06-30-cached-ball-types';
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -81,8 +81,7 @@ export async function GET(request: Request) {
   const inputUrl = new URL(request.url);
   const level = inputUrl.searchParams.get('level')?.trim() ?? '';
   const forceRefresh = inputUrl.searchParams.get('force_refresh') === '1' || inputUrl.searchParams.get('force_refresh') === 'true';
-  const schoolUpper = String(schoolCode ?? '').trim().toUpperCase();
-  const shouldRefreshBallTypes = forceRefresh || (schoolUpper !== 'LEAGUE' && schoolUpper !== 'PRO' && schoolUpper !== 'MLB');
+  const shouldRefreshBallTypes = forceRefresh;
   const url = new URL(`${apiBase}/v1/pitching/filters`);
   url.searchParams.set('school_code', schoolCode);
   if (level) url.searchParams.set('level', level);
