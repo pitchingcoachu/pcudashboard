@@ -1,4 +1,9 @@
 import { NextResponse } from 'next/server';
+import {
+  DEMO_REQUEST_FOLLOWUP_TEMPLATE_KEY,
+  getEmailTemplate,
+  renderDemoRequestTemplate,
+} from '../../../lib/email-templates';
 
 type DemoPayload = {
   name?: string;
@@ -34,6 +39,7 @@ export async function POST(request: Request) {
   if (resendApiKey) {
     const toEmail = process.env.DEMO_REQUEST_TO_EMAIL ?? 'info@pitchingcoachu.com';
     const fromEmail = process.env.DEMO_REQUEST_FROM_EMAIL ?? 'onboarding@resend.dev';
+    const confirmationFromEmail = process.env.DEMO_REQUEST_CONFIRMATION_FROM_EMAIL ?? fromEmail;
 
     const subject = `New PCU Demo Request - ${name}`;
     const text = [
@@ -56,31 +62,44 @@ export async function POST(request: Request) {
     `;
 
     try {
-      const resendResponse = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${resendApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: fromEmail,
-          to: [toEmail],
-          reply_to: email,
-          subject,
-          text,
-          html,
-        }),
+      await sendResendEmail(resendApiKey, {
+        from: fromEmail,
+        to: [toEmail],
+        reply_to: email,
+        subject,
+        text,
+        html,
       });
-
-      if (!resendResponse.ok) {
-        const errorText = await resendResponse.text();
-        deliveryErrors.push(`Email provider error: ${errorText}`);
-      } else {
-        emailDelivered = true;
-        deliveryResults.push('email');
-      }
+      emailDelivered = true;
+      deliveryResults.push('email');
     } catch (error) {
       deliveryErrors.push(`Email provider error: ${String(error)}`);
+    }
+
+    try {
+      const template = await getEmailTemplate(DEMO_REQUEST_FOLLOWUP_TEMPLATE_KEY);
+      const rendered = renderDemoRequestTemplate(
+        template,
+        {
+          name,
+          email,
+          phone,
+          school_or_facility: schoolOrFacility,
+          role,
+        },
+        confirmationFromEmail
+      );
+      await sendResendEmail(resendApiKey, {
+        from: rendered.from,
+        to: [email],
+        reply_to: toEmail,
+        subject: rendered.subject,
+        text: rendered.text,
+        html: rendered.html,
+      });
+      deliveryResults.push('confirmation_email');
+    } catch (error) {
+      deliveryErrors.push(`Confirmation email provider error: ${String(error)}`);
     }
   } else if (requireEmailDelivery) {
     deliveryErrors.push('Email provider error: RESEND_API_KEY is not configured');
@@ -139,4 +158,29 @@ function escapeHtml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+async function sendResendEmail(
+  resendApiKey: string,
+  payload: {
+    from: string;
+    to: string[];
+    reply_to?: string;
+    subject: string;
+    text: string;
+    html: string;
+  }
+) {
+  const resendResponse = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${resendApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resendResponse.ok) {
+    throw new Error(await resendResponse.text());
+  }
 }

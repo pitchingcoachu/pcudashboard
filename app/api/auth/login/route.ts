@@ -11,6 +11,8 @@ import {
 import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
 import { resolveHomeDashboardSchoolCode } from '../../../../lib/dashboard-home-school';
 import { canUseProgrammingData } from '../../../../lib/programming-scope';
+import { readActivityRequestMeta } from '../../../../lib/portal-activity';
+import { recordPortalActivityEvent } from '../../../../lib/training-db';
 
 type LoginPayload = {
   email?: string;
@@ -102,6 +104,21 @@ export async function POST(request: Request) {
       dashboardSchoolCode: resolvedDashboardSchoolCode,
     });
     const hostname = requestUrl.hostname;
+    const { userAgent, ipAddress } = await readActivityRequestMeta(request);
+    void recordPortalActivityEvent({
+      userId: user.userId ?? null,
+      email: user.email,
+      name: user.name ?? null,
+      role: normalizedRole,
+      organizationId: user.organizationId ?? null,
+      playerId: user.playerId ?? null,
+      dashboardSchoolCode: resolvedDashboardSchoolCode,
+      eventType: 'login_success',
+      path: isWebMode ? '/login?mode=web' : '/api/auth/login',
+      metadata: { mode: isWebMode ? 'web' : 'api' },
+      userAgent,
+      ipAddress,
+    }).catch(() => {});
 
     if (isWebMode) {
       const destination =

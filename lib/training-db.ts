@@ -1,5 +1,6 @@
 import { createPasswordHash, ensureAuthDbReady, getDbPool, isDatabaseConfigured, verifyPasswordAgainstHash } from './auth-db';
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH } from './note-attachment-limits';
+import type { PortalActivityEventType } from './portal-activity';
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 
 declare global {
@@ -151,6 +152,34 @@ export type DashboardPlayerNoteRow = {
   attachmentDataUrl: string | null;
   createdAt: string;
   createdByUserId: number | null;
+};
+
+export type PortalActivityUserSummaryRow = {
+  userId: number | null;
+  email: string;
+  name: string | null;
+  role: 'admin' | 'coach' | 'player' | 'unknown';
+  organizationId: number | null;
+  organizationName: string | null;
+  playerId: number | null;
+  dashboardSchoolCode: string | null;
+  lastLoginAt: string | null;
+  lastActivityAt: string | null;
+  lastPath: string | null;
+  loginCount30d: number;
+  pageViewCount30d: number;
+  keyActionCount30d: number;
+};
+
+export type PortalActivityRecentEventRow = {
+  id: number;
+  email: string;
+  name: string | null;
+  role: 'admin' | 'coach' | 'player' | 'unknown';
+  organizationName: string | null;
+  eventType: PortalActivityEventType;
+  path: string | null;
+  createdAt: string;
 };
 
 export type TrackedExerciseRow = {
@@ -430,6 +459,27 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_exercise ON program_day_items (exercise_id);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_program_day_items_workout ON program_day_items (workout_id);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_organizations_upper_trim_name ON organizations ((UPPER(TRIM(name))));`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS portal_activity_events (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER,
+        email TEXT NOT NULL,
+        name TEXT,
+        role TEXT NOT NULL DEFAULT 'unknown',
+        organization_id INTEGER,
+        player_id INTEGER,
+        dashboard_school_code TEXT,
+        event_type TEXT NOT NULL,
+        path TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        user_agent TEXT,
+        ip_address TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_activity_events_created ON portal_activity_events (created_at DESC);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_activity_events_email_created ON portal_activity_events (LOWER(email), created_at DESC);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_activity_events_type_created ON portal_activity_events (event_type, created_at DESC);`);
     await pool.query(`UPDATE auth_users SET is_active = TRUE WHERE is_active IS NULL;`);
     await pool.query(`
     CREATE TABLE IF NOT EXISTS dashboard_custom_tables (
@@ -1956,6 +2006,248 @@ export async function setStaffActiveStatus(input: {
   );
   if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Coach user not found.' };
   return { ok: true };
+}
+
+function normalizeActivityRole(value: string | null | undefined): 'admin' | 'coach' | 'player' | 'unknown' {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'admin') return 'admin';
+  if (normalized === 'coach') return 'coach';
+  if (normalized === 'player') return 'player';
+  return 'unknown';
+}
+
+function normalizeActivityEventTypeForDb(value: string): PortalActivityEventType {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'login_success') return 'login_success';
+  if (normalized === 'bullpen_saved') return 'bullpen_saved';
+  if (normalized === 'workout_logged') return 'workout_logged';
+  if (normalized === 'questionnaire_completed') return 'questionnaire_completed';
+  if (normalized === 'note_added') return 'note_added';
+  return 'page_view';
+}
+
+async function ensurePortalActivityEventsTable(): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS portal_activity_events (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER,
+      email TEXT NOT NULL,
+      name TEXT,
+      role TEXT NOT NULL DEFAULT 'unknown',
+      organization_id INTEGER,
+      player_id INTEGER,
+      dashboard_school_code TEXT,
+      event_type TEXT NOT NULL,
+      path TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      user_agent TEXT,
+      ip_address TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_activity_events_created ON portal_activity_events (created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_activity_events_email_created ON portal_activity_events (LOWER(email), created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_activity_events_type_created ON portal_activity_events (event_type, created_at DESC);`);
+}
+
+export async function recordPortalActivityEvent(input: {
+  userId?: number | null;
+  email: string;
+  name?: string | null;
+  role?: 'admin' | 'coach' | 'player' | string | null;
+  organizationId?: number | null;
+  playerId?: number | null;
+  dashboardSchoolCode?: string | null;
+  eventType: PortalActivityEventType;
+  path?: string | null;
+  metadata?: Record<string, unknown> | null;
+  userAgent?: string | null;
+  ipAddress?: string | null;
+}): Promise<void> {
+  const email = String(input.email ?? '').trim().toLowerCase();
+  if (!email || !isDatabaseConfigured()) return;
+  await ensureTrainingDbReady();
+  await ensurePortalActivityEventsTable();
+  const pool = getDbPool();
+  await pool.query(
+    `
+      INSERT INTO portal_activity_events (
+        user_id,
+        email,
+        name,
+        role,
+        organization_id,
+        player_id,
+        dashboard_school_code,
+        event_type,
+        path,
+        metadata,
+        user_agent,
+        ip_address
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
+    `,
+    [
+      Number.isFinite(Number(input.userId)) && Number(input.userId) > 0 ? Number(input.userId) : null,
+      email,
+      String(input.name ?? '').trim() || null,
+      normalizeActivityRole(input.role),
+      Number.isFinite(Number(input.organizationId)) && Number(input.organizationId) > 0 ? Number(input.organizationId) : null,
+      Number.isFinite(Number(input.playerId)) && Number(input.playerId) > 0 ? Number(input.playerId) : null,
+      String(input.dashboardSchoolCode ?? '').trim().toUpperCase() || null,
+      input.eventType,
+      String(input.path ?? '').trim().slice(0, 500) || null,
+      JSON.stringify(input.metadata ?? {}),
+      String(input.userAgent ?? '').trim().slice(0, 1000) || null,
+      String(input.ipAddress ?? '').trim().slice(0, 120) || null,
+    ]
+  );
+}
+
+export async function listPortalActivityOverview(input: {
+  role?: string | null;
+  query?: string | null;
+  limit?: number;
+} = {}): Promise<{ users: PortalActivityUserSummaryRow[]; recentEvents: PortalActivityRecentEventRow[] }> {
+  if (!isDatabaseConfigured()) return { users: [], recentEvents: [] };
+  await ensureTrainingDbReady();
+  await ensurePortalActivityEventsTable();
+  const pool = getDbPool();
+  const role = normalizeActivityRole(input.role);
+  const q = String(input.query ?? '').trim();
+  const limit = Math.max(20, Math.min(500, Number(input.limit ?? 200) || 200));
+
+  const filters: string[] = [];
+  const params: unknown[] = [];
+  if (role !== 'unknown') {
+    params.push(role);
+    filters.push(`e.role = $${params.length}`);
+  }
+  if (q) {
+    params.push(`%${q}%`);
+    filters.push(`(e.email ILIKE $${params.length} OR COALESCE(e.name, '') ILIKE $${params.length} OR COALESCE(o.name, '') ILIKE $${params.length})`);
+  }
+  const whereSql = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+
+  const usersResult = await pool.query<{
+    user_id: number | null;
+    email: string;
+    name: string | null;
+    role: string;
+    organization_id: number | null;
+    organization_name: string | null;
+    player_id: number | null;
+    dashboard_school_code: string | null;
+    last_login_at: string | null;
+    last_activity_at: string | null;
+    last_path: string | null;
+    login_count_30d: string;
+    page_view_count_30d: string;
+    key_action_count_30d: string;
+  }>(
+    `
+      WITH ranked AS (
+        SELECT
+          e.*,
+          ROW_NUMBER() OVER (PARTITION BY LOWER(e.email) ORDER BY e.created_at DESC, e.id DESC) AS row_rank
+        FROM portal_activity_events e
+      ),
+      aggregates AS (
+        SELECT
+          LOWER(email) AS email_key,
+          MAX(created_at) FILTER (WHERE event_type = 'login_success')::text AS last_login_at,
+          MAX(created_at)::text AS last_activity_at,
+          COUNT(*) FILTER (WHERE event_type = 'login_success' AND created_at >= NOW() - INTERVAL '30 days')::text AS login_count_30d,
+          COUNT(*) FILTER (WHERE event_type = 'page_view' AND created_at >= NOW() - INTERVAL '30 days')::text AS page_view_count_30d,
+          COUNT(*) FILTER (WHERE event_type <> 'page_view' AND event_type <> 'login_success' AND created_at >= NOW() - INTERVAL '30 days')::text AS key_action_count_30d
+        FROM portal_activity_events
+        GROUP BY LOWER(email)
+      )
+      SELECT
+        e.user_id,
+        e.email,
+        e.name,
+        e.role,
+        e.organization_id,
+        o.name AS organization_name,
+        e.player_id,
+        e.dashboard_school_code,
+        a.last_login_at,
+        a.last_activity_at,
+        e.path AS last_path,
+        a.login_count_30d,
+        a.page_view_count_30d,
+        a.key_action_count_30d
+      FROM ranked e
+      JOIN aggregates a ON a.email_key = LOWER(e.email)
+      LEFT JOIN organizations o ON o.id = e.organization_id
+      ${whereSql}
+        ${whereSql ? 'AND' : 'WHERE'} e.row_rank = 1
+      ORDER BY COALESCE(a.last_activity_at, '') DESC
+      LIMIT $${params.length + 1}
+    `,
+    [...params, limit]
+  );
+
+  const eventsResult = await pool.query<{
+    id: string;
+    email: string;
+    name: string | null;
+    role: string;
+    organization_name: string | null;
+    event_type: string;
+    path: string | null;
+    created_at: string;
+  }>(
+    `
+      SELECT
+        e.id::text AS id,
+        e.email,
+        e.name,
+        e.role,
+        o.name AS organization_name,
+        e.event_type,
+        e.path,
+        e.created_at::text AS created_at
+      FROM portal_activity_events e
+      LEFT JOIN organizations o ON o.id = e.organization_id
+      ${whereSql}
+      ORDER BY e.created_at DESC, e.id DESC
+      LIMIT $${params.length + 1}
+    `,
+    [...params, limit]
+  );
+
+  return {
+    users: usersResult.rows.map((row) => ({
+      userId: row.user_id,
+      email: row.email,
+      name: row.name,
+      role: normalizeActivityRole(row.role),
+      organizationId: row.organization_id,
+      organizationName: row.organization_name,
+      playerId: row.player_id,
+      dashboardSchoolCode: row.dashboard_school_code,
+      lastLoginAt: row.last_login_at,
+      lastActivityAt: row.last_activity_at,
+      lastPath: row.last_path,
+      loginCount30d: Number(row.login_count_30d ?? '0') || 0,
+      pageViewCount30d: Number(row.page_view_count_30d ?? '0') || 0,
+      keyActionCount30d: Number(row.key_action_count_30d ?? '0') || 0,
+    })),
+    recentEvents: eventsResult.rows.map((row) => ({
+      id: Number(row.id),
+      email: row.email,
+      name: row.name,
+      role: normalizeActivityRole(row.role),
+      organizationName: row.organization_name,
+      eventType: normalizeActivityEventTypeForDb(row.event_type),
+      path: row.path,
+      createdAt: row.created_at,
+    })),
+  };
 }
 
 export async function deleteStaffUser(input: {

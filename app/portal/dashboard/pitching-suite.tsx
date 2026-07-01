@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
@@ -251,6 +251,15 @@ type CellColors = { bg: string; text: string };
 type PitchActionPoint = OverviewPayload['chart_points'][number];
 type PitchEditSelectMode = 'single' | 'lasso';
 type PlotLasso = { startX: number; startY: number; endX: number; endY: number; dragging: boolean } | null;
+type BreakdownTool = 'line' | 'arrow' | 'circle' | 'pen' | 'text' | 'erase';
+type BreakdownAnnotation = {
+  id: string;
+  tool: Exclude<BreakdownTool, 'erase'>;
+  color: string;
+  width: number;
+  points: Array<{ x: number; y: number }>;
+  text?: string;
+};
 const PITCH_TYPE_DISPLAY_ORDER = [
   'Fastball',
   'Sinker',
@@ -2354,15 +2363,59 @@ export default function PitchingSuite({
   const [actionVideoPlaying, setActionVideoPlaying] = useState(false);
   const [actionVideoTime, setActionVideoTime] = useState(0);
   const [actionVideoDuration, setActionVideoDuration] = useState(0);
+  const [actionPlaybackRate, setActionPlaybackRate] = useState(1);
+  const [actionVideoLoop, setActionVideoLoop] = useState(false);
   const [actionVideoRefreshNonce, setActionVideoRefreshNonce] = useState(0);
+  const [breakdownMode, setBreakdownMode] = useState(false);
+  const [breakdownTool, setBreakdownTool] = useState<BreakdownTool>('line');
+  const [breakdownColor, setBreakdownColor] = useState('#facc15');
+  const [breakdownWidth, setBreakdownWidth] = useState(4);
+  const [breakdownAnnotations, setBreakdownAnnotations] = useState<BreakdownAnnotation[]>([]);
+  const [activeBreakdownAnnotation, setActiveBreakdownAnnotation] = useState<BreakdownAnnotation | null>(null);
+  const [breakdownNoteText, setBreakdownNoteText] = useState('');
+  const [breakdownMessage, setBreakdownMessage] = useState('');
+  const [breakdownSaving, setBreakdownSaving] = useState(false);
+  const [showBreakdownNotePanel, setShowBreakdownNotePanel] = useState(false);
+  const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'ready'>('idle');
+  const [recordingUrl, setRecordingUrl] = useState('');
+  const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
+  const [isLightTheme, setIsLightTheme] = useState(true);
+  const [isActionModalFullscreen, setIsActionModalFullscreen] = useState(false);
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
   const effectiveSplitBy = isLeaderboardPage ? (leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Pitcher') : splitBy;
   const singleActionVideoRef = useRef<HTMLVideoElement | null>(null);
   const leftCompareVideoRef = useRef<HTMLVideoElement | null>(null);
   const rightCompareVideoRef = useRef<HTMLVideoElement | null>(null);
   const actionViewRef = useRef<HTMLDivElement | null>(null);
+  const actionModalCardRef = useRef<HTMLDivElement | null>(null);
+  const breakdownCaptureRef = useRef<HTMLDivElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
   const latestOverviewRequestKeyRef = useRef('');
   const actionVideoRetryKeysRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    const syncTheme = () => setIsLightTheme(document.body.classList.contains('theme-light'));
+    syncTheme();
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      const fullscreenDoc = document as Document & { webkitFullscreenElement?: Element | null };
+      const fullscreenElement = document.fullscreenElement ?? fullscreenDoc.webkitFullscreenElement ?? null;
+      setIsActionModalFullscreen(fullscreenElement === actionModalCardRef.current);
+    };
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    document.addEventListener('webkitfullscreenchange', syncFullscreenState);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFullscreenState);
+      document.removeEventListener('webkitfullscreenchange', syncFullscreenState);
+    };
+  }, []);
 
   const isLeague =
     String(selectedSchoolCode ?? '').toUpperCase() === 'LEAGUE' ||
@@ -2376,6 +2429,24 @@ export default function PitchingSuite({
     () => resolveSchoolBrand(String(filters?.school_code ?? selectedSchoolCode ?? 'PCU')),
     [filters?.school_code, selectedSchoolCode]
   );
+  const actionModalTheme = {
+    panelBg: isLightTheme ? '#f3f4f6' : '#05070b',
+    panelText: isLightTheme ? '#1f2937' : '#f8fafc',
+    textStrong: isLightTheme ? '#111827' : '#f8fafc',
+    muted: isLightTheme ? '#475569' : '#cbd5e1',
+    softMuted: isLightTheme ? '#4b5563' : '#94a3b8',
+    border: isLightTheme ? '#d1d5db' : 'rgba(148,163,184,0.28)',
+    controlBg: isLightTheme ? '#fff' : 'rgba(15,23,42,0.96)',
+    controlSoftBg: isLightTheme ? '#f8fafc' : 'rgba(2,6,23,0.88)',
+    toolbarBg: isLightTheme ? '#fff' : 'rgba(2,6,23,0.92)',
+    zoneStroke: isLightTheme ? '#111827' : '#f8fafc',
+  };
+  const actionModalButtonStyle = {
+    background: actionModalTheme.controlBg,
+    color: actionModalTheme.muted,
+    borderColor: actionModalTheme.border,
+  };
+  const actionModalSearchTheme: 'light' | 'dark' = isLightTheme ? 'light' : 'dark';
   const isGcu =
     String(selectedSchoolCode ?? '').toUpperCase() === 'GCU' ||
     String(filters?.school_code ?? '').toUpperCase() === 'GCU';
@@ -5329,13 +5400,41 @@ export default function PitchingSuite({
         (url) => !!url && url.trim().length > 0
       )
     : [];
+  const actionZoneW = 240;
+  const actionZoneH = 260;
+  const actionZoneXMin = -2.5;
+  const actionZoneXMax = 2.5;
+  const actionZoneYMin = 0;
+  const actionZoneYMax = 4.5;
+  const actionZonePad = 10;
+  const actionZoneScale = Math.min(
+    (actionZoneW - actionZonePad * 2) / (actionZoneXMax - actionZoneXMin),
+    (actionZoneH - actionZonePad * 2) / (actionZoneYMax - actionZoneYMin)
+  );
+  const actionZoneDrawnW = (actionZoneXMax - actionZoneXMin) * actionZoneScale;
+  const actionZoneDrawnH = (actionZoneYMax - actionZoneYMin) * actionZoneScale;
+  const actionZoneLeftPad = (actionZoneW - actionZoneDrawnW) / 2;
+  const actionZoneTopPad = (actionZoneH - actionZoneDrawnH) / 2;
+  const actionZonePx = (x: number) => actionZoneLeftPad + (x - actionZoneXMin) * actionZoneScale;
+  const actionZonePy = (y: number) => actionZoneTopPad + (actionZoneYMax - y) * actionZoneScale;
+  const actionStrikeBottom = 1.5;
+  const actionStrikeTop = 3.6;
+  const actionStrikeLeft = -0.88;
+  const actionStrikeRight = 0.88;
+  const actionStrikeCenterX = (actionStrikeLeft + actionStrikeRight) / 2;
+  const actionStrikeCenterY = (actionStrikeBottom + actionStrikeTop) / 2;
+  const actionCompRadiusFt = 1.5;
+  const actionCompBottom = actionStrikeCenterY - actionCompRadiusFt;
+  const actionCompTop = actionStrikeCenterY + actionCompRadiusFt;
+  const actionCompLeft = actionStrikeCenterX - actionCompRadiusFt;
+  const actionCompRight = actionStrikeCenterX + actionCompRadiusFt;
   const actionPlateX =
-    currentActionPitch?.plate_side !== null && currentActionPitch?.plate_side !== undefined
-      ? 120 + (orientX(currentActionPitch.plate_side) / 2.5) * 107
+    typeof currentActionPitch?.plate_side === 'number' && Number.isFinite(currentActionPitch.plate_side)
+      ? actionZonePx(orientX(currentActionPitch.plate_side))
       : null;
   const actionPlateY =
-    currentActionPitch?.plate_height !== null && currentActionPitch?.plate_height !== undefined
-      ? 20 + ((4.5 - currentActionPitch.plate_height) / 4.5) * 180
+    typeof currentActionPitch?.plate_height === 'number' && Number.isFinite(currentActionPitch.plate_height)
+      ? actionZonePy(currentActionPitch.plate_height)
       : null;
 
   const pitchKeyFor = (pitch: PitchActionPoint): string => {
@@ -5406,36 +5505,102 @@ export default function PitchingSuite({
   const updateSyncedDuration = () => {
     const left = leftCompareVideoRef.current;
     const right = rightCompareVideoRef.current;
+    const single = singleActionVideoRef.current;
     const leftDur = left?.duration && Number.isFinite(left.duration) ? left.duration : 0;
     const rightDur = right?.duration && Number.isFinite(right.duration) ? right.duration : 0;
-    const next = leftDur && rightDur ? Math.min(leftDur, rightDur) : leftDur || rightDur || 0;
+    const singleDur = single?.duration && Number.isFinite(single.duration) ? single.duration : 0;
+    const next = actionSideBySide ? (leftDur && rightDur ? Math.min(leftDur, rightDur) : leftDur || rightDur || 0) : singleDur;
     setActionVideoDuration(next);
   };
 
   const syncSeekVideos = (seconds: number) => {
+    const bounded = Math.max(0, Math.min(actionVideoDuration || seconds, seconds));
+    const single = singleActionVideoRef.current;
     const left = leftCompareVideoRef.current;
     const right = rightCompareVideoRef.current;
-    if (left) left.currentTime = seconds;
-    if (right) right.currentTime = seconds;
-    setActionVideoTime(seconds);
+    if (actionSideBySide) {
+      if (left) left.currentTime = bounded;
+      if (right) right.currentTime = bounded;
+    } else if (single) {
+      single.currentTime = bounded;
+    }
+    setActionVideoTime(bounded);
   };
 
   const syncPlayPauseVideos = async () => {
+    const single = singleActionVideoRef.current;
     const left = leftCompareVideoRef.current;
     const right = rightCompareVideoRef.current;
-    if (!left || !right) return;
+    const videos = actionSideBySide ? [left, right].filter(Boolean) : [single].filter(Boolean);
+    if (!videos.length) return;
     if (actionVideoPlaying) {
-      left.pause();
-      right.pause();
+      videos.forEach((video) => video?.pause());
       setActionVideoPlaying(false);
       return;
     }
     try {
-      await Promise.all([left.play(), right.play()]);
+      videos.forEach((video) => {
+        if (video) video.playbackRate = actionPlaybackRate;
+      });
+      await Promise.all(videos.map((video) => video?.play()));
       setActionVideoPlaying(true);
     } catch {
       setActionVideoPlaying(false);
     }
+  };
+
+  const stepActionVideo = (seconds: number) => {
+    const base = actionSideBySide ? (leftCompareVideoRef.current?.currentTime ?? actionVideoTime) : (singleActionVideoRef.current?.currentTime ?? actionVideoTime);
+    syncSeekVideos(base + seconds);
+  };
+
+  const resetActionVideos = () => {
+    [singleActionVideoRef.current, leftCompareVideoRef.current, rightCompareVideoRef.current].forEach((video) => {
+      if (!video) return;
+      video.pause();
+      video.currentTime = 0;
+      video.playbackRate = actionPlaybackRate;
+    });
+    setActionVideoTime(0);
+    setActionVideoPlaying(false);
+  };
+
+  const toggleActionModalFullscreen = async () => {
+    const target = actionModalCardRef.current as (HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> | void }) | null;
+    if (!target) return;
+    const fullscreenDoc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      webkitExitFullscreen?: () => Promise<void> | void;
+    };
+    const fullscreenElement = document.fullscreenElement ?? fullscreenDoc.webkitFullscreenElement ?? null;
+    try {
+      if (fullscreenElement) {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else await fullscreenDoc.webkitExitFullscreen?.();
+        return;
+      }
+      if (target.requestFullscreen) await target.requestFullscreen();
+      else await target.webkitRequestFullscreen?.();
+    } catch (error) {
+      setBreakdownMessage(error instanceof Error ? error.message : 'Fullscreen is not available.');
+    }
+  };
+
+  const setActionVideoRate = (rate: number) => {
+    setActionPlaybackRate(rate);
+    [singleActionVideoRef.current, leftCompareVideoRef.current, rightCompareVideoRef.current].forEach((video) => {
+      if (video) video.playbackRate = rate;
+    });
+  };
+
+  const toggleActionVideoLoop = () => {
+    setActionVideoLoop((prev) => {
+      const next = !prev;
+      [singleActionVideoRef.current, leftCompareVideoRef.current, rightCompareVideoRef.current].forEach((video) => {
+        if (video) video.loop = next;
+      });
+      return next;
+    });
   };
 
   const handleActionVideoLoadError = async (targetPitch: PitchActionPoint | null) => {
@@ -5453,24 +5618,24 @@ export default function PitchingSuite({
   };
 
   useEffect(() => {
-    if (!actionSideBySide) {
-      setActionVideoPlaying(false);
-      setActionVideoTime(0);
-      setActionVideoDuration(0);
-      return;
-    }
     const timer = window.setInterval(() => {
-      const left = leftCompareVideoRef.current;
-      if (!left) return;
-      setActionVideoTime(left.currentTime || 0);
-      if (actionVideoDuration > 0 && left.currentTime >= actionVideoDuration) {
-        left.pause();
-        rightCompareVideoRef.current?.pause();
+      const primary = actionSideBySide ? leftCompareVideoRef.current : singleActionVideoRef.current;
+      if (!primary) return;
+      setActionVideoTime(primary.currentTime || 0);
+      if (!actionVideoLoop && actionVideoDuration > 0 && primary.currentTime >= actionVideoDuration) {
+        primary.pause();
+        if (actionSideBySide) rightCompareVideoRef.current?.pause();
         setActionVideoPlaying(false);
       }
     }, 50);
     return () => window.clearInterval(timer);
   }, [actionSideBySide, actionVideoDuration]);
+
+  useEffect(() => {
+    if (!actionSideBySide) return;
+    setActionVideoTime(0);
+    setActionVideoPlaying(false);
+  }, [actionSideBySide, actionLeftPitchKey, actionRightPitchKey]);
 
   const downloadUrl = (url: string, fileName: string) => {
     if (!url) return;
@@ -5482,6 +5647,465 @@ export default function PitchingSuite({
     document.body.appendChild(a);
     a.click();
     a.remove();
+  };
+
+  const blobToDataUrl = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(reader.error ?? new Error('Failed to read file.'));
+      reader.readAsDataURL(blob);
+    });
+
+  const getBreakdownPoint = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width))),
+      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))),
+    };
+  };
+
+  const annotationDistance = (annotation: BreakdownAnnotation, point: { x: number; y: number }): number => {
+    if (!annotation.points.length) return 999;
+    if (annotation.tool === 'circle' && annotation.points.length >= 2) {
+      const [a, b] = annotation.points;
+      const cx = (a.x + b.x) / 2;
+      const cy = (a.y + b.y) / 2;
+      const rx = Math.abs(b.x - a.x) / 2;
+      const ry = Math.abs(b.y - a.y) / 2;
+      const edge = Math.abs(Math.hypot((point.x - cx) / Math.max(rx, 0.001), (point.y - cy) / Math.max(ry, 0.001)) - 1);
+      return edge * 0.08;
+    }
+    return Math.min(...annotation.points.map((p) => Math.hypot(p.x - point.x, p.y - point.y)));
+  };
+
+  const handleBreakdownPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!breakdownMode) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const point = getBreakdownPoint(event);
+    if (breakdownTool === 'erase') {
+      setBreakdownAnnotations((items) => {
+        if (!items.length) return items;
+        const nearest = items
+          .map((item) => ({ item, distance: annotationDistance(item, point) }))
+          .sort((a, b) => a.distance - b.distance)[0];
+        if (!nearest || nearest.distance > 0.08) return items;
+        return items.filter((item) => item.id !== nearest.item.id);
+      });
+      return;
+    }
+    if (breakdownTool === 'text') {
+      const text = window.prompt('Text label');
+      if (!text?.trim()) return;
+      setBreakdownAnnotations((items) => [
+        ...items,
+        {
+          id: `bd-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          tool: 'text',
+          color: breakdownColor,
+          width: breakdownWidth,
+          points: [point],
+          text: text.trim(),
+        },
+      ]);
+      return;
+    }
+    const annotation: BreakdownAnnotation = {
+      id: `bd-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      tool: breakdownTool,
+      color: breakdownColor,
+      width: breakdownWidth,
+      points: [point, point],
+    };
+    setActiveBreakdownAnnotation(annotation);
+  };
+
+  const handleBreakdownPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!activeBreakdownAnnotation) return;
+    event.preventDefault();
+    const point = getBreakdownPoint(event);
+    setActiveBreakdownAnnotation((current) => {
+      if (!current) return current;
+      if (current.tool === 'pen') return { ...current, points: [...current.points, point] };
+      return { ...current, points: [current.points[0], point] };
+    });
+  };
+
+  const finishBreakdownAnnotation = (event?: ReactPointerEvent<SVGSVGElement>) => {
+    if (event && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (!activeBreakdownAnnotation) return;
+    setBreakdownAnnotations((items) => [...items, activeBreakdownAnnotation]);
+    setActiveBreakdownAnnotation(null);
+  };
+
+  const drawAnnotationOnCanvas = (
+    ctx: CanvasRenderingContext2D,
+    annotation: BreakdownAnnotation,
+    width: number,
+    height: number
+  ) => {
+    const points = annotation.points;
+    if (!points.length) return;
+    ctx.save();
+    ctx.strokeStyle = annotation.color;
+    ctx.fillStyle = annotation.color;
+    ctx.lineWidth = annotation.width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if (annotation.tool === 'text') {
+      ctx.font = '700 30px system-ui, -apple-system, sans-serif';
+      ctx.fillText(annotation.text ?? '', points[0].x * width, points[0].y * height);
+    } else if (annotation.tool === 'circle' && points.length >= 2) {
+      const x = Math.min(points[0].x, points[1].x) * width;
+      const y = Math.min(points[0].y, points[1].y) * height;
+      const w = Math.abs(points[1].x - points[0].x) * width;
+      const h = Math.abs(points[1].y - points[0].y) * height;
+      ctx.beginPath();
+      ctx.ellipse(x + w / 2, y + h / 2, Math.max(1, w / 2), Math.max(1, h / 2), 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x * width, points[0].y * height);
+      for (const point of points.slice(1)) ctx.lineTo(point.x * width, point.y * height);
+      ctx.stroke();
+      if (annotation.tool === 'arrow' && points.length >= 2) {
+        const a = points[points.length - 2];
+        const b = points[points.length - 1];
+        const angle = Math.atan2((b.y - a.y) * height, (b.x - a.x) * width);
+        const size = Math.max(14, annotation.width * 4);
+        const x = b.x * width;
+        const y = b.y * height;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - size * Math.cos(angle - Math.PI / 6), y - size * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(x - size * Math.cos(angle + Math.PI / 6), y - size * Math.sin(angle + Math.PI / 6));
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  };
+
+  const saveBreakdownNote = async (attachment: { name: string; mimeType: string; dataUrl: string }, defaultText: string) => {
+    if (!currentActionPitch) return;
+    setBreakdownSaving(true);
+    setBreakdownMessage('');
+    try {
+      if (attachment.dataUrl.length > 60_000_000) {
+        setBreakdownMessage('Breakdown file is too large for Player Notes. Use Download instead.');
+        return;
+      }
+      const pitcherName = formatNameFirstLast(resolvePitcherName(currentActionPitch, selectedPitchers));
+      const response = await fetch('/api/player/plan-notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dashboardPlayerName: pitcherName,
+          domain: 'General',
+          noteDate: (currentActionPitch.session_date ?? '').slice(0, 10) || toYmdNow(),
+          category: 'Video Breakdown',
+          noteText: [
+            breakdownNoteText.trim() || defaultText,
+            '',
+            `Pitch: ${currentActionPitch.pitch_type || '-'} | ${fmtNum(currentActionPitch.velo, 1)} mph | ${formatShortDate(currentActionPitch.session_date ?? '')}`,
+            actionSideBySide && selectedRightPitch
+              ? `Compare: ${selectedRightPitch.pitch_type || '-'} | ${fmtNum(selectedRightPitch.velo, 1)} mph | ${formatShortDate(selectedRightPitch.session_date ?? '')}`
+              : '',
+          ].filter(Boolean).join('\n'),
+          attachmentName: attachment.name,
+          attachmentMimeType: attachment.mimeType,
+          attachmentDataUrl: attachment.dataUrl,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to save breakdown note.');
+      setBreakdownMessage('Saved to Player Notes.');
+    } catch (error) {
+      setBreakdownMessage(error instanceof Error ? error.message : 'Failed to save breakdown.');
+    } finally {
+      setBreakdownSaving(false);
+    }
+  };
+
+  const captureBreakdownSnapshot = async (): Promise<string> => {
+    // For single view, capture the full actionViewRef (video + side metrics + strike zone).
+    // For side-by-side, capture breakdownCaptureRef (compact metrics are already inside it).
+    const container = actionSideBySide ? breakdownCaptureRef.current : actionViewRef.current;
+    if (!container) throw new Error('Breakdown view is not ready.');
+    const { default: html2canvas } = await import('html2canvas');
+    const scale = Math.min(2, window.devicePixelRatio || 1);
+    const snapshotCanvas = await html2canvas(container, {
+      scale,
+      useCORS: true,
+      allowTaint: false,
+      backgroundColor: '#000000',
+      logging: false,
+      ignoreElements: (element) => element instanceof HTMLElement && element.dataset.breakdownUi === 'true',
+    });
+    return snapshotCanvas.toDataURL('image/png');
+  };
+
+  const captureBreakdownSnapshotWithScreenShare = async (): Promise<string> => {
+    const container = breakdownCaptureRef.current;
+    if (!container) throw new Error('Breakdown view is not ready.');
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      throw new Error('Snapshot capture is blocked by the browser for this video source.');
+    }
+    const breakdownUiElements = Array.from(document.querySelectorAll<HTMLElement>('[data-breakdown-ui="true"]'));
+    const previousVisibility = breakdownUiElements.map((element) => element.style.visibility);
+    breakdownUiElements.forEach((element) => {
+      element.style.visibility = 'hidden';
+    });
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    try {
+      const video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+      await video.play();
+      await new Promise((resolve) => window.setTimeout(resolve, 180));
+      const rect = container.getBoundingClientRect();
+      const canvas = document.createElement('canvas');
+      const videoWidth = video.videoWidth || Math.round(window.innerWidth * (window.devicePixelRatio || 1));
+      const videoHeight = video.videoHeight || Math.round(window.innerHeight * (window.devicePixelRatio || 1));
+      const scaleX = videoWidth / Math.max(1, window.innerWidth);
+      const scaleY = videoHeight / Math.max(1, window.innerHeight);
+      canvas.width = Math.max(1, Math.round(rect.width * scaleX));
+      canvas.height = Math.max(1, Math.round(rect.height * scaleY));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Snapshot canvas is not available.');
+      ctx.drawImage(
+        video,
+        Math.max(0, rect.left * scaleX),
+        Math.max(0, rect.top * scaleY),
+        Math.max(1, rect.width * scaleX),
+        Math.max(1, rect.height * scaleY),
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+      return canvas.toDataURL('image/png');
+    } finally {
+      stream.getTracks().forEach((track) => track.stop());
+      breakdownUiElements.forEach((element, index) => {
+        element.style.visibility = previousVisibility[index] ?? '';
+      });
+    }
+  };
+
+  const captureBreakdownSnapshotSafe = async (): Promise<string> => {
+    try {
+      return await captureBreakdownSnapshot();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error ?? '');
+      const insecure = /insecure|tainted|security/i.test(message) || error instanceof DOMException;
+      if (!insecure) throw error;
+      setBreakdownMessage('Video source blocks direct snapshot export. Choose this tab/window to capture the breakdown.');
+      return captureBreakdownSnapshotWithScreenShare();
+    }
+  };
+
+  const saveBreakdownSnapshot = async () => {
+    try {
+      const dataUrl = await captureBreakdownSnapshotSafe();
+      await saveBreakdownNote(
+        { name: `video-breakdown-${Date.now()}.png`, mimeType: 'image/png', dataUrl },
+        'Video breakdown snapshot'
+      );
+    } catch (error) {
+      setBreakdownMessage(error instanceof Error ? error.message : 'Failed to capture snapshot.');
+    }
+  };
+
+  const downloadBreakdownSnapshot = async () => {
+    try {
+      const dataUrl = await captureBreakdownSnapshotSafe();
+      downloadUrl(dataUrl, `video-breakdown-${Date.now()}.png`);
+    } catch (error) {
+      setBreakdownMessage(error instanceof Error ? error.message : 'Failed to capture snapshot.');
+    }
+  };
+
+  const startBreakdownRecording = async () => {
+    setBreakdownMessage('');
+    setRecordingBlob(null);
+    if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+    setRecordingUrl('');
+    try {
+      if (!navigator.mediaDevices?.getDisplayMedia || typeof MediaRecorder === 'undefined') {
+        setBreakdownMessage('Screen recording is not supported in this browser.');
+        return;
+      }
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      let micStream: MediaStream | null = null;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        micStream = null;
+      }
+      const tracks = [...displayStream.getVideoTracks(), ...displayStream.getAudioTracks(), ...(micStream?.getAudioTracks() ?? [])];
+      const stream = new MediaStream(tracks);
+      recordingStreamRef.current = stream;
+      recordingChunksRef.current = [];
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+        ? 'video/webm;codecs=vp9,opus'
+        : 'video/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordingChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(recordingChunksRef.current, { type: 'video/webm' });
+        setRecordingBlob(blob);
+        setRecordingUrl(URL.createObjectURL(blob));
+        setRecordingState('ready');
+        recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+        recordingStreamRef.current = null;
+      };
+      displayStream.getVideoTracks()[0]?.addEventListener('ended', () => {
+        if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
+      });
+      recorder.start();
+      setRecordingState('recording');
+      setBreakdownMessage('Recording started. Choose this tab/window when prompted so the video and drawings are captured.');
+    } catch (error) {
+      setBreakdownMessage(error instanceof Error ? error.message : 'Failed to start recording.');
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      recordingStreamRef.current = null;
+      setRecordingState('idle');
+    }
+  };
+
+  const stopBreakdownRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder?.state === 'recording') recorder.stop();
+  };
+
+  const saveBreakdownRecording = async () => {
+    if (!recordingBlob) {
+      setBreakdownMessage('Record a breakdown first.');
+      return;
+    }
+    const dataUrl = await blobToDataUrl(recordingBlob);
+    await saveBreakdownNote(
+      { name: `video-breakdown-${Date.now()}.webm`, mimeType: recordingBlob.type || 'video/webm', dataUrl },
+      'Recorded video breakdown'
+    );
+  };
+
+  useEffect(() => {
+    return () => {
+      if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+      recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, [recordingUrl]);
+
+  const renderBreakdownAnnotation = (annotation: BreakdownAnnotation, key: string) => {
+    const pts = annotation.points;
+    if (!pts.length) return null;
+    const overlayUnits = 1000;
+    const sx = (value: number) => value * overlayUnits;
+    const strokeWidth = annotation.width;
+    if (annotation.tool === 'text') {
+      return (
+        <text
+          key={key}
+          x={sx(pts[0].x)}
+          y={sx(pts[0].y)}
+          fill={annotation.color}
+          fontSize={36}
+          fontWeight={800}
+          style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.65)', strokeWidth: 5 }}
+        >
+          {annotation.text}
+        </text>
+      );
+    }
+    if (annotation.tool === 'circle' && pts.length >= 2) {
+      const x = sx(Math.min(pts[0].x, pts[1].x));
+      const y = sx(Math.min(pts[0].y, pts[1].y));
+      const w = sx(Math.abs(pts[1].x - pts[0].x));
+      const h = sx(Math.abs(pts[1].y - pts[0].y));
+      return <ellipse key={key} cx={x + w / 2} cy={y + h / 2} rx={Math.max(2, w / 2)} ry={Math.max(2, h / 2)} fill="none" stroke={annotation.color} strokeWidth={strokeWidth} />;
+    }
+    const points = pts.map((point) => `${sx(point.x)},${sx(point.y)}`).join(' ');
+    if (annotation.tool === 'arrow' && pts.length >= 2) {
+      const a = pts[pts.length - 2];
+      const b = pts[pts.length - 1];
+      const angle = Math.atan2(b.y - a.y, b.x - a.x);
+      const size = 34;
+      const bx = sx(b.x);
+      const by = sx(b.y);
+      const left = `${bx - size * Math.cos(angle - Math.PI / 6)},${by - size * Math.sin(angle - Math.PI / 6)}`;
+      const right = `${bx - size * Math.cos(angle + Math.PI / 6)},${by - size * Math.sin(angle + Math.PI / 6)}`;
+      return (
+        <g key={key}>
+          <polyline points={points} fill="none" stroke={annotation.color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+          <polygon points={`${bx},${by} ${left} ${right}`} fill={annotation.color} />
+        </g>
+      );
+    }
+    return <polyline key={key} points={points} fill="none" stroke={annotation.color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />;
+  };
+
+  const renderBreakdownOverlay = () => (
+    <svg
+      viewBox="0 0 1000 1000"
+      preserveAspectRatio="none"
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 5,
+        cursor: breakdownMode ? (breakdownTool === 'erase' ? 'not-allowed' : 'crosshair') : 'default',
+        pointerEvents: breakdownMode ? 'auto' : 'none',
+        touchAction: 'none',
+      }}
+      onPointerDown={handleBreakdownPointerDown}
+      onPointerMove={handleBreakdownPointerMove}
+      onPointerUp={finishBreakdownAnnotation}
+      onPointerCancel={finishBreakdownAnnotation}
+      onPointerLeave={finishBreakdownAnnotation}
+    >
+      {breakdownAnnotations.map((annotation) => renderBreakdownAnnotation(annotation, annotation.id))}
+      {activeBreakdownAnnotation ? renderBreakdownAnnotation(activeBreakdownAnnotation, 'active-breakdown') : null}
+    </svg>
+  );
+
+  const renderCompactVideoMetrics = (pitch: PitchActionPoint | null, align: 'left' | 'right') => {
+    if (!pitch) return null;
+    return (
+      <div
+        style={{
+          display: 'grid',
+          gap: 4,
+          alignContent: 'start',
+          color: '#f8fafc',
+          fontWeight: 800,
+          fontSize: '0.82rem',
+          lineHeight: 1.08,
+          textAlign: align,
+          padding: '0.42rem 0.55rem',
+          border: '1px solid rgba(255,255,255,0.18)',
+          borderRadius: 8,
+          background: 'rgba(0,0,0,0.52)',
+          minHeight: 0,
+        }}
+      >
+        <div>{formatNameFirstLast(resolvePitcherName(pitch, selectedPitchers))}</div>
+        <div>{formatShortDate(pitch.session_date ?? '')} | {pitch.pitch_type || '-'}</div>
+        <div>
+          {fmtNum(pitch.velo, 1)} mph | IVB: {fmtNum(pitch.ivb, 1)} | HB: {fmtNum(pitch.hb, 1)} | {fmtNum(pitch.spin, 0)} rpm
+        </div>
+        <div style={{ color: 'rgba(248,250,252,0.78)', fontSize: '0.76rem' }}>
+          SpinEff: {pitch.spin_eff !== null ? `${fmtNum(pitch.spin_eff > 1 ? pitch.spin_eff : pitch.spin_eff * 100, 1)}%` : '-'} | bTilt: {formatTiltClock(pitch.break_tilt)} | Height: {fmtNum(pitch.release_height, 1)} | Side: {typeof pitch.release_side === 'number' ? fmtNum(orientX(pitch.release_side), 1) : '-'}
+        </div>
+      </div>
+    );
   };
 
   const renderVideoPitchMetrics = (pitch: PitchActionPoint, align: 'left' | 'right', dark = false) => (
@@ -12301,53 +12925,56 @@ export default function PitchingSuite({
       {actionMode && currentActionPitch ? (
         <div className="portal-modal-backdrop" onClick={() => setActionMode(null)}>
           <div
+            ref={actionModalCardRef}
             className="portal-modal-card"
             onClick={(event) => event.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label="Pitch action modal"
             style={{
-              width: 'min(1080px, 92vw)',
-              maxHeight: '86vh',
-              overflow: 'auto',
-              background: '#f3f4f6',
-              color: '#1f2937',
-              border: '1px solid #d1d5db',
-              padding: '0.85rem',
-              gap: '0.65rem',
+              width: isActionModalFullscreen ? '100vw' : (actionMode === 'video' ? 'min(1320px, 94vw)' : 'min(1080px, 92vw)'),
+              ...(actionMode === 'video'
+                ? { height: isActionModalFullscreen ? '100vh' : '90vh', overflow: 'hidden', gridTemplateRows: 'auto auto minmax(0, 1fr)' }
+                : { maxHeight: '88vh', overflow: 'auto' }),
+              background: actionModalTheme.panelBg,
+              color: actionModalTheme.panelText,
+              border: `1px solid ${actionModalTheme.border}`,
+              borderRadius: isActionModalFullscreen ? 0 : undefined,
+              padding: isActionModalFullscreen ? '0.65rem' : '0.75rem',
+              gap: actionMode === 'video' ? '0.45rem' : '0.65rem',
             }}
           >
             {actionMode === 'edit' && canUsePitchEdits ? (
               <>
-                <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#1f2937' }}>
+                <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: actionModalTheme.textStrong }}>
                   Edit Pitch Type for {actionPitchCount} pitch(es)
                 </h3>
-                <div style={{ borderTop: '1px solid #d1d5db', margin: '0.2rem -1.1rem 0', paddingTop: '1rem', paddingInline: '1.1rem' }}>
+                <div style={{ borderTop: `1px solid ${actionModalTheme.border}`, margin: '0.2rem -1.1rem 0', paddingTop: '1rem', paddingInline: '1.1rem' }}>
                   <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(260px, 1fr))', gap: '1rem 1.4rem' }}>
-                    <label style={{ color: '#374151', fontWeight: 700, fontSize: '0.9rem' }}>
+                    <label style={{ color: actionModalTheme.muted, fontWeight: 700, fontSize: '0.9rem' }}>
                       NEW PITCH TYPE:
                       <SearchableSingleSelect
                         options={pitchEditPitchTypeOptions}
                         value={editPitchType}
                         onChange={setEditPitchType}
                         placeholder="Pitch Type"
-                        theme="light"
+                        theme={actionModalSearchTheme}
                       />
                     </label>
-                    <label style={{ color: '#374151', fontWeight: 700, fontSize: '0.9rem' }}>
+                    <label style={{ color: actionModalTheme.muted, fontWeight: 700, fontSize: '0.9rem' }}>
                       ASSIGN TO PITCHER:
                       <SearchableSingleSelect
                         options={pitchEditPitcherOptions}
                         value={editPitcher}
                         onChange={setEditPitcher}
                         placeholder="Pitcher"
-                        theme="light"
+                        theme={actionModalSearchTheme}
                       />
                     </label>
                   </div>
-                  <div style={{ marginTop: '1rem', borderTop: '1px solid #d1d5db', paddingTop: '1rem' }}>
-                    <div style={{ fontSize: '1rem', fontWeight: 700, color: '#111827', marginBottom: 8 }}>Selected Pitches:</div>
-                    <div style={{ display: 'grid', gap: 4, maxHeight: 180, overflow: 'auto', fontSize: '0.95rem', color: '#1f2937' }}>
+                  <div style={{ marginTop: '1rem', borderTop: `1px solid ${actionModalTheme.border}`, paddingTop: '1rem' }}>
+                    <div style={{ fontSize: '1rem', fontWeight: 700, color: actionModalTheme.textStrong, marginBottom: 8 }}>Selected Pitches:</div>
+                    <div style={{ display: 'grid', gap: 4, maxHeight: 180, overflow: 'auto', fontSize: '0.95rem', color: actionModalTheme.panelText }}>
                       {actionPitches.slice(0, 80).map((pitch, idx) => (
                         <div key={`sel-${pitch.pitch_event_id ?? idx}`}>
                           Pitch {idx + 1}: {pitch.pitch_type} - {formatShortDate(pitch.session_date ?? '')} ({fmtNum(pitch.velo, 1)} mph, HB: {fmtNum(pitch.hb, 1)}, IVB: {fmtNum(pitch.ivb, 1)})
@@ -12357,17 +12984,17 @@ export default function PitchingSuite({
                   </div>
                 </div>
                 <div className="portal-choice-line-actions" style={{ justifyContent: 'space-between', marginTop: '0.4rem' }}>
-                  <button type="button" className="btn btn-ghost" style={{ background: '#fff', color: '#4b5563', borderColor: '#cbd5e1' }} onClick={() => setActionMode(null)}>
+                  <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => setActionMode(null)}>
                     Cancel
                   </button>
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-                    <button type="button" className="btn btn-ghost" style={{ background: '#fff', color: '#9ca3af', borderColor: '#d1d5db' }} disabled>
+                    <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, color: actionModalTheme.softMuted }} disabled>
                       Delete Selected Pitches
                     </button>
                     <button
                       type="button"
                       className="btn btn-primary"
-                      style={{ background: '#fff', color: '#374151', border: '1px solid #cbd5e1' }}
+                      style={{ background: actionModalTheme.controlBg, color: actionModalTheme.muted, border: `1px solid ${actionModalTheme.border}` }}
                       disabled={actionSaveState === 'saving'}
                       onClick={saveCurrentPitchEdit}
                     >
@@ -12379,70 +13006,73 @@ export default function PitchingSuite({
               </>
             ) : (
               <>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '0.65rem' }}>
                   <div>
-                    <button type="button" className="btn btn-ghost" style={{ background: '#fff', color: '#475569', borderColor: '#cbd5e1' }} disabled={actionIndex <= 0} onClick={() => setActionIndex((i) => Math.max(0, i - 1))}>
+                    <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} disabled={actionIndex <= 0} onClick={() => setActionIndex((i) => Math.max(0, i - 1))}>
                       &lt; Prev
                     </button>
                   </div>
-                  <div style={{ justifySelf: 'center', fontWeight: 700, color: '#4b5563' }}>
+                  <div style={{ justifySelf: 'center', fontWeight: 700, color: actionModalTheme.softMuted }}>
                     {actionIndex + 1} of {actionPitchCount}
                   </div>
                   <div style={{ justifySelf: 'end' }}>
-                    <button type="button" className="btn btn-ghost" style={{ background: '#fff', color: '#475569', borderColor: '#cbd5e1' }} disabled={actionIndex >= actionPitchCount - 1} onClick={() => setActionIndex((i) => Math.min(actionPitchCount - 1, i + 1))}>
+                    <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} disabled={actionIndex >= actionPitchCount - 1} onClick={() => setActionIndex((i) => Math.min(actionPitchCount - 1, i + 1))}>
                       Next &gt;
                     </button>
                   </div>
                 </div>
 
                 {actionMode === 'video' ? (
-                  <div style={{ display: 'grid', justifyItems: 'center', gap: 10 }}>
+                  <div style={{ display: 'grid', justifyItems: 'center', gap: 6, minHeight: 0, overflow: 'hidden' }}>
                     {actionSideBySide ? (
-                      <div style={{ width: 'min(980px, 100%)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                      <div style={{ width: 'min(1080px, 100%)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                         <div>
-                          <div style={{ fontSize: '0.75rem', color: '#475569', marginBottom: 4 }}>Left Video Pitch</div>
+                          <div style={{ fontSize: '0.75rem', color: actionModalTheme.muted, marginBottom: 4 }}>Left Video Pitch</div>
                           <SearchableSingleSelect
                             options={comparePitchOptions}
                             value={actionLeftPitchKey}
                             onChange={setActionLeftPitchKey}
                             placeholder="Select Left Pitch"
-                            theme="light"
+                            theme={actionModalSearchTheme}
                           />
                         </div>
                         <div>
-                          <div style={{ fontSize: '0.75rem', color: '#475569', marginBottom: 4 }}>Right Video Pitch</div>
+                          <div style={{ fontSize: '0.75rem', color: actionModalTheme.muted, marginBottom: 4 }}>Right Video Pitch</div>
                           <SearchableSingleSelect
                             options={comparePitchOptions.filter((option) => option.value !== actionLeftPitchKey)}
                             value={actionRightPitchKey}
                             onChange={setActionRightPitchKey}
                             placeholder="Select Right Pitch"
-                            theme="light"
+                            theme={actionModalSearchTheme}
                           />
                         </div>
                       </div>
                     ) : null}
-                    <div style={{ display: 'flex', justifyContent: 'center', gap: 10 }}>
-                    <button type="button" className="btn btn-ghost" style={{ background: '#fff', color: '#475569', borderColor: '#cbd5e1' }} onClick={() => setActionSideBySide((v) => !v)}>
-                      {actionSideBySide ? 'Single View' : 'Side-by-Side'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      style={{ background: '#fff', color: '#475569', borderColor: '#cbd5e1' }}
-                      onClick={() =>
-                        downloadUrl(
-                          (actionSideBySide ? selectedLeftUrls[0] : actionVideoUrls[0]) || '',
-                          `pitch-${
-                            (actionSideBySide ? selectedLeftPitch?.pitch_event_id : currentActionPitch.pitch_event_id) ??
-                            (actionSideBySide ? selectedLeftPitch?.pitch_no : currentActionPitch.pitch_no) ??
-                            'clip'
-                          }.mp4`
-                        )
-                      }
-                      disabled={actionSideBySide ? !selectedLeftUrls.length : !actionVideoUrls.length}
-                    >
-                      Download Pitch
-                    </button>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => setActionSideBySide((v) => !v)}>
+                        {actionSideBySide ? 'Single View' : 'Side-by-Side'}
+                      </button>
+                      <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => void toggleActionModalFullscreen()}>
+                        {isActionModalFullscreen ? 'Exit Full Screen' : 'Full Screen'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        style={actionModalButtonStyle}
+                        onClick={() =>
+                          downloadUrl(
+                            (actionSideBySide ? selectedLeftUrls[0] : actionVideoUrls[0]) || '',
+                            `pitch-${
+                              (actionSideBySide ? selectedLeftPitch?.pitch_event_id : currentActionPitch.pitch_event_id) ??
+                              (actionSideBySide ? selectedLeftPitch?.pitch_no : currentActionPitch.pitch_no) ??
+                              'clip'
+                            }.mp4`
+                          )
+                        }
+                        disabled={actionSideBySide ? !selectedLeftUrls.length : !actionVideoUrls.length}
+                      >
+                        Download Pitch
+                      </button>
                     </div>
                   </div>
                 ) : null}
@@ -12452,19 +13082,23 @@ export default function PitchingSuite({
                   style={{
                     display: 'grid',
                     gridTemplateColumns:
-                      actionMode === 'video' && actionSideBySide ? 'minmax(980px, 1fr)' : 'minmax(520px,1fr) 250px',
-                    gap: '1rem',
-                    alignItems: 'start',
+                      actionMode === 'video' && actionSideBySide ? 'minmax(0, 1fr)' : 'minmax(0,1fr) 250px',
+                    gap: '0.75rem',
+                    alignItems: 'stretch',
+                    minHeight: 0,
                   }}
                 >
-                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  <div style={{ display: 'grid', gap: '0.5rem', minHeight: 0, gridTemplateRows: actionMode === 'video' ? 'minmax(0, 1fr) auto' : undefined }}>
                     {actionMode === 'video' ? (
                       <div
+                        ref={breakdownCaptureRef}
                         style={{
+                          position: 'relative',
                           background: '#000',
                           borderRadius: 10,
                           border: '1px solid #111827',
-                          minHeight: 560,
+                          minHeight: 0,
+                          height: '100%',
                           display: 'grid',
                           placeItems: 'center',
                           overflow: 'hidden',
@@ -12473,28 +13107,35 @@ export default function PitchingSuite({
                         {hasActionVideo ? (
                           actionSideBySide ? (
                             selectedLeftUrls.length >= 1 ? (
-                              <div style={{ width: '100%', height: '100%', display: 'grid', gridTemplateColumns: '190px 1fr 1fr 190px', gap: 10, padding: 10 }}>
-                                {selectedLeftPitch ? renderVideoPitchMetrics(selectedLeftPitch, 'left', true) : <div />}
-                                <video
-                                  key={`left-${actionLeftPitchKey}-${selectedLeftUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
-                                  ref={leftCompareVideoRef}
-                                  style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
-                                  onLoadedMetadata={updateSyncedDuration}
-                                  onPause={() => setActionVideoPlaying(false)}
-                                  onPlay={() => setActionVideoPlaying(true)}
-                                  onError={() => {
-                                    void handleActionVideoLoadError(selectedLeftPitch ?? null);
-                                  }}
-                                >
-                                  <source src={selectedLeftUrls[0]} />
-                                </video>
+                              <div style={{ width: '100%', height: '100%', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 12, padding: 12, alignItems: 'stretch' }}>
+                                <div style={{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', gap: 8, minWidth: 0 }}>
+                                  {renderCompactVideoMetrics(selectedLeftPitch, 'left')}
+                                  <video
+                                    key={`left-${actionLeftPitchKey}-${selectedLeftUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
+                                    ref={leftCompareVideoRef}
+                                    crossOrigin="anonymous"
+                                    loop={actionVideoLoop}
+                                    style={{ width: '100%', height: '100%', minHeight: 0, objectFit: 'contain', background: '#000' }}
+                                    onLoadedMetadata={updateSyncedDuration}
+                                    onPause={() => setActionVideoPlaying(false)}
+                                    onPlay={() => setActionVideoPlaying(true)}
+                                    onError={() => {
+                                      void handleActionVideoLoadError(selectedLeftPitch ?? null);
+                                    }}
+                                  >
+                                    <source src={selectedLeftUrls[0]} />
+                                  </video>
+                                </div>
                                 {selectedRightPitch ? (
                                   selectedRightUrls.length ? (
-                                    <>
+                                    <div style={{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', gap: 8, minWidth: 0 }}>
+                                      {renderCompactVideoMetrics(selectedRightPitch, 'right')}
                                       <video
                                         key={`right-${actionRightPitchKey}-${selectedRightUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
                                         ref={rightCompareVideoRef}
-                                        style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
+                                        crossOrigin="anonymous"
+                                        loop={actionVideoLoop}
+                                        style={{ width: '100%', height: '100%', minHeight: 0, objectFit: 'contain', background: '#000' }}
                                         onLoadedMetadata={updateSyncedDuration}
                                         onPause={() => setActionVideoPlaying(false)}
                                         onPlay={() => setActionVideoPlaying(true)}
@@ -12504,14 +13145,12 @@ export default function PitchingSuite({
                                       >
                                         <source src={selectedRightUrls[0]} />
                                       </video>
-                                      {renderVideoPitchMetrics(selectedRightPitch, 'right', true)}
-                                    </>
+                                    </div>
                                   ) : (
                                     <>
                                       <div style={{ color: '#f8fafc', display: 'grid', placeItems: 'center', textAlign: 'center', fontWeight: 700 }}>
                                         Selected compare pitch has no video.
                                       </div>
-                                      {renderVideoPitchMetrics(selectedRightPitch, 'right', true)}
                                     </>
                                   )
                                 ) : (
@@ -12519,7 +13158,6 @@ export default function PitchingSuite({
                                     <div style={{ color: '#f8fafc', display: 'grid', placeItems: 'center', textAlign: 'center', fontWeight: 700 }}>
                                       Select a second pitch to compare.
                                     </div>
-                                    <div />
                                   </>
                                 )}
                               </div>
@@ -12532,9 +13170,13 @@ export default function PitchingSuite({
                             <video
                               key={`single-${currentPitchKey}-${actionVideoUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
                               ref={singleActionVideoRef}
-                              controls
+                              crossOrigin="anonymous"
                               autoPlay
+                              loop={actionVideoLoop}
                               style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                              onLoadedMetadata={updateSyncedDuration}
+                              onPause={() => setActionVideoPlaying(false)}
+                              onPlay={() => setActionVideoPlaying(true)}
                               onError={() => {
                                 void handleActionVideoLoadError(currentActionPitch ?? null);
                               }}
@@ -12545,20 +13187,178 @@ export default function PitchingSuite({
                         ) : (
                           <div style={{ color: '#f8fafc', fontSize: '2rem', fontWeight: 700 }}>No video available</div>
                         )}
+                        {actionMode === 'video' && hasActionVideo ? (
+                          <div
+                            data-breakdown-ui="true"
+                            style={{
+                              position: 'absolute',
+                              top: 10,
+                              left: 10,
+                              zIndex: 12,
+                              display: 'grid',
+                              gap: 8,
+                              maxWidth: 'min(760px, calc(100% - 20px))',
+                              pointerEvents: 'auto',
+                            }}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                flexWrap: 'wrap',
+                                padding: '0.35rem',
+                                border: '1px solid rgba(148,163,184,0.32)',
+                                borderRadius: 12,
+                                background: 'rgba(2,6,23,0.82)',
+                                boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
+                              }}
+                            >
+                              <button
+                                type="button"
+                                className={!breakdownMode ? 'btn btn-primary' : 'btn btn-ghost'}
+                                style={!breakdownMode ? { padding: '0.32rem 0.58rem', minHeight: 0 } : { ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }}
+                                onClick={() => setBreakdownMode(false)}
+                              >
+                                View
+                              </button>
+                              {(['line', 'arrow', 'circle', 'pen', 'text', 'erase'] as BreakdownTool[]).map((tool) => (
+                                <button
+                                  key={tool}
+                                  type="button"
+                                  className={breakdownMode && breakdownTool === tool ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  style={breakdownMode && breakdownTool === tool ? { padding: '0.32rem 0.58rem', minHeight: 0 } : { ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }}
+                                  onClick={() => {
+                                    setBreakdownMode(true);
+                                    setBreakdownTool(tool);
+                                  }}
+                                >
+                                  {tool === 'pen' ? 'Freehand' : tool.charAt(0).toUpperCase() + tool.slice(1)}
+                                </button>
+                              ))}
+                              <input
+                                type="color"
+                                value={breakdownColor}
+                                onChange={(event) => setBreakdownColor(event.target.value)}
+                                aria-label="Drawing color"
+                                style={{ width: 34, height: 34, border: '1px solid rgba(148,163,184,0.32)', borderRadius: 8, padding: 2, background: 'rgba(15,23,42,0.9)' }}
+                              />
+                              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: '#e5e7eb', fontWeight: 800, fontSize: '0.74rem' }}>
+                                Width
+                                <input type="range" min={2} max={10} value={breakdownWidth} onChange={(event) => setBreakdownWidth(Number(event.target.value))} style={{ width: 88 }} />
+                              </label>
+                              <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }} onClick={() => setBreakdownAnnotations((items) => items.slice(0, -1))} disabled={!breakdownAnnotations.length}>
+                                Undo
+                              </button>
+                              <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }} onClick={() => setBreakdownAnnotations([])} disabled={!breakdownAnnotations.length}>
+                                Clear
+                              </button>
+                              <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }} onClick={() => setShowBreakdownNotePanel((value) => !value)}>
+                                Note / Save
+                              </button>
+                            </div>
+                            {showBreakdownNotePanel ? (
+                              <div
+                                style={{
+                                  width: 'min(520px, calc(100vw - 80px))',
+                                  display: 'grid',
+                                  gap: 8,
+                                  border: '1px solid rgba(148,163,184,0.32)',
+                                  borderRadius: 12,
+                                  padding: 10,
+                                  background: 'rgba(2,6,23,0.92)',
+                                  boxShadow: '0 14px 30px rgba(0,0,0,0.36)',
+                                }}
+                              >
+                                <textarea
+                                  value={breakdownNoteText}
+                                  onChange={(event) => setBreakdownNoteText(event.target.value)}
+                                  placeholder="Optional note for Player Notes..."
+                                  style={{ minHeight: 74, resize: 'vertical', border: '1px solid rgba(148,163,184,0.38)', borderRadius: 8, padding: '0.55rem', color: '#f8fafc', background: 'rgba(15,23,42,0.94)', fontWeight: 600 }}
+                                />
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                  <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, padding: '0.42rem 0.7rem' }} onClick={downloadBreakdownSnapshot}>
+                                    Download Snapshot
+                                  </button>
+                                  <button type="button" className="btn btn-primary" style={{ padding: '0.42rem 0.7rem' }} onClick={() => void saveBreakdownSnapshot()} disabled={breakdownSaving}>
+                                    Save Snapshot
+                                  </button>
+                                  {recordingState === 'recording' ? (
+                                    <button type="button" className="btn btn-primary" style={{ padding: '0.42rem 0.7rem' }} onClick={stopBreakdownRecording}>
+                                      Stop Recording
+                                    </button>
+                                  ) : (
+                                    <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, padding: '0.42rem 0.7rem' }} onClick={() => void startBreakdownRecording()}>
+                                      Record
+                                    </button>
+                                  )}
+                                  {recordingUrl ? (
+                                    <>
+                                      <button type="button" className="btn btn-primary" style={{ padding: '0.42rem 0.7rem' }} onClick={() => void saveBreakdownRecording()} disabled={breakdownSaving}>
+                                        Save Recording
+                                      </button>
+                                      <a className="btn btn-ghost" href={recordingUrl} download={`video-breakdown-${Date.now()}.webm`} style={{ ...actionModalButtonStyle, padding: '0.42rem 0.7rem' }}>
+                                        Download Recording
+                                      </a>
+                                    </>
+                                  ) : null}
+                                </div>
+                                {breakdownMessage ? <div style={{ color: breakdownMessage.includes('Saved') ? '#86efac' : '#fde68a', fontWeight: 800, fontSize: '0.82rem' }}>{breakdownMessage}</div> : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {actionMode === 'video' && hasActionVideo ? renderBreakdownOverlay() : null}
                       </div>
                     ) : null}
 
-                    {actionMode === 'video' && actionSideBySide ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {actionMode === 'video' && hasActionVideo ? (
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                         <button
                           type="button"
                           className="btn btn-ghost"
-                          style={{ background: '#fff', color: '#1f2937', borderColor: '#cbd5e1' }}
+                          style={actionModalButtonStyle}
                           onClick={syncPlayPauseVideos}
-                          disabled={!selectedLeftUrls.length || !selectedRightUrls.length}
+                          disabled={actionSideBySide ? (!selectedLeftUrls.length || !selectedRightUrls.length) : !actionVideoUrls.length}
                         >
                           {actionVideoPlaying ? 'Pause' : 'Play'}
                         </button>
+                        <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={resetActionVideos}>
+                          Reset
+                        </button>
+                        <button
+                          type="button"
+                          className={actionVideoLoop ? 'btn btn-primary' : 'btn btn-ghost'}
+                          style={actionVideoLoop ? { padding: '0.42rem 0.75rem' } : actionModalButtonStyle}
+                          onClick={toggleActionVideoLoop}
+                        >
+                          Loop
+                        </button>
+                        <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => stepActionVideo(-5 / 60)}>
+                          -5 Frames
+                        </button>
+                        <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => stepActionVideo(-1 / 60)}>
+                          -1 Frame
+                        </button>
+                        <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => stepActionVideo(1 / 60)}>
+                          +1 Frame
+                        </button>
+                        <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => stepActionVideo(5 / 60)}>
+                          +5 Frames
+                        </button>
+                        <select value={actionPlaybackRate} onChange={(event) => setActionVideoRate(Number(event.target.value))} style={{ minHeight: 38, border: `1px solid ${actionModalTheme.border}`, borderRadius: 10, padding: '0 0.6rem', color: actionModalTheme.panelText, background: actionModalTheme.controlBg, fontWeight: 700 }}>
+                          <option value={0.25}>0.25x</option>
+                          <option value={0.5}>0.5x</option>
+                          <option value={1}>1x</option>
+                          <option value={1.5}>1.5x</option>
+                        </select>
+                        <span style={{ color: actionModalTheme.muted, fontWeight: 700, marginLeft: 'auto' }}>
+                          {actionVideoTime.toFixed(2)}s / {(actionVideoDuration || 0).toFixed(2)}s
+                        </span>
+                        </div>
                         <input
                           type="range"
                           min={0}
@@ -12567,8 +13367,13 @@ export default function PitchingSuite({
                           value={Math.min(actionVideoTime, actionVideoDuration || actionVideoTime)}
                           onChange={(event) => syncSeekVideos(Number(event.target.value))}
                           disabled={!actionVideoDuration}
-                          style={{ flex: 1 }}
+                          style={{ width: '100%' }}
                         />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                          <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => setActionMode(null)}>
+                            Close
+                          </button>
+                        </div>
                       </div>
                     ) : null}
 
@@ -12579,8 +13384,8 @@ export default function PitchingSuite({
                             minHeight: 470,
                             height: 'min(64vh, 540px)',
                             borderRadius: 10,
-                            border: '1px solid #d1d5db',
-                            background: '#f8fafc',
+                            border: `1px solid ${actionModalTheme.border}`,
+                            background: actionModalTheme.controlSoftBg,
                             display: 'grid',
                             placeItems: 'center',
                             overflow: 'hidden',
@@ -12597,10 +13402,10 @@ export default function PitchingSuite({
                           />
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <button type="button" className="btn btn-ghost" style={{ background: '#fff', color: '#1f2937', borderColor: '#cbd5e1' }} onClick={() => setActionIsPlaying(true)}>
+                          <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => setActionIsPlaying(true)}>
                             Play
                           </button>
-                          <button type="button" className="btn btn-ghost" style={{ background: '#fff', color: '#1f2937', borderColor: '#cbd5e1' }} onClick={() => setActionIsPlaying(false)}>
+                          <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => setActionIsPlaying(false)}>
                             Pause
                           </button>
                           <input
@@ -12612,7 +13417,7 @@ export default function PitchingSuite({
                             style={{ flex: 1 }}
                           />
                         </div>
-                        <div style={{ border: '1px solid #d1d5db', borderRadius: 10, background: '#fff', padding: '0.7rem', color: '#374151', fontSize: '0.86rem' }}>
+                        <div style={{ border: `1px solid ${actionModalTheme.border}`, borderRadius: 10, background: actionModalTheme.controlBg, padding: '0.7rem', color: actionModalTheme.muted, fontSize: '0.86rem' }}>
                           Dashed gold arrow: Release tilt direction (rTilt) | Solid green arrow: Break tilt direction (bTilt)
                         </div>
                       </>
@@ -12620,12 +13425,12 @@ export default function PitchingSuite({
                   </div>
 
                   {!(actionMode === 'video' && actionSideBySide) ? (
-                  <div style={{ display: 'grid', gap: '0.5rem', color: '#111827', fontWeight: 700, fontSize: '0.98rem' }}>
+                  <div style={{ display: 'grid', gap: '0.5rem', color: actionModalTheme.textStrong, fontWeight: 700, fontSize: '0.98rem', alignSelf: 'start', overflowY: 'auto' }}>
                     <div>
                       <div>{formatNameFirstLast(currentActionPitch.pitcher)}</div>
                       <div>{actionDateLabel}</div>
                     </div>
-                    <hr style={{ width: '100%', borderColor: '#d1d5db' }} />
+                    <hr style={{ width: '100%', borderColor: actionModalTheme.border }} />
                     <div>{currentActionPitch.pitch_type}</div>
                     <div>{fmtNum(currentActionPitch.velo, 1)} mph</div>
                     <div>IVB: {fmtNum(currentActionPitch.ivb, 1)} in</div>
@@ -12641,26 +13446,48 @@ export default function PitchingSuite({
                     <div>bTilt: {formatTiltClock(currentActionPitch.break_tilt)}</div>
                     <div>Height: {fmtNum(currentActionPitch.release_height, 1)}</div>
                     <div>Side: {typeof currentActionPitch.release_side === 'number' ? fmtNum(orientX(currentActionPitch.release_side), 1) : '-'}</div>
-                    <div style={{ display: 'grid', justifyContent: 'center', marginTop: 8 }}>
-                      <svg viewBox="0 0 240 252" style={{ width: 120, height: 126 }}>
-                        <rect x={40} y={45} width={160} height={120} fill="none" stroke="#111827" strokeWidth="6" />
-                        <line x1={93.33} y1={45} x2={93.33} y2={165} stroke="#111827" strokeWidth="3" />
-                        <line x1={146.66} y1={45} x2={146.66} y2={165} stroke="#111827" strokeWidth="3" />
-                        <line x1={40} y1={85} x2={200} y2={85} stroke="#111827" strokeWidth="3" />
-                        <line x1={40} y1={125} x2={200} y2={125} stroke="#111827" strokeWidth="3" />
-                        <rect x={13} y={20} width={214} height={178} fill="none" stroke="#111827" strokeWidth="4" />
-                        <line x1={13} y1={104} x2={40} y2={104} stroke="#111827" strokeWidth="4" />
-                        <line x1={200} y1={104} x2={227} y2={104} stroke="#111827" strokeWidth="4" />
-                        <line x1={120} y1={20} x2={120} y2={45} stroke="#111827" strokeWidth="4" />
-                        <polyline points="80,236 80,228 120,222 160,228 160,236 80,236" fill="none" stroke="#111827" strokeWidth="4" />
+                    <div style={{ display: 'grid', justifyContent: 'center', marginTop: 10 }}>
+                      <svg viewBox={`0 0 ${actionZoneW} ${actionZoneH}`} style={{ width: 172, height: 186 }}>
+                        <polygon
+                          points={`${actionZonePx(-0.75)},${actionZonePy(0.55)} ${actionZonePx(0.75)},${actionZonePy(0.55)} ${actionZonePx(0.75)},${actionZonePy(0.65)} ${actionZonePx(0)},${actionZonePy(0.75)} ${actionZonePx(-0.75)},${actionZonePy(0.65)}`}
+                          fill="none"
+                          stroke={actionModalTheme.zoneStroke}
+                          strokeWidth="4"
+                        />
+                        <rect
+                          x={actionZonePx(actionCompLeft)}
+                          y={actionZonePy(actionCompTop)}
+                          width={actionZonePx(actionCompRight) - actionZonePx(actionCompLeft)}
+                          height={actionZonePy(actionCompBottom) - actionZonePy(actionCompTop)}
+                          fill="none"
+                          stroke={actionModalTheme.zoneStroke}
+                          strokeWidth="4"
+                        />
+                        <line x1={actionZonePx(actionCompLeft)} y1={actionZonePy(actionStrikeCenterY)} x2={actionZonePx(actionStrikeLeft)} y2={actionZonePy(actionStrikeCenterY)} stroke={actionModalTheme.zoneStroke} strokeWidth="3" />
+                        <line x1={actionZonePx(actionStrikeRight)} y1={actionZonePy(actionStrikeCenterY)} x2={actionZonePx(actionCompRight)} y2={actionZonePy(actionStrikeCenterY)} stroke={actionModalTheme.zoneStroke} strokeWidth="3" />
+                        <line x1={actionZonePx(actionStrikeCenterX)} y1={actionZonePy(actionCompBottom)} x2={actionZonePx(actionStrikeCenterX)} y2={actionZonePy(actionStrikeBottom)} stroke={actionModalTheme.zoneStroke} strokeWidth="3" />
+                        <line x1={actionZonePx(actionStrikeCenterX)} y1={actionZonePy(actionStrikeTop)} x2={actionZonePx(actionStrikeCenterX)} y2={actionZonePy(actionCompTop)} stroke={actionModalTheme.zoneStroke} strokeWidth="3" />
+                        <rect
+                          x={actionZonePx(actionStrikeLeft)}
+                          y={actionZonePy(actionStrikeTop)}
+                          width={actionZonePx(actionStrikeRight) - actionZonePx(actionStrikeLeft)}
+                          height={actionZonePy(actionStrikeBottom) - actionZonePy(actionStrikeTop)}
+                          fill="none"
+                          stroke={actionModalTheme.zoneStroke}
+                          strokeWidth="6"
+                        />
+                        <line x1={actionZonePx(actionStrikeLeft + ((actionStrikeRight - actionStrikeLeft) / 3))} y1={actionZonePy(actionStrikeBottom)} x2={actionZonePx(actionStrikeLeft + ((actionStrikeRight - actionStrikeLeft) / 3))} y2={actionZonePy(actionStrikeTop)} stroke={actionModalTheme.zoneStroke} strokeWidth="3" />
+                        <line x1={actionZonePx(actionStrikeLeft + (((actionStrikeRight - actionStrikeLeft) * 2) / 3))} y1={actionZonePy(actionStrikeBottom)} x2={actionZonePx(actionStrikeLeft + (((actionStrikeRight - actionStrikeLeft) * 2) / 3))} y2={actionZonePy(actionStrikeTop)} stroke={actionModalTheme.zoneStroke} strokeWidth="3" />
+                        <line x1={actionZonePx(actionStrikeLeft)} y1={actionZonePy(actionStrikeBottom + ((actionStrikeTop - actionStrikeBottom) / 3))} x2={actionZonePx(actionStrikeRight)} y2={actionZonePy(actionStrikeBottom + ((actionStrikeTop - actionStrikeBottom) / 3))} stroke={actionModalTheme.zoneStroke} strokeWidth="3" />
+                        <line x1={actionZonePx(actionStrikeLeft)} y1={actionZonePy(actionStrikeBottom + (((actionStrikeTop - actionStrikeBottom) * 2) / 3))} x2={actionZonePx(actionStrikeRight)} y2={actionZonePy(actionStrikeBottom + (((actionStrikeTop - actionStrikeBottom) * 2) / 3))} stroke={actionModalTheme.zoneStroke} strokeWidth="3" />
                         {actionPlateX !== null && actionPlateY !== null ? (
                           <circle
                             cx={actionPlateX}
                             cy={actionPlateY}
-                            r="7"
+                            r="10.5"
                             fill={pitchColors[currentActionPitch.pitch_type] ?? '#9ca3af'}
-                            stroke="#111827"
-                            strokeWidth="1.5"
+                            stroke={actionModalTheme.zoneStroke}
+                            strokeWidth="2"
                           />
                         ) : null}
                       </svg>
@@ -12674,11 +13501,6 @@ export default function PitchingSuite({
                     </div>
                   </div>
                   ) : null}
-                </div>
-                <div className="portal-choice-line-actions" style={{ justifyContent: 'flex-end' }}>
-                  <button type="button" className="btn btn-ghost" style={{ background: '#fff', color: '#374151', borderColor: '#cbd5e1' }} onClick={() => setActionMode(null)}>
-                    Close
-                  </button>
                 </div>
               </>
             )}

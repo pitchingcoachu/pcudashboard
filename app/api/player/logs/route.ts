@@ -1,7 +1,8 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { upsertExerciseLog } from '../../../../lib/training-db';
+import { readActivityRequestMeta } from '../../../../lib/portal-activity';
+import { recordPortalActivityEvent, upsertExerciseLog } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
 
 const ASSESSMENT_NOTES_TOKEN = '[ASSESSMENT_NOTES]';
@@ -128,6 +129,21 @@ export async function POST(request: Request) {
       performedLoad: performedLoadCombined || String(form.get('performedLoad') ?? ''),
       notes,
     });
+    const { userAgent, ipAddress } = await readActivityRequestMeta(request);
+    void recordPortalActivityEvent({
+      userId: session.userId ?? null,
+      email: session.email,
+      name: session.name ?? null,
+      role: session.role ?? 'admin',
+      organizationId: session.organizationId ?? null,
+      playerId: allowedPlayerId,
+      dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+      eventType: 'workout_logged',
+      path: '/portal/player',
+      metadata: { itemId, scheduleType },
+      userAgent,
+      ipAddress,
+    }).catch(() => {});
   } catch (error) {
     return redirectWithMessage(request, '/portal/player', {
       error: error instanceof Error ? error.message : 'Could not save log.',

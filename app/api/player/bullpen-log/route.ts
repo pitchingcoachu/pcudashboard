@@ -1,9 +1,10 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
+import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import { canManagePlayer } from '../../../../lib/portal-access';
-import { getPlayerForUser, playerExistsInOrganization, getBullpenLogEntries, saveBullpenLogEntry } from '../../../../lib/training-db';
+import { getPlayerForUser, playerExistsInOrganization, getBullpenLogEntries, recordPortalActivityEvent, saveBullpenLogEntry } from '../../../../lib/training-db';
 
 async function resolvePlayerId(session: ReturnType<typeof getSessionFromCookies>, requestedPlayerId: number) {
   if (!session) return null;
@@ -66,5 +67,20 @@ export async function POST(request: Request) {
     rowsJson,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 500 });
+  const { userAgent, ipAddress } = await readActivityRequestMeta(request);
+  void recordPortalActivityEvent({
+    userId: session.userId ?? null,
+    email: session.email,
+    name: session.name ?? null,
+    role: session.role ?? 'admin',
+    organizationId,
+    playerId,
+    dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+    eventType: 'bullpen_saved',
+    path: '/portal/player/program/bullpens',
+    metadata: { templateId, bullpenDate },
+    userAgent,
+    ipAddress,
+  }).catch(() => {});
   return NextResponse.json({ ok: true });
 }

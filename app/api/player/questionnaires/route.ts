@@ -2,10 +2,12 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { canManagePlayer } from '../../../../lib/portal-access';
+import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import {
   getPlayerForUser,
   listPendingQuestionnairesForPlayer,
+  recordPortalActivityEvent,
   saveQuestionnaireResponse,
 } from '../../../../lib/training-db';
 
@@ -76,6 +78,21 @@ export async function POST(request: Request) {
     submittedByUserId: session.userId ?? null,
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+  const { userAgent, ipAddress } = await readActivityRequestMeta(request);
+  void recordPortalActivityEvent({
+    userId: session.userId ?? null,
+    email: session.email,
+    name: session.name ?? null,
+    role: session.role ?? 'admin',
+    organizationId,
+    playerId,
+    dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+    eventType: 'questionnaire_completed',
+    path: '/portal/player',
+    metadata: { assignmentId, questionnaireId, dueDate },
+    userAgent,
+    ipAddress,
+  }).catch(() => {});
 
   const pending = await listPendingQuestionnairesForPlayer({ organizationId, playerId });
   return NextResponse.json({ ok: true, pending });

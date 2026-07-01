@@ -17,6 +17,7 @@ import {
   resolveProgrammingOrganizationId,
   resolveProgrammingSchoolCode,
 } from '../../../lib/programming-scope';
+import { canViewPortalActivity } from '../../../lib/portal-activity';
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -205,6 +206,24 @@ export default async function AdminHomePage() {
           Open Player Notes
         </Link>
       </article>
+      {canViewPortalActivity(session) ? (
+        <article className="portal-admin-card">
+          <h2>Activity Tracker</h2>
+          <p>Review logins, page views, and recent portal activity across all schools.</p>
+          <Link href="/portal/admin/activity" className="btn btn-primary as-link">
+            Open Activity Tracker
+          </Link>
+        </article>
+      ) : null}
+      {session.role === 'admin' && session.email.trim().toLowerCase() === 'jgaynor@pitchingcoachu.com' ? (
+        <article className="portal-admin-card">
+          <h2>Email Automations</h2>
+          <p>Edit the automatic email sent after someone submits the PCU Dashboard form.</p>
+          <Link href="/portal/admin/email-templates" className="btn btn-primary as-link">
+            Open Email Automations
+          </Link>
+        </article>
+      ) : null}
       <article className="portal-admin-card">
         <h2>Force Plate Data</h2>
         <p>View VALD ForceDecks metrics and test history.</p>
