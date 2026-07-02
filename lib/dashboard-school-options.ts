@@ -74,6 +74,7 @@ function schoolFromOrganizationName(name: string | null | undefined): string | n
   const value = String(name ?? '').trim();
   if (!value) return null;
   const upper = value.toUpperCase();
+  if (upper.includes('DASHBOARD TRIAL')) return 'TRIAL';
   if (upper.includes('PITCHINGCOACHU')) return 'PCU';
   const compact = upper.replace(/[^A-Z0-9]/g, '');
   const allowed = resolveAllowedDashboardSchoolCodes();

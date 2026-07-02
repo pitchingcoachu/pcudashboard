@@ -36,6 +36,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: 
 export default async function AdminHomePage() {
   const session = await requirePortalSession();
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
+  const isTrialSchool = programmingSchoolCode === 'TRIAL';
   const schoolAccess = await withTimeout(
     getSchoolProductAccess(programmingSchoolCode),
     3_000,
@@ -206,7 +207,7 @@ export default async function AdminHomePage() {
           Open Player Notes
         </Link>
       </article>
-      {canViewPortalActivity(session) ? (
+      {!isTrialSchool && canViewPortalActivity(session) ? (
         <article className="portal-admin-card">
           <h2>Activity Tracker</h2>
           <p>Review logins, page views, and recent portal activity across all schools.</p>
@@ -215,7 +216,7 @@ export default async function AdminHomePage() {
           </Link>
         </article>
       ) : null}
-      {session.role === 'admin' && session.email.trim().toLowerCase() === 'jgaynor@pitchingcoachu.com' ? (
+      {!isTrialSchool && session.role === 'admin' && session.email.trim().toLowerCase() === 'jgaynor@pitchingcoachu.com' ? (
         <article className="portal-admin-card">
           <h2>Email Automations</h2>
           <p>Edit the automatic email sent after someone submits the PCU Dashboard form.</p>
@@ -224,13 +225,15 @@ export default async function AdminHomePage() {
           </Link>
         </article>
       ) : null}
-      <article className="portal-admin-card">
-        <h2>Force Plate Data</h2>
-        <p>View VALD ForceDecks metrics and test history.</p>
-        <Link href="/portal/force-plates" className="btn btn-primary as-link">
-          Open Force Plate Data
-        </Link>
-      </article>
+      {!isTrialSchool ? (
+        <article className="portal-admin-card">
+          <h2>Force Plate Data</h2>
+          <p>View VALD ForceDecks metrics and test history.</p>
+          <Link href="/portal/force-plates" className="btn btn-primary as-link">
+            Open Force Plate Data
+          </Link>
+        </article>
+      ) : null}
       <article className="portal-admin-card">
         <h2>Dashboard</h2>
         <p>Open the main dashboard view.</p>

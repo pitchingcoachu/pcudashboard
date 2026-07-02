@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { DEMO_REQUEST_FOLLOWUP_TEMPLATE_KEY, htmlToPlainText, saveEmailTemplate } from '../../../../lib/email-templates';
+import { resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -15,6 +16,9 @@ export async function POST(request: Request) {
     const cookieStore = await cookies();
     const session = getSessionFromCookies(cookieStore);
     if (!session) return NextResponse.redirect(new URL('/login', request.url), 303);
+    if (resolveProgrammingSchoolCode(session) === 'TRIAL') {
+      return redirectWithMessage(request, '/portal/admin', 'error', 'Email automations are not available for Dashboard Trial.');
+    }
     if ((session.role ?? 'admin') !== 'admin' || session.email.trim().toLowerCase() !== 'jgaynor@pitchingcoachu.com') {
       return redirectWithMessage(request, '/portal/admin', 'error', 'Only authorized admins can edit email templates.');
     }

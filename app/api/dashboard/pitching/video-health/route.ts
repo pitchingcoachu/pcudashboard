@@ -65,7 +65,7 @@ export async function GET(request: Request) {
   if (endDate) url.searchParams.set('end_date', endDate);
   if (scopedPitcher) url.searchParams.set('pitcher', scopedPitcher);
   if (teamType) url.searchParams.set('team_type', teamType);
-  url.searchParams.set('with_video', '1');
+  url.searchParams.set('with_video', 'Yes');
   url.searchParams.set('include_chart_points', '1');
   url.searchParams.set('include_row_pitches', '0');
   url.searchParams.set('include_trend_rows', '0');

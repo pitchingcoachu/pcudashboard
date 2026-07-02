@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import Image from 'next/image';
+import { notFound } from 'next/navigation';
 import SyncForcePlatesButton from './sync-force-plates-button';
 import { requirePortalSession } from '../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
@@ -67,6 +68,7 @@ export default async function ForcePlatesPage({
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const params = await searchParams;
   const selectedSchoolCode = resolveProgrammingSchoolCode(session);
+  if (String(selectedSchoolCode ?? '').trim().toUpperCase() === 'TRIAL') notFound();
   const canAccessProgramming = canUseProgrammingData(session);
   const orgId = resolveProgrammingOrganizationId(session);
   const isPcu = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'PCU';

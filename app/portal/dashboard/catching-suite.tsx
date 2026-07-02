@@ -910,12 +910,12 @@ export default function CatchingSuite() {
   }, [page, hmChartType, heatPoints, heatmapDisplayView]);
 
   const catcherOptions = useMemo(() => {
-    const values = !isLeague || teamType === 'All' ? (filters?.catchers ?? []) : (filters?.catchers_by_team_code?.[teamType] ?? []);
+    const values = teamType === 'All' ? (filters?.catchers ?? []) : (filters?.catchers_by_team_code?.[teamType] ?? filters?.catchers ?? []);
     return withAll(values).map((value) => ({
       value,
       label: value === 'All' ? 'All' : formatNameFirstLast(value),
     }));
-  }, [filters?.catchers, filters?.catchers_by_team_code, isLeague, teamType]);
+  }, [filters?.catchers, filters?.catchers_by_team_code, teamType]);
   const teamTypeOptions = useMemo(() => {
     const school = String(filters?.school_code ?? '').trim();
     const isPro = String(filters?.school_code ?? '').trim().toUpperCase() === 'PRO';

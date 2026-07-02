@@ -917,6 +917,70 @@ def _compute_home_trends_payload(
         roster_hitters = {str(key).strip() for key in roster.get("hitter_norm", []) if str(key).strip()}
         allowed_pitcher_keys = roster_pitchers if roster_pitchers else None
         allowed_hitter_keys = roster_hitters if roster_hitters else None
+    pitching_defaults = {
+        "team_type": "All",
+        "opp_hitter": None,
+        "with_video": None,
+        "break_lines": None,
+        "stuff_level": None,
+        "stuff_base": None,
+        "hand": None,
+        "batter_side": None,
+        "venue": None,
+        "session_type": None,
+        "visual_option": None,
+        "in_zone": None,
+        "qp_locations": None,
+        "ball_types": None,
+        "zone_locations": None,
+        "pitch_results": None,
+        "count_filter": None,
+        "after_count_filter": None,
+        "velo_min": None,
+        "velo_max": None,
+        "ivb_min": None,
+        "ivb_max": None,
+        "hb_min": None,
+        "hb_max": None,
+        "pc_min": None,
+        "pc_max": None,
+        "bf_min": None,
+        "bf_max": None,
+        "ip_min": None,
+        "ip_max": None,
+        "chart_points_limit": None,
+        "chart_only": False,
+        "force_raw": False,
+    }
+    hitting_defaults = {
+        "session_type": None,
+        "team_type": "All",
+        "opp_pitcher": None,
+        "hand": None,
+        "batter_side": None,
+        "venue": None,
+        "in_zone": None,
+        "pitch_types": None,
+        "zone_locations": None,
+        "pitch_results": None,
+        "count_filter": None,
+        "after_count_filter": None,
+        "bip_result": None,
+        "velo_min": None,
+        "velo_max": None,
+        "ivb_min": None,
+        "ivb_max": None,
+        "hb_min": None,
+        "hb_max": None,
+        "pc_min": None,
+        "pc_max": None,
+        "chart_points_limit": None,
+        "chart_only": False,
+        "force_raw": False,
+        "recent_pa_mode": None,
+        "recent_pa_count": None,
+        "recent_pa_ignore_dates": False,
+    }
 
     season_pitching = pitching_overview(
         school_code=school,
@@ -927,9 +991,11 @@ def _compute_home_trends_payload(
         table_mode="Custom",
         split_by="Pitcher",
         custom_columns="K%,BB%,E+A%",
+        pitch_types=None,
         include_chart_points=False,
         include_row_pitches=False,
         include_trend_rows=False,
+        **pitching_defaults,
     )
     recent_pitching = pitching_overview(
         school_code=school,
@@ -940,9 +1006,11 @@ def _compute_home_trends_payload(
         table_mode="Custom",
         split_by="Pitcher",
         custom_columns="K%,BB%,E+A%",
+        pitch_types=None,
         include_chart_points=False,
         include_row_pitches=False,
         include_trend_rows=False,
+        **pitching_defaults,
     )
     season_pitching_fbsi = pitching_overview(
         school_code=school,
@@ -957,6 +1025,7 @@ def _compute_home_trends_payload(
         include_chart_points=False,
         include_row_pitches=False,
         include_trend_rows=False,
+        **pitching_defaults,
     )
     recent_pitching_fbsi = pitching_overview(
         school_code=school,
@@ -971,6 +1040,7 @@ def _compute_home_trends_payload(
         include_chart_points=False,
         include_row_pitches=False,
         include_trend_rows=False,
+        **pitching_defaults,
     )
     season_hitting = hitting_overview(
         school_code=school,
@@ -982,6 +1052,7 @@ def _compute_home_trends_payload(
         split_by="Batter",
         custom_columns="xWOBA,Barrel%,GoZoneSw%",
         include_chart_points=False,
+        **hitting_defaults,
     )
     recent_hitting = hitting_overview(
         school_code=school,
@@ -993,6 +1064,7 @@ def _compute_home_trends_payload(
         split_by="Batter",
         custom_columns="xWOBA,Barrel%,GoZoneSw%",
         include_chart_points=False,
+        **hitting_defaults,
     )
 
     pitching_rows = _build_home_pitching_rows(
@@ -5714,6 +5786,31 @@ def _league_add_labeled_team_keys(by_team_code: Dict[str, List[str]]) -> Dict[st
     return out
 
 
+def _add_school_team_filter_keys(
+    by_team_code: Dict[str, List[str]],
+    *,
+    school_code: str,
+    team_markers_norm: set[str],
+) -> Dict[str, List[str]]:
+    if not by_team_code or not team_markers_norm or school_code in {"LEAGUE", "PRO"}:
+        return by_team_code
+    out = dict(by_team_code)
+    school_names: set[str] = set()
+    opponent_names: set[str] = set()
+    for team_code, names in by_team_code.items():
+        code = _normalize_team_code(team_code)
+        target = school_names if code in team_markers_norm else opponent_names
+        for name in names:
+            cleaned = str(name or "").strip()
+            if cleaned:
+                target.add(cleaned)
+    if school_names:
+        out[school_code] = sorted(school_names)
+    if opponent_names:
+        out["Opponents"] = sorted(opponent_names)
+    return out
+
+
 def _filter_pitching_rows_by_team_type(
     rows: List[Dict[str, Any]],
     team_type_value: str,
@@ -5826,6 +5923,7 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
         "GCU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "GCU", "school_config.R"),
         "GMU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "GMU", "school_config.R"),
         "LSU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "LSU", "school_config.R"),
+        "TRIAL": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "TRIAL", "school_config.R"),
         "UNM": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "UNM", "school_config.R"),
         "SEMO": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "SEMO", "school_config.R"),
         "CREIGHTON": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CREIGHTON", "school_config.R"),
@@ -8519,12 +8617,13 @@ def _try_pitching_overview_daily_rollup(
     if batter_side_norm and batter_side_norm.lower() != "all":
         where_parts.append("batterside_norm = %(batterside_norm)s::text")
         params["batterside_norm"] = batter_side_norm
-    team_type_norm = _normalize_team_code(
-        _league_team_code_from_value(team_type or "") if school_code == "LEAGUE" else (team_type or "")
+    _append_college_rollup_team_filter(
+        where_parts,
+        params,
+        school_code=school_code,
+        team_type_value=team_type,
+        role="pitching",
     )
-    if team_type_norm and team_type_norm != "ALL":
-        where_parts.append("pitcher_team_norm = %(team_type_norm)s::text")
-        params["team_type_norm"] = team_type_norm
     if selected_count_filters:
         params["count_filters"] = selected_count_filters
         params["count_filters_count"] = len(selected_count_filters)
@@ -8820,7 +8919,7 @@ def _try_pitching_overview_daily_rollup(
                 rows=len(grouped_rows),
                 pitchers_count=len(selected_pitcher_keys),
                 pitch_types_count=len(selected_pitch_types),
-                team_type=team_type_norm or "ALL",
+                team_type=(team_type or "ALL"),
                 session_type=session_type_filter or "All",
                 hand=hand_norm or "All",
                 batter_side=batter_side_norm or "All",
@@ -9473,9 +9572,15 @@ def _try_pitching_overview_daily_rollup(
         if batter_side_norm and batter_side_norm.lower() != "all":
             chart_where.append("CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.batterside), ''), ''), 1)) = 'L' THEN 'Left' WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.batterside), ''), ''), 1)) = 'R' THEN 'Right' ELSE 'Unknown' END = %(batterside_norm)s::text")
             chart_params["batterside_norm"] = batter_side_norm
-        if team_type_norm and team_type_norm != "ALL":
-            chart_where.append(PITCHER_TEAM_NORM_SQL.replace("pitcherteam", "pe.pitcherteam") + " = %(team_type_norm)s::text")
-            chart_params["team_type_norm"] = team_type_norm
+        _append_college_rollup_team_filter(
+            chart_where,
+            chart_params,
+            school_code=school_code,
+            team_type_value=team_type,
+            role="pitching",
+            pitcher_team_col=PITCHER_TEAM_NORM_SQL.replace("pitcherteam", "pe.pitcherteam"),
+            batter_team_col=BATTER_TEAM_NORM_EFF_SQL.replace("batterteam", "pe.batterteam"),
+        )
         chart_where_sql = " AND ".join(chart_where)
         try:
             with get_conn() as conn, conn.cursor() as cur:
@@ -11260,7 +11365,7 @@ def _try_pro_pitching_overview_rollup(
                 pitchers_count=len(selected_pitcher_keys),
                 opp_hitters_count=len(selected_opp_hitter_keys),
                 pitch_types_count=len(selected_pitch_types),
-                team_type=team_type_norm or "ALL",
+                team_type=(team_type_value or "ALL"),
                 hand=(hand or "All"),
                 batter_side=(batter_side or "All"),
             )
@@ -12565,12 +12670,13 @@ def _try_league_hitting_overview_rollup(
         "pitch_types": selected_pitch_types,
         "pitch_types_count": len(selected_pitch_types),
     }
-    team_type_norm = _normalize_team_code(
-        _league_team_code_from_value(team_type_value or "") if school_code == "LEAGUE" else (team_type_value or "")
+    _append_college_rollup_team_filter(
+        where,
+        params,
+        school_code=school_code,
+        team_type_value=team_type_value,
+        role="hitting",
     )
-    if team_type_norm and team_type_norm != "ALL":
-        where.append("batter_team_norm_eff = %(team_type_norm)s::text")
-        params["team_type_norm"] = team_type_norm
     if (hand or "").strip() and hand != "All":
         where.append("pitcherthrows_norm = %(pitcherthrows_norm)s::text")
         params["pitcherthrows_norm"] = hand
@@ -12953,6 +13059,7 @@ def _mod_namespaces_for_school(school_code: str) -> List[str]:
         "OSU": ["oklahomastate", "osubaseball"],
         "CNU": ["cnubaseball", "carsonnewman"],
         "LSU": ["lsubaseball", "lsu"],
+        "TRIAL": ["dashboardtrial", "trial"],
         "UNM": ["unmbaseball", "unm", "newmexico"],
         "SEMO": ["semobaseball", "semo"],
         "PCU": ["tmdata", "pcu", "pcubaseball"],
@@ -13383,6 +13490,63 @@ BATTER_NAME_IS_KNOWN_SQL = """
   (%(known_campers_count)s::int > 0 AND """ + BATTER_NAME_NORM_SQL + """ = ANY(%(known_campers)s::text[]))
 )
 """
+
+
+def _append_college_rollup_team_filter(
+    where_parts: List[str],
+    params: Dict[str, Any],
+    *,
+    school_code: str,
+    team_type_value: Optional[str],
+    role: str,
+    pitcher_team_col: str = "pitcher_team_norm",
+    batter_team_col: str = "batter_team_norm_eff",
+) -> None:
+    team_raw = (team_type_value or "").strip()
+    team_norm = _normalize_team_code(_league_team_code_from_value(team_raw) if school_code == "LEAGUE" else team_raw)
+    if not team_norm or team_norm == "ALL":
+        return
+    if school_code == "LEAGUE":
+        target_col = pitcher_team_col if role == "pitching" else batter_team_col
+        where_parts.append(f"{target_col} = %(team_type_norm)s::text")
+        params["team_type_norm"] = team_norm
+        return
+
+    school_norm = _normalize_team_code(school_code)
+    if team_raw == school_code or team_norm == school_norm:
+        markers = _load_school_roster(school_code).get("team_markers_norm", [])
+        if markers:
+            params["rollup_team_markers_norm"] = markers
+            target_col = pitcher_team_col if role == "pitching" else batter_team_col
+            where_parts.append(f"{target_col} = ANY(%(rollup_team_markers_norm)s::text[])")
+        else:
+            target_col = pitcher_team_col if role == "pitching" else batter_team_col
+            where_parts.append(f"{target_col} = %(team_type_norm)s::text")
+            params["team_type_norm"] = team_norm
+        return
+
+    if team_raw == "Opponents":
+        markers = _load_school_roster(school_code).get("team_markers_norm", [])
+        if not markers:
+            return
+        params["rollup_team_markers_norm"] = markers
+        if role == "pitching":
+            where_parts.append(
+                f"{batter_team_col} = ANY(%(rollup_team_markers_norm)s::text[]) "
+                f"AND COALESCE(NULLIF({pitcher_team_col}, ''), '') <> '' "
+                f"AND NOT ({pitcher_team_col} = ANY(%(rollup_team_markers_norm)s::text[]))"
+            )
+        else:
+            where_parts.append(
+                f"{pitcher_team_col} = ANY(%(rollup_team_markers_norm)s::text[]) "
+                f"AND COALESCE(NULLIF({batter_team_col}, ''), '') <> '' "
+                f"AND NOT ({batter_team_col} = ANY(%(rollup_team_markers_norm)s::text[]))"
+            )
+        return
+
+    target_col = pitcher_team_col if role == "pitching" else batter_team_col
+    where_parts.append(f"{target_col} = %(team_type_norm)s::text")
+    params["team_type_norm"] = team_norm
 
 
 @app.get("/health")
@@ -18336,7 +18500,6 @@ def pitching_filters(
                 cur.execute("SELECT to_regclass('public.pitch_events_daily_rollup_league')::text AS table_name")
                 reg = cur.fetchone() or {}
                 use_college_rollup_filters = bool(reg.get("table_name"))
-
             if school_code != "PRO" and use_college_rollup_filters:
                 cur.execute(
                     """
@@ -18625,6 +18788,17 @@ def pitching_filters(
     known_hitter_keys = set(hitter_norm | campers_norm)
     if known_hitter_keys:
         opp_hitters = [name for name in opp_hitters if _normalize_name_key(name) not in known_hitter_keys]
+    if school_code not in {"LEAGUE", "PRO"}:
+        pitchers_by_team_code = _add_school_team_filter_keys(
+            pitchers_by_team_code,
+            school_code=school_code,
+            team_markers_norm=set(team_markers_norm or []),
+        )
+        opp_hitters_by_team_code = _add_school_team_filter_keys(
+            opp_hitters_by_team_code,
+            school_code=school_code,
+            team_markers_norm=set(team_markers_norm or []),
+        )
 
     response = PitchingFiltersResponse(
         school_code=school_code,
@@ -19935,14 +20109,21 @@ def pitching_overview(
         with get_conn() as conn, conn.cursor() as cur:
             video_map_table = None
             # Prefer school-scoped table first so sites like PCU read their dedicated
-            # mappings (video_map_pcu). Fall back to shared canonical table.
-            table_candidates = [f"public.video_map_{school_code.lower()}", "public.video_map"]
-            for candidate in table_candidates:
+            # mappings (video_map_pcu). TRIAL uses a materialized cache copied from
+            # LSU's Edger map, with LSU as a fallback if the cache is absent.
+            video_school_code = school_code
+            if school_code == "TRIAL":
+                table_candidates = [("public.video_map_trial", "TRIAL"), ("public.video_map_lsu", "LSU"), ("public.video_map", "TRIAL")]
+            else:
+                table_candidates = [(f"public.video_map_{school_code.lower()}", school_code), ("public.video_map", school_code)]
+            for candidate, candidate_school_code in table_candidates:
                 cur.execute("SELECT to_regclass(%(tbl)s)::text AS reg", {"tbl": candidate})
                 reg = (cur.fetchone() or {}).get("reg")
                 if reg:
                     video_map_table = str(reg)
+                    video_school_code = candidate_school_code
                     break
+            params["video_school_code"] = video_school_code
 
             if video_map_table:
                 video_map_has_school_code = False
@@ -19964,7 +20145,7 @@ def pitching_overview(
                 )
                 video_map_has_school_code = bool((cur.fetchone() or {}).get("has_col"))
                 school_code_clause = (
-                    "AND upper(coalesce(nullif(trim(school_code), ''), %(school_code)s)) = %(school_code)s"
+                    "AND upper(coalesce(nullif(trim(school_code), ''), %(video_school_code)s)) = %(video_school_code)s"
                     if video_map_has_school_code
                     else ""
                 )
@@ -22055,12 +22236,65 @@ def hitting_filters(
                 opp_pitchers_by_team_code = _league_add_labeled_team_keys(opp_pitchers_by_team_code)
             else:
                 team_types = ["All", school_code, "Opponents", "Campers"]
+                cur.execute(
+                    """
+                    SELECT team_code, array_agg(name ORDER BY name) AS names
+                    FROM (
+                      SELECT DISTINCT
+                        """ + BATTER_TEAM_NORM_EFF_SQL + """ AS team_code,
+                        NULLIF(TRIM(batter), '') AS name
+                      FROM public.pitch_events
+                      WHERE school_code = %(school_code)s
+                        AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                    ) t
+                    WHERE team_code <> '' AND name IS NOT NULL
+                    GROUP BY team_code
+                    ORDER BY team_code
+                    """,
+                    {"school_code": school_code, "team_markers_norm": team_markers_norm},
+                )
+                hitters_by_team_code = {
+                    str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
+                    for row in cur.fetchall()
+                }
+                cur.execute(
+                    """
+                    SELECT team_code, array_agg(name ORDER BY name) AS names
+                    FROM (
+                      SELECT DISTINCT
+                        """ + BATTER_TEAM_NORM_EFF_SQL + """ AS team_code,
+                        NULLIF(TRIM(pitcher), '') AS name
+                      FROM public.pitch_events
+                      WHERE school_code = %(school_code)s
+                        AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                    ) t
+                    WHERE team_code <> '' AND name IS NOT NULL
+                    GROUP BY team_code
+                    ORDER BY team_code
+                    """,
+                    {"school_code": school_code, "team_markers_norm": team_markers_norm},
+                )
+                opp_pitchers_by_team_code = {
+                    str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
+                    for row in cur.fetchall()
+                }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"hitting filters query failed: {exc}") from exc
 
     allowed_hitter_keys = set(team_hitter_norm)
     if allowed_hitter_keys:
         hitters = [name for name in hitters if _normalize_name_key(name) in allowed_hitter_keys]
+    if school_code not in {"LEAGUE", "PRO"}:
+        hitters_by_team_code = _add_school_team_filter_keys(
+            hitters_by_team_code,
+            school_code=school_code,
+            team_markers_norm=set(team_markers_norm or []),
+        )
+        opp_pitchers_by_team_code = _add_school_team_filter_keys(
+            opp_pitchers_by_team_code,
+            school_code=school_code,
+            team_markers_norm=set(team_markers_norm or []),
+        )
 
     response = {
         "school_code": school_code,
@@ -23382,8 +23616,35 @@ def catching_filters(
                 catchers_by_team_code = _league_add_labeled_team_keys(catchers_by_team_code)
             else:
                 team_types = ["All", school_code, "Opponents", "Campers"]
+                cur.execute(
+                    """
+                    SELECT team_code, array_agg(name ORDER BY name) AS names
+                    FROM (
+                      SELECT DISTINCT
+                        """ + PITCHER_TEAM_NORM_SQL + """ AS team_code,
+                        NULLIF(TRIM(catcher), '') AS name
+                      FROM public.pitch_events
+                      WHERE school_code = %(school_code)s
+                        AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                    ) t
+                    WHERE team_code <> '' AND name IS NOT NULL
+                    GROUP BY team_code
+                    ORDER BY team_code
+                    """,
+                    {"school_code": school_code, "team_markers_norm": team_markers_norm},
+                )
+                catchers_by_team_code = {
+                    str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
+                    for row in cur.fetchall()
+                }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"catching filters query failed: {exc}") from exc
+    if school_code not in {"LEAGUE", "PRO"}:
+        catchers_by_team_code = _add_school_team_filter_keys(
+            catchers_by_team_code,
+            school_code=school_code,
+            team_markers_norm=set(team_markers_norm or []),
+        )
 
     response = {
         "school_code": school_code,

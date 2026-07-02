@@ -9,10 +9,18 @@ type SessionLike = {
   role?: string;
 };
 
+const DEFAULT_DASHBOARD_TRIAL_TEMPLATE_ORG_ID = 22;
+
 function normalizeSchoolCode(value: string | null | undefined): string {
   return String(value ?? '')
     .trim()
     .toUpperCase();
+}
+
+function resolveDashboardTrialTemplateOrganizationId(): number {
+  const configured = Number(process.env.DASHBOARD_TRIAL_TEMPLATE_ORG_ID ?? '');
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  return DEFAULT_DASHBOARD_TRIAL_TEMPLATE_ORG_ID;
 }
 
 function parseProgrammingDataSchoolCodes(): string[] {
@@ -83,6 +91,11 @@ function resolveScopedOrganizationIdBySelectedSchool(session: SessionLike): numb
 
   // Safety: prevent leaking one org's programming data into other selected schools.
   // Keep PCU fallback for the primary PCU org when map is incomplete.
+  // Trial evaluator accounts are isolated by their own org; global admins use the seeded fake-data template org.
+  if (selectedSchool === 'TRIAL') {
+    if (!isGlobalAdminSession(session) && sessionOrgId > 0) return sessionOrgId;
+    return resolveDashboardTrialTemplateOrganizationId();
+  }
   if (selectedSchool === 'PCU' && sessionOrgId > 0) return sessionOrgId;
   // Global admins may be granted schools before env mapping is updated (for example PRO).
   // Fall back to their session org so admin create flows don't hard-fail on org_id=0.
@@ -311,7 +324,7 @@ export function canUseProgrammingData(session: SessionLike): boolean {
   if (typeof access.programming === 'boolean') return access.programming;
   const schoolCode = resolveProgrammingSchoolCode(session);
   const allowed = parseProgrammingDataSchoolCodes();
-  return allowed.includes(schoolCode);
+  return schoolCode === 'TRIAL' || allowed.includes(schoolCode);
 }
 
 export function canUseClientManagement(session: SessionLike): boolean {

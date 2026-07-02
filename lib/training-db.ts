@@ -2,6 +2,53 @@ import { createPasswordHash, ensureAuthDbReady, getDbPool, isDatabaseConfigured,
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH } from './note-attachment-limits';
 import type { PortalActivityEventType } from './portal-activity';
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
+const DASHBOARD_TRIAL_ORG_PREFIX = 'Dashboard Trial - ';
+const DEFAULT_DASHBOARD_TRIAL_TEMPLATE_ORG_ID = 22;
+const PCU_TEMPLATE_ORGANIZATION_ID = 1;
+const TRIAL_FAKE_FIRST_NAMES = [
+  'Mason',
+  'Carter',
+  'Nolan',
+  'Evan',
+  'Cole',
+  'Logan',
+  'Wyatt',
+  'Caleb',
+  'Parker',
+  'Owen',
+  'Grant',
+  'Reid',
+  'Blake',
+  'Luke',
+  'Tyler',
+  'Ryan',
+  'Austin',
+  'Dylan',
+  'Gavin',
+  'Chase',
+];
+const TRIAL_FAKE_LAST_NAMES = [
+  'Anderson',
+  'Bennett',
+  'Carver',
+  'Collins',
+  'Dawson',
+  'Foster',
+  'Graham',
+  'Hayes',
+  'Hudson',
+  'Lawson',
+  'Miller',
+  'Palmer',
+  'Reed',
+  'Sullivan',
+  'Turner',
+  'Walker',
+  'West',
+  'Wright',
+  'Young',
+  'Brooks',
+];
 
 declare global {
   var __pcuTrainingDbReady: boolean | undefined;
@@ -166,6 +213,7 @@ export type PortalActivityUserSummaryRow = {
   lastLoginAt: string | null;
   lastActivityAt: string | null;
   lastPath: string | null;
+  lastMetadata: Record<string, unknown> | null;
   loginCount30d: number;
   pageViewCount30d: number;
   keyActionCount30d: number;
@@ -179,6 +227,7 @@ export type PortalActivityRecentEventRow = {
   organizationName: string | null;
   eventType: PortalActivityEventType;
   path: string | null;
+  metadata: Record<string, unknown> | null;
   createdAt: string;
 };
 
@@ -371,6 +420,12 @@ export type OrganizationOptionRow = {
   organizationName: string;
   schoolCode: string;
 };
+
+function resolveDashboardTrialTemplateOrganizationId(): number {
+  const configured = Number(process.env.DASHBOARD_TRIAL_TEMPLATE_ORG_ID ?? '');
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  return DEFAULT_DASHBOARD_TRIAL_TEMPLATE_ORG_ID;
+}
 
 type Queryable = {
   query: (text: string, values?: unknown[]) => Promise<unknown>;
@@ -681,6 +736,13 @@ export async function ensureTrainingDbReady(): Promise<void> {
   });
 
   await global.__pcuTrainingDbReadyPromise;
+}
+
+async function ensureWorkoutLibraryCalendarLinkTargetColumn(): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(`ALTER TABLE workout_library ADD COLUMN IF NOT EXISTS calendar_link_target TEXT NOT NULL DEFAULT 'none';`);
+  await pool.query(`UPDATE workout_library SET calendar_link_target = 'none' WHERE calendar_link_target IS NULL OR LENGTH(TRIM(calendar_link_target)) = 0;`);
 }
 
 function validateHttpUrl(value: string): { ok: true; value: string } | { ok: false; error: string } {
@@ -1144,6 +1206,51 @@ export async function listCoachesByOrganization(organizationId: number): Promise
   });
 }
 
+export async function listDashboardTrialCoaches(): Promise<CoachRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    user_id: number;
+    name: string | null;
+    email: string;
+    phone: string | null;
+    role: string;
+    is_active: boolean | null;
+    assigned_player_count: string;
+  }>(
+    `
+      SELECT
+        u.id AS user_id,
+        u.name,
+        u.email,
+        u.phone,
+        u.role,
+        u.is_active,
+        COUNT(p.id)::text AS assigned_player_count
+      FROM auth_users u
+      JOIN organizations o ON o.id = u.organization_id
+      LEFT JOIN players p ON p.assigned_coach_user_id = u.id
+      WHERE u.role IN ('admin', 'coach')
+        AND LOWER(TRIM(o.name)) LIKE LOWER($1)
+      GROUP BY u.id, u.name, u.email, u.phone, u.role, u.is_active
+      ORDER BY COALESCE(u.name, u.email) ASC
+    `,
+    [`${DASHBOARD_TRIAL_ORG_PREFIX}%`]
+  );
+  return result.rows
+    .map((row): CoachRow => ({
+      userId: row.user_id,
+      name: (row.name ?? '').trim() || row.email,
+      email: row.email,
+      phone: row.phone,
+      role: row.role === 'coach' ? 'coach' : 'admin',
+      isActive: row.is_active !== false,
+      assignedPlayerCount: Number(row.assigned_player_count ?? '0') || 0,
+    }))
+    .filter((row) => row.role === 'admin' || row.role === 'coach');
+}
+
 export async function listCoachAssignedPlayersByOrganization(organizationId: number): Promise<CoachAssignedPlayerRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
@@ -1178,6 +1285,54 @@ export async function listCoachAssignedPlayersByOrganization(organizationId: num
       assignedCoachUserId: row.assigned_coach_user_id,
     }));
   });
+}
+
+export async function listDashboardTrialCoachAssignedPlayers(): Promise<CoachAssignedPlayerRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    player_id: number;
+    full_name: string;
+    email: string;
+    status: string;
+    assigned_coach_user_id: number | null;
+  }>(
+    `
+      SELECT p.id AS player_id, p.full_name, p.email, p.status, p.assigned_coach_user_id
+      FROM players p
+      JOIN organizations o ON o.id = p.organization_id
+      WHERE LOWER(TRIM(o.name)) LIKE LOWER($1)
+      ORDER BY p.full_name ASC
+    `,
+    [`${DASHBOARD_TRIAL_ORG_PREFIX}%`]
+  );
+  return result.rows.map((row) => ({
+    playerId: row.player_id,
+    fullName: row.full_name,
+    email: row.email,
+    status: row.status,
+    assignedCoachUserId: row.assigned_coach_user_id,
+  }));
+}
+
+export async function resolveDashboardTrialOrganizationIdForStaffUser(staffUserId: number): Promise<number> {
+  if (!isDatabaseConfigured()) return 0;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ organization_id: number | null }>(
+    `
+      SELECT u.organization_id
+      FROM auth_users u
+      JOIN organizations o ON o.id = u.organization_id
+      WHERE u.id = $1
+        AND u.role IN ('admin', 'coach')
+        AND LOWER(TRIM(o.name)) LIKE LOWER($2)
+      LIMIT 1
+    `,
+    [staffUserId, `${DASHBOARD_TRIAL_ORG_PREFIX}%`]
+  );
+  return Number(result.rows[0]?.organization_id ?? 0) || 0;
 }
 
 export async function listPlayerChoicesByOrganization(input: {
@@ -1389,6 +1544,7 @@ export async function listWorkoutChoicesByOrganization(organizationId: number): 
   const cacheKey = `workout_choices:${organizationId}`;
   return _withTrainingReadCache(cacheKey, 25_000, async () => {
     const pool = getDbPool();
+    await ensureWorkoutLibraryCalendarLinkTargetColumn();
     const result = await pool.query<{
       id: number;
       name: string;
@@ -1553,6 +1709,7 @@ export async function resolveOrganizationIdForSchool(input: {
   const fallbackOrganizationId = Number(input.fallbackOrganizationId ?? 0);
   if (!schoolCode) return Number.isFinite(fallbackOrganizationId) && fallbackOrganizationId > 0 ? fallbackOrganizationId : 0;
   const normalizedFallback = Number.isFinite(fallbackOrganizationId) && fallbackOrganizationId > 0 ? fallbackOrganizationId : 0;
+  if (schoolCode === 'TRIAL') return normalizedFallback || resolveDashboardTrialTemplateOrganizationId();
   const cacheKey = `resolve_org_id_for_school:${schoolCode}:${normalizedFallback}:${input.createIfMissing ? 1 : 0}`;
   return _withTrainingReadCache(cacheKey, 45_000, async () => {
     const schoolByOrgId = parseOrgSchoolMap();
@@ -1626,6 +1783,279 @@ export async function resolveOrganizationIdForSchool(input: {
 
     return normalizedFallback;
   });
+}
+
+function normalizeTrialEmail(value: string): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function fakeTrialPlayerName(index: number): string {
+  const first = TRIAL_FAKE_FIRST_NAMES[index % TRIAL_FAKE_FIRST_NAMES.length];
+  const last = TRIAL_FAKE_LAST_NAMES[Math.floor(index / TRIAL_FAKE_FIRST_NAMES.length) % TRIAL_FAKE_LAST_NAMES.length];
+  return `${first} ${last}`;
+}
+
+export function isDashboardTrialOrganizationName(value: string | null | undefined): boolean {
+  return String(value ?? '').trim().toLowerCase().startsWith(DASHBOARD_TRIAL_ORG_PREFIX.toLowerCase());
+}
+
+export async function ensureDashboardTrialOrganizationForCoach(email: string): Promise<number> {
+  if (!isDatabaseConfigured()) return 0;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const normalizedEmail = normalizeTrialEmail(email);
+  if (!normalizedEmail) return 0;
+  const orgName = `${DASHBOARD_TRIAL_ORG_PREFIX}${normalizedEmail}`;
+  const existing = await pool.query<{ id: number }>(
+    `SELECT id FROM organizations WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) ORDER BY id ASC LIMIT 1`,
+    [orgName]
+  );
+  if ((existing.rowCount ?? 0) > 0) return Number(existing.rows[0]?.id ?? 0) || 0;
+  const created = await pool.query<{ id: number }>(`INSERT INTO organizations (name) VALUES ($1) RETURNING id`, [orgName]);
+  return Number(created.rows[0]?.id ?? 0) || 0;
+}
+
+export async function seedDashboardTrialOrganizationFromPcu(input: {
+  organizationId: number;
+  coachUserId?: number | null;
+  createdByUserId?: number | null;
+}): Promise<{ ok: true; players: number; exercises: number; workouts: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const targetOrganizationId = Number(input.organizationId);
+  if (!Number.isFinite(targetOrganizationId) || targetOrganizationId <= 0) return { ok: false, error: 'Valid trial organization is required.' };
+  const coachUserId = Number(input.coachUserId ?? 0);
+  const assignedCoachUserId = Number.isFinite(coachUserId) && coachUserId > 0 ? coachUserId : null;
+  const createdByUserId = Number(input.createdByUserId ?? assignedCoachUserId ?? 0) || null;
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const sourceOrgId = PCU_TEMPLATE_ORGANIZATION_ID;
+
+    await client.query(
+      `
+        INSERT INTO exercise_library (
+          organization_id, name, category, description, instruction_video_url, coaching_cues,
+          created_by, rep_measure, reps_per_side, tracking_type, created_at, updated_at
+        )
+        SELECT
+          $1, e.name, e.category, e.description, e.instruction_video_url, e.coaching_cues,
+          $2, e.rep_measure, e.reps_per_side, e.tracking_type, NOW(), NOW()
+        FROM exercise_library e
+        WHERE e.organization_id = $3
+          AND NOT EXISTS (
+            SELECT 1
+            FROM exercise_library existing
+            WHERE existing.organization_id = $1
+              AND LOWER(TRIM(existing.name)) = LOWER(TRIM(e.name))
+              AND LOWER(TRIM(COALESCE(existing.category, ''))) = LOWER(TRIM(COALESCE(e.category, '')))
+          )
+      `,
+      [targetOrganizationId, createdByUserId, sourceOrgId]
+    );
+
+    await client.query(
+      `
+        INSERT INTO workout_library (
+          organization_id, name, description, category, calendar_link_target, created_by, created_at, updated_at
+        )
+        SELECT
+          $1, w.name, w.description, w.category, w.calendar_link_target, $2, NOW(), NOW()
+        FROM workout_library w
+        WHERE w.organization_id = $3
+          AND NOT EXISTS (
+            SELECT 1
+            FROM workout_library existing
+            WHERE existing.organization_id = $1
+              AND LOWER(TRIM(existing.name)) = LOWER(TRIM(w.name))
+          )
+      `,
+      [targetOrganizationId, createdByUserId, sourceOrgId]
+    );
+
+    await client.query(
+      `
+        INSERT INTO workout_exercises (
+          workout_id, exercise_id, sort_order, prescribed_sets, prescribed_reps,
+          prescribed_load, notes, exercise_prefix, created_at, updated_at
+        )
+        SELECT
+          target_workout.id,
+          target_exercise.id,
+          we.sort_order,
+          we.prescribed_sets,
+          we.prescribed_reps,
+          we.prescribed_load,
+          we.notes,
+          we.exercise_prefix,
+          NOW(),
+          NOW()
+        FROM workout_exercises we
+        JOIN workout_library source_workout ON source_workout.id = we.workout_id AND source_workout.organization_id = $2
+        JOIN workout_library target_workout
+          ON target_workout.organization_id = $1
+         AND LOWER(TRIM(target_workout.name)) = LOWER(TRIM(source_workout.name))
+        LEFT JOIN exercise_library source_exercise ON source_exercise.id = we.exercise_id
+        LEFT JOIN exercise_library target_exercise
+          ON target_exercise.organization_id = $1
+         AND LOWER(TRIM(target_exercise.name)) = LOWER(TRIM(source_exercise.name))
+         AND LOWER(TRIM(COALESCE(target_exercise.category, ''))) = LOWER(TRIM(COALESCE(source_exercise.category, '')))
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM workout_exercises existing
+          WHERE existing.workout_id = target_workout.id
+            AND existing.sort_order = we.sort_order
+            AND COALESCE(existing.exercise_prefix, '') = COALESCE(we.exercise_prefix, '')
+        )
+      `,
+      [targetOrganizationId, sourceOrgId]
+    );
+
+    const sourcePlayers = await client.query<{
+      status: string | null;
+      college_commitment: string | null;
+      grad_year: string | null;
+      position: string | null;
+      height: string | null;
+      profile_weight_lbs: number | null;
+      bats_hand: string | null;
+      throws_hand: string | null;
+    }>(
+      `
+        SELECT status, college_commitment, grad_year, position, height,
+               profile_weight_lbs, bats_hand, throws_hand
+        FROM players
+        WHERE organization_id = $1
+        ORDER BY full_name ASC, id ASC
+      `,
+      [sourceOrgId]
+    );
+
+    for (const [playerIndex, row] of sourcePlayers.rows.entries()) {
+      const fakeName = fakeTrialPlayerName(playerIndex);
+      const fakeEmail = `trial.player.${String(targetOrganizationId)}.${String(playerIndex + 1).padStart(2, '0')}@example.invalid`;
+      await client.query(
+        `
+          INSERT INTO players (
+            organization_id, user_id, full_name, email, status, school_team, phone,
+            college_commitment, grad_year, position, height, profile_weight_lbs,
+            bats_hand, throws_hand, assigned_coach_user_id, created_at, updated_at
+          )
+          SELECT
+            $1, NULL, $2, $3, COALESCE($4, 'active'), 'Dashboard Trial', NULL,
+            $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW()
+          WHERE NOT EXISTS (
+            SELECT 1 FROM players WHERE organization_id = $1 AND LOWER(TRIM(email)) = LOWER(TRIM($3))
+          )
+        `,
+        [
+          targetOrganizationId,
+          fakeName,
+          fakeEmail,
+          row.status,
+          row.college_commitment,
+          row.grad_year,
+          row.position,
+          row.height,
+          row.profile_weight_lbs,
+          row.bats_hand,
+          row.throws_hand,
+          assignedCoachUserId,
+        ]
+      );
+    }
+
+    await client.query(
+      `
+        INSERT INTO schedule_throwing_state (
+          organization_id, player_id, by_date_json, week_notes_json, templates_json,
+          created_by_user_id, updated_by_user_id, created_at, updated_at
+        )
+        SELECT
+          $1, 0, COALESCE(s.by_date_json, '{}'::jsonb), COALESCE(s.week_notes_json, '{}'::jsonb),
+          COALESCE(s.templates_json, '{}'::jsonb), $2, $2, NOW(), NOW()
+        FROM schedule_throwing_state s
+        WHERE s.organization_id = $3 AND s.player_id = 0
+        ON CONFLICT (organization_id, player_id)
+        DO UPDATE SET
+          templates_json = EXCLUDED.templates_json,
+          week_notes_json = EXCLUDED.week_notes_json,
+          updated_by_user_id = EXCLUDED.updated_by_user_id,
+          updated_at = NOW()
+      `,
+      [targetOrganizationId, createdByUserId, sourceOrgId]
+    );
+
+    await client.query(
+      `
+        INSERT INTO dashboard_custom_reports (
+          organization_id, school_code, name, payload_json, created_by_user_id,
+          created_at, updated_at, applies_to_all_schools, created_by_email
+        )
+        SELECT
+          $1, 'TRIAL', r.name, r.payload_json, $2, NOW(), NOW(), FALSE, NULL
+        FROM dashboard_custom_reports r
+        WHERE r.organization_id = $3
+          AND r.school_code = 'PCU'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM dashboard_custom_reports existing
+            WHERE existing.organization_id = $1
+              AND existing.school_code = 'TRIAL'
+              AND existing.applies_to_all_schools = FALSE
+              AND LOWER(TRIM(existing.name)) = LOWER(TRIM(r.name))
+          )
+      `,
+      [targetOrganizationId, createdByUserId, sourceOrgId]
+    );
+
+    await client.query(
+      `
+        INSERT INTO dashboard_custom_tables (
+          organization_id, school_code, name, columns_json, created_by_user_id,
+          created_at, updated_at, created_by_email
+        )
+        SELECT
+          $1, 'TRIAL', t.name, t.columns_json, $2, NOW(), NOW(), NULL
+        FROM dashboard_custom_tables t
+        WHERE t.organization_id = $3
+          AND t.school_code = 'PCU'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM dashboard_custom_tables existing
+            WHERE existing.organization_id = $1
+              AND existing.school_code = 'TRIAL'
+              AND LOWER(TRIM(existing.name)) = LOWER(TRIM(t.name))
+          )
+      `,
+      [targetOrganizationId, createdByUserId, sourceOrgId]
+    );
+
+    const counts = await client.query<{ players: string; exercises: string; workouts: string }>(
+      `
+        SELECT
+          (SELECT COUNT(*)::text FROM players WHERE organization_id = $1) AS players,
+          (SELECT COUNT(*)::text FROM exercise_library WHERE organization_id = $1) AS exercises,
+          (SELECT COUNT(*)::text FROM workout_library WHERE organization_id = $1) AS workouts
+      `,
+      [targetOrganizationId]
+    );
+
+    await client.query('COMMIT');
+    _invalidateTrainingReadCacheForOrganization(targetOrganizationId);
+    return {
+      ok: true,
+      players: Number(counts.rows[0]?.players ?? '0') || 0,
+      exercises: Number(counts.rows[0]?.exercises ?? '0') || 0,
+      workouts: Number(counts.rows[0]?.workouts ?? '0') || 0,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to seed Dashboard Trial organization.' };
+  } finally {
+    client.release();
+  }
 }
 
 export async function isCoachAssignedToPlayer(input: {
@@ -1858,7 +2288,7 @@ export async function createStaffUser(input: {
   phone?: string;
   role: 'admin' | 'coach';
   allowCrossSchoolLinking?: boolean;
-}): Promise<{ ok: true; reusedExistingPassword: boolean } | { ok: false; error: string }> {
+}): Promise<{ ok: true; reusedExistingPassword: boolean; userId: number } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
@@ -1952,15 +2382,16 @@ export async function createStaffUser(input: {
       email, username, name, phone, password, password_hash, app_url, role, organization_id
     )
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    RETURNING id
   `;
   // Production can have occasional auth_users id sequence drift (manual imports,
   // legacy bootstraps). Proactively sync before insert and retry on pkey conflicts.
   await ensureAuthUsersIdSequence(pool);
-  let inserted = false;
+  let insertedUserId = 0;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      await pool.query(insertSql, insertValues);
-      inserted = true;
+      const inserted = await pool.query<{ id: number }>(insertSql, insertValues);
+      insertedUserId = Number(inserted.rows[0]?.id ?? 0) || 0;
       break;
     } catch (error) {
       const typed = error as { code?: string; constraint?: string; message?: string } | null;
@@ -1974,14 +2405,14 @@ export async function createStaffUser(input: {
       await ensureAuthUsersIdSequence(pool);
     }
   }
-  if (!inserted) {
+  if (insertedUserId <= 0) {
     return {
       ok: false,
       error: 'Could not create coach/admin profile because user ID sequencing is out of sync. Please retry.',
     };
   }
 
-  return { ok: true, reusedExistingPassword };
+  return { ok: true, reusedExistingPassword, userId: insertedUserId };
 }
 
 export async function setStaffActiveStatus(input: {
@@ -2143,6 +2574,7 @@ export async function listPortalActivityOverview(input: {
     last_login_at: string | null;
     last_activity_at: string | null;
     last_path: string | null;
+    last_metadata: Record<string, unknown> | null;
     login_count_30d: string;
     page_view_count_30d: string;
     key_action_count_30d: string;
@@ -2177,6 +2609,7 @@ export async function listPortalActivityOverview(input: {
         a.last_login_at,
         a.last_activity_at,
         e.path AS last_path,
+        e.metadata AS last_metadata,
         a.login_count_30d,
         a.page_view_count_30d,
         a.key_action_count_30d
@@ -2199,6 +2632,7 @@ export async function listPortalActivityOverview(input: {
     organization_name: string | null;
     event_type: string;
     path: string | null;
+    metadata: Record<string, unknown> | null;
     created_at: string;
   }>(
     `
@@ -2210,6 +2644,7 @@ export async function listPortalActivityOverview(input: {
         o.name AS organization_name,
         e.event_type,
         e.path,
+        e.metadata,
         e.created_at::text AS created_at
       FROM portal_activity_events e
       LEFT JOIN organizations o ON o.id = e.organization_id
@@ -2233,6 +2668,7 @@ export async function listPortalActivityOverview(input: {
       lastLoginAt: row.last_login_at,
       lastActivityAt: row.last_activity_at,
       lastPath: row.last_path,
+      lastMetadata: row.last_metadata && typeof row.last_metadata === 'object' ? row.last_metadata : null,
       loginCount30d: Number(row.login_count_30d ?? '0') || 0,
       pageViewCount30d: Number(row.page_view_count_30d ?? '0') || 0,
       keyActionCount30d: Number(row.key_action_count_30d ?? '0') || 0,
@@ -2245,6 +2681,7 @@ export async function listPortalActivityOverview(input: {
       organizationName: row.organization_name,
       eventType: normalizeActivityEventTypeForDb(row.event_type),
       path: row.path,
+      metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : null,
       createdAt: row.created_at,
     })),
   };
@@ -2652,6 +3089,7 @@ export async function listExercisesByOrganization(organizationId: number): Promi
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
   const pool = getDbPool();
+  await ensureWorkoutLibraryCalendarLinkTargetColumn();
 
   const result = await pool.query<{
     id: number;
@@ -3014,6 +3452,7 @@ export async function getWorkoutByIdInOrganization(input: {
   if (!isDatabaseConfigured()) return null;
   await ensureTrainingDbReady();
   const pool = getDbPool();
+  await ensureWorkoutLibraryCalendarLinkTargetColumn();
 
   const workoutResult = await pool.query<{ id: number; name: string; category: string; description: string | null; calendar_link_target: string | null }>(
     `

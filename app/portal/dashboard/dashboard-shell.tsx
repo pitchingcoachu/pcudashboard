@@ -13,6 +13,7 @@ import PlayerPlansSuite from './player-plans-suite';
 import PitchingSuite from './pitching-suite';
 import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import StuffCalculatorSuite from './stuff-calculator-suite';
+import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 
 type DashboardShellProps = {
   role: 'admin' | 'coach' | 'player';
@@ -83,6 +84,11 @@ function toFirstLast(value: string): string {
   const first = rest.join(' ').trim();
   const combined = `${first} ${last}`.replace(/\s+/g, ' ').trim();
   return combined || raw;
+}
+
+function suiteActivitySlug(value: string): string {
+  if (value === 'Stuff+ Calculator') return 'stuff-calculator';
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
 function resolveTypedCandidate(raw: string, candidates: Candidate[]): Candidate | null {
@@ -204,6 +210,18 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       }
     }
   }, [shellStorageKey, suiteOptions]);
+  useEffect(() => {
+    dispatchPortalActivity({
+      eventType: 'page_view',
+      path: dashboardActivityPath(suiteActivitySlug(activeSuite)),
+      metadata: {
+        pageLabel: `Dashboard / ${activeSuite}`,
+        section: 'Dashboard',
+        suite: activeSuite,
+        schoolCode: selectedSchoolCode,
+      },
+    });
+  }, [activeSuite, selectedSchoolCode]);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     if (forceHome) {

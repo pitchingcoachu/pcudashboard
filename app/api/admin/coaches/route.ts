@@ -2,7 +2,12 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { isGlobalAdminSession, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
-import { createStaffUser, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
+import {
+  createStaffUser,
+  ensureDashboardTrialOrganizationForCoach,
+  resolveOrganizationIdForSchool,
+  seedDashboardTrialOrganizationFromPcu,
+} from '../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -24,11 +29,15 @@ export async function POST(request: Request) {
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/coaches');
     const selectedSchoolCode = resolveProgrammingSchoolCode(session);
-    const organizationId = await resolveOrganizationIdForSchool({
-      schoolCode: selectedSchoolCode,
-      fallbackOrganizationId: 0,
-      createIfMissing: session.role === 'admin' && selectedSchoolCode !== 'LEAGUE',
-    });
+    const email = String(form.get('email') ?? '').trim();
+    const organizationId =
+      selectedSchoolCode === 'TRIAL'
+        ? await ensureDashboardTrialOrganizationForCoach(email)
+        : await resolveOrganizationIdForSchool({
+            schoolCode: selectedSchoolCode,
+            fallbackOrganizationId: 0,
+            createIfMissing: session.role === 'admin' && selectedSchoolCode !== 'LEAGUE',
+          });
     if (organizationId <= 0) {
       return redirectWithMessage(request, redirectTo, 'error', 'Coach management is not enabled for this school.');
     }
@@ -38,13 +47,21 @@ export async function POST(request: Request) {
     const result = await createStaffUser({
       organizationId,
       name: String(form.get('name') ?? ''),
-      email: String(form.get('email') ?? ''),
+      email,
       phone: String(form.get('phone') ?? ''),
       password: String(form.get('password') ?? ''),
       role,
       allowCrossSchoolLinking: isGlobalAdminSession(session),
     });
     if (!result.ok) return redirectWithMessage(request, redirectTo, 'error', result.error);
+    if (selectedSchoolCode === 'TRIAL') {
+      const seeded = await seedDashboardTrialOrganizationFromPcu({
+        organizationId,
+        coachUserId: result.userId,
+        createdByUserId: session.userId ?? result.userId,
+      });
+      if (!seeded.ok) return redirectWithMessage(request, redirectTo, 'error', seeded.error);
+    }
     return redirectWithMessage(request, redirectTo, 'ok', 'Coach profile created.');
   } catch (error) {
     return redirectWithMessage(

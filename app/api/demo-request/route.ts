@@ -28,19 +28,22 @@ export async function POST(request: Request) {
   const resendApiKey = process.env.RESEND_API_KEY;
   const sheetsWebhookUrl = process.env.GOOGLE_SHEETS_WEBHOOK_URL;
   const requireEmailDelivery = process.env.REQUIRE_DEMO_REQUEST_EMAIL !== 'false';
+  const allowLocalPreviewOnly = process.env.NODE_ENV !== 'production' && !resendApiKey && !sheetsWebhookUrl;
   if (!resendApiKey && !sheetsWebhookUrl) {
-    return NextResponse.json({ error: 'No delivery method configured' }, { status: 500 });
+    if (!allowLocalPreviewOnly) {
+      return NextResponse.json({ error: 'No delivery method configured' }, { status: 500 });
+    }
   }
 
   const deliveryResults: string[] = [];
   const deliveryErrors: string[] = [];
   let emailDelivered = false;
+  let followupPreview: { subject: string; html: string; text: string } | null = null;
+  const toEmail = process.env.DEMO_REQUEST_TO_EMAIL ?? 'info@pitchingcoachu.com';
+  const fromEmail = process.env.DEMO_REQUEST_FROM_EMAIL ?? 'onboarding@resend.dev';
+  const confirmationFromEmail = process.env.DEMO_REQUEST_CONFIRMATION_FROM_EMAIL ?? fromEmail;
 
   if (resendApiKey) {
-    const toEmail = process.env.DEMO_REQUEST_TO_EMAIL ?? 'info@pitchingcoachu.com';
-    const fromEmail = process.env.DEMO_REQUEST_FROM_EMAIL ?? 'onboarding@resend.dev';
-    const confirmationFromEmail = process.env.DEMO_REQUEST_CONFIRMATION_FROM_EMAIL ?? fromEmail;
-
     const subject = `New PCU Demo Request - ${name}`;
     const text = [
       'New demo request submitted:',
@@ -97,9 +100,37 @@ export async function POST(request: Request) {
         text: rendered.text,
         html: rendered.html,
       });
+      followupPreview = {
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+      };
       deliveryResults.push('confirmation_email');
     } catch (error) {
       deliveryErrors.push(`Confirmation email provider error: ${String(error)}`);
+    }
+  } else if (allowLocalPreviewOnly) {
+    try {
+      const template = await getEmailTemplate(DEMO_REQUEST_FOLLOWUP_TEMPLATE_KEY);
+      const rendered = renderDemoRequestTemplate(
+        template,
+        {
+          name,
+          email,
+          phone,
+          school_or_facility: schoolOrFacility,
+          role,
+        },
+        confirmationFromEmail
+      );
+      followupPreview = {
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+      };
+      deliveryResults.push('local_preview');
+    } catch (error) {
+      deliveryErrors.push(`Local preview error: ${String(error)}`);
     }
   } else if (requireEmailDelivery) {
     deliveryErrors.push('Email provider error: RESEND_API_KEY is not configured');
@@ -138,7 +169,7 @@ export async function POST(request: Request) {
 
   const warnings: string[] = [];
   if (requireEmailDelivery && !emailDelivered) {
-    warnings.push('Request saved, but email notification failed.');
+    warnings.push(allowLocalPreviewOnly ? 'Local preview only. No email was sent.' : 'Request saved, but email notification failed.');
   }
   if (deliveryErrors.length > 0) {
     console.error('Demo request delivery issues:', deliveryErrors.join(' | '));
@@ -148,6 +179,7 @@ export async function POST(request: Request) {
     ok: true,
     delivered_via: deliveryResults,
     warnings,
+    followupPreview,
   });
 }
 

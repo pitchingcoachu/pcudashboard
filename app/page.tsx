@@ -9,6 +9,16 @@ type HomeSession = {
   email: string;
 };
 
+type DemoFollowupPreview = {
+  subject: string;
+  html: string;
+  text: string;
+};
+
+function demoFollowupKicker(message: string): string {
+  return message.toLowerCase().includes('local preview') ? 'Local email preview' : 'Email sent to you';
+}
+
 const outcomeCards = [
   {
     title: 'Clear and Precise Data Visuals',
@@ -291,6 +301,7 @@ export default function Home() {
   const [contactCopied, setContactCopied] = useState(false);
   const [isSubmittingDemo, setIsSubmittingDemo] = useState(false);
   const [demoFormMessage, setDemoFormMessage] = useState<string>('');
+  const [demoFollowupPreview, setDemoFollowupPreview] = useState<DemoFollowupPreview | null>(null);
   const [homeSession, setHomeSession] = useState<HomeSession | null>(null);
   const contactEmail = 'info@pitchingcoachu.com';
   const topNavRef = useRef<HTMLElement | null>(null);
@@ -401,6 +412,7 @@ export default function Home() {
   const handleDemoSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setDemoFormMessage('');
+    setDemoFollowupPreview(null);
     setIsSubmittingDemo(true);
 
     const form = event.currentTarget;
@@ -422,6 +434,7 @@ export default function Home() {
       const data = (await response.json().catch(() => ({}))) as {
         warnings?: string[];
         error?: string;
+        followupPreview?: DemoFollowupPreview | null;
       };
 
       if (!response.ok) {
@@ -430,10 +443,12 @@ export default function Home() {
             ? data.error
             : 'Could not submit right now. Please email info@pitchingcoachu.com.';
         setDemoFormMessage(errorMessage);
+        setDemoFollowupPreview(null);
         return;
       }
 
       form.reset();
+      setDemoFollowupPreview(data.followupPreview ?? null);
       if (data.warnings && data.warnings.length > 0) {
         setDemoFormMessage(
           'Thanks. Your request was saved, but email notification failed. Please verify RESEND settings.'
@@ -443,10 +458,21 @@ export default function Home() {
       }
     } catch {
       setDemoFormMessage('Could not submit right now. Please email info@pitchingcoachu.com.');
+      setDemoFollowupPreview(null);
     } finally {
       setIsSubmittingDemo(false);
     }
   };
+
+  useEffect(() => {
+    if (!demoFollowupPreview) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setDemoFollowupPreview(null);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [demoFollowupPreview]);
+
   const scrollToDemo = () => {
     const demoSection = document.getElementById('demo');
     if (demoSection) {
@@ -806,6 +832,37 @@ export default function Home() {
           </form>
         </section>
       </main>
+
+      {demoFollowupPreview ? (
+        <div
+          className="demo-followup-modal-overlay"
+          role="presentation"
+          onClick={() => setDemoFollowupPreview(null)}
+        >
+          <section
+            className="demo-followup-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="demo-followup-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="demo-followup-close"
+              aria-label="Close email preview"
+              onClick={() => setDemoFollowupPreview(null)}
+            >
+              x
+            </button>
+            <p className="lead-followup-kicker">{demoFollowupKicker(demoFormMessage)}</p>
+            <h4 id="demo-followup-title">{demoFollowupPreview.subject}</h4>
+            <div
+              className="lead-followup-body"
+              dangerouslySetInnerHTML={{ __html: demoFollowupPreview.html }}
+            />
+          </section>
+        </div>
+      ) : null}
 
       {activeIndex !== null && (
         <div className="lightbox-overlay" onClick={closeLightbox} role="dialog" aria-modal="true" aria-label="Image viewer">

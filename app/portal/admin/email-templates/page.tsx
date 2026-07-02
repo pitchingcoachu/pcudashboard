@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { DEMO_REQUEST_FOLLOWUP_TEMPLATE_KEY, getEmailTemplate } from '../../../../lib/email-templates';
 import { requirePortalSession } from '../../../../lib/portal-session';
+import { resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import EmailTemplateEditor from './email-template-editor';
 
 export const dynamic = 'force-dynamic';
@@ -17,6 +18,7 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 
 export default async function EmailTemplatesPage({ searchParams }: PageProps) {
   const session = await requirePortalSession();
+  if (resolveProgrammingSchoolCode(session) === 'TRIAL') notFound();
   if (session.role !== 'admin' || session.email.trim().toLowerCase() !== 'jgaynor@pitchingcoachu.com') notFound();
   const [template, params] = await Promise.all([
     getEmailTemplate(DEMO_REQUEST_FOLLOWUP_TEMPLATE_KEY),

@@ -10,6 +10,7 @@ import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
+import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 
 type FiltersPayload = {
   school_code: string;
@@ -42,6 +43,10 @@ type FiltersPayload = {
 type OptionItem = { value: string; label: string };
 
 const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-06-30-cached-ball-types';
+
+function dashboardPageSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
 
 type PitchTypeRow = {
   pitch_type: string;
@@ -2205,6 +2210,24 @@ export default function PitchingSuite({
   const proLeaderboardDateDefaultAppliedRef = useRef(false);
 
   useEffect(() => {
+    dispatchPortalActivity({
+      eventType: 'page_view',
+      path: dashboardActivityPath('pitching', dashboardPageSlug(dashboardPage)),
+      metadata: {
+        pageLabel: `Dashboard / Pitching / ${dashboardPage}`,
+        section: 'Dashboard',
+        suite: 'Pitching',
+        subPage: dashboardPage,
+        schoolCode: initialSchoolCode,
+        tableMode,
+        splitBy: dashboardPage === 'Leaderboard' ? (leaderboardViewBy === 'Team' ? 'Pitcher Team' : 'Pitcher') : splitBy,
+        visualOption,
+        leaderboardViewBy: dashboardPage === 'Leaderboard' ? leaderboardViewBy : '',
+      },
+    });
+  }, [dashboardPage, initialSchoolCode, leaderboardViewBy, splitBy, tableMode, visualOption]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     const media = window.matchMedia('(max-width: 900px)');
     const sync = () => setIsMobileView(media.matches);
@@ -2482,14 +2505,14 @@ export default function PitchingSuite({
     isLeague && (dashboardPage === 'Summary' || dashboardPage === 'Leaderboard') && leagueWindowDays > 14 && isLeagueAllSelection;
   const filteredPitchers = useMemo(() => {
     if (!filters) return [];
-    if (!isLeague || teamType === 'All') return filters.pitchers ?? [];
-    return filters.pitchers_by_team_code?.[teamType] ?? [];
-  }, [filters, isLeague, teamType]);
+    if (teamType === 'All') return filters.pitchers ?? [];
+    return filters.pitchers_by_team_code?.[teamType] ?? filters.pitchers ?? [];
+  }, [filters, teamType]);
   const filteredOppHitters = useMemo(() => {
     if (!filters) return [];
-    if (!isLeague || teamType === 'All') return filters.opp_hitters ?? [];
-    return filters.opp_hitters_by_team_code?.[teamType] ?? [];
-  }, [filters, isLeague, teamType]);
+    if (teamType === 'All') return filters.opp_hitters ?? [];
+    return filters.opp_hitters_by_team_code?.[teamType] ?? filters.opp_hitters ?? [];
+  }, [filters, teamType]);
   const pitcherOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filteredPitchers, true)] : []), [filters, filteredPitchers]);
   const hitterOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filteredOppHitters, true)] : []), [filters, filteredOppHitters]);
   const pitchTypeOptions = useMemo(() => (filters ? [{ value: 'All', label: 'All' }, ...toOptions(filters.pitch_types)] : []), [filters]);
@@ -4785,7 +4808,7 @@ export default function PitchingSuite({
     if (!ids.length) return pitches;
     try {
       const req = new URL(baseRequestKey, window.location.origin);
-      req.searchParams.set('with_video', '1');
+      req.searchParams.set('with_video', 'Yes');
       req.searchParams.set('include_chart_points', '1');
       req.searchParams.set('include_row_pitches', '0');
       req.searchParams.set('include_trend_rows', '0');

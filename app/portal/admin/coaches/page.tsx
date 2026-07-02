@@ -1,7 +1,13 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requirePortalSession } from '../../../../lib/portal-session';
-import { listCoachAssignedPlayersByOrganization, listCoachesByOrganization, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
+import {
+  listCoachAssignedPlayersByOrganization,
+  listCoachesByOrganization,
+  listDashboardTrialCoachAssignedPlayers,
+  listDashboardTrialCoaches,
+  resolveOrganizationIdForSchool,
+} from '../../../../lib/training-db';
 import {
   canUseClientManagement,
   resolveProgrammingSchoolCode,
@@ -25,15 +31,26 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
   if (session.role !== 'admin') notFound();
   const canAccessClientManagement = canUseClientManagement(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
-  const clientManagementOrganizationId = await resolveOrganizationIdForSchool({
-    schoolCode: programmingSchoolCode,
-    fallbackOrganizationId: 0,
-    createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
-  });
+  const isTrialSchool = programmingSchoolCode === 'TRIAL';
+  const clientManagementOrganizationId = isTrialSchool
+    ? 1
+    : await resolveOrganizationIdForSchool({
+        schoolCode: programmingSchoolCode,
+        fallbackOrganizationId: 0,
+        createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
+      });
 
   const [coaches, assignedPlayers, params] = await Promise.all([
-    clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
-    clientManagementOrganizationId > 0 ? listCoachAssignedPlayersByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
+    isTrialSchool
+      ? listDashboardTrialCoaches()
+      : clientManagementOrganizationId > 0
+        ? listCoachesByOrganization(clientManagementOrganizationId)
+        : Promise.resolve([]),
+    isTrialSchool
+      ? listDashboardTrialCoachAssignedPlayers()
+      : clientManagementOrganizationId > 0
+        ? listCoachAssignedPlayersByOrganization(clientManagementOrganizationId)
+        : Promise.resolve([]),
     searchParams,
   ]);
   const { ok, error } = readMessage(params);

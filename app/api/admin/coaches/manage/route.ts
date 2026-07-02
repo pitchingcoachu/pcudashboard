@@ -2,7 +2,13 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
-import { deleteStaffUser, resolveOrganizationIdForSchool, setStaffActiveStatus, updateStaffUser } from '../../../../../lib/training-db';
+import {
+  deleteStaffUser,
+  resolveDashboardTrialOrganizationIdForStaffUser,
+  resolveOrganizationIdForSchool,
+  setStaffActiveStatus,
+  updateStaffUser,
+} from '../../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -24,16 +30,19 @@ export async function POST(request: Request) {
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/coaches');
     const selectedSchoolCode = resolveProgrammingSchoolCode(session);
-    const organizationId = await resolveOrganizationIdForSchool({
-      schoolCode: selectedSchoolCode,
-      fallbackOrganizationId: 0,
-      createIfMissing: session.role === 'admin' && selectedSchoolCode !== 'LEAGUE',
-    });
+    const staffUserId = Number(String(form.get('staffUserId') ?? '0'));
+    const organizationId =
+      selectedSchoolCode === 'TRIAL'
+        ? await resolveDashboardTrialOrganizationIdForStaffUser(staffUserId)
+        : await resolveOrganizationIdForSchool({
+            schoolCode: selectedSchoolCode,
+            fallbackOrganizationId: 0,
+            createIfMissing: session.role === 'admin' && selectedSchoolCode !== 'LEAGUE',
+          });
     if (organizationId <= 0) {
       return redirectWithMessage(request, redirectTo, 'error', 'Coach management is not enabled for this school.');
     }
 
-    const staffUserId = Number(String(form.get('staffUserId') ?? '0'));
     const action = String(form.get('action') ?? '').trim().toLowerCase();
 
     if (!Number.isFinite(staffUserId) || staffUserId <= 0) {

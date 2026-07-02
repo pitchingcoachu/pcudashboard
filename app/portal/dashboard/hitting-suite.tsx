@@ -8,6 +8,7 @@ import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
+import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
@@ -230,6 +231,10 @@ const SPRAY_RESULT_COLORS: Record<(typeof SPRAY_RESULT_ORDER)[number], string> =
 };
 const SPLIT_BY_DEFAULT = 'Pitch Types';
 const TABLE_MODE_DEFAULT = 'Results';
+
+function dashboardPageSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
 const RESULTS_TABLE_COLUMNS_TEMPLATE = [
   'PA',
   'AB',
@@ -2236,6 +2241,24 @@ export default function HittingSuite({
   const [pcMax, setPcMax] = useState('');
 
   useEffect(() => {
+    dispatchPortalActivity({
+      eventType: 'page_view',
+      path: dashboardActivityPath('hitting', dashboardPageSlug(dashboardPage)),
+      metadata: {
+        pageLabel: `Dashboard / Hitting / ${dashboardPage}`,
+        section: 'Dashboard',
+        suite: 'Hitting',
+        subPage: dashboardPage,
+        schoolCode: String(selectedSchoolCode ?? '').trim().toUpperCase(),
+        tableMode,
+        splitBy: dashboardPage === 'Leaderboard' ? (leaderboardViewBy === 'Team' ? 'Batter Team' : 'Batter') : splitBy,
+        swingTab: dashboardPage === 'Swing Data' ? swingTab : '',
+        leaderboardViewBy: dashboardPage === 'Leaderboard' ? leaderboardViewBy : '',
+      },
+    });
+  }, [dashboardPage, leaderboardViewBy, selectedSchoolCode, splitBy, swingTab, tableMode]);
+
+  useEffect(() => {
     if (!homeNavigateRequest) return;
     if (homeNavigateRequest.suite !== 'Hitting') return;
     if (lastAppliedHomeRequestRef.current === homeNavigateRequest.requestId) return;
@@ -2349,14 +2372,14 @@ export default function HittingSuite({
   }, [filters?.school_code, filters?.team_types, isPro]);
   const hitterOptions = useMemo(() => {
     if (!filters) return [{ value: 'All', label: 'All' }];
-    const values = !isLeague || teamType === 'All' ? (filters.hitters ?? []) : (filters.hitters_by_team_code?.[teamType] ?? []);
+    const values = teamType === 'All' ? (filters.hitters ?? []) : (filters.hitters_by_team_code?.[teamType] ?? filters.hitters ?? []);
     return [{ value: 'All', label: 'All' }, ...toOptions(values, true)];
-  }, [filters, isLeague, teamType]);
+  }, [filters, teamType]);
   const oppPitcherOptions = useMemo(() => {
     if (!filters) return [{ value: 'All', label: 'All' }];
-    const values = !isLeague || teamType === 'All' ? (filters.opp_pitchers ?? []) : (filters.opp_pitchers_by_team_code?.[teamType] ?? []);
+    const values = teamType === 'All' ? (filters.opp_pitchers ?? []) : (filters.opp_pitchers_by_team_code?.[teamType] ?? filters.opp_pitchers ?? []);
     return [{ value: 'All', label: 'All' }, ...toOptions(values, true)];
-  }, [filters, isLeague, teamType]);
+  }, [filters, teamType]);
 
   useEffect(() => {
     const allowed = new Set(hitterOptions.map((option) => option.value));

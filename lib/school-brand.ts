@@ -43,6 +43,15 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentSoft: '#2f1456',
     accentRgb: '70, 29, 124',
   },
+  TRIAL: {
+    schoolCode: 'TRIAL',
+    logoSrc: '/pitching-coach-u-logo.png',
+    logoAlt: 'Dashboard Trial',
+    accent: '#c8102e',
+    accentSoft: '#8f0f24',
+    accentRgb: '200, 16, 46',
+    accentRgbSecondary: '200, 16, 46',
+  },
   CNU: {
     schoolCode: 'CNU',
     logoSrc: '/cnu-logo.png',
