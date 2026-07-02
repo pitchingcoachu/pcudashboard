@@ -38,10 +38,32 @@ export async function POST(request: Request) {
   const deliveryResults: string[] = [];
   const deliveryErrors: string[] = [];
   let emailDelivered = false;
+  let confirmationEmailDelivered = false;
   let followupPreview: { subject: string; html: string; text: string } | null = null;
   const toEmail = process.env.DEMO_REQUEST_TO_EMAIL ?? 'info@pitchingcoachu.com';
   const fromEmail = process.env.DEMO_REQUEST_FROM_EMAIL ?? 'onboarding@resend.dev';
   const confirmationFromEmail = process.env.DEMO_REQUEST_CONFIRMATION_FROM_EMAIL ?? fromEmail;
+  try {
+    const template = await getEmailTemplate(DEMO_REQUEST_FOLLOWUP_TEMPLATE_KEY);
+    const rendered = renderDemoRequestTemplate(
+      template,
+      {
+        name,
+        email,
+        phone,
+        school_or_facility: schoolOrFacility,
+        role,
+      },
+      confirmationFromEmail
+    );
+    followupPreview = {
+      subject: rendered.subject,
+      html: rendered.html,
+      text: rendered.text,
+    };
+  } catch (error) {
+    deliveryErrors.push(`Follow-up preview render error: ${String(error)}`);
+  }
 
   if (resendApiKey) {
     const subject = `New PCU Demo Request - ${name}`;
@@ -80,57 +102,23 @@ export async function POST(request: Request) {
     }
 
     try {
-      const template = await getEmailTemplate(DEMO_REQUEST_FOLLOWUP_TEMPLATE_KEY);
-      const rendered = renderDemoRequestTemplate(
-        template,
-        {
-          name,
-          email,
-          phone,
-          school_or_facility: schoolOrFacility,
-          role,
-        },
-        confirmationFromEmail
-      );
+      if (!followupPreview) throw new Error('Follow-up preview could not be rendered.');
       await sendResendEmail(resendApiKey, {
-        from: rendered.from,
+        from: confirmationFromEmail,
         to: [email],
         reply_to: toEmail,
-        subject: rendered.subject,
-        text: rendered.text,
-        html: rendered.html,
+        subject: followupPreview.subject,
+        text: followupPreview.text,
+        html: followupPreview.html,
       });
-      followupPreview = {
-        subject: rendered.subject,
-        html: rendered.html,
-        text: rendered.text,
-      };
+      confirmationEmailDelivered = true;
       deliveryResults.push('confirmation_email');
     } catch (error) {
       deliveryErrors.push(`Confirmation email provider error: ${String(error)}`);
     }
   } else if (allowLocalPreviewOnly) {
-    try {
-      const template = await getEmailTemplate(DEMO_REQUEST_FOLLOWUP_TEMPLATE_KEY);
-      const rendered = renderDemoRequestTemplate(
-        template,
-        {
-          name,
-          email,
-          phone,
-          school_or_facility: schoolOrFacility,
-          role,
-        },
-        confirmationFromEmail
-      );
-      followupPreview = {
-        subject: rendered.subject,
-        html: rendered.html,
-        text: rendered.text,
-      };
+    if (followupPreview) {
       deliveryResults.push('local_preview');
-    } catch (error) {
-      deliveryErrors.push(`Local preview error: ${String(error)}`);
     }
   } else if (requireEmailDelivery) {
     deliveryErrors.push('Email provider error: RESEND_API_KEY is not configured');
@@ -170,6 +158,9 @@ export async function POST(request: Request) {
   const warnings: string[] = [];
   if (requireEmailDelivery && !emailDelivered) {
     warnings.push(allowLocalPreviewOnly ? 'Local preview only. No email was sent.' : 'Request saved, but email notification failed.');
+  }
+  if (resendApiKey && !confirmationEmailDelivered) {
+    warnings.push('Request saved, but follow-up email failed.');
   }
   if (deliveryErrors.length > 0) {
     console.error('Demo request delivery issues:', deliveryErrors.join(' | '));

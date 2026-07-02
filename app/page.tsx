@@ -16,7 +16,10 @@ type DemoFollowupPreview = {
 };
 
 function demoFollowupKicker(message: string): string {
-  return message.toLowerCase().includes('local preview') ? 'Local email preview' : 'Email sent to you';
+  const normalized = message.toLowerCase();
+  if (normalized.includes('local preview')) return 'Local email preview';
+  if (normalized.includes('failed') || normalized.includes('verify resend')) return 'Email preview';
+  return 'Email sent to you';
 }
 
 const outcomeCards = [
@@ -656,37 +659,37 @@ export default function Home() {
           <div className="testimonials-grid">
             {topTestimonials.map((item, index) => (
               <article key={`${item.name}-${index}`} className="testimonial-card reveal-item" data-reveal>
-                <div className="testimonial-quote">
-                  {item.paragraphs.map((paragraph, paragraphIndex) => (
-                    <p key={paragraph}>
-                      {paragraphIndex === 0 ? '“' : ''}
-                      {paragraph}
-                      {paragraphIndex === item.paragraphs.length - 1 ? '”' : ''}
-                    </p>
-                  ))}
-                </div>
-                <div className="testimonial-meta">
+                <div className="testimonial-card-top">
                   {item.headshotSrc && (
                     <Image
                       src={item.headshotSrc}
                       alt={item.headshotAlt ?? `${item.name} headshot`}
-                      width={54}
-                      height={54}
+                      width={64}
+                      height={64}
                       className={`testimonial-headshot ${item.headshotClass ?? ''}`}
                     />
                   )}
-                  <p>{item.name}</p>
-                  <p>{item.role}</p>
-                  <p>{item.school}</p>
+                  <div className="testimonial-person">
+                    <p>{item.name}</p>
+                    <p>{item.role}</p>
+                    <p>{item.school}</p>
+                  </div>
                   {item.logoSrc && (
                     <Image
                       src={item.logoSrc}
                       alt={item.logoAlt ?? `${item.school} logo`}
-                      width={48}
-                      height={48}
+                      width={52}
+                      height={52}
                       className={`testimonial-logo-image ${item.logoClass ?? ''}`}
                     />
                   )}
+                </div>
+                <div className="testimonial-quote">
+                  {item.paragraphs.map((paragraph, paragraphIndex) => (
+                    <p key={paragraph}>
+                      {paragraph}
+                    </p>
+                  ))}
                 </div>
               </article>
             ))}
@@ -749,37 +752,37 @@ export default function Home() {
           <div className="testimonials-grid">
             {lowerTestimonials.map((item, index) => (
               <article key={`${item.name}-${index}`} className="testimonial-card reveal-item" data-reveal>
-                <div className="testimonial-quote">
-                  {item.paragraphs.map((paragraph, paragraphIndex) => (
-                    <p key={paragraph}>
-                      {paragraphIndex === 0 ? '“' : ''}
-                      {paragraph}
-                      {paragraphIndex === item.paragraphs.length - 1 ? '”' : ''}
-                    </p>
-                  ))}
-                </div>
-                <div className="testimonial-meta">
+                <div className="testimonial-card-top">
                   {item.headshotSrc && (
                     <Image
                       src={item.headshotSrc}
                       alt={item.headshotAlt ?? `${item.name} headshot`}
-                      width={54}
-                      height={54}
+                      width={64}
+                      height={64}
                       className={`testimonial-headshot ${item.headshotClass ?? ''}`}
                     />
                   )}
-                  <p>{item.name}</p>
-                  <p>{item.role}</p>
-                  <p>{item.school}</p>
+                  <div className="testimonial-person">
+                    <p>{item.name}</p>
+                    <p>{item.role}</p>
+                    <p>{item.school}</p>
+                  </div>
                   {item.logoSrc && (
                     <Image
                       src={item.logoSrc}
                       alt={item.logoAlt ?? `${item.school} logo`}
-                      width={48}
-                      height={48}
+                      width={52}
+                      height={52}
                       className={`testimonial-logo-image ${item.logoClass ?? ''}`}
                     />
                   )}
+                </div>
+                <div className="testimonial-quote">
+                  {item.paragraphs.map((paragraph, paragraphIndex) => (
+                    <p key={paragraph}>
+                      {paragraph}
+                    </p>
+                  ))}
                 </div>
               </article>
             ))}
