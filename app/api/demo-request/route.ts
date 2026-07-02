@@ -64,6 +64,24 @@ export async function POST(request: Request) {
   } catch (error) {
     deliveryErrors.push(`Follow-up preview render error: ${String(error)}`);
   }
+  const sheetsRequest = sheetsWebhookUrl
+    ? fetchWithTimeout(
+        sheetsWebhookUrl,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            submitted_at: new Date().toISOString(),
+            name,
+            email,
+            phone: phone || '',
+            school_or_facility: schoolOrFacility,
+            role,
+          }),
+        },
+        2500
+      )
+    : null;
 
   if (resendApiKey) {
     const subject = `New PCU Demo Request - ${name}`;
@@ -86,35 +104,39 @@ export async function POST(request: Request) {
       <p><strong>Role:</strong> ${escapeHtml(role)}</p>
     `;
 
-    try {
-      await sendResendEmail(resendApiKey, {
+    const emailTasks = [
+      sendResendEmail(resendApiKey, {
         from: fromEmail,
         to: [toEmail],
         reply_to: email,
         subject,
         text,
         html,
-      });
+      }),
+      followupPreview
+        ? sendResendEmail(resendApiKey, {
+            from: confirmationFromEmail,
+            to: [email],
+            reply_to: toEmail,
+            subject: followupPreview.subject,
+            text: followupPreview.text,
+            html: followupPreview.html,
+          })
+        : Promise.reject(new Error('Follow-up preview could not be rendered.')),
+    ] as const;
+
+    const [notificationResult, confirmationResult] = await Promise.allSettled(emailTasks);
+    if (notificationResult.status === 'fulfilled') {
       emailDelivered = true;
       deliveryResults.push('email');
-    } catch (error) {
-      deliveryErrors.push(`Email provider error: ${String(error)}`);
+    } else {
+      deliveryErrors.push(`Email provider error: ${String(notificationResult.reason)}`);
     }
-
-    try {
-      if (!followupPreview) throw new Error('Follow-up preview could not be rendered.');
-      await sendResendEmail(resendApiKey, {
-        from: confirmationFromEmail,
-        to: [email],
-        reply_to: toEmail,
-        subject: followupPreview.subject,
-        text: followupPreview.text,
-        html: followupPreview.html,
-      });
+    if (confirmationResult.status === 'fulfilled') {
       confirmationEmailDelivered = true;
       deliveryResults.push('confirmation_email');
-    } catch (error) {
-      deliveryErrors.push(`Confirmation email provider error: ${String(error)}`);
+    } else {
+      deliveryErrors.push(`Confirmation email provider error: ${String(confirmationResult.reason)}`);
     }
   } else if (allowLocalPreviewOnly) {
     if (followupPreview) {
@@ -124,20 +146,9 @@ export async function POST(request: Request) {
     deliveryErrors.push('Email provider error: RESEND_API_KEY is not configured');
   }
 
-  if (sheetsWebhookUrl) {
+  if (sheetsRequest) {
     try {
-      const sheetsResponse = await fetch(sheetsWebhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          submitted_at: new Date().toISOString(),
-          name,
-          email,
-          phone: phone || '',
-          school_or_facility: schoolOrFacility,
-          role,
-        }),
-      });
+      const sheetsResponse = await sheetsRequest;
 
       if (!sheetsResponse.ok) {
         const sheetError = await sheetsResponse.text();
@@ -205,5 +216,15 @@ async function sendResendEmail(
 
   if (!resendResponse.ok) {
     throw new Error(await resendResponse.text());
+  }
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
   }
 }
