@@ -2713,6 +2713,66 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     }
   };
 
+  const duplicateBullpenTemplate = () => {
+    const sourceName = activeCurrent.title.trim() || activeTemplates.find((template) => template.id === activeSelectedTemplateId)?.name?.trim();
+    const baseName = sourceName || `${isVelocityView ? 'Velocity' : 'Bullpen'} Script`;
+    const name = `${baseName} Copy`;
+    const nowIso = new Date().toISOString();
+    const templateId = `${isVelocityView ? 'vl' : 'bp'}-${Date.now()}`;
+    const columnTypes = normalizeBullpenColumnTypes(activeCurrent.columnTypes, activeCurrent.columns.length);
+    const next: BullpenTemplate = {
+      id: templateId,
+      name,
+      rowCount: activeCurrent.rowCount,
+      columns: [...activeCurrent.columns],
+      columnTypes,
+      rows: buildBullpenRows(activeCurrent.rowCount, activeCurrent.columns.length, activeCurrent.rows),
+      updatedAt: nowIso,
+    };
+    const nextCurrent: BullpenScript = {
+      title: name,
+      rowCount: next.rowCount,
+      columns: [...next.columns],
+      columnTypes: [...columnTypes],
+      rows: buildBullpenRows(next.rowCount, next.columns.length, next.rows),
+    };
+    const nextBullpenTemplates = isVelocityView ? bullpenTemplates : [next, ...bullpenTemplates];
+    const nextVelocityTemplates = isVelocityView ? [next, ...velocityTemplates] : velocityTemplates;
+
+    if (isVelocityView) {
+      setVelocityTemplates(nextVelocityTemplates);
+      setSelectedVelocityTemplateId(templateId);
+      setVisibleVelocityTemplateIds((prev) => Array.from(new Set([templateId, ...prev])));
+      setVelocityCurrent(nextCurrent);
+    } else {
+      setBullpenTemplates(nextBullpenTemplates);
+      setSelectedBullpenTemplateId(templateId);
+      setVisibleBullpenTemplateIds((prev) => Array.from(new Set([templateId, ...prev])));
+      setBullpenCurrent(nextCurrent);
+    }
+    setError('');
+
+    if (!playerId) {
+      void fetchWithTimeout('/api/admin/schedule/throwing', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          playerId: 0,
+          byDate: {},
+          weekNotes: {},
+          templates: [],
+          bullpenState: { current: isVelocityView ? bullpenCurrent : nextCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+          bullpenTemplates: nextBullpenTemplates,
+          velocityState: { current: isVelocityView ? nextCurrent : velocityCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+          velocityTemplates: nextVelocityTemplates,
+          drillsState: normalizeDrillsState(null),
+          preThrowDrillTemplates,
+          postThrowDrillTemplates,
+        }),
+      }).catch(() => {});
+    }
+  };
+
   const deleteBullpenTemplate = () => {
     const templateId = activeSelectedTemplateId;
     if (!templateId) {
@@ -3359,6 +3419,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                         style={{ minWidth: 154, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
                       >
                         {activeSavedTemplateSelected ? 'Update Script' : 'Save New Script'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={duplicateBullpenTemplate}
+                        style={{ minWidth: 154, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
+                      >
+                        Duplicate Script
                       </button>
                       <button
                         type="button"

@@ -753,7 +753,14 @@ function playerNameQueryCandidates(selectedName: string, resolvedName: string): 
 }
 
 function toOptions(values: string[]): OptionItem[] {
-  return values.map((value) => ({ value, label: value }));
+  return values.length ? values.map((value) => ({ value, label: value })) : [{ value: 'All', label: 'All' }];
+}
+
+function withAllOption(values?: string[]): string[] {
+  const cleaned = Array.from(
+    new Set((values ?? []).map((value) => String(value ?? '').trim()).filter((value) => value.length > 0 && value !== 'All'))
+  );
+  return ['All', ...cleaned];
 }
 
 function normalizeExecutionStatKey(value: string): string {
@@ -3165,7 +3172,10 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
 
   useEffect(() => {
     let active = true;
-    fetch(`/api/dashboard/player-plans/domain-players?domain=${encodeURIComponent(domain)}`, { cache: 'no-store' })
+    const params = new URLSearchParams();
+    params.set('domain', domain);
+    if (selectedSchoolCode) params.set('school_code', selectedSchoolCode);
+    fetch(`/api/dashboard/player-plans/domain-players?${params.toString()}`, { cache: 'no-store' })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as { players?: string[]; error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load player options.');
@@ -3190,7 +3200,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
     return () => {
       active = false;
     };
-  }, [domain, linkedPlayersNameKey]);
+  }, [domain, linkedPlayersNameKey, selectedSchoolCode]);
 
   useEffect(() => {
     const fallback = DOMAIN_EXECUTION_FALLBACKS[domain] ?? DOMAIN_EXECUTION_FALLBACKS.Pitching;
@@ -3352,46 +3362,37 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
   useEffect(() => {
     let active = true;
     const domainPath = domain.toLowerCase();
-    const filterUrl = domain === 'Pitching' ? `/api/dashboard/${domainPath}/filters?force_refresh=1` : `/api/dashboard/${domainPath}/filters`;
+    const params = new URLSearchParams();
+    if (selectedSchoolCode) params.set('school_code', selectedSchoolCode);
+    if (domain === 'Pitching') params.set('force_refresh', '1');
+    const filterUrl = `/api/dashboard/${domainPath}/filters${params.toString() ? `?${params.toString()}` : ''}`;
     fetch(filterUrl, { cache: 'no-store' })
       .then(async (response) => {
         if (!response.ok) throw new Error('Failed to load dashboard filters.');
         const payload = (await response.json().catch(() => ({}))) as Partial<DashboardFilterOptions>;
         if (!active) return;
         setFilterOptions({
-          pitchers: payload.pitchers?.length ? ['All', ...payload.pitchers.filter((value) => value !== 'All')] : ['All'],
-          hitters: payload.hitters?.length ? ['All', ...payload.hitters.filter((value) => value !== 'All')] : ['All'],
-          catchers: payload.catchers?.length ? ['All', ...payload.catchers.filter((value) => value !== 'All')] : ['All'],
-          pitch_types: payload.pitch_types?.length ? ['All', ...payload.pitch_types.filter((value) => value !== 'All')] : ['All'],
-          ball_types: payload.ball_types?.length ? ['All', ...payload.ball_types.filter((value) => value !== 'All')] : ['All'],
-          pitch_results: payload.pitch_results?.length ? ['All', ...payload.pitch_results.filter((value) => value !== 'All')] : ['All'],
-          count_options: payload.count_options?.length ? ['All', ...payload.count_options.filter((value) => value !== 'All')] : ['All'],
-          after_count_options: payload.after_count_options?.length ? ['All', ...payload.after_count_options.filter((value) => value !== 'All')] : ['All'],
-          team_types: payload.team_types?.length ? ['All', ...payload.team_types.filter((value) => value !== 'All')] : ['All'],
-          hands: payload.hands?.length ? ['All', ...payload.hands.filter((value) => value !== 'All')] : ['All'],
-          batter_sides: payload.batter_sides?.length ? ['All', ...payload.batter_sides.filter((value) => value !== 'All')] : ['All'],
+          pitchers: withAllOption(payload.pitchers),
+          hitters: withAllOption(payload.hitters),
+          catchers: withAllOption(payload.catchers),
+          pitch_types: withAllOption(payload.pitch_types),
+          ball_types: withAllOption(payload.ball_types),
+          pitch_results: withAllOption(payload.pitch_results),
+          count_options: withAllOption(payload.count_options),
+          after_count_options: withAllOption(payload.after_count_options),
+          team_types: withAllOption(payload.team_types),
+          hands: withAllOption(payload.hands),
+          batter_sides: withAllOption(payload.batter_sides),
         });
       })
       .catch(() => {
         if (!active) return;
-        setFilterOptions({
-          pitchers: ['All'],
-          hitters: ['All'],
-          catchers: ['All'],
-          pitch_types: ['All'],
-          ball_types: ['All'],
-          pitch_results: ['All'],
-          count_options: ['All'],
-          after_count_options: ['All'],
-          team_types: ['All'],
-          hands: ['All'],
-          batter_sides: ['All'],
-        });
+        setFilterOptions((current) => current);
       });
     return () => {
       active = false;
     };
-  }, [domain]);
+  }, [domain, selectedSchoolCode]);
 
   useEffect(() => {
     if (!activePlanPlayerId) {

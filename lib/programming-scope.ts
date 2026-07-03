@@ -77,6 +77,7 @@ function resolveScopedOrganizationIdBySelectedSchool(session: SessionLike): numb
   if (!canScopeBySelectedSchool) return session.organizationId ?? 0;
   const selectedSchool = resolveProgrammingSchoolCode(session);
   const sessionOrgId = Number(session.organizationId ?? 0);
+  if (selectedSchool === 'TRIAL' && sessionOrgId > 0 && !isGlobalAdminSession(session)) return sessionOrgId;
   const map = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
   const matches = Object.entries(map)
     .filter(([, schoolCode]) => schoolCode === selectedSchool)
@@ -292,6 +293,11 @@ export async function setSchoolProductAccess(
 }
 
 export function resolveProgrammingSchoolCode(session: SessionLike): string {
+  const sessionOrgId = Number(session.organizationId ?? 0);
+  if (!isGlobalAdminSession(session) && Number.isFinite(sessionOrgId) && sessionOrgId > 0) {
+    const map = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}');
+    if (map[sessionOrgId] === 'TRIAL') return 'TRIAL';
+  }
   return resolveDashboardSchoolCode({
     userId: 0,
     email: String(session.email ?? ''),

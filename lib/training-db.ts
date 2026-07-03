@@ -1908,6 +1908,7 @@ export async function seedDashboardTrialOrganizationFromPcu(input: {
             AND existing.sort_order = we.sort_order
             AND COALESCE(existing.exercise_prefix, '') = COALESCE(we.exercise_prefix, '')
         )
+        ON CONFLICT DO NOTHING
       `,
       [targetOrganizationId, sourceOrgId]
     );
@@ -1963,6 +1964,18 @@ export async function seedDashboardTrialOrganizationFromPcu(input: {
           row.throws_hand,
           assignedCoachUserId,
         ]
+      );
+    }
+
+    if (assignedCoachUserId) {
+      await client.query(
+        `
+          UPDATE players
+          SET assigned_coach_user_id = $2,
+              updated_at = NOW()
+          WHERE organization_id = $1
+        `,
+        [targetOrganizationId, assignedCoachUserId]
       );
     }
 

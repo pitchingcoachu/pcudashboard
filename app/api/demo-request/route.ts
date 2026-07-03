@@ -43,6 +43,7 @@ export async function POST(request: Request) {
   const toEmail = process.env.DEMO_REQUEST_TO_EMAIL ?? 'info@pitchingcoachu.com';
   const fromEmail = process.env.DEMO_REQUEST_FROM_EMAIL ?? 'onboarding@resend.dev';
   const confirmationFromEmail = process.env.DEMO_REQUEST_CONFIRMATION_FROM_EMAIL ?? fromEmail;
+  const replyToEmail = process.env.DEMO_REQUEST_REPLY_TO_EMAIL ?? toEmail;
   try {
     const template = await getEmailTemplate(DEMO_REQUEST_FOLLOWUP_TEMPLATE_KEY);
     const rendered = renderDemoRequestTemplate(
@@ -117,7 +118,7 @@ export async function POST(request: Request) {
         ? sendResendEmail(resendApiKey, {
             from: confirmationFromEmail,
             to: [email],
-            reply_to: toEmail,
+            reply_to: replyToEmail,
             subject: followupPreview.subject,
             text: followupPreview.text,
             html: followupPreview.html,

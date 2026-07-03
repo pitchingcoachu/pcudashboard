@@ -909,6 +909,35 @@ export async function GET(request: Request) {
     !hasValue(bfMax) &&
     !hasValue(ipMin) &&
     !hasValue(ipMax);
+  const shouldFallbackProPitchTypesRollup =
+    isPro &&
+    !shouldScopePlayer &&
+    !percentileBaseline &&
+    proBroadScope &&
+    splitBy === 'Pitch Types' &&
+    !includeChartsRequested &&
+    !isTruthy(chartOnly) &&
+    !hasValue(withVideo) &&
+    !hasValue(breakLines) &&
+    !hasValue(venue) &&
+    !hasValue(qpLocations) &&
+    !hasValue(inZone) &&
+    !hasValue(zoneLocations) &&
+    !hasValue(pitchResults) &&
+    !hasValue(countFilter) &&
+    !hasValue(afterCountFilter) &&
+    !hasValue(veloMin) &&
+    !hasValue(veloMax) &&
+    !hasValue(ivbMin) &&
+    !hasValue(ivbMax) &&
+    !hasValue(hbMin) &&
+    !hasValue(hbMax) &&
+    !hasValue(pcMin) &&
+    !hasValue(pcMax) &&
+    !hasValue(bfMin) &&
+    !hasValue(bfMax) &&
+    !hasValue(ipMin) &&
+    !hasValue(ipMax);
   if (shouldForceLeaguePitchTypesRollup) {
     const rollupPayload = await maybeReturnPitchingPitchTypesRollup({
       request,
@@ -1125,7 +1154,24 @@ export async function GET(request: Request) {
       }
     }
     if (result.status < 200 || result.status >= 300) {
-      const shouldFallbackToLeanProLeaderboard = false;
+      if (shouldFallbackProPitchTypesRollup && result.status >= 500) {
+        const rollupPayload = await maybeReturnPitchingPitchTypesRollup({
+          request,
+          schoolCode,
+          startDate,
+          endDate,
+          level,
+          sessionType,
+          hand,
+          batterSide,
+          teamType: teamType && teamType !== 'All' ? teamType : 'All',
+          pitchTypes,
+          customColumns,
+        });
+        if (rollupPayload) return rollupPayload;
+      }
+      const shouldFallbackToLeanProLeaderboard =
+        shouldForceProLeaderboardRollupShape && result.status >= 500;
       if (shouldFallbackToLeanProLeaderboard && result.status >= 500) {
         const fallback = await fetchProSafePitchingLeaderboard({
           apiBase,
@@ -1203,7 +1249,23 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    const shouldFallbackToLeanProLeaderboard = false;
+    if (shouldFallbackProPitchTypesRollup) {
+      const rollupPayload = await maybeReturnPitchingPitchTypesRollup({
+        request,
+        schoolCode,
+        startDate,
+        endDate,
+        level,
+        sessionType,
+        hand,
+        batterSide,
+        teamType: teamType && teamType !== 'All' ? teamType : 'All',
+        pitchTypes,
+        customColumns,
+      });
+      if (rollupPayload) return rollupPayload;
+    }
+    const shouldFallbackToLeanProLeaderboard = shouldForceProLeaderboardRollupShape;
     if (shouldFallbackToLeanProLeaderboard) {
       try {
         const fallback = await fetchProSafePitchingLeaderboard({

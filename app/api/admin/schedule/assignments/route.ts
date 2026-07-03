@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { addProgramItem, listProgramItemsForPlayerByDateRange } from '../../../../../lib/training-db';
-import { canManagePlayer } from '../../../../../lib/portal-access';
+import { canManagePlayer, resolveManageablePlayerOrganizationId } from '../../../../../lib/portal-access';
 import { logApiTiming } from '../../../../../lib/request-timing';
 
 function parseDate(value: string): string | null {
@@ -60,20 +60,19 @@ export async function POST(request: Request) {
   const playerId = Number(body.playerId ?? 0);
   const dayDate = parseDate(String(body.dayDate ?? ''));
   const workoutId = Number(body.workoutId ?? 0);
-  const organizationId = resolveProgrammingOrganizationId(session);
   const userId = session.userId ?? 0;
 
-  if (organizationId <= 0 || userId <= 0) {
+  if (userId <= 0) {
     return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }
   if (!Number.isFinite(playerId) || playerId <= 0 || !dayDate || !Number.isFinite(workoutId) || workoutId <= 0) {
     return finish(400, { error: 'playerId, dayDate, and workoutId are required.' });
   }
-  const allowed = await canManagePlayer(session, playerId);
-  if (!allowed) return finish(403, { error: 'Forbidden' });
+  const manageableOrganizationId = await resolveManageablePlayerOrganizationId(session, playerId);
+  if (manageableOrganizationId <= 0) return finish(403, { error: 'Forbidden' });
 
   const result = await addProgramItem({
-    organizationId,
+    organizationId: manageableOrganizationId,
     userId,
     playerId,
     dayDate,
