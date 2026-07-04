@@ -268,6 +268,7 @@ export default function WorkoutLogModal({
   const [mounted, setMounted] = useState(false);
   const [historyByExercise, setHistoryByExercise] = useState<Record<number, ExerciseLoadHistoryEntry[]>>({});
   const [videoPreview, setVideoPreview] = useState<{ title: string; url: string } | null>(null);
+  const [mediaUploadMessage, setMediaUploadMessage] = useState('');
   const [customizingWorkout, setCustomizingWorkout] = useState(false);
   const [exerciseDrafts, setExerciseDrafts] = useState<WorkoutExerciseDraft[]>(() => buildWorkoutExerciseDrafts(item));
   const formRef = useRef<HTMLFormElement | null>(null);
@@ -379,6 +380,31 @@ export default function WorkoutLogModal({
       return raw;
     } catch {
       return raw;
+    }
+  };
+
+  const uploadExerciseMedia = async (exerciseName: string, files: File[]) => {
+    if (!files.length) return;
+    setMediaUploadMessage('');
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]!;
+        const baseName = file.name.replace(/\.[^.]+$/, '');
+        const title = files.length > 1 ? `${baseName}` : baseName;
+        const form = new FormData();
+        form.set('playerId', String(playerId));
+        form.set('file', file);
+        form.set('title', title);
+        form.set('category', 'Workout');
+        form.set('sourceType', 'workout_exercise');
+        form.set('sourceLabel', exerciseName);
+        const response = await fetch('/api/player/media', { method: 'POST', body: form });
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        if (!response.ok) throw new Error(payload.error ?? `Failed to upload ${file.name}.`);
+      }
+      setMediaUploadMessage(files.length > 1 ? `${files.length} files saved to Player Notes.` : `Saved to Player Notes.`);
+    } catch (error) {
+      setMediaUploadMessage(error instanceof Error ? error.message : 'Failed to upload media.');
     }
   };
 
@@ -622,6 +648,20 @@ export default function WorkoutLogModal({
                           {exercise.prefix ? `${exercise.prefix} ` : ''}
                           {exercise.name}
                         </button>
+                        <label className="btn btn-ghost" style={{ padding: '0.35rem 0.55rem', minHeight: 0, cursor: 'pointer' }} title="Upload photo/video">
+                          Camera
+                          <input
+                            type="file"
+                            accept="image/*,video/*"
+                            multiple={true}
+                            style={{ display: 'none' }}
+                            onChange={(event) => {
+                              const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+                              void uploadExerciseMedia(exercise.name, files);
+                              event.currentTarget.value = '';
+                            }}
+                          />
+                        </label>
                       </div>
                       {exercise.description && <p className="portal-muted-text">{exercise.description}</p>}
                       {exercise.coachingCues && (
@@ -737,6 +777,20 @@ export default function WorkoutLogModal({
                 >
                   {item.itemName}
                 </button>
+                <label className="btn btn-ghost" style={{ padding: '0.35rem 0.55rem', minHeight: 0, cursor: 'pointer' }} title="Upload photo/video">
+                  Camera
+                  <input
+                    type="file"
+                    accept="image/*,video/*"
+                    multiple={true}
+                    style={{ display: 'none' }}
+                    onChange={(event) => {
+                      const files = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+                      void uploadExerciseMedia(item.itemName, files);
+                      event.currentTarget.value = '';
+                    }}
+                  />
+                </label>
               </div>
               {item.exerciseDescription && <p className="portal-muted-text">{item.exerciseDescription}</p>}
               {item.exerciseCoachingCues && (
@@ -806,6 +860,7 @@ export default function WorkoutLogModal({
             </div>
           )}
 
+          {mediaUploadMessage ? <p className={mediaUploadMessage.includes('Failed') || mediaUploadMessage.includes('Forbidden') ? 'auth-error' : 'auth-message'}>{mediaUploadMessage}</p> : null}
           {error && <p className="auth-error">{error}</p>}
           <div className="portal-choice-line-actions">
             {!(catchPlayNote && item.itemType === 'workout' && item.workoutExercises.length === 0) && (

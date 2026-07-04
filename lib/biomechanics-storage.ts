@@ -151,6 +151,40 @@ export async function uploadMotionCaptureVideoToR2(args: {
   }
 }
 
+export async function uploadPlayerMediaToR2(args: {
+  organizationId: number;
+  playerId: number;
+  fileName: string;
+  contentType: string;
+  body: Buffer;
+}): Promise<string | null> {
+  const safeName = String(args.fileName ?? 'media').replace(/[^a-zA-Z0-9._-]+/g, '-');
+  const kind = String(args.contentType ?? '').toLowerCase().startsWith('image/') ? 'photo' : 'video';
+  const key = `player-media/org-${args.organizationId}/player-${args.playerId}/${kind}-${Date.now()}-${safeName}`;
+  const client = getR2Client();
+  if (!client) {
+    if (!canUseLocalMotionCaptureStorage()) throw new Error('R2 not configured and local storage only works in dev (NODE_ENV=development, VERCEL!=1)');
+    const filePath = path.join(localMotionCaptureRoot(), key);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, args.body);
+    return `local:${key}`;
+  }
+  const bucket = getR2Bucket();
+  await client.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: args.body,
+    ContentType: args.contentType || 'application/octet-stream',
+    Metadata: {
+      organization_id: String(args.organizationId),
+      player_id: String(args.playerId),
+      source_file_name: safeName,
+      media_kind: kind,
+    },
+  }));
+  return key;
+}
+
 export async function getObjectFromR2(key: string): Promise<{ body: AsyncIterable<Uint8Array>; contentType: string; contentLength: number | null } | null> {
   if (key.startsWith('local:')) {
     if (!canUseLocalMotionCaptureStorage()) return null;

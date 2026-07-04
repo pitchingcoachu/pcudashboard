@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import MediaBreakdownViewer from '../components/media-breakdown-viewer';
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH, formatNoteAttachmentLimit } from '../../../lib/note-attachment-limits';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching' | 'General';
@@ -33,6 +34,24 @@ type NoteAttachment = {
   name: string;
   mimeType: string;
   dataUrl: string;
+};
+type PlayerMedia = {
+  id: number;
+  mediaType: 'photo' | 'video';
+  title: string;
+  category: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  sourceType: string | null;
+  sourceLabel: string | null;
+  createdAt: string;
+};
+type MediaPreview = {
+  title: string;
+  url: string;
+  mimeType: string;
+  downloadName: string;
 };
 
 type PlayerNotesSuiteProps = {
@@ -227,11 +246,26 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   const [filterEndDate, setFilterEndDate] = useState('');
   const [searchText, setSearchText] = useState('');
   const [attachmentPreview, setAttachmentPreview] = useState<AttachmentPreview | null>(null);
+  const [mediaPreview, setMediaPreview] = useState<MediaPreview | null>(null);
+  const [playerMedia, setPlayerMedia] = useState<PlayerMedia[]>([]);
+  const [loadingMedia, setLoadingMedia] = useState(false);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [mediaFiles, setMediaFiles] = useState<File[]>([]);
+  const [mediaTitle, setMediaTitle] = useState('');
+  const [mediaCategory, setMediaCategory] = useState('General');
+  const [mediaMessage, setMediaMessage] = useState('');
+  const [editingMediaId, setEditingMediaId] = useState<number | null>(null);
+  const [editingMediaTitle, setEditingMediaTitle] = useState('');
+  const [editingMediaCategory, setEditingMediaCategory] = useState('');
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [editingText, setEditingText] = useState('');
   const categoryOptions = useMemo(
     () => uniqueNames([...DEFAULT_NOTE_CATEGORIES, ...customCategories, ...notes.map((note) => note.category)]),
     [customCategories, notes]
+  );
+  const mediaCategoryOptions = useMemo(
+    () => uniqueNames(['General', 'Workout', 'Bullpen', 'Video Breakdown', ...customCategories, ...playerMedia.map((media) => media.category)]),
+    [customCategories, playerMedia]
   );
   const selectedLinkedPlayerId = useMemo(() => {
     if (isFixedPlayerMode) return fixedPlayerId;
@@ -343,6 +377,32 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
       active = false;
     };
   }, [fixedPlayerId, isFixedPlayerMode, selectedLinkedPlayerId, selectedPlayerName]);
+
+  useEffect(() => {
+    if (selectedLinkedPlayerId <= 0) {
+      setPlayerMedia([]);
+      return;
+    }
+    let active = true;
+    setLoadingMedia(true);
+    fetch(`/api/player/media?playerId=${selectedLinkedPlayerId}`, { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load media.');
+        if (!active) return;
+        setPlayerMedia(Array.isArray(payload.media) ? payload.media : []);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setMessage(error instanceof Error ? error.message : 'Failed to load media.');
+      })
+      .finally(() => {
+        if (active) setLoadingMedia(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedLinkedPlayerId]);
 
   useEffect(() => {
     if (!notes.length) {
@@ -507,6 +567,27 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
     return counts;
   }, [categoryOptions, notes]);
 
+  const noteMediaAttachments = useMemo(() => (
+    notes.flatMap((note) =>
+      parseNoteAttachments(note)
+        .filter((attachment) => attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/'))
+        .map((attachment, idx) => ({
+          id: `note-${note.id}-${idx}`,
+          title: attachment.name,
+          category: note.category,
+          mimeType: attachment.mimeType,
+          url: attachment.dataUrl,
+          downloadName: attachment.name,
+          sourceLabel: `Note - ${normalizeDateOnly(note.noteDate) || note.noteDate}`,
+        }))
+    )
+  ), [notes]);
+
+  const mediaFilterCategories = useMemo(
+    () => uniqueNames([...playerMedia.map((media) => media.category), ...noteMediaAttachments.map((media) => media.category)]),
+    [noteMediaAttachments, playerMedia]
+  );
+
   const handleCategorySelect = (value: string) => {
     if (value === '__add_new__') {
       setShowNewCategoryInput(true);
@@ -524,6 +605,89 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
     setNewCategoryDraft('');
     setShowNewCategoryInput(false);
   };
+
+  async function uploadMedia() {
+    if (selectedLinkedPlayerId <= 0) {
+      setMediaMessage('Select a linked player to upload media.');
+      return;
+    }
+    if (!mediaFiles.length) {
+      setMediaMessage('Choose a photo or video first.');
+      return;
+    }
+    setMediaMessage('');
+    setUploadingMedia(true);
+    try {
+      let lastMedia: PlayerMedia[] = playerMedia;
+      for (let i = 0; i < mediaFiles.length; i++) {
+        const file = mediaFiles[i]!;
+        const title = mediaFiles.length === 1
+          ? (mediaTitle.trim() || file.name.replace(/\.[^.]+$/, ''))
+          : (mediaTitle.trim() ? `${mediaTitle.trim()} ${i + 1}` : file.name.replace(/\.[^.]+$/, ''));
+        const form = new FormData();
+        form.set('playerId', String(selectedLinkedPlayerId));
+        form.set('file', file);
+        form.set('title', title);
+        form.set('category', mediaCategory.trim() || 'General');
+        form.set('sourceType', 'player_notes');
+        const response = await fetch('/api/player/media', { method: 'POST', body: form });
+        const rawText = await response.text();
+        let payload: { media?: PlayerMedia[]; error?: string } = {};
+        try { payload = JSON.parse(rawText); } catch { /* not json */ }
+        if (!response.ok) throw new Error(payload.error ?? rawText.slice(0, 300) ?? `Failed to upload ${file.name}.`);
+        if (Array.isArray(payload.media)) lastMedia = payload.media;
+        else throw new Error(`Upload succeeded but got unexpected response: ${rawText.slice(0, 200)}`);
+      }
+      setPlayerMedia(lastMedia);
+      setCustomCategories((current) => uniqueNames([...current, mediaCategory]));
+      setMediaFiles([]);
+      setMediaTitle('');
+      setMediaMessage(mediaFiles.length > 1 ? `${mediaFiles.length} files uploaded.` : 'Media uploaded.');
+    } catch (error) {
+      setMediaMessage(error instanceof Error ? error.message : 'Failed to upload media.');
+    } finally {
+      setUploadingMedia(false);
+    }
+  }
+
+  async function deleteMedia(media: PlayerMedia) {
+    if (!confirm(`Delete "${media.title}"? This cannot be undone.`)) return;
+    setMediaPreview(null);
+    setMediaMessage('');
+    try {
+      const params = new URLSearchParams({ playerId: String(selectedLinkedPlayerId), mediaId: String(media.id) });
+      const response = await fetch(`/api/player/media?${params.toString()}`, { method: 'DELETE' });
+      const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to delete media.');
+      setPlayerMedia(Array.isArray(payload.media) ? payload.media : []);
+      setMediaMessage('Media deleted.');
+    } catch (error) {
+      setMediaMessage(error instanceof Error ? error.message : 'Failed to delete media.');
+    }
+  }
+
+  async function saveMediaEdits(media: PlayerMedia) {
+    if (selectedLinkedPlayerId <= 0) return;
+    try {
+      const response = await fetch('/api/player/media', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          playerId: selectedLinkedPlayerId,
+          mediaId: media.id,
+          title: editingMediaTitle,
+          category: editingMediaCategory,
+        }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to update media.');
+      setPlayerMedia(Array.isArray(payload.media) ? payload.media : []);
+      setEditingMediaId(null);
+      setMessage('Media updated.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to update media.');
+    }
+  }
 
   return (
     <section className={embedded ? 'portal-admin-card' : 'portal-panel portal-admin-panel'} style={{ padding: '1rem' }}>
@@ -578,6 +742,143 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
               All
             </button>
           </div>
+        </article>
+
+        <article className="portal-admin-card">
+          <div className="portal-row-between" style={{ alignItems: 'start', gap: 12 }}>
+            <div>
+              <h3 style={{ margin: 0 }}>Photos & Videos</h3>
+              <p className="portal-muted-text" style={{ margin: '0.25rem 0 0' }}>
+                Uploaded media and note attachments for the selected player.
+              </p>
+            </div>
+            {loadingMedia ? <span className="portal-muted-text">Loading media...</span> : null}
+          </div>
+          {selectedLinkedPlayerId > 0 ? (
+            <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+              <div className="portal-form-grid" style={{ gridTemplateColumns: 'minmax(180px, 1fr) minmax(160px, 220px) minmax(160px, 220px) auto', alignItems: 'end' }}>
+                <label>
+                  Upload Photos/Videos
+                  <input
+                    type="file"
+                    accept="image/*,video/*"
+                    multiple={true}
+                    onChange={(event) => {
+                      const files = event.target.files ? Array.from(event.target.files) : [];
+                      setMediaFiles(files);
+                      if (files.length === 1 && !mediaTitle.trim()) setMediaTitle(files[0]!.name.replace(/\.[^.]+$/, ''));
+                      setMediaMessage('');
+                    }}
+                  />
+                </label>
+                <label>
+                  Name
+                  <input value={mediaTitle} onChange={(event) => setMediaTitle(event.target.value)} placeholder="Media name..." />
+                </label>
+                <label>
+                  Category
+                  <input list="player-media-category-options" value={mediaCategory} onChange={(event) => setMediaCategory(event.target.value)} />
+                  <datalist id="player-media-category-options">
+                    {mediaCategoryOptions.map((category) => <option key={`media-cat-${category}`} value={category} />)}
+                  </datalist>
+                </label>
+                <button type="button" className="btn btn-primary" onClick={() => void uploadMedia()} disabled={!mediaFiles.length || uploadingMedia}>
+                  {uploadingMedia ? 'Uploading...' : 'Upload'}
+                </button>
+              </div>
+              {mediaFiles.length > 0 ? (
+                <p className="portal-muted-text" style={{ margin: 0 }}>{mediaFiles.map((f) => f.name).join(', ')}</p>
+              ) : null}
+              {mediaMessage ? (
+                <p className={mediaMessage.includes('Failed') || mediaMessage.includes('not configured') ? 'auth-error' : 'auth-message'} style={{ margin: 0 }}>
+                  {mediaMessage}
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="portal-muted-text" style={{ marginBottom: 0 }}>Select a specific linked player to upload and organize media.</p>
+          )}
+          {mediaFilterCategories.length > 0 ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+              <button type="button" className={filterCategory === 'All' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setFilterCategory('All')}>All Media</button>
+              {mediaFilterCategories.map((category) => (
+                <button key={`media-filter-${category}`} type="button" className={filterCategory === category ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setFilterCategory(category)}>
+                  {category}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 10, marginTop: 12 }}>
+            {playerMedia
+              .filter((media) => filterCategory === 'All' || media.category === filterCategory)
+              .map((media) => {
+                const url = `/api/player/media/${media.id}`;
+                return (
+                  <div key={`player-media-${media.id}`} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.16)', display: 'grid', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setMediaPreview({ title: media.title, url, mimeType: media.contentType, downloadName: media.fileName })}
+                      style={{ border: 0, borderRadius: 8, minHeight: 112, background: 'rgba(15,23,42,0.92)', color: '#f8fafc', fontWeight: 900, cursor: 'pointer' }}
+                    >
+                      {media.mediaType === 'video' ? 'Video' : 'Photo'}
+                    </button>
+                    {editingMediaId === media.id ? (
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <input value={editingMediaTitle} onChange={(event) => setEditingMediaTitle(event.target.value)} />
+                        <input list="player-media-category-options" value={editingMediaCategory} onChange={(event) => setEditingMediaCategory(event.target.value)} />
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button type="button" className="btn btn-primary" onClick={() => void saveMediaEdits(media)}>Save</button>
+                          <button type="button" className="btn btn-ghost" onClick={() => setEditingMediaId(null)}>Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <strong style={{ color: '#f8fafc' }}>{media.title}</strong>
+                        <span className="portal-muted-text">{media.category}{media.sourceLabel ? ` - ${media.sourceLabel}` : ''}</span>
+                        <span className="portal-muted-text" style={{ fontSize: 11 }}>{new Date(media.createdAt).toLocaleDateString()}</span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            onClick={() => {
+                              setEditingMediaId(media.id);
+                              setEditingMediaTitle(media.title);
+                              setEditingMediaCategory(media.category);
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            style={{ color: '#f87171' }}
+                            onClick={() => void deleteMedia(media)}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            {noteMediaAttachments
+              .filter((media) => filterCategory === 'All' || media.category === filterCategory)
+              .map((media) => (
+                <div key={media.id} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.12)', display: 'grid', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setMediaPreview({ title: media.title, url: media.url, mimeType: media.mimeType, downloadName: media.downloadName })}
+                    style={{ border: 0, borderRadius: 8, minHeight: 112, background: 'rgba(15,23,42,0.74)', color: '#f8fafc', fontWeight: 900, cursor: 'pointer' }}
+                  >
+                    {media.mimeType.startsWith('video/') ? 'Video Attachment' : 'Photo Attachment'}
+                  </button>
+                  <strong style={{ color: '#f8fafc' }}>{media.title}</strong>
+                  <span className="portal-muted-text">{media.category} - {media.sourceLabel}</span>
+                </div>
+              ))}
+          </div>
+          {!playerMedia.length && !noteMediaAttachments.length ? <p className="portal-muted-text" style={{ marginBottom: 0 }}>No photos or videos yet.</p> : null}
         </article>
 
         <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'minmax(420px, 560px) minmax(0, 1fr)', alignItems: 'start' }}>
@@ -841,6 +1142,15 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
               </div>
             </div>
           </div>
+        ) : null}
+        {mediaPreview ? (
+          <MediaBreakdownViewer
+            title={mediaPreview.title}
+            url={mediaPreview.url}
+            mimeType={mediaPreview.mimeType}
+            downloadName={mediaPreview.downloadName}
+            onClose={() => setMediaPreview(null)}
+          />
         ) : null}
       </div>
     </section>

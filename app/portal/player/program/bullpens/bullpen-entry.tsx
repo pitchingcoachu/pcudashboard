@@ -253,7 +253,7 @@ function TrendBarChart({ data, metric }: {
                         stroke="rgba(255,255,255,0.22)"
                         strokeWidth={1}
                       />
-                      <title>{`${d.date}\nPitch Type: ${d.pitchType}\nBall Type: ${d.ballType}${d.drill !== 'All' ? `\nDrill: ${d.drill}` : ''}${d.ballWeight !== 'All' ? `\nBall Weight: ${d.ballWeight}` : ''}\n${trendMetricLabel(metric)}: ${trendMetricFormat(metric, d.value)}\nPitches: ${d.count}`}</title>
+                      <title>{`${d.date}${metric === 'velocity' ? formatVelocityContext(d) : `\nPitch Type: ${d.pitchType}\nBall Type: ${d.ballType}`}\n${trendMetricLabel(metric)}: ${trendMetricFormat(metric, d.value)}\nPitches: ${d.count}`}</title>
                     </g>
                   );
                 })}
@@ -264,7 +264,7 @@ function TrendBarChart({ data, metric }: {
             );
           })}
           <text x={pad.left} y={18} fontSize={12} fontWeight={800} fill="#cbd5e1">
-            {trendMetricLabel(metric)} by Date / Pitch Type / Ball Type{metric === 'velocity' ? ' / Drill / Ball Weight' : ''}
+            {trendMetricLabel(metric)} by Date / {metric === 'velocity' ? 'Velocity Factors' : 'Pitch Type / Ball Type'}
           </text>
         </svg>
       </div>
@@ -352,7 +352,7 @@ function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
                   return (
                     <g key={point.key}>
                       <circle cx={cx} cy={cy} r={5.5} fill={fill} stroke="rgba(255,255,255,0.8)" strokeWidth={1.2} />
-                      <title>{`${point.date}\nPitch #: ${point.pitchNumber}\nPitch Type: ${point.pitchType}\nBall Type: ${point.ballType}${point.drill !== 'All' ? `\nDrill: ${point.drill}` : ''}${point.ballWeight !== 'All' ? `\nBall Weight: ${point.ballWeight}` : ''}\nVelocity: ${trendMetricFormat('velocity', point.value)}`}</title>
+                      <title>{`${point.date}\nPitch #: ${point.pitchNumber}${formatVelocityContext(point)}\nVelocity: ${trendMetricFormat('velocity', point.value)}`}</title>
                     </g>
                   );
                 })}
@@ -363,7 +363,7 @@ function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
             );
           })}
           <text x={pad.left} y={18} fontSize={12} fontWeight={800} fill="#cbd5e1">
-            Individual Pitch Velocity by Date / Pitch Type / Ball Type / Drill / Ball Weight
+            Individual Pitch Velocity by Date / Velocity Factors
           </text>
         </svg>
       </div>
@@ -371,9 +371,13 @@ function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
   );
 }
 
-function getColumn(columns: string[], wanted: string) {
-  const target = wanted.trim().toLowerCase();
-  return columns.find((column) => column.trim().toLowerCase() === target) ?? null;
+function normalizeHeader(value: string) {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function getColumn(columns: string[], wanted: string | string[]) {
+  const targets = (Array.isArray(wanted) ? wanted : [wanted]).map(normalizeHeader).filter(Boolean);
+  return columns.find((column) => targets.includes(normalizeHeader(column))) ?? null;
 }
 
 function getFactorKey(parts: string[]) {
@@ -384,13 +388,63 @@ function getFactorLabel(parts: string[]) {
   return parts.filter((part) => part && part !== 'All').join(' / ') || 'All';
 }
 
-function getVelocityFactorLabel(drill: string, ballWeight: string) {
-  return getFactorLabel([drill, ballWeight]);
+function rowHasDrillColumn(row: Record<string, string>) {
+  return String(row.__drillCol ?? '').trim().length > 0;
+}
+
+function getVelocityComboParts(row: Record<string, string>) {
+  if (rowHasDrillColumn(row)) {
+    return {
+      pitchType: 'All',
+      ballType: 'All',
+      drill: getRowDrill(row, 'Unspecified'),
+      ballWeight: getRowBallWeight(row, 'All'),
+      comboParts: [getRowDrill(row, 'Unspecified'), getRowBallWeight(row, 'All')],
+      drillOnly: true,
+    };
+  }
+  const pitchType = getRowPitchType(row, 'Pitch');
+  const ballType = getRowBallType(row, 'Ball');
+  const drill = getRowDrill(row, 'All');
+  const ballWeight = getRowBallWeight(row, 'All');
+  return {
+    pitchType,
+    ballType,
+    drill,
+    ballWeight,
+    comboParts: [pitchType, ballType, drill, ballWeight],
+    drillOnly: false,
+  };
+}
+
+function formatVelocityContext(parts: { pitchType: string; ballType: string; drill: string; ballWeight: string }) {
+  const lines: string[] = [];
+  if (parts.pitchType !== 'All') lines.push(`Pitch Type: ${parts.pitchType}`);
+  if (parts.ballType !== 'All') lines.push(`Ball Type: ${parts.ballType}`);
+  if (parts.drill !== 'All') lines.push(`Drill: ${parts.drill}`);
+  if (parts.ballWeight !== 'All') lines.push(`Ball Weight: ${parts.ballWeight}`);
+  return lines.length ? `\n${lines.join('\n')}` : '';
 }
 
 function getColumnValue(row: Record<string, string>, column: string | null, fallback: string) {
   if (!column) return fallback;
   return String(row[column] ?? '').trim() || fallback;
+}
+
+function getRowPitchType(row: Record<string, string>, fallback = 'Pitch') {
+  return getColumnValue(row, row.__pitchTypeCol || null, fallback);
+}
+
+function getRowBallType(row: Record<string, string>, fallback = 'Ball') {
+  return getColumnValue(row, row.__ballTypeCol || null, fallback);
+}
+
+function getRowDrill(row: Record<string, string>, fallback = 'All') {
+  return getColumnValue(row, row.__drillCol || null, fallback);
+}
+
+function getRowBallWeight(row: Record<string, string>, fallback = 'All') {
+  return getColumnValue(row, row.__ballWeightCol || null, fallback);
 }
 
 function isStrike(value: string) {
@@ -571,6 +625,10 @@ export default function BullpenEntry({
   const [velocityTrendMode, setVelocityTrendMode] = useState<'average' | 'individual'>('average');
   const [trendStartDate, setTrendStartDate] = useState('');
   const [trendEndDate, setTrendEndDate] = useState('');
+  const [trendPitchTypeFilter, setTrendPitchTypeFilter] = useState('All');
+  const [trendBallTypeFilter, setTrendBallTypeFilter] = useState('All');
+  const [trendDrillFilter, setTrendDrillFilter] = useState('All');
+  const [trendBallWeightFilter, setTrendBallWeightFilter] = useState('All');
 
   // All rows across all entries, each annotated with date
   const allRows = useMemo(() => {
@@ -589,15 +647,16 @@ export default function BullpenEntry({
         const columnTypes = getLogEntryColumnTypes(entry, columns, sourceTemplate?.columnTypes);
         const velocityCol = findColumnByType(columns, columnTypes, 'velocity');
         const strikeCol = findColumnByType(columns, columnTypes, 'strike');
-        const pitchTypeCol = getColumn(columns, 'pitch type') ?? '';
-        const ballTypeCol = getColumn(columns, 'ball type') ?? '';
-        const drillCol = getColumn(columns, 'drill') ?? '';
-        const ballWeightCol = getColumn(columns, 'ball weight') ?? '';
+        const pitchTypeCol = getColumn(columns, ['pitch type', 'pitch types', 'pitch', 'pitch name']) ?? '';
+        const ballTypeCol = getColumn(columns, ['ball type', 'ball', 'weighted ball']) ?? '';
+        const drillCol = getColumn(columns, ['drill', 'drills']) ?? '';
+        const ballWeightCol = getColumn(columns, ['ball weight', 'weight', 'ball wt', 'ballweight']) ?? '';
         return (entry.rowsJson ?? []).map((row, index): Record<string, string> => ({
           ...row,
           __date: entry.bullpenDate,
           __pitchNumber: String(index + 1),
           __templateId: entry.templateId,
+          __templateName: String(row.__templateName ?? sourceTemplate?.name ?? ''),
           __velocityCol: velocityCol,
           __strikeCol: strikeCol,
           __pitchTypeCol: pitchTypeCol,
@@ -607,6 +666,31 @@ export default function BullpenEntry({
         }));
       });
   }, [logEntries, templateById, trendStartDate, trendEndDate]);
+
+  const trendFilterOptions = useMemo(() => {
+    const unique = (values: string[]) => Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    return {
+      pitchTypes: unique(allRows.map((row) => getRowPitchType(row, 'Unspecified'))),
+      ballTypes: unique(allRows.map((row) => getRowBallType(row, 'Unspecified'))),
+      drills: unique(allRows.map((row) => getRowDrill(row, 'All')).filter((value) => value !== 'All')),
+      ballWeights: unique(allRows.map((row) => getRowBallWeight(row, 'All')).filter((value) => value !== 'All')),
+    };
+  }, [allRows]);
+
+  useEffect(() => {
+    if (trendPitchTypeFilter !== 'All' && !trendFilterOptions.pitchTypes.includes(trendPitchTypeFilter)) setTrendPitchTypeFilter('All');
+    if (trendBallTypeFilter !== 'All' && !trendFilterOptions.ballTypes.includes(trendBallTypeFilter)) setTrendBallTypeFilter('All');
+    if (trendDrillFilter !== 'All' && !trendFilterOptions.drills.includes(trendDrillFilter)) setTrendDrillFilter('All');
+    if (trendBallWeightFilter !== 'All' && !trendFilterOptions.ballWeights.includes(trendBallWeightFilter)) setTrendBallWeightFilter('All');
+  }, [trendBallTypeFilter, trendBallWeightFilter, trendDrillFilter, trendFilterOptions, trendPitchTypeFilter]);
+
+  const filteredTrendRows = useMemo(() => allRows.filter((row) => {
+    if (trendPitchTypeFilter !== 'All' && getRowPitchType(row, 'Unspecified') !== trendPitchTypeFilter) return false;
+    if (trendBallTypeFilter !== 'All' && getRowBallType(row, 'Unspecified') !== trendBallTypeFilter) return false;
+    if (trendDrillFilter !== 'All' && getRowDrill(row, 'All') !== trendDrillFilter) return false;
+    if (trendBallWeightFilter !== 'All' && getRowBallWeight(row, 'All') !== trendBallWeightFilter) return false;
+    return true;
+  }), [allRows, trendBallTypeFilter, trendBallWeightFilter, trendDrillFilter, trendPitchTypeFilter]);
 
   const trendMetricOptions = useMemo(() => {
     const options: Array<{ value: BullpenTrendMetric; label: string }> = [];
@@ -634,18 +718,19 @@ export default function BullpenEntry({
 
   const combinedTrendData = useMemo(() => {
     const groups = new Map<string, { date: string; comboKey: string; comboLabel: string; pitchType: string; ballType: string; drill: string; ballWeight: string; sum: number; count: number; yes: number }>();
-    for (const row of allRows) {
+    for (const row of filteredTrendRows) {
       const valueCol = trendMetric === 'velocity' ? row.__velocityCol : row.__strikeCol;
       if (!valueCol) continue;
       const date = String(row.__date ?? '').trim();
       if (!date) continue;
-      const pitchType = getColumnValue(row, row.__pitchTypeCol || null, 'Pitch');
-      const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Ball');
-      const drill = trendMetric === 'velocity' ? getColumnValue(row, row.__drillCol || null, 'All') : 'All';
-      const ballWeight = trendMetric === 'velocity' ? getColumnValue(row, row.__ballWeightCol || null, 'All') : 'All';
-      const comboParts = trendMetric === 'velocity' ? [drill, ballWeight] : [pitchType, ballType];
+      const velocityParts = trendMetric === 'velocity' ? getVelocityComboParts(row) : null;
+      const pitchType = velocityParts?.pitchType ?? getRowPitchType(row, 'Pitch');
+      const ballType = velocityParts?.ballType ?? getRowBallType(row, 'Ball');
+      const drill = velocityParts?.drill ?? 'All';
+      const ballWeight = velocityParts?.ballWeight ?? 'All';
+      const comboParts = velocityParts?.comboParts ?? [pitchType, ballType];
       const comboKey = getFactorKey(comboParts);
-      const comboLabel = trendMetric === 'velocity' ? getVelocityFactorLabel(drill, ballWeight) : getFactorLabel(comboParts);
+      const comboLabel = getFactorLabel(comboParts);
       const rawValue = String(row[valueCol] ?? '').trim();
       if (!rawValue) continue;
       const key = `${date}|${comboKey}`;
@@ -682,10 +767,10 @@ export default function BullpenEntry({
         a.date.localeCompare(b.date) ||
         a.comboLabel.localeCompare(b.comboLabel)
       );
-  }, [allRows, trendMetric]);
+  }, [filteredTrendRows, trendMetric]);
 
   const individualVelocityPoints = useMemo(() => {
-    return allRows
+    return filteredTrendRows
       .map((row, index) => {
         const velocityCol = row.__velocityCol || '';
         if (!velocityCol) return null;
@@ -693,27 +778,23 @@ export default function BullpenEntry({
         if (!Number.isFinite(value) || value <= 0) return null;
         const date = String(row.__date ?? '').trim();
         if (!date) return null;
-        const pitchType = getColumnValue(row, row.__pitchTypeCol || null, 'Pitch');
-        const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Ball');
-        const drill = getColumnValue(row, row.__drillCol || null, 'All');
-        const ballWeight = getColumnValue(row, row.__ballWeightCol || null, 'All');
-        const comboParts = [drill, ballWeight];
+        const velocityParts = getVelocityComboParts(row);
         return {
           key: `${date}|${index}|${value}`,
           date,
-          comboKey: getFactorKey(comboParts),
-          comboLabel: getVelocityFactorLabel(drill, ballWeight),
-          pitchType,
-          ballType,
-          drill,
-          ballWeight,
+          comboKey: getFactorKey(velocityParts.comboParts),
+          comboLabel: getFactorLabel(velocityParts.comboParts),
+          pitchType: velocityParts.pitchType,
+          ballType: velocityParts.ballType,
+          drill: velocityParts.drill,
+          ballWeight: velocityParts.ballWeight,
           value,
           pitchNumber: Number(row.__pitchNumber) || index + 1,
         };
       })
       .filter((point): point is BullpenVelocityPoint => point !== null)
       .sort((a, b) => a.date.localeCompare(b.date) || a.pitchNumber - b.pitchNumber);
-  }, [allRows]);
+  }, [filteredTrendRows]);
 
   const bullpenSummary = useMemo(() => {
     type SummaryAccumulator = {
@@ -754,18 +835,19 @@ export default function BullpenEntry({
       }
     };
 
-    for (const row of allRows) {
+    for (const row of filteredTrendRows) {
       const velocityRaw = row.__velocityCol ? String(row[row.__velocityCol] ?? '').trim() : '';
       const velocityValue = Number(velocityRaw);
       const velocity = velocityRaw && Number.isFinite(velocityValue) && velocityValue > 0 ? velocityValue : null;
       const strike = row.__strikeCol ? String(row[row.__strikeCol] ?? '').trim() : '';
       if (velocity === null && !isStrikeResult(strike)) continue;
 
-      const pitchType = getColumnValue(row, row.__pitchTypeCol || null, 'Unspecified');
-      const ballType = getColumnValue(row, row.__ballTypeCol || null, 'Unspecified');
-      const drill = getColumnValue(row, row.__drillCol || null, 'All');
-      const ballWeight = getColumnValue(row, row.__ballWeightCol || null, 'All');
-      const key = getFactorKey([pitchType, ballType, drill, ballWeight]);
+      const velocityParts = velocity !== null ? getVelocityComboParts(row) : null;
+      const pitchType = velocityParts?.pitchType ?? getRowPitchType(row, 'Unspecified');
+      const ballType = velocityParts?.ballType ?? getRowBallType(row, 'Unspecified');
+      const drill = velocityParts?.drill ?? getRowDrill(row, 'All');
+      const ballWeight = velocityParts?.ballWeight ?? getRowBallWeight(row, 'All');
+      const key = getFactorKey(velocityParts?.comboParts ?? [pitchType, ballType, drill, ballWeight]);
       const group = groups.get(key) ?? {
         pitchType,
         ballType,
@@ -801,7 +883,7 @@ export default function BullpenEntry({
       total: total.count > 0 ? toSummaryRow('all', total) : null,
       rows: summaryRows,
     };
-  }, [allRows]);
+  }, [filteredTrendRows]);
 
   const savedEntrySummaries = useMemo(() => logEntries.map((entry) => {
     const sourceTemplate = templateById.get(entry.templateId);
@@ -841,8 +923,15 @@ export default function BullpenEntry({
 
   const summaryHasVelocity = trendMetricOptions.some((option) => option.value === 'velocity');
   const summaryHasStrike = trendMetricOptions.some((option) => option.value === 'strike');
-  const summaryHasDrill = summaryHasVelocity && allRows.some((row) => String(row.__drillCol ?? '').trim());
-  const summaryHasBallWeight = summaryHasVelocity && allRows.some((row) => String(row.__ballWeightCol ?? '').trim());
+  const summaryHasDrill = summaryHasVelocity && filteredTrendRows.some((row) => String(row.__drillCol ?? '').trim());
+  const summaryHasBallWeight = summaryHasVelocity && filteredTrendRows.some((row) => String(row.__ballWeightCol ?? '').trim());
+  const summaryVelocityRows = filteredTrendRows.filter((row) => {
+    const velocityCol = row.__velocityCol || '';
+    if (!velocityCol) return false;
+    const velocity = Number(String(row[velocityCol] ?? '').trim());
+    return Number.isFinite(velocity) && velocity > 0;
+  });
+  const summaryUsesDrillOnly = summaryVelocityRows.length > 0 && summaryVelocityRows.every(rowHasDrillColumn);
 
   if (!visibleTemplates.length) {
     return <p className="portal-muted-text" style={{ margin: 0 }}>No bullpen scripts assigned yet.</p>;
@@ -942,7 +1031,7 @@ export default function BullpenEntry({
                                 value={val}
                                 onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
                                 placeholder="mph"
-                                style={{ width: '100%', minWidth: 0, textAlign: 'center', fontWeight: 600, padding: '0.35rem 0.25rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
+                                style={{ width: '100%', minWidth: 0, textAlign: 'center', fontSize: '0.95rem', fontWeight: 600, padding: '0.35rem 0.25rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
                               />
                             </td>
                           );
@@ -977,7 +1066,7 @@ export default function BullpenEntry({
                                 className="portal-schedule-control"
                                 value={val}
                                 onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
-                                style={{ width: '100%', minWidth: 0, textAlign: 'center', fontWeight: 600, padding: '0.35rem 0.45rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
+                                style={{ width: '100%', minWidth: 0, textAlign: 'center', fontSize: '0.95rem', fontWeight: 600, padding: '0.35rem 0.45rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
                               />
                             </td>
                           );
@@ -1093,6 +1182,73 @@ export default function BullpenEntry({
                   All Dates
                 </button>
               ) : null}
+              <label style={{ display: 'grid', gap: 3 }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Pitch Type</span>
+                <select
+                  className="portal-schedule-control"
+                  value={trendPitchTypeFilter}
+                  onChange={(e) => setTrendPitchTypeFilter(e.target.value)}
+                  style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
+                >
+                  <option value="All">All</option>
+                  {trendFilterOptions.pitchTypes.map((value) => <option key={`pitch-filter-${value}`} value={value}>{value}</option>)}
+                </select>
+              </label>
+              <label style={{ display: 'grid', gap: 3 }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Ball Type</span>
+                <select
+                  className="portal-schedule-control"
+                  value={trendBallTypeFilter}
+                  onChange={(e) => setTrendBallTypeFilter(e.target.value)}
+                  style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
+                >
+                  <option value="All">All</option>
+                  {trendFilterOptions.ballTypes.map((value) => <option key={`ball-filter-${value}`} value={value}>{value}</option>)}
+                </select>
+              </label>
+              {trendFilterOptions.drills.length > 0 ? (
+                <label style={{ display: 'grid', gap: 3 }}>
+                  <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Drill</span>
+                  <select
+                    className="portal-schedule-control"
+                    value={trendDrillFilter}
+                    onChange={(e) => setTrendDrillFilter(e.target.value)}
+                    style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
+                  >
+                    <option value="All">All</option>
+                    {trendFilterOptions.drills.map((value) => <option key={`drill-filter-${value}`} value={value}>{value}</option>)}
+                  </select>
+                </label>
+              ) : null}
+              {trendFilterOptions.ballWeights.length > 0 ? (
+                <label style={{ display: 'grid', gap: 3 }}>
+                  <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Ball Weight</span>
+                  <select
+                    className="portal-schedule-control"
+                    value={trendBallWeightFilter}
+                    onChange={(e) => setTrendBallWeightFilter(e.target.value)}
+                    style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
+                  >
+                    <option value="All">All</option>
+                    {trendFilterOptions.ballWeights.map((value) => <option key={`weight-filter-${value}`} value={value}>{value}</option>)}
+                  </select>
+                </label>
+              ) : null}
+              {(trendPitchTypeFilter !== 'All' || trendBallTypeFilter !== 'All' || trendDrillFilter !== 'All' || trendBallWeightFilter !== 'All') ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{ padding: '3px 10px', fontSize: 12, minHeight: 30 }}
+                  onClick={() => {
+                    setTrendPitchTypeFilter('All');
+                    setTrendBallTypeFilter('All');
+                    setTrendDrillFilter('All');
+                    setTrendBallWeightFilter('All');
+                  }}
+                >
+                  Clear Filters
+                </button>
+              ) : null}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                 {trendMetricOptions.map((option) => (
                   <button
@@ -1143,8 +1299,8 @@ export default function BullpenEntry({
                 <table className="portal-table portal-bullpen-summary-table">
                   <thead>
                     <tr>
-                      <th>Pitch Type</th>
-                      <th>Ball Type</th>
+                      {!summaryUsesDrillOnly ? <th>Pitch Type</th> : null}
+                      {!summaryUsesDrillOnly ? <th>Ball Type</th> : null}
                       {summaryHasDrill ? <th>Drill</th> : null}
                       {summaryHasBallWeight ? <th>Ball Weight</th> : null}
                       <th className="portal-bullpen-summary-number">#</th>
@@ -1156,8 +1312,8 @@ export default function BullpenEntry({
                   <tbody>
                     {[...bullpenSummary.rows, bullpenSummary.total].map((summaryRow) => (
                       <tr key={summaryRow.key} className={summaryRow.key === 'all' ? 'portal-bullpen-summary-all' : undefined}>
-                        <td>{summaryRow.pitchType}</td>
-                        <td>{summaryRow.ballType}</td>
+                        {!summaryUsesDrillOnly ? <td>{summaryRow.pitchType}</td> : null}
+                        {!summaryUsesDrillOnly ? <td>{summaryRow.ballType}</td> : null}
                         {summaryHasDrill ? <td>{summaryRow.drill}</td> : null}
                         {summaryHasBallWeight ? <td>{summaryRow.ballWeight}</td> : null}
                         <td className="portal-bullpen-summary-number">{summaryRow.count}</td>

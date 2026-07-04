@@ -201,6 +201,24 @@ export type DashboardPlayerNoteRow = {
   createdByUserId: number | null;
 };
 
+export type PlayerMediaRow = {
+  id: number;
+  organizationId: number;
+  playerId: number;
+  mediaType: 'photo' | 'video';
+  title: string;
+  category: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  r2Key: string;
+  sourceType: string | null;
+  sourceLabel: string | null;
+  createdAt: string;
+  updatedAt: string;
+  createdByUserId: number | null;
+};
+
 export type PortalActivityUserSummaryRow = {
   userId: number | null;
   email: string;
@@ -576,6 +594,30 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`ALTER TABLE player_plan_notes ADD COLUMN IF NOT EXISTS source_id TEXT;`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_plan_notes_player_date ON player_plan_notes (player_id, note_date DESC, created_at DESC);`);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_player_plan_notes_source ON player_plan_notes (player_id, source_type, source_id);`);
+    await pool.query(`
+    CREATE TABLE IF NOT EXISTS player_media (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      media_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'General',
+      file_name TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      size_bytes BIGINT NOT NULL DEFAULT 0,
+      r2_key TEXT NOT NULL,
+      source_type TEXT,
+      source_label TEXT,
+      created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+    await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'General';`);
+    await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS source_type TEXT;`);
+    await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS source_label TEXT;`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_player_created ON player_media (player_id, created_at DESC);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_org_player_category ON player_media (organization_id, player_id, lower(category));`);
     await pool.query(`
     CREATE TABLE IF NOT EXISTS dashboard_player_notes (
       id BIGSERIAL PRIMARY KEY,
@@ -6684,6 +6726,199 @@ export async function deletePlayerPlanNote(input: {
   );
   if ((result.rowCount ?? 0) < 1) return { ok: false, error: 'Note not found.' };
   return { ok: true };
+}
+
+export async function listPlayerMedia(input: {
+  organizationId: number;
+  playerId: number;
+  mediaType?: 'photo' | 'video';
+}): Promise<PlayerMediaRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const mediaType = input.mediaType === 'photo' || input.mediaType === 'video' ? input.mediaType : null;
+  const result = await pool.query<{
+    id: number;
+    organization_id: number;
+    player_id: number;
+    media_type: string;
+    title: string;
+    category: string;
+    file_name: string;
+    content_type: string;
+    size_bytes: string | number;
+    r2_key: string;
+    source_type: string | null;
+    source_label: string | null;
+    created_at: string;
+    updated_at: string;
+    created_by_user_id: number | null;
+  }>(
+    `
+      SELECT
+        id,
+        organization_id,
+        player_id,
+        media_type,
+        title,
+        category,
+        file_name,
+        content_type,
+        size_bytes,
+        r2_key,
+        source_type,
+        source_label,
+        created_at::text,
+        updated_at::text,
+        created_by_user_id
+      FROM player_media
+      WHERE organization_id = $1
+        AND player_id = $2
+        AND ($3::text IS NULL OR media_type = $3::text)
+      ORDER BY created_at DESC, id DESC
+    `,
+    [input.organizationId, input.playerId, mediaType]
+  );
+  return result.rows
+    .map((row) => {
+      const mediaTypeValue = row.media_type === 'photo' || row.media_type === 'video' ? row.media_type : null;
+      if (!mediaTypeValue) return null;
+      return {
+        id: Number(row.id),
+        organizationId: Number(row.organization_id),
+        playerId: Number(row.player_id),
+        mediaType: mediaTypeValue,
+        title: String(row.title ?? '').trim() || String(row.file_name ?? 'Media'),
+        category: String(row.category ?? '').trim() || 'General',
+        fileName: row.file_name,
+        contentType: row.content_type,
+        sizeBytes: Number(row.size_bytes ?? 0) || 0,
+        r2Key: row.r2_key,
+        sourceType: row.source_type,
+        sourceLabel: row.source_label,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        createdByUserId: row.created_by_user_id,
+      } satisfies PlayerMediaRow;
+    })
+    .filter((row): row is PlayerMediaRow => Boolean(row));
+}
+
+export async function getPlayerMedia(input: {
+  organizationId: number;
+  mediaId: number;
+}): Promise<PlayerMediaRow | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ player_id: number }>(`SELECT player_id FROM player_media WHERE id = $1 AND organization_id = $2`, [
+    input.mediaId,
+    input.organizationId,
+  ]);
+  const playerId = result.rows[0]?.player_id ?? 0;
+  if (!playerId) return null;
+  const rows = await listPlayerMedia({ organizationId: input.organizationId, playerId });
+  return rows.find((row) => Number(row.id) === Number(input.mediaId)) ?? null;
+}
+
+export async function createPlayerMedia(input: {
+  organizationId: number;
+  playerId: number;
+  mediaType: 'photo' | 'video';
+  title: string;
+  category: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  r2Key: string;
+  sourceType?: string;
+  sourceLabel?: string;
+  createdByUserId: number;
+}): Promise<{ ok: true; id: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const mediaType = input.mediaType === 'photo' || input.mediaType === 'video' ? input.mediaType : null;
+  if (!mediaType) return { ok: false, error: 'Media type must be photo or video.' };
+  const playerCheck = await pool.query(`SELECT id FROM players WHERE id = $1 AND organization_id = $2 LIMIT 1`, [
+    input.playerId,
+    input.organizationId,
+  ]);
+  if ((playerCheck.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
+  const result = await pool.query<{ id: number }>(
+    `
+      INSERT INTO player_media (
+        organization_id,
+        player_id,
+        media_type,
+        title,
+        category,
+        file_name,
+        content_type,
+        size_bytes,
+        r2_key,
+        source_type,
+        source_label,
+        created_by_user_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING id
+    `,
+    [
+      input.organizationId,
+      input.playerId,
+      mediaType,
+      String(input.title ?? '').trim() || String(input.fileName ?? 'Media'),
+      String(input.category ?? '').trim() || 'General',
+      String(input.fileName ?? '').trim() || 'media',
+      String(input.contentType ?? '').trim() || 'application/octet-stream',
+      Math.max(0, Math.round(Number(input.sizeBytes) || 0)),
+      input.r2Key,
+      String(input.sourceType ?? '').trim() || null,
+      String(input.sourceLabel ?? '').trim() || null,
+      input.createdByUserId,
+    ]
+  );
+  return { ok: true, id: result.rows[0]?.id ?? 0 };
+}
+
+export async function updatePlayerMedia(input: {
+  organizationId: number;
+  mediaId: number;
+  title: string;
+  category: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const title = String(input.title ?? '').trim();
+  const category = String(input.category ?? '').trim() || 'General';
+  if (!title) return { ok: false, error: 'Title is required.' };
+  const result = await pool.query(
+    `
+      UPDATE player_media
+      SET title = $1, category = $2, updated_at = NOW()
+      WHERE id = $3 AND organization_id = $4
+    `,
+    [title, category, input.mediaId, input.organizationId]
+  );
+  if ((result.rowCount ?? 0) < 1) return { ok: false, error: 'Media not found.' };
+  return { ok: true };
+}
+
+export async function deletePlayerMedia(input: {
+  organizationId: number;
+  mediaId: number;
+}): Promise<{ ok: true; r2Key: string } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ r2_key: string }>(
+    `DELETE FROM player_media WHERE id = $1 AND organization_id = $2 RETURNING r2_key`,
+    [input.mediaId, input.organizationId]
+  );
+  if ((result.rowCount ?? 0) < 1) return { ok: false, error: 'Media not found.' };
+  return { ok: true, r2Key: result.rows[0]?.r2_key ?? '' };
 }
 
 export async function listDashboardPlayerNotes(input: {

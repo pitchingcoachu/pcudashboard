@@ -256,7 +256,7 @@ type CellColors = { bg: string; text: string };
 type PitchActionPoint = OverviewPayload['chart_points'][number];
 type PitchEditSelectMode = 'single' | 'lasso';
 type PlotLasso = { startX: number; startY: number; endX: number; endY: number; dragging: boolean } | null;
-type BreakdownTool = 'line' | 'arrow' | 'circle' | 'pen' | 'text' | 'erase';
+type BreakdownTool = 'line' | 'arrow' | 'circle' | 'pen' | 'text' | 'angle' | 'erase';
 type BreakdownAnnotation = {
   id: string;
   tool: Exclude<BreakdownTool, 'erase'>;
@@ -264,6 +264,7 @@ type BreakdownAnnotation = {
   width: number;
   points: Array<{ x: number; y: number }>;
   text?: string;
+  angleMode?: 'acute' | 'obtuse';
 };
 const PITCH_TYPE_DISPLAY_ORDER = [
   'Fastball',
@@ -2395,6 +2396,8 @@ export default function PitchingSuite({
   const [breakdownWidth, setBreakdownWidth] = useState(4);
   const [breakdownAnnotations, setBreakdownAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [activeBreakdownAnnotation, setActiveBreakdownAnnotation] = useState<BreakdownAnnotation | null>(null);
+  const [breakdownAngleMode, setBreakdownAngleMode] = useState<'acute' | 'obtuse'>('acute');
+  const [breakdownAnglePending, setBreakdownAnglePending] = useState<Array<{ x: number; y: number }>>([]);
   const [breakdownNoteText, setBreakdownNoteText] = useState('');
   const [breakdownMessage, setBreakdownMessage] = useState('');
   const [breakdownSaving, setBreakdownSaving] = useState(false);
@@ -5702,10 +5705,22 @@ export default function PitchingSuite({
     return Math.min(...annotation.points.map((p) => Math.hypot(p.x - point.x, p.y - point.y)));
   };
 
+  const measureBreakdownAngle = (points: Array<{ x: number; y: number }>, mode: 'acute' | 'obtuse' = 'acute'): number | null => {
+    if (points.length < 3) return null;
+    const [a, b, c] = points;
+    const ab = { x: a.x - b.x, y: a.y - b.y };
+    const cb = { x: c.x - b.x, y: c.y - b.y };
+    const dot = ab.x * cb.x + ab.y * cb.y;
+    const mag = Math.hypot(ab.x, ab.y) * Math.hypot(cb.x, cb.y);
+    if (mag <= 0) return null;
+    const deg = (Math.acos(Math.max(-1, Math.min(1, dot / mag))) * 180) / Math.PI;
+    const acute = deg > 90 ? 180 - deg : deg;
+    return mode === 'obtuse' ? 180 - acute : acute;
+  };
+
   const handleBreakdownPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!breakdownMode) return;
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
     const point = getBreakdownPoint(event);
     if (breakdownTool === 'erase') {
       setBreakdownAnnotations((items) => {
@@ -5734,6 +5749,24 @@ export default function PitchingSuite({
       ]);
       return;
     }
+    if (breakdownTool === 'angle') {
+      const next = [...breakdownAnglePending, point];
+      if (next.length === 3) {
+        setBreakdownAnnotations((items) => [...items, {
+          id: `bd-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          tool: 'angle',
+          color: breakdownColor,
+          width: breakdownWidth,
+          points: next,
+          angleMode: breakdownAngleMode,
+        }]);
+        setBreakdownAnglePending([]);
+      } else {
+        setBreakdownAnglePending(next);
+      }
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
     const annotation: BreakdownAnnotation = {
       id: `bd-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       tool: breakdownTool,
@@ -5751,6 +5784,7 @@ export default function PitchingSuite({
     setActiveBreakdownAnnotation((current) => {
       if (!current) return current;
       if (current.tool === 'pen') return { ...current, points: [...current.points, point] };
+      if (current.tool === 'angle') return current;
       return { ...current, points: [current.points[0], point] };
     });
   };
@@ -5760,6 +5794,7 @@ export default function PitchingSuite({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     if (!activeBreakdownAnnotation) return;
+    if (activeBreakdownAnnotation.tool === 'angle') return;
     setBreakdownAnnotations((items) => [...items, activeBreakdownAnnotation]);
     setActiveBreakdownAnnotation(null);
   };
@@ -5789,6 +5824,17 @@ export default function PitchingSuite({
       ctx.beginPath();
       ctx.ellipse(x + w / 2, y + h / 2, Math.max(1, w / 2), Math.max(1, h / 2), 0, 0, Math.PI * 2);
       ctx.stroke();
+    } else if (annotation.tool === 'angle' && points.length >= 3) {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x * width, points[0].y * height);
+      ctx.lineTo(points[1].x * width, points[1].y * height);
+      ctx.lineTo(points[2].x * width, points[2].y * height);
+      ctx.stroke();
+      const angle = measureBreakdownAngle(points);
+      if (angle !== null) {
+        ctx.font = '800 30px system-ui, -apple-system, sans-serif';
+        ctx.fillText(`${angle.toFixed(0)}°`, points[1].x * width + 16, points[1].y * height - 16);
+      }
     } else {
       ctx.beginPath();
       ctx.moveTo(points[0].x * width, points[0].y * height);
@@ -6056,6 +6102,30 @@ export default function PitchingSuite({
       const h = sx(Math.abs(pts[1].y - pts[0].y));
       return <ellipse key={key} cx={x + w / 2} cy={y + h / 2} rx={Math.max(2, w / 2)} ry={Math.max(2, h / 2)} fill="none" stroke={annotation.color} strokeWidth={strokeWidth} />;
     }
+    if (annotation.tool === 'angle') {
+      const polyPoints = pts.map((point) => `${sx(point.x)},${sx(point.y)}`).join(' ');
+      const angle = measureBreakdownAngle(pts, annotation.angleMode ?? 'acute');
+      const vertex = pts[1] ?? pts[0];
+      const dir1 = pts.length >= 2 ? { x: pts[0].x - vertex.x, y: pts[0].y - vertex.y } : { x: 0, y: -1 };
+      const dir2 = pts.length >= 3 ? { x: pts[2].x - vertex.x, y: pts[2].y - vertex.y } : { x: 0, y: -1 };
+      const mag1 = Math.hypot(dir1.x, dir1.y) || 1;
+      const mag2 = Math.hypot(dir2.x, dir2.y) || 1;
+      const bisect = { x: dir1.x / mag1 + dir2.x / mag2, y: dir1.y / mag1 + dir2.y / mag2 };
+      const bisectMag = Math.hypot(bisect.x, bisect.y) || 1;
+      const labelX = sx(vertex.x) + (bisect.x / bisectMag) * 60;
+      const labelY = sx(vertex.y) + (bisect.y / bisectMag) * 60;
+      return (
+        <g key={key}>
+          <polyline points={polyPoints} fill="none" stroke={annotation.color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+          {pts.map((point, index) => <circle key={`${key}-angle-point-${index}`} cx={sx(point.x)} cy={sx(point.y)} r={7} fill={annotation.color} stroke="rgba(0,0,0,0.78)" strokeWidth={2} />)}
+          {angle !== null ? (
+            <text x={labelX} y={labelY} textAnchor="middle" dominantBaseline="middle" fill={annotation.color} fontSize={36} fontWeight={900} style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.72)', strokeWidth: 5 }}>
+              {`${angle.toFixed(1)}°`}
+            </text>
+          ) : null}
+        </g>
+      );
+    }
     const points = pts.map((point) => `${sx(point.x)},${sx(point.y)}`).join(' ');
     if (annotation.tool === 'arrow' && pts.length >= 2) {
       const a = pts[pts.length - 2];
@@ -6096,6 +6166,7 @@ export default function PitchingSuite({
     >
       {breakdownAnnotations.map((annotation) => renderBreakdownAnnotation(annotation, annotation.id))}
       {activeBreakdownAnnotation ? renderBreakdownAnnotation(activeBreakdownAnnotation, 'active-breakdown') : null}
+      {breakdownAnglePending.length > 0 ? renderBreakdownAnnotation({ id: 'angle-pending', tool: 'angle', color: breakdownColor, width: breakdownWidth, points: breakdownAnglePending, angleMode: breakdownAngleMode }, 'angle-pending') : null}
     </svg>
   );
 
@@ -13243,11 +13314,11 @@ export default function PitchingSuite({
                                 type="button"
                                 className={!breakdownMode ? 'btn btn-primary' : 'btn btn-ghost'}
                                 style={!breakdownMode ? { padding: '0.32rem 0.58rem', minHeight: 0 } : { ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }}
-                                onClick={() => setBreakdownMode(false)}
+                                onClick={() => { setBreakdownMode(false); setBreakdownAnglePending([]); }}
                               >
                                 View
                               </button>
-                              {(['line', 'arrow', 'circle', 'pen', 'text', 'erase'] as BreakdownTool[]).map((tool) => (
+                              {(['line', 'arrow', 'circle', 'pen', 'angle', 'text', 'erase'] as BreakdownTool[]).map((tool) => (
                                 <button
                                   key={tool}
                                   type="button"
@@ -13256,11 +13327,33 @@ export default function PitchingSuite({
                                   onClick={() => {
                                     setBreakdownMode(true);
                                     setBreakdownTool(tool);
+                                    setBreakdownAnglePending([]);
                                   }}
                                 >
                                   {tool === 'pen' ? 'Freehand' : tool.charAt(0).toUpperCase() + tool.slice(1)}
+                                  {tool === 'angle' && breakdownAnglePending.length > 0 ? ` (${breakdownAnglePending.length}/3)` : ''}
                                 </button>
                               ))}
+                              {breakdownMode && breakdownTool === 'angle' ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className={breakdownAngleMode === 'acute' ? 'btn btn-primary' : 'btn btn-ghost'}
+                                    style={breakdownAngleMode === 'acute' ? { padding: '0.32rem 0.58rem', minHeight: 0 } : { ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }}
+                                    onClick={() => setBreakdownAngleMode('acute')}
+                                  >
+                                    Acute
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={breakdownAngleMode === 'obtuse' ? 'btn btn-primary' : 'btn btn-ghost'}
+                                    style={breakdownAngleMode === 'obtuse' ? { padding: '0.32rem 0.58rem', minHeight: 0 } : { ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }}
+                                    onClick={() => setBreakdownAngleMode('obtuse')}
+                                  >
+                                    Obtuse
+                                  </button>
+                                </>
+                              ) : null}
                               <input
                                 type="color"
                                 value={breakdownColor}
