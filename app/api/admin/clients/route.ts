@@ -2,12 +2,40 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveClientManagementOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
-import { createClientWithLogin, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
+import { createClientWithLogin, listClientsByOrganizationPaged, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
   url.searchParams.set(key, value);
   return NextResponse.redirect(url, 303);
+}
+
+export async function GET(request: Request) {
+  const cookieStore = await cookies();
+  const session = getSessionFromCookies(cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.role === 'player') return NextResponse.json({ players: [] });
+
+  const selectedSchoolCode = resolveProgrammingSchoolCode(session);
+  const fallbackOrgId = resolveClientManagementOrganizationId(session);
+  const organizationId = await resolveOrganizationIdForSchool({
+    schoolCode: selectedSchoolCode,
+    fallbackOrganizationId: fallbackOrgId,
+    createIfMissing: false,
+  });
+  if (organizationId <= 0) return NextResponse.json({ players: [] });
+
+  const q = new URL(request.url).searchParams.get('q') ?? '';
+  const result = await listClientsByOrganizationPaged({
+    organizationId,
+    page: 1,
+    pageSize: 500,
+    query: q,
+    assignedCoachOnlyUserId: session.role === 'coach' ? (session.userId ?? null) : null,
+  });
+  return NextResponse.json({
+    players: result.rows.map((r) => ({ playerId: r.playerId, fullName: r.fullName })),
+  });
 }
 
 export async function POST(request: Request) {

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import SchoolAccessCard from './school-access-card';
+import PlayerSearch from './player-search';
 import {
   getClientCountByOrganization,
   getExerciseCountByOrganization,
@@ -103,6 +104,8 @@ export default async function AdminHomePage() {
     .map(({ status, count }) => `${status}: ${count}`)
     .join(' | ');
   return (
+    <div style={{ display: 'grid', gap: 20 }}>
+      <PlayerSearch />
     <div className="portal-admin-grid">
       {programmingOrganizationId <= 0 ? (
         <article className="portal-admin-card">
@@ -241,6 +244,7 @@ export default async function AdminHomePage() {
           Open Dashboard
         </Link>
       </article>
+    </div>
     </div>
   );
 }

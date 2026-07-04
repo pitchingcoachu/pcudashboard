@@ -5875,7 +5875,7 @@ export default function PitchingSuite({
           dashboardPlayerName: pitcherName,
           domain: 'General',
           noteDate: (currentActionPitch.session_date ?? '').slice(0, 10) || toYmdNow(),
-          category: 'Video Breakdown',
+          category: 'Edger',
           noteText: [
             breakdownNoteText.trim() || defaultText,
             '',
