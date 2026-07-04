@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { deleteObjectFromR2, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
 import { canManagePlayer } from '../../../../lib/portal-access';
-import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import {
   createPlayerMedia,
   deletePlayerMedia,
@@ -30,9 +29,8 @@ async function requireManagedPlayer(playerId: number) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
-  if (session.role === 'player') return { ok: false as const, status: 403, error: 'Forbidden' };
-  const organizationId = resolveProgrammingOrganizationId(session);
-  if (organizationId <= 0) return { ok: false as const, status: 403, error: 'Programming data is not available for this school.' };
+  const organizationId = Number(session.organizationId ?? 0);
+  if (organizationId <= 0) return { ok: false as const, status: 403, error: 'No organization found for session.' };
   if (!Number.isFinite(playerId) || playerId <= 0) return { ok: false as const, status: 400, error: 'Valid playerId is required.' };
   const allowed = await canManagePlayer(
     session as { role?: 'admin' | 'coach' | 'player'; organizationId?: number; userId?: number; playerId?: number | null },

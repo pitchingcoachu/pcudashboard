@@ -46,7 +46,7 @@ export async function GET(request: Request, context: { params: Promise<{ mediaId
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  // Players can access their own media (canManagePlayer enforces ownership below)
   const organizationId = Number(session.organizationId ?? 0);
   if (organizationId <= 0) return NextResponse.json({ error: 'No organization found for session.' }, { status: 403 });
 
