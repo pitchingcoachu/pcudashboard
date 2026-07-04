@@ -50,8 +50,10 @@ const TRIAL_FAKE_LAST_NAMES = [
   'Brooks',
 ];
 
+const TRAINING_DB_VERSION = '2026-07-04-player-media';
+
 declare global {
-  var __pcuTrainingDbReady: boolean | undefined;
+  var __pcuTrainingDbReady: boolean | string | undefined;
   var __pcuTrainingDbReadyPromise: Promise<void> | undefined;
   var __pcuAuthUsersSequenceStructureReady: boolean | undefined;
   var __pcuTrainingTrackingTypeReady: boolean | undefined;
@@ -495,7 +497,7 @@ async function syncAuthUsersIdSequence(db: Queryable): Promise<void> {
 
 export async function ensureTrainingDbReady(): Promise<void> {
   if (!isDatabaseConfigured()) return;
-  if (global.__pcuTrainingDbReady) return;
+  if (global.__pcuTrainingDbReady === TRAINING_DB_VERSION) return;
   if (global.__pcuTrainingDbReadyPromise) {
     await global.__pcuTrainingDbReadyPromise;
     return;
@@ -772,7 +774,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
       `CREATE INDEX IF NOT EXISTS idx_program_workout_exercise_overrides_player_workout_updated
        ON program_workout_exercise_overrides (organization_id, player_id, workout_id, updated_at DESC);`
     );
-    global.__pcuTrainingDbReady = true;
+    global.__pcuTrainingDbReady = TRAINING_DB_VERSION;
   })().finally(() => {
     global.__pcuTrainingDbReadyPromise = undefined;
   });
