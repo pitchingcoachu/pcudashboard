@@ -5,7 +5,6 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { getR2Client, getR2Bucket } from '../../../../../lib/biomechanics-storage';
-import { canManagePlayer } from '../../../../../lib/portal-access';
 import { getPlayerMedia } from '../../../../../lib/training-db';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 
@@ -60,12 +59,10 @@ export async function GET(request: Request, context: { params: Promise<{ mediaId
   if (!media) {
     return NextResponse.json({ error: `Media not found. mediaId=${mediaId} organizationId=${organizationId}` }, { status: 404 });
   }
-
-  const allowed = await canManagePlayer(
-    session as { role?: 'admin' | 'coach' | 'player'; organizationId?: number; userId?: number; playerId?: number | null },
-    media.playerId
-  );
-  if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  // Players can only access their own media
+  if (session.role === 'player' && media.playerId !== (session.playerId ?? -1)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
   const rangeHeader = request.headers.get('range');
   const contentType = media.contentType || inferContentType(media.r2Key);

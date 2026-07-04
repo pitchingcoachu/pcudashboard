@@ -399,8 +399,10 @@ export default function WorkoutLogModal({
         form.set('sourceType', 'workout_exercise');
         form.set('sourceLabel', exerciseName);
         const response = await fetch('/api/player/media', { method: 'POST', body: form });
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
-        if (!response.ok) throw new Error(payload.error ?? `Failed to upload ${file.name}.`);
+        const rawText = await response.text();
+        let payload: { error?: string; media?: unknown } = {};
+        try { payload = JSON.parse(rawText); } catch { /* not json */ }
+        if (!response.ok) throw new Error(payload.error ?? rawText.slice(0, 300) ?? `Failed to upload ${file.name}.`);
       }
       setMediaUploadMessage(files.length > 1 ? `${files.length} files saved to Player Notes.` : `Saved to Player Notes.`);
     } catch (error) {

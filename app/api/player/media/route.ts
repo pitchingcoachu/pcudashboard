@@ -2,7 +2,6 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { deleteObjectFromR2, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
-import { canManagePlayer } from '../../../../lib/portal-access';
 import {
   createPlayerMedia,
   deletePlayerMedia,
@@ -32,13 +31,12 @@ async function requireManagedPlayer(playerId: number) {
   const organizationId = Number(session.organizationId ?? 0);
   if (organizationId <= 0) return { ok: false as const, status: 403, error: 'No organization found for session.' };
   if (!Number.isFinite(playerId) || playerId <= 0) return { ok: false as const, status: 400, error: 'Valid playerId is required.' };
-  const allowed = await canManagePlayer(
-    session as { role?: 'admin' | 'coach' | 'player'; organizationId?: number; userId?: number; playerId?: number | null },
-    playerId
-  );
-  if (!allowed) return { ok: false as const, status: 403, error: 'Forbidden' };
   const player = await getPlayerByIdInOrganization({ organizationId, playerId });
   if (!player) return { ok: false as const, status: 404, error: 'Player not found.' };
+  // Players can only access their own record
+  if (session.role === 'player' && player.id !== (session.playerId ?? -1)) {
+    return { ok: false as const, status: 403, error: 'Forbidden' };
+  }
   return { ok: true as const, session, organizationId, playerId: player.id };
 }
 
