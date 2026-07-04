@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import MediaBreakdownViewer from '../components/media-breakdown-viewer';
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH, formatNoteAttachmentLimit } from '../../../lib/note-attachment-limits';
+import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching' | 'General';
 
@@ -607,14 +608,8 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   };
 
   async function uploadMedia() {
-    if (selectedLinkedPlayerId <= 0) {
-      setMediaMessage('Select a linked player to upload media.');
-      return;
-    }
-    if (!mediaFiles.length) {
-      setMediaMessage('Choose a photo or video first.');
-      return;
-    }
+    if (selectedLinkedPlayerId <= 0) { setMediaMessage('Select a linked player to upload media.'); return; }
+    if (!mediaFiles.length) { setMediaMessage('Choose a photo or video first.'); return; }
     setMediaMessage('');
     setUploadingMedia(true);
     try {
@@ -624,19 +619,15 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
         const title = mediaFiles.length === 1
           ? (mediaTitle.trim() || file.name.replace(/\.[^.]+$/, ''))
           : (mediaTitle.trim() ? `${mediaTitle.trim()} ${i + 1}` : file.name.replace(/\.[^.]+$/, ''));
-        const form = new FormData();
-        form.set('playerId', String(selectedLinkedPlayerId));
-        form.set('file', file);
-        form.set('title', title);
-        form.set('category', mediaCategory.trim() || 'General');
-        form.set('sourceType', 'player_notes');
-        const response = await fetch('/api/player/media', { method: 'POST', body: form });
-        const rawText = await response.text();
-        let payload: { media?: PlayerMedia[]; error?: string } = {};
-        try { payload = JSON.parse(rawText); } catch { /* not json */ }
-        if (!response.ok) throw new Error(payload.error ?? rawText.slice(0, 300) ?? `Failed to upload ${file.name}.`);
-        if (Array.isArray(payload.media)) lastMedia = payload.media;
-        else throw new Error(`Upload succeeded but got unexpected response: ${rawText.slice(0, 200)}`);
+        const result = await uploadPlayerMediaFile({
+          playerId: selectedLinkedPlayerId,
+          file,
+          title,
+          category: mediaCategory.trim() || 'General',
+          sourceType: 'player_notes',
+        });
+        if (!result.ok) throw new Error(result.error);
+        lastMedia = result.media as PlayerMedia[];
       }
       setPlayerMedia(lastMedia);
       setCustomCategories((current) => uniqueNames([...current, mediaCategory]));

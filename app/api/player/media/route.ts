@@ -1,7 +1,9 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { deleteObjectFromR2, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
+import { deleteObjectFromR2, getR2Bucket, getR2Client, isR2Configured, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import {
   createPlayerMedia,
   deletePlayerMedia,
@@ -24,6 +26,12 @@ function inferMediaContentType(fileName: string): string {
   return map[ext] ?? 'application/octet-stream';
 }
 
+function buildR2Key(organizationId: number, playerId: number, fileName: string, contentType: string): string {
+  const safeName = String(fileName ?? 'media').replace(/[^a-zA-Z0-9._-]+/g, '-');
+  const kind = String(contentType ?? '').toLowerCase().startsWith('image/') ? 'photo' : 'video';
+  return `player-media/org-${organizationId}/player-${playerId}/${kind}-${Date.now()}-${safeName}`;
+}
+
 async function requireManagedPlayer(playerId: number) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -33,15 +41,42 @@ async function requireManagedPlayer(playerId: number) {
   if (!Number.isFinite(playerId) || playerId <= 0) return { ok: false as const, status: 400, error: 'Valid playerId is required.' };
   const player = await getPlayerByIdInOrganization({ organizationId, playerId });
   if (!player) return { ok: false as const, status: 404, error: 'Player not found.' };
-  // Players can only access their own record
   if (session.role === 'player' && player.id !== (session.playerId ?? -1)) {
     return { ok: false as const, status: 403, error: 'Forbidden' };
   }
   return { ok: true as const, session, organizationId, playerId: player.id };
 }
 
+// ── GET: list media ──────────────────────────────────────────────────────────
 export async function GET(request: Request) {
   const url = new URL(request.url);
+
+  // Presigned URL request: ?presign=1&fileName=...&contentType=...&playerId=...
+  if (url.searchParams.get('presign') === '1') {
+    const playerId = Number(url.searchParams.get('playerId') ?? '0');
+    const allowed = await requireManagedPlayer(playerId);
+    if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+
+    const fileName = String(url.searchParams.get('fileName') ?? '').trim();
+    const rawContentType = String(url.searchParams.get('contentType') ?? '').trim();
+    const contentType = rawContentType || inferMediaContentType(fileName);
+
+    if (!isR2Configured()) {
+      // Signal to client to fall back to direct upload
+      return NextResponse.json({ presign: false });
+    }
+
+    const r2Key = buildR2Key(allowed.organizationId, allowed.playerId, fileName, contentType);
+    const client = getR2Client()!;
+    const bucket = getR2Bucket();
+    const uploadUrl = await getSignedUrl(
+      client,
+      new PutObjectCommand({ Bucket: bucket, Key: r2Key, ContentType: contentType }),
+      { expiresIn: 3600 }
+    );
+    return NextResponse.json({ presign: true, uploadUrl, r2Key, contentType });
+  }
+
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
   const allowed = await requireManagedPlayer(playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
@@ -51,7 +86,45 @@ export async function GET(request: Request) {
   return NextResponse.json({ media });
 }
 
+// ── POST: save metadata after presigned upload, OR direct upload in local dev ─
 export async function POST(request: Request) {
+  const contentTypeHeader = request.headers.get('content-type') ?? '';
+
+  // JSON body = presigned upload already done, just save metadata
+  if (contentTypeHeader.includes('application/json')) {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const playerId = Number(body.playerId ?? '0');
+    const allowed = await requireManagedPlayer(playerId);
+    if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+
+    const r2Key = String(body.r2Key ?? '').trim();
+    const fileName = String(body.fileName ?? '').trim();
+    const rawContentType = String(body.contentType ?? '').trim();
+    const contentType = rawContentType || inferMediaContentType(fileName);
+    const mediaType = contentType.startsWith('image/') ? 'photo' : contentType.startsWith('video/') ? 'video' : null;
+    if (!mediaType) return NextResponse.json({ error: 'Only photo and video uploads are supported.' }, { status: 400 });
+    if (!r2Key) return NextResponse.json({ error: 'r2Key is required.' }, { status: 400 });
+
+    const created = await createPlayerMedia({
+      organizationId: allowed.organizationId,
+      playerId: allowed.playerId,
+      mediaType,
+      title: String(body.title ?? '').trim() || fileName,
+      category: String(body.category ?? '').trim() || 'General',
+      fileName,
+      contentType,
+      sizeBytes: Number(body.sizeBytes ?? 0) || 0,
+      r2Key,
+      sourceType: String(body.sourceType ?? '').trim() || undefined,
+      sourceLabel: String(body.sourceLabel ?? '').trim() || undefined,
+      createdByUserId: allowed.session.userId ?? 0,
+    });
+    if (!created.ok) return NextResponse.json({ error: `DB error: ${created.error}` }, { status: 400 });
+    const media = await listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId });
+    return NextResponse.json({ ok: true, media });
+  }
+
+  // FormData = direct upload (local dev fallback, no R2)
   const form = await request.formData();
   const playerId = Number(form.get('playerId') ?? '0');
   const allowed = await requireManagedPlayer(playerId);
@@ -69,7 +142,7 @@ export async function POST(request: Request) {
   const mediaType = contentType.startsWith('image/') ? 'photo' : contentType.startsWith('video/') ? 'video' : null;
   if (!mediaType) return NextResponse.json({ error: 'Only photo and video uploads are supported.' }, { status: 400 });
 
-  const body = Buffer.from(await file.arrayBuffer());
+  const fileBody = Buffer.from(await file.arrayBuffer());
   let r2Key: string | null = null;
   let storageError = '';
   try {
@@ -78,12 +151,12 @@ export async function POST(request: Request) {
       playerId: allowed.playerId,
       fileName: file.name,
       contentType,
-      body,
+      body: fileBody,
     });
   } catch (err) {
     storageError = err instanceof Error ? err.message : String(err);
   }
-  if (!r2Key) return NextResponse.json({ error: `Storage failed: ${storageError || 'uploadPlayerMediaToR2 returned null'}` }, { status: 500 });
+  if (!r2Key) return NextResponse.json({ error: `Storage failed: ${storageError || 'unknown'}` }, { status: 500 });
 
   const created = await createPlayerMedia({
     organizationId: allowed.organizationId,
@@ -104,6 +177,7 @@ export async function POST(request: Request) {
   return NextResponse.json({ ok: true, media });
 }
 
+// ── DELETE ───────────────────────────────────────────────────────────────────
 export async function DELETE(request: Request) {
   const url = new URL(request.url);
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
@@ -117,6 +191,7 @@ export async function DELETE(request: Request) {
   return NextResponse.json({ ok: true, media });
 }
 
+// ── PATCH ────────────────────────────────────────────────────────────────────
 export async function PATCH(request: Request) {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const playerId = Number(body.playerId ?? '0');

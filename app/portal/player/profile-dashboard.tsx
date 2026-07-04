@@ -13,6 +13,7 @@ import type {
 import WorkoutLogModal from '../components/workout-log-modal';
 import PlayerNotesSuite from '../dashboard/player-notes-suite';
 import ProfilePlanGoalsPanel from './profile-plan-goals-panel';
+import PlayerMediaSection from './player-media-section';
 
 type TrackedExercise = {
   exerciseId: number;
@@ -469,6 +470,7 @@ export default function ProfileDashboard({
   const [valdWeightLogs, setValdWeightLogs] = useState<BodyWeightLogRow[]>([]);
   const [defaultForceMetricKey, setDefaultForceMetricKey] = useState('');
   const [profileExpanded, setProfileExpanded] = useState(false);
+  const [mediaExpanded, setMediaExpanded] = useState(false);
   const [assessmentExpanded, setAssessmentExpanded] = useState(true);
 
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
@@ -964,6 +966,16 @@ export default function ProfileDashboard({
         </div>
         {photoMessage ? <p className={photoMessage === 'Profile photo updated.' ? 'auth-message' : 'auth-error'}>{photoMessage}</p> : null}
       </section>
+
+      <article className="portal-admin-card">
+        <div className="portal-row-between" style={{ alignItems: 'center' }}>
+          <h3 style={{ margin: 0 }}>Videos & Photos</h3>
+          <button type="button" className="btn btn-ghost" onClick={() => setMediaExpanded((v) => !v)}>
+            {mediaExpanded ? 'Collapse' : 'Expand'}
+          </button>
+        </div>
+        {mediaExpanded ? <PlayerMediaSection playerId={playerId} isPlayer={sessionRole === 'player'} /> : null}
+      </article>
 
       {showProfileDetailsPanel && (
         <article className="portal-admin-card">

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import MediaBreakdownViewer from '../components/media-breakdown-viewer';
+import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 
 type PlayerMedia = {
   id: number;
@@ -48,16 +49,6 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
       .finally(() => setLoading(false));
   }, [playerId]);
 
-  function inferMediaContentType(fileName: string): string {
-    const ext = String(fileName ?? '').split('.').pop()?.toLowerCase() ?? '';
-    const map: Record<string, string> = {
-      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
-      webp: 'image/webp', heic: 'image/heic', heif: 'image/heif',
-      mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
-    };
-    return map[ext] ?? 'application/octet-stream';
-  }
-
   async function upload() {
     if (!mediaFiles.length) { setMessage('Choose a file first.'); return; }
     setMessage('');
@@ -69,16 +60,15 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
         const title = mediaFiles.length === 1
           ? (mediaTitle.trim() || file.name.replace(/\.[^.]+$/, ''))
           : (mediaTitle.trim() ? `${mediaTitle.trim()} ${i + 1}` : file.name.replace(/\.[^.]+$/, ''));
-        const form = new FormData();
-        form.set('playerId', String(playerId));
-        form.set('file', file);
-        form.set('title', title);
-        form.set('category', mediaCategory.trim() || 'General');
-        form.set('sourceType', 'player_self');
-        const response = await fetch('/api/player/media', { method: 'POST', body: form });
-        const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
-        if (!response.ok) throw new Error(payload.error ?? `Failed to upload ${file.name}.`);
-        if (Array.isArray(payload.media)) lastMedia = payload.media;
+        const result = await uploadPlayerMediaFile({
+          playerId,
+          file,
+          title,
+          category: mediaCategory.trim() || 'General',
+          sourceType: 'player_self',
+        });
+        if (!result.ok) throw new Error(result.error);
+        lastMedia = result.media as PlayerMedia[];
       }
       setMedia(lastMedia);
       setMediaFiles([]);
@@ -94,10 +84,8 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
   const filtered = filterCategory === 'All' ? media : media.filter((m) => m.category === filterCategory);
 
   return (
-    <article className="portal-admin-card" style={{ marginTop: 16 }}>
-      <h3 style={{ marginTop: 0 }}>My Videos & Photos</h3>
-
-      {/* Upload row — players can upload, admins/coaches viewing profile can also upload */}
+    <div style={{ marginTop: 12 }}>
+      {/* Upload row */}
       <div className="portal-form-grid" style={{ gridTemplateColumns: 'minmax(180px,1fr) minmax(140px,200px) minmax(140px,200px) auto', alignItems: 'end', marginBottom: 8 }}>
         <label>
           Upload
@@ -160,7 +148,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 10 }}>
         {filtered.map((m) => {
           const url = `/api/player/media/${m.id}`;
-          const mimeType = m.contentType || inferMediaContentType(m.fileName);
+          const mimeType = m.contentType || 'video/quicktime';
           return (
             <div key={m.id} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.16)', display: 'grid', gap: 6 }}>
               <button
@@ -191,6 +179,6 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
           onClose={() => setMediaPreview(null)}
         />
       )}
-    </article>
+    </div>
   );
 }

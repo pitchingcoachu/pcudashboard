@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 import { createPortal } from 'react-dom';
 import type { ExerciseLoadHistoryEntry, ProgramItemRow } from '../../../lib/training-db';
 
@@ -389,22 +390,18 @@ export default function WorkoutLogModal({
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i]!;
-        const baseName = file.name.replace(/\.[^.]+$/, '');
-        const title = files.length > 1 ? `${baseName}` : baseName;
-        const form = new FormData();
-        form.set('playerId', String(playerId));
-        form.set('file', file);
-        form.set('title', title);
-        form.set('category', 'Workout');
-        form.set('sourceType', 'workout_exercise');
-        form.set('sourceLabel', exerciseName);
-        const response = await fetch('/api/player/media', { method: 'POST', body: form });
-        const rawText = await response.text();
-        let payload: { error?: string; media?: unknown } = {};
-        try { payload = JSON.parse(rawText); } catch { /* not json */ }
-        if (!response.ok) throw new Error(payload.error ?? rawText.slice(0, 300) ?? `Failed to upload ${file.name}.`);
+        const title = file.name.replace(/\.[^.]+$/, '');
+        const result = await uploadPlayerMediaFile({
+          playerId,
+          file,
+          title,
+          category: 'Workout',
+          sourceType: 'workout_exercise',
+          sourceLabel: exerciseName,
+        });
+        if (!result.ok) throw new Error(result.error);
       }
-      setMediaUploadMessage(files.length > 1 ? `${files.length} files saved to Player Notes.` : `Saved to Player Notes.`);
+      setMediaUploadMessage(files.length > 1 ? `${files.length} files saved to Player Notes.` : 'Saved to Player Notes.');
     } catch (error) {
       setMediaUploadMessage(error instanceof Error ? error.message : 'Failed to upload media.');
     }
