@@ -16,6 +16,7 @@ export async function POST(request: Request) {
     pitch_event_ids?: Array<number | string>;
     pitch_type?: string;
     pitcher?: string;
+    ball_type?: string;
   };
 
   const singlePitchEventId = Number(body.pitch_event_id);
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
   const uniquePitchEventIds = Array.from(new Set(pitchEventIds));
   const pitchType = (body.pitch_type ?? '').toString().trim();
   const pitcher = (body.pitcher ?? '').toString().trim();
+  const ballType = (body.ball_type ?? '').toString().trim();
   if (!uniquePitchEventIds.length) {
     return NextResponse.json({ error: 'pitch_event_id or pitch_event_ids is required.' }, { status: 400 });
   }
@@ -59,6 +61,7 @@ export async function POST(request: Request) {
         pitch_event_ids: uniquePitchEventIds,
         pitch_type: pitchType,
         pitcher,
+        ...(ballType ? { ball_type: ballType } : {}),
       }),
       cache: 'no-store',
     });

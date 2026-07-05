@@ -1,4 +1,4 @@
-import { getPlayerForUser, isCoachAssignedToPlayer, playerExistsInOrganization } from './training-db';
+import { getPlayerForUser, playerExistsInOrganization } from './training-db';
 import { resolveProgrammingOrganizationId } from './programming-scope';
 
 type SessionLike = {
@@ -34,10 +34,8 @@ export async function resolveManageablePlayerOrganizationId(session: SessionLike
   }
 
   if (session.role === 'coach') {
-    const userId = session.userId ?? 0;
-    if (!Number.isFinite(userId) || userId <= 0) return 0;
     for (const organizationId of candidateOrganizationIds) {
-      if (await isCoachAssignedToPlayer({ organizationId, coachUserId: userId, playerId })) return organizationId;
+      if (await playerExistsInOrganization({ organizationId, playerId })) return organizationId;
     }
     return 0;
   }

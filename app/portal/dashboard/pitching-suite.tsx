@@ -2307,6 +2307,7 @@ export default function PitchingSuite({
   const [actionIndex, setActionIndex] = useState(0);
   const [editPitchType, setEditPitchType] = useState('');
   const [editPitcher, setEditPitcher] = useState('');
+  const [editBallType, setEditBallType] = useState('');
   const [actionSaveState, setActionSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [actionSaveMessage, setActionSaveMessage] = useState('');
   const [actionIsPlaying, setActionIsPlaying] = useState(false);
@@ -2547,6 +2548,12 @@ export default function PitchingSuite({
     const all = Array.from(new Set([...fromFilters, ...actionPitches.map((pitch) => pitch.pitcher).filter(Boolean)]));
     return toOptions(all, true);
   }, [filters?.pitchers, actionPitches]);
+  const pitchEditBallTypeOptions = useMemo(() => {
+    const fromFilters = filters?.ball_types ?? [];
+    const defaults = ['Baseball', 'Weighted Ball'];
+    const all = Array.from(new Set([...defaults, ...fromFilters])).filter(Boolean);
+    return toOptions(all);
+  }, [filters?.ball_types]);
 
   useEffect(() => {
     if (!canShowVeloManualEntry && dashboardPage === 'Velo Manual Entry') {
@@ -4856,6 +4863,7 @@ export default function PitchingSuite({
     setActionMode(nextMode);
     setEditPitchType(refreshed[0]?.pitch_type ?? '');
     setEditPitcher(resolvePitcherName(refreshed[0], selectedPitchers));
+    setEditBallType('');
     setActionSaveState('idle');
     setActionSaveMessage('');
     setActionIsPlaying(nextMode === 'spin');
@@ -4874,6 +4882,7 @@ export default function PitchingSuite({
     if (!currentActionPitch) return;
     setEditPitchType(currentActionPitch.pitch_type ?? '');
     setEditPitcher(resolvePitcherName(currentActionPitch, selectedPitchers));
+    setEditBallType('');
     setActionSaveState('idle');
     setActionSaveMessage('');
   }, [actionIndex, currentActionPitch?.pitch_type, currentActionPitch?.pitcher]);
@@ -4899,6 +4908,7 @@ export default function PitchingSuite({
     }
     const nextPitchType = (editPitchType || currentActionPitch.pitch_type || '').trim();
     const nextPitcher = (editPitcher || resolvePitcherName(currentActionPitch, selectedPitchers) || '').trim();
+    const nextBallType = editBallType.trim();
     if (!nextPitchType || !nextPitcher) {
       setActionSaveState('error');
       setActionSaveMessage('Pitch type and pitcher are required.');
@@ -4915,6 +4925,7 @@ export default function PitchingSuite({
           pitch_event_ids: editIds,
           pitch_type: nextPitchType,
           pitcher: nextPitcher,
+          ...(nextBallType ? { ball_type: nextBallType } : {}),
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string; ok?: boolean; updated_count?: number };
@@ -13044,7 +13055,7 @@ export default function PitchingSuite({
                   Edit Pitch Type for {actionPitchCount} pitch(es)
                 </h3>
                 <div style={{ borderTop: `1px solid ${actionModalTheme.border}`, margin: '0.2rem -1.1rem 0', paddingTop: '1rem', paddingInline: '1.1rem' }}>
-                  <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(260px, 1fr))', gap: '1rem 1.4rem' }}>
+                  <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(200px, 1fr))', gap: '1rem 1.4rem' }}>
                     <label style={{ color: actionModalTheme.muted, fontWeight: 700, fontSize: '0.9rem' }}>
                       NEW PITCH TYPE:
                       <SearchableSingleSelect
@@ -13062,6 +13073,16 @@ export default function PitchingSuite({
                         value={editPitcher}
                         onChange={setEditPitcher}
                         placeholder="Pitcher"
+                        theme={actionModalSearchTheme}
+                      />
+                    </label>
+                    <label style={{ color: actionModalTheme.muted, fontWeight: 700, fontSize: '0.9rem' }}>
+                      BALL TYPE:
+                      <SearchableSingleSelect
+                        options={pitchEditBallTypeOptions}
+                        value={editBallType}
+                        onChange={setEditBallType}
+                        placeholder="(unchanged)"
                         theme={actionModalSearchTheme}
                       />
                     </label>

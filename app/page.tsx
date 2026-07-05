@@ -606,11 +606,10 @@ export default function Home() {
         <section className="hero-panel">
           <div className="hero-layout">
             <div className="hero-copy">
-              <p className="hero-eyebrow">Performance Data Built for Coaches and Players</p>
-              <h2>Player Development Insights That Drive Winning.</h2>
+              <p className="hero-eyebrow">Player Development &amp; Analysis Platform</p>
+              <h2>Built by coaches, for coaches.</h2>
               <p className="hero-subcopy">
-                The PCU Dashboard is your one-stop shop for evaluating player performance and creating development plans that
-                get results.
+                Custom programming and performance analysis for coaches that prioritize development.
               </p>
               <div className="hero-actions">
                 <button type="button" className="btn btn-primary" onClick={scrollToDemo}>
@@ -619,25 +618,55 @@ export default function Home() {
               </div>
             </div>
             <figure className="hero-preview">
-              <video
-                src="/intro-video.mov"
-                className="hero-preview-video"
-                autoPlay
-                muted={isHeroMuted}
-                loop
-                playsInline
-                aria-label="PCU dashboard intro video"
+              <Image
+                src="/dashboard-hero-shot.png"
+                alt="PCU Dashboard screenshot"
+                fill
+                sizes="(max-width: 900px) 100vw, 50vw"
+                className="hero-preview-image"
+                priority
               />
-              <button
-                type="button"
-                className="hero-video-audio-toggle"
-                onClick={() => setIsHeroMuted((prev) => !prev)}
-                aria-label={isHeroMuted ? 'Unmute intro video' : 'Mute intro video'}
-              >
-                {isHeroMuted ? 'Unmute' : 'Mute'}
-              </button>
+              <div className="hero-preview-fade" />
             </figure>
           </div>
+        </section>
+
+        <section className="logo-bar-panel" aria-label="Trusted by top programs">
+          <p className="logo-bar-label">Trusted by</p>
+          <div className="logo-bar-logos">
+            <Image src="/harvard-logo.png" alt="Harvard University" width={52} height={52} className="logo-bar-img" />
+            <Image src="/lsu-logo.png" alt="Louisiana State University" width={52} height={52} className="logo-bar-img" />
+            <Image src="/florida-logo.png" alt="University of Florida" width={52} height={52} className="logo-bar-img" />
+            <Image src="/creighton-logo.png" alt="Creighton University" width={52} height={52} className="logo-bar-img" />
+            <Image src="/osu-logo.png" alt="Oklahoma State University" width={52} height={52} className="logo-bar-img" />
+            <Image src="/gcu-logo.png" alt="Grand Canyon University" width={52} height={52} className="logo-bar-img" />
+            <Image src="/cbu-logo.webp" alt="Cal Baptist University" width={52} height={52} className="logo-bar-img" />
+          </div>
+        </section>
+
+        <section className="content-panel intro-video-panel reveal-section" data-reveal>
+          <div className="section-head">
+            <h3>See It In Action</h3>
+          </div>
+          <figure className="intro-video-wrap">
+            <video
+              src="/intro-video.mov"
+              className="intro-video"
+              autoPlay
+              muted={isHeroMuted}
+              loop
+              playsInline
+              aria-label="PCU dashboard intro video"
+            />
+            <button
+              type="button"
+              className="hero-video-audio-toggle"
+              onClick={() => setIsHeroMuted((prev) => !prev)}
+              aria-label={isHeroMuted ? 'Unmute intro video' : 'Mute intro video'}
+            >
+              {isHeroMuted ? 'Unmute' : 'Mute'}
+            </button>
+          </figure>
         </section>
 
         <section className="content-panel reveal-section" data-reveal>
