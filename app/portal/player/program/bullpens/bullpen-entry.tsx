@@ -407,7 +407,7 @@ function getVelocityComboParts(row: Record<string, string>) {
     };
   }
   const pitchType = getRowPitchType(row, 'Pitch');
-  const ballType = getRowBallType(row, 'Ball');
+  const ballType = getRowBallType(row);
   const drill = getRowDrill(row, 'All');
   const ballWeight = getRowBallWeight(row, 'All');
   return {
@@ -438,8 +438,12 @@ function getRowPitchType(row: Record<string, string>, fallback = 'Pitch') {
   return getColumnValue(row, row.__pitchTypeCol || null, fallback);
 }
 
-function getRowBallType(row: Record<string, string>, fallback = 'Ball') {
-  return getColumnValue(row, row.__ballTypeCol || null, fallback);
+function getRowBallType(row: Record<string, string>, fallback = 'Baseball') {
+  const col = row.__ballTypeCol || null;
+  const value = col ? String(row[col] ?? '').trim() : '';
+  if (value) return value;
+  const hasBallWeight = Boolean(row.__ballWeightCol && String(row[row.__ballWeightCol] ?? '').trim());
+  return hasBallWeight ? 'Weighted Ball' : fallback;
 }
 
 function getRowDrill(row: Record<string, string>, fallback = 'All') {
@@ -685,7 +689,7 @@ export default function BullpenEntry({
     const unique = (values: string[]) => Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
     return {
       pitchTypes: unique(allRows.map((row) => getRowPitchType(row, 'Unspecified'))),
-      ballTypes: unique(allRows.map((row) => getRowBallType(row, 'Unspecified'))),
+      ballTypes: unique(allRows.map((row) => getRowBallType(row))),
       drills: unique(allRows.map((row) => getRowDrill(row, 'All')).filter((value) => value !== 'All')),
       ballWeights: unique(allRows.map((row) => getRowBallWeight(row, 'All')).filter((value) => value !== 'All')),
     };
@@ -700,7 +704,7 @@ export default function BullpenEntry({
 
   const filteredTrendRows = useMemo(() => allRows.filter((row) => {
     if (trendPitchTypeFilter !== 'All' && getRowPitchType(row, 'Unspecified') !== trendPitchTypeFilter) return false;
-    if (trendBallTypeFilter !== 'All' && getRowBallType(row, 'Unspecified') !== trendBallTypeFilter) return false;
+    if (trendBallTypeFilter !== 'All' && getRowBallType(row) !== trendBallTypeFilter) return false;
     if (trendDrillFilter !== 'All' && getRowDrill(row, 'All') !== trendDrillFilter) return false;
     if (trendBallWeightFilter !== 'All' && getRowBallWeight(row, 'All') !== trendBallWeightFilter) return false;
     return true;
@@ -740,7 +744,7 @@ export default function BullpenEntry({
       if (!date) continue;
       const velocityParts = trendMetric === 'velocity' ? getVelocityComboParts(row) : null;
       const pitchType = velocityParts?.pitchType ?? getRowPitchType(row, 'Pitch');
-      const ballType = velocityParts?.ballType ?? getRowBallType(row, 'Ball');
+      const ballType = velocityParts?.ballType ?? getRowBallType(row);
       const drill = velocityParts?.drill ?? 'All';
       const ballWeight = velocityParts?.ballWeight ?? 'All';
       const comboParts = velocityParts?.comboParts ?? [pitchType, ballType];
@@ -872,7 +876,7 @@ export default function BullpenEntry({
 
       const velocityParts = velocity !== null ? getVelocityComboParts(row) : null;
       const pitchType = velocityParts?.pitchType ?? getRowPitchType(row, 'Unspecified');
-      const ballType = velocityParts?.ballType ?? getRowBallType(row, 'Unspecified');
+      const ballType = velocityParts?.ballType ?? getRowBallType(row);
       const drill = velocityParts?.drill ?? getRowDrill(row, 'All');
       const ballWeight = velocityParts?.ballWeight ?? getRowBallWeight(row, 'All');
       const key = getFactorKey(velocityParts?.comboParts ?? [pitchType, ballType, drill, ballWeight]);
@@ -1026,6 +1030,11 @@ export default function BullpenEntry({
             <h3 style={{ margin: 0, textAlign: 'center', fontSize: '1.05rem', fontWeight: 800 }}>{template.name}</h3>
             <img src="/pitching-coach-u-logo.png" alt="PCU" style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'end' }} />
           </div>
+          <datalist id="bullpen-pitch-type-list">
+            {['Fastball', 'Sinker', 'Cutter', 'Sweeper', 'Curveball', 'Changeup', 'Splitter', 'Knuckleball'].map((pt) => (
+              <option key={pt} value={pt} />
+            ))}
+          </datalist>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 600 }}>
               <thead>
@@ -1099,10 +1108,13 @@ export default function BullpenEntry({
                           );
                         }
                         if (columnType === 'fill') {
+                          const isPitchTypeCol = ['pitch type', 'pitch types', 'pitch', 'pitch name'].includes(col.trim().toLowerCase());
+                          const listId = isPitchTypeCol ? 'bullpen-pitch-type-list' : undefined;
                           return (
                             <td key={ci} style={{ padding: '0.16rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
                               <input
                                 type="text"
+                                list={listId}
                                 className="portal-schedule-control"
                                 value={val}
                                 onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
