@@ -52,9 +52,9 @@ type ScriptState = {
 };
 
 const DEFAULT_COLUMNS = ['Pitch Type', 'Ball Type', 'Stretch/Windup', 'Location', 'Situation', 'Notes'];
-type BullpenColumnType = 'auto' | 'text' | 'velocity' | 'strike';
+type BullpenColumnType = 'auto' | 'text' | 'fill' | 'velocity' | 'strike' | 'two-thirds';
 const DEFAULT_COLUMN_TYPE: BullpenColumnType = 'auto';
-const ALLOWED_COLUMN_TYPES = new Set<BullpenColumnType>(['auto', 'text', 'velocity', 'strike']);
+const ALLOWED_COLUMN_TYPES = new Set<BullpenColumnType>(['auto', 'text', 'fill', 'velocity', 'strike', 'two-thirds']);
 const DEFAULT_SCRIPT_STATE: ScriptState = {
   current: { title: '', rowCount: 20, columns: [...DEFAULT_COLUMNS], rows: [] },
   selectedTemplateId: '',
