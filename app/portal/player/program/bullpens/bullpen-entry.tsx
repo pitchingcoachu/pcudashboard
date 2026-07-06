@@ -1031,7 +1031,7 @@ export default function BullpenEntry({
             <img src="/pitching-coach-u-logo.png" alt="PCU" style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'end' }} />
           </div>
           <datalist id="bullpen-pitch-type-list">
-            {['Fastball', 'Sinker', 'Cutter', 'Sweeper', 'Curveball', 'Changeup', 'Splitter', 'Knuckleball'].map((pt) => (
+            {['Fastball', 'Sinker', 'Cutter', 'Slider', 'Sweeper', 'Curveball', 'Changeup', 'Splitter', 'Knuckleball'].map((pt) => (
               <option key={pt} value={pt} />
             ))}
           </datalist>
