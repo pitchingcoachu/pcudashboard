@@ -59,7 +59,7 @@ type BullpenState = {
   notes?: string;
 };
 type BullpenFieldKey = number;
-type BullpenColumnType = 'auto' | 'text' | 'velocity' | 'strike';
+type BullpenColumnType = 'auto' | 'text' | 'fill' | 'velocity' | 'strike' | 'two-thirds';
 type TemplateChoice = {
   id: number;
   name: string;
@@ -157,8 +157,10 @@ const DEFAULT_BULLPEN_COLUMN_TYPE: BullpenColumnType = 'auto';
 const BULLPEN_COLUMN_TYPE_OPTIONS: Array<{ value: BullpenColumnType; label: string }> = [
   { value: 'auto', label: 'Auto' },
   { value: 'text', label: 'Text' },
+  { value: 'fill', label: 'Fill-In' },
   { value: 'velocity', label: 'Velocity' },
   { value: 'strike', label: 'Strike/Ball' },
+  { value: 'two-thirds', label: '2/3' },
 ];
 
 function normalizeBullpenColumnTypes(raw: unknown, columnCount: number): BullpenColumnType[] {

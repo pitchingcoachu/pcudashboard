@@ -526,7 +526,7 @@ export default function Home() {
             PCU Website
           </Link>
           <button type="button" className="btn btn-ghost" onClick={scrollToDemo}>
-            Request a Demo
+            Request 7-Day Free Trial
           </button>
           <div className="contact-popover-wrap" ref={contactPopoverRef}>
             <button type="button" className="btn btn-ghost" onClick={() => setIsContactOpen((prev) => !prev)}>
@@ -606,15 +606,27 @@ export default function Home() {
         <section className="hero-panel">
           <div className="hero-layout">
             <div className="hero-copy">
-              <p className="hero-eyebrow">Player Development &amp; Analysis Platform</p>
+              <p className="hero-eyebrow">Baseball Player Development Software</p>
               <h2>Built by coaches, for coaches.</h2>
               <p className="hero-subcopy">
-                Custom programming and performance analysis for coaches that prioritize development.
+                The PCU Dashboard helps baseball programs organize performance data and programming — so coaches spend less time digging through information and more time developing players.
               </p>
               <div className="hero-actions">
                 <button type="button" className="btn btn-primary" onClick={scrollToDemo}>
-                  Request a Demo
+                  Request 7-Day Free Trial
                 </button>
+              </div>
+              <div className="hero-trusted">
+                <p className="hero-trusted-label">Trusted by</p>
+                <div className="hero-trusted-logos">
+                  <Image src="/harvard-logo.png" alt="Harvard University" width={40} height={40} className="logo-bar-img" />
+                  <Image src="/lsu-logo.png" alt="Louisiana State University" width={40} height={40} className="logo-bar-img" />
+                  <Image src="/florida-logo.png" alt="University of Florida" width={40} height={40} className="logo-bar-img" />
+                  <Image src="/creighton-logo.png" alt="Creighton University" width={40} height={40} className="logo-bar-img" />
+                  <Image src="/osu-logo.png" alt="Oklahoma State University" width={40} height={40} className="logo-bar-img" />
+                  <Image src="/gcu-logo.png" alt="Grand Canyon University" width={40} height={40} className="logo-bar-img" />
+                  <Image src="/cbu-logo.webp" alt="Cal Baptist University" width={40} height={40} className="logo-bar-img" />
+                </div>
               </div>
             </div>
             <figure className="hero-preview">
@@ -631,18 +643,6 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="logo-bar-panel" aria-label="Trusted by top programs">
-          <p className="logo-bar-label">Trusted by</p>
-          <div className="logo-bar-logos">
-            <Image src="/harvard-logo.png" alt="Harvard University" width={52} height={52} className="logo-bar-img" />
-            <Image src="/lsu-logo.png" alt="Louisiana State University" width={52} height={52} className="logo-bar-img" />
-            <Image src="/florida-logo.png" alt="University of Florida" width={52} height={52} className="logo-bar-img" />
-            <Image src="/creighton-logo.png" alt="Creighton University" width={52} height={52} className="logo-bar-img" />
-            <Image src="/osu-logo.png" alt="Oklahoma State University" width={52} height={52} className="logo-bar-img" />
-            <Image src="/gcu-logo.png" alt="Grand Canyon University" width={52} height={52} className="logo-bar-img" />
-            <Image src="/cbu-logo.webp" alt="Cal Baptist University" width={52} height={52} className="logo-bar-img" />
-          </div>
-        </section>
 
         <section className="content-panel intro-video-panel reveal-section" data-reveal>
           <div className="section-head">
@@ -834,7 +834,7 @@ export default function Home() {
 
         <section id="demo" className="content-panel form-panel reveal-section" data-reveal>
           <div className="section-head">
-            <h3>Request a Demo</h3>
+            <h3>Request 7-Day Free Trial</h3>
           </div>
           <form className="lead-form" onSubmit={handleDemoSubmit}>
             <label>

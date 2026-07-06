@@ -21,9 +21,9 @@ function toIsoDate(d: Date) {
   return d.toISOString().slice(0, 10);
 }
 
-type BullpenColumnType = 'auto' | 'text' | 'velocity' | 'strike';
+type BullpenColumnType = 'auto' | 'text' | 'fill' | 'velocity' | 'strike' | 'two-thirds';
 const DEFAULT_COLUMN_TYPE: BullpenColumnType = 'auto';
-const ALLOWED_COLUMN_TYPES = new Set<BullpenColumnType>(['auto', 'text', 'velocity', 'strike']);
+const ALLOWED_COLUMN_TYPES = new Set<BullpenColumnType>(['auto', 'text', 'fill', 'velocity', 'strike', 'two-thirds']);
 
 function normalizeColumnTypes(raw: unknown, columnCount: number): BullpenColumnType[] {
   const source = Array.isArray(raw) ? raw : [];
@@ -53,7 +53,7 @@ function resolveColumnType(col: string, type: BullpenColumnType = DEFAULT_COLUMN
 
 function isEditableColumn(col: string, type: BullpenColumnType = DEFAULT_COLUMN_TYPE) {
   const resolvedType = resolveColumnType(col, type);
-  return resolvedType === 'velocity' || resolvedType === 'strike';
+  return resolvedType === 'velocity' || resolvedType === 'strike' || resolvedType === 'two-thirds' || resolvedType === 'fill';
 }
 
 function buildEmptyRows(rowCount: number, columns: string[], templateRows: string[][], columnTypes?: BullpenColumnType[]): Array<Record<string, string>> {
@@ -88,6 +88,7 @@ function hasTrackingValue(col: string, value: string, type: BullpenColumnType = 
     return Number.isFinite(velocity) && velocity > 0;
   }
   if (resolvedType === 'strike') return isStrikeResult(raw);
+  if (resolvedType === 'two-thirds') return isTwoThirdsResult(raw);
   return false;
 }
 
@@ -104,7 +105,7 @@ function getCurrentTrackingRowIndex(rows: Array<Record<string, string>>, columns
   return nextIndex < rows.length ? nextIndex : -1;
 }
 
-type BullpenTrendMetric = 'velocity' | 'strike';
+type BullpenTrendMetric = 'velocity' | 'strike' | 'two-thirds';
 
 type BullpenTrendBucket = {
   key: string;
@@ -142,6 +143,7 @@ type BullpenSummaryRow = {
   avgVelocity: number | null;
   maxVelocity: number | null;
   strikePct: number | null;
+  twoThirdsPct: number | null;
 };
 
 function formatTrendDate(value: string) {
@@ -153,6 +155,7 @@ function formatTrendDate(value: string) {
 
 function trendMetricLabel(metric: BullpenTrendMetric) {
   if (metric === 'velocity') return 'Avg Velocity';
+  if (metric === 'two-thirds') return '2/3%';
   return 'Strike';
 }
 
@@ -457,6 +460,15 @@ function isStrikeResult(value: string) {
   return normalized === 'yes' || normalized === 'no' || normalized === 'strike' || normalized === 'ball';
 }
 
+function isTwoThirds(value: string) {
+  return value.trim().toLowerCase() === 'yes';
+}
+
+function isTwoThirdsResult(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'yes' || normalized === 'no';
+}
+
 function getLogEntryColumns(entry: LogEntry) {
   const firstRow = entry.rowsJson.find((row) => row && typeof row === 'object');
   const savedColumns = String(firstRow?.__templateColumns ?? '').trim();
@@ -647,6 +659,7 @@ export default function BullpenEntry({
         const columnTypes = getLogEntryColumnTypes(entry, columns, sourceTemplate?.columnTypes);
         const velocityCol = findColumnByType(columns, columnTypes, 'velocity');
         const strikeCol = findColumnByType(columns, columnTypes, 'strike');
+        const twoThirdsCol = findColumnByType(columns, columnTypes, 'two-thirds');
         const pitchTypeCol = getColumn(columns, ['pitch type', 'pitch types', 'pitch', 'pitch name']) ?? '';
         const ballTypeCol = getColumn(columns, ['ball type', 'ball', 'weighted ball']) ?? '';
         const drillCol = getColumn(columns, ['drill', 'drills']) ?? '';
@@ -659,6 +672,7 @@ export default function BullpenEntry({
           __templateName: String(row.__templateName ?? sourceTemplate?.name ?? ''),
           __velocityCol: velocityCol,
           __strikeCol: strikeCol,
+          __twoThirdsCol: twoThirdsCol,
           __pitchTypeCol: pitchTypeCol,
           __ballTypeCol: ballTypeCol,
           __drillCol: drillCol,
@@ -707,6 +721,7 @@ export default function BullpenEntry({
     const allTypes = [...templateColumns, ...savedColumns];
     if (allTypes.includes('velocity')) options.push({ value: 'velocity', label: 'Velocity' });
     if (allTypes.includes('strike')) options.push({ value: 'strike', label: 'Strike %' });
+    if (allTypes.includes('two-thirds')) options.push({ value: 'two-thirds', label: '2/3%' });
     return options;
   }, [visibleTemplates, logEntries, templateById]);
 
@@ -719,7 +734,7 @@ export default function BullpenEntry({
   const combinedTrendData = useMemo(() => {
     const groups = new Map<string, { date: string; comboKey: string; comboLabel: string; pitchType: string; ballType: string; drill: string; ballWeight: string; sum: number; count: number; yes: number }>();
     for (const row of filteredTrendRows) {
-      const valueCol = trendMetric === 'velocity' ? row.__velocityCol : row.__strikeCol;
+      const valueCol = trendMetric === 'velocity' ? row.__velocityCol : trendMetric === 'two-thirds' ? row.__twoThirdsCol : row.__strikeCol;
       if (!valueCol) continue;
       const date = String(row.__date ?? '').trim();
       if (!date) continue;
@@ -740,6 +755,10 @@ export default function BullpenEntry({
         if (!Number.isFinite(value) || value <= 0) continue;
         group.sum += value;
         group.count += 1;
+      } else if (trendMetric === 'two-thirds') {
+        if (!isTwoThirdsResult(rawValue)) continue;
+        group.count += 1;
+        if (isTwoThirds(rawValue)) group.yes += 1;
       } else {
         if (!isStrikeResult(rawValue)) continue;
         group.count += 1;
@@ -808,6 +827,8 @@ export default function BullpenEntry({
       maxVelocity: number | null;
       strikeYes: number;
       strikeCount: number;
+      twoThirdsYes: number;
+      twoThirdsCount: number;
     };
     const groups = new Map<string, SummaryAccumulator>();
     const total: SummaryAccumulator = {
@@ -821,8 +842,10 @@ export default function BullpenEntry({
       maxVelocity: null,
       strikeYes: 0,
       strikeCount: 0,
+      twoThirdsYes: 0,
+      twoThirdsCount: 0,
     };
-    const addPitch = (group: SummaryAccumulator, velocity: number | null, strike: string) => {
+    const addPitch = (group: SummaryAccumulator, velocity: number | null, strike: string, twoThirds: string) => {
       group.count += 1;
       if (velocity !== null) {
         group.velocitySum += velocity;
@@ -833,6 +856,10 @@ export default function BullpenEntry({
         group.strikeCount += 1;
         if (isStrike(strike)) group.strikeYes += 1;
       }
+      if (isTwoThirdsResult(twoThirds)) {
+        group.twoThirdsCount += 1;
+        if (isTwoThirds(twoThirds)) group.twoThirdsYes += 1;
+      }
     };
 
     for (const row of filteredTrendRows) {
@@ -840,7 +867,8 @@ export default function BullpenEntry({
       const velocityValue = Number(velocityRaw);
       const velocity = velocityRaw && Number.isFinite(velocityValue) && velocityValue > 0 ? velocityValue : null;
       const strike = row.__strikeCol ? String(row[row.__strikeCol] ?? '').trim() : '';
-      if (velocity === null && !isStrikeResult(strike)) continue;
+      const twoThirds = row.__twoThirdsCol ? String(row[row.__twoThirdsCol] ?? '').trim() : '';
+      if (velocity === null && !isStrikeResult(strike) && !isTwoThirdsResult(twoThirds)) continue;
 
       const velocityParts = velocity !== null ? getVelocityComboParts(row) : null;
       const pitchType = velocityParts?.pitchType ?? getRowPitchType(row, 'Unspecified');
@@ -859,9 +887,11 @@ export default function BullpenEntry({
         maxVelocity: null,
         strikeYes: 0,
         strikeCount: 0,
+        twoThirdsYes: 0,
+        twoThirdsCount: 0,
       };
-      addPitch(group, velocity, strike);
-      addPitch(total, velocity, strike);
+      addPitch(group, velocity, strike, twoThirds);
+      addPitch(total, velocity, strike, twoThirds);
       groups.set(key, group);
     }
 
@@ -875,6 +905,7 @@ export default function BullpenEntry({
       avgVelocity: group.velocityCount > 0 ? group.velocitySum / group.velocityCount : null,
       maxVelocity: group.maxVelocity,
       strikePct: group.strikeCount > 0 ? (group.strikeYes / group.strikeCount) * 100 : null,
+      twoThirdsPct: group.twoThirdsCount > 0 ? (group.twoThirdsYes / group.twoThirdsCount) * 100 : null,
     });
     const summaryRows = Array.from(groups.entries())
       .map(([key, group]) => toSummaryRow(key, group))
@@ -892,11 +923,14 @@ export default function BullpenEntry({
     const columnTypes = getLogEntryColumnTypes(entry, columns, sourceTemplate?.columnTypes);
     const velocityCol = findColumnByType(columns, columnTypes, 'velocity');
     const strikeCol = findColumnByType(columns, columnTypes, 'strike');
+    const twoThirdsCol = findColumnByType(columns, columnTypes, 'two-thirds');
     let velocitySum = 0;
     let velocityCount = 0;
     let maxVelocity: number | null = null;
     let strikeCount = 0;
     let strikeYes = 0;
+    let twoThirdsCount = 0;
+    let twoThirdsYes = 0;
     for (const row of entry.rowsJson) {
       const velocity = Number(String(velocityCol ? row[velocityCol] ?? '' : '').trim());
       if (Number.isFinite(velocity) && velocity > 0) {
@@ -909,6 +943,11 @@ export default function BullpenEntry({
         strikeCount += 1;
         if (isStrike(strike)) strikeYes += 1;
       }
+      const twoThirds = String(twoThirdsCol ? row[twoThirdsCol] ?? '' : '').trim();
+      if (isTwoThirdsResult(twoThirds)) {
+        twoThirdsCount += 1;
+        if (isTwoThirds(twoThirds)) twoThirdsYes += 1;
+      }
     }
     const savedName = String(entry.rowsJson[0]?.__templateName ?? '').trim();
     return {
@@ -916,6 +955,7 @@ export default function BullpenEntry({
       date: entry.bullpenDate,
       name: sourceTemplate?.name || savedName || 'Saved Bullpen',
       strikePct: strikeCount > 0 ? (strikeYes / strikeCount) * 100 : null,
+      twoThirdsPct: twoThirdsCount > 0 ? (twoThirdsYes / twoThirdsCount) * 100 : null,
       avgVelocity: velocityCount > 0 ? velocitySum / velocityCount : null,
       maxVelocity,
     };
@@ -923,6 +963,7 @@ export default function BullpenEntry({
 
   const summaryHasVelocity = trendMetricOptions.some((option) => option.value === 'velocity');
   const summaryHasStrike = trendMetricOptions.some((option) => option.value === 'strike');
+  const summaryHasTwoThirds = trendMetricOptions.some((option) => option.value === 'two-thirds');
   const summaryHasDrill = summaryHasVelocity && filteredTrendRows.some((row) => String(row.__drillCol ?? '').trim());
   const summaryHasBallWeight = summaryHasVelocity && filteredTrendRows.some((row) => String(row.__ballWeightCol ?? '').trim());
   const summaryVelocityRows = filteredTrendRows.filter((row) => {
@@ -1036,7 +1077,7 @@ export default function BullpenEntry({
                             </td>
                           );
                         }
-                        if (columnType === 'strike') {
+                        if (columnType === 'strike' || columnType === 'two-thirds') {
                           return (
                             <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
                               <div style={{ display: 'flex', gap: 12, justifyContent: 'center', padding: '4px 0' }}>
@@ -1054,6 +1095,20 @@ export default function BullpenEntry({
                                   </label>
                                 ))}
                               </div>
+                            </td>
+                          );
+                        }
+                        if (columnType === 'fill') {
+                          return (
+                            <td key={ci} style={{ padding: '0.16rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
+                              <input
+                                type="text"
+                                className="portal-schedule-control"
+                                value={val}
+                                onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
+                                placeholder={col}
+                                style={{ width: '100%', minWidth: 0, textAlign: 'center', fontSize: '0.95rem', fontWeight: 600, padding: '0.35rem 0.45rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
+                              />
                             </td>
                           );
                         }
@@ -1123,6 +1178,7 @@ export default function BullpenEntry({
                   <th>Date</th>
                   <th>Script</th>
                   <th className="portal-bullpen-summary-number">Strike %</th>
+                  {savedEntrySummaries.some((e) => e.twoThirdsPct !== null) ? <th className="portal-bullpen-summary-number">2/3%</th> : null}
                   <th className="portal-bullpen-summary-number">Avg Velo</th>
                   <th className="portal-bullpen-summary-number">Max Velo</th>
                 </tr>
@@ -1133,6 +1189,7 @@ export default function BullpenEntry({
                     <td>{entry.date}</td>
                     <td>{entry.name}</td>
                     <td className="portal-bullpen-summary-number">{formatSummaryNumber(entry.strikePct, '%')}</td>
+                    {savedEntrySummaries.some((e) => e.twoThirdsPct !== null) ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(entry.twoThirdsPct, '%')}</td> : null}
                     <td className="portal-bullpen-summary-number">{formatSummaryNumber(entry.avgVelocity)}</td>
                     <td className="portal-bullpen-summary-number">{formatSummaryNumber(entry.maxVelocity)}</td>
                   </tr>
@@ -1305,6 +1362,7 @@ export default function BullpenEntry({
                       {summaryHasBallWeight ? <th>Ball Weight</th> : null}
                       <th className="portal-bullpen-summary-number">#</th>
                       {summaryHasStrike ? <th className="portal-bullpen-summary-number">Strike %</th> : null}
+                      {summaryHasTwoThirds ? <th className="portal-bullpen-summary-number">2/3%</th> : null}
                       {summaryHasVelocity ? <th className="portal-bullpen-summary-number">Avg Velo</th> : null}
                       {summaryHasVelocity ? <th className="portal-bullpen-summary-number">Max Velo</th> : null}
                     </tr>
@@ -1318,6 +1376,7 @@ export default function BullpenEntry({
                         {summaryHasBallWeight ? <td>{summaryRow.ballWeight}</td> : null}
                         <td className="portal-bullpen-summary-number">{summaryRow.count}</td>
                         {summaryHasStrike ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.strikePct, '%')}</td> : null}
+                        {summaryHasTwoThirds ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.twoThirdsPct, '%')}</td> : null}
                         {summaryHasVelocity ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.avgVelocity)}</td> : null}
                         {summaryHasVelocity ? <td className="portal-bullpen-summary-number">{formatSummaryNumber(summaryRow.maxVelocity)}</td> : null}
                       </tr>

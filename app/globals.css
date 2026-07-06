@@ -831,6 +831,26 @@ main {
   flex-wrap: wrap;
 }
 
+.hero-trusted {
+  margin-top: 1.75rem;
+}
+
+.hero-trusted-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.4;
+  margin: 0 0 0.6rem;
+}
+
+.hero-trusted-logos {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
 /* ── Intro video section ─────────────────────────────────────── */
 .intro-video-wrap {
   position: relative;
