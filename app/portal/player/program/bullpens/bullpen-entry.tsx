@@ -1087,19 +1087,18 @@ export default function BullpenEntry({
                           );
                         }
                         if (columnType === 'strike' || columnType === 'two-thirds') {
+                          const bubbleBg = val === 'Yes' ? 'rgba(34,197,94,0.2)' : val === 'No' ? 'rgba(239,68,68,0.2)' : undefined;
                           return (
-                            <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
+                            <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle, background: bubbleBg ?? currentRowCellStyle?.background }}>
                               <div style={{ display: 'flex', gap: 12, justifyContent: 'center', padding: '4px 0' }}>
                                 {(['Yes', 'No'] as const).map((opt) => (
                                   <label key={opt} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, cursor: 'pointer', fontSize: 11, color: isCurrentRow ? '#d1fae5' : '#94a3b8', fontWeight: isCurrentRow ? 800 : 400 }}>
                                     {opt}
                                     <input
-                                      type="radio"
-                                      name={`row-${ri}-col-${ci}`}
-                                      value={opt}
+                                      type="checkbox"
                                       checked={val === opt}
-                                      onChange={() => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: opt } : r))}
-                                      style={{ accentColor: opt === 'Yes' ? '#22c55e' : '#ef4444' }}
+                                      onChange={() => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: val === opt ? '' : opt } : r))}
+                                      style={{ accentColor: opt === 'Yes' ? '#22c55e' : '#ef4444', cursor: 'pointer' }}
                                     />
                                   </label>
                                 ))}
