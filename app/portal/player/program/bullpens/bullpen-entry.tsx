@@ -2,9 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+const BULLPEN_CATEGORIES = ['Velocity', 'Command', 'Pitch Design', 'Combo', 'Mechanical', 'Build Ups'] as const;
+
 type ScriptTemplate = {
   id: string;
   name: string;
+  category?: string;
   rowCount: number;
   columns: string[];
   columnTypes?: BullpenColumnType[];
@@ -995,7 +998,16 @@ export default function BullpenEntry({
               onChange={(e) => setSelectedTemplateId(e.target.value)}
               style={{ minWidth: 200 }}
             >
-              {visibleTemplates.map((t) => (
+              {BULLPEN_CATEGORIES.map((cat) => {
+                const inCat = visibleTemplates.filter((t) => t.category === cat);
+                if (!inCat.length) return null;
+                return (
+                  <optgroup key={cat} label={cat}>
+                    {inCat.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </optgroup>
+                );
+              })}
+              {visibleTemplates.filter((t) => !t.category).map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
               ))}
             </select>

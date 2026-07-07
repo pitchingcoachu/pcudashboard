@@ -42,9 +42,13 @@ type BullpenScript = {
   columnTypes?: BullpenColumnType[];
   rows: string[][];
 };
+const BULLPEN_CATEGORIES = ['Velocity', 'Command', 'Pitch Design', 'Combo', 'Mechanical', 'Build Ups'] as const;
+type BullpenCategory = (typeof BULLPEN_CATEGORIES)[number] | '';
+
 type BullpenTemplate = {
   id: string;
   name: string;
+  category?: BullpenCategory;
   rowCount: number;
   columns: string[];
   columnTypes?: BullpenColumnType[];
@@ -405,6 +409,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [selectedBullpenTemplateId, setSelectedBullpenTemplateId] = useState<string>('');
   const [visibleBullpenTemplateIds, setVisibleBullpenTemplateIds] = useState<string[]>([]);
   const [bullpenNotes, setBullpenNotes] = useState('');
+  const [bullpenCurrentCategory, setBullpenCurrentCategory] = useState<BullpenCategory>('');
   const [velocityCurrent, setVelocityCurrent] = useState<BullpenScript>({
     title: '',
     rowCount: 20,
@@ -453,6 +458,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [bullpenColumnDragIndex, setBullpenColumnDragIndex] = useState<number | null>(null);
   const [scriptTemplateBuilderCollapsed, setScriptTemplateBuilderCollapsed] = useState(true);
   const [scriptVisibilityMenuOpen, setScriptVisibilityMenuOpen] = useState(false);
+  const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set(BULLPEN_CATEGORIES));
   const bullpenFillTargetsRef = useRef<Set<string>>(new Set());
   const throwingCalendarRef = useRef<HTMLDivElement | null>(null);
   const throwingStateLoadedRef = useRef(false);
@@ -2642,6 +2648,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     } else {
       setSelectedBullpenTemplateId('');
       setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
+      setBullpenCurrentCategory('');
     }
   };
 
@@ -2651,6 +2658,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     if (!selected) return;
     if (isVelocityView) setSelectedVelocityTemplateId(selected.id);
     else setSelectedBullpenTemplateId(selected.id);
+    if (!isVelocityView) setBullpenCurrentCategory((selected.category ?? '') as BullpenCategory);
     const nextCurrent = {
       title: selected.name,
       rowCount: selected.rowCount,
@@ -2673,6 +2681,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     const next: BullpenTemplate = {
       id: templateId,
       name,
+      category: isVelocityView ? undefined : (bullpenCurrentCategory || undefined),
       rowCount: activeCurrent.rowCount,
       columns: activeCurrent.columns,
       columnTypes: normalizeBullpenColumnTypes(activeCurrent.columnTypes, activeCurrent.columns.length),
@@ -2725,6 +2734,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     const next: BullpenTemplate = {
       id: templateId,
       name,
+      category: isVelocityView ? undefined : (bullpenCurrentCategory || undefined),
       rowCount: activeCurrent.rowCount,
       columns: [...activeCurrent.columns],
       columnTypes,
@@ -3356,27 +3366,94 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 </div>
                 {!scriptTemplateBuilderCollapsed ? (
                   <>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <label style={{ display: 'grid', gap: 4 }}>
-                        Script Template
-                        <select
-                          className="portal-schedule-control"
-                          value={activeSelectedTemplateId}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            if (isVelocityView) setSelectedVelocityTemplateId(value);
-                            else setSelectedBullpenTemplateId(value);
-                            if (value) applyBullpenTemplate(value);
-                          }}
-                        >
-                          <option value="">Current Player Script</option>
-                          {activeTemplates.map((template) => (
-                            <option key={template.id} value={template.id}>
-                              {template.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                    <div style={{ display: 'grid', gridTemplateColumns: !isVelocityView ? '220px 1fr' : '1fr', gap: 12, alignItems: 'start' }}>
+                      {/* Folder browser — bullpen only */}
+                      {!isVelocityView ? (
+                        <div style={{ border: '1px solid var(--calendar-grid-border, var(--border))', borderRadius: 8, overflow: 'hidden', background: 'rgba(0,0,0,0.18)' }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.5, padding: '7px 10px 5px', borderBottom: '1px solid var(--calendar-grid-border, var(--border))' }}>Script Library</div>
+                          <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+                            {/* Category folders */}
+                            {[...BULLPEN_CATEGORIES, '' as const].map((cat) => {
+                              const inCat = activeTemplates.filter((t) => (t.category ?? '') === cat);
+                              if (!inCat.length) return null;
+                              const folderKey = cat || '__uncategorized';
+                              const label = cat || 'Uncategorized';
+                              const isOpen = openFolders.has(folderKey);
+                              return (
+                                <div key={folderKey}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setOpenFolders((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(folderKey)) next.delete(folderKey); else next.add(folderKey);
+                                      return next;
+                                    })}
+                                    style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 700, color: 'inherit', borderBottom: '1px solid var(--calendar-grid-border, var(--border))' }}
+                                  >
+                                    <span style={{ fontSize: 10, opacity: 0.6 }}>{isOpen ? '▾' : '▸'}</span>
+                                    <span style={{ fontSize: 13 }}>📁</span>
+                                    <span style={{ flex: 1, textAlign: 'left' }}>{label}</span>
+                                    <span style={{ fontSize: 10, opacity: 0.45 }}>{inCat.length}</span>
+                                  </button>
+                                  {isOpen ? inCat.map((t) => {
+                                    const isSelected = activeSelectedTemplateId === t.id;
+                                    const isVisible = activeVisibleTemplateIds.includes(t.id);
+                                    return (
+                                      <div
+                                        key={t.id}
+                                        style={{ display: 'flex', alignItems: 'center', gap: 0, paddingLeft: 24, borderBottom: '1px solid var(--calendar-grid-border, var(--border))', background: isSelected ? 'rgba(99,102,241,0.18)' : undefined }}
+                                      >
+                                        <button
+                                          type="button"
+                                          onClick={() => { setSelectedBullpenTemplateId(t.id); applyBullpenTemplate(t.id); }}
+                                          style={{ flex: 1, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '5px 6px', fontSize: 12, fontWeight: isSelected ? 700 : 400, color: isSelected ? '#a5b4fc' : 'inherit', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                        >
+                                          {t.name}
+                                        </button>
+                                        <label title="Player-visible" style={{ display: 'flex', alignItems: 'center', padding: '0 8px', cursor: 'pointer', flexShrink: 0 }}>
+                                          <input
+                                            type="checkbox"
+                                            checked={isVisible}
+                                            onChange={(e) => {
+                                              const checked = e.target.checked;
+                                              setVisibleBullpenTemplateIds((prev) => checked ? Array.from(new Set([...prev, t.id])) : prev.filter((id) => id !== t.id));
+                                            }}
+                                            style={{ accentColor: '#22c55e', cursor: 'pointer' }}
+                                          />
+                                        </label>
+                                      </div>
+                                    );
+                                  }) : null}
+                                </div>
+                              );
+                            })}
+                            {activeTemplates.length === 0 ? <div style={{ padding: '10px', fontSize: 12, opacity: 0.45 }}>No scripts saved yet.</div> : null}
+                          </div>
+                          <div style={{ padding: '5px 8px', borderTop: '1px solid var(--calendar-grid-border, var(--border))', fontSize: 10, opacity: 0.4 }}>
+                            ✓ = player-visible
+                          </div>
+                        </div>
+                      ) : null}
+                      {/* Right side: script editor controls */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        {isVelocityView ? (
+                          <label style={{ display: 'grid', gap: 4 }}>
+                            Script Template
+                            <select
+                              className="portal-schedule-control"
+                              value={activeSelectedTemplateId}
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                setSelectedVelocityTemplateId(value);
+                                if (value) applyBullpenTemplate(value);
+                              }}
+                              style={{ minWidth: 200 }}
+                            >
+                              <option value="">Current Player Script</option>
+                              {activeTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                          </label>
+                        ) : null}
                       <label style={{ display: 'grid', gap: 4 }}>
                         Script Title
                         <input
@@ -3390,6 +3467,21 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                           placeholder={view === 'velocity' ? 'Velocity Script Title' : 'Bullpen Script Title'}
                         />
                       </label>
+                      {!isVelocityView ? (
+                        <label style={{ display: 'grid', gap: 4 }}>
+                          Category
+                          <select
+                            className="portal-schedule-control"
+                            value={bullpenCurrentCategory}
+                            onChange={(event) => setBullpenCurrentCategory(event.target.value as BullpenCategory)}
+                          >
+                            <option value="">— None —</option>
+                            {BULLPEN_CATEGORIES.map((cat) => (
+                              <option key={cat} value={cat}>{cat}</option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : null}
                       <label style={{ display: 'grid', gap: 4 }}>
                         Pitches (Rows)
                         <input
@@ -3456,6 +3548,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                         Delete Script
                       </button>
                     </div>
+                    </div>{/* end grid: folder browser + controls */}
                     <div style={{ display: 'grid', gap: 6 }}>
                       <label style={{ display: 'grid', gap: 4 }}>
                         {view === 'velocity' ? 'Velocity Notes (player can see)' : 'Bullpen Notes (player can see)'}
@@ -3491,28 +3584,57 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                           </button>
                           {scriptVisibilityMenuOpen ? (
                             <div className="portal-script-visibility-menu">
-                              {activeTemplates.map((template) => {
-                                const checked = activeVisibleTemplateIds.includes(template.id);
-                                return (
-                                  <label key={`bp-visible-${template.id}`} className="portal-script-visibility-option">
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      onChange={(event) => {
-                                        const isChecked = event.target.checked;
-                                        const updater = (prev: string[]) => {
-                                          if (isChecked) return Array.from(new Set([...prev, template.id]));
-                                          return prev.filter((id) => id !== template.id);
-                                        };
-                                        if (isVelocityView) setVisibleVelocityTemplateIds(updater);
-                                        else setVisibleBullpenTemplateIds(updater);
-                                      }}
-                                    />
-                                    <span>{template.name}</span>
-                                  </label>
-                                );
-                              })}
                               {activeTemplates.length === 0 ? <span className="portal-muted-text">No scripts saved yet.</span> : null}
+                              {!isVelocityView ? (
+                                <>
+                                  {BULLPEN_CATEGORIES.map((cat) => {
+                                    const inCat = activeTemplates.filter((t) => t.category === cat);
+                                    if (!inCat.length) return null;
+                                    return (
+                                      <div key={cat}>
+                                        <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.5, padding: '6px 10px 2px' }}>{cat}</div>
+                                        {inCat.map((template) => {
+                                          const checked = activeVisibleTemplateIds.includes(template.id);
+                                          return (
+                                            <label key={`bp-visible-${template.id}`} className="portal-script-visibility-option">
+                                              <input type="checkbox" checked={checked} onChange={(event) => {
+                                                const isChecked = event.target.checked;
+                                                setVisibleBullpenTemplateIds((prev) => isChecked ? Array.from(new Set([...prev, template.id])) : prev.filter((id) => id !== template.id));
+                                              }} />
+                                              <span>{template.name}</span>
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                    );
+                                  })}
+                                  {activeTemplates.filter((t) => !t.category).map((template) => {
+                                    const checked = activeVisibleTemplateIds.includes(template.id);
+                                    return (
+                                      <label key={`bp-visible-${template.id}`} className="portal-script-visibility-option">
+                                        <input type="checkbox" checked={checked} onChange={(event) => {
+                                          const isChecked = event.target.checked;
+                                          setVisibleBullpenTemplateIds((prev) => isChecked ? Array.from(new Set([...prev, template.id])) : prev.filter((id) => id !== template.id));
+                                        }} />
+                                        <span>{template.name}</span>
+                                      </label>
+                                    );
+                                  })}
+                                </>
+                              ) : (
+                                activeTemplates.map((template) => {
+                                  const checked = activeVisibleTemplateIds.includes(template.id);
+                                  return (
+                                    <label key={`bp-visible-${template.id}`} className="portal-script-visibility-option">
+                                      <input type="checkbox" checked={checked} onChange={(event) => {
+                                        const isChecked = event.target.checked;
+                                        setVisibleVelocityTemplateIds((prev) => isChecked ? Array.from(new Set([...prev, template.id])) : prev.filter((id) => id !== template.id));
+                                      }} />
+                                      <span>{template.name}</span>
+                                    </label>
+                                  );
+                                })
+                              )}
                             </div>
                           ) : null}
                         </div>

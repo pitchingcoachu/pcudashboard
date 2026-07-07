@@ -130,9 +130,12 @@ function normalizeTemplateList(raw: unknown): ScriptTemplate[] {
       const t = (row ?? {}) as Record<string, unknown>;
       const count = Math.max(1, Math.min(300, Number(t.rowCount ?? 20) || 20));
       const cols = normalizeColumns(t.columns);
+      const CATEGORIES = ['Velocity', 'Command', 'Pitch Design', 'Combo', 'Mechanical', 'Build Ups'];
+      const rawCategory = String(t.category ?? '').trim();
       return {
         id: String(t.id ?? ''),
         name: String(t.name ?? ''),
+        category: CATEGORIES.includes(rawCategory) ? rawCategory : undefined,
         rowCount: count,
         columns: cols,
         columnTypes: normalizeColumnTypes(t.columnTypes, cols.length),
