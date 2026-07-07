@@ -145,12 +145,12 @@ SEP_SI_HB = {"Cutter": 18.0, "Slider": 20.0, "Sweeper": 30.0, "Curveball": 25.0,
 VELO_AVG_BY_LEVEL = {"Pro": 94.0, "College": 89.0, "High School": 82.0}
 
 _OVERVIEW_CACHE_TTL_SECONDS = max(0, int(os.getenv("DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS", "45")))
-_OVERVIEW_CACHE_MAX_ENTRIES = max(64, int(os.getenv("DASHBOARD_OVERVIEW_CACHE_MAX_ENTRIES", "256")))
+_OVERVIEW_CACHE_MAX_ENTRIES = max(16, int(os.getenv("DASHBOARD_OVERVIEW_CACHE_MAX_ENTRIES", "64")))
 _CHART_POINTS_MAX = max(1000, int(os.getenv("DASHBOARD_CHART_POINTS_MAX", "6000")))
 _OVERVIEW_CACHE: Dict[str, tuple[float, Any]] = {}
 _OVERVIEW_CACHE_LOCK = threading.Lock()
 _PRO_CHART_CACHE_TTL_SECONDS = max(0, int(os.getenv("DASHBOARD_PRO_CHART_CACHE_TTL_SECONDS", "900")))
-_PRO_CHART_CACHE_MAX_ENTRIES = max(128, int(os.getenv("DASHBOARD_PRO_CHART_CACHE_MAX_ENTRIES", "1024")))
+_PRO_CHART_CACHE_MAX_ENTRIES = max(16, int(os.getenv("DASHBOARD_PRO_CHART_CACHE_MAX_ENTRIES", "128")))
 _PRO_CHART_CACHE: Dict[str, tuple[float, Any]] = {}
 _PRO_CHART_CACHE_LOCK = threading.Lock()
 _FILTERS_CACHE_TTL_SECONDS = max(0, int(os.getenv("DASHBOARD_FILTERS_CACHE_TTL_SECONDS", "120")))
@@ -8349,6 +8349,7 @@ def _kick_endpoint_cache_warm_background(school_code: Optional[str] = None) -> N
 def _start_filters_snapshot_warmer_background() -> None:
     def _worker() -> None:
         try:
+            time.sleep(15)
             _warm_filters_snapshots(force=False)
         except Exception:
             return
@@ -8363,6 +8364,7 @@ def _start_filters_snapshot_warmer_background() -> None:
 def _start_home_trends_snapshot_warmer_background() -> None:
     def _worker() -> None:
         try:
+            time.sleep(30)
             _warm_home_trends_snapshots(force=False)
         except Exception:
             return
@@ -8377,6 +8379,7 @@ def _start_home_trends_snapshot_warmer_background() -> None:
 def _start_endpoint_cache_warmer_background() -> None:
     def _worker() -> None:
         try:
+            time.sleep(60)
             _warm_endpoint_caches(force=False, school_code=None)
         except Exception:
             return
