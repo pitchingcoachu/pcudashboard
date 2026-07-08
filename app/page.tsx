@@ -22,38 +22,6 @@ function demoFollowupKicker(message: string): string {
   return 'Email sent to you';
 }
 
-const outcomeCards = [
-  {
-    title: 'Clear and Precise Data Visuals',
-    description:
-      'Unlimited ways to filter data to see heatmaps, movement plots, trend charts, leaderboards, custom reports, and more.',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M3.5 20.5h17v-2h-17v2Zm1-4h3v-6h-3v6Zm6 0h3V3.5h-3v13Zm6 0h3V8.5h-3v8Z" />
-      </svg>
-    ),
-  },
-  {
-    title: 'Custom Performance Models',
-    description:
-      'PCU has created several proprietary models including Stuff+, Ctrl+, QP+, and Pitching+. These provide several insights into the raw quality of a pitch, as well as the execution.',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 4h2v14h14v2H4V4Zm3.2 9.3a1.3 1.3 0 1 1 0 2.6 1.3 1.3 0 0 1 0-2.6Zm4.8-3.8a1.3 1.3 0 1 1 0 2.6 1.3 1.3 0 0 1 0-2.6Zm4.4-2.7a1.3 1.3 0 1 1 0 2.6 1.3 1.3 0 0 1 0-2.6Zm1.3 8.5a1.3 1.3 0 1 1 0 2.6 1.3 1.3 0 0 1 0-2.6ZM8 14.1l3.1-2.4 1.1 1.4-3.1 2.4L8 14.1Zm5-3.7 2.8-1.7 1 1.5-2.8 1.7-1-1.5Zm.7 3.4 1.2-1.2 2.4 2.4-1.2 1.2-2.4-2.4Z" />
-      </svg>
-    ),
-  },
-  {
-    title: 'Elite Level Customer Service',
-    description:
-      'What separates us from our competitors is not only our fast response time, but also our ability to provide meaningful insights on player performance at your discretion.',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 2.5a6.5 6.5 0 0 0-6.5 6.5V11H4a1.5 1.5 0 0 0-1.5 1.5v3A1.5 1.5 0 0 0 4 17h2.5v-8A5.5 5.5 0 0 1 12 3.5a5.5 5.5 0 0 1 5.5 5.5v8H12v1h6a1.5 1.5 0 0 0 1.5-1.5v-3A1.5 1.5 0 0 0 18 11h-.5V9A6.5 6.5 0 0 0 12 2.5Zm-3 16a2 2 0 0 0 2 2h2.5v-1H11a1 1 0 0 1-1-1v-.5H9v.5Z" />
-      </svg>
-    ),
-  },
-];
 
 const galleryImages = [
   { src: '/dashboard-shot-1.png', alt: 'PCU dashboard overview screen' },
@@ -73,94 +41,25 @@ const galleryImages = [
 
 const dashboardIncludes = [
   {
-    title: 'Data Visuals',
-    description: 'Simple to understand charts, tables, and heatmaps to monitor performance and to adjust your training.',
-    image: '/dashboard-shot-3.png',
-    video: '/charts-and-maps.mov',
-    alt: 'Charts and heatmaps in the PCU Dashboard',
+    title: 'Clear data that impacts performance on the field.',
+    description: 'Tools we offer to directly track and impact your players: custom tables and reports, at bat and game logs, trend charts and heatmaps, and more.',
+    image: '/visual.png',
+    alt: 'Data visuals in the PCU Dashboard',
   },
   {
-    title: 'Custom Tables and Reports',
-    description: 'Monitor what matters to you most and build reports that you can implement with your team immediately.',
-    image: '/dashboard-shot-5.png',
-    video: '/custom-tables-and-reports.mov',
-    alt: 'Custom tables and reports in the PCU Dashboard',
+    title: 'Organized and structured programming.',
+    description: 'Create custom training plans that are easily accessible for all players. Track weight room exercises, bullpen plans, and drill packages.',
+    image: '/schedule.png',
+    alt: 'Schedule and programming in the PCU Dashboard',
   },
   {
-    title: 'Player Development Plan Builder',
-    description: 'Set objective goals for each player and track progress along the way.',
-    image: '/dashboard-shot-14.png',
-    video: '/player-plan.mov',
-    alt: 'Player Development Plan Builder view in the PCU Dashboard',
-  },
-  {
-    title: 'Pitch Edit Feature',
-    description: 'Gone are the days of mistagged pitches. Edit the pitch and pitcher to the correct specs for accurate data.',
-    image: '/dashboard-shot-8.png',
-    video: '/pitch-edit.mov',
-    alt: 'Pitch edit feature in the PCU Dashboard',
-  },
-  {
-    title: 'Notes and Uploads',
-    description:
-      'Write notes on any page and upload a photo, video, or pdf. The note will save to the page you were on and allow you to never forget a grip or cue ever again.',
-    image: '/dashboard-shot-10.png',
-    video: '/notes.mov',
-    alt: 'Notes and uploads in the PCU Dashboard',
-  },
-  {
-    title: 'Biomechanics',
-    description: 'Upload Newtforce data into the app and monitor progress via tables and graphs.',
-    image: '/dashboard-shot-11.png',
-    video: '/biomechanics.mov',
-    alt: 'Biomechanics workflow in the PCU Dashboard',
-  },
-  {
-    title: 'Edgertronic Integration and Spin Visual',
-    description:
-      'Edgertronic video automatically syncs with each pitch and allows you to see the metrics next to it. Compare two videos side by side or view individually. Also, view the pitch as a spin visual to fully understand what the ball is doing.',
-    image: '/dashboard-shot-12.png',
-    video: '/edger-and-spin.mov',
-    alt: 'Edgertronic integration in the PCU Dashboard',
-  },
-  {
-    title: 'Correlation Analysis',
-    description: 'Compare any two metrics to discover how strong of a correlation there is between them.',
-    image: '/dashboard-shot-9.png',
-    video: '/correlations-inside-pcu-dashboard.mov',
-    alt: 'Correlation analysis in the PCU Dashboard',
+    title: 'Coaches that have been there.',
+    description: 'Not a software company. A team of coaches who\'ve used this data in real programs — available to help you make sense of it.',
+    image: '/IMG_1982.JPG',
+    alt: 'PCU coaches working with players',
   },
 ];
 
-const whoItsFor = [
-  {
-    title: 'Teams',
-    detail: 'Monitor performance for your entire team. Individual log ins available for players as well.',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M8 10a3 3 0 1 1 0-6 3 3 0 0 1 0 6Zm8 0a3 3 0 1 1 0-6 3 3 0 0 1 0 6ZM3.5 20c0-2.8 2.6-5 5.5-5s5.5 2.2 5.5 5H3.5Zm10 0c.2-2 1.4-3.8 3.2-4.7 2.5-1.2 5.8-.2 7.3 2.2.5.8.8 1.6 1 2.5h-11.5Z" />
-      </svg>
-    ),
-  },
-  {
-    title: 'Facilities',
-    detail: 'Objective data for every player in your program. Individual log ins available for every client.',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M3 21V3h18v18H3Zm2-2h3v-3H5v3Zm0-5h3v-3H5v3Zm0-5h3V5H5v4Zm5 10h4v-3h-4v3Zm0-5h4v-3h-4v3Zm0-5h4V5h-4v4Zm6 10h3V5h-3v14Z" />
-      </svg>
-    ),
-  },
-  {
-    title: 'Players',
-    detail: 'Looking for an edge as a player? Access objective data on your performances all season long.',
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8c0-3.9 3.2-7 7-7s7 3.1 7 7H5Z" />
-      </svg>
-    ),
-  },
-];
 
 const faqItems = [
   {
@@ -230,16 +129,18 @@ const testimonials = [
   },
   {
     paragraphs: [
-      'The dashboard is very user-friendly and efficient, especially for those who want straightforward tools and information without digging through complicated tabs and settings.',
+      'The visuals are clear, specific, and immediately applicable—whether we\'re teaching movement profiles, release traits, or pitch design concepts. Instead of abstract conversations, our pitchers can see exactly what we\'re asking for, which accelerates understanding and shortens the gap between intent and execution.',
+      'Just as important, it allows us to track process-driven goals and deliver consistent, objective feedback. We\'re measuring bullpen intent, execution quality, and pitch characteristics—not just results.',
     ],
-    name: 'David Kopp',
-    school: 'University of Florida',
+    name: 'Nathan Bannister',
+    school: 'University of San Diego',
     role: 'Pitching Coach',
-    headshotSrc: '/david-kopp-headshot.webp',
-    headshotAlt: 'David Kopp headshot',
-    headshotClass: 'headshot-david',
-    logoSrc: '/florida-logo.png',
-    logoAlt: 'University of Florida logo',
+    headshotSrc: '/banny.webp',
+    headshotAlt: 'Nathan Bannister headshot',
+    headshotClass: 'headshot-banny',
+    logoSrc: '/San-Diego-Toreros-Logo.png',
+    logoAlt: 'University of San Diego logo',
+    logoClass: 'logo-san-diego',
   },
   {
     paragraphs: [
@@ -289,6 +190,19 @@ const testimonials = [
     logoSrc: '/unm-logo.png',
     logoAlt: 'University of New Mexico logo',
     logoClass: 'logo-unm',
+  },
+  {
+    paragraphs: [
+      'The dashboard is very user-friendly and efficient, especially for those who want straightforward tools and information without digging through complicated tabs and settings.',
+    ],
+    name: 'David Kopp',
+    school: 'University of Florida',
+    role: 'Pitching Coach',
+    headshotSrc: '/david-kopp-headshot.webp',
+    headshotAlt: 'David Kopp headshot',
+    headshotClass: 'headshot-david',
+    logoSrc: '/florida-logo.png',
+    logoAlt: 'University of Florida logo',
   },
 ];
 
@@ -630,57 +544,26 @@ export default function Home() {
               </div>
             </div>
             <figure className="hero-preview">
-              <Image
-                src="/dashboard-hero-shot.png"
-                alt="PCU Dashboard screenshot"
-                fill
-                sizes="(max-width: 900px) 100vw, 50vw"
+              <video
+                src="/intro.MOV"
                 className="hero-preview-image"
-                priority
+                autoPlay
+                muted={isHeroMuted}
+                loop
+                playsInline
+                aria-label="PCU dashboard intro video"
+                style={{ objectFit: 'cover', width: '100%', height: '100%' }}
               />
               <div className="hero-preview-fade" />
+              <button
+                type="button"
+                className="hero-video-audio-toggle"
+                onClick={() => setIsHeroMuted((prev) => !prev)}
+                aria-label={isHeroMuted ? 'Unmute intro video' : 'Mute intro video'}
+              >
+                {isHeroMuted ? 'Unmute' : 'Mute'}
+              </button>
             </figure>
-          </div>
-        </section>
-
-
-        <section className="content-panel intro-video-panel reveal-section" data-reveal>
-          <div className="section-head">
-            <h3>See It In Action</h3>
-          </div>
-          <figure className="intro-video-wrap">
-            <video
-              src="/intro-video.mov"
-              className="intro-video"
-              autoPlay
-              muted={isHeroMuted}
-              loop
-              playsInline
-              aria-label="PCU dashboard intro video"
-            />
-            <button
-              type="button"
-              className="hero-video-audio-toggle"
-              onClick={() => setIsHeroMuted((prev) => !prev)}
-              aria-label={isHeroMuted ? 'Unmute intro video' : 'Mute intro video'}
-            >
-              {isHeroMuted ? 'Unmute' : 'Mute'}
-            </button>
-          </figure>
-        </section>
-
-        <section className="content-panel reveal-section" data-reveal>
-          <div className="section-head">
-            <h3>Why Programs Choose PCU</h3>
-          </div>
-          <div className="card-grid">
-            {outcomeCards.map((card) => (
-              <article key={card.title} className="card reveal-item" data-reveal>
-                <span className="card-icon">{card.icon}</span>
-                <h4>{card.title}</h4>
-                <p>{card.description}</p>
-              </article>
-            ))}
           </div>
         </section>
 
@@ -727,51 +610,19 @@ export default function Home() {
 
         <section id="includes" className="content-panel includes-panel reveal-section" data-reveal>
           <div className="section-head">
-            <h3>What&apos;s included in the PCU Dashboard</h3>
+            <h3>What&apos;s inside.</h3>
           </div>
-          <div className="includes-grid">
+          <div className="includes-stack">
             {dashboardIncludes.map((item, index) => (
-              <article key={item.title} className="include-card reveal-item" data-reveal>
-                <div className="include-top">
+              <article key={item.title} className={`include-row reveal-item${index % 2 === 1 ? ' include-row--reverse' : ''}`} data-reveal>
+                <button className="include-row-visual" onClick={() => openLightboxBySrc(item.image!)} aria-label={`Open ${item.title}`}>
+                  <Image src={item.image!} alt={item.alt} fill sizes="(max-width: 860px) 100vw, 55vw" className="include-image" />
+                </button>
+                <div className="include-row-text">
                   <span className="include-number">{String(index + 1).padStart(2, '0')}</span>
-                  <div>
-                    <h4>{item.title}</h4>
-                    {item.description && <p className="include-text">{item.description}</p>}
-                  </div>
+                  <h4>{item.title}</h4>
+                  <p className="include-text">{item.description}</p>
                 </div>
-                {item.video ? (
-                  <div className="include-preview">
-                    <video
-                      src={item.video}
-                      className="include-video"
-                      autoPlay
-                      muted
-                      loop
-                      playsInline
-                      controls
-                      aria-label={item.alt}
-                    />
-                  </div>
-                ) : (
-                  <button className="include-preview" onClick={() => openLightboxBySrc(item.image)} aria-label={`Open ${item.title}`}>
-                    <Image src={item.image} alt={item.alt} fill sizes="(max-width: 980px) 100vw, 50vw" className="include-image" />
-                  </button>
-                )}
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="content-panel reveal-section" data-reveal>
-          <div className="section-head">
-            <h3>Who this is for</h3>
-          </div>
-          <div className="who-grid">
-            {whoItsFor.map((item) => (
-              <article key={item.title} className="who-card reveal-item" data-reveal>
-                <span className="who-icon">{item.icon}</span>
-                <h4>{item.title}</h4>
-                <p>{item.detail}</p>
               </article>
             ))}
           </div>

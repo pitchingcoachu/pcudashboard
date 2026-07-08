@@ -8004,7 +8004,6 @@ def _refresh_league_daily_rollup(force: bool = False, school_code: Optional[str]
         _kick_filters_snapshot_refresh_background(school_code=school_filter, domain="pitching", level_bucket="All")
         _kick_filters_snapshot_refresh_background(school_code=school_filter, domain="hitting", level_bucket="All")
         _kick_filters_snapshot_refresh_background(school_code=school_filter, domain="catching", level_bucket="All")
-        _kick_endpoint_cache_warm_background(school_filter)
     except Exception as exc:
         logger.warning("league daily rollup refresh failed: %s", exc)
         return
@@ -10759,7 +10758,6 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
             _kick_filters_snapshot_refresh_background(school_code="PRO", domain="pitching", level_bucket=lvl)
             _kick_filters_snapshot_refresh_background(school_code="PRO", domain="hitting", level_bucket=lvl)
             _kick_filters_snapshot_refresh_background(school_code="PRO", domain="catching", level_bucket=lvl)
-        _kick_endpoint_cache_warm_background("PRO")
     except Exception as exc:
         logger.warning("pro rollup refresh failed: %s", exc)
         return
@@ -22847,6 +22845,9 @@ def hitting_overview(
             return league_rollup_payload
     need_prev_counts = bool(selected_after_count_filters) or (split_by == "After Count")
     need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
+    chart_source_scan_limit: Optional[int] = None
+    if chart_only and include_chart_points and not need_prev_counts and not need_pitch_number:
+        chart_source_scan_limit = max(2000, min(int((parsed_chart_points_limit or 350) * 35), 25000))
 
     try:
         with get_conn() as conn, conn.cursor() as cur:
@@ -23011,7 +23012,11 @@ def hitting_overview(
                     (%(batter_side_filter)s::text = 'Right' AND UPPER(LEFT(COALESCE(NULLIF(TRIM(batterside), ''), ''), 1)) = 'R')
                   )
                   AND (%(pitch_types_count)s::int = 0 OR """ + PITCH_TYPE_NORMALIZE_SQL + """ = ANY(%(pitch_types)s::text[]))
-                ORDER BY session_date, COALESCE(created_at, NOW()), id
+                """ + (
+                    "ORDER BY session_date DESC, COALESCE(created_at, NOW()) DESC, id DESC LIMIT %(chart_source_scan_limit)s::int"
+                    if chart_source_scan_limit is not None
+                    else "ORDER BY session_date, COALESCE(created_at, NOW()), id"
+                ) + """
                 """
                 ).replace("__PREV_BALLS_SQL__", prev_balls_sql).replace("__PREV_STRIKES_SQL__", prev_strikes_sql).replace("__PITCH_NUMBER_SQL__", pitch_number_sql),
                 {
@@ -23027,6 +23032,7 @@ def hitting_overview(
                     "batter_side_filter": batter_side,
                     "pitch_types_count": len(selected_pitch_types),
                     "pitch_types": selected_pitch_types,
+                    **({"chart_source_scan_limit": chart_source_scan_limit} if chart_source_scan_limit is not None else {}),
                 },
             )
             rows = [dict(row) for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
