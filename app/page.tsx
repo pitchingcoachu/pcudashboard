@@ -67,17 +67,21 @@ const faqItems = [
     answer: 'Within 72 hours.',
   },
   {
-    question: "Can we view other team's data?",
-    answer: 'At this time you can only see data for your own team, as well as opponents you have faced.',
+    question: 'Do we need someone tech-savvy to run it?',
+    answer: 'No. The PCU Dashboard was built by coaches for coaches — no technical background needed.',
+  },
+  {
+    question: 'How much does it cost?',
+    answer: 'Prices vary based on program size and add-on features included.',
+  },
+  {
+    question: 'What data does it work with?',
+    answer:
+      'We currently integrate with Trackman, Edgertronic video, and Axioforce force plates. If your program uses other motion capture or force plate technology, we can build that integration for you as well.',
   },
   {
     question: 'Is this only pitching data?',
-    answer: 'No, there is hitting and catching data included as well.',
-  },
-  {
-    question: 'Is there game video?',
-    answer:
-      'Currently, there is edger video (if you have it) and we will be implenting your own personal game video soon.',
+    answer: 'No — Trackman hitting data and catching metrics are included for every program.',
   },
   {
     question: 'Can our players have access?',
@@ -91,7 +95,7 @@ const faqItems = [
   {
     question: 'Do we have access to an analyst?',
     answer:
-      'You will have the ability to ask questions, as well as consult about player development related things for your players.',
+      'There is an optional add-on to have an analyst to help assist with programming, reports, and anything else you might need. We also offer a biomechanist consultant for those that have motion capture or force plates. We offer this for pitching and hitting. All of our coaches have professional or college coaching experience.',
   },
 ];
 
@@ -166,14 +170,14 @@ const testimonials = [
       'Always updating and adding new great features.',
     ],
     name: 'Matt Silberman',
-    school: 'Cal Baptist University',
+    school: 'Dallas Baptist University',
     role: 'Pitching Coach and Recruiting Coordinator',
     headshotSrc: '/matt-silberman-headshot.webp',
     headshotAlt: 'Matt Silberman headshot',
     headshotClass: 'headshot-silberman',
-    logoSrc: '/cbu-logo.webp',
-    logoAlt: 'Cal Baptist University logo',
-    logoClass: 'logo-cbu',
+    logoSrc: '/dallas-baptist.svg',
+    logoAlt: 'Dallas Baptist University logo',
+    logoClass: 'logo-dbu',
   },
   {
     paragraphs: [
@@ -530,18 +534,7 @@ export default function Home() {
                   Request 7-Day Free Trial
                 </button>
               </div>
-              <div className="hero-trusted">
-                <p className="hero-trusted-label">Trusted by</p>
-                <div className="hero-trusted-logos">
-                  <Image src="/harvard-logo.png" alt="Harvard University" width={40} height={40} className="logo-bar-img" />
-                  <Image src="/lsu-logo.png" alt="Louisiana State University" width={40} height={40} className="logo-bar-img" />
-                  <Image src="/florida-logo.png" alt="University of Florida" width={40} height={40} className="logo-bar-img" />
-                  <Image src="/creighton-logo.png" alt="Creighton University" width={40} height={40} className="logo-bar-img" />
-                  <Image src="/osu-logo.png" alt="Oklahoma State University" width={40} height={40} className="logo-bar-img" />
-                  <Image src="/gcu-logo.png" alt="Grand Canyon University" width={40} height={40} className="logo-bar-img" />
-                  <Image src="/cbu-logo.webp" alt="Cal Baptist University" width={40} height={40} className="logo-bar-img" />
-                </div>
-              </div>
+              <p className="hero-trusted-label">Trusted by 25+ college programs and facilities</p>
             </div>
             <figure className="hero-preview">
               <video
@@ -568,7 +561,7 @@ export default function Home() {
         </section>
 
         <section className="content-panel testimonials-panel reveal-section" data-reveal>
-          <div className="testimonials-grid">
+          <div className="testimonials-grid testimonials-grid--top">
             {topTestimonials.map((item, index) => (
               <article key={`${item.name}-${index}`} className="testimonial-card reveal-item" data-reveal>
                 <div className="testimonial-card-top">
@@ -610,7 +603,7 @@ export default function Home() {
 
         <section id="includes" className="content-panel includes-panel reveal-section" data-reveal>
           <div className="section-head">
-            <h3>What&apos;s inside.</h3>
+            <h3>What&apos;s inside</h3>
           </div>
           <div className="includes-stack">
             {dashboardIncludes.map((item, index) => (
@@ -625,6 +618,15 @@ export default function Home() {
                 </div>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className="content-panel cta-mid-panel reveal-section" data-reveal>
+          <div className="cta-mid-inner">
+            <h3>Ready to see it for yourself?</h3>
+            <button type="button" className="btn btn-primary" onClick={scrollToDemo}>
+              Request 7-Day Free Trial
+            </button>
           </div>
         </section>
 
