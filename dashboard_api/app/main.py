@@ -6570,7 +6570,44 @@ def _ensure_performance_indexes() -> None:
           END
         ))
         """,
-        # Backing indexes for inning fallback lookups by PitchUID/PlayID.
+        # Add school_code to pitch_data so CTE inning lookups can be scoped per-school
+        # instead of scanning all 2M+ rows across every school for a date range.
+        """
+        ALTER TABLE public.pitch_data ADD COLUMN IF NOT EXISTS school_code TEXT
+        """,
+        # Backfill school_code on pitch_data rows via PitchUID join to pitch_events.
+        # Runs as a DO block so it's a no-op once all rows are already populated.
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'pitch_data' AND column_name = 'school_code'
+          ) THEN
+            UPDATE public.pitch_data pd
+            SET school_code = pe.school_code
+            FROM (
+              SELECT DISTINCT ON (lower(btrim(pitchuid::text)))
+                lower(btrim(pitchuid::text)) AS uid_key,
+                school_code
+              FROM public.pitch_events
+              WHERE pitchuid IS NOT NULL AND btrim(pitchuid::text) <> '' AND school_code IS NOT NULL
+              ORDER BY lower(btrim(pitchuid::text)), session_date DESC
+            ) pe
+            WHERE pd.school_code IS NULL
+              AND pd."PitchUID" IS NOT NULL
+              AND lower(btrim(pd."PitchUID"::text)) = pe.uid_key;
+          END IF;
+        END $$;
+        """,
+        # Index that lets the pd_uid_map/pd_play_map CTEs filter by school + date
+        # rather than doing a full-table date scan.
+        """
+        CREATE INDEX IF NOT EXISTS idx_pitch_data_school_date
+        ON public.pitch_data (school_code, "Date")
+        WHERE school_code IS NOT NULL
+        """,
+        # Backing indexes for inning fallback lookups by PitchUID/PlayID, now school-scoped.
         """
         CREATE INDEX IF NOT EXISTS idx_pitch_data_pitchuid_key_date
         ON public.pitch_data ((lower(btrim("PitchUID"::text))), "Date")
@@ -15630,6 +15667,27 @@ def _pro_pitching_overview(
         params["batter_side"] = batter_side
         where.append("COALESCE(NULLIF(TRIM(batterside), ''), 'Unknown') = %(batter_side)s::text")
 
+    # Push metric range filters into SQL so the DB does the heavy lifting instead
+    # of loading every pitch and filtering in Python — critical for wide date ranges.
+    if parsed_velo_min is not None:
+        params["velo_min"] = parsed_velo_min
+        where.append("relspeed >= %(velo_min)s::double precision")
+    if parsed_velo_max is not None:
+        params["velo_max"] = parsed_velo_max
+        where.append("relspeed <= %(velo_max)s::double precision")
+    if parsed_ivb_min is not None:
+        params["ivb_min"] = parsed_ivb_min
+        where.append("inducedvertbreak >= %(ivb_min)s::double precision")
+    if parsed_ivb_max is not None:
+        params["ivb_max"] = parsed_ivb_max
+        where.append("inducedvertbreak <= %(ivb_max)s::double precision")
+    if parsed_hb_min is not None:
+        params["hb_min"] = parsed_hb_min
+        where.append("horzbreak >= %(hb_min)s::double precision")
+    if parsed_hb_max is not None:
+        params["hb_max"] = parsed_hb_max
+        where.append("horzbreak <= %(hb_max)s::double precision")
+
     zone_select_expr = "NULL::int AS zone_num"
     pro_cols = _pro_pitch_events_columns()
     if "zone" in pro_cols:
@@ -16089,24 +16147,6 @@ def _pro_pitching_overview(
             if is_qp == want_qp:
                 kept.append(row)
         rows = kept
-
-    if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max]):
-        filtered_rows: List[Dict[str, Any]] = []
-        for row in rows:
-            if parsed_velo_min is not None and (not _is_num(row.get("rel_speed")) or float(row.get("rel_speed")) < parsed_velo_min):
-                continue
-            if parsed_velo_max is not None and (not _is_num(row.get("rel_speed")) or float(row.get("rel_speed")) > parsed_velo_max):
-                continue
-            if parsed_ivb_min is not None and (not _is_num(row.get("ivb")) or float(row.get("ivb")) < parsed_ivb_min):
-                continue
-            if parsed_ivb_max is not None and (not _is_num(row.get("ivb")) or float(row.get("ivb")) > parsed_ivb_max):
-                continue
-            if parsed_hb_min is not None and (not _is_num(row.get("hb")) or float(row.get("hb")) < parsed_hb_min):
-                continue
-            if parsed_hb_max is not None and (not _is_num(row.get("hb")) or float(row.get("hb")) > parsed_hb_max):
-                continue
-            filtered_rows.append(row)
-        rows = filtered_rows
 
     # PRO special case requested: when All pitchers are selected, Inning split should
     # use true game inning (not outing-normalized 1..N by pitcher).
@@ -19694,10 +19734,12 @@ def pitching_overview(
         return rollup_fast_response
     need_prev_counts = bool(selected_after_count_filters) or (split_by == "After Count")
     need_pitch_number = parsed_pc_min is not None or parsed_pc_max is not None
-
-    query = """
-      WITH
-      __VIDEO_MAP_CTE__
+    # Inning/game data from pitch_data is only used when row-level pitch display or
+    # trend rows are requested. For all other paths (overview table, chart_only) the
+    # CTEs scan 2M+ rows unnecessarily — replace them with empty stubs instead.
+    need_pitch_data_cte = include_row_pitches or include_trend_rows
+    if need_pitch_data_cte:
+        pd_uid_map_cte = """
       pd_uid_map AS (
         SELECT DISTINCT ON (lower(btrim(pd."PitchUID"::text)), pd."Date"::date)
           lower(btrim(pd."PitchUID"::text)) AS pitchuid_key,
@@ -19713,8 +19755,10 @@ def pitching_overview(
           AND btrim(pd."Inning"::text) <> ''
           AND (%(start_date)s::date IS NULL OR pd."Date"::date >= %(start_date)s::date)
           AND (%(end_date)s::date IS NULL OR pd."Date"::date <= %(end_date)s::date)
+          AND (pd.school_code IS NULL OR pd.school_code = %(school_code)s)
         ORDER BY lower(btrim(pd."PitchUID"::text)), pd."Date"::date, pd."Date" DESC NULLS LAST
-      ),
+      ),"""
+        pd_play_map_cte = """
       pd_play_map AS (
         SELECT DISTINCT ON (lower(btrim(pd."PlayID"::text)), pd."Date"::date)
           lower(btrim(pd."PlayID"::text)) AS playid_key,
@@ -19730,8 +19774,34 @@ def pitching_overview(
           AND btrim(pd."Inning"::text) <> ''
           AND (%(start_date)s::date IS NULL OR pd."Date"::date >= %(start_date)s::date)
           AND (%(end_date)s::date IS NULL OR pd."Date"::date <= %(end_date)s::date)
+          AND (pd.school_code IS NULL OR pd.school_code = %(school_code)s)
         ORDER BY lower(btrim(pd."PlayID"::text)), pd."Date"::date, pd."Date" DESC NULLS LAST
-      ),
+      ),"""
+    else:
+        # Empty stubs — no pitch_data scan at all for overview/chart requests.
+        pd_uid_map_cte = """
+      pd_uid_map AS (
+        SELECT NULL::text AS pitchuid_key, NULL::date AS map_session_date,
+               NULL::text AS inning, NULL::text AS map_game_id, NULL::text AS map_game_uid
+        WHERE FALSE
+      ),"""
+        pd_play_map_cte = """
+      pd_play_map AS (
+        SELECT NULL::text AS playid_key, NULL::date AS map_session_date,
+               NULL::text AS inning, NULL::text AS map_game_id, NULL::text AS map_game_uid
+        WHERE FALSE
+      ),"""
+    # For chart_only requests with large date windows, limit how many rows the DB
+    # returns — the chart builder only needs ~1200 points and will sample them anyway.
+    chart_source_scan_limit: Optional[int] = None
+    if chart_only and include_chart_points and not need_prev_counts and not need_pitch_number:
+        chart_source_scan_limit = max(2000, min(int((parsed_chart_points_limit or 350) * 35), 25000))
+        params["chart_source_scan_limit"] = chart_source_scan_limit
+
+    query = """
+      WITH
+      __VIDEO_MAP_CTE__
+""" + pd_uid_map_cte + pd_play_map_cte + """
       base_raw AS (
         SELECT
           id,
@@ -20275,7 +20345,11 @@ def pitching_overview(
                   , batter_team_norm_eff
                   , session_type_norm
                 FROM base
-                """,
+                """ + (
+                    "ORDER BY session_date DESC, id DESC LIMIT %(chart_source_scan_limit)s::int"
+                    if chart_source_scan_limit is not None
+                    else ""
+                ),
                 params,
             )
             table_source_rows = [row for row in cur.fetchall() if str(row.get("pitch_type") or "") != "Undefined"]
@@ -22475,11 +22549,17 @@ def hitting_overview(
             and (not selected_opp_pitcher_keys)
             and (not team_type_value or str(team_type_value).strip().lower() == "all")
         )
+        large_window = bool(span_days and span_days > 14)
         league_rollup_candidate = (
             league_all_selection
             and (not chart_only)
             and mode_raw in {"Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"}
         )
+        # For large date windows with no pitcher/hitter selection, also push any
+        # chart_only request onto a row-limited path so it can't fetch tens of
+        # thousands of rows into Python just for heatmap dots.
+        if large_window and league_all_selection and chart_only:
+            include_chart_points = True  # already set by chart_only block above, ensure
         league_leaderboard_has_narrowing_filters = bool(
             selected_opp_pitcher_keys
             or (venue_filter or "").strip()

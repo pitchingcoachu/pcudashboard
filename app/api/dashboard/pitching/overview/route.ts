@@ -158,9 +158,9 @@ function applyOverviewBackfills(payload: unknown): unknown {
 
 function resolveOverviewTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
-  if (upper === 'LEAGUE') return 45000;
-  if (upper === 'PRO') return 30000;
-  return 30000;
+  if (upper === 'LEAGUE') return 60000;
+  if (upper === 'PRO') return 45000;
+  return 60000;
 }
 
 function resolveOverviewCachePolicy(

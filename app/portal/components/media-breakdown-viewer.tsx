@@ -40,6 +40,8 @@ type PlayerMediaItem = {
   createdAt: string;
 };
 
+// ── Geometry helpers ──────────────────────────────────────────────────────────
+
 function measureAngle(points: Array<{ x: number; y: number }>, mode: 'acute' | 'obtuse' = 'acute'): number | null {
   if (points.length < 3) return null;
   const [a, b, c] = points;
@@ -54,12 +56,24 @@ function measureAngle(points: Array<{ x: number; y: number }>, mode: 'acute' | '
   return mode === 'obtuse' ? 180 - acute : acute;
 }
 
-function pointOnOverlay(event: ReactPointerEvent<SVGSVGElement>) {
+// Convert a pointer event on the SVG overlay (which moves with the video) to
+// a 0-1 normalised coordinate in video space, accounting for zoom + pan.
+function pointOnOverlay(
+  event: ReactPointerEvent<SVGSVGElement>,
+  zoom: number,
+  pan: { x: number; y: number },
+): { x: number; y: number } {
   const rect = event.currentTarget.getBoundingClientRect();
-  return {
-    x: Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width))),
-    y: Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))),
-  };
+  // Raw fraction within the (zoomed+panned) SVG element
+  const rx = (event.clientX - rect.left) / Math.max(1, rect.width);
+  const ry = (event.clientY - rect.top) / Math.max(1, rect.height);
+  // Invert the transform to get the fraction in original video space
+  // transform: translate(pan.x%, pan.y%) scale(zoom), origin = 50% 50%
+  // raw = (orig - 0.5) * zoom + 0.5 + pan/containerSize
+  // For our use-case pan is stored as fraction of container, so:
+  const ox = (rx - 0.5 - pan.x) / zoom + 0.5;
+  const oy = (ry - 0.5 - pan.y) / zoom + 0.5;
+  return { x: Math.max(0, Math.min(1, ox)), y: Math.max(0, Math.min(1, oy)) };
 }
 
 function renderAnnotation(annotation: BreakdownAnnotation, key: string) {
@@ -67,7 +81,6 @@ function renderAnnotation(annotation: BreakdownAnnotation, key: string) {
   if (!pts.length) return null;
   const u = 1000;
   const sx = (v: number) => v * u;
-
   const labelStyle: React.CSSProperties = { paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.82)', strokeWidth: 6 };
 
   if (annotation.tool === 'text') {
@@ -77,7 +90,6 @@ function renderAnnotation(annotation: BreakdownAnnotation, key: string) {
       </text>
     );
   }
-
   if (annotation.tool === 'circle' && pts.length >= 2) {
     const x = sx(Math.min(pts[0].x, pts[1].x));
     const y = sx(Math.min(pts[0].y, pts[1].y));
@@ -85,7 +97,6 @@ function renderAnnotation(annotation: BreakdownAnnotation, key: string) {
     const h = sx(Math.abs(pts[1].y - pts[0].y));
     return <ellipse key={key} cx={x + w / 2} cy={y + h / 2} rx={Math.max(2, w / 2)} ry={Math.max(2, h / 2)} fill="none" stroke={annotation.color} strokeWidth={annotation.width} />;
   }
-
   if (annotation.tool === 'angle') {
     const angle = measureAngle(pts, annotation.angleMode ?? 'acute');
     const polyPoints = pts.map((p) => `${sx(p.x)},${sx(p.y)}`).join(' ');
@@ -94,45 +105,36 @@ function renderAnnotation(annotation: BreakdownAnnotation, key: string) {
     const dir2 = pts.length >= 3 ? { x: pts[2].x - vertex.x, y: pts[2].y - vertex.y } : { x: 0, y: -1 };
     const mag1 = Math.hypot(dir1.x, dir1.y) || 1;
     const mag2 = Math.hypot(dir2.x, dir2.y) || 1;
-    const norm1 = { x: dir1.x / mag1, y: dir1.y / mag1 };
-    const norm2 = { x: dir2.x / mag2, y: dir2.y / mag2 };
-    const bisect = { x: norm1.x + norm2.x, y: norm1.y + norm2.y };
+    const bisect = { x: dir1.x / mag1 + dir2.x / mag2, y: dir1.y / mag1 + dir2.y / mag2 };
     const bisectMag = Math.hypot(bisect.x, bisect.y) || 1;
-    const labelOffset = 60;
-    const labelX = sx(vertex.x) + (bisect.x / bisectMag) * labelOffset;
-    const labelY = sx(vertex.y) + (bisect.y / bisectMag) * labelOffset;
+    const labelX = sx(vertex.x) + (bisect.x / bisectMag) * 60;
+    const labelY = sx(vertex.y) + (bisect.y / bisectMag) * 60;
     return (
       <g key={key}>
         <polyline points={polyPoints} fill="none" stroke={annotation.color} strokeWidth={annotation.width} strokeLinecap="round" strokeLinejoin="round" />
         {pts.map((p, idx) => <circle key={`${key}-p-${idx}`} cx={sx(p.x)} cy={sx(p.y)} r={8} fill={annotation.color} stroke="rgba(0,0,0,0.78)" strokeWidth={2} />)}
-        {angle !== null ? (
+        {angle !== null && (
           <text x={labelX} y={labelY} textAnchor="middle" dominantBaseline="middle" fill={annotation.color} fontSize={38} fontWeight={900} style={labelStyle}>
             {`${angle.toFixed(1)}°`}
           </text>
-        ) : null}
+        )}
       </g>
     );
   }
-
   const polyPoints = pts.map((p) => `${sx(p.x)},${sx(p.y)}`).join(' ');
   if (annotation.tool === 'arrow' && pts.length >= 2) {
     const a = pts[pts.length - 2];
     const b = pts[pts.length - 1];
     const angle = Math.atan2(b.y - a.y, b.x - a.x);
     const size = 34;
-    const bx = sx(b.x);
-    const by = sx(b.y);
+    const bx = sx(b.x); const by = sx(b.y);
     return (
       <g key={key}>
         <polyline points={polyPoints} fill="none" stroke={annotation.color} strokeWidth={annotation.width} strokeLinecap="round" strokeLinejoin="round" />
-        <polygon
-          points={`${bx},${by} ${bx - size * Math.cos(angle - Math.PI / 6)},${by - size * Math.sin(angle - Math.PI / 6)} ${bx - size * Math.cos(angle + Math.PI / 6)},${by - size * Math.sin(angle + Math.PI / 6)}`}
-          fill={annotation.color}
-        />
+        <polygon points={`${bx},${by} ${bx - size * Math.cos(angle - Math.PI / 6)},${by - size * Math.sin(angle - Math.PI / 6)} ${bx - size * Math.cos(angle + Math.PI / 6)},${by - size * Math.sin(angle + Math.PI / 6)}`} fill={annotation.color} />
       </g>
     );
   }
-
   return <polyline key={key} points={polyPoints} fill="none" stroke={annotation.color} strokeWidth={annotation.width} strokeLinecap="round" strokeLinejoin="round" />;
 }
 
@@ -143,7 +145,22 @@ function formatTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}.${ms}`;
 }
 
-// ── Single video panel (video + overlay + controls) ──────────────────────────
+// ── Zoom/pan helpers ──────────────────────────────────────────────────────────
+
+const ZOOM_STEP = 0.35;
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+
+function clampPan(pan: { x: number; y: number }, zoom: number) {
+  // Maximum pan offset (as fraction of container) to keep video in view
+  const maxOff = Math.max(0, (zoom - 1) / (2 * zoom));
+  return {
+    x: Math.max(-maxOff, Math.min(maxOff, pan.x)),
+    y: Math.max(-maxOff, Math.min(maxOff, pan.y)),
+  };
+}
+
+// ── Video panel ───────────────────────────────────────────────────────────────
 
 type VideoPanelProps = {
   url: string;
@@ -170,10 +187,18 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   const scrubberRef = useRef<HTMLDivElement | null>(null);
   const scrubbing = useRef(false);
 
+  // Zoom & pan state
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panStart = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+  const mediaWrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Annotation state
   const [annotations, setAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [active, setActive] = useState<BreakdownAnnotation | null>(null);
   const [anglePending, setAnglePending] = useState<Array<{ x: number; y: number }>>([]);
 
+  // ── Video events ──
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -185,18 +210,8 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
       }
     };
     const onDuration = () => setDuration(video.duration || 0);
-    const onPlay = () => {
-      setPlaying(true);
-      if (synced && syncRef?.current && syncRef.current !== video) {
-        syncRef.current.play().catch(() => {});
-      }
-    };
-    const onPause = () => {
-      setPlaying(false);
-      if (synced && syncRef?.current && syncRef.current !== video) {
-        syncRef.current.pause();
-      }
-    };
+    const onPlay = () => { setPlaying(true); if (synced && syncRef?.current && syncRef.current !== video) syncRef.current.play().catch(() => {}); };
+    const onPause = () => { setPlaying(false); if (synced && syncRef?.current && syncRef.current !== video) syncRef.current.pause(); };
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('loadedmetadata', onDuration);
     video.addEventListener('durationchange', onDuration);
@@ -211,52 +226,80 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     };
   }, [synced, syncRef]);
 
-  // Expose this video's ref to the sync system
-  useEffect(() => {
-    if (isActive && syncRef) syncRef.current = videoRef.current;
-  }, [isActive, syncRef]);
+  useEffect(() => { if (isActive && syncRef) syncRef.current = videoRef.current; }, [isActive, syncRef]);
+  useEffect(() => { const video = videoRef.current; if (!video) return; video.playbackRate = playbackRate; }, [playbackRate]);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.playbackRate = playbackRate;
-  }, [playbackRate]);
+  // ── Zoom & pan handlers ──
+  function applyZoom(delta: number, pivot?: { x: number; y: number }) {
+    setZoom((prev) => {
+      const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prev + delta));
+      if (next === prev) return prev;
+      // If zooming out to 1 reset pan
+      if (next === 1) { setPan({ x: 0, y: 0 }); return next; }
+      // Optionally shift pan toward pivot (centre of container by default)
+      setPan((p) => clampPan(p, next));
+      return next;
+    });
+  }
 
+  // Pinch-to-zoom via wheel
+  function onWheel(e: React.WheelEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+    applyZoom(delta);
+  }
+
+  // Pan drag — only active when zoomed in and not in draw mode
+  function onPanStart(e: React.PointerEvent<HTMLDivElement>) {
+    if (drawMode || zoom <= 1) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    panStart.current = { px: e.clientX, py: e.clientY, ox: pan.x, oy: pan.y };
+  }
+
+  function onPanMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!panStart.current) return;
+    const wrap = mediaWrapRef.current;
+    if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const dx = (e.clientX - panStart.current.px) / rect.width;
+    const dy = (e.clientY - panStart.current.py) / rect.height;
+    setPan(clampPan({ x: panStart.current.ox + dx, y: panStart.current.oy + dy }, zoom));
+  }
+
+  function onPanEnd(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    panStart.current = null;
+  }
+
+  function resetZoom() { setZoom(1); setPan({ x: 0, y: 0 }); }
+
+  // ── Scrubber ──
   function scrubToFraction(fraction: number) {
     const video = videoRef.current;
     if (!video || !duration) return;
     const t = Math.max(0, Math.min(duration, fraction * duration));
     video.currentTime = t;
     setCurrentTime(t);
-    if (synced && syncRef?.current && syncRef.current !== video) {
-      syncRef.current.currentTime = t;
-    }
+    if (synced && syncRef?.current && syncRef.current !== video) syncRef.current.currentTime = t;
   }
-
-  function getScrubFraction(clientX: number): number {
+  function getScrubFraction(clientX: number) {
     const bar = scrubberRef.current;
     if (!bar) return 0;
     const rect = bar.getBoundingClientRect();
     return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
   }
-
-  function onScrubStart(event: React.PointerEvent<HTMLDivElement>) {
+  function onScrubStart(e: React.PointerEvent<HTMLDivElement>) {
     scrubbing.current = true;
-    event.currentTarget.setPointerCapture(event.pointerId);
+    e.currentTarget.setPointerCapture(e.pointerId);
     videoRef.current?.pause();
     if (synced && syncRef?.current) syncRef.current.pause();
-    scrubToFraction(getScrubFraction(event.clientX));
+    scrubToFraction(getScrubFraction(e.clientX));
   }
-
-  function onScrubMove(event: React.PointerEvent<HTMLDivElement>) {
-    if (!scrubbing.current) return;
-    scrubToFraction(getScrubFraction(event.clientX));
-  }
-
-  function onScrubEnd(event: React.PointerEvent<HTMLDivElement>) {
+  function onScrubMove(e: React.PointerEvent<HTMLDivElement>) { if (scrubbing.current) scrubToFraction(getScrubFraction(e.clientX)); }
+  function onScrubEnd(e: React.PointerEvent<HTMLDivElement>) {
     if (!scrubbing.current) return;
     scrubbing.current = false;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
   }
 
   function stepFrame(direction: 1 | -1) {
@@ -265,24 +308,17 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     video.pause();
     const t = Math.max(0, Math.min(duration, video.currentTime + direction / 30));
     video.currentTime = t;
-    if (synced && syncRef?.current) {
-      syncRef.current.pause();
-      syncRef.current.currentTime = t;
-    }
+    if (synced && syncRef?.current) { syncRef.current.pause(); syncRef.current.currentTime = t; }
   }
 
   function togglePlay() {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) {
-      video.play().catch((err: unknown) => {
-        if (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'NotAllowedError')) return;
-      });
-    } else {
-      video.pause();
-    }
+    if (video.paused) video.play().catch((err: unknown) => { if (err instanceof DOMException && (err.name === 'AbortError' || err.name === 'NotAllowedError')) return; });
+    else video.pause();
   }
 
+  // ── Annotation draw ──
   const distanceToAnnotation = (ann: BreakdownAnnotation, point: { x: number; y: number }) => {
     if (!ann.points.length) return 999;
     return Math.min(...ann.points.map((p) => Math.hypot(p.x - point.x, p.y - point.y)));
@@ -292,8 +328,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     if (!drawMode) return;
     onActivate?.();
     event.preventDefault();
-    const point = pointOnOverlay(event);
-
+    const point = pointOnOverlay(event, zoom, pan);
     if (tool === 'erase') {
       setAnnotations((items) => {
         const nearest = items.map((item) => ({ item, d: distanceToAnnotation(item, point) })).sort((a, b) => a.d - b.d)[0];
@@ -301,25 +336,18 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
       });
       return;
     }
-
     if (tool === 'text') {
       const text = window.prompt('Text label');
       if (!text?.trim()) return;
       setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'text', color, width, points: [point], text: text.trim() }]);
       return;
     }
-
     if (tool === 'angle') {
       const next = [...anglePending, point];
-      if (next.length === 3) {
-        setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'angle', color, width, points: next, angleMode }]);
-        setAnglePending([]);
-      } else {
-        setAnglePending(next);
-      }
+      if (next.length === 3) { setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'angle', color, width, points: next, angleMode }]); setAnglePending([]); }
+      else setAnglePending(next);
       return;
     }
-
     event.currentTarget.setPointerCapture(event.pointerId);
     setActive({ id: `media-${Date.now()}-${Math.random().toString(16).slice(2)}`, tool, color, width, points: [point, point] });
   };
@@ -327,7 +355,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   const pointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!active) return;
     event.preventDefault();
-    const point = pointOnOverlay(event);
+    const point = pointOnOverlay(event, zoom, pan);
     setActive((current) => {
       if (!current) return current;
       if (current.tool === 'pen') return { ...current, points: [...current.points, point] };
@@ -350,47 +378,100 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   const progress = duration > 0 ? currentTime / duration : 0;
   const maxH = compact ? '38vh' : '62vh';
 
+  // CSS transform for zoom + pan
+  const transformStyle = zoom > 1
+    ? `translate(${pan.x * 100}%, ${pan.y * 100}%) scale(${zoom})`
+    : undefined;
+
+  const isZoomed = zoom > 1;
+  const canPan = isZoomed && !drawMode;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{title}</div>
-      {/* Video + overlay */}
+
+      {/* Video + overlay wrapper — clips the zoom */}
       <div
-        style={{ position: 'relative', borderRadius: 10, overflow: 'hidden', background: '#000', cursor: drawMode ? 'crosshair' : 'default' }}
+        ref={mediaWrapRef}
+        style={{ position: 'relative', borderRadius: 10, overflow: 'hidden', background: '#000', cursor: canPan ? 'grab' : drawMode ? 'crosshair' : 'default' }}
         onClick={onActivate}
+        onWheel={onWheel}
+        onPointerDown={onPanStart}
+        onPointerMove={onPanMove}
+        onPointerUp={onPanEnd}
+        onPointerCancel={onPanEnd}
       >
-        <video
-          ref={videoRef}
-          src={url}
-          playsInline
-          preload="auto"
-          loop={loop}
-          style={{ width: '100%', maxHeight: maxH, display: 'block' }}
-          onError={(e) => {
-            const v = e.currentTarget;
-            console.error('[MediaBreakdownViewer] video error:', v.error?.code, v.error?.message, 'src:', v.src);
-          }}
-        />
-        <svg
-          viewBox="0 0 1000 1000"
-          preserveAspectRatio="none"
-          style={{
-            position: 'absolute', inset: 0, width: '100%', height: '100%',
-            pointerEvents: drawMode ? 'auto' : 'none',
-            cursor: drawMode ? 'crosshair' : 'default',
-            touchAction: 'none',
-          }}
-          onPointerDown={pointerDown}
-          onPointerMove={pointerMove}
-          onPointerUp={finish}
-          onPointerCancel={finish}
-        >
-          {allAnnotations.map((ann) => renderAnnotation(ann, ann.id))}
-        </svg>
-        {/* Undo/Clear mini controls */}
-        <div style={{ position: 'absolute', bottom: 6, right: 6, display: 'flex', gap: 4 }}>
-          <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0, background: 'rgba(2,6,23,0.8)' }} onClick={() => { setAnnotations((items) => items.slice(0, -1)); setAnglePending([]); }} disabled={!annotations.length}>Undo</button>
-          <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0, background: 'rgba(2,6,23,0.8)' }} onClick={() => { setAnnotations([]); setAnglePending([]); }} disabled={!annotations.length}>Clear</button>
+        {/* Inner wrapper that receives the transform */}
+        <div style={{ transform: transformStyle, transformOrigin: '50% 50%', willChange: zoom > 1 ? 'transform' : undefined }}>
+          <video
+            ref={videoRef}
+            src={url}
+            playsInline
+            preload="auto"
+            loop={loop}
+            style={{ width: '100%', maxHeight: maxH, display: 'block', pointerEvents: 'none' }}
+            onError={(e) => {
+              const v = e.currentTarget;
+              console.error('[MediaBreakdownViewer] video error:', v.error?.code, v.error?.message, 'src:', v.src);
+            }}
+          />
+          <svg
+            viewBox="0 0 1000 1000"
+            preserveAspectRatio="none"
+            style={{
+              position: 'absolute', inset: 0, width: '100%', height: '100%',
+              pointerEvents: drawMode ? 'auto' : 'none',
+              cursor: drawMode ? 'crosshair' : 'default',
+              touchAction: 'none',
+            }}
+            onPointerDown={pointerDown}
+            onPointerMove={pointerMove}
+            onPointerUp={finish}
+            onPointerCancel={finish}
+          >
+            {allAnnotations.map((ann) => renderAnnotation(ann, ann.id))}
+          </svg>
         </div>
+
+        {/* Zoom controls — always visible, top-left corner */}
+        <div style={{ position: 'absolute', top: 6, left: 6, display: 'flex', gap: 3, zIndex: 10 }}>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            style={{ fontSize: 14, padding: '1px 8px', minHeight: 0, background: 'rgba(2,6,23,0.85)', lineHeight: 1.4, fontWeight: 700 }}
+            onClick={(e) => { e.stopPropagation(); applyZoom(ZOOM_STEP); }}
+            title="Zoom in"
+          >+</button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            style={{ fontSize: 14, padding: '1px 8px', minHeight: 0, background: 'rgba(2,6,23,0.85)', lineHeight: 1.4, fontWeight: 700 }}
+            onClick={(e) => { e.stopPropagation(); applyZoom(-ZOOM_STEP); }}
+            title="Zoom out"
+          >−</button>
+          {isZoomed && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ fontSize: 10, padding: '1px 7px', minHeight: 0, background: 'rgba(2,6,23,0.85)', fontWeight: 700 }}
+              onClick={(e) => { e.stopPropagation(); resetZoom(); }}
+              title="Reset zoom"
+            >{Math.round(zoom * 10) / 10}× ✕</button>
+          )}
+        </div>
+
+        {/* Undo/Clear — bottom-right */}
+        <div style={{ position: 'absolute', bottom: 6, right: 6, display: 'flex', gap: 4, zIndex: 10 }}>
+          <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0, background: 'rgba(2,6,23,0.8)' }} onClick={(e) => { e.stopPropagation(); setAnnotations((items) => items.slice(0, -1)); setAnglePending([]); }} disabled={!annotations.length}>Undo</button>
+          <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0, background: 'rgba(2,6,23,0.8)' }} onClick={(e) => { e.stopPropagation(); setAnnotations([]); setAnglePending([]); }} disabled={!annotations.length}>Clear</button>
+        </div>
+
+        {/* Pan hint when zoomed + draw mode conflict */}
+        {isZoomed && drawMode && (
+          <div style={{ position: 'absolute', top: 6, right: 6, fontSize: 9, fontWeight: 700, color: '#94a3b8', background: 'rgba(2,6,23,0.8)', borderRadius: 4, padding: '2px 6px', zIndex: 10, pointerEvents: 'none' }}>
+            Switch to View to pan
+          </div>
+        )}
       </div>
 
       {/* Scrubber */}
@@ -446,10 +527,7 @@ function ComparePicker({ players, onPick, onCancel }: ComparePickerProps) {
     if (!selectedPlayer) { setMedia([]); return; }
     setLoadingMedia(true);
     fetch(`/api/player/media?playerId=${selectedPlayer.playerId}&mediaType=video`, { cache: 'no-store' })
-      .then(async (r) => {
-        const payload = (await r.json().catch(() => ({}))) as { media?: PlayerMediaItem[] };
-        setMedia(Array.isArray(payload.media) ? payload.media : []);
-      })
+      .then(async (r) => { const payload = (await r.json().catch(() => ({}))) as { media?: PlayerMediaItem[] }; setMedia(Array.isArray(payload.media) ? payload.media : []); })
       .catch(() => setMedia([]))
       .finally(() => setLoadingMedia(false));
   }, [selectedPlayer]);
@@ -461,28 +539,13 @@ function ComparePicker({ players, onPick, onCancel }: ComparePickerProps) {
           <h4 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>Pick comparison video</h4>
           <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '2px 8px', minHeight: 0 }} onClick={onCancel}>Cancel</button>
         </div>
-
         {!selectedPlayer ? (
           <>
-            <input
-              autoFocus
-              placeholder="Search player..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(148,163,184,0.25)', background: 'rgba(255,255,255,0.06)', color: '#f8fafc', fontSize: 13 }}
-            />
+            <input autoFocus placeholder="Search player..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid rgba(148,163,184,0.25)', background: 'rgba(255,255,255,0.06)', color: '#f8fafc', fontSize: 13 }} />
             <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, maxHeight: '50vh' }}>
               {filtered.length === 0 && <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>No players found.</p>}
               {filtered.map((p) => (
-                <button
-                  key={p.playerId}
-                  type="button"
-                  className="btn btn-ghost"
-                  style={{ textAlign: 'left', padding: '8px 12px', fontSize: 13, justifyContent: 'flex-start' }}
-                  onClick={() => setSelectedPlayer(p)}
-                >
-                  {p.fullName}
-                </button>
+                <button key={p.playerId} type="button" className="btn btn-ghost" style={{ textAlign: 'left', padding: '8px 12px', fontSize: 13, justifyContent: 'flex-start' }} onClick={() => setSelectedPlayer(p)}>{p.fullName}</button>
               ))}
             </div>
           </>
@@ -496,20 +559,8 @@ function ComparePicker({ players, onPick, onCancel }: ComparePickerProps) {
             {!loadingMedia && media.length === 0 && <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>No videos uploaded for this player.</p>}
             <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, maxHeight: '50vh' }}>
               {media.filter((m) => m.mediaType === 'video').map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  className="btn btn-ghost"
-                  style={{ textAlign: 'left', padding: '8px 12px', fontSize: 13, justifyContent: 'flex-start', display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}
-                  onClick={() => onPick({
-                    playerId: selectedPlayer.playerId,
-                    playerName: selectedPlayer.fullName,
-                    mediaId: m.id,
-                    title: m.title,
-                    url: `/api/player/media/${m.id}`,
-                    mimeType: m.contentType,
-                  })}
-                >
+                <button key={m.id} type="button" className="btn btn-ghost" style={{ textAlign: 'left', padding: '8px 12px', fontSize: 13, justifyContent: 'flex-start', display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}
+                  onClick={() => onPick({ playerId: selectedPlayer.playerId, playerName: selectedPlayer.fullName, mediaId: m.id, title: m.title, url: `/api/player/media/${m.id}`, mimeType: m.contentType })}>
                   <span>{m.title}</span>
                   <span style={{ fontSize: 11, color: '#64748b' }}>{m.category} · {new Date(m.createdAt).toLocaleDateString()}</span>
                 </button>
@@ -541,20 +592,52 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
   const isVideo = mimeType.startsWith('video/');
   const isImage = mimeType.startsWith('image/');
 
-  // Single-panel image/non-video state (kept for image support)
+  // Image-mode annotation state
   const [annotations, setAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [active, setActive] = useState<BreakdownAnnotation | null>(null);
   const [anglePending, setAnglePending] = useState<Array<{ x: number; y: number }>>([]);
 
-  const handlePickVideo = useCallback((video: CompareVideo) => {
-    setCompareVideo(video);
-    setShowPicker(false);
-  }, []);
+  // Image zoom/pan
+  const [imgZoom, setImgZoom] = useState(1);
+  const [imgPan, setImgPan] = useState({ x: 0, y: 0 });
+  const imgPanStart = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+  const imgWrapRef = useRef<HTMLDivElement | null>(null);
+
+  const handlePickVideo = useCallback((video: CompareVideo) => { setCompareVideo(video); setShowPicker(false); }, []);
+
+  // Image pan handlers
+  function onImgWheel(e: React.WheelEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setImgZoom((prev) => {
+      const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, prev + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)));
+      if (next === 1) setImgPan({ x: 0, y: 0 });
+      else setImgPan((p) => clampPan(p, next));
+      return next;
+    });
+  }
+  function onImgPanStart(e: React.PointerEvent<HTMLDivElement>) {
+    if (drawMode || imgZoom <= 1) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    imgPanStart.current = { px: e.clientX, py: e.clientY, ox: imgPan.x, oy: imgPan.y };
+  }
+  function onImgPanMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!imgPanStart.current) return;
+    const wrap = imgWrapRef.current;
+    if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    const dx = (e.clientX - imgPanStart.current.px) / rect.width;
+    const dy = (e.clientY - imgPanStart.current.py) / rect.height;
+    setImgPan(clampPan({ x: imgPanStart.current.ox + dx, y: imgPanStart.current.oy + dy }, imgZoom));
+  }
+  function onImgPanEnd(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    imgPanStart.current = null;
+  }
 
   function pointerDownImage(event: ReactPointerEvent<SVGSVGElement>) {
     if (!drawMode) return;
     event.preventDefault();
-    const point = pointOnOverlay(event);
+    const point = pointOnOverlay(event, imgZoom, imgPan);
     if (tool === 'erase') {
       setAnnotations((items) => {
         const nearest = items.map((item) => ({ item, d: Math.min(...item.points.map((p) => Math.hypot(p.x - point.x, p.y - point.y))) })).sort((a, b) => a.d - b.d)[0];
@@ -570,14 +653,8 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
     }
     if (tool === 'angle') {
       const next = [...anglePending, point];
-      if (next.length === 3) {
-        setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'angle', color, width, points: next, angleMode }]);
-        setAnglePending([]);
-        setAnglePendingCount(0);
-      } else {
-        setAnglePending(next);
-        setAnglePendingCount(next.length);
-      }
+      if (next.length === 3) { setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'angle', color, width, points: next, angleMode }]); setAnglePending([]); setAnglePendingCount(0); }
+      else { setAnglePending(next); setAnglePendingCount(next.length); }
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -587,7 +664,7 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
   function pointerMoveImage(event: ReactPointerEvent<SVGSVGElement>) {
     if (!active) return;
     event.preventDefault();
-    const point = pointOnOverlay(event);
+    const point = pointOnOverlay(event, imgZoom, imgPan);
     setActive((current) => {
       if (!current) return current;
       if (current.tool === 'pen') return { ...current, points: [...current.points, point] };
@@ -605,10 +682,7 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
   const allImageAnnotations = [...annotations, ...(active ? [active] : []), ...(anglePending.length > 0 ? [{ id: 'angle-preview', tool: 'angle' as const, color, width, points: anglePending, angleMode }] : [])];
 
   const toolbar = (
-    <div style={{
-      display: 'flex', gap: 4, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 10,
-      background: 'rgba(2,6,23,0.92)', border: '1px solid rgba(148,163,184,0.25)', flexShrink: 0,
-    }}>
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 10, background: 'rgba(2,6,23,0.92)', border: '1px solid rgba(148,163,184,0.25)', flexShrink: 0 }}>
       <button type="button" className={!drawMode ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setDrawMode(false); setAnglePending([]); setAnglePendingCount(0); }}>View</button>
       {(['line', 'arrow', 'circle', 'pen', 'angle', 'text', 'erase'] as BreakdownTool[]).map((entry) => (
         <button key={entry} type="button" className={drawMode && tool === entry ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setDrawMode(true); setTool(entry); setAnglePending([]); setAnglePendingCount(0); }}>
@@ -616,12 +690,12 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
           {entry === 'angle' && anglePendingCount > 0 ? ` (${anglePendingCount}/3)` : ''}
         </button>
       ))}
-      {drawMode && tool === 'angle' ? (
+      {drawMode && tool === 'angle' && (
         <>
           <button type="button" className={angleMode === 'acute' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => setAngleMode('acute')}>Acute</button>
           <button type="button" className={angleMode === 'obtuse' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => setAngleMode('obtuse')}>Obtuse</button>
         </>
-      ) : null}
+      )}
       <input type="color" value={color} onChange={(e) => setColor(e.target.value)} aria-label="Color" style={{ width: 28, height: 28, padding: 1 }} />
       <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700 }}>
         W<input type="range" min={2} max={14} value={width} onChange={(e) => setWidth(Number(e.target.value))} style={{ width: 50 }} />
@@ -635,20 +709,13 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
     </div>
   );
 
+  const imgZoomed = imgZoom > 1;
+
   return (
     <div className="portal-modal-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
       <div
         className="portal-modal-panel"
-        style={{
-          width: compareMode ? 'min(1600px, 98vw)' : 'min(1180px, 96vw)',
-          maxHeight: '98vh',
-          background: '#020617',
-          color: '#f8fafc',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 10,
-          transition: 'width 0.2s ease',
-        }}
+        style={{ width: compareMode ? 'min(1600px, 98vw)' : 'min(1180px, 96vw)', maxHeight: '98vh', background: '#020617', color: '#f8fafc', display: 'flex', flexDirection: 'column', gap: 10, transition: 'width 0.2s ease' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -656,22 +723,13 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
           <h3 style={{ margin: 0, fontSize: '1rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</h3>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
             {isVideo && players && players.length > 0 && (
-              <button
-                type="button"
-                className={compareMode ? 'btn btn-primary' : 'btn btn-ghost'}
-                style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}
-                onClick={() => {
-                  if (compareMode) { setCompareMode(false); setCompareVideo(null); setSynced(false); }
-                  else { setCompareMode(true); setShowPicker(true); }
-                }}
-              >
+              <button type="button" className={compareMode ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}
+                onClick={() => { if (compareMode) { setCompareMode(false); setCompareVideo(null); setSynced(false); } else { setCompareMode(true); setShowPicker(true); } }}>
                 {compareMode ? 'Exit Compare' : 'Compare'}
               </button>
             )}
             {compareMode && compareVideo && (
-              <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={() => setShowPicker(true)}>
-                Swap Video
-              </button>
+              <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={() => setShowPicker(true)}>Swap Video</button>
             )}
             {compareMode && compareVideo && (
               <button type="button" className={synced ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={() => setSynced((v) => !v)}>
@@ -689,55 +747,44 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
         {/* Media area */}
         {isVideo && compareMode && compareVideo ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flex: 1, minHeight: 0 }}>
-            <VideoPanel
-              url={url}
-              title={title}
-              tool={tool}
-              drawMode={drawMode}
-              color={color}
-              width={width}
-              angleMode={angleMode}
-              synced={synced}
-              syncRef={syncRef}
-              compact
-            />
-            <VideoPanel
-              url={compareVideo.url}
-              title={`${compareVideo.playerName} — ${compareVideo.title}`}
-              tool={tool}
-              drawMode={drawMode}
-              color={color}
-              width={width}
-              angleMode={angleMode}
-              synced={synced}
-              syncRef={syncRef}
-              compact
-            />
+            <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact />
+            <VideoPanel url={compareVideo.url} title={`${compareVideo.playerName} — ${compareVideo.title}`} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact />
           </div>
         ) : isVideo ? (
-          <VideoPanel
-            url={url}
-            title={title}
-            tool={tool}
-            drawMode={drawMode}
-            color={color}
-            width={width}
-            angleMode={angleMode}
-          />
+          <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} />
         ) : isImage ? (
-          <div style={{ position: 'relative', marginTop: 4, borderRadius: 10, overflow: 'hidden', background: '#000' }}>
-            <img src={url} alt={title} style={{ width: '100%', maxHeight: '68vh', objectFit: 'contain', display: 'block' }} />
-            <svg
-              viewBox="0 0 1000 1000"
-              preserveAspectRatio="none"
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: drawMode ? 'auto' : 'none', cursor: drawMode ? 'crosshair' : 'default', touchAction: 'none' }}
-              onPointerDown={pointerDownImage}
-              onPointerMove={pointerMoveImage}
-              onPointerUp={finishImage}
-              onPointerCancel={finishImage}
-            >
-              {allImageAnnotations.map((ann) => renderAnnotation(ann, ann.id))}
-            </svg>
+          <div
+            ref={imgWrapRef}
+            style={{ position: 'relative', marginTop: 4, borderRadius: 10, overflow: 'hidden', background: '#000', cursor: imgZoomed && !drawMode ? 'grab' : drawMode ? 'crosshair' : 'default' }}
+            onWheel={onImgWheel}
+            onPointerDown={onImgPanStart}
+            onPointerMove={onImgPanMove}
+            onPointerUp={onImgPanEnd}
+            onPointerCancel={onImgPanEnd}
+          >
+            <div style={{ transform: imgZoomed ? `translate(${imgPan.x * 100}%, ${imgPan.y * 100}%) scale(${imgZoom})` : undefined, transformOrigin: '50% 50%', willChange: imgZoomed ? 'transform' : undefined }}>
+              <img src={url} alt={title} style={{ width: '100%', maxHeight: '68vh', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} />
+              <svg
+                viewBox="0 0 1000 1000"
+                preserveAspectRatio="none"
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: drawMode ? 'auto' : 'none', cursor: drawMode ? 'crosshair' : 'default', touchAction: 'none' }}
+                onPointerDown={pointerDownImage}
+                onPointerMove={pointerMoveImage}
+                onPointerUp={finishImage}
+                onPointerCancel={finishImage}
+              >
+                {allImageAnnotations.map((ann) => renderAnnotation(ann, ann.id))}
+              </svg>
+            </div>
+
+            {/* Image zoom controls */}
+            <div style={{ position: 'absolute', top: 6, left: 6, display: 'flex', gap: 3, zIndex: 10 }}>
+              <button type="button" className="btn btn-ghost" style={{ fontSize: 14, padding: '1px 8px', minHeight: 0, background: 'rgba(2,6,23,0.85)', lineHeight: 1.4, fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); setImgZoom((z) => { const n = Math.min(ZOOM_MAX, z + ZOOM_STEP); setImgPan((p) => clampPan(p, n)); return n; }); }} title="Zoom in">+</button>
+              <button type="button" className="btn btn-ghost" style={{ fontSize: 14, padding: '1px 8px', minHeight: 0, background: 'rgba(2,6,23,0.85)', lineHeight: 1.4, fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); setImgZoom((z) => { const n = Math.max(ZOOM_MIN, z - ZOOM_STEP); if (n === 1) setImgPan({ x: 0, y: 0 }); else setImgPan((p) => clampPan(p, n)); return n; }); }} title="Zoom out">−</button>
+              {imgZoomed && (
+                <button type="button" className="btn btn-ghost" style={{ fontSize: 10, padding: '1px 7px', minHeight: 0, background: 'rgba(2,6,23,0.85)', fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); setImgZoom(1); setImgPan({ x: 0, y: 0 }); }} title="Reset zoom">{Math.round(imgZoom * 10) / 10}× ✕</button>
+              )}
+            </div>
           </div>
         ) : (
           <iframe title={title} src={url} style={{ width: '100%', height: '68vh', border: 0 }} />
@@ -745,11 +792,7 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
       </div>
 
       {showPicker && players && (
-        <ComparePicker
-          players={players}
-          onPick={handlePickVideo}
-          onCancel={() => { setShowPicker(false); if (!compareVideo) setCompareMode(false); }}
-        />
+        <ComparePicker players={players} onPick={handlePickVideo} onCancel={() => { setShowPicker(false); if (!compareVideo) setCompareMode(false); }} />
       )}
     </div>
   );
