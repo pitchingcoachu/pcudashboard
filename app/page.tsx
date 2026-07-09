@@ -527,7 +527,7 @@ export default function Home() {
               <p className="hero-eyebrow">Baseball Player Development Software</p>
               <h2>Built by coaches, for coaches.</h2>
               <p className="hero-subcopy">
-                The PCU Dashboard helps baseball programs organize performance data and programming — so coaches spend less time digging through information and more time developing players.
+                The PCU Dashboard helps college baseball programs and facilities analyze and understand their pitch data — so coaches spend less time digging through information and more time developing players.
               </p>
               <div className="hero-actions">
                 <button type="button" className="btn btn-primary" onClick={scrollToDemo}>

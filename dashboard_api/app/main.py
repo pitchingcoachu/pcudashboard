@@ -8283,14 +8283,18 @@ def _warm_overview_endpoints_for_school(school_code: str, level_bucket: str = "A
         recent_start=today - timedelta(days=13),
         recent_end=today,
         level=level,
-        force_refresh=True,
+        force_refresh=False,
     )
 
 
 def _warm_endpoint_caches(force: bool = False, school_code: Optional[str] = None) -> None:
     schools = [_validate_school_code(school_code)] if school_code else _collect_known_school_codes()
     now = time.monotonic()
+    first = True
     for school in schools:
+        if not first:
+            time.sleep(15)
+        first = False
         levels = ["All", "AAA", "MLB"] if school == "PRO" else ["All"]
         for level_bucket in levels:
             cache_key = f"{school}|{level_bucket}"

@@ -651,6 +651,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             columns: Array.isArray(t.columns) ? t.columns.map((c) => String(c ?? '')) : [...DEFAULT_BULLPEN_COLUMNS],
             columnTypes: normalizeBullpenColumnTypes(t.columnTypes, Array.isArray(t.columns) && t.columns.length ? t.columns.length : DEFAULT_BULLPEN_COLUMNS.length),
             rows: Array.isArray(t.rows) ? t.rows : [], updatedAt: String(t.updatedAt ?? ''),
+            category: (BULLPEN_CATEGORIES as readonly string[]).includes(String(t.category ?? '').trim()) ? String(t.category).trim() as BullpenCategory : '' as BullpenCategory,
           })).filter((t) => t.id && t.name) : [];
           const sharedVelocityTemplates = Array.isArray(sharedPayload.velocityTemplates) ? sharedPayload.velocityTemplates.map((t) => ({
             id: String(t.id ?? ''), name: String(t.name ?? ''), rowCount: Math.max(1, Number(t.rowCount ?? 20)),
@@ -765,6 +766,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               template.rows
             ),
             updatedAt: String(template.updatedAt ?? ''),
+            category: (BULLPEN_CATEGORIES as readonly string[]).includes(String(template.category ?? '').trim()) ? String(template.category).trim() as BullpenCategory : '' as BullpenCategory,
           })).filter((template) => template.id && template.name);
           setBullpenTemplates(nextBullpenTemplates);
           setSelectedBullpenTemplateId(String(bullpenState.selectedTemplateId ?? ''));
