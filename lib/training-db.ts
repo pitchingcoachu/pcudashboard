@@ -3148,6 +3148,12 @@ export async function listExercisesByOrganization(organizationId: number): Promi
   const pool = getDbPool();
   await ensureWorkoutLibraryCalendarLinkTargetColumn();
 
+  // Include PCU template exercises (org 1) for all orgs so every school sees the shared library.
+  // The org's own exercises take priority; PCU duplicates (same name+category) are excluded.
+  const orgIds = organizationId === PCU_TEMPLATE_ORGANIZATION_ID
+    ? [organizationId]
+    : [organizationId, PCU_TEMPLATE_ORGANIZATION_ID];
+
   const result = await pool.query<{
     id: number;
     name: string;
@@ -3161,11 +3167,20 @@ export async function listExercisesByOrganization(organizationId: number): Promi
   }>(
     `
       SELECT id, name, category, rep_measure, tracking_type, reps_per_side, description, instruction_video_url, coaching_cues
-      FROM exercise_library
-      WHERE organization_id = $1
+      FROM exercise_library e
+      WHERE organization_id = ANY($1::int[])
+        AND (
+          organization_id = $2
+          OR NOT EXISTS (
+            SELECT 1 FROM exercise_library own
+            WHERE own.organization_id = $2
+              AND LOWER(TRIM(own.name)) = LOWER(TRIM(e.name))
+              AND LOWER(TRIM(COALESCE(own.category, ''))) = LOWER(TRIM(COALESCE(e.category, '')))
+          )
+        )
       ORDER BY name ASC
     `,
-    [organizationId]
+    [orgIds, organizationId]
   );
 
   return result.rows.map((row) => ({
@@ -3203,10 +3218,10 @@ export async function getExerciseByIdInOrganization(input: {
     `
       SELECT id, name, category, rep_measure, tracking_type, reps_per_side, description, instruction_video_url, coaching_cues
       FROM exercise_library
-      WHERE organization_id = $1 AND id = $2
+      WHERE id = $2 AND organization_id = ANY(ARRAY[$1, $3]::int[])
       LIMIT 1
     `,
-    [input.organizationId, input.exerciseId]
+    [input.organizationId, input.exerciseId, PCU_TEMPLATE_ORGANIZATION_ID]
   );
 
   if ((result.rowCount ?? 0) !== 1) return null;
@@ -3455,6 +3470,12 @@ export async function listWorkoutsByOrganization(organizationId: number): Promis
   await ensureTrainingDbReady();
   const pool = getDbPool();
 
+  // Include PCU template workouts (org 1) for all orgs. The org's own workouts take priority;
+  // PCU duplicates (same name) are excluded so local overrides win.
+  const orgIds = organizationId === PCU_TEMPLATE_ORGANIZATION_ID
+    ? [organizationId]
+    : [organizationId, PCU_TEMPLATE_ORGANIZATION_ID];
+
   const result = await pool.query<{
     id: number;
     name: string;
@@ -3484,11 +3505,19 @@ export async function listWorkoutsByOrganization(organizationId: number): Promis
       FROM workout_library w
       LEFT JOIN workout_exercises we ON we.workout_id = w.id
       LEFT JOIN exercise_library e ON e.id = we.exercise_id
-      WHERE w.organization_id = $1
+      WHERE w.organization_id = ANY($1::int[])
+        AND (
+          w.organization_id = $2
+          OR NOT EXISTS (
+            SELECT 1 FROM workout_library own
+            WHERE own.organization_id = $2
+              AND LOWER(TRIM(own.name)) = LOWER(TRIM(w.name))
+          )
+        )
       GROUP BY w.id, w.name, w.category, w.description, w.calendar_link_target
       ORDER BY w.name ASC
     `,
-    [organizationId]
+    [orgIds, organizationId]
   );
 
   return result.rows.map((row) => ({
@@ -3515,10 +3544,10 @@ export async function getWorkoutByIdInOrganization(input: {
     `
       SELECT id, name, category, description, calendar_link_target
       FROM workout_library
-      WHERE id = $1 AND organization_id = $2
+      WHERE id = $1 AND organization_id = ANY(ARRAY[$2, $3]::int[])
       LIMIT 1
     `,
-    [input.workoutId, input.organizationId]
+    [input.workoutId, input.organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
   );
   if ((workoutResult.rowCount ?? 0) !== 1) return null;
 
@@ -3741,8 +3770,8 @@ export async function saveScheduleTemplate(input: {
   const workoutIds = Array.from(new Set(cleanedDays.flatMap((day) => day.items.map((item) => item.workoutId))));
   if (workoutIds.length === 0) return { ok: false, error: 'No workouts found for this template.' };
   const validWorkouts = await pool.query<{ id: number }>(
-    `SELECT id FROM workout_library WHERE organization_id = $1 AND id = ANY($2::int[])`,
-    [input.organizationId, workoutIds]
+    `SELECT id FROM workout_library WHERE organization_id = ANY(ARRAY[$1, $3]::int[]) AND id = ANY($2::int[])`,
+    [input.organizationId, workoutIds, PCU_TEMPLATE_ORGANIZATION_ID]
   );
   if (validWorkouts.rows.length !== workoutIds.length) {
     return { ok: false, error: 'One or more workouts are not available in this organization.' };
@@ -3941,6 +3970,10 @@ export async function saveScheduleThrowingState(input: {
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'Failed to save throwing state.' };
   }
+}
+
+export async function getPcuSharedThrowingState(): Promise<{ byDate: Record<string, unknown>; weekNotes: Record<string, unknown>; templates: unknown }> {
+  return getScheduleThrowingState({ organizationId: PCU_TEMPLATE_ORGANIZATION_ID, playerId: 0 });
 }
 
 export async function applyScheduleTemplateToPlayer(input: {
@@ -4458,8 +4491,8 @@ export async function addProgramItem(input: {
   if (input.assignmentType === 'exercise') {
     const exId = input.exerciseId ?? 0;
     const exerciseCheck = await pool.query<{ id: number }>(
-      `SELECT id FROM exercise_library WHERE id = $1 AND organization_id = $2 LIMIT 1`,
-      [exId, input.organizationId]
+      `SELECT id FROM exercise_library WHERE id = $1 AND organization_id = ANY(ARRAY[$2, $3]::int[]) LIMIT 1`,
+      [exId, input.organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
     );
     if ((exerciseCheck.rowCount ?? 0) !== 1) {
       return { ok: false, error: 'Exercise was not found in your organization.' };
@@ -4468,8 +4501,8 @@ export async function addProgramItem(input: {
   } else {
     const wkId = input.workoutId ?? 0;
     const workoutCheck = await pool.query<{ id: number }>(
-      `SELECT id FROM workout_library WHERE id = $1 AND organization_id = $2 LIMIT 1`,
-      [wkId, input.organizationId]
+      `SELECT id FROM workout_library WHERE id = $1 AND organization_id = ANY(ARRAY[$2, $3]::int[]) LIMIT 1`,
+      [wkId, input.organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
     );
     if ((workoutCheck.rowCount ?? 0) !== 1) {
       return { ok: false, error: 'Workout was not found in your organization.' };
@@ -4603,8 +4636,8 @@ export async function replaceProgramItemsForDates(input: {
 
   if (exerciseIds.length > 0) {
     const validExercises = await pool.query<{ id: number }>(
-      `SELECT id FROM exercise_library WHERE organization_id = $1 AND id = ANY($2::int[])`,
-      [input.organizationId, exerciseIds]
+      `SELECT id FROM exercise_library WHERE organization_id = ANY(ARRAY[$1, $3]::int[]) AND id = ANY($2::int[])`,
+      [input.organizationId, exerciseIds, PCU_TEMPLATE_ORGANIZATION_ID]
     );
     if (validExercises.rows.length !== exerciseIds.length) {
       return { ok: false, error: 'One or more copied exercises are not available in this organization.' };
@@ -4613,8 +4646,8 @@ export async function replaceProgramItemsForDates(input: {
 
   if (workoutIds.length > 0) {
     const validWorkouts = await pool.query<{ id: number }>(
-      `SELECT id FROM workout_library WHERE organization_id = $1 AND id = ANY($2::int[])`,
-      [input.organizationId, workoutIds]
+      `SELECT id FROM workout_library WHERE organization_id = ANY(ARRAY[$1, $3]::int[]) AND id = ANY($2::int[])`,
+      [input.organizationId, workoutIds, PCU_TEMPLATE_ORGANIZATION_ID]
     );
     if (validWorkouts.rows.length !== workoutIds.length) {
       return { ok: false, error: 'One or more copied workouts are not available in this organization.' };

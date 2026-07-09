@@ -314,6 +314,11 @@
   .contact { align-items: flex-start; flex-direction: column; margin-top: 14px; }
   .contact a { width: 100%; text-align: center; }
   .footer { align-items: flex-start; flex-direction: column; }
+  /* Stack price below plan name so the "Most comprehensive" badge and price don't overlap */
+  .cardHeader { flex-direction: column; gap: 6px; }
+  .price { text-align: left; }
+  /* Push card header down enough to clear the absolute badge on featured card */
+  .featuredCard .cardHeader { padding-top: 28px; }
 }
 
 @media (max-width: 520px) {

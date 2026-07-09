@@ -21,10 +21,13 @@ type MediaPreview = {
   downloadName: string;
 };
 
+type OrgPlayer = { playerId: number; fullName: string };
+
 export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: number; isPlayer: boolean }) {
   const [media, setMedia] = useState<PlayerMedia[]>([]);
   const [loading, setLoading] = useState(false);
   const [mediaPreview, setMediaPreview] = useState<MediaPreview | null>(null);
+  const [orgPlayers, setOrgPlayers] = useState<OrgPlayer[]>([]);
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [mediaTitle, setMediaTitle] = useState('');
   const [mediaCategory, setMediaCategory] = useState('General');
@@ -36,6 +39,15 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
     () => Array.from(new Set(media.map((m) => m.category))).sort(),
     [media]
   );
+
+  useEffect(() => {
+    fetch('/api/dashboard/player-plans/players', { cache: 'no-store' })
+      .then(async (r) => {
+        const data = (await r.json().catch(() => ({}))) as { players?: OrgPlayer[] };
+        if (Array.isArray(data.players)) setOrgPlayers(data.players);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (playerId <= 0) return;
@@ -177,6 +189,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
           mimeType={mediaPreview.mimeType}
           downloadName={mediaPreview.downloadName}
           onClose={() => setMediaPreview(null)}
+          players={orgPlayers}
         />
       )}
     </div>

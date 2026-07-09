@@ -5,6 +5,7 @@ import { resolveProgrammingOrganizationId } from '../../../../../lib/programming
 import {
   getRecoverableBullpenScripts,
   getScheduleThrowingState,
+  getPcuSharedThrowingState,
   playerExistsInOrganization,
   saveScheduleThrowingState,
 } from '../../../../../lib/training-db';
@@ -221,17 +222,34 @@ export async function GET(request: Request) {
     if (!exists) return finish(404, { error: 'Player not found in this organization.' });
   }
 
-  const [playerState, sharedState] = await Promise.all([
+  const PCU_ORG_ID = 1;
+  const isNonPcuOrg = organizationId !== PCU_ORG_ID;
+
+  const [playerState, sharedState, pcuSharedState] = await Promise.all([
     isSharedOnly ? Promise.resolve({ templates: {}, byDate: {}, weekNotes: {} }) : getScheduleThrowingState({ organizationId, playerId }),
     getScheduleThrowingState({ organizationId, playerId: SHARED_PLAYER_ID }),
+    isNonPcuOrg ? getPcuSharedThrowingState() : Promise.resolve(null),
   ]);
 
   const playerTemplatesObj = parseTemplatesObject(playerState.templates);
   const sharedTemplatesObj = parseTemplatesObject(sharedState.templates);
+  const pcuTemplatesObj = pcuSharedState ? parseTemplatesObject(pcuSharedState.templates) : null;
 
-  const throwingTemplates = Array.isArray(sharedTemplatesObj.throwingTemplates)
+  const orgThrowingTemplates = Array.isArray(sharedTemplatesObj.throwingTemplates)
     ? (sharedTemplatesObj.throwingTemplates as unknown[])
     : [];
+  const pcuThrowingTemplates = pcuTemplatesObj && Array.isArray(pcuTemplatesObj.throwingTemplates)
+    ? (pcuTemplatesObj.throwingTemplates as unknown[])
+    : [];
+  // Merge PCU throwing templates that aren't already present by name
+  const orgThrowingNames = new Set(orgThrowingTemplates.map((t) => String((t as Record<string, unknown>).name ?? '').trim().toLowerCase()).filter(Boolean));
+  const throwingTemplates = [
+    ...orgThrowingTemplates,
+    ...pcuThrowingTemplates.filter((t) => {
+      const name = String((t as Record<string, unknown>).name ?? '').trim().toLowerCase();
+      return name && !orgThrowingNames.has(name);
+    }),
+  ];
 
   const legacyBullpen = normalizeScriptState(playerTemplatesObj.bullpen);
   const legacyVelocity = normalizeScriptState(playerTemplatesObj.velocity);
@@ -249,6 +267,26 @@ export async function GET(request: Request) {
   }
   if (velocityTemplates.length === 0 && !isSharedOnly) {
     velocityTemplates = extractLegacyTemplates(playerTemplatesObj.velocity);
+  }
+
+  // Merge PCU bullpen/velocity templates for non-PCU orgs — org's own templates take priority by name
+  if (pcuTemplatesObj) {
+    const pcuBullpen = normalizeTemplateList(pcuTemplatesObj.bullpenTemplates);
+    if (pcuBullpen.length > 0) {
+      const orgNames = new Set(bullpenTemplates.map((t) => t.name.trim().toLowerCase()));
+      bullpenTemplates = [
+        ...bullpenTemplates,
+        ...pcuBullpen.filter((t) => !orgNames.has(t.name.trim().toLowerCase())),
+      ];
+    }
+    const pcuVelocity = normalizeTemplateList(pcuTemplatesObj.velocityTemplates);
+    if (pcuVelocity.length > 0) {
+      const orgNames = new Set(velocityTemplates.map((t) => t.name.trim().toLowerCase()));
+      velocityTemplates = [
+        ...velocityTemplates,
+        ...pcuVelocity.filter((t) => !orgNames.has(t.name.trim().toLowerCase())),
+      ];
+    }
   }
 
   const bullpenState = normalizeScriptState(playerTemplatesObj.bullpen);

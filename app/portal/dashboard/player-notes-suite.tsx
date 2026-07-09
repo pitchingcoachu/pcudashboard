@@ -1141,6 +1141,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             mimeType={mediaPreview.mimeType}
             downloadName={mediaPreview.downloadName}
             onClose={() => setMediaPreview(null)}
+            players={linkedPlayers}
           />
         ) : null}
       </div>
