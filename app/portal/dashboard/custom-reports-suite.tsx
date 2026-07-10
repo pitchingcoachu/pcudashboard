@@ -280,6 +280,12 @@ type ReportPayload = {
   enableTableColors?: boolean;
   percentileScope?: PercentileScope;
   showCellPercentiles?: boolean;
+  useGlobalPitchTypes?: boolean;
+  useGlobalBatterSide?: boolean;
+  useGlobalPitcherHand?: boolean;
+  globalPitchTypes?: string[];
+  globalBatterSide?: string;
+  globalPitcherHand?: string;
   globalStartDate: string;
   globalEndDate: string;
   useMostRecent200Pa?: boolean;
@@ -602,6 +608,17 @@ function selectedValues(values: string[] | undefined): string[] {
   const list = (values ?? []).map((entry) => (entry ?? '').trim()).filter(Boolean);
   if (!list.length || list.includes('All')) return [];
   return list;
+}
+
+function mergeSingleGlobalFilter(globalValue: string, localValue: string): string {
+  const globalNorm = String(globalValue ?? '').trim();
+  const localNorm = String(localValue ?? '').trim();
+  const hasGlobal = Boolean(globalNorm && globalNorm !== 'All');
+  const hasLocal = Boolean(localNorm && localNorm !== 'All');
+  if (hasGlobal && hasLocal && globalNorm !== localNorm) return '__NO_MATCH__';
+  if (hasLocal) return localNorm;
+  if (hasGlobal) return globalNorm;
+  return '';
 }
 
 function normalizeNameKey(value: string): string {
@@ -2200,6 +2217,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const [enableTableColors, setEnableTableColors] = useState(true);
   const [percentileScope, setPercentileScope] = useState<PercentileScope>('NCAA');
   const [showCellPercentiles, setShowCellPercentiles] = useState(false);
+  const [useGlobalPitchTypes, setUseGlobalPitchTypes] = useState(false);
+  const [useGlobalBatterSide, setUseGlobalBatterSide] = useState(false);
+  const [useGlobalPitcherHand, setUseGlobalPitcherHand] = useState(false);
+  const [globalPitchTypes, setGlobalPitchTypes] = useState<string[]>(['All']);
+  const [globalBatterSide, setGlobalBatterSide] = useState('All');
+  const [globalPitcherHand, setGlobalPitcherHand] = useState('All');
   const [globalStartDate, setGlobalStartDate] = useState('');
   const [globalEndDate, setGlobalEndDate] = useState('');
   const [rowPlayers, setRowPlayers] = useState<string[]>(Array.from({ length: MAX_REPORT_ROWS }, () => 'All'));
@@ -2691,6 +2714,17 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   useEffect(() => {
     if (!levelOptions.some((entry) => entry === reportLevel)) setReportLevel('All');
   }, [levelOptions, reportLevel]);
+
+  useEffect(() => {
+    if (restoringSavedReportRef.current) return;
+    setGlobalPitchTypes((current) => {
+      const valid = new Set(pitchTypeOptions);
+      const selected = current.filter((entry) => entry === 'All' || valid.has(entry));
+      return selected.length ? selected : ['All'];
+    });
+    if (!batterSideOptions.includes(globalBatterSide)) setGlobalBatterSide('All');
+    if (!pitcherHandOptions.includes(globalPitcherHand)) setGlobalPitcherHand('All');
+  }, [pitchTypeOptions, batterSideOptions, pitcherHandOptions, globalBatterSide, globalPitcherHand]);
 
   useEffect(() => {
     if (restoringSavedReportRef.current) return;
@@ -3331,24 +3365,41 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               params.set('session_type', sessionType);
             }
           }
-          if (cellFilters.includes('Pitch Types')) {
+          if (useGlobalPitchTypes) {
+            const pitchTypes = selectedValues(globalPitchTypes);
+            if (pitchTypes.length) params.set('pitch_types', pitchTypes.join(','));
+          } else if (cellFilters.includes('Pitch Types')) {
             const pitchTypes = selectedValues(config.pitchTypes);
             if (pitchTypes.length) params.set('pitch_types', pitchTypes.join(','));
           }
-          if (cellFilters.includes('Batter Hand') && config.batterSide && config.batterSide !== 'All') {
-            const hasExplicitPitcherHandFilter = cellFilters.includes('Pitcher Hand') && config.pitcherHand && config.pitcherHand !== 'All';
+          const effectiveBatterSide = mergeSingleGlobalFilter(
+            useGlobalBatterSide ? globalBatterSide : 'All',
+            !useGlobalBatterSide && cellFilters.includes('Batter Hand') ? config.batterSide : ''
+          );
+          if (effectiveBatterSide === '__NO_MATCH__') {
+            params.set('pitch_types', '__NO_MATCH__');
+          } else if (effectiveBatterSide) {
+            const hasExplicitPitcherHandFilter =
+              (useGlobalPitcherHand && globalPitcherHand && globalPitcherHand !== 'All') ||
+              (cellFilters.includes('Pitcher Hand') && config.pitcherHand && config.pitcherHand !== 'All');
             const looksLikeMisappliedVsHandFilter =
               reportType === 'Hitting' &&
               Boolean(impliedPitcherHand) &&
               !hasExplicitPitcherHandFilter &&
-              (config.batterSide === 'Right' || config.batterSide === 'Left') &&
-              config.batterSide === impliedPitcherHand;
+              (effectiveBatterSide === 'Right' || effectiveBatterSide === 'Left') &&
+              effectiveBatterSide === impliedPitcherHand;
             if (!looksLikeMisappliedVsHandFilter) {
-              params.set('batter_side', config.batterSide);
+              params.set('batter_side', effectiveBatterSide);
             }
           }
-          if (cellFilters.includes('Pitcher Hand') && config.pitcherHand && config.pitcherHand !== 'All') {
-            params.set('hand', config.pitcherHand);
+          const effectivePitcherHand = mergeSingleGlobalFilter(
+            useGlobalPitcherHand ? globalPitcherHand : 'All',
+            !useGlobalPitcherHand && cellFilters.includes('Pitcher Hand') ? config.pitcherHand : ''
+          );
+          if (effectivePitcherHand === '__NO_MATCH__') {
+            params.set('pitch_types', '__NO_MATCH__');
+          } else if (effectivePitcherHand) {
+            params.set('hand', effectivePitcherHand);
           } else if (reportType === 'Hitting' && impliedPitcherHand) {
             params.set('hand', impliedPitcherHand);
           }
@@ -3412,6 +3463,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const hasHittingRollupUnsupportedFilters =
             reportType === 'Hitting' &&
             (
+              (useGlobalBatterSide && globalBatterSide && globalBatterSide !== 'All') ||
               (cellFilters.includes('Batter Hand') && config.batterSide && config.batterSide !== 'All') ||
               (cellFilters.includes('Pitch Results') && selectedValues(config.pitchResults).length > 0) ||
               (cellFilters.includes('In Zone') && config.inZone && config.inZone !== 'All') ||
@@ -3498,11 +3550,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             })();
           const query = params.toString();
           const key = `${endpoint}?${query}`;
+          const requestPitchTypes = String(params.get('pitch_types') ?? '')
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter(Boolean);
           const canUseSharedHeatmapSource =
             (reportType === 'Hitting' || reportType === 'Pitching') &&
             reportScope === 'Multi-Player' &&
             normalizedPanelType === 'Heatmap' &&
-            cellFilters.includes('Pitch Types');
+            requestPitchTypes.length > 0;
           const sharedHeatmapFetchKey = (() => {
             if (!canUseSharedHeatmapSource) return '';
             const shared = new URLSearchParams(params);
@@ -3593,7 +3649,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             if (cached && now - cached.at < CACHE_TTL_MS) {
               const normalizedCachedPayload =
                 canUseSharedHeatmapSource
-                  ? filterOverviewPointsByPitchTypes(cached.payload, selectedValues(config.pitchTypes))
+                  ? filterOverviewPointsByPitchTypes(cached.payload, requestPitchTypes)
                   : cached.payload;
               commitCellResult(cellId, normalizedCachedPayload, { status: 'ready' });
               return;
@@ -3603,7 +3659,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               const runningPayload = await running;
               const normalizedRunningPayload =
                 canUseSharedHeatmapSource
-                  ? filterOverviewPointsByPitchTypes(runningPayload, selectedValues(config.pitchTypes))
+                  ? filterOverviewPointsByPitchTypes(runningPayload, requestPitchTypes)
                   : runningPayload;
               commitCellResult(cellId, normalizedRunningPayload, { status: 'ready' });
               return;
@@ -3636,7 +3692,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             try {
               let loadedPayload = await requestPromise;
               if (canUseSharedHeatmapSource) {
-                loadedPayload = filterOverviewPointsByPitchTypes(loadedPayload, selectedValues(config.pitchTypes));
+                loadedPayload = filterOverviewPointsByPitchTypes(loadedPayload, requestPitchTypes);
               }
               if (reportType === 'Hitting' && normalizedPanelType === 'Summary Table') {
                 const skipExpensiveFallbacks = reportScope === 'Multi-Player';
@@ -3906,6 +3962,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     initialSchoolCode,
     reportTeam,
     reportLevel,
+    useGlobalPitchTypes,
+    useGlobalBatterSide,
+    useGlobalPitcherHand,
+    globalPitchTypes,
+    globalBatterSide,
+    globalPitcherHand,
     enableTableColors,
     percentileScope,
     showCellPercentiles,
@@ -3941,6 +4003,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     setEnableTableColors(payload.enableTableColors !== false);
     setPercentileScope(payload.percentileScope === 'TEAM' || payload.percentileScope === 'MLB' ? payload.percentileScope : 'NCAA');
     setShowCellPercentiles(Boolean(payload.showCellPercentiles));
+    setUseGlobalPitchTypes(Boolean(payload.useGlobalPitchTypes));
+    setUseGlobalBatterSide(Boolean(payload.useGlobalBatterSide));
+    setUseGlobalPitcherHand(Boolean(payload.useGlobalPitcherHand));
+    setGlobalPitchTypes(Array.isArray(payload.globalPitchTypes) && payload.globalPitchTypes.length ? payload.globalPitchTypes : ['All']);
+    setGlobalBatterSide(String(payload.globalBatterSide ?? 'All').trim() || 'All');
+    setGlobalPitcherHand(String(payload.globalPitcherHand ?? 'All').trim() || 'All');
     setGlobalStartDate(payload.globalStartDate || '');
     setGlobalEndDate(payload.globalEndDate || '');
     setUseMostRecent200Pa(Boolean(payload.useMostRecent200Pa));
@@ -3981,6 +4049,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     enableTableColors,
     percentileScope,
     showCellPercentiles,
+    useGlobalPitchTypes,
+    useGlobalBatterSide,
+    useGlobalPitcherHand,
+    globalPitchTypes,
+    globalBatterSide,
+    globalPitcherHand,
     globalStartDate,
     globalEndDate,
     useMostRecent200Pa,
@@ -4628,6 +4702,18 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   </label>
                 ) : null}
                 <label className="portal-checkbox-label">
+                  <input type="checkbox" checked={useGlobalPitcherHand} onChange={(event) => setUseGlobalPitcherHand(event.target.checked)} />
+                  Use global pitcher hand instead of per panel
+                </label>
+                <label className="portal-checkbox-label">
+                  <input type="checkbox" checked={useGlobalBatterSide} onChange={(event) => setUseGlobalBatterSide(event.target.checked)} />
+                  Use global batter hand instead of per panel
+                </label>
+                <label className="portal-checkbox-label">
+                  <input type="checkbox" checked={useGlobalPitchTypes} onChange={(event) => setUseGlobalPitchTypes(event.target.checked)} />
+                  Use global pitch type instead of per panel
+                </label>
+                <label className="portal-checkbox-label">
                   <input type="checkbox" checked={showPitchTypeKey} onChange={(event) => setShowPitchTypeKey(event.target.checked)} />
                   Show pitch type key
                 </label>
@@ -4694,6 +4780,41 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     Global End Date
                     <input type="date" value={globalEndDate} onChange={(event) => setGlobalEndDate(event.target.value)} />
                   </label>
+                </div>
+              ) : null}
+
+              {useGlobalPitcherHand || useGlobalBatterSide || useGlobalPitchTypes ? (
+                <div className="portal-form-grid portal-custom-reports-global-dates">
+                  {useGlobalPitcherHand ? (
+                    <label>
+                      Global Pitcher Hand
+                      <SearchableSingleSelect
+                        options={pitcherHandOptions.map((entry) => ({ value: entry, label: entry }))}
+                        value={globalPitcherHand}
+                        onChange={(next) => setGlobalPitcherHand(next || 'All')}
+                      />
+                    </label>
+                  ) : null}
+                  {useGlobalBatterSide ? (
+                    <label>
+                      Global Batter Hand
+                      <SearchableSingleSelect
+                        options={batterSideOptions.map((entry) => ({ value: entry, label: entry }))}
+                        value={globalBatterSide}
+                        onChange={(next) => setGlobalBatterSide(next || 'All')}
+                      />
+                    </label>
+                  ) : null}
+                  {useGlobalPitchTypes ? (
+                    <label>
+                      Global Pitch Type
+                      <SearchableMultiSelect
+                        options={pitchTypeOptions.map((entry) => ({ value: entry, label: entry }))}
+                        values={globalPitchTypes}
+                        onChange={setGlobalPitchTypes}
+                      />
+                    </label>
+                  ) : null}
                 </div>
               ) : null}
 

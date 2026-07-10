@@ -305,7 +305,7 @@ export async function GET(request: Request) {
 
   const splitBy = String(url.searchParams.get('split_by') ?? '').trim();
   const splitByNorm = splitBy || 'Pitch Types';
-  if (!['Pitch Types', 'Pitcher Hand', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(splitByNorm)) {
+  if (!['Pitch Types', 'Pitcher', 'Pitcher Team', 'Pitcher Hand', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(splitByNorm)) {
     return NextResponse.json({ table_rows: [], table_columns: [] });
   }
 
@@ -460,18 +460,233 @@ export async function GET(request: Request) {
   if (batterSide) add('batterside_norm = ?', batterSide);
   if (teamCode) add('pitcher_team_code = ?', teamCode);
   if (pitcherNorms.length) add('pitcher_norm = ANY(?::text[])', pitcherNorms);
+  if (pitchTypeSet.size) add('LOWER(pitch_type) = ANY(?::text[])', Array.from(pitchTypeSet));
 
   const tableRef = schoolCode === 'PRO'
     ? 'public.pro_pitching_heatmap_daily_bins'
     : 'public.pitching_heatmap_daily_bins';
 
   let result: { rows: AggRow[] };
-  try {
+  const useProPitcherEventRollup =
+    schoolCode === 'PRO' &&
+    (splitByNorm === 'Pitcher' || splitByNorm === 'Pitcher Team') &&
+    !batterSide &&
+    !teamCode &&
+    !pitcherNorms.length;
+  const useLeaguePitcherEventRollup =
+    schoolCode !== 'PRO' &&
+    (splitByNorm === 'Pitcher' || splitByNorm === 'Pitcher Team') &&
+    !batterSide &&
+    !teamCode &&
+    !pitcherNorms.length;
+  if (useProPitcherEventRollup) {
+    const eventWhere: string[] = ['school_code = $1'];
+    const eventValues: unknown[] = [schoolCode];
+    const addEvent = (clause: string, value?: unknown) => {
+      if (value === undefined) {
+        eventWhere.push(clause);
+        return;
+      }
+      eventValues.push(value);
+      eventWhere.push(clause.replace('?', `$${eventValues.length}`));
+    };
+    if (level !== 'ALL') addEvent('level_bucket = ?', level);
+    if (startDate) addEvent('session_date >= ?::date', startDate);
+    if (endDate) addEvent('session_date <= ?::date', endDate);
+    if (hand) addEvent('pitcherthrows_norm = ?', hand);
+    if (pitchTypeSet.size) addEvent('LOWER(pitch_type) = ANY(?::text[])', Array.from(pitchTypeSet));
+    const splitExpr = splitByNorm === 'Pitcher Team'
+      ? "CASE WHEN pitcher_team_code <> '' THEN pitcher_team_code ELSE 'Unknown' END"
+      : "CASE WHEN pitcher_name <> '' THEN pitcher_name ELSE pitcher_norm END";
+    const splitGroupExpr = splitByNorm === 'Pitcher Team'
+      ? "CASE WHEN pitcher_team_code <> '' THEN pitcher_team_code ELSE 'Unknown' END"
+      : "pitcher_norm";
+    result = await pool.query<AggRow>(
+      `
+      SELECT
+        MIN(${splitExpr}) AS split_value,
+        MIN(pitch_type) AS pitch_type,
+        SUM(pitches)::int AS pitch_n,
+        SUM(swing_n)::int AS swing_n,
+        SUM(whiff_n)::int AS whiff_n,
+        SUM(in_play_n)::int AS in_play_n,
+        SUM(gb_n)::int AS gb_n,
+        GREATEST(SUM(csw_n)::int - SUM(whiff_n)::int, 0) AS cs_n,
+        GREATEST(SUM(pitches)::int - SUM(swing_n)::int, 0) AS take_n,
+        SUM(bf_n)::int AS pa_n,
+        SUM(in_zone_n)::int AS inzone_n,
+        SUM(comp_n)::int AS comp_n,
+        SUM(fps_den)::int AS fps_den,
+        SUM(fps_num)::int AS fps_num,
+        SUM(early_den)::int AS early_den,
+        SUM(early_num)::int AS early_num,
+        SUM(ahead_den)::int AS ahead_den,
+        SUM(ahead_num)::int AS ahead_num,
+        SUM(ea_den)::int AS ea_den,
+        SUM(ea_num)::int AS ea_num,
+        SUM(oneone_den)::int AS oneone_den,
+        SUM(oneone_num)::int AS oneone_num,
+        SUM(chase_num)::int AS chase_n,
+        (SUM(single_n) + SUM(double_n) + SUM(triple_n) + SUM(hr_n))::int AS h_n,
+        (SUM(double_n) + SUM(triple_n) + SUM(hr_n))::int AS xbh_n,
+        SUM(hr_n)::int AS hr_n,
+        SUM(hbp_n)::int AS hbp_n,
+        0::int AS fps_fb_den,
+        0::int AS fps_fb_num,
+        0::int AS fps_os_den,
+        0::int AS fps_os_num,
+        SUM(barrel_n)::int AS barrel_n,
+        0::double precision AS xiso_sum,
+        0::int AS xiso_n,
+        SUM(velo_sum)::double precision AS relspeed_sum,
+        SUM(velo_n)::int AS relspeed_n,
+        MAX(velo_max)::double precision AS relspeed_max,
+        SUM(ivb_sum)::double precision AS ivb_sum,
+        SUM(ivb_n)::int AS ivb_n,
+        SUM(hb_sum)::double precision AS hb_sum,
+        SUM(hb_n)::int AS hb_n,
+        SUM(spin_sum)::double precision AS spin_sum,
+        SUM(spin_n)::int AS spin_n,
+        SUM(rel_height_sum)::double precision AS relheight_sum,
+        SUM(rel_height_n)::int AS relheight_n,
+        SUM(rel_side_sum)::double precision AS relside_sum,
+        SUM(rel_side_n)::int AS relside_n,
+        SUM(ext_sum)::double precision AS extension_sum,
+        SUM(ext_n)::int AS extension_n,
+        0::double precision AS releasetilt_sum,
+        0::int AS releasetilt_n,
+        0::double precision AS stuff_plus_sum,
+        0::int AS stuff_plus_n,
+        SUM(comp_n)::double precision * 135.0 AS qp_plus_sum,
+        SUM(pitches)::int AS qp_plus_n,
+        0::double precision AS ctrl_plus_sum,
+        0::int AS ctrl_plus_n,
+        0::double precision AS pitching_plus_sum,
+        0::int AS pitching_plus_n,
+        SUM(k_n)::int AS k_n,
+        SUM(bb_n)::int AS bb_n,
+        SUM(rv_sum)::double precision AS rv_sum,
+        SUM(pv_sum)::double precision AS pv_sum,
+        SUM(xwoba_sum)::double precision AS xwoba_sum,
+        SUM(xwoba_n)::int AS xwoba_n,
+        SUM(ev_sum)::double precision AS ev_sum,
+        SUM(ev_n)::int AS ev_n
+      FROM public.pro_pitch_events_daily_rollup
+      WHERE ${eventWhere.join(' AND ')}
+      GROUP BY ${splitGroupExpr}
+      `,
+      eventValues
+    );
+  } else if (useLeaguePitcherEventRollup) {
+    const eventWhere: string[] = schoolCode === 'LEAGUE'
+      ? ["school_code NOT IN ('PRO', 'LEAGUE')"]
+      : ['school_code = $1'];
+    const eventValues: unknown[] = schoolCode === 'LEAGUE' ? [] : [schoolCode];
+    const addEvent = (clause: string, value?: unknown) => {
+      if (value === undefined) {
+        eventWhere.push(clause);
+        return;
+      }
+      eventValues.push(value);
+      eventWhere.push(clause.replace('?', `$${eventValues.length}`));
+    };
+    if (startDate) addEvent('session_date >= ?::date', startDate);
+    if (endDate) addEvent('session_date <= ?::date', endDate);
+    if (sessionType) addEvent('session_bucket = ?', sessionType);
+    if (hand) addEvent('pitcherthrows_norm = ?', hand);
+    if (pitchTypeSet.size) addEvent('LOWER(pitch_type) = ANY(?::text[])', Array.from(pitchTypeSet));
+    const splitExpr = splitByNorm === 'Pitcher Team'
+      ? "CASE WHEN pitcher_team_norm <> '' THEN pitcher_team_norm ELSE 'Unknown' END"
+      : "CASE WHEN pitcher_name <> '' THEN pitcher_name ELSE pitcher_norm END";
+    const splitGroupExpr = splitByNorm === 'Pitcher Team'
+      ? "CASE WHEN pitcher_team_norm <> '' THEN pitcher_team_norm ELSE 'Unknown' END"
+      : "pitcher_norm";
+    result = await pool.query<AggRow>(
+      `
+      SELECT
+        MIN(${splitExpr}) AS split_value,
+        MIN(pitch_type) AS pitch_type,
+        SUM(pitches)::int AS pitch_n,
+        SUM(swing_n)::int AS swing_n,
+        SUM(whiff_n)::int AS whiff_n,
+        SUM(in_play_n)::int AS in_play_n,
+        SUM(gb_n)::int AS gb_n,
+        GREATEST(SUM(csw_n)::int - SUM(whiff_n)::int, 0) AS cs_n,
+        GREATEST(SUM(pitches)::int - SUM(swing_n)::int, 0) AS take_n,
+        SUM(bf_n)::int AS pa_n,
+        SUM(in_zone_n)::int AS inzone_n,
+        SUM(comp_n)::int AS comp_n,
+        SUM(fps_den)::int AS fps_den,
+        SUM(fps_num)::int AS fps_num,
+        SUM(early_den)::int AS early_den,
+        SUM(early_num)::int AS early_num,
+        SUM(ahead_den)::int AS ahead_den,
+        SUM(ahead_num)::int AS ahead_num,
+        SUM(ea_den)::int AS ea_den,
+        SUM(ea_num)::int AS ea_num,
+        SUM(oneone_den)::int AS oneone_den,
+        SUM(oneone_num)::int AS oneone_num,
+        0::int AS chase_n,
+        (SUM(single_n) + SUM(double_n) + SUM(triple_n) + SUM(hr_n))::int AS h_n,
+        (SUM(double_n) + SUM(triple_n) + SUM(hr_n))::int AS xbh_n,
+        SUM(hr_n)::int AS hr_n,
+        SUM(hbp_n)::int AS hbp_n,
+        0::int AS fps_fb_den,
+        0::int AS fps_fb_num,
+        0::int AS fps_os_den,
+        0::int AS fps_os_num,
+        SUM(barrel_n)::int AS barrel_n,
+        0::double precision AS xiso_sum,
+        0::int AS xiso_n,
+        SUM(velo_sum)::double precision AS relspeed_sum,
+        SUM(velo_n)::int AS relspeed_n,
+        MAX(velo_max)::double precision AS relspeed_max,
+        SUM(ivb_sum)::double precision AS ivb_sum,
+        SUM(ivb_n)::int AS ivb_n,
+        SUM(hb_sum)::double precision AS hb_sum,
+        SUM(hb_n)::int AS hb_n,
+        SUM(spin_sum)::double precision AS spin_sum,
+        SUM(spin_n)::int AS spin_n,
+        SUM(rel_height_sum)::double precision AS relheight_sum,
+        SUM(rel_height_n)::int AS relheight_n,
+        SUM(rel_side_sum)::double precision AS relside_sum,
+        SUM(rel_side_n)::int AS relside_n,
+        SUM(ext_sum)::double precision AS extension_sum,
+        SUM(ext_n)::int AS extension_n,
+        0::double precision AS releasetilt_sum,
+        0::int AS releasetilt_n,
+        0::double precision AS stuff_plus_sum,
+        0::int AS stuff_plus_n,
+        SUM(comp_n)::double precision * 135.0 AS qp_plus_sum,
+        SUM(pitches)::int AS qp_plus_n,
+        0::double precision AS ctrl_plus_sum,
+        0::int AS ctrl_plus_n,
+        0::double precision AS pitching_plus_sum,
+        0::int AS pitching_plus_n,
+        SUM(k_n)::int AS k_n,
+        SUM(bb_n)::int AS bb_n,
+        SUM(rv_sum)::double precision AS rv_sum,
+        SUM(pv_sum)::double precision AS pv_sum,
+        0::double precision AS xwoba_sum,
+        0::int AS xwoba_n,
+        SUM(ev_sum)::double precision AS ev_sum,
+        SUM(ev_n)::int AS ev_n
+      FROM public.pitch_events_daily_rollup_league
+      WHERE ${eventWhere.join(' AND ')}
+      GROUP BY ${splitGroupExpr}
+      `,
+      eventValues
+    );
+  } else try {
     result = await pool.query<AggRow>(
       `
       SELECT
         ${
-          splitByNorm === 'Pitcher Hand'
+          splitByNorm === 'Pitcher'
+              ? "CASE WHEN pitcher_norm <> '' THEN pitcher_norm ELSE 'Unknown' END"
+              : splitByNorm === 'Pitcher Team'
+              ? "CASE WHEN pitcher_team_code <> '' THEN pitcher_team_code ELSE 'Unknown' END"
+              : splitByNorm === 'Pitcher Hand'
               ? "CASE WHEN pitcherhand_norm <> '' THEN pitcherhand_norm ELSE 'Unknown' END"
               : splitByNorm === 'Batter Hand'
               ? "CASE WHEN batterside_norm <> '' THEN batterside_norm ELSE 'Unknown' END"
@@ -562,7 +777,11 @@ export async function GET(request: Request) {
       `
       SELECT
         ${
-          splitByNorm === 'Pitcher Hand'
+          splitByNorm === 'Pitcher'
+              ? "CASE WHEN pitcher_norm <> '' THEN pitcher_norm ELSE 'Unknown' END"
+              : splitByNorm === 'Pitcher Team'
+              ? "CASE WHEN pitcher_team_code <> '' THEN pitcher_team_code ELSE 'Unknown' END"
+              : splitByNorm === 'Pitcher Hand'
               ? "CASE WHEN pitcherhand_norm <> '' THEN pitcherhand_norm ELSE 'Unknown' END"
               : splitByNorm === 'Batter Hand'
               ? "CASE WHEN batterside_norm <> '' THEN batterside_norm ELSE 'Unknown' END"
@@ -649,14 +868,18 @@ export async function GET(request: Request) {
   }
 
   const filtered = result.rows.filter((row) => {
-    if (splitByNorm === 'Pitcher Hand' || splitByNorm === 'Batter Hand' || splitByNorm === 'Count' || splitByNorm === 'After Count' || splitByNorm === 'Inning') return true;
+    if (splitByNorm === 'Pitcher' || splitByNorm === 'Pitcher Team' || splitByNorm === 'Pitcher Hand' || splitByNorm === 'Batter Hand' || splitByNorm === 'Count' || splitByNorm === 'After Count' || splitByNorm === 'Inning') return true;
     if (!pitchTypeSet.size) return true;
     return pitchTypeSet.has(String(row.pitch_type ?? '').trim().toLowerCase());
   });
   if (!filtered.length) return NextResponse.json({ table_rows: [], table_columns: [] });
 
   const splitColumn =
-    splitByNorm === 'Pitcher Hand'
+    splitByNorm === 'Pitcher'
+      ? 'Pitcher'
+      : splitByNorm === 'Pitcher Team'
+      ? 'Pitcher Team'
+      : splitByNorm === 'Pitcher Hand'
       ? 'Pitcher Hand'
       : splitByNorm === 'Batter Hand'
       ? 'Batter Hand'

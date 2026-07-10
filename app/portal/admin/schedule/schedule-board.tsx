@@ -1251,17 +1251,85 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     if (!node) return;
     try {
       const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
+      const isLightTheme =
+        typeof document !== 'undefined' &&
+        document.body.classList.contains('theme-light');
+      const pageBackground = isLightTheme ? '#f8fafc' : '#05060a';
       const renderCanvas = async (el: HTMLElement) =>
         html2canvas(el, {
-          backgroundColor: '#05060a',
+          backgroundColor: pageBackground,
           scale: 2,
           useCORS: true,
           onclone: (doc) => {
+            if (isLightTheme) doc.body.classList.add('theme-light');
+            else doc.body.classList.remove('theme-light');
+            doc.documentElement.style.background = pageBackground;
+            doc.body.style.background = pageBackground;
             const clonedRoot = doc.body.querySelector('[data-throwing-export-root="true"]');
             if (!clonedRoot) return;
+            if (clonedRoot instanceof HTMLElement) {
+              clonedRoot.style.background = pageBackground;
+              clonedRoot.style.color = isLightTheme ? '#0f172a' : '#f8fafc';
+              clonedRoot.style.overflow = 'visible';
+            }
             const fields = clonedRoot.querySelectorAll('input[placeholder], textarea[placeholder]');
             fields.forEach((field) => {
               field.removeAttribute('placeholder');
+            });
+            const formFields = clonedRoot.querySelectorAll('input.portal-throwing-field, textarea.portal-throwing-notes');
+            formFields.forEach((field) => {
+              if (!(field instanceof HTMLElement)) return;
+              const tagName = field.tagName.toLowerCase();
+              const isTextarea = tagName === 'textarea';
+              if (tagName !== 'input' && !isTextarea) return;
+              const formField = field as HTMLInputElement | HTMLTextAreaElement;
+              const computed = doc.defaultView?.getComputedStyle(field);
+              const replacement = doc.createElement('div');
+              replacement.textContent = formField.value || '';
+              replacement.className = field.className;
+              replacement.style.boxSizing = 'border-box';
+              replacement.style.width = '100%';
+              replacement.style.minWidth = '0';
+              replacement.style.minHeight = computed?.minHeight || (isTextarea ? '100%' : '36px');
+              replacement.style.height = isTextarea ? '100%' : (computed?.height || '36px');
+              replacement.style.padding = computed?.padding || '0.42rem 0.55rem';
+              replacement.style.border = computed?.border || (isLightTheme ? '1px solid rgba(15, 23, 42, 0.2)' : '1px solid rgba(255, 255, 255, 0.24)');
+              replacement.style.borderRadius = computed?.borderRadius || '6px';
+              replacement.style.background = computed?.background || (isLightTheme ? '#f8fbff' : 'rgba(17, 20, 28, 0.92)');
+              replacement.style.color = computed?.color || (isLightTheme ? '#0f172a' : '#e7edf7');
+              replacement.style.font = computed?.font || 'inherit';
+              replacement.style.fontSize = computed?.fontSize || '12px';
+              replacement.style.fontWeight = computed?.fontWeight || '500';
+              replacement.style.lineHeight = isTextarea ? '1.25' : (computed?.lineHeight || '1.2');
+              replacement.style.display = 'flex';
+              replacement.style.alignItems = isTextarea ? 'flex-start' : 'center';
+              replacement.style.justifyContent = 'flex-start';
+              replacement.style.textAlign = 'left';
+              replacement.style.whiteSpace = isTextarea ? 'pre-wrap' : 'nowrap';
+              replacement.style.overflowWrap = isTextarea ? 'anywhere' : 'normal';
+              replacement.style.wordBreak = 'normal';
+              replacement.style.overflow = 'hidden';
+              field.replaceWith(replacement);
+            });
+            clonedRoot.querySelectorAll('.portal-schedule-day-body').forEach((body) => {
+              if (!(body instanceof HTMLElement)) return;
+              body.style.overflow = 'hidden';
+              body.style.overflowX = 'hidden';
+              body.style.overflowY = 'hidden';
+            });
+            clonedRoot.querySelectorAll('[data-throwing-intensity-tone]').forEach((cell) => {
+              if (!(cell instanceof HTMLElement)) return;
+              const tone = cell.dataset.throwingIntensityTone;
+              if (tone === 'low') {
+                cell.style.background = isLightTheme ? 'rgba(153, 27, 27, 0.30)' : '#3f0c0f';
+                cell.style.boxShadow = isLightTheme ? 'inset 0 0 0 1px rgba(239, 68, 68, 0.55)' : 'inset 0 0 0 1px #8f2024';
+              } else if (tone === 'medium') {
+                cell.style.background = isLightTheme ? 'rgba(202, 138, 4, 0.28)' : '#4a3308';
+                cell.style.boxShadow = isLightTheme ? 'inset 0 0 0 1px rgba(250, 204, 21, 0.55)' : 'inset 0 0 0 1px #9a7404';
+              } else if (tone === 'high') {
+                cell.style.background = isLightTheme ? 'rgba(21, 128, 61, 0.30)' : '#0b3218';
+                cell.style.boxShadow = isLightTheme ? 'inset 0 0 0 1px rgba(74, 222, 128, 0.55)' : 'inset 0 0 0 1px #1f7a3c';
+              }
             });
           },
         });
@@ -1308,12 +1376,13 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       const sectionGap = 8;
 
       const paintPageBackground = () => {
-        pdf.setFillColor(5, 6, 10);
+        if (isLightTheme) pdf.setFillColor(248, 250, 252);
+        else pdf.setFillColor(5, 6, 10);
         pdf.rect(0, 0, pageWidth, pageHeight, 'F');
       };
 
       const drawCenteredHeader = () => {
-        pdf.setTextColor(255, 255, 255);
+        pdf.setTextColor(isLightTheme ? 15 : 255, isLightTheme ? 23 : 255, isLightTheme ? 42 : 255);
         if (logoData) {
           pdf.addImage(logoData, 'PNG', margin, margin, logoW, logoH);
           pdf.addImage(logoData, 'PNG', pageWidth - margin - logoW, margin, logoW, logoH);
@@ -1833,6 +1902,15 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     return Number.isFinite(value) ? value : null;
   };
 
+  const getThrowingIntensityTone = (entry: ThrowingDayEntry): 'low' | 'medium' | 'high' | '' => {
+    const intensity = parseIntensityValue(entry.intensity);
+    if (intensity == null) return '';
+    if (intensity <= 60) return 'low';
+    if (intensity >= 65 && intensity <= 85) return 'medium';
+    if (intensity >= 90) return 'high';
+    return '';
+  };
+
   const getThrowingCellHighlightStyle = (entry: ThrowingDayEntry): CSSProperties => {
     const intensity = parseIntensityValue(entry.intensity);
     if (intensity == null) return {};
@@ -2304,6 +2382,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       <article
         key={date}
         className="portal-schedule-day portal-throwing-cell"
+        data-throwing-intensity-tone={getThrowingIntensityTone(entry) || undefined}
         style={{
           minHeight: '182px',
           aspectRatio: 'auto',
@@ -2472,6 +2551,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       <article
         key={`throwing-template-${cellKey}`}
         className="portal-schedule-day portal-throwing-cell"
+        data-throwing-intensity-tone={getThrowingIntensityTone(entry) || undefined}
         style={{
           minHeight: '182px',
           aspectRatio: 'auto',
@@ -4550,7 +4630,6 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                           alignContent: 'start',
                           overflow: 'hidden',
                           margin: 0,
-                          gridTemplateRows: 'repeat(4, 36px)',
                           gap: '0.28rem',
                           paddingRight: 0,
                         }}

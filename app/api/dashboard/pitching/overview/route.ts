@@ -158,9 +158,9 @@ function applyOverviewBackfills(payload: unknown): unknown {
 
 function resolveOverviewTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
-  if (upper === 'LEAGUE') return 60000;
-  if (upper === 'PRO') return 45000;
-  return 60000;
+  if (upper === 'LEAGUE') return 30000;
+  if (upper === 'PRO') return 30000;
+  return 30000;
 }
 
 function resolveOverviewCachePolicy(
@@ -175,11 +175,7 @@ function resolveOverviewCachePolicy(
 }
 
 function resolveOverviewRetries(schoolCode: string): number {
-  const upper = String(schoolCode ?? '').trim().toUpperCase();
-  // League overview/heatmap requests are long-running and most exposed to brief
-  // backend restarts; allow a couple retries before surfacing an error.
-  if (upper === 'LEAGUE') return 2;
-  return 1;
+  return 0;
 }
 
 function parseIsoDate(value: string): Date | null {
@@ -201,6 +197,16 @@ function hasNonEmptyTableRows(payload: unknown): boolean {
 
 function hasValue(value: string): boolean {
   return String(value ?? '').trim().length > 0;
+}
+
+function normalizeBallTypesParam(value: string): string {
+  const selected = String(value ?? '')
+    .split(/[;,]/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => part.toLowerCase() !== 'all');
+  if (selected.length === 1 && selected[0].toLowerCase() === 'baseball') return '';
+  return selected.join(';');
 }
 
 function trimCustomColumnsForBaseline(raw: string, maxCols = 48): string {
@@ -473,7 +479,7 @@ async function fetchProSafePitchingLeaderboard(params: {
     staleTtlMs: cachePolicy.staleTtlMs,
     timeoutMs,
     retries,
-    fetcher: () => fetch(fallbackUrl.toString(), { cache: 'no-store' }),
+    fetcher: (signal) => fetch(fallbackUrl.toString(), { cache: 'no-store', signal }),
   });
   return fallback;
 }
@@ -508,7 +514,7 @@ async function fetchLeagueSafePitchingLeaderboard(params: {
     staleTtlMs: cachePolicy.staleTtlMs,
     timeoutMs,
     retries,
-    fetcher: () => fetch(fallbackUrl.toString(), { cache: 'no-store' }),
+    fetcher: (signal) => fetch(fallbackUrl.toString(), { cache: 'no-store', signal }),
   });
 }
 
@@ -627,6 +633,7 @@ export async function GET(request: Request) {
     : rawCustomColumns;
   const includeRowPitches = inputUrl.searchParams.get('include_row_pitches')?.trim() ?? '';
   const includeTrendRows = inputUrl.searchParams.get('include_trend_rows')?.trim() ?? '';
+  const effectiveBallTypes = normalizeBallTypesParam(ballTypes);
   const resolvedSchoolCode = resolveDashboardSchoolCode({
     userId: session.userId ?? 0,
     email: session.email,
@@ -719,8 +726,8 @@ export async function GET(request: Request) {
   if (inZone) url.searchParams.set('in_zone', inZone);
   if (qpLocations) url.searchParams.set('qp_locations', qpLocations);
   if (pitchTypes) url.searchParams.set('pitch_types', pitchTypes);
-  if (ballTypes && String(schoolCode ?? '').trim().toUpperCase() !== 'PRO' && String(schoolCode ?? '').trim().toUpperCase() !== 'LEAGUE') {
-    url.searchParams.set('ball_types', ballTypes);
+  if (effectiveBallTypes && String(schoolCode ?? '').trim().toUpperCase() !== 'PRO' && String(schoolCode ?? '').trim().toUpperCase() !== 'LEAGUE') {
+    url.searchParams.set('ball_types', effectiveBallTypes);
     url.searchParams.set('force_raw', '1');
   }
   if (zoneLocations) url.searchParams.set('zone_locations', zoneLocations);
@@ -821,7 +828,7 @@ export async function GET(request: Request) {
     hasValue(visualOption) ||
     hasValue(inZone) ||
     hasValue(pitchTypes) ||
-    hasValue(ballTypes) ||
+    hasValue(effectiveBallTypes) ||
     hasValue(zoneLocations) ||
     hasValue(pitchResults) ||
     hasValue(countFilter) ||
@@ -853,7 +860,7 @@ export async function GET(request: Request) {
     hasValue(visualOption) ||
     hasValue(inZone) ||
     hasValue(pitchTypes) ||
-    hasValue(ballTypes) ||
+    hasValue(effectiveBallTypes) ||
     hasValue(zoneLocations) ||
     hasValue(pitchResults) ||
     hasValue(countFilter) ||
@@ -872,12 +879,19 @@ export async function GET(request: Request) {
     hasValue(ipMax) ||
     hasValue(chartOnly) ||
     hasValue(forceRaw);
+  const leaguePercentileBaselineLeaderboard =
+    percentileBaseline &&
+    isLeague &&
+    !shouldScopePlayer &&
+    broadScope &&
+    isLeaderboardLikeSplit &&
+    !isTruthy(chartOnly);
   const leagueBroadLeaderboard =
     isLeague &&
     !shouldScopePlayer &&
     broadScope &&
     isLeaderboardLikeSplit &&
-    !hasLeagueLeaderboardNarrowingFilters &&
+    (!hasLeagueLeaderboardNarrowingFilters || leaguePercentileBaselineLeaderboard) &&
     !isTruthy(chartOnly);
   const shouldForceLeaguePitchTypesRollup =
     isLeague &&
@@ -967,6 +981,8 @@ export async function GET(request: Request) {
     const dropKeys = [
       'with_video',
       'break_lines',
+      'stuff_level',
+      'stuff_base',
       'hand',
       'batter_side',
       'venue',
@@ -1130,7 +1146,7 @@ export async function GET(request: Request) {
       staleTtlMs: cachePolicy.staleTtlMs,
       timeoutMs: resolveOverviewTimeoutMs(schoolCode),
       retries: resolveOverviewRetries(schoolCode),
-      fetcher: () => fetch(url.toString(), { cache: 'no-store' }),
+      fetcher: (signal) => fetch(url.toString(), { cache: 'no-store', signal }),
     });
     if (
       result.status >= 200 &&
@@ -1219,7 +1235,7 @@ export async function GET(request: Request) {
       pitcher: scopedPitcher || pitcher,
       teamType,
       pitchTypes,
-      ballTypes,
+      ballTypes: effectiveBallTypes,
       includeChartPoints: url.searchParams.get('include_chart_points') ?? includeChartPoints,
       chartOnly: url.searchParams.get('chart_only') ?? chartOnly,
       splitBy,

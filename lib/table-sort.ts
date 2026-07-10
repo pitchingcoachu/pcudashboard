@@ -111,7 +111,8 @@ export function formatTableDisplayValue(column: string, value: unknown): string 
   if (upper === 'USAGE' || upper === 'USAGE %' || upper === 'USAGE%') {
     const numericValue = parseSortableNumber(value);
     if (numericValue === null) return String(value);
-    const normalizedUsage = Math.abs(numericValue) <= 1 ? numericValue * 100 : numericValue;
+    const rawText = typeof value === 'string' ? value.trim() : '';
+    const normalizedUsage = rawText.includes('%') || Math.abs(numericValue) > 1 ? numericValue : numericValue * 100;
     return `${normalizedUsage.toFixed(1)}%`;
   }
   if (upper.includes('%')) {

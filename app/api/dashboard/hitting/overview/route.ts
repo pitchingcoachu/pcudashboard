@@ -87,6 +87,15 @@ async function maybeAttachHittingHeatmapRollup(params: {
 
   if (!isTruthy(includeChartPoints)) return payload;
   if (!payload || typeof payload !== 'object') return payload;
+  const existingChartPoints = (payload as { chart_points?: unknown }).chart_points;
+  const existingHeatmapPoints = (payload as { heatmap_points?: unknown }).heatmap_points;
+  if (
+    isTruthy(inputUrl.searchParams.get('chart_only')?.trim() ?? '') &&
+    ((Array.isArray(existingChartPoints) && existingChartPoints.length > 0) ||
+      (Array.isArray(existingHeatmapPoints) && existingHeatmapPoints.length > 0))
+  ) {
+    return payload;
+  }
 
   const hasUnsupportedFilters = [
     'pitch_results',

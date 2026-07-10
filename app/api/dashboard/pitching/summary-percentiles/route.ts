@@ -36,6 +36,10 @@ function extractColumnValues(
   const splitColumn = String((Array.isArray(payload.table_columns) ? payload.table_columns[0] : '') || 'Pitcher');
   const out = rows
     .filter((row) => !isAllLikeRowValue(row[splitColumn]))
+    .filter((row) => {
+      const pitches = parseSortableNumber(row['#'] ?? row.P ?? row.Pitches);
+      return pitches === null || pitches >= 25;
+    })
     .map((row) => parseSortableNumber(row[column]))
     .filter((value): value is number => value !== null)
     .sort((a, b) => a - b);
@@ -49,7 +53,18 @@ export async function POST(request: Request) {
 
   const body = (await request.json().catch(() => ({}))) as Body;
   const requests = Array.isArray(body.requests) ? body.requests : [];
-  const columns = Array.isArray(body.columns) ? body.columns.map((v) => String(v ?? '').trim()).filter(Boolean) : [];
+  const requestedColumns = Array.isArray(body.columns) ? body.columns.map((v) => String(v ?? '').trim()).filter(Boolean) : [];
+  const supportedColumns = new Set([
+    '#', 'P', 'PA', 'BF', 'AB', 'AVG', 'OBP', 'SLG', 'OPS', 'H', 'XBH', 'HR', 'HBP', 'BB', 'K', 'Whiffs',
+    'Velo', 'Max', 'IVB', 'HB', 'Spin', 'Height', 'Side', 'Ext', 'rTilt',
+    'Usage', 'Overall', 'InZone%', 'Comp%', 'Strike%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%',
+    'FPS(FB)%', 'FPS(OS)%',
+    'Swing%', 'Whiff%', 'SwStrk%', 'GB%', 'K%', 'BB%', 'K-BB%', 'CSW%', 'Called-S%', 'Take%', 'Chase%',
+    'EV', 'Barrel%', 'xWOBA', 'xISO', 'RV/100', 'PV/100',
+    'Stuff+', 'QP+', 'Ctrl+', 'Pitching+',
+    'ERA', 'FIP', 'xFIP', 'SIERA', 'WHIP',
+  ]);
+  const columns = requestedColumns.filter((column) => supportedColumns.has(column));
   if (!requests.length || !columns.length) {
     return NextResponse.json({ distributions: {}, handed_distributions: {} });
   }
@@ -71,16 +86,14 @@ export async function POST(request: Request) {
 
       const baseUrl = new URL('/api/dashboard/pitching/table-rollup', origin);
       baseUrl.search = query;
-      if ((baseUrl.searchParams.get('table_mode') ?? '').trim().toLowerCase() === 'custom') {
-        baseUrl.searchParams.set('custom_columns', columns.join(','));
-      }
+      baseUrl.searchParams.set('custom_columns', columns.join(','));
       baseUrl.searchParams.set('include_chart_points', '0');
       baseUrl.searchParams.set('include_row_pitches', '0');
       baseUrl.searchParams.set('include_trend_rows', '0');
       baseUrl.searchParams.delete('chart_only');
       baseUrl.searchParams.delete('chart_points_limit');
       const baseResult = await fetchDashboardJsonWithCache({
-        cacheKey: `pitching:summary-percentiles:base:${baseUrl.toString()}`,
+        cacheKey: `pitching:summary-percentiles:v3:base:${baseUrl.toString()}`,
         ttlMs: 300000,
         staleTtlMs: 1800000,
         timeoutMs: 120000,
@@ -102,16 +115,14 @@ export async function POST(request: Request) {
       if (!handedQuery) return;
       const handedUrl = new URL('/api/dashboard/pitching/table-rollup', origin);
       handedUrl.search = handedQuery;
-      if ((handedUrl.searchParams.get('table_mode') ?? '').trim().toLowerCase() === 'custom') {
-        handedUrl.searchParams.set('custom_columns', columns.join(','));
-      }
+      handedUrl.searchParams.set('custom_columns', columns.join(','));
       handedUrl.searchParams.set('include_chart_points', '0');
       handedUrl.searchParams.set('include_row_pitches', '0');
       handedUrl.searchParams.set('include_trend_rows', '0');
       handedUrl.searchParams.delete('chart_only');
       handedUrl.searchParams.delete('chart_points_limit');
       const handedResult = await fetchDashboardJsonWithCache({
-        cacheKey: `pitching:summary-percentiles:handed:${handedUrl.toString()}`,
+        cacheKey: `pitching:summary-percentiles:v3:handed:${handedUrl.toString()}`,
         ttlMs: 300000,
         staleTtlMs: 1800000,
         timeoutMs: 120000,

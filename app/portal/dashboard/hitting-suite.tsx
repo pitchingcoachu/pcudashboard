@@ -12,6 +12,7 @@ import { dashboardActivityPath, dispatchPortalActivity } from './activity-events
 
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
+type Contact2dDisplay = 'individual' | 'average_pitch_type' | 'heat_exit_velocity' | 'heat_result' | 'heat_contact';
 
 type HittingFiltersPayload = {
   school_code: string;
@@ -2111,6 +2112,84 @@ function buildHeatCells(points: ChartPoint[], metric: string, strictRunValue = f
   return cells;
 }
 
+function resultQualityScore(point: ChartPoint): number {
+  const label = resultLabelForSwing(point.play_result);
+  if (label === 'HomeRun') return 1;
+  if (label === 'Triple') return 0.86;
+  if (label === 'Double') return 0.72;
+  if (label === 'Single') return 0.58;
+  if (label === 'Error') return 0.48;
+  if (label === 'FieldersChoice' || label === 'Sacrifice') return 0.34;
+  if (label === 'Out') return 0.18;
+  return 0.28;
+}
+
+function buildContactHeatCells(
+  points: ChartPoint[],
+  metric: 'exit_velocity' | 'result' | 'contact',
+  bounds: { xMin: number; xMax: number; yMin: number; yMax: number }
+): HeatCell[] {
+  const cols = 44;
+  const rows = 40;
+  const cellW = (bounds.xMax - bounds.xMin) / cols;
+  const cellH = (bounds.yMax - bounds.yMin) / rows;
+  const sigmaX = Math.max(0.12, (bounds.xMax - bounds.xMin) / 18);
+  const sigmaY = Math.max(0.12, (bounds.yMax - bounds.yMin) / 20);
+  const valid = points
+    .map((p) => ({
+      p,
+      x: parseNumber(p.contact_position_z),
+      y: parseNumber(p.contact_position_x),
+    }))
+    .filter(
+      (row): row is { p: ChartPoint; x: number; y: number } =>
+        row.x !== null &&
+        row.y !== null &&
+        row.x >= bounds.xMin &&
+        row.x <= bounds.xMax &&
+        row.y >= bounds.yMin &&
+        row.y <= bounds.yMax
+    );
+  if (!valid.length) return [];
+
+  const evRows = valid.filter((row) => typeof row.p.exit_speed === 'number' && Number.isFinite(row.p.exit_speed));
+  const globalEv = evRows.length ? evRows.reduce((sum, row) => sum + Number(row.p.exit_speed), 0) / evRows.length : 88;
+  const globalResult = valid.reduce((sum, row) => sum + resultQualityScore(row.p), 0) / valid.length;
+  const shrinkStrength = 8;
+  const eps = 1e-9;
+  const cells: HeatCell[] = [];
+
+  for (let row = 0; row < rows; row += 1) {
+    const cy = bounds.yMin + (row + 0.5) * cellH;
+    for (let col = 0; col < cols; col += 1) {
+      const cx = bounds.xMin + (col + 0.5) * cellW;
+      let sumW = 0;
+      let evWSum = 0;
+      let evW = 0;
+      let resultWSum = 0;
+      for (const point of valid) {
+        const dx = (cx - point.x) / sigmaX;
+        const dy = (cy - point.y) / sigmaY;
+        const w = Math.exp(-0.5 * (dx * dx + dy * dy));
+        if (w < 1e-6) continue;
+        sumW += w;
+        if (typeof point.p.exit_speed === 'number' && Number.isFinite(point.p.exit_speed)) {
+          evWSum += w * point.p.exit_speed;
+          evW += w;
+        }
+        resultWSum += w * resultQualityScore(point.p);
+      }
+
+      let value = sumW;
+      if (metric === 'exit_velocity') value = (evWSum + shrinkStrength * globalEv) / Math.max(eps, evW + shrinkStrength);
+      if (metric === 'result') value = (resultWSum + shrinkStrength * globalResult) / Math.max(eps, sumW + shrinkStrength);
+      cells.push({ x: bounds.xMin + col * cellW, y: bounds.yMin + row * cellH, w: cellW, h: cellH, value, density: sumW });
+    }
+  }
+
+  return cells;
+}
+
 export default function HittingSuite({
   role,
   selectedSchoolCode,
@@ -2166,7 +2245,7 @@ export default function HittingSuite({
   const [appliedFilterVersion, setAppliedFilterVersion] = useState(0);
   const [chartHover, setChartHover] = useState<ChartHover>(null);
   const [swingTab, setSwingTab] = useState<'2D Contact' | '3D Contact' | 'Attack Angles' | 'Bat Speed' | 'EV and LA'>('2D Contact');
-  const [contact2dMode, setContact2dMode] = useState<'individual' | 'average_pitch_type'>('individual');
+  const [contact2dDisplay, setContact2dDisplay] = useState<Contact2dDisplay>('individual');
   const [contact2dColorBy, setContact2dColorBy] = useState<'pitch_type' | 'exit_velocity' | 'result'>('pitch_type');
   const [contact3dMode, setContact3dMode] = useState<'individual' | 'average_pitch_type'>('individual');
   const [contact3dColorBy, setContact3dColorBy] = useState<'pitch_type' | 'exit_velocity' | 'result'>('pitch_type');
@@ -3206,7 +3285,7 @@ export default function HittingSuite({
       if (pcMin.trim()) params.set('pc_min', pcMin.trim());
       if (pcMax.trim()) params.set('pc_max', pcMax.trim());
       params.set('include_chart_points', '0');
-      params.set('force_raw', '1');
+      params.delete('force_raw');
       const response = await fetch(`/api/dashboard/hitting/overview?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
       const payload = (await response.json().catch(() => ({}))) as HittingOverviewPayload & { error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to load game log.');
@@ -4332,7 +4411,16 @@ export default function HittingSuite({
   );
   const swingLegend = useMemo(() => {
     const map = new Map<string, string>();
-    if (swingTab === '2D Contact' || swingTab === '3D Contact') {
+    if (swingTab === '2D Contact' && contact2dDisplay !== 'individual' && contact2dDisplay !== 'average_pitch_type') {
+      if (contact2dDisplay === 'heat_result') {
+        map.set('Outs / weak results', divergingColor(0.18, 0.15, 0.5, 1));
+        map.set('Average results', divergingColor(0.5, 0.15, 0.5, 1));
+        map.set('Hits / damage', divergingColor(0.9, 0.15, 0.5, 1));
+      } else if (contact2dDisplay === 'heat_contact') {
+        map.set('Lower contact density', sequentialColor(0.2, 0, 1));
+        map.set('Higher contact density', sequentialColor(1, 0, 1));
+      }
+    } else if (swingTab === '2D Contact' || swingTab === '3D Contact') {
       const mode = swingTab === '2D Contact' ? contact2dColorBy : contact3dColorBy;
       const base = swingTab === '2D Contact' ? swingContactPoints : swingContact3dPoints;
       for (const p of base) {
@@ -4357,7 +4445,7 @@ export default function HittingSuite({
       }
     }
     return Array.from(map.entries());
-  }, [swingTab, contact2dColorBy, contact3dColorBy, batSpeedColorBy, evlaColorBy, swingContactPoints, swingContact3dPoints, swingEvlaPoints, points, swingColorFor]);
+  }, [swingTab, contact2dDisplay, contact2dColorBy, contact3dColorBy, batSpeedColorBy, evlaColorBy, swingContactPoints, swingContact3dPoints, swingEvlaPoints, points, swingColorFor]);
 
   useEffect(() => {
     if (swingTab !== '3D Contact') return;
@@ -5859,23 +5947,28 @@ export default function HittingSuite({
                             options={[
                               { value: 'individual', label: 'Individual Pitches' },
                               { value: 'average_pitch_type', label: 'Average by Pitch Type' },
+                              { value: 'heat_exit_velocity', label: 'Heat: Exit Velocity' },
+                              { value: 'heat_result', label: 'Heat: Results' },
+                              { value: 'heat_contact', label: 'Heat: Contact' },
                             ]}
-                            value={contact2dMode}
-                            onChange={(next) => setContact2dMode(next as 'individual' | 'average_pitch_type')}
+                            value={contact2dDisplay}
+                            onChange={(next) => setContact2dDisplay(next as Contact2dDisplay)}
                           />
                         </label>
-                        <label>
-                          Color By
-                          <SearchableSingleSelect
-                            options={[
-                              { value: 'pitch_type', label: 'Pitch Type' },
-                              { value: 'exit_velocity', label: 'Exit Velocity' },
-                              { value: 'result', label: 'Result' },
-                            ]}
-                            value={contact2dColorBy}
-                            onChange={(next) => setContact2dColorBy(next as 'pitch_type' | 'exit_velocity' | 'result')}
-                          />
-                        </label>
+                        {contact2dDisplay === 'individual' || contact2dDisplay === 'average_pitch_type' ? (
+                          <label>
+                            Color By
+                            <SearchableSingleSelect
+                              options={[
+                                { value: 'pitch_type', label: 'Pitch Type' },
+                                { value: 'exit_velocity', label: 'Exit Velocity' },
+                                { value: 'result', label: 'Result' },
+                              ]}
+                              value={contact2dColorBy}
+                              onChange={(next) => setContact2dColorBy(next as 'pitch_type' | 'exit_velocity' | 'result')}
+                            />
+                          </label>
+                        ) : null}
                       </>
                     ) : null}
                     {swingTab === '3D Contact' ? (
@@ -5985,15 +6078,19 @@ export default function HittingSuite({
                         />
                       </label>
                     ) : null}
-                    <div style={{ fontWeight: 700, marginTop: 6 }}>Color Key</div>
-                    <div style={{ display: 'grid', gap: 8 }}>
-                      {swingLegend.map(([label, color]) => (
-                        <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ width: 12, height: 12, borderRadius: 999, background: color, display: 'inline-block', border: '1px solid rgba(255,255,255,0.35)' }} />
-                          <span>{label}</span>
+                    {swingLegend.length ? (
+                      <>
+                        <div style={{ fontWeight: 700, marginTop: 6 }}>Color Key</div>
+                        <div style={{ display: 'grid', gap: 8 }}>
+                          {swingLegend.map(([label, color]) => (
+                            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span style={{ width: 12, height: 12, borderRadius: 999, background: color, display: 'inline-block', border: '1px solid rgba(255,255,255,0.35)' }} />
+                              <span>{label}</span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      </>
+                    ) : null}
                   </div>
 
                   <div className="dashboard-panel">
@@ -6006,8 +6103,9 @@ export default function HittingSuite({
                     {swingTab === '2D Contact' ? (
                       <svg viewBox="0 0 720 560" style={{ width: '100%', height: 560, border: '1px solid rgba(255,255,255,0.14)', borderRadius: 10 }} onMouseLeave={() => setChartHover(null)}>
                         {(() => {
+                          const isHeatMode = contact2dDisplay !== 'individual' && contact2dDisplay !== 'average_pitch_type';
                           const data =
-                            contact2dMode === 'average_pitch_type'
+                            contact2dDisplay === 'average_pitch_type'
                               ? Object.values(
                                   swingContactPoints.reduce<Record<string, { n: number; x: number; z: number; p: ChartPoint }>>((acc, p) => {
                                     const key = p.pitch_type || 'Unknown';
@@ -6019,19 +6117,147 @@ export default function HittingSuite({
                                   }, {})
                                 ).map((g) => ({ ...g.p, contact_position_x: g.x / g.n, contact_position_z: g.z / g.n }))
                               : swingContactPoints;
-                          const ys = data.map((p) => Number(p.contact_position_x ?? 0)).filter((v) => Number.isFinite(v));
+                          const ys = swingContactPoints.map((p) => Number(p.contact_position_x ?? 0)).filter((v) => Number.isFinite(v));
                           const yMin = ys.length ? Math.floor(Math.min(...ys, -0.6)) : -1;
                           const yMax = ys.length ? Math.ceil(Math.max(...ys, 1.0)) : 6;
                           const xMin = -2.5;
                           const xMax = 2.5;
                           const px = (x: number) => 20 + ((x - xMin) / (xMax - xMin)) * 680;
                           const py = (y: number) => 540 - ((y - yMin) / (yMax - yMin)) * 520;
+                          const heatMetric =
+                            contact2dDisplay === 'heat_exit_velocity'
+                              ? 'exit_velocity'
+                              : contact2dDisplay === 'heat_result'
+                                ? 'result'
+                                : 'contact';
+                          const heatCells = isHeatMode ? buildContactHeatCells(swingContactPoints, heatMetric, { xMin, xMax, yMin, yMax }) : [];
+                          const heatValues = heatCells.map((cell) => cell.value).filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+                          const maxDensity = heatCells.length ? Math.max(...heatCells.map((cell) => cell.density), 1) : 1;
+                          const selectedHeatPitchTypes = (pitchTypes || []).filter((entry) => entry && entry !== 'All');
+                          const evScale = getHeatmapFixedScale('Exit Velocity', selectedHeatPitchTypes);
+                          const heatScale =
+                            contact2dDisplay === 'heat_exit_velocity'
+                              ? {
+                                  min: evScale?.min ?? (heatValues[0] ?? 70),
+                                  mid: evScale?.mid ?? (heatValues[Math.floor(heatValues.length / 2)] ?? 88),
+                                  max: evScale?.max ?? (heatValues[heatValues.length - 1] ?? 105),
+                                  label: 'Exit Velocity',
+                                  format: (value: number) => `${value.toFixed(0)} mph`,
+                                }
+                              : contact2dDisplay === 'heat_result'
+                                ? {
+                                    min: 0.15,
+                                    mid: 0.5,
+                                    max: 1,
+                                    label: 'Results',
+                                    format: (value: number) => `${Math.round(value * 100)}`,
+                                  }
+                                : {
+                                    min: 0,
+                                    mid: maxDensity / 2,
+                                    max: maxDensity,
+                                    label: 'Contact Density',
+                                    format: (value: number) => value.toFixed(1),
+                                  };
+                          const heatColorFor = (cell: HeatCell) => {
+                            if (contact2dDisplay === 'heat_exit_velocity') return divergingColor(cell.value, heatScale.min, heatScale.mid, heatScale.max);
+                            if (contact2dDisplay === 'heat_result') return divergingColor(cell.value, 0.15, 0.5, 1);
+                            return sequentialColor(cell.density, 0, maxDensity);
+                          };
+                          const gradientLow =
+                            contact2dDisplay === 'heat_contact'
+                              ? sequentialColor(heatScale.min, heatScale.min, heatScale.max)
+                              : divergingColor(heatScale.min, heatScale.min, heatScale.mid, heatScale.max);
+                          const gradientMid =
+                            contact2dDisplay === 'heat_contact'
+                              ? sequentialColor(heatScale.mid, heatScale.min, heatScale.max)
+                              : divergingColor(heatScale.mid, heatScale.min, heatScale.mid, heatScale.max);
+                          const gradientHigh =
+                            contact2dDisplay === 'heat_contact'
+                              ? sequentialColor(heatScale.max, heatScale.min, heatScale.max)
+                              : divergingColor(heatScale.max, heatScale.min, heatScale.mid, heatScale.max);
                           return (
                             <>
+                              {isHeatMode ? (
+                                <defs>
+                                  <linearGradient id="contact-2d-heat-scale" x1="0%" y1="0%" x2="100%" y2="0%">
+                                    <stop offset="0%" stopColor={gradientLow} />
+                                    <stop offset="50%" stopColor={gradientMid} />
+                                    <stop offset="100%" stopColor={gradientHigh} />
+                                  </linearGradient>
+                                  <filter id="contact-2d-heat-blur" x="-20%" y="-20%" width="140%" height="140%">
+                                    <feGaussianBlur stdDeviation="2.1" />
+                                  </filter>
+                                </defs>
+                              ) : null}
+                              {isHeatMode ? (
+                                <g filter="url(#contact-2d-heat-blur)">
+                                  {heatCells.map((cell) => {
+                                    if (!Number.isFinite(cell.value)) return null;
+                                    const cx = px(cell.x + cell.w / 2);
+                                    const cy = py(cell.y + cell.h / 2);
+                                    const radius = Math.max(2.0, cell.w * ((700 - 20) / (xMax - xMin)) * 1.45);
+                                    const densityNorm = Math.max(0, Math.min(1, cell.density / maxDensity));
+                                    if (densityNorm < 0.03) return null;
+                                    const normalized =
+                                      contact2dDisplay === 'heat_contact'
+                                        ? densityNorm
+                                        : Math.max(0, Math.min(1, (cell.value - heatScale.min) / Math.max(1e-9, heatScale.max - heatScale.min)));
+                                    return (
+                                      <circle
+                                        key={`s2h-blur-${cell.x}-${cell.y}`}
+                                        cx={cx}
+                                        cy={cy}
+                                        r={radius}
+                                        fill={heatColorFor(cell)}
+                                        opacity={Math.max(0.3, normalized * 1.25 * (contact2dDisplay === 'heat_contact' ? 1 : Math.max(0.55, densityNorm)))}
+                                      />
+                                    );
+                                  })}
+                                </g>
+                              ) : null}
+                              {isHeatMode ? heatCells.map((cell) => {
+                                if (!Number.isFinite(cell.value)) return null;
+                                const cx = px(cell.x + cell.w / 2);
+                                const cy = py(cell.y + cell.h / 2);
+                                const radius = Math.max(1.0, cell.w * ((700 - 20) / (xMax - xMin)) * 0.75);
+                                const densityNorm = Math.max(0, Math.min(1, cell.density / maxDensity));
+                                if (densityNorm < 0.03) return null;
+                                const tipValue = contact2dDisplay === 'heat_contact' ? heatScale.format(cell.density) : heatScale.format(cell.value);
+                                return (
+                                  <circle
+                                    key={`s2h-core-${cell.x}-${cell.y}`}
+                                    cx={cx}
+                                    cy={cy}
+                                    r={radius}
+                                    fill="rgba(0,0,0,0.001)"
+                                    onMouseEnter={(event) => setChartHover({ x: event.clientX, y: event.clientY, text: `${heatScale.label}: ${tipValue}`, bg: heatColorFor(cell) })}
+                                    onMouseMove={(event) => setChartHover({ x: event.clientX, y: event.clientY, text: `${heatScale.label}: ${tipValue}`, bg: heatColorFor(cell) })}
+                                  />
+                                );
+                              }) : null}
                               <rect x={px(-1.9)} y={py(0.9)} width={px(-0.9) - px(-1.9)} height={py(-0.45) - py(0.9)} fill="none" stroke="rgba(255,255,255,0.6)" />
                               <rect x={px(0.9)} y={py(0.9)} width={px(1.9) - px(0.9)} height={py(-0.45) - py(0.9)} fill="none" stroke="rgba(255,255,255,0.6)" />
                               <polygon points={`${px(-0.708)},${py(0.62)} ${px(0.708)},${py(0.62)} ${px(0.708)},${py(0.35)} ${px(0)},${py(0)} ${px(-0.708)},${py(0.35)}`} fill="none" stroke="rgba(255,255,255,0.8)" />
-                              {data.map((p, i) => {
+                              {isHeatMode ? (
+                                <g>
+                                  <rect x={198} y={8} width={324} height={56} fill="rgba(0,0,0,0.58)" stroke="rgba(255,255,255,0.14)" rx={6} />
+                                  <rect x={210} y={16} width={300} height={18} fill="url(#contact-2d-heat-scale)" stroke="rgba(255,255,255,0.22)" />
+                                  <text x={210} y={47} fill="rgba(255,255,255,0.82)" fontSize={12} fontWeight={700} textAnchor="start">
+                                    {heatScale.format(heatScale.min)}
+                                  </text>
+                                  <text x={360} y={47} fill="rgba(255,255,255,0.82)" fontSize={12} fontWeight={700} textAnchor="middle">
+                                    {heatScale.format(heatScale.mid)}
+                                  </text>
+                                  <text x={510} y={47} fill="rgba(255,255,255,0.82)" fontSize={12} fontWeight={700} textAnchor="end">
+                                    {heatScale.format(heatScale.max)}
+                                  </text>
+                                  <text x={360} y={61} fill="rgba(255,255,255,0.9)" fontSize={12} fontWeight={800} textAnchor="middle">
+                                    {heatScale.label}
+                                  </text>
+                                </g>
+                              ) : null}
+                              {!isHeatMode ? data.map((p, i) => {
                                 const x = parseNumber(p.contact_position_z) ?? 0;
                                 const y = parseNumber(p.contact_position_x) ?? 0;
                                 const color = swingColorFor(p, contact2dColorBy);
@@ -6041,7 +6267,7 @@ export default function HittingSuite({
                                     key={`s2-${i}`}
                                     cx={px(x)}
                                     cy={py(y)}
-                                    r={contact2dMode === 'average_pitch_type' ? 4.5 : 3}
+                                    r={contact2dDisplay === 'average_pitch_type' ? 7 : 4.75}
                                     fill={color}
                                     stroke="rgba(255,255,255,0.75)"
                                     strokeWidth={0.6}
@@ -6049,7 +6275,7 @@ export default function HittingSuite({
                                     onMouseMove={(event) => setChartHover({ x: event.clientX, y: event.clientY, text: tip, bg: color })}
                                   />
                                 );
-                              })}
+                              }) : null}
                             </>
                           );
                         })()}
@@ -6170,7 +6396,7 @@ export default function HittingSuite({
                             const px = (x: number) => plotLeft + ((x + 2.5) / 5) * plotW;
                             const py = (y: number) => plotTop + (1 - (y - yMin) / (yMax - yMin)) * plotH;
 
-                            const batHalf = (34 / 12) / 2;
+                            const batHalf = (28 / 12) / 2;
                             const batTheta = -rad;
                             const b1x = cx - Math.cos(batTheta) * batHalf;
                             const b1y = cy - Math.sin(batTheta) * batHalf;
@@ -6207,20 +6433,78 @@ export default function HittingSuite({
                             const uy = dy / dirNorm;
                             const arrowLen = 1.0;
 
-                            const segCount = 40;
-                            const segs = Array.from({ length: segCount }, (_, i) => {
-                              const t0 = i / segCount;
-                              const t1 = (i + 1) / segCount;
-                              const x0 = handleX + (barrelX - handleX) * t0;
-                              const y0 = handleY + (barrelY - handleY) * t0;
-                              const x1 = handleX + (barrelX - handleX) * t1;
-                              const y1 = handleY + (barrelY - handleY) * t1;
-                              const tm = (t0 + t1) / 2;
-                              const lw = tm <= (2 / 3)
-                                ? 6 + (tm / (2 / 3)) * 2
-                                : 8 + ((tm - (2 / 3)) / (1 / 3)) * 6.8;
-                              return { x0, y0, x1, y1, lw, lwh: Math.max(1.6, lw * 0.34) };
-                            });
+                            const batScreen = (() => {
+                              const hx = px(handleX);
+                              const hy = py(handleY);
+                              const bx = px(barrelX);
+                              const by = py(barrelY);
+                              const len = Math.hypot(bx - hx, by - hy) || 1;
+                              const uxScreen = (bx - hx) / len;
+                              const uyScreen = (by - hy) / len;
+                              const nx = -uyScreen;
+                              const ny = uxScreen;
+                              const point = (t: number, offset: number) => ({
+                                x: hx + (bx - hx) * t + nx * offset,
+                                y: hy + (by - hy) * t + ny * offset,
+                              });
+                              const fmt = (p: { x: number; y: number }) => `${p.x.toFixed(2)},${p.y.toFixed(2)}`;
+                              const station = (t: number, radius: number) => {
+                                const x = hx + (bx - hx) * t;
+                                const y = hy + (by - hy) * t;
+                                return {
+                                  left: point(t, radius),
+                                  right: point(t, -radius),
+                                  x,
+                                  y,
+                                };
+                              };
+                              const knobBack = station(-0.045, 8.6);
+                              const knobFront = station(0.035, 6.7);
+                              const handle = station(0.28, 5.25);
+                              const neck = station(0.48, 6.3);
+                              const taper = station(0.66, 9.0);
+                              const barrelStart = station(0.74, 14.2);
+                              const barrelEnd = station(0.97, 17.0);
+                              const cap = station(1.0, 12.5);
+                              const bodyPath = [
+                                `M ${fmt(knobBack.left)}`,
+                                `Q ${fmt(knobFront.left)} ${fmt(handle.left)}`,
+                                `C ${fmt(station(0.4, 5.55).left)} ${fmt(neck.left)} ${fmt(taper.left)}`,
+                                `C ${fmt(station(0.7, 11.2).left)} ${fmt(barrelStart.left)} ${fmt(barrelEnd.left)}`,
+                                `Q ${fmt(cap.left)} ${fmt(cap.left)}`,
+                                `Q ${fmt(point(1.02, 0))} ${fmt(cap.right)}`,
+                                `Q ${fmt(cap.right)} ${fmt(barrelEnd.right)}`,
+                                `C ${fmt(barrelStart.right)} ${fmt(station(0.7, 11.2).right)} ${fmt(taper.right)}`,
+                                `C ${fmt(neck.right)} ${fmt(station(0.4, 5.55).right)} ${fmt(handle.right)}`,
+                                `Q ${fmt(knobFront.right)} ${fmt(knobBack.right)}`,
+                                `Q ${fmt(point(-0.075, 0))} ${fmt(knobBack.left)}`,
+                                'Z',
+                              ].join(' ');
+                              const grainPath = (offset: number, start = 0.18, end = 0.96) =>
+                                [
+                                  `M ${fmt(point(start, offset))}`,
+                                  `C ${fmt(point(0.38, offset + 1.4))} ${fmt(point(0.64, offset - 1.2))} ${fmt(point(end, offset + 0.6))}`,
+                                ].join(' ');
+                              const highlightPath = [
+                                `M ${fmt(point(0.2, -2.2))}`,
+                                `C ${fmt(point(0.42, -3.5))} ${fmt(point(0.68, -5.2))} ${fmt(point(0.94, -6.2))}`,
+                              ].join(' ');
+                              const knob = point(-0.035, 0);
+                              const capCenter = point(1.0, 0);
+                              const angleDeg = (Math.atan2(uyScreen, uxScreen) * 180) / Math.PI;
+                              return {
+                                bodyPath,
+                                grainPaths: [grainPath(-5.2, 0.12, 0.9), grainPath(-0.5, 0.18, 0.96), grainPath(5.0, 0.2, 0.88)],
+                                highlightPath,
+                                knob,
+                                capCenter,
+                                angleDeg,
+                                hx,
+                                hy,
+                                bx,
+                                by,
+                              };
+                            })();
 
                             const pullLeft = isLefty ? 'OPPO' : 'PULL';
                             const pullRight = isLefty ? 'PULL' : 'OPPO';
@@ -6246,13 +6530,53 @@ export default function HittingSuite({
                                 />
                                 <line x1={px(arrowX)} y1={py(arrowY)} x2={px(arrowX)} y2={py(arrowY + arrowLen)} stroke={zeroCol} strokeWidth={1.4} strokeDasharray="5 5" />
 
-                                {segs.map((s, i) => (
-                                  <g key={`bat-${i}`}>
-                                    <line x1={px(s.x0)} y1={py(s.y0)} x2={px(s.x1)} y2={py(s.y1)} stroke={batCol} strokeWidth={Math.max(1, s.lw)} strokeLinecap="round" />
-                                    <line x1={px(s.x0)} y1={py(s.y0)} x2={px(s.x1)} y2={py(s.y1)} stroke={batHiCol} strokeOpacity={0.42} strokeWidth={Math.max(1, s.lwh)} strokeLinecap="round" />
-                                  </g>
+                                <defs>
+                                  <linearGradient id="horizontal-attack-bat-wood" x1={batScreen.hx} y1={batScreen.hy} x2={batScreen.bx} y2={batScreen.by} gradientUnits="userSpaceOnUse">
+                                    <stop offset="0%" stopColor="#8a5426" />
+                                    <stop offset="18%" stopColor="#b98245" />
+                                    <stop offset="58%" stopColor="#d3ad78" />
+                                    <stop offset="100%" stopColor="#e6c48e" />
+                                  </linearGradient>
+                                  <linearGradient id="horizontal-attack-bat-highlight" x1={batScreen.hx} y1={batScreen.hy} x2={batScreen.bx} y2={batScreen.by} gradientUnits="userSpaceOnUse">
+                                    <stop offset="0%" stopColor="rgba(255,255,255,0.08)" />
+                                    <stop offset="55%" stopColor="rgba(255,229,181,0.48)" />
+                                    <stop offset="100%" stopColor="rgba(255,244,214,0.3)" />
+                                  </linearGradient>
+                                </defs>
+                                <path d={batScreen.bodyPath} fill="url(#horizontal-attack-bat-wood)" stroke="rgba(67,39,17,0.9)" strokeWidth={2.2} strokeLinejoin="round" />
+                                <ellipse
+                                  cx={batScreen.capCenter.x}
+                                  cy={batScreen.capCenter.y}
+                                  rx={5.8}
+                                  ry={12.8}
+                                  transform={`rotate(${batScreen.angleDeg} ${batScreen.capCenter.x} ${batScreen.capCenter.y})`}
+                                  fill="#c18a43"
+                                  stroke="rgba(67,39,17,0.72)"
+                                  strokeWidth={1.5}
+                                />
+                                {batScreen.grainPaths.map((path, i) => (
+                                  <path key={`bat-grain-${i}`} d={path} fill="none" stroke="#9b642f" strokeOpacity={0.32} strokeWidth={i === 1 ? 3.2 : 2.1} strokeLinecap="round" />
                                 ))}
-                                <circle cx={px(handleX)} cy={py(handleY)} r={4.8} fill={batHandleCol} />
+                                <path d={batScreen.highlightPath} fill="none" stroke="url(#horizontal-attack-bat-highlight)" strokeWidth={5.5} strokeLinecap="round" />
+                                <ellipse
+                                  cx={batScreen.knob.x}
+                                  cy={batScreen.knob.y}
+                                  rx={6.2}
+                                  ry={9.4}
+                                  transform={`rotate(${batScreen.angleDeg} ${batScreen.knob.x} ${batScreen.knob.y})`}
+                                  fill={batHandleCol}
+                                  stroke="rgba(43,25,10,0.85)"
+                                  strokeWidth={1.4}
+                                />
+                                <ellipse
+                                  cx={batScreen.knob.x}
+                                  cy={batScreen.knob.y}
+                                  rx={2.7}
+                                  ry={4.2}
+                                  transform={`rotate(${batScreen.angleDeg} ${batScreen.knob.x} ${batScreen.knob.y})`}
+                                  fill="#c5842e"
+                                  fillOpacity={0.85}
+                                />
 
                                 <line x1={px(arrowX)} y1={py(arrowY)} x2={px(arrowX + ux * arrowLen)} y2={py(arrowY + uy * arrowLen)} stroke={arrowCol} strokeWidth={2.2} />
                                 <polygon

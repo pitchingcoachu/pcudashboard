@@ -1069,6 +1069,12 @@ function toParamValue(values: string[]): string {
   return values.filter((value) => value !== 'All').join(';');
 }
 
+function toBallTypesParamValue(values: string[]): string {
+  const selected = values.filter((value) => value !== 'All');
+  if (selected.length === 1 && selected[0] === 'Baseball') return '';
+  return selected.join(';');
+}
+
 function schoolNameFromCodeIfKnown(value: string): string {
   const code = String(value ?? '').trim().toUpperCase();
   if (!code) return '';
@@ -2184,7 +2190,7 @@ export default function PitchingSuite({
   const [manualProgressSortDirection, setManualProgressSortDirection] = useState<SortDirection>('desc');
   const [visualOption, setVisualOption] = useState('Play Video');
   const [pitchEditSelectMode, setPitchEditSelectMode] = useState<PitchEditSelectMode>('single');
-  const [enableTableColors, setEnableTableColors] = useState(!shouldUsePcuDefaults);
+  const [enableTableColors, setEnableTableColors] = useState(false);
   const [showCellPercentiles, setShowCellPercentiles] = useState(false);
   const [percentileBaselineRequestKey, setPercentileBaselineRequestKey] = useState('');
   const [percentileBaselineRows, setPercentileBaselineRows] = useState<Array<Record<string, string | number | null>>>([]);
@@ -3063,7 +3069,7 @@ export default function PitchingSuite({
     const pitchersParam = toParamValue(selectedPitchers);
     const hittersParam = toParamValue(selectedHitters);
     const pitchTypesParam = toParamValue(selectedPitchTypes);
-    const ballTypesParam = toParamValue(selectedBallTypes);
+    const ballTypesParam = toBallTypesParamValue(selectedBallTypes);
     const zoneParam = toParamValue(selectedZoneLocations);
     const resultsParam = toParamValue(selectedPitchResults);
     const countParam = toParamValue(selectedCountFilters);
@@ -3261,6 +3267,14 @@ export default function PitchingSuite({
         })()
       : null;
     const overviewTtlMs = isPro ? 90000 : 30000;
+    if (isGameLogPage || isPitchLogPage) {
+      setLoadingOverview(false);
+      return () => {
+        active = false;
+        window.clearTimeout(timeoutId);
+        controller.abort();
+      };
+    }
     const applyOverviewPayload = (payload: OverviewPayload) => {
       const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
       const availableColumns = Array.isArray(payload.available_table_columns) ? payload.available_table_columns : [];
@@ -3712,6 +3726,7 @@ export default function PitchingSuite({
       return;
     }
     const cacheKey = [
+      'v4',
       splitBy,
       baseQuery,
       selectedSinglePitcherHandCode,
@@ -3732,6 +3747,16 @@ export default function PitchingSuite({
       const requests: Array<{ rowKey: string; query: string; handedQuery?: string }> = [];
       for (const [rowKey, rowLabel] of rowsByKey.entries()) {
         const params = new URLSearchParams(baseQuery);
+        const activeSummaryScope = isPro ? 'MLB' : summaryPercentileScope;
+        if (activeSummaryScope === 'MLB') {
+          params.set('school_code', 'PRO');
+          params.set('level', 'MLB');
+        } else if (activeSummaryScope === 'TEAM') {
+          const schoolTeamCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+          params.set('school_code', schoolTeamCode && schoolTeamCode !== 'PRO' && schoolTeamCode !== 'LEAGUE' ? schoolTeamCode : 'LEAGUE');
+        } else {
+          params.set('school_code', 'LEAGUE');
+        }
         params.set('split_by', 'Pitcher');
         params.delete('pitcher');
         params.set('include_chart_points', '0');
@@ -3756,17 +3781,13 @@ export default function PitchingSuite({
         setLoadingSummaryPitchTypePercentiles(false);
         return;
       }
-      const allCandidateColumns = Array.from(
+      const cols = Array.from(
         new Set(
-          [
-            ...(Array.isArray(overview?.available_table_columns) ? overview.available_table_columns : []),
-            ...tableColumns.slice(1),
-          ]
+          ['#', ...tableColumns.slice(1)]
             .map((value) => String(value ?? '').trim())
             .filter(Boolean)
         )
       ).filter((column) => normalizePercentileColumnToken(column) !== normalizePercentileColumnToken(splitColumn));
-      const cols = allCandidateColumns.length ? allCandidateColumns : tableColumns.slice(1);
       if (controller.signal.aborted || !active) return;
       setLoadingSummaryPitchTypePercentiles(true);
       timeoutId = window.setTimeout(() => {
@@ -3826,7 +3847,7 @@ export default function PitchingSuite({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [dashboardPage, splitBy, isPro, summaryPercentileScope, enableTableColors, showCellPercentiles, summaryStatView, percentileBaselineRequestKey, percentileBaselineRows, overview?.table_rows, overview?.table_columns, overview?.available_table_columns, selectedSinglePitcherHandCode, filters?.pitch_types]);
+  }, [dashboardPage, splitBy, isPro, summaryPercentileScope, enableTableColors, showCellPercentiles, summaryStatView, percentileBaselineRequestKey, percentileBaselineRows, overview?.table_rows, overview?.table_columns, overview?.available_table_columns, selectedSinglePitcherHandCode, filters?.pitch_types, filters?.school_code, selectedSchoolCode]);
 
   const sortedGameLogRows = useMemo(
     () => sortTableRows(gameLogRows, gameLogSortColumn, gameLogSortDirection),
@@ -3910,7 +3931,7 @@ export default function PitchingSuite({
       const pitchersParam = toParamValue(selectedPitchers);
       const hittersParam = toParamValue(selectedHitters);
       const pitchTypesParam = toParamValue(selectedPitchTypes);
-      const ballTypesParam = toParamValue(selectedBallTypes);
+      const ballTypesParam = toBallTypesParamValue(selectedBallTypes);
       const zoneParam = toParamValue(selectedZoneLocations);
       const resultsParam = toParamValue(selectedPitchResults);
       const countParam = toParamValue(selectedCountFilters);
@@ -3960,7 +3981,7 @@ export default function PitchingSuite({
       if (isPcuBullpenSelection) params.set('chart_points_limit', '9000');
       params.set('include_row_pitches', '0');
       params.set('include_trend_rows', '0');
-      params.set('force_raw', '1');
+      if (isPcuBullpenSelection) params.set('force_raw', '1');
       const response = await fetch(`/api/dashboard/pitching/overview?${params.toString()}`, {
         signal: controller.signal,
         cache: 'no-store',
@@ -4207,7 +4228,7 @@ export default function PitchingSuite({
       const pitchersParam = toParamValue(selectedPitchers);
       const hittersParam = toParamValue(selectedHitters);
       const pitchTypesParam = toParamValue(selectedPitchTypes);
-      const ballTypesParam = toParamValue(selectedBallTypes);
+      const ballTypesParam = toBallTypesParamValue(selectedBallTypes);
       const zoneParam = toParamValue(selectedZoneLocations);
       const resultsParam = toParamValue(selectedPitchResults);
       const countParam = toParamValue(selectedCountFilters);
@@ -4534,7 +4555,7 @@ export default function PitchingSuite({
     if (hittersParam) params.set('opp_hitter', hittersParam);
     const pitchTypesParam = toParamValue(selectedPitchTypes);
     if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
-    const ballTypesParam = toParamValue(selectedBallTypes);
+    const ballTypesParam = toBallTypesParamValue(selectedBallTypes);
     if (!isPro && !isLeague && ballTypesParam) params.set('ball_types', ballTypesParam);
 
     fetch(`/api/dashboard/pitching/ab-report?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
@@ -9116,11 +9137,15 @@ export default function PitchingSuite({
     const rowSplitKey = splitColumn ? percentileSplitRowKey(splitColumn, row[splitColumn]) : '';
     const isPitchLikeSplit = isPitchLikeSplitColumn(splitColumn);
     const isAllSummaryRow = splitColumn ? isAllLikeRowValue(row[splitColumn]) : false;
+    const columnToken = normalizePercentileColumnToken(column);
+    const isUsageLikeColumn = columnToken === normalizePercentileColumnToken('Usage') || columnToken === normalizePercentileColumnToken('Overall');
+    const isSummaryPitchTypeRow = isSummaryPageLocal && isPitchLikeSplit && !isAllSummaryRow;
+    if (isSummaryPitchTypeRow && isUsageLikeColumn) return null;
     const isStrictSummaryColumn =
       isSummaryPageLocal &&
       !isAllSummaryRow &&
-      SUMMARY_STRICT_ROW_DISTRIBUTION_COLUMNS.has(normalizePercentileColumnToken(column));
-    const useHandedMovementDistribution = HANDED_MOVEMENT_PERCENTILE_COLUMNS.has(normalizePercentileColumnToken(column));
+      SUMMARY_STRICT_ROW_DISTRIBUTION_COLUMNS.has(columnToken);
+    const useHandedMovementDistribution = HANDED_MOVEMENT_PERCENTILE_COLUMNS.has(columnToken);
     const scopedDistribution =
       rowSplitKey && !isAllLikeRowValue(row[splitColumn])
         ? (
@@ -9143,6 +9168,10 @@ export default function PitchingSuite({
         )
       : getColumnDistributionByToken(globalByColumn, column);
     const globalDistributionUsable = globalDistribution.length ? globalDistribution : tokenGlobalDistribution;
+    const pitchTypeScopedDistribution =
+      isPitchLikeSplit && rowSplitKey && !isAllLikeRowValue(row[splitColumn])
+        ? scopedDistributionUsable
+        : [];
     const isGameLogPageLocal = dashboardPage === 'Game Log';
     const isPitchLogPageLocal = dashboardPage === 'Pitch Log';
     const pitchLogTeamDistribution = pitchLogTeamDistributions.get(column) ?? [];
@@ -9166,17 +9195,20 @@ export default function PitchingSuite({
                 : (summaryPitchTypeDistributions.get(key) ?? [])
             );
             if (rowDistribution.length > 1) return rowDistribution;
+            if (isSummaryPitchTypeRow) return [];
             if (isStrictSummaryColumn) return globalDistributionUsable.length > 1 ? globalDistributionUsable : [];
             if (isAllSummaryRow) return globalDistributionUsable;
             return scopedDistributionUsable.length ? scopedDistributionUsable : globalDistributionUsable;
           })()
         )
       : isLeaderboardPage
-      ? globalDistributionUsable
+      ? (pitchTypeScopedDistribution.length ? pitchTypeScopedDistribution : globalDistributionUsable)
       : (isGameLogPageLocal || isPitchLogPageLocal)
       ? (isPitchLogPageLocal ? (pitchLogDistributionUsable.length ? pitchLogDistributionUsable : globalDistributionUsable) : globalDistributionUsable)
-      : scopedDistributionUsable.length ? scopedDistributionUsable : globalDistributionUsable;
-    const effectiveDistribution = isSummaryPageLocal && !distribution.length
+      : pitchTypeScopedDistribution.length ? pitchTypeScopedDistribution : scopedDistributionUsable.length ? scopedDistributionUsable : globalDistributionUsable;
+    const effectiveDistribution = isSummaryPitchTypeRow
+      ? distribution
+      : isSummaryPageLocal && !distribution.length
       ? (
           (() => {
             const summaryGlobal = getSummaryGlobalDistributionByToken(column);
@@ -9227,27 +9259,27 @@ export default function PitchingSuite({
     if (!sidePitcherHandCode) sidePitcherHandCode = pitcherHandCode;
     if (
       isPitchLikeSplit &&
-      normalizePercentileColumnToken(column) === normalizePercentileColumnToken('IVB') &&
+      columnToken === normalizePercentileColumnToken('IVB') &&
       shouldInvertIvbForPitchTypeLabel(row[splitColumn])
     ) {
       adjusted = Math.max(0, Math.min(100, 100 - adjusted));
     }
     if (
       isPitchLikeSplit &&
-      normalizePercentileColumnToken(column) === normalizePercentileColumnToken('HB') &&
+      columnToken === normalizePercentileColumnToken('HB') &&
       shouldInvertHbForPitchTypeLabel(row[splitColumn], pitcherHandCode)
     ) {
       adjusted = Math.max(0, Math.min(100, 100 - adjusted));
     }
     if (
       isPitchLikeSplit &&
-      normalizePercentileColumnToken(column) === normalizePercentileColumnToken('VAA') &&
+      columnToken === normalizePercentileColumnToken('VAA') &&
       shouldInvertVaaForPitchTypeLabel(row[splitColumn])
     ) {
       adjusted = Math.max(0, Math.min(100, 100 - adjusted));
     }
     if (
-      normalizePercentileColumnToken(column) === normalizePercentileColumnToken('Side') &&
+      columnToken === normalizePercentileColumnToken('Side') &&
       (
         (isPro && sidePitcherHandCode === 'R') ||
         (!isPro && sidePitcherHandCode === 'L')
@@ -10630,7 +10662,6 @@ export default function PitchingSuite({
                                 }
                               >
                                 {(() => {
-                                  const cellStyle = getTableCellStyle(row, column);
                                   const rawValue = row[column] ?? '-';
                                   const percentileValue = getCellPercentile(row, column, rawValue);
                                   const percentilesReady =
@@ -10765,6 +10796,7 @@ export default function PitchingSuite({
                                   ) : renderedCellValue;
                                   const percentileCellStyle =
                                     enableTableColors &&
+                                    percentilesReady &&
                                     colIndex > 0 &&
                                     percentileValue !== null
                                       ? {
