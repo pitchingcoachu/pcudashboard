@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback, type PointerEvent as ReactPointerEvent } from 'react';
 
 type BreakdownTool = 'line' | 'arrow' | 'circle' | 'pen' | 'text' | 'angle' | 'erase';
-type BreakdownAnnotation = {
+export type BreakdownAnnotation = {
   id: string;
   tool: Exclude<BreakdownTool, 'erase'>;
   color: string;
@@ -20,9 +20,16 @@ type MediaBreakdownViewerProps = {
   downloadName?: string;
   onClose: () => void;
   players?: Array<{ playerId: number; fullName: string }>;
+  initialAnnotations?: BreakdownAnnotation[];
+  onSaveAnnotations?: (annotations: BreakdownAnnotation[]) => Promise<void>;
+  onPrevious?: () => void;
+  onNext?: () => void;
+  hasPrevious?: boolean;
+  hasNext?: boolean;
+  positionLabel?: string;
 };
 
-type CompareVideo = {
+type CompareMedia = {
   playerId: number;
   playerName: string;
   mediaId: number;
@@ -175,9 +182,11 @@ type VideoPanelProps = {
   syncRef?: React.MutableRefObject<HTMLVideoElement | null>;
   synced?: boolean;
   compact?: boolean;
+  initialAnnotations?: BreakdownAnnotation[];
+  onAnnotationsChange?: (annotations: BreakdownAnnotation[]) => void;
 };
 
-function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onActivate, isActive, syncRef, synced, compact }: VideoPanelProps) {
+function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onActivate, isActive, syncRef, synced, compact, initialAnnotations, onAnnotationsChange }: VideoPanelProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -197,6 +206,16 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   const [annotations, setAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [active, setActive] = useState<BreakdownAnnotation | null>(null);
   const [anglePending, setAnglePending] = useState<Array<{ x: number; y: number }>>([]);
+
+  useEffect(() => {
+    setAnnotations(Array.isArray(initialAnnotations) ? initialAnnotations : []);
+    setActive(null);
+    setAnglePending([]);
+  }, [initialAnnotations, url]);
+
+  useEffect(() => {
+    onAnnotationsChange?.(annotations);
+  }, [annotations, onAnnotationsChange]);
 
   // ── Video events ──
   useEffect(() => {
@@ -511,11 +530,12 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
 
 type ComparePickerProps = {
   players: Array<{ playerId: number; fullName: string }>;
-  onPick: (video: CompareVideo) => void;
+  mediaType: 'photo' | 'video';
+  onPick: (media: CompareMedia) => void;
   onCancel: () => void;
 };
 
-function ComparePicker({ players, onPick, onCancel }: ComparePickerProps) {
+function ComparePicker({ players, mediaType, onPick, onCancel }: ComparePickerProps) {
   const [search, setSearch] = useState('');
   const [selectedPlayer, setSelectedPlayer] = useState<{ playerId: number; fullName: string } | null>(null);
   const [media, setMedia] = useState<PlayerMediaItem[]>([]);
@@ -526,7 +546,7 @@ function ComparePicker({ players, onPick, onCancel }: ComparePickerProps) {
   useEffect(() => {
     if (!selectedPlayer) { setMedia([]); return; }
     setLoadingMedia(true);
-    fetch(`/api/player/media?playerId=${selectedPlayer.playerId}&mediaType=video`, { cache: 'no-store' })
+    fetch(`/api/player/media?playerId=${selectedPlayer.playerId}&mediaType=${mediaType}`, { cache: 'no-store' })
       .then(async (r) => { const payload = (await r.json().catch(() => ({}))) as { media?: PlayerMediaItem[] }; setMedia(Array.isArray(payload.media) ? payload.media : []); })
       .catch(() => setMedia([]))
       .finally(() => setLoadingMedia(false));
@@ -536,7 +556,7 @@ function ComparePicker({ players, onPick, onCancel }: ComparePickerProps) {
     <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onCancel}>
       <div style={{ background: '#0f172a', border: '1px solid rgba(148,163,184,0.2)', borderRadius: 14, padding: 20, width: 'min(520px, 94vw)', maxHeight: '80vh', display: 'flex', flexDirection: 'column', gap: 14 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <h4 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>Pick comparison video</h4>
+          <h4 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>Pick comparison {mediaType}</h4>
           <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '2px 8px', minHeight: 0 }} onClick={onCancel}>Cancel</button>
         </div>
         {!selectedPlayer ? (
@@ -555,10 +575,10 @@ function ComparePicker({ players, onPick, onCancel }: ComparePickerProps) {
               <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 8px', minHeight: 0 }} onClick={() => setSelectedPlayer(null)}>← Back</button>
               <span style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc' }}>{selectedPlayer.fullName}</span>
             </div>
-            {loadingMedia && <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>Loading videos...</p>}
-            {!loadingMedia && media.length === 0 && <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>No videos uploaded for this player.</p>}
+            {loadingMedia && <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>Loading {mediaType}s...</p>}
+            {!loadingMedia && media.length === 0 && <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>No {mediaType}s uploaded for this player.</p>}
             <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4, maxHeight: '50vh' }}>
-              {media.filter((m) => m.mediaType === 'video').map((m) => (
+              {media.filter((m) => m.mediaType === mediaType).map((m) => (
                 <button key={m.id} type="button" className="btn btn-ghost" style={{ textAlign: 'left', padding: '8px 12px', fontSize: 13, justifyContent: 'flex-start', display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}
                   onClick={() => onPick({ playerId: selectedPlayer.playerId, playerName: selectedPlayer.fullName, mediaId: m.id, title: m.title, url: `/api/player/media/${m.id}`, mimeType: m.contentType })}>
                   <span>{m.title}</span>
@@ -575,17 +595,32 @@ function ComparePicker({ players, onPick, onCancel }: ComparePickerProps) {
 
 // ── Main viewer ───────────────────────────────────────────────────────────────
 
-export default function MediaBreakdownViewer({ title, url, mimeType, downloadName, onClose, players }: MediaBreakdownViewerProps) {
+export default function MediaBreakdownViewer({
+  title,
+  url,
+  mimeType,
+  downloadName,
+  onClose,
+  players,
+  initialAnnotations,
+  onSaveAnnotations,
+  onPrevious,
+  onNext,
+  hasPrevious,
+  hasNext,
+  positionLabel,
+}: MediaBreakdownViewerProps) {
   const [tool, setTool] = useState<BreakdownTool>('line');
   const [drawMode, setDrawMode] = useState(false);
   const [color, setColor] = useState('#facc15');
   const [width, setWidth] = useState(4);
   const [angleMode, setAngleMode] = useState<'acute' | 'obtuse'>('acute');
   const [anglePendingCount, setAnglePendingCount] = useState(0);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   const [compareMode, setCompareMode] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
-  const [compareVideo, setCompareVideo] = useState<CompareVideo | null>(null);
+  const [compareMedia, setCompareMedia] = useState<CompareMedia | null>(null);
   const [synced, setSynced] = useState(false);
   const syncRef = useRef<HTMLVideoElement | null>(null);
 
@@ -594,6 +629,7 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
 
   // Image-mode annotation state
   const [annotations, setAnnotations] = useState<BreakdownAnnotation[]>([]);
+  const [videoAnnotations, setVideoAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [active, setActive] = useState<BreakdownAnnotation | null>(null);
   const [anglePending, setAnglePending] = useState<Array<{ x: number; y: number }>>([]);
 
@@ -603,7 +639,34 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
   const imgPanStart = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
   const imgWrapRef = useRef<HTMLDivElement | null>(null);
 
-  const handlePickVideo = useCallback((video: CompareVideo) => { setCompareVideo(video); setShowPicker(false); }, []);
+  const handlePickMedia = useCallback((media: CompareMedia) => { setCompareMedia(media); setShowPicker(false); }, []);
+  const handleMainVideoAnnotationsChange = useCallback((next: BreakdownAnnotation[]) => {
+    setVideoAnnotations(next);
+    setSaveState('idle');
+  }, []);
+
+  useEffect(() => {
+    const next = Array.isArray(initialAnnotations) ? initialAnnotations : [];
+    setAnnotations(next);
+    setVideoAnnotations(next);
+    setActive(null);
+    setAnglePending([]);
+    setAnglePendingCount(0);
+    setSaveState('idle');
+  }, [initialAnnotations, url]);
+
+  const saveAnnotations = async () => {
+    if (!onSaveAnnotations) return;
+    const savedAnnotations = isVideo ? videoAnnotations : annotations;
+    setSaveState('saving');
+    try {
+      await onSaveAnnotations(savedAnnotations);
+      setSaveState('saved');
+    } catch (error) {
+      console.error('[MediaBreakdownViewer] save annotations failed:', error);
+      setSaveState('error');
+    }
+  };
 
   // Image pan handlers
   function onImgWheel(e: React.WheelEvent<HTMLDivElement>) {
@@ -649,11 +712,12 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
       const text = window.prompt('Text label');
       if (!text?.trim()) return;
       setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'text', color, width, points: [point], text: text.trim() }]);
+      setSaveState('idle');
       return;
     }
     if (tool === 'angle') {
       const next = [...anglePending, point];
-      if (next.length === 3) { setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'angle', color, width, points: next, angleMode }]); setAnglePending([]); setAnglePendingCount(0); }
+      if (next.length === 3) { setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'angle', color, width, points: next, angleMode }]); setAnglePending([]); setAnglePendingCount(0); setSaveState('idle'); }
       else { setAnglePending(next); setAnglePendingCount(next.length); }
       return;
     }
@@ -676,6 +740,7 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
     if (event && event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     if (!active) return;
     setAnnotations((items) => [...items, active]);
+    setSaveState('idle');
     setActive(null);
   }
 
@@ -702,14 +767,55 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
       </label>
       {!isVideo && (
         <>
-          <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setAnnotations((items) => items.slice(0, -1)); setAnglePending([]); setAnglePendingCount(0); }} disabled={!annotations.length}>Undo</button>
-          <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setAnnotations([]); setAnglePending([]); setAnglePendingCount(0); }} disabled={!annotations.length}>Clear</button>
+          <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setAnnotations((items) => items.slice(0, -1)); setAnglePending([]); setAnglePendingCount(0); setSaveState('idle'); }} disabled={!annotations.length}>Undo</button>
+          <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setAnnotations([]); setAnglePending([]); setAnglePendingCount(0); setSaveState('idle'); }} disabled={!annotations.length}>Clear</button>
         </>
       )}
+      {onSaveAnnotations ? (
+        <button type="button" className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={() => void saveAnnotations()} disabled={saveState === 'saving'}>
+          {saveState === 'saving' ? 'Saving...' : saveState === 'saved' ? 'Saved' : 'Save Markup'}
+        </button>
+      ) : null}
+      {saveState === 'error' ? <span style={{ color: '#fca5a5', fontSize: 11, fontWeight: 800 }}>Save failed</span> : null}
     </div>
   );
 
   const imgZoomed = imgZoom > 1;
+  const compareType: 'photo' | 'video' = isImage ? 'photo' : 'video';
+  const imagePanel = (
+    <div
+      ref={imgWrapRef}
+      style={{ position: 'relative', marginTop: 4, borderRadius: 10, overflow: 'hidden', background: '#000', cursor: imgZoomed && !drawMode ? 'grab' : drawMode ? 'crosshair' : 'default' }}
+      onWheel={onImgWheel}
+      onPointerDown={onImgPanStart}
+      onPointerMove={onImgPanMove}
+      onPointerUp={onImgPanEnd}
+      onPointerCancel={onImgPanEnd}
+    >
+      <div style={{ transform: imgZoomed ? `translate(${imgPan.x * 100}%, ${imgPan.y * 100}%) scale(${imgZoom})` : undefined, transformOrigin: '50% 50%', willChange: imgZoomed ? 'transform' : undefined }}>
+        <img src={url} alt={title} style={{ width: '100%', maxHeight: compareMode && compareMedia ? '58vh' : '68vh', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} />
+        <svg
+          viewBox="0 0 1000 1000"
+          preserveAspectRatio="none"
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: drawMode ? 'auto' : 'none', cursor: drawMode ? 'crosshair' : 'default', touchAction: 'none' }}
+          onPointerDown={pointerDownImage}
+          onPointerMove={pointerMoveImage}
+          onPointerUp={finishImage}
+          onPointerCancel={finishImage}
+        >
+          {allImageAnnotations.map((ann) => renderAnnotation(ann, ann.id))}
+        </svg>
+      </div>
+
+      <div style={{ position: 'absolute', top: 6, left: 6, display: 'flex', gap: 3, zIndex: 10 }}>
+        <button type="button" className="btn btn-ghost" style={{ fontSize: 14, padding: '1px 8px', minHeight: 0, background: 'rgba(2,6,23,0.85)', lineHeight: 1.4, fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); setImgZoom((z) => { const n = Math.min(ZOOM_MAX, z + ZOOM_STEP); setImgPan((p) => clampPan(p, n)); return n; }); }} title="Zoom in">+</button>
+        <button type="button" className="btn btn-ghost" style={{ fontSize: 14, padding: '1px 8px', minHeight: 0, background: 'rgba(2,6,23,0.85)', lineHeight: 1.4, fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); setImgZoom((z) => { const n = Math.max(ZOOM_MIN, z - ZOOM_STEP); if (n === 1) setImgPan({ x: 0, y: 0 }); else setImgPan((p) => clampPan(p, n)); return n; }); }} title="Zoom out">−</button>
+        {imgZoomed && (
+          <button type="button" className="btn btn-ghost" style={{ fontSize: 10, padding: '1px 7px', minHeight: 0, background: 'rgba(2,6,23,0.85)', fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); setImgZoom(1); setImgPan({ x: 0, y: 0 }); }} title="Reset zoom">{Math.round(imgZoom * 10) / 10}× ✕</button>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="portal-modal-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
@@ -722,16 +828,19 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
         <div className="portal-row-between" style={{ gap: 10, flexShrink: 0 }}>
           <h3 style={{ margin: 0, fontSize: '1rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</h3>
           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-            {isVideo && players && players.length > 0 && (
+            {positionLabel ? <span style={{ alignSelf: 'center', color: '#94a3b8', fontSize: 12, fontWeight: 800 }}>{positionLabel}</span> : null}
+            <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={onPrevious} disabled={!hasPrevious}>Previous</button>
+            <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={onNext} disabled={!hasNext}>Next</button>
+            {(isVideo || isImage) && players && players.length > 0 && (
               <button type="button" className={compareMode ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}
-                onClick={() => { if (compareMode) { setCompareMode(false); setCompareVideo(null); setSynced(false); } else { setCompareMode(true); setShowPicker(true); } }}>
+                onClick={() => { if (compareMode) { setCompareMode(false); setCompareMedia(null); setSynced(false); } else { setCompareMode(true); setShowPicker(true); } }}>
                 {compareMode ? 'Exit Compare' : 'Compare'}
               </button>
             )}
-            {compareMode && compareVideo && (
-              <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={() => setShowPicker(true)}>Swap Video</button>
+            {compareMode && compareMedia && (
+              <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={() => setShowPicker(true)}>Swap {compareType === 'photo' ? 'Photo' : 'Video'}</button>
             )}
-            {compareMode && compareVideo && (
+            {isVideo && compareMode && compareMedia && (
               <button type="button" className={synced ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={() => setSynced((v) => !v)}>
                 {synced ? 'Synced ✓' : 'Sync'}
               </button>
@@ -745,54 +854,35 @@ export default function MediaBreakdownViewer({ title, url, mimeType, downloadNam
         {toolbar}
 
         {/* Media area */}
-        {isVideo && compareMode && compareVideo ? (
+        {isVideo && compareMode && compareMedia ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flex: 1, minHeight: 0 }}>
-            <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact />
-            <VideoPanel url={compareVideo.url} title={`${compareVideo.playerName} — ${compareVideo.title}`} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact />
+            <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact initialAnnotations={initialAnnotations} onAnnotationsChange={handleMainVideoAnnotationsChange} />
+            <VideoPanel url={compareMedia.url} title={`${compareMedia.playerName} - ${compareMedia.title}`} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact />
           </div>
         ) : isVideo ? (
-          <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} />
-        ) : isImage ? (
-          <div
-            ref={imgWrapRef}
-            style={{ position: 'relative', marginTop: 4, borderRadius: 10, overflow: 'hidden', background: '#000', cursor: imgZoomed && !drawMode ? 'grab' : drawMode ? 'crosshair' : 'default' }}
-            onWheel={onImgWheel}
-            onPointerDown={onImgPanStart}
-            onPointerMove={onImgPanMove}
-            onPointerUp={onImgPanEnd}
-            onPointerCancel={onImgPanEnd}
-          >
-            <div style={{ transform: imgZoomed ? `translate(${imgPan.x * 100}%, ${imgPan.y * 100}%) scale(${imgZoom})` : undefined, transformOrigin: '50% 50%', willChange: imgZoomed ? 'transform' : undefined }}>
-              <img src={url} alt={title} style={{ width: '100%', maxHeight: '68vh', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} />
-              <svg
-                viewBox="0 0 1000 1000"
-                preserveAspectRatio="none"
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: drawMode ? 'auto' : 'none', cursor: drawMode ? 'crosshair' : 'default', touchAction: 'none' }}
-                onPointerDown={pointerDownImage}
-                onPointerMove={pointerMoveImage}
-                onPointerUp={finishImage}
-                onPointerCancel={finishImage}
-              >
-                {allImageAnnotations.map((ann) => renderAnnotation(ann, ann.id))}
-              </svg>
+          <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} initialAnnotations={initialAnnotations} onAnnotationsChange={handleMainVideoAnnotationsChange} />
+        ) : isImage && compareMode && compareMedia ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flex: 1, minHeight: 0 }}>
+            <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{title}</div>
+              {imagePanel}
             </div>
-
-            {/* Image zoom controls */}
-            <div style={{ position: 'absolute', top: 6, left: 6, display: 'flex', gap: 3, zIndex: 10 }}>
-              <button type="button" className="btn btn-ghost" style={{ fontSize: 14, padding: '1px 8px', minHeight: 0, background: 'rgba(2,6,23,0.85)', lineHeight: 1.4, fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); setImgZoom((z) => { const n = Math.min(ZOOM_MAX, z + ZOOM_STEP); setImgPan((p) => clampPan(p, n)); return n; }); }} title="Zoom in">+</button>
-              <button type="button" className="btn btn-ghost" style={{ fontSize: 14, padding: '1px 8px', minHeight: 0, background: 'rgba(2,6,23,0.85)', lineHeight: 1.4, fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); setImgZoom((z) => { const n = Math.max(ZOOM_MIN, z - ZOOM_STEP); if (n === 1) setImgPan({ x: 0, y: 0 }); else setImgPan((p) => clampPan(p, n)); return n; }); }} title="Zoom out">−</button>
-              {imgZoomed && (
-                <button type="button" className="btn btn-ghost" style={{ fontSize: 10, padding: '1px 7px', minHeight: 0, background: 'rgba(2,6,23,0.85)', fontWeight: 700 }} onClick={(e) => { e.stopPropagation(); setImgZoom(1); setImgPan({ x: 0, y: 0 }); }} title="Reset zoom">{Math.round(imgZoom * 10) / 10}× ✕</button>
-              )}
+            <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{compareMedia.playerName} - {compareMedia.title}</div>
+              <div style={{ borderRadius: 10, overflow: 'hidden', background: '#000' }}>
+                <img src={compareMedia.url} alt={`${compareMedia.playerName} - ${compareMedia.title}`} style={{ width: '100%', maxHeight: '58vh', objectFit: 'contain', display: 'block' }} />
+              </div>
             </div>
           </div>
+        ) : isImage ? (
+          imagePanel
         ) : (
           <iframe title={title} src={url} style={{ width: '100%', height: '68vh', border: 0 }} />
         )}
       </div>
 
       {showPicker && players && (
-        <ComparePicker players={players} onPick={handlePickVideo} onCancel={() => { setShowPicker(false); if (!compareVideo) setCompareMode(false); }} />
+        <ComparePicker players={players} mediaType={compareType} onPick={handlePickMedia} onCancel={() => { setShowPicker(false); if (!compareMedia) setCompareMode(false); }} />
       )}
     </div>
   );

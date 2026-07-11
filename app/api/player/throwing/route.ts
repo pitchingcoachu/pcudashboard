@@ -2,7 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
-import { getPlayerForUser, getScheduleThrowingState, playerExistsInOrganization } from '../../../../lib/training-db';
+import { getPlayerForUser, getRecoverableVelocityScripts, getScheduleThrowingState, playerExistsInOrganization } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import { normalizeDrillsState } from '../../../../lib/drills-program';
 
@@ -97,6 +97,22 @@ function extractLegacyTemplates(scriptRaw: unknown): ScriptTemplate[] {
   if (!scriptRaw || typeof scriptRaw !== 'object') return [];
   const data = scriptRaw as Record<string, unknown>;
   return normalizeTemplateList(data.templates);
+}
+
+function recoverVelocityTemplates(raw: unknown): ScriptTemplate[] {
+  const source = Array.isArray(raw) ? raw : [];
+  return normalizeTemplateList(
+    source.map((value) => {
+      const script = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+      const name = String(script.title ?? '').trim();
+      return {
+        ...script,
+        id: name ? `recovered-velocity:${name.toLowerCase()}` : '',
+        name,
+        updatedAt: '',
+      };
+    })
+  );
 }
 
 function normalizeScriptState(raw: unknown): ScriptState {
@@ -196,6 +212,9 @@ export async function GET(request: Request) {
   }
   if (velocityTemplates.length === 0) {
     velocityTemplates = extractLegacyTemplates(playerTemplatesObj.velocity);
+  }
+  if (velocityTemplates.length === 0) {
+    velocityTemplates = recoverVelocityTemplates(await getRecoverableVelocityScripts({ organizationId }));
   }
   if (bullpenState.visibleTemplateIds.length === 0) {
     bullpenState.visibleTemplateIds = bullpenTemplates.map((row) => row.id);

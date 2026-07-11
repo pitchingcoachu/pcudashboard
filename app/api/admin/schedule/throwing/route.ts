@@ -4,6 +4,7 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import {
   getRecoverableBullpenScripts,
+  getRecoverableVelocityScripts,
   getScheduleThrowingState,
   getPcuSharedThrowingState,
   playerExistsInOrganization,
@@ -23,6 +24,7 @@ type ScriptGrid = {
 type ScriptTemplate = {
   id: string;
   name: string;
+  category?: string;
   rowCount: number;
   columns: string[];
   columnTypes?: BullpenColumnType[];
@@ -152,6 +154,40 @@ function extractLegacyTemplates(scriptRaw: unknown): ScriptTemplate[] {
   return normalizeTemplateList(data.templates);
 }
 
+function templateMergeKey(template: ScriptTemplate): string {
+  const id = template.id.trim();
+  if (id) return `id:${id}`;
+  return `name:${template.name.trim().toLowerCase()}`;
+}
+
+function templateUpdatedTime(template: ScriptTemplate): number {
+  const time = Date.parse(template.updatedAt);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function mergeTemplateLists(existingRaw: unknown, incoming: ScriptTemplate[]): ScriptTemplate[] {
+  const existing = normalizeTemplateList(existingRaw);
+  if (existing.length === 0) return incoming;
+  const merged = new Map<string, ScriptTemplate>();
+  for (const template of existing) merged.set(templateMergeKey(template), template);
+  for (const template of incoming) {
+    const key = templateMergeKey(template);
+    const previous = merged.get(key);
+    if (!previous) {
+      merged.set(key, template);
+      continue;
+    }
+    const previousTime = templateUpdatedTime(previous);
+    const nextTime = templateUpdatedTime(template);
+    const shouldUseIncoming = nextTime >= previousTime;
+    merged.set(key, {
+      ...(shouldUseIncoming ? template : previous),
+      category: (shouldUseIncoming ? template.category : previous.category) ?? previous.category ?? template.category,
+    });
+  }
+  return Array.from(merged.values());
+}
+
 function recoverBullpenTemplates(raw: unknown): ScriptTemplate[] {
   const source = Array.isArray(raw) ? raw : [];
   return normalizeTemplateList(
@@ -161,6 +197,22 @@ function recoverBullpenTemplates(raw: unknown): ScriptTemplate[] {
       return {
         ...script,
         id: name ? `recovered-bullpen:${name.toLowerCase()}` : '',
+        name,
+        updatedAt: '',
+      };
+    })
+  );
+}
+
+function recoverVelocityTemplates(raw: unknown): ScriptTemplate[] {
+  const source = Array.isArray(raw) ? raw : [];
+  return normalizeTemplateList(
+    source.map((value) => {
+      const script = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+      const name = String(script.title ?? '').trim();
+      return {
+        ...script,
+        id: name ? `recovered-velocity:${name.toLowerCase()}` : '',
         name,
         updatedAt: '',
       };
@@ -268,6 +320,9 @@ export async function GET(request: Request) {
   if (velocityTemplates.length === 0 && !isSharedOnly) {
     velocityTemplates = extractLegacyTemplates(playerTemplatesObj.velocity);
   }
+  if (velocityTemplates.length === 0) {
+    velocityTemplates = recoverVelocityTemplates(await getRecoverableVelocityScripts({ organizationId }));
+  }
 
   // Merge PCU bullpen/velocity templates for non-PCU orgs — org's own templates take priority by name
   if (pcuTemplatesObj) {
@@ -280,11 +335,14 @@ export async function GET(request: Request) {
       ];
     }
     const pcuVelocity = normalizeTemplateList(pcuTemplatesObj.velocityTemplates);
-    if (pcuVelocity.length > 0) {
+    const pcuVelocityTemplates = pcuVelocity.length > 0
+      ? pcuVelocity
+      : recoverVelocityTemplates(await getRecoverableVelocityScripts({ organizationId: PCU_ORG_ID }));
+    if (pcuVelocityTemplates.length > 0) {
       const orgNames = new Set(velocityTemplates.map((t) => t.name.trim().toLowerCase()));
       velocityTemplates = [
         ...velocityTemplates,
-        ...pcuVelocity.filter((t) => !orgNames.has(t.name.trim().toLowerCase())),
+        ...pcuVelocityTemplates.filter((t) => !orgNames.has(t.name.trim().toLowerCase())),
       ];
     }
   }
@@ -381,6 +439,12 @@ export async function POST(request: Request) {
   const hasVelocityTemplatesInput = Array.isArray(body.velocityTemplates);
   let nextBullpenTemplates = normalizeTemplateList(hasBullpenTemplatesInput ? body.bullpenTemplates : sharedObj.bullpenTemplates);
   let nextVelocityTemplates = normalizeTemplateList(hasVelocityTemplatesInput ? body.velocityTemplates : sharedObj.velocityTemplates);
+  if (hasBullpenTemplatesInput) {
+    nextBullpenTemplates = mergeTemplateLists(sharedObj.bullpenTemplates, nextBullpenTemplates);
+  }
+  if (hasVelocityTemplatesInput) {
+    nextVelocityTemplates = mergeTemplateLists(sharedObj.velocityTemplates, nextVelocityTemplates);
+  }
   const nextPreThrowDrillTemplates = normalizeDrillTemplates(
     Array.isArray(body.preThrowDrillTemplates) ? body.preThrowDrillTemplates : sharedObj.preThrowDrillTemplates
   );
@@ -396,6 +460,9 @@ export async function POST(request: Request) {
   }
   if (nextVelocityTemplates.length === 0 && !hasVelocityTemplatesInput && !isSharedOnly) {
     nextVelocityTemplates = extractLegacyTemplates(playerObj.velocity);
+  }
+  if (nextVelocityTemplates.length === 0 && !hasVelocityTemplatesInput) {
+    nextVelocityTemplates = recoverVelocityTemplates(await getRecoverableVelocityScripts({ organizationId }));
   }
 
   const bullpenTemplateIds = new Set(nextBullpenTemplates.map((row) => row.id));

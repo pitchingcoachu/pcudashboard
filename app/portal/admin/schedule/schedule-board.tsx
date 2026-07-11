@@ -2779,10 +2779,15 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     };
     const nextBullpenTemplates = isVelocityView ? bullpenTemplates : applyTemplates(bullpenTemplates);
     const nextVelocityTemplates = isVelocityView ? applyTemplates(velocityTemplates) : velocityTemplates;
-    if (isVelocityView) setVelocityTemplates(applyTemplates);
-    else setBullpenTemplates(applyTemplates);
-    if (isVelocityView) setSelectedVelocityTemplateId(templateId);
-    else setSelectedBullpenTemplateId(templateId);
+    if (isVelocityView) {
+      setVelocityTemplates(applyTemplates);
+      setSelectedVelocityTemplateId(templateId);
+      setVisibleVelocityTemplateIds((prev) => Array.from(new Set([templateId, ...prev])));
+    } else {
+      setBullpenTemplates(applyTemplates);
+      setSelectedBullpenTemplateId(templateId);
+      setVisibleBullpenTemplateIds((prev) => Array.from(new Set([templateId, ...prev])));
+    }
     setError('');
     // When no player is selected, immediately persist to shared storage — don't rely on debounced auto-save.
     if (!playerId) {
@@ -4290,12 +4295,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                   </thead>
                   <tbody>
                     {buildBullpenRows(activeCurrent.rowCount, activeCurrent.columns.length, activeCurrent.rows).map((row, idx) => (
-                      <tr key={`bp-row-${idx}`}>
+                      <tr key={`bp-row-${idx}`} style={{ height: 46 }}>
                         <td
                           style={{
                             textAlign: 'center',
                             fontWeight: 700,
-                            padding: '0.32rem',
+                            padding: '0.16rem',
+                            height: 46,
+                            verticalAlign: 'middle',
                             borderBottom: '1px solid rgba(255,255,255,0.1)',
                             borderRight: '1px solid var(--calendar-grid-border, var(--border))',
                             whiteSpace: 'nowrap',
@@ -4307,7 +4314,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                           <td
                             key={`bp-cell-${idx}-${fieldIdx}`}
                             style={{
-                              padding: '0.2rem',
+                              padding: '0.16rem',
+                              height: 46,
+                              verticalAlign: 'middle',
+                              textAlign: 'center',
                               borderBottom: '1px solid rgba(255,255,255,0.1)',
                               borderRight: '1px solid var(--calendar-grid-border, var(--border))',
                             }}
@@ -4345,6 +4355,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                                 }}
                                 style={{
                                   width: '100%',
+                                  height: 34,
+                                  minHeight: 34,
+                                  boxSizing: 'border-box',
+                                  display: 'block',
                                   minWidth:
                                     fieldIdx === activeCurrent.columns.length - 1
                                       ? 260
@@ -4354,9 +4368,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                                           ? 120
                                           : 95,
                                   borderRadius: 7,
-                                  padding: '0.35rem 0.45rem',
+                                  padding: '0 0.45rem',
                                   textAlign: 'center',
                                   fontSize: '1.02rem',
+                                  lineHeight: '34px',
                                   fontWeight: 600,
                                 }}
                               />

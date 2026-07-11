@@ -32,6 +32,31 @@ function buildR2Key(organizationId: number, playerId: number, fileName: string, 
   return `player-media/org-${organizationId}/player-${playerId}/${kind}-${Date.now()}-${safeName}`;
 }
 
+function sanitizeBreakdownAnnotations(value: unknown): unknown[] | null {
+  if (!Array.isArray(value)) return null;
+  return value
+    .slice(0, 500)
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
+    .map((entry) => ({
+      id: String(entry.id ?? `media-${Date.now()}`),
+      tool: String(entry.tool ?? ''),
+      color: String(entry.color ?? '#facc15'),
+      width: Math.max(1, Math.min(30, Number(entry.width ?? 4) || 4)),
+      points: Array.isArray(entry.points)
+        ? entry.points
+            .slice(0, 2000)
+            .filter((point): point is Record<string, unknown> => Boolean(point) && typeof point === 'object' && !Array.isArray(point))
+            .map((point) => ({
+              x: Math.max(0, Math.min(1, Number(point.x ?? 0) || 0)),
+              y: Math.max(0, Math.min(1, Number(point.y ?? 0) || 0)),
+            }))
+        : [],
+      ...(typeof entry.text === 'string' ? { text: entry.text.slice(0, 300) } : {}),
+      ...(entry.angleMode === 'acute' || entry.angleMode === 'obtuse' ? { angleMode: entry.angleMode } : {}),
+    }))
+    .filter((entry) => entry.tool && entry.points.length > 0);
+}
+
 async function requireManagedPlayer(playerId: number) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
@@ -198,11 +223,16 @@ export async function PATCH(request: Request) {
   const allowed = await requireManagedPlayer(playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
   const mediaId = Number(body.mediaId ?? 0);
+  const breakdownAnnotations = Object.prototype.hasOwnProperty.call(body, 'breakdownAnnotations')
+    ? sanitizeBreakdownAnnotations(body.breakdownAnnotations)
+    : undefined;
+  if (breakdownAnnotations === null) return NextResponse.json({ error: 'Invalid breakdown annotations.' }, { status: 400 });
   const updated = await updatePlayerMedia({
     organizationId: allowed.organizationId,
     mediaId,
-    title: String(body.title ?? ''),
-    category: String(body.category ?? ''),
+    ...(typeof body.title === 'string' ? { title: body.title } : {}),
+    ...(typeof body.category === 'string' ? { category: body.category } : {}),
+    ...(breakdownAnnotations !== undefined ? { breakdownAnnotations } : {}),
   });
   if (!updated.ok) return NextResponse.json({ error: updated.error }, { status: 400 });
   const media = await listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId });

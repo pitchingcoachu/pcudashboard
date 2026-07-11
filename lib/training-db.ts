@@ -216,6 +216,7 @@ export type PlayerMediaRow = {
   r2Key: string;
   sourceType: string | null;
   sourceLabel: string | null;
+  breakdownAnnotations: unknown[];
   createdAt: string;
   updatedAt: string;
   createdByUserId: number | null;
@@ -610,6 +611,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
       r2_key TEXT NOT NULL,
       source_type TEXT,
       source_label TEXT,
+      breakdown_annotations_json JSONB NOT NULL DEFAULT '[]'::jsonb,
       created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -618,6 +620,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'General';`);
     await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS source_type TEXT;`);
     await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS source_label TEXT;`);
+    await pool.query(`ALTER TABLE player_media ADD COLUMN IF NOT EXISTS breakdown_annotations_json JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_player_created ON player_media (player_id, created_at DESC);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_org_player_category ON player_media (organization_id, player_id, lower(category));`);
     await pool.query(`
@@ -3925,6 +3928,30 @@ export async function getRecoverableBullpenScripts(input: {
   return result.rows.map((row) => row.script).filter(Boolean);
 }
 
+export async function getRecoverableVelocityScripts(input: {
+  organizationId: number;
+}): Promise<unknown[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ script: unknown }>(
+    `
+      SELECT DISTINCT ON (LOWER(TRIM(templates_json #>> '{velocity,current,title}')))
+        templates_json #> '{velocity,current}' AS script
+      FROM schedule_throwing_state
+      WHERE organization_id = $1
+        AND player_id > 0
+        AND jsonb_typeof(templates_json #> '{velocity,current}') = 'object'
+        AND TRIM(COALESCE(templates_json #>> '{velocity,current,title}', '')) <> ''
+      ORDER BY
+        LOWER(TRIM(templates_json #>> '{velocity,current,title}')),
+        updated_at DESC
+    `,
+    [input.organizationId]
+  );
+  return result.rows.map((row) => row.script).filter(Boolean);
+}
+
 export async function saveScheduleThrowingState(input: {
   organizationId: number;
   playerId: number;
@@ -6785,6 +6812,7 @@ export async function listPlayerMedia(input: {
     r2_key: string;
     source_type: string | null;
     source_label: string | null;
+    breakdown_annotations_json: unknown;
     created_at: string;
     updated_at: string;
     created_by_user_id: number | null;
@@ -6803,6 +6831,7 @@ export async function listPlayerMedia(input: {
         r2_key,
         source_type,
         source_label,
+        COALESCE(breakdown_annotations_json, '[]'::jsonb) AS breakdown_annotations_json,
         created_at::text,
         updated_at::text,
         created_by_user_id
@@ -6831,6 +6860,7 @@ export async function listPlayerMedia(input: {
         r2Key: row.r2_key,
         sourceType: row.source_type,
         sourceLabel: row.source_label,
+        breakdownAnnotations: Array.isArray(row.breakdown_annotations_json) ? row.breakdown_annotations_json : [],
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         createdByUserId: row.created_by_user_id,
@@ -6920,22 +6950,41 @@ export async function createPlayerMedia(input: {
 export async function updatePlayerMedia(input: {
   organizationId: number;
   mediaId: number;
-  title: string;
-  category: string;
+  title?: string;
+  category?: string;
+  breakdownAnnotations?: unknown[];
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
-  const title = String(input.title ?? '').trim();
-  const category = String(input.category ?? '').trim() || 'General';
-  if (!title) return { ok: false, error: 'Title is required.' };
+  const updates: string[] = [];
+  const values: unknown[] = [];
+  if (typeof input.title === 'string') {
+    const title = input.title.trim();
+    if (!title) return { ok: false, error: 'Title is required.' };
+    values.push(title);
+    updates.push(`title = $${values.length}`);
+  }
+  if (typeof input.category === 'string') {
+    const category = input.category.trim() || 'General';
+    values.push(category);
+    updates.push(`category = $${values.length}`);
+  }
+  if (Array.isArray(input.breakdownAnnotations)) {
+    values.push(JSON.stringify(input.breakdownAnnotations));
+    updates.push(`breakdown_annotations_json = $${values.length}::jsonb`);
+  }
+  if (!updates.length) return { ok: false, error: 'No media updates provided.' };
+  values.push(input.mediaId, input.organizationId);
+  const mediaIdParam = values.length - 1;
+  const organizationIdParam = values.length;
   const result = await pool.query(
     `
       UPDATE player_media
-      SET title = $1, category = $2, updated_at = NOW()
-      WHERE id = $3 AND organization_id = $4
+      SET ${updates.join(', ')}, updated_at = NOW()
+      WHERE id = $${mediaIdParam} AND organization_id = $${organizationIdParam}
     `,
-    [title, category, input.mediaId, input.organizationId]
+    values
   );
   if ((result.rowCount ?? 0) < 1) return { ok: false, error: 'Media not found.' };
   return { ok: true };

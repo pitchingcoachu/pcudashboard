@@ -526,7 +526,8 @@ export default function BullpenEntry({
   const visibleTemplates = useMemo(() => {
     const visibleSet = new Set((state.visibleTemplateIds ?? []).map(String));
     const filtered = templates.filter((t) => visibleSet.has(t.id));
-    return filtered.length ? filtered : templates;
+    const hasNewSharedTemplates = templates.some((template) => !visibleSet.has(template.id));
+    return filtered.length && !hasNewSharedTemplates ? filtered : templates;
   }, [templates, state.visibleTemplateIds]);
 
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
@@ -669,7 +670,7 @@ export default function BullpenEntry({
         const twoThirdsCol = findColumnByType(columns, columnTypes, 'two-thirds');
         const pitchTypeCol = getColumn(columns, ['pitch type', 'pitch types', 'pitch', 'pitch name']) ?? '';
         const ballTypeCol = getColumn(columns, ['ball type', 'ball', 'weighted ball']) ?? '';
-        const drillCol = getColumn(columns, ['drill', 'drills']) ?? '';
+        const drillCol = getColumn(columns, ['drill', 'drills', 'throw type', 'throwtype', 'throw', 'throwing type', 'velocity type']) ?? '';
         const ballWeightCol = getColumn(columns, ['ball weight', 'weight', 'ball wt', 'ballweight']) ?? '';
         return (entry.rowsJson ?? []).map((row, index): Record<string, string> => ({
           ...row,
@@ -959,6 +960,7 @@ export default function BullpenEntry({
     const savedName = String(entry.rowsJson[0]?.__templateName ?? '').trim();
     return {
       key: `${entry.templateId}|${entry.bullpenDate}`,
+      templateId: entry.templateId,
       date: entry.bullpenDate,
       name: sourceTemplate?.name || savedName || 'Saved Bullpen',
       strikePct: strikeCount > 0 ? (strikeYes / strikeCount) * 100 : null,
@@ -984,6 +986,41 @@ export default function BullpenEntry({
   if (!visibleTemplates.length) {
     return <p className="portal-muted-text" style={{ margin: 0 }}>No bullpen scripts assigned yet.</p>;
   }
+
+  const bullpenCellStyle = {
+    padding: '0.16rem',
+    height: 46,
+    borderBottom: '1px solid rgba(255,255,255,0.1)',
+    borderRight: '1px solid var(--calendar-grid-border, var(--border))',
+    verticalAlign: 'middle' as const,
+    textAlign: 'center' as const,
+  };
+  const bullpenInputStyle = {
+    width: '100%',
+    minWidth: 0,
+    minHeight: 34,
+    height: 34,
+    boxSizing: 'border-box' as const,
+    display: 'block',
+    textAlign: 'center' as const,
+    fontSize: '0.95rem',
+    lineHeight: '34px',
+    fontWeight: 600,
+    padding: '0 0.45rem',
+  };
+  const bullpenStaticCellStyle = {
+    minHeight: 34,
+    height: 34,
+    width: '100%',
+    boxSizing: 'border-box' as const,
+    display: 'grid',
+    placeItems: 'center',
+    padding: '0 0.45rem',
+    textAlign: 'center' as const,
+    fontSize: '0.95rem',
+    lineHeight: '34px',
+    fontWeight: 600,
+  };
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
@@ -1073,12 +1110,11 @@ export default function BullpenEntry({
                     ? { background: 'rgba(34,197,94,0.12)' }
                     : {};
                   return (
-                    <tr key={ri} aria-current={isCurrentRow ? 'step' : undefined}>
-                      <td style={{ textAlign: 'center', fontWeight: 700, padding: '0.32rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', boxShadow: isCurrentRow ? 'inset 4px 0 0 #22c55e' : undefined, ...currentRowCellStyle }}>
+                    <tr key={ri} aria-current={isCurrentRow ? 'step' : undefined} style={{ height: 46 }}>
+                      <td style={{ ...bullpenCellStyle, fontWeight: 700, boxShadow: isCurrentRow ? 'inset 4px 0 0 #22c55e' : undefined, ...currentRowCellStyle }}>
                         <div style={{ display: 'grid', justifyItems: 'center', gap: 2, lineHeight: 1.05 }}>
                           <span>{ri + 1}</span>
                           {isCurrentRow ? <span style={{ fontSize: 10, fontWeight: 900, color: '#86efac', textTransform: 'uppercase' }}>Now</span> : null}
-                          {isAdditionalRow && !isCurrentRow ? <span style={{ fontSize: 9, fontWeight: 900, color: '#fbbf24', textTransform: 'uppercase' }}>Extra</span> : null}
                         </div>
                       </td>
                       {template.columns.map((col, ci) => {
@@ -1086,14 +1122,14 @@ export default function BullpenEntry({
                         const columnType = resolveColumnType(col, templateColumnTypes[ci]);
                         if (columnType === 'velocity') {
                           return (
-                            <td key={ci} style={{ padding: '0.16rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', width: 72, minWidth: 72, maxWidth: 72, ...currentRowCellStyle }}>
+                            <td key={ci} style={{ ...bullpenCellStyle, width: 72, minWidth: 72, maxWidth: 72, ...currentRowCellStyle }}>
                               <input
                                 type="number"
                                 className="portal-schedule-control"
                                 value={val}
                                 onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
                                 placeholder="mph"
-                                style={{ width: '100%', minWidth: 0, textAlign: 'center', fontSize: '0.95rem', fontWeight: 600, padding: '0.35rem 0.25rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
+                                style={{ ...bullpenInputStyle, padding: '0 0.25rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
                               />
                             </td>
                           );
@@ -1101,7 +1137,7 @@ export default function BullpenEntry({
                         if (columnType === 'strike' || columnType === 'two-thirds') {
                           const bubbleBg = val === 'Yes' ? 'rgba(34,197,94,0.2)' : val === 'No' ? 'rgba(239,68,68,0.2)' : undefined;
                           return (
-                            <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle, background: bubbleBg ?? currentRowCellStyle?.background }}>
+                            <td key={ci} style={{ ...bullpenCellStyle, ...currentRowCellStyle, background: bubbleBg ?? currentRowCellStyle?.background }}>
                               <div style={{ display: 'flex', gap: 12, justifyContent: 'center', padding: '4px 0' }}>
                                 {(['Yes', 'No'] as const).map((opt) => (
                                   <label key={opt} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, cursor: 'pointer', fontSize: 11, color: isCurrentRow ? '#d1fae5' : '#94a3b8', fontWeight: isCurrentRow ? 800 : 400 }}>
@@ -1122,7 +1158,7 @@ export default function BullpenEntry({
                           const isPitchTypeCol = ['pitch type', 'pitch types', 'pitch', 'pitch name'].includes(col.trim().toLowerCase());
                           const listId = isPitchTypeCol ? 'bullpen-pitch-type-list' : undefined;
                           return (
-                            <td key={ci} style={{ padding: '0.16rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
+                            <td key={ci} style={{ ...bullpenCellStyle, ...currentRowCellStyle }}>
                               <input
                                 type="text"
                                 list={listId}
@@ -1130,7 +1166,7 @@ export default function BullpenEntry({
                                 value={val}
                                 onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
                                 placeholder={col}
-                                style={{ width: '100%', minWidth: 0, textAlign: 'center', fontSize: '0.95rem', fontWeight: 600, padding: '0.35rem 0.45rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
+                                style={{ ...bullpenInputStyle, borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
                               />
                             </td>
                           );
@@ -1138,20 +1174,20 @@ export default function BullpenEntry({
                         // Readonly cell
                         if (isAdditionalRow) {
                           return (
-                            <td key={ci} style={{ padding: '0.16rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
+                            <td key={ci} style={{ ...bullpenCellStyle, ...currentRowCellStyle }}>
                               <input
                                 type="text"
                                 className="portal-schedule-control"
                                 value={val}
                                 onChange={(e) => setRows((prev) => prev.map((r, i) => i === ri ? { ...r, [col]: e.target.value } : r))}
-                                style={{ width: '100%', minWidth: 0, textAlign: 'center', fontSize: '0.95rem', fontWeight: 600, padding: '0.35rem 0.45rem', borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
+                                style={{ ...bullpenInputStyle, borderColor: isCurrentRow ? 'rgba(34,197,94,0.75)' : undefined, boxShadow: isCurrentRow ? '0 0 0 1px rgba(34,197,94,0.24)' : undefined }}
                               />
                             </td>
                           );
                         }
                         return (
-                          <td key={ci} style={{ padding: '0.2rem', borderBottom: '1px solid rgba(255,255,255,0.1)', borderRight: '1px solid var(--calendar-grid-border, var(--border))', ...currentRowCellStyle }}>
-                            <div style={{ padding: '0.35rem 0.45rem', textAlign: 'center', fontSize: '0.95rem', fontWeight: 600, color: isCurrentRow ? '#f8fafc' : '#e2e8f0', opacity: isCurrentRow ? 1 : 0.85 }}>
+                          <td key={ci} style={{ ...bullpenCellStyle, ...currentRowCellStyle }}>
+                            <div style={{ ...bullpenStaticCellStyle, color: isCurrentRow ? '#f8fafc' : '#e2e8f0', opacity: isCurrentRow ? 1 : 0.85 }}>
                               {val || '—'}
                             </div>
                           </td>
@@ -1207,8 +1243,32 @@ export default function BullpenEntry({
                 </tr>
               </thead>
               <tbody>
-                {savedEntrySummaries.map((entry) => (
-                  <tr key={entry.key}>
+                {savedEntrySummaries.map((entry) => {
+                  const isEditingEntry = selectedTemplateId === entry.templateId && bullpenDate === entry.date;
+                  return (
+                  <tr
+                    key={entry.key}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Edit ${entry.name} from ${entry.date}`}
+                    onClick={() => {
+                      setSelectedTemplateId(entry.templateId);
+                      setBullpenDate(entry.date);
+                      setSaveMsg('');
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      setSelectedTemplateId(entry.templateId);
+                      setBullpenDate(entry.date);
+                      setSaveMsg('');
+                    }}
+                    style={{
+                      cursor: 'pointer',
+                      background: isEditingEntry ? 'rgba(34,197,94,0.12)' : undefined,
+                      boxShadow: isEditingEntry ? 'inset 3px 0 0 #22c55e' : undefined,
+                    }}
+                  >
                     <td>{entry.date}</td>
                     <td>{entry.name}</td>
                     <td className="portal-bullpen-summary-number">{formatSummaryNumber(entry.strikePct, '%')}</td>
@@ -1216,7 +1276,8 @@ export default function BullpenEntry({
                     <td className="portal-bullpen-summary-number">{formatSummaryNumber(entry.avgVelocity)}</td>
                     <td className="portal-bullpen-summary-number">{formatSummaryNumber(entry.maxVelocity)}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

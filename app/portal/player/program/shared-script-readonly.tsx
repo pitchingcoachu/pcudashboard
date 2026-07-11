@@ -44,7 +44,9 @@ export default function SharedScriptReadonly({
   const [exportError, setExportError] = useState('');
   const visibleTemplates = useMemo(() => {
     const visibleSet = new Set((state.visibleTemplateIds ?? []).map((value) => String(value ?? '')));
-    return templates.filter((template) => visibleSet.has(template.id));
+    const filtered = templates.filter((template) => visibleSet.has(template.id));
+    const hasNewSharedTemplates = templates.some((template) => !visibleSet.has(template.id));
+    return filtered.length && !hasNewSharedTemplates ? filtered : templates;
   }, [state.visibleTemplateIds, templates]);
   const [selectedId, setSelectedId] = useState(state.selectedTemplateId || visibleTemplates[0]?.id || '');
   useEffect(() => {

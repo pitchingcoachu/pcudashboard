@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import MediaBreakdownViewer from '../components/media-breakdown-viewer';
+import MediaBreakdownViewer, { type BreakdownAnnotation } from '../components/media-breakdown-viewer';
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH, formatNoteAttachmentLimit } from '../../../lib/note-attachment-limits';
 import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 
@@ -30,11 +30,13 @@ type AttachmentPreview = {
   name: string;
   mimeType: string;
   dataUrl: string;
+  breakdownAnnotations?: BreakdownAnnotation[];
 };
 type NoteAttachment = {
   name: string;
   mimeType: string;
   dataUrl: string;
+  breakdownAnnotations?: BreakdownAnnotation[];
 };
 type PlayerMedia = {
   id: number;
@@ -47,13 +49,18 @@ type PlayerMedia = {
   sourceType: string | null;
   sourceLabel: string | null;
   createdAt: string;
+  breakdownAnnotations?: BreakdownAnnotation[];
 };
 type MediaPreview = {
+  id: string;
   title: string;
   url: string;
   mimeType: string;
   downloadName: string;
+  initialAnnotations: BreakdownAnnotation[];
+  saveAnnotations?: (annotations: BreakdownAnnotation[]) => Promise<void>;
 };
+type MediaGalleryItem = MediaPreview;
 
 type PlayerNotesSuiteProps = {
   fixedPlayer?: {
@@ -168,20 +175,21 @@ function parseNoteAttachments(note: Pick<PlayerPlanNote, 'attachmentName' | 'att
   if (!dataUrl) return [];
   if (mimeType === MULTI_ATTACHMENT_MIME || dataUrl.startsWith('[')) {
     try {
-      const parsed = JSON.parse(dataUrl) as Array<{ name?: string; mimeType?: string; dataUrl?: string }>;
+      const parsed = JSON.parse(dataUrl) as Array<{ name?: string; mimeType?: string; dataUrl?: string; breakdownAnnotations?: unknown }>;
       if (!Array.isArray(parsed)) return [];
       return parsed
         .map((entry) => ({
           name: String(entry?.name ?? '').trim() || 'attachment',
           mimeType: String(entry?.mimeType ?? '').trim(),
           dataUrl: String(entry?.dataUrl ?? '').trim(),
+          breakdownAnnotations: Array.isArray(entry?.breakdownAnnotations) ? entry.breakdownAnnotations as BreakdownAnnotation[] : [],
         }))
         .filter((entry) => entry.dataUrl.length > 0);
     } catch {
       return [];
     }
   }
-  return [{ name: attachmentName || 'attachment', mimeType, dataUrl }];
+  return [{ name: attachmentName || 'attachment', mimeType, dataUrl, breakdownAnnotations: [] }];
 }
 
 function encodeAttachmentsForApi(files: NoteAttachment[]): {
@@ -190,7 +198,8 @@ function encodeAttachmentsForApi(files: NoteAttachment[]): {
   attachmentDataUrl: string;
 } {
   if (!files.length) return { attachmentName: '', attachmentMimeType: '', attachmentDataUrl: '' };
-  if (files.length === 1) {
+  const hasAnnotations = files.some((file) => Array.isArray(file.breakdownAnnotations) && file.breakdownAnnotations.length > 0);
+  if (files.length === 1 && !hasAnnotations) {
     const only = files[0];
     return {
       attachmentName: only.name,
@@ -574,11 +583,15 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
         .filter((attachment) => attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/'))
         .map((attachment, idx) => ({
           id: `note-${note.id}-${idx}`,
+          noteId: note.id,
+          note,
+          attachmentIndex: idx,
           title: attachment.name,
           category: note.category,
           mimeType: attachment.mimeType,
           url: attachment.dataUrl,
           downloadName: attachment.name,
+          initialAnnotations: attachment.breakdownAnnotations ?? [],
           sourceLabel: `Note - ${normalizeDateOnly(note.noteDate) || note.noteDate}`,
         }))
     )
@@ -679,6 +692,91 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
       setMessage(error instanceof Error ? error.message : 'Failed to update media.');
     }
   }
+
+  async function savePlayerMediaBreakdownAnnotations(media: PlayerMedia, annotations: BreakdownAnnotation[]) {
+    if (selectedLinkedPlayerId <= 0) throw new Error('Select a linked player to save markup.');
+    const response = await fetch('/api/player/media', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        playerId: selectedLinkedPlayerId,
+        mediaId: media.id,
+        breakdownAnnotations: annotations,
+      }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+    if (!response.ok) throw new Error(payload.error ?? 'Failed to save markup.');
+    if (Array.isArray(payload.media)) setPlayerMedia(payload.media);
+    setMediaPreview((current) => current && current.url === `/api/player/media/${media.id}` ? { ...current, initialAnnotations: annotations } : current);
+    setMediaMessage('Markup saved.');
+  }
+
+  async function saveNoteAttachmentBreakdownAnnotations(note: PlayerPlanNote, attachmentIndex: number, annotations: BreakdownAnnotation[]) {
+    const attachments = parseNoteAttachments(note);
+    if (!attachments[attachmentIndex]) throw new Error('Attachment not found.');
+    const nextAttachments = attachments.map((attachment, idx) => (
+      idx === attachmentIndex ? { ...attachment, breakdownAnnotations: annotations } : attachment
+    ));
+    const encoded = encodeAttachmentsForApi(nextAttachments);
+    if (encoded.attachmentDataUrl.length > NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH) {
+      throw new Error(`Attachments are too large. Please keep uploads under ${NOTE_ATTACHMENT_LIMIT_LABEL}.`);
+    }
+    const response = await fetch('/api/player/plan-notes', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        noteId: note.id,
+        playerId: note.playerId,
+        noteDate: note.noteDate,
+        category: note.category,
+        noteText: note.noteText,
+        attachmentName: encoded.attachmentName,
+        attachmentMimeType: encoded.attachmentMimeType,
+        attachmentDataUrl: encoded.attachmentDataUrl,
+      }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? 'Failed to save markup.');
+    setNotes((current) =>
+      current.map((item) =>
+        item.id === note.id
+          ? {
+              ...item,
+              attachmentName: encoded.attachmentName || null,
+              attachmentMimeType: encoded.attachmentMimeType || null,
+              attachmentDataUrl: encoded.attachmentDataUrl || null,
+            }
+          : item
+      )
+    );
+    setMediaPreview((current) => current && current.url === attachments[attachmentIndex]?.dataUrl ? { ...current, initialAnnotations: annotations } : current);
+    setMessage('Markup saved.');
+  }
+
+  const visiblePlayerMedia = playerMedia.filter((media) => filterCategory === 'All' || media.category === filterCategory);
+  const visibleNoteMedia = noteMediaAttachments.filter((media) => filterCategory === 'All' || media.category === filterCategory);
+  const mediaGalleryItems: MediaGalleryItem[] = [
+    ...visiblePlayerMedia.map((media) => ({
+      id: `player-${media.id}`,
+      title: media.title,
+      url: `/api/player/media/${media.id}`,
+      mimeType: media.contentType,
+      downloadName: media.fileName,
+      initialAnnotations: media.breakdownAnnotations ?? [],
+      saveAnnotations: (annotations: BreakdownAnnotation[]) => savePlayerMediaBreakdownAnnotations(media, annotations),
+    })),
+    ...visibleNoteMedia.map((media) => ({
+      id: media.id,
+      title: media.title,
+      url: media.url,
+      mimeType: media.mimeType,
+      downloadName: media.downloadName,
+      initialAnnotations: media.initialAnnotations,
+      saveAnnotations: (annotations: BreakdownAnnotation[]) => saveNoteAttachmentBreakdownAnnotations(media.note, media.attachmentIndex, annotations),
+    })),
+  ];
+  const previewIndex = mediaPreview ? mediaGalleryItems.findIndex((item) => item.id === mediaPreview.id) : -1;
+  const openMediaGalleryItem = (item: MediaGalleryItem) => setMediaPreview(item);
 
   return (
     <section className={embedded ? 'portal-admin-card' : 'portal-panel portal-admin-panel'} style={{ padding: '1rem' }}>
@@ -800,15 +898,16 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             </div>
           ) : null}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 10, marginTop: 12 }}>
-            {playerMedia
-              .filter((media) => filterCategory === 'All' || media.category === filterCategory)
+            {visiblePlayerMedia
               .map((media) => {
-                const url = `/api/player/media/${media.id}`;
                 return (
                   <div key={`player-media-${media.id}`} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.16)', display: 'grid', gap: 8 }}>
                     <button
                       type="button"
-                      onClick={() => setMediaPreview({ title: media.title, url, mimeType: media.contentType, downloadName: media.fileName })}
+                      onClick={() => {
+                        const item = mediaGalleryItems.find((entry) => entry.id === `player-${media.id}`);
+                        if (item) openMediaGalleryItem(item);
+                      }}
                       style={{ border: 0, borderRadius: 8, minHeight: 112, background: 'rgba(15,23,42,0.92)', color: '#f8fafc', fontWeight: 900, cursor: 'pointer' }}
                     >
                       {media.mediaType === 'video' ? 'Video' : 'Photo'}
@@ -853,13 +952,15 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                   </div>
                 );
               })}
-            {noteMediaAttachments
-              .filter((media) => filterCategory === 'All' || media.category === filterCategory)
+            {visibleNoteMedia
               .map((media) => (
                 <div key={media.id} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.12)', display: 'grid', gap: 8 }}>
                   <button
                     type="button"
-                    onClick={() => setMediaPreview({ title: media.title, url: media.url, mimeType: media.mimeType, downloadName: media.downloadName })}
+                    onClick={() => {
+                      const item = mediaGalleryItems.find((entry) => entry.id === media.id);
+                      if (item) openMediaGalleryItem(item);
+                    }}
                     style={{ border: 0, borderRadius: 8, minHeight: 112, background: 'rgba(15,23,42,0.74)', color: '#f8fafc', fontWeight: 900, cursor: 'pointer' }}
                   >
                     {media.mimeType.startsWith('video/') ? 'Video Attachment' : 'Photo Attachment'}
@@ -1015,7 +1116,23 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                                     key={`att-${note.id}-${idx}`}
                                     type="button"
                                     className="btn btn-ghost"
-                                    onClick={() => setAttachmentPreview(attachment)}
+                                    onClick={() => {
+                                      if (attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/')) {
+                                        const galleryId = `note-${note.id}-${idx}`;
+                                        const item = mediaGalleryItems.find((entry) => entry.id === galleryId);
+                                        openMediaGalleryItem(item ?? {
+                                          id: galleryId,
+                                          title: attachment.name,
+                                          url: attachment.dataUrl,
+                                          mimeType: attachment.mimeType,
+                                          downloadName: attachment.name,
+                                          initialAnnotations: attachment.breakdownAnnotations ?? [],
+                                          saveAnnotations: (annotations) => saveNoteAttachmentBreakdownAnnotations(note, idx, annotations),
+                                        });
+                                        return;
+                                      }
+                                      setAttachmentPreview(attachment);
+                                    }}
                                   >
                                     {parseNoteAttachments(note).length > 1 ? `Attachment ${idx + 1}` : 'Open Attachment'}
                                   </button>
@@ -1142,6 +1259,13 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             downloadName={mediaPreview.downloadName}
             onClose={() => setMediaPreview(null)}
             players={linkedPlayers}
+            initialAnnotations={mediaPreview.initialAnnotations}
+            onSaveAnnotations={mediaPreview.saveAnnotations}
+            hasPrevious={previewIndex > 0}
+            hasNext={previewIndex >= 0 && previewIndex < mediaGalleryItems.length - 1}
+            positionLabel={previewIndex >= 0 ? `${previewIndex + 1} / ${mediaGalleryItems.length}` : undefined}
+            onPrevious={previewIndex > 0 ? () => openMediaGalleryItem(mediaGalleryItems[previewIndex - 1]!) : undefined}
+            onNext={previewIndex >= 0 && previewIndex < mediaGalleryItems.length - 1 ? () => openMediaGalleryItem(mediaGalleryItems[previewIndex + 1]!) : undefined}
           />
         ) : null}
       </div>

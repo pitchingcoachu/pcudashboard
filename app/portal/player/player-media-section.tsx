@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import MediaBreakdownViewer from '../components/media-breakdown-viewer';
+import MediaBreakdownViewer, { type BreakdownAnnotation } from '../components/media-breakdown-viewer';
 import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 
 type PlayerMedia = {
@@ -12,6 +12,7 @@ type PlayerMedia = {
   fileName: string;
   contentType: string;
   createdAt: string;
+  breakdownAnnotations?: BreakdownAnnotation[];
 };
 
 type MediaPreview = {
@@ -19,6 +20,8 @@ type MediaPreview = {
   url: string;
   mimeType: string;
   downloadName: string;
+  mediaId: number;
+  initialAnnotations: BreakdownAnnotation[];
 };
 
 type OrgPlayer = { playerId: number; fullName: string };
@@ -94,6 +97,33 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
   }
 
   const filtered = filterCategory === 'All' ? media : media.filter((m) => m.category === filterCategory);
+  const previewIndex = mediaPreview ? filtered.findIndex((item) => item.id === mediaPreview.mediaId) : -1;
+
+  function openMediaPreview(item: PlayerMedia) {
+    const url = `/api/player/media/${item.id}`;
+    const mimeType = item.contentType || 'video/quicktime';
+    setMediaPreview({
+      title: item.title,
+      url,
+      mimeType,
+      downloadName: item.fileName,
+      mediaId: item.id,
+      initialAnnotations: item.breakdownAnnotations ?? [],
+    });
+  }
+
+  async function saveBreakdownAnnotations(mediaId: number, annotations: BreakdownAnnotation[]) {
+    const response = await fetch('/api/player/media', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ playerId, mediaId, breakdownAnnotations: annotations }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+    if (!response.ok) throw new Error(payload.error ?? 'Failed to save markup.');
+    if (Array.isArray(payload.media)) setMedia(payload.media);
+    setMediaPreview((current) => current && current.mediaId === mediaId ? { ...current, initialAnnotations: annotations } : current);
+    setMessage('Markup saved.');
+  }
 
   return (
     <div style={{ marginTop: 12 }}>
@@ -165,7 +195,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
             <div key={m.id} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.16)', display: 'grid', gap: 6 }}>
               <button
                 type="button"
-                onClick={() => setMediaPreview({ title: m.title, url, mimeType, downloadName: m.fileName })}
+                onClick={() => openMediaPreview(m)}
                 style={{ border: 0, borderRadius: 8, minHeight: 100, background: 'rgba(15,23,42,0.92)', color: '#f8fafc', fontWeight: 900, cursor: 'pointer' }}
               >
                 {m.mediaType === 'video' ? '▶ Video' : 'Photo'}
@@ -190,6 +220,13 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
           downloadName={mediaPreview.downloadName}
           onClose={() => setMediaPreview(null)}
           players={orgPlayers}
+          initialAnnotations={mediaPreview.initialAnnotations}
+          onSaveAnnotations={(annotations) => saveBreakdownAnnotations(mediaPreview.mediaId, annotations)}
+          hasPrevious={previewIndex > 0}
+          hasNext={previewIndex >= 0 && previewIndex < filtered.length - 1}
+          positionLabel={previewIndex >= 0 ? `${previewIndex + 1} / ${filtered.length}` : undefined}
+          onPrevious={previewIndex > 0 ? () => openMediaPreview(filtered[previewIndex - 1]!) : undefined}
+          onNext={previewIndex >= 0 && previewIndex < filtered.length - 1 ? () => openMediaPreview(filtered[previewIndex + 1]!) : undefined}
         />
       )}
     </div>
