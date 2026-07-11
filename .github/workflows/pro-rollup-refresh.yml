@@ -1,0 +1,31 @@
+name: PRO Rollup Refresh
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: pro-rollup-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      DASHBOARD_DATABASE_URL: ${{ secrets.DASHBOARD_DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r dashboard_api/requirements.txt
+
+      - name: Refresh PRO rollups
+        run: python scripts/refresh_pro_rollups.py
