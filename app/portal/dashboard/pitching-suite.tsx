@@ -4969,10 +4969,57 @@ export default function PitchingSuite({
             (rows ?? []).map((pitch) => applyPitchEdit(pitch as PitchActionPoint)),
           ])
         );
+        const splitColumn = String(previous.table_columns?.[0] ?? '').trim();
+        const splitNorm = splitColumn.toLowerCase().replace(/\s+/g, ' ');
+        const countColumn = previous.table_columns?.includes('#') ? '#' : previous.table_columns?.includes('P') ? 'P' : '';
+        const editableBefore = actionPitches.filter((pitch) => editSet.has(Number(pitch.pitch_event_id ?? -1)));
+        const tableDelta = new Map<string, number>();
+        const addDelta = (key: string, delta: number) => {
+          const clean = String(key ?? '').trim();
+          if (!clean) return;
+          tableDelta.set(clean.toLowerCase(), (tableDelta.get(clean.toLowerCase()) ?? 0) + delta);
+        };
+        if (countColumn && editableBefore.length) {
+          for (const pitch of editableBefore) {
+            if (splitNorm === 'pitch' || splitNorm === 'pitch type' || splitNorm === 'pitch types') {
+              addDelta(String(pitch.pitch_type ?? 'Undefined'), -1);
+              addDelta(nextPitchType, 1);
+            } else if (splitNorm === 'pitcher') {
+              addDelta(resolvePitcherName(pitch, selectedPitchers) || String(pitch.pitcher ?? 'Unknown Pitcher'), -1);
+              addDelta(nextPitcher, 1);
+            }
+            const allKey = String((previous.table_rows ?? []).find((row) => {
+              const value = String((row as Record<string, unknown>)[splitColumn] ?? '').trim().toLowerCase();
+              return value === 'all' || value === 'all (pinned)';
+            })?.[splitColumn] ?? '');
+            if (allKey) addDelta(allKey, 0);
+          }
+        }
+        let nextTableRows: Record<string, string | number | null>[] = previous.table_rows ?? [];
+        if (splitColumn && countColumn && tableDelta.size) {
+          nextTableRows = nextTableRows.map((row) => {
+            const rowObj = row as Record<string, string | number | null>;
+            const rowName = String(rowObj[splitColumn] ?? '').trim();
+            const delta = tableDelta.get(rowName.toLowerCase()) ?? 0;
+            if (!delta) return row;
+            const currentCount = Number(rowObj[countColumn] ?? 0);
+            if (!Number.isFinite(currentCount)) return row;
+            return { ...rowObj, [countColumn]: Math.max(0, currentCount + delta) };
+          });
+          const existingKeys = new Set(
+            nextTableRows.map((row) => String((row as Record<string, unknown>)[splitColumn] ?? '').trim().toLowerCase())
+          );
+          for (const [key, delta] of tableDelta.entries()) {
+            if (delta <= 0 || existingKeys.has(key) || key === 'all' || key === 'all (pinned)') continue;
+            const displayValue = splitNorm === 'pitcher' ? nextPitcher : nextPitchType;
+            nextTableRows = [...nextTableRows, { [splitColumn]: displayValue, [countColumn]: delta }];
+          }
+        }
         return {
           ...previous,
           chart_points: nextChartPoints,
           row_pitches_by_key: nextRowPitches,
+          table_rows: nextTableRows,
         };
       });
       setActionPitches((rows) =>
@@ -6306,6 +6353,62 @@ export default function PitchingSuite({
     },
     [overview?.row_pitches_by_key, overview?.table_columns, summaryPoints]
   );
+  const fetchCompletePitchesForRow = useCallback(
+    async (
+      row: Record<string, string | number | null>,
+      rowKey: string,
+      currentPitches: PitchActionPoint[]
+    ): Promise<PitchActionPoint[]> => {
+      const rowPitchTarget = Number(row['#'] ?? row.P ?? row.pitches ?? 0);
+      if (currentPitches.length && (!Number.isFinite(rowPitchTarget) || rowPitchTarget <= 0 || currentPitches.length >= rowPitchTarget)) {
+        return currentPitches;
+      }
+      const baseRequestKey = latestOverviewRequestKeyRef.current;
+      if (!baseRequestKey || typeof window === 'undefined') return currentPitches;
+      const splitColumn = String(overview?.table_columns?.[0] ?? '').trim();
+      const rawSplitValue = String(row[splitColumn] ?? rowKey ?? '').trim();
+      if (!rawSplitValue) return currentPitches;
+
+      try {
+        const req = new URL(baseRequestKey, window.location.origin);
+        const splitNorm = splitColumn.trim().toLowerCase().replace(/\s+/g, ' ');
+        const isAll = rawSplitValue.toLowerCase() === 'all' || rawSplitValue.toLowerCase() === 'all (pinned)';
+        req.searchParams.set('include_chart_points', '1');
+        req.searchParams.set('include_row_pitches', '0');
+        req.searchParams.set('include_trend_rows', '0');
+        req.searchParams.set('chart_only', '1');
+        req.searchParams.set('force_raw', '1');
+        req.searchParams.set(
+          'chart_points_limit',
+          String(Math.min(12000, Math.max(2500, Math.ceil(Number.isFinite(rowPitchTarget) ? rowPitchTarget + 250 : 2500))))
+        );
+        req.searchParams.delete('percentile_baseline');
+
+        if (!isAll) {
+          if (splitNorm === 'pitch' || splitNorm === 'pitch type' || splitNorm === 'pitch types') {
+            req.searchParams.set('pitch_types', rawSplitValue);
+          } else if (splitNorm === 'pitcher') {
+            req.searchParams.set('pitcher', rawSplitValue);
+          } else if (splitNorm === 'batter') {
+            req.searchParams.set('opp_hitter', rawSplitValue);
+          } else if (splitNorm === 'catcher') {
+            req.searchParams.set('catcher', rawSplitValue);
+          } else if (splitNorm === 'session type') {
+            req.searchParams.set('session_type', rawSplitValue);
+          }
+        }
+
+        const response = await fetch(req.toString(), { cache: 'no-store' });
+        const payload = (await response.json().catch(() => ({}))) as { chart_points?: PitchActionPoint[]; error?: string };
+        if (!response.ok || payload.error) return currentPitches;
+        const fetched = Array.isArray(payload.chart_points) ? payload.chart_points : [];
+        return fetched.length ? fetched : currentPitches;
+      } catch {
+        return currentPitches;
+      }
+    },
+    [overview?.table_columns]
+  );
   const summaryHeatmapPoints = useMemo(
     () => ((overview?.heatmap_points as PitchActionPoint[] | undefined) ?? summaryPoints),
     [overview?.heatmap_points, summaryPoints]
@@ -7540,7 +7643,7 @@ export default function PitchingSuite({
         ) : null}
       </svg>
     );
-  }, [summaryPoints, avgByType, releaseView, isPro, isPitchEditLassoEnabled, releaseLasso]);
+  }, [summaryPoints, avgByType, releaseView, isPro, isPitchEditLassoEnabled, releaseLasso, visualOption, canUsePitchEdits]);
 
   const movementSvg = useMemo(() => {
     const w = 520;
@@ -7779,7 +7882,7 @@ export default function PitchingSuite({
         ) : null}
       </svg>
     );
-  }, [summaryPoints, avgByType, movementView, breakLines, plottedPitcherHand, targetShapes, isPitchEditLassoEnabled, movementLasso]);
+  }, [summaryPoints, avgByType, movementView, breakLines, plottedPitcherHand, targetShapes, isPitchEditLassoEnabled, movementLasso, visualOption, canUsePitchEdits]);
 
   const locationSvg = useMemo(() => {
     const w = 520;
@@ -8002,7 +8105,7 @@ export default function PitchingSuite({
         </g>
       </svg>
     );
-  }, [summaryPoints, summaryHeatmapPoints, locationView, isPro, selectedPitchTypes]);
+  }, [summaryPoints, summaryHeatmapPoints, locationView, isPro, selectedPitchTypes, visualOption, canUsePitchEdits]);
 
   const heatmapStatOptions = useMemo(
     () => [
@@ -8338,7 +8441,7 @@ export default function PitchingSuite({
         </g>
       </svg>
     );
-  }, [summaryPoints, summaryHeatmapPoints, heatmapDisplayView, canRenderQpHeatmap, qpSelectedPitchType, qpSelectedCountBucket, qpSelectedHand, isPro, selectedPitchTypes]);
+  }, [summaryPoints, summaryHeatmapPoints, heatmapDisplayView, canRenderQpHeatmap, qpSelectedPitchType, qpSelectedCountBucket, qpSelectedHand, isPro, selectedPitchTypes, visualOption, canUsePitchEdits]);
 
   const tableColorMode = useMemo(() => {
     if (!tableMode) return '';
@@ -10609,6 +10712,8 @@ export default function PitchingSuite({
                           return leaderboardRowsWithPins.map((row, idx) => {
                           const rowKey = String(row[displayedTableColumns?.[0] ?? 'row'] ?? 'Unknown');
                           const rowPitches = resolveEditablePitchesForRow(row, rowKey);
+                          const rowPitchCount = Number(row['#'] ?? row.P ?? row.pitches ?? 0);
+                          const canOpenRowPitches = rowPitches.length > 0 || (Number.isFinite(rowPitchCount) && rowPitchCount > 0);
                           const isAllRow = isLeaderboardPage && String(row[displayedTableColumns?.[0] ?? ''] ?? '').trim().toLowerCase() === 'all';
                           const isPinnedAllRow = isLeaderboardPage && String(row[displayedTableColumns?.[0] ?? ''] ?? '').trim().toLowerCase() === 'all (pinned)';
                           const rankValue = isAllRow || isPinnedAllRow ? '' : String(++leaderboardRankCounter);
@@ -10643,19 +10748,19 @@ export default function PitchingSuite({
                                       ? '#fff'
                                       : undefined,
                                   cursor:
-                                    (column === '#' && rowPitches.length)
+                                    (column === '#' && canOpenRowPitches)
                                     || (isLeaderboardPage && column === leaderboardPrimaryColumn && !isAllRow)
                                       ? 'pointer'
                                       : undefined,
                                   textDecoration:
-                                    (column === '#' && rowPitches.length)
+                                    (column === '#' && canOpenRowPitches)
                                     || (isLeaderboardPage && column === leaderboardPrimaryColumn && !isAllRow)
                                       ? 'underline'
                                       : undefined,
                                 }}
                                 onClick={
-                                  column === '#' && rowPitches.length
-                                    ? () => openActionModal(rowPitches)
+                                  column === '#' && canOpenRowPitches
+                                    ? async () => openActionModal(await fetchCompletePitchesForRow(row, rowKey, rowPitches))
                                     : (isLeaderboardPage && column === leaderboardPrimaryColumn && !isAllRow)
                                       ? () => applyLeaderboardDrilldown(row[column], leaderboardViewBy)
                                       : undefined
