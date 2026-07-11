@@ -583,6 +583,9 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const inputUrl = new URL(request.url);
+  // Strip client-side post-edit cache buster — not forwarded to the backend.
+  const postEditCacheBust = inputUrl.searchParams.get('_cb')?.trim() ?? '';
+  inputUrl.searchParams.delete('_cb');
   const startDate = inputUrl.searchParams.get('start_date')?.trim() ?? '';
   const endDate = inputUrl.searchParams.get('end_date')?.trim() ?? '';
   const pitcher = inputUrl.searchParams.get('pitcher')?.trim() ?? '';
@@ -1071,6 +1074,7 @@ export async function GET(request: Request) {
   const isGameSplit = splitBy === 'Game';
   const gameSplitCacheBuster = isGameSplit ? `:game:${Date.now()}` : '';
   const customShapeCacheBuster = customModeRequested ? ':custom-shape-v3' : '';
+  const editCacheBuster = postEditCacheBust ? `:edit:${postEditCacheBust}` : '';
   // Accuracy-first: do not preemptively serve PRO leaderboard-safe rollup payloads.
   // This avoids ERA/FIP/xFIP/SIERA drift versus summary/player views, which use
   // the primary overview path.
@@ -1141,7 +1145,7 @@ export async function GET(request: Request) {
 
   try {
     const result = await fetchDashboardJsonWithCache({
-      cacheKey: `pitching:overview:${PITCHING_OVERVIEW_CACHE_VERSION}:${url.toString()}${gameSplitCacheBuster}${customShapeCacheBuster}`,
+      cacheKey: `pitching:overview:${PITCHING_OVERVIEW_CACHE_VERSION}:${url.toString()}${gameSplitCacheBuster}${customShapeCacheBuster}${editCacheBuster}`,
       ttlMs: cachePolicy.ttlMs,
       staleTtlMs: cachePolicy.staleTtlMs,
       timeoutMs: resolveOverviewTimeoutMs(schoolCode),

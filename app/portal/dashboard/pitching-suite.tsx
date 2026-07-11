@@ -2280,6 +2280,7 @@ export default function PitchingSuite({
   const [ipMax, setIpMax] = useState('');
 
   const [appliedFilterVersion, setAppliedFilterVersion] = useState(0);
+  const [postEditCacheBust, setPostEditCacheBust] = useState<number>(0);
   const jaredDashboardTable = useMemo(() => {
     const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
     const preferred = customTables.find((item) => normalize(item.name) === 'jaredsdashboard');
@@ -3042,6 +3043,7 @@ export default function PitchingSuite({
     params.set('start_date', startDate);
     params.set('end_date', endDate);
     params.delete('force_raw');
+    if (postEditCacheBust) params.set('_cb', String(postEditCacheBust));
 
     const apiTeamType = isLeague
       ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
@@ -3582,6 +3584,7 @@ export default function PitchingSuite({
     summaryStatView,
     filters?.school_code,
     selectedSchoolCode,
+    postEditCacheBust,
   ]);
 
   useEffect(() => {
@@ -5031,6 +5034,8 @@ export default function PitchingSuite({
       );
       setActionSaveState('saved');
       setActionSaveMessage(`Saved ${payload.updated_count ?? editIds.length} pitch edit(s).`);
+      const editCacheBust = Date.now();
+      setPostEditCacheBust(editCacheBust);
       overviewCacheRef.current.clear();
       overviewInflightRef.current.clear();
       setAppliedFilterVersion((current) => current + 1);

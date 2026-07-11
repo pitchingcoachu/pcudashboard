@@ -8244,10 +8244,10 @@ def _kick_league_rollup_refresh_background() -> None:
             _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING = False
 
 
-def _kick_school_rollup_refresh_background(school_code: str) -> None:
+def _kick_school_rollup_refresh_background(school_code: str, reset_timer: bool = False) -> None:
     school = _validate_school_code(school_code)
     if school == "PRO":
-        _kick_pro_rollup_refresh_background()
+        _kick_pro_rollup_refresh_background(reset_timer=reset_timer)
         return
 
     with _SCHOOL_ROLLUP_REFRESH_LOCK:
@@ -11047,8 +11047,10 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
         return
 
 
-def _kick_pro_rollup_refresh_background() -> None:
-    global _PRO_DAILY_ROLLUP_REFRESH_RUNNING
+def _kick_pro_rollup_refresh_background(reset_timer: bool = False) -> None:
+    global _PRO_DAILY_ROLLUP_REFRESH_RUNNING, _PRO_DAILY_ROLLUP_LAST_AT
+    if reset_timer:
+        _PRO_DAILY_ROLLUP_LAST_AT = 0.0
     with _PRO_DAILY_ROLLUP_REFRESH_LOCK:
         if _PRO_DAILY_ROLLUP_REFRESH_RUNNING:
             return
@@ -25305,7 +25307,7 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
 
     _overview_cache_invalidate_school(school_code)
     _filters_cache_invalidate_school(school_code)
-    _kick_school_rollup_refresh_background(school_code)
+    _kick_school_rollup_refresh_background(school_code, reset_timer=True)
     return PitchEditResponse(ok=True, updated_count=len(pitch_ids))
 
 
