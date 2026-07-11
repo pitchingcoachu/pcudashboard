@@ -22,13 +22,22 @@ function inferMediaContentType(fileName: string): string {
     mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', qt: 'video/quicktime',
     webm: 'video/webm', avi: 'video/x-msvideo', mkv: 'video/x-matroska',
     '3gp': 'video/3gpp', '3g2': 'video/3gpp2',
+    pdf: 'application/pdf',
   };
   return map[ext] ?? 'application/octet-stream';
 }
 
+function inferMediaType(contentType: string): 'photo' | 'video' | 'pdf' | null {
+  const normalized = String(contentType ?? '').toLowerCase();
+  if (normalized.startsWith('image/')) return 'photo';
+  if (normalized.startsWith('video/')) return 'video';
+  if (normalized === 'application/pdf') return 'pdf';
+  return null;
+}
+
 function buildR2Key(organizationId: number, playerId: number, fileName: string, contentType: string): string {
   const safeName = String(fileName ?? 'media').replace(/[^a-zA-Z0-9._-]+/g, '-');
-  const kind = String(contentType ?? '').toLowerCase().startsWith('image/') ? 'photo' : 'video';
+  const kind = inferMediaType(contentType) ?? 'file';
   return `player-media/org-${organizationId}/player-${playerId}/${kind}-${Date.now()}-${safeName}`;
 }
 
@@ -106,7 +115,7 @@ export async function GET(request: Request) {
   const allowed = await requireManagedPlayer(playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
   const rawType = url.searchParams.get('mediaType');
-  const mediaType = rawType === 'photo' || rawType === 'video' ? rawType : undefined;
+  const mediaType = rawType === 'photo' || rawType === 'video' || rawType === 'pdf' ? rawType : undefined;
   const media = await listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId, mediaType });
   return NextResponse.json({ media });
 }
@@ -126,8 +135,8 @@ export async function POST(request: Request) {
     const fileName = String(body.fileName ?? '').trim();
     const rawContentType = String(body.contentType ?? '').trim();
     const contentType = rawContentType || inferMediaContentType(fileName);
-    const mediaType = contentType.startsWith('image/') ? 'photo' : contentType.startsWith('video/') ? 'video' : null;
-    if (!mediaType) return NextResponse.json({ error: 'Only photo and video uploads are supported.' }, { status: 400 });
+    const mediaType = inferMediaType(contentType);
+    if (!mediaType) return NextResponse.json({ error: 'Only photo, video, and PDF uploads are supported.' }, { status: 400 });
     if (!r2Key) return NextResponse.json({ error: 'r2Key is required.' }, { status: 400 });
 
     const created = await createPlayerMedia({
@@ -157,15 +166,15 @@ export async function POST(request: Request) {
 
   const file = form.get('file');
   if (!(file instanceof File) || file.size <= 0) {
-    return NextResponse.json({ error: 'Choose a photo or video file.' }, { status: 400 });
+    return NextResponse.json({ error: 'Choose a photo, video, or PDF file.' }, { status: 400 });
   }
   if (file.size > MAX_PLAYER_MEDIA_BYTES) {
     return NextResponse.json({ error: 'Media file is too large. Limit is 350 MB.' }, { status: 400 });
   }
   const rawContentType = String(file.type || '').trim();
   const contentType = rawContentType || inferMediaContentType(file.name);
-  const mediaType = contentType.startsWith('image/') ? 'photo' : contentType.startsWith('video/') ? 'video' : null;
-  if (!mediaType) return NextResponse.json({ error: 'Only photo and video uploads are supported.' }, { status: 400 });
+  const mediaType = inferMediaType(contentType);
+  if (!mediaType) return NextResponse.json({ error: 'Only photo, video, and PDF uploads are supported.' }, { status: 400 });
 
   const fileBody = Buffer.from(await file.arrayBuffer());
   let r2Key: string | null = null;

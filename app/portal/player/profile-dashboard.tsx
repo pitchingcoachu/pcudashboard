@@ -95,6 +95,8 @@ type ProfileDashboardProps = {
   initialTrend: ExerciseTrendPoint[];
 };
 
+const SHOW_ASSESSMENT_SCORES = false;
+
 function isThrowingCalendarWorkoutName(value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return normalized === 'throwing calendar' || normalized === 'throwing' || normalized.includes('throwing calendar');
@@ -969,7 +971,7 @@ export default function ProfileDashboard({
 
       <article className="portal-admin-card">
         <div className="portal-row-between" style={{ alignItems: 'center' }}>
-          <h3 style={{ margin: 0 }}>Videos & Photos</h3>
+          <h3 style={{ margin: 0 }}>Videos, Photos & PDFs</h3>
           <button type="button" className="btn btn-ghost" onClick={() => setMediaExpanded((v) => !v)}>
             {mediaExpanded ? 'Collapse' : 'Expand'}
           </button>
@@ -1232,6 +1234,7 @@ export default function ProfileDashboard({
         canEditGoals={sessionRole === 'admin' || sessionRole === 'coach'}
       />
 
+      {SHOW_ASSESSMENT_SCORES ? (
       <article className="portal-admin-card">
         <div className="portal-row-between">
           <h3>Assessment Scores</h3>
@@ -1316,6 +1319,7 @@ export default function ProfileDashboard({
           </div>
         )}
       </article>
+      ) : null}
 
       <div className="portal-profile-three-col" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.85rem' }}>
         <article className="portal-admin-card">

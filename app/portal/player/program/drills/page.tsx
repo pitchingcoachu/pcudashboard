@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../../../lib/portal-session';
 import { canUseProgrammingData, resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { normalizeDrillsState } from '../../../../../lib/drills-program';
-import { listExercisesByOrganization } from '../../../../../lib/training-db';
+import { getPlayerForUser, listExercisesByOrganization } from '../../../../../lib/training-db';
 import DrillsReadonly from './drills-readonly';
 
 type DrillsPageProps = {
@@ -18,6 +18,13 @@ export default async function PlayerDrillsPage({ searchParams }: DrillsPageProps
   const canPreview = session.role === 'admin' || session.role === 'coach';
   const previewPlayerId = Number(typeof params.previewPlayerId === 'string' ? params.previewPlayerId : '0');
   const playerIdQuery = canPreview && Number.isFinite(previewPlayerId) && previewPlayerId > 0 ? `?playerId=${previewPlayerId}` : '';
+  let resolvedPlayerId = 0;
+  if (session.role === 'player') {
+    const player = await getPlayerForUser({ organizationId: session.organizationId, userId: session.userId });
+    resolvedPlayerId = Number(player?.id ?? session.playerId ?? 0);
+  } else if (canPreview && previewPlayerId > 0) {
+    resolvedPlayerId = previewPlayerId;
+  }
   const h = await headers();
   const host = h.get('host');
   if (!host) redirect('/portal/player/program');
@@ -48,7 +55,7 @@ export default async function PlayerDrillsPage({ searchParams }: DrillsPageProps
           <h2 style={{ marginTop: 0 }}>Plyos and Drills</h2>
           <Link href={backHref} className="btn btn-ghost as-link">Back to Program</Link>
         </div>
-        <DrillsReadonly state={drillsState} drillVideos={drillVideos} />
+        <DrillsReadonly state={drillsState} drillVideos={drillVideos} playerId={resolvedPlayerId} />
       </section>
     </div>
   );

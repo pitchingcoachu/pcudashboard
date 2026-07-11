@@ -21,6 +21,7 @@ function inferContentType(key: string): string {
   if (lower.endsWith('.png')) return 'image/png';
   if (lower.endsWith('.gif')) return 'image/gif';
   if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
   return 'application/octet-stream';
 }
 

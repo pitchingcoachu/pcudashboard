@@ -27,6 +27,8 @@ type PlayerPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
+const SHOW_ASSESSMENT_SCORES = false;
+
 function todayIsoDate(): string {
   const now = new Date();
   const year = now.getUTCFullYear();
@@ -182,14 +184,16 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
     session.role === 'admin' || session.role === 'coach'
       ? listCoachesByOrganization(programmingOrganizationId)
       : Promise.resolve([]),
-    withTimeout(
-      listAssessmentWorkoutScoresForPlayer({
-        playerId: effectivePlayerId,
-        limit: session.role === 'player' ? 80 : 180,
-      }),
-      3500,
-      []
-    ),
+    SHOW_ASSESSMENT_SCORES
+      ? withTimeout(
+          listAssessmentWorkoutScoresForPlayer({
+            playerId: effectivePlayerId,
+            limit: session.role === 'player' ? 80 : 180,
+          }),
+          3500,
+          []
+        )
+      : Promise.resolve([]),
     withTimeout(
       listPlayerPlanGoalsForPlayer({ playerId: effectivePlayerId }),
       3500,

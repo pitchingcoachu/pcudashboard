@@ -27,6 +27,7 @@ type MediaBreakdownViewerProps = {
   hasPrevious?: boolean;
   hasNext?: boolean;
   positionLabel?: string;
+  onDelete?: () => void;
 };
 
 type CompareMedia = {
@@ -609,6 +610,7 @@ export default function MediaBreakdownViewer({
   hasPrevious,
   hasNext,
   positionLabel,
+  onDelete,
 }: MediaBreakdownViewerProps) {
   const [tool, setTool] = useState<BreakdownTool>('line');
   const [drawMode, setDrawMode] = useState(false);
@@ -846,6 +848,9 @@ export default function MediaBreakdownViewer({
               </button>
             )}
             <a className="btn btn-ghost" href={url} download={downloadName || title} style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}>Download</a>
+            {onDelete ? (
+              <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0, color: '#fca5a5' }} onClick={onDelete}>Delete</button>
+            ) : null}
             <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={onClose}>Close</button>
           </div>
         </div>

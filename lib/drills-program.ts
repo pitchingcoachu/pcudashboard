@@ -21,6 +21,7 @@ export type DrillSectionState = {
 };
 
 export type DrillsState = {
+  notes: string;
   pre: DrillSectionState;
   post: DrillSectionState;
 };
@@ -70,17 +71,19 @@ export function normalizeDrillSectionState(raw: unknown): DrillSectionState {
 
 export function normalizeDrillsState(raw: unknown): DrillsState {
   if (!raw || typeof raw !== 'object') {
-    return { pre: defaultDrillSectionState(), post: defaultDrillSectionState() };
+    return { notes: '', pre: defaultDrillSectionState(), post: defaultDrillSectionState() };
   }
   const value = raw as Record<string, unknown>;
   if ('pre' in value || 'post' in value) {
     return {
+      notes: String(value.notes ?? ''),
       pre: normalizeDrillSectionState(value.pre),
       post: normalizeDrillSectionState(value.post),
     };
   }
   // Existing single-section plans become the pre-throw plan.
   return {
+    notes: String(value.notes ?? ''),
     pre: normalizeDrillSectionState(value),
     post: defaultDrillSectionState(),
   };

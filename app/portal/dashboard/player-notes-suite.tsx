@@ -40,7 +40,7 @@ type NoteAttachment = {
 };
 type PlayerMedia = {
   id: number;
-  mediaType: 'photo' | 'video';
+  mediaType: 'photo' | 'video' | 'pdf';
   title: string;
   category: string;
   fileName: string;
@@ -59,6 +59,7 @@ type MediaPreview = {
   downloadName: string;
   initialAnnotations: BreakdownAnnotation[];
   saveAnnotations?: (annotations: BreakdownAnnotation[]) => Promise<void>;
+  deleteMedia?: () => Promise<void> | void;
 };
 type MediaGalleryItem = MediaPreview;
 
@@ -69,6 +70,39 @@ type PlayerNotesSuiteProps = {
   } | null;
   embedded?: boolean;
 };
+
+function MediaTileFallback({ label }: { label: string }) {
+  return (
+    <span className="portal-media-tile-fallback">
+      <span className="portal-media-tile-fallback-icon" aria-hidden="true">
+        {label === 'PDF' ? 'PDF' : label === 'Video' ? 'VID' : 'IMG'}
+      </span>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function MediaTilePreview({ url, title, mimeType }: { url: string; title: string; mimeType: string }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const normalized = String(mimeType ?? '').toLowerCase();
+  const isUnsupportedImagePreview = normalized.includes('heic') || normalized.includes('heif');
+  if (normalized.startsWith('image/')) {
+    if (isUnsupportedImagePreview || imageFailed) return <MediaTileFallback label="Photo" />;
+    return <img src={url} alt={title} className="portal-media-tile-preview-media" loading="lazy" onError={() => setImageFailed(true)} />;
+  }
+  if (normalized.startsWith('video/')) {
+    return <video src={url} className="portal-media-tile-preview-media" muted playsInline preload="metadata" />;
+  }
+  if (normalized === 'application/pdf') {
+    return (
+      <>
+        <iframe title={`${title} preview`} src={`${url}#toolbar=0&navpanes=0&scrollbar=0&page=1`} className="portal-media-tile-preview-media portal-media-tile-preview-pdf" />
+        <span className="portal-media-tile-badge">PDF</span>
+      </>
+    );
+  }
+  return <MediaTileFallback label="File" />;
+}
 
 const DEFAULT_NOTE_CATEGORIES = ['Player Plan', 'Weight Room', 'Nutrition', 'Mental Training', 'Grips', 'Questionnaires'];
 const MULTI_ATTACHMENT_MIME = 'application/x.pcu-note-attachments+json';
@@ -274,7 +308,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
     [customCategories, notes]
   );
   const mediaCategoryOptions = useMemo(
-    () => uniqueNames(['General', 'Workout', 'Bullpen', 'Video Breakdown', ...customCategories, ...playerMedia.map((media) => media.category)]),
+    () => uniqueNames(['General', 'Workout', 'Drills', 'Bullpen', 'Video Breakdown', ...customCategories, ...playerMedia.map((media) => media.category)]),
     [customCategories, playerMedia]
   );
   const selectedLinkedPlayerId = useMemo(() => {
@@ -580,7 +614,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   const noteMediaAttachments = useMemo(() => (
     notes.flatMap((note) =>
       parseNoteAttachments(note)
-        .filter((attachment) => attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/'))
+        .filter((attachment) => attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/') || attachment.mimeType === 'application/pdf')
         .map((attachment, idx) => ({
           id: `note-${note.id}-${idx}`,
           noteId: note.id,
@@ -763,7 +797,8 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
       mimeType: media.contentType,
       downloadName: media.fileName,
       initialAnnotations: media.breakdownAnnotations ?? [],
-      saveAnnotations: (annotations: BreakdownAnnotation[]) => savePlayerMediaBreakdownAnnotations(media, annotations),
+      saveAnnotations: media.contentType === 'application/pdf' ? undefined : (annotations: BreakdownAnnotation[]) => savePlayerMediaBreakdownAnnotations(media, annotations),
+      deleteMedia: () => deleteMedia(media),
     })),
     ...visibleNoteMedia.map((media) => ({
       id: media.id,
@@ -772,7 +807,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
       mimeType: media.mimeType,
       downloadName: media.downloadName,
       initialAnnotations: media.initialAnnotations,
-      saveAnnotations: (annotations: BreakdownAnnotation[]) => saveNoteAttachmentBreakdownAnnotations(media.note, media.attachmentIndex, annotations),
+      saveAnnotations: media.mimeType === 'application/pdf' ? undefined : (annotations: BreakdownAnnotation[]) => saveNoteAttachmentBreakdownAnnotations(media.note, media.attachmentIndex, annotations),
     })),
   ];
   const previewIndex = mediaPreview ? mediaGalleryItems.findIndex((item) => item.id === mediaPreview.id) : -1;
@@ -847,10 +882,10 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
               <div className="portal-form-grid" style={{ gridTemplateColumns: 'minmax(180px, 1fr) minmax(160px, 220px) minmax(160px, 220px) auto', alignItems: 'end' }}>
                 <label>
-                  Upload Photos/Videos
+                  Upload Photos/Videos/PDFs
                   <input
                     type="file"
-                    accept="image/*,video/*"
+                    accept="image/*,video/*,application/pdf,.pdf"
                     multiple={true}
                     onChange={(event) => {
                       const files = event.target.files ? Array.from(event.target.files) : [];
@@ -908,9 +943,10 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                         const item = mediaGalleryItems.find((entry) => entry.id === `player-${media.id}`);
                         if (item) openMediaGalleryItem(item);
                       }}
-                      style={{ border: 0, borderRadius: 8, minHeight: 112, background: 'rgba(15,23,42,0.92)', color: '#f8fafc', fontWeight: 900, cursor: 'pointer' }}
+                      className="portal-media-tile-preview"
                     >
-                      {media.mediaType === 'video' ? 'Video' : 'Photo'}
+                      <MediaTilePreview url={`/api/player/media/${media.id}`} title={media.title} mimeType={media.contentType} />
+                      <span className="portal-media-tile-kind">{media.mediaType === 'video' ? 'Video' : media.mediaType === 'pdf' || media.contentType === 'application/pdf' ? 'PDF' : 'Photo'}</span>
                     </button>
                     {editingMediaId === media.id ? (
                       <div style={{ display: 'grid', gap: 6 }}>
@@ -961,9 +997,10 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                       const item = mediaGalleryItems.find((entry) => entry.id === media.id);
                       if (item) openMediaGalleryItem(item);
                     }}
-                    style={{ border: 0, borderRadius: 8, minHeight: 112, background: 'rgba(15,23,42,0.74)', color: '#f8fafc', fontWeight: 900, cursor: 'pointer' }}
+                    className="portal-media-tile-preview"
                   >
-                    {media.mimeType.startsWith('video/') ? 'Video Attachment' : 'Photo Attachment'}
+                    <MediaTilePreview url={media.url} title={media.title} mimeType={media.mimeType} />
+                    <span className="portal-media-tile-kind">{media.mimeType.startsWith('video/') ? 'Video Attachment' : media.mimeType === 'application/pdf' ? 'PDF Attachment' : 'Photo Attachment'}</span>
                   </button>
                   <strong style={{ color: '#f8fafc' }}>{media.title}</strong>
                   <span className="portal-muted-text">{media.category} - {media.sourceLabel}</span>
@@ -1117,7 +1154,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                                     type="button"
                                     className="btn btn-ghost"
                                     onClick={() => {
-                                      if (attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/')) {
+                                      if (attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/') || attachment.mimeType === 'application/pdf') {
                                         const galleryId = `note-${note.id}-${idx}`;
                                         const item = mediaGalleryItems.find((entry) => entry.id === galleryId);
                                         openMediaGalleryItem(item ?? {
@@ -1127,7 +1164,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                                           mimeType: attachment.mimeType,
                                           downloadName: attachment.name,
                                           initialAnnotations: attachment.breakdownAnnotations ?? [],
-                                          saveAnnotations: (annotations) => saveNoteAttachmentBreakdownAnnotations(note, idx, annotations),
+                                          saveAnnotations: attachment.mimeType === 'application/pdf' ? undefined : (annotations) => saveNoteAttachmentBreakdownAnnotations(note, idx, annotations),
                                         });
                                         return;
                                       }
@@ -1261,6 +1298,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             players={linkedPlayers}
             initialAnnotations={mediaPreview.initialAnnotations}
             onSaveAnnotations={mediaPreview.saveAnnotations}
+            onDelete={mediaPreview.deleteMedia}
             hasPrevious={previewIndex > 0}
             hasNext={previewIndex >= 0 && previewIndex < mediaGalleryItems.length - 1}
             positionLabel={previewIndex >= 0 ? `${previewIndex + 1} / ${mediaGalleryItems.length}` : undefined}

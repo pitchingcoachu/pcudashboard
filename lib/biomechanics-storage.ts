@@ -159,7 +159,8 @@ export async function uploadPlayerMediaToR2(args: {
   body: Buffer;
 }): Promise<string | null> {
   const safeName = String(args.fileName ?? 'media').replace(/[^a-zA-Z0-9._-]+/g, '-');
-  const kind = String(args.contentType ?? '').toLowerCase().startsWith('image/') ? 'photo' : 'video';
+  const normalizedType = String(args.contentType ?? '').toLowerCase();
+  const kind = normalizedType.startsWith('image/') ? 'photo' : normalizedType.startsWith('video/') ? 'video' : normalizedType === 'application/pdf' ? 'pdf' : 'file';
   const key = `player-media/org-${args.organizationId}/player-${args.playerId}/${kind}-${Date.now()}-${safeName}`;
   const client = getR2Client();
   if (!client) {

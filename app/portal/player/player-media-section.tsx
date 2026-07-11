@@ -6,7 +6,7 @@ import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 
 type PlayerMedia = {
   id: number;
-  mediaType: 'photo' | 'video';
+  mediaType: 'photo' | 'video' | 'pdf';
   title: string;
   category: string;
   fileName: string;
@@ -25,6 +25,39 @@ type MediaPreview = {
 };
 
 type OrgPlayer = { playerId: number; fullName: string };
+
+function MediaTileFallback({ label }: { label: string }) {
+  return (
+    <span className="portal-media-tile-fallback">
+      <span className="portal-media-tile-fallback-icon" aria-hidden="true">
+        {label === 'PDF' ? 'PDF' : label === 'Video' ? 'VID' : 'IMG'}
+      </span>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function MediaTilePreview({ url, title, contentType, mediaType }: { url: string; title: string; contentType: string; mediaType: PlayerMedia['mediaType'] }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const normalized = String(contentType ?? '').toLowerCase();
+  const isUnsupportedImagePreview = normalized.includes('heic') || normalized.includes('heif');
+  if (mediaType === 'photo' || normalized.startsWith('image/')) {
+    if (isUnsupportedImagePreview || imageFailed) return <MediaTileFallback label="Photo" />;
+    return <img src={url} alt={title} className="portal-media-tile-preview-media" loading="lazy" onError={() => setImageFailed(true)} />;
+  }
+  if (mediaType === 'video' || normalized.startsWith('video/')) {
+    return <video src={url} className="portal-media-tile-preview-media" muted playsInline preload="metadata" />;
+  }
+  if (mediaType === 'pdf' || normalized === 'application/pdf') {
+    return (
+      <>
+        <iframe title={`${title} preview`} src={`${url}#toolbar=0&navpanes=0&scrollbar=0&page=1`} className="portal-media-tile-preview-media portal-media-tile-preview-pdf" />
+        <span className="portal-media-tile-badge">PDF</span>
+      </>
+    );
+  }
+  return <MediaTileFallback label="File" />;
+}
 
 export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: number; isPlayer: boolean }) {
   const [media, setMedia] = useState<PlayerMedia[]>([]);
@@ -99,6 +132,12 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
   const filtered = filterCategory === 'All' ? media : media.filter((m) => m.category === filterCategory);
   const previewIndex = mediaPreview ? filtered.findIndex((item) => item.id === mediaPreview.mediaId) : -1;
 
+  function mediaKindLabel(item: PlayerMedia): string {
+    if (item.mediaType === 'pdf' || item.contentType === 'application/pdf') return 'PDF';
+    if (item.mediaType === 'video') return 'Video';
+    return 'Photo';
+  }
+
   function openMediaPreview(item: PlayerMedia) {
     const url = `/api/player/media/${item.id}`;
     const mimeType = item.contentType || 'video/quicktime';
@@ -125,6 +164,19 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
     setMessage('Markup saved.');
   }
 
+  async function deleteMedia(mediaId: number, title: string) {
+    if (!window.confirm(`Delete "${title}"? This cannot be undone.`)) return;
+    const response = await fetch(`/api/player/media?${new URLSearchParams({ playerId: String(playerId), mediaId: String(mediaId) }).toString()}`, { method: 'DELETE' });
+    const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+    if (!response.ok) {
+      setMessage(payload.error ?? 'Delete failed.');
+      return;
+    }
+    setMedia(Array.isArray(payload.media) ? payload.media : []);
+    setMediaPreview(null);
+    setMessage('Media deleted.');
+  }
+
   return (
     <div style={{ marginTop: 12 }}>
       {/* Upload row */}
@@ -133,7 +185,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
           Upload
           <input
             type="file"
-            accept="image/*,video/*"
+            accept="image/*,video/*,application/pdf,.pdf"
             multiple
             onChange={(e) => {
               const files = e.target.files ? Array.from(e.target.files) : [];
@@ -155,7 +207,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
             onChange={(e) => setMediaCategory(e.target.value)}
           />
           <datalist id="player-media-cat-opts">
-            {['General', 'Workout', 'Bullpen', 'Mechanics', 'Edger'].map((c) => (
+            {['General', 'Workout', 'Drills', 'Bullpen', 'Mechanics', 'Edger'].map((c) => (
               <option key={c} value={c} />
             ))}
             {categoryOptions.map((c) => <option key={`existing-${c}`} value={c} />)}
@@ -196,9 +248,10 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
               <button
                 type="button"
                 onClick={() => openMediaPreview(m)}
-                style={{ border: 0, borderRadius: 8, minHeight: 100, background: 'rgba(15,23,42,0.92)', color: '#f8fafc', fontWeight: 900, cursor: 'pointer' }}
+                className="portal-media-tile-preview"
               >
-                {m.mediaType === 'video' ? '▶ Video' : 'Photo'}
+                <MediaTilePreview url={url} title={m.title} contentType={mimeType} mediaType={m.mediaType} />
+                <span className="portal-media-tile-kind">{mediaKindLabel(m)}</span>
               </button>
               <strong style={{ color: '#f8fafc', fontSize: 13 }}>{m.title}</strong>
               <span className="portal-muted-text" style={{ fontSize: 12 }}>{m.category}</span>
@@ -209,7 +262,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
       </div>
 
       {!loading && !media.length && (
-        <p className="portal-muted-text" style={{ marginBottom: 0 }}>No videos or photos yet.</p>
+        <p className="portal-muted-text" style={{ marginBottom: 0 }}>No videos, photos, or PDFs yet.</p>
       )}
 
       {mediaPreview && (
@@ -221,7 +274,8 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
           onClose={() => setMediaPreview(null)}
           players={orgPlayers}
           initialAnnotations={mediaPreview.initialAnnotations}
-          onSaveAnnotations={(annotations) => saveBreakdownAnnotations(mediaPreview.mediaId, annotations)}
+          onSaveAnnotations={mediaPreview.mimeType === 'application/pdf' ? undefined : (annotations) => saveBreakdownAnnotations(mediaPreview.mediaId, annotations)}
+          onDelete={() => void deleteMedia(mediaPreview.mediaId, mediaPreview.title)}
           hasPrevious={previewIndex > 0}
           hasNext={previewIndex >= 0 && previewIndex < filtered.length - 1}
           positionLabel={previewIndex >= 0 ? `${previewIndex + 1} / ${filtered.length}` : undefined}

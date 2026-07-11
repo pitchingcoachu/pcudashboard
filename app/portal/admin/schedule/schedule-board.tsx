@@ -420,6 +420,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [selectedVelocityTemplateId, setSelectedVelocityTemplateId] = useState<string>('');
   const [visibleVelocityTemplateIds, setVisibleVelocityTemplateIds] = useState<string[]>([]);
   const [velocityNotes, setVelocityNotes] = useState('');
+  const [drillsNotes, setDrillsNotes] = useState('');
   const [drillsRowCount, setDrillsRowCount] = useState<number>(4);
   const [drillsRows, setDrillsRows] = useState<DrillRow[]>(() => normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
   const [postDrillsRowCount, setPostDrillsRowCount] = useState<number>(DEFAULT_DRILL_ROW_COUNT);
@@ -438,6 +439,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [newDrillVideoUrl, setNewDrillVideoUrl] = useState('');
   const [newDrillSaveToLibrary, setNewDrillSaveToLibrary] = useState(true);
   const [drillVideoPreview, setDrillVideoPreview] = useState<{ title: string; url: string } | null>(null);
+  const drillsNoteTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [catchPlayHighDay, setCatchPlayHighDay] = useState('');
   const [catchPlayMediumDay, setCatchPlayMediumDay] = useState('');
   const [catchPlayLowDay, setCatchPlayLowDay] = useState('');
@@ -629,6 +631,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setCycleNotes('');
         setDrillsRowCount(DEFAULT_DRILL_ROW_COUNT);
         setDrillsRows(normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
+        setDrillsNotes('');
         setPostDrillsRowCount(DEFAULT_DRILL_ROW_COUNT);
         setPostDrillsRows(normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
         setSelectedPreDrillTemplateId('');
@@ -834,6 +837,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           setVelocityNotes('');
         }
         const nextDrillsState = normalizeDrillsState(payload.drillsState);
+        setDrillsNotes(nextDrillsState.notes);
         setDrillsRowCount(nextDrillsState.pre.rowCount);
         setDrillsRows(nextDrillsState.pre.rows);
         setSelectedPreDrillTemplateId(nextDrillsState.pre.selectedTemplateId);
@@ -868,8 +872,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setSelectedVelocityTemplateId('');
         setVisibleVelocityTemplateIds([]);
         setVelocityNotes('');
+        setDrillsNotes('');
         setDrillsRowCount(DEFAULT_DRILL_ROW_COUNT);
         setDrillsRows(normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
+        setDrillsNotes('');
         setPostDrillsRowCount(DEFAULT_DRILL_ROW_COUNT);
         setPostDrillsRows(normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
         setSelectedPreDrillTemplateId('');
@@ -938,6 +944,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           },
           velocityTemplates,
           drillsState: {
+            notes: drillsNotes,
             pre: { rowCount: drillsRowCount, rows: drillsRows.slice(0, drillsRowCount), selectedTemplateId: selectedPreDrillTemplateId },
             post: { rowCount: postDrillsRowCount, rows: postDrillsRows.slice(0, postDrillsRowCount), selectedTemplateId: selectedPostDrillTemplateId },
           } satisfies DrillsState,
@@ -949,7 +956,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       }).catch(() => {});
     }, 350);
     return () => clearTimeout(handle);
-  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, bullpenNotes, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, velocityNotes, drillsRowCount, drillsRows, postDrillsRowCount, postDrillsRows, selectedPreDrillTemplateId, selectedPostDrillTemplateId, preThrowDrillTemplates, postThrowDrillTemplates, catchPlayHighDay, catchPlayMediumDay, catchPlayLowDay, cycleNotes]);
+  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, bullpenNotes, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, velocityNotes, drillsNotes, drillsRowCount, drillsRows, postDrillsRowCount, postDrillsRows, selectedPreDrillTemplateId, selectedPostDrillTemplateId, preThrowDrillTemplates, postThrowDrillTemplates, catchPlayHighDay, catchPlayMediumDay, catchPlayLowDay, cycleNotes]);
 
   useEffect(() => {
     if (!selectedTemplateId) {
@@ -1074,6 +1081,17 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
 
   const getThrowingTemplateCellKey = (weekIndex: number, dayIndex: number) => `w${weekIndex + 1}-d${dayIndex}`;
   const emptyThrowingEntry: ThrowingDayEntry = { intensity: '', distance: '', throwsText: '', drills: '', bullpen: '' };
+
+  const resizeDrillsNoteTextarea = useCallback(() => {
+    const textarea = drillsNoteTextareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.max(52, textarea.scrollHeight)}px`;
+  }, []);
+
+  useEffect(() => {
+    resizeDrillsNoteTextarea();
+  }, [drillsNotes, resizeDrillsNoteTextarea]);
   const normalizeThrowingEntry = (entry: Partial<ThrowingDayEntry> | undefined | null): ThrowingDayEntry => ({
     intensity: String(entry?.intensity ?? ''),
     distance: String(entry?.distance ?? ''),
@@ -3034,22 +3052,17 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     <td key={`${section}-${index}-${field}`}>
                       {field === 'drill' ? (
                         <div className="portal-drill-picker-cell">
-                          <input
+                          <textarea
                             className="portal-schedule-control"
-                            list={`${section}-drill-options`}
                             value={row.drill}
                             placeholder="Select drill"
+                            rows={2}
                             onChange={(event) => updateRows((previous) => {
                               const next = [...previous];
                               next[index] = { ...(next[index] ?? emptyDrillRow()), drill: event.target.value };
                               return next;
                             })}
                           />
-                          <datalist id={`${section}-drill-options`}>
-                            {drillExerciseOptions.map((option) => (
-                              <option key={`${section}-drill-opt-${option.id}-${option.name}`} value={option.name} />
-                            ))}
-                          </datalist>
                           {(() => {
                             const selected = drillExerciseOptions.find((option) => option.name === row.drill);
                             const videoUrl = String(selected?.instructionVideoUrl ?? '').trim();
@@ -3066,9 +3079,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                           })()}
                         </div>
                       ) : (
-                        <input
+                        <textarea
                           className="portal-schedule-control"
                           value={row[field]}
+                          rows={2}
                           onChange={(event) => updateRows((previous) => {
                             const next = [...previous];
                             next[index] = { ...(next[index] ?? emptyDrillRow()), [field]: event.target.value };
@@ -4420,6 +4434,22 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           )}
           {builderMode === 'schedule' && view === 'drills' && (
             <div className="portal-drills-sections">
+              <section className="portal-drills-note-section">
+                <label>
+                  <strong>Player Note</strong>
+                  <textarea
+                    ref={drillsNoteTextareaRef}
+                    className="portal-schedule-control"
+                    rows={2}
+                    placeholder="Notes for this player's plyos and drills..."
+                    value={drillsNotes}
+                    onChange={(event) => {
+                      setDrillsNotes(event.target.value);
+                      requestAnimationFrame(resizeDrillsNoteTextarea);
+                    }}
+                  />
+                </label>
+              </section>
               {renderDrillSection('pre')}
               {renderDrillSection('post')}
               <section className="portal-panel" style={{ marginTop: '1rem', gridColumn: '1 / -1', width: '100%', paddingBottom: '0.6rem' }}>

@@ -207,7 +207,7 @@ export type PlayerMediaRow = {
   id: number;
   organizationId: number;
   playerId: number;
-  mediaType: 'photo' | 'video';
+  mediaType: 'photo' | 'video' | 'pdf';
   title: string;
   category: string;
   fileName: string;
@@ -6793,12 +6793,12 @@ export async function deletePlayerPlanNote(input: {
 export async function listPlayerMedia(input: {
   organizationId: number;
   playerId: number;
-  mediaType?: 'photo' | 'video';
+  mediaType?: 'photo' | 'video' | 'pdf';
 }): Promise<PlayerMediaRow[]> {
   if (!isDatabaseConfigured()) return [];
   await ensureTrainingDbReady();
   const pool = getDbPool();
-  const mediaType = input.mediaType === 'photo' || input.mediaType === 'video' ? input.mediaType : null;
+  const mediaType = input.mediaType === 'photo' || input.mediaType === 'video' || input.mediaType === 'pdf' ? input.mediaType : null;
   const result = await pool.query<{
     id: number;
     organization_id: number;
@@ -6845,7 +6845,7 @@ export async function listPlayerMedia(input: {
   );
   return result.rows
     .map((row) => {
-      const mediaTypeValue = row.media_type === 'photo' || row.media_type === 'video' ? row.media_type : null;
+      const mediaTypeValue = row.media_type === 'photo' || row.media_type === 'video' || row.media_type === 'pdf' ? row.media_type : null;
       if (!mediaTypeValue) return null;
       return {
         id: Number(row.id),
@@ -6889,7 +6889,7 @@ export async function getPlayerMedia(input: {
 export async function createPlayerMedia(input: {
   organizationId: number;
   playerId: number;
-  mediaType: 'photo' | 'video';
+  mediaType: 'photo' | 'video' | 'pdf';
   title: string;
   category: string;
   fileName: string;
@@ -6903,8 +6903,8 @@ export async function createPlayerMedia(input: {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
-  const mediaType = input.mediaType === 'photo' || input.mediaType === 'video' ? input.mediaType : null;
-  if (!mediaType) return { ok: false, error: 'Media type must be photo or video.' };
+  const mediaType = input.mediaType === 'photo' || input.mediaType === 'video' || input.mediaType === 'pdf' ? input.mediaType : null;
+  if (!mediaType) return { ok: false, error: 'Media type must be photo, video, or pdf.' };
   const playerCheck = await pool.query(`SELECT id FROM players WHERE id = $1 AND organization_id = $2 LIMIT 1`, [
     input.playerId,
     input.organizationId,

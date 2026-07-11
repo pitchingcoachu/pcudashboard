@@ -80,6 +80,7 @@ function inferContentType(fileName: string): string {
     webp: 'image/webp', heic: 'image/heic', heif: 'image/heif', avif: 'image/avif',
     mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', qt: 'video/quicktime',
     webm: 'video/webm', avi: 'video/x-msvideo', mkv: 'video/x-matroska',
+    pdf: 'application/pdf',
   };
   return map[ext] ?? 'application/octet-stream';
 }
