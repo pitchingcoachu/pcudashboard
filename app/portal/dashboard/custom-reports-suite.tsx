@@ -3307,6 +3307,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           const isProSchool = String(resolvedSchoolCode || '').trim().toUpperCase() === 'PRO';
           const normalizedPanelType = normalizePanelType(config.panelType);
           const isHeatmapPanel = normalizedPanelType === 'Heatmap';
+          const isMovementPanel = normalizedPanelType === 'Movement Plot';
           const isVelocityPanel =
             normalizedPanelType === 'Velocity Chart' ||
             normalizedPanelType === 'Velocity Bar Chart' ||
@@ -3318,7 +3319,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           if (needsChartPoints) params.set('chart_only', '1');
           if (needsChartPoints) {
             if (isProSchool) {
-              if (reportScope === 'Single Player' && isVelocityPanel) {
+              if (reportScope === 'Single Player' && (isVelocityPanel || isMovementPanel)) {
                 params.set('chart_points_limit', '6000');
               } else if (reportScope === 'Multi-Player' && isHeatmapPanel) {
                 params.set('chart_points_limit', '6000');
@@ -3326,7 +3327,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 params.set('chart_points_limit', isHeatmapPanel ? '6000' : (reportScope === 'Team' ? '60' : '220'));
               }
             } else {
-              if (reportScope === 'Single Player' && isVelocityPanel) {
+              if (reportScope === 'Single Player' && (isVelocityPanel || isMovementPanel)) {
                 params.set('chart_points_limit', '6000');
               } else if (reportScope === 'Multi-Player' && isHeatmapPanel) {
                 params.set('chart_points_limit', '6000');
