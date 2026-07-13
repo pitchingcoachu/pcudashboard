@@ -1,5 +1,7 @@
 // Client-side helper: uploads a file to player media, using R2 presigned URL
 // when available (production) or direct POST fallback (local dev).
+const MAX_PLAYER_MEDIA_BYTES = 350 * 1024 * 1024;
+
 export async function uploadPlayerMediaFile(args: {
   playerId: number;
   file: File;
@@ -7,8 +9,11 @@ export async function uploadPlayerMediaFile(args: {
   category: string;
   sourceType?: string;
   sourceLabel?: string;
-}): Promise<{ ok: true; media: unknown[] } | { ok: false; error: string }> {
+}): Promise<{ ok: true; media: unknown[]; createdMedia?: unknown } | { ok: false; error: string }> {
   const { playerId, file, title, category, sourceType, sourceLabel } = args;
+  if (file.size > MAX_PLAYER_MEDIA_BYTES) {
+    return { ok: false, error: 'Media file is too large. Limit is 350 MB.' };
+  }
 
   const rawContentType = file.type.trim();
   const contentType = rawContentType || inferContentType(file.name);
@@ -19,6 +24,7 @@ export async function uploadPlayerMediaFile(args: {
     playerId: String(playerId),
     fileName: file.name,
     contentType,
+    sizeBytes: String(file.size),
   });
   const presignRes = await fetch(`/api/player/media?${presignParams.toString()}`);
   if (!presignRes.ok) {
@@ -54,9 +60,9 @@ export async function uploadPlayerMediaFile(args: {
         sourceLabel: sourceLabel ?? '',
       }),
     });
-    const metaBody = await metaRes.json().catch(() => ({})) as { ok?: boolean; media?: unknown[]; error?: string };
+    const metaBody = await metaRes.json().catch(() => ({})) as { ok?: boolean; media?: unknown[]; createdMedia?: unknown; error?: string };
     if (!metaRes.ok) return { ok: false, error: metaBody.error ?? 'Failed to save media record.' };
-    return { ok: true, media: Array.isArray(metaBody.media) ? metaBody.media : [] };
+    return { ok: true, media: Array.isArray(metaBody.media) ? metaBody.media : [], createdMedia: metaBody.createdMedia };
   }
 
   // Fallback: direct FormData POST (local dev, no R2)
@@ -68,9 +74,9 @@ export async function uploadPlayerMediaFile(args: {
   if (sourceType) form.set('sourceType', sourceType);
   if (sourceLabel) form.set('sourceLabel', sourceLabel);
   const res = await fetch('/api/player/media', { method: 'POST', body: form });
-  const resBody = await res.json().catch(() => ({})) as { ok?: boolean; media?: unknown[]; error?: string };
+  const resBody = await res.json().catch(() => ({})) as { ok?: boolean; media?: unknown[]; createdMedia?: unknown; error?: string };
   if (!res.ok) return { ok: false, error: resBody.error ?? `Failed to upload ${file.name}.` };
-  return { ok: true, media: Array.isArray(resBody.media) ? resBody.media : [] };
+  return { ok: true, media: Array.isArray(resBody.media) ? resBody.media : [], createdMedia: resBody.createdMedia };
 }
 
 function inferContentType(fileName: string): string {

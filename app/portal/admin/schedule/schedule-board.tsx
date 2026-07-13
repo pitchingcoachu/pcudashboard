@@ -439,6 +439,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [newDrillVideoUrl, setNewDrillVideoUrl] = useState('');
   const [newDrillSaveToLibrary, setNewDrillSaveToLibrary] = useState(true);
   const [drillVideoPreview, setDrillVideoPreview] = useState<{ title: string; url: string } | null>(null);
+  const [drillRowDrag, setDrillRowDrag] = useState<{ section: 'pre' | 'post'; index: number } | null>(null);
   const drillsNoteTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [catchPlayHighDay, setCatchPlayHighDay] = useState('');
   const [catchPlayMediumDay, setCatchPlayMediumDay] = useState('');
@@ -3023,6 +3024,18 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     setError('');
   };
 
+  const moveDrillRow = (section: 'pre' | 'post', fromIndex: number, toIndex: number) => {
+    const rowCount = section === 'pre' ? drillsRowCount : postDrillsRowCount;
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= rowCount || toIndex >= rowCount) return;
+    const updateRows = section === 'pre' ? setDrillsRows : setPostDrillsRows;
+    updateRows((previous) => {
+      const next = normalizeDrillRows(previous, Math.max(previous.length, rowCount));
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved ?? emptyDrillRow());
+      return next;
+    });
+  };
+
   const renderDrillSection = (section: 'pre' | 'post') => {
     const isPre = section === 'pre';
     const sectionRows = isPre ? drillsRows : postDrillsRows;
@@ -3034,6 +3047,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         <div className="portal-table-wrap">
           <table className="portal-drills-table">
             <colgroup>
+              <col className="portal-drills-col-handle" />
               <col className="portal-drills-col-drill" />
               <col className="portal-drills-col-compact" />
               <col className="portal-drills-col-compact" />
@@ -3042,12 +3056,46 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             </colgroup>
             <thead>
               <tr>
+                <th aria-label="Reorder drills" />
                 {['Drill', 'Sets', 'Reps', 'Weight', 'Notes'].map((label) => <th key={label}>{label}</th>)}
               </tr>
             </thead>
             <tbody>
               {sectionRows.slice(0, sectionRowCount).map((row, index) => (
-                <tr key={`${section}-drill-row-${index}`}>
+                <tr
+                  key={`${section}-drill-row-${index}`}
+                  className={drillRowDrag?.section === section && drillRowDrag.index === index ? 'portal-drills-row-dragging' : undefined}
+                  onDragOver={(event) => {
+                    if (!drillRowDrag || drillRowDrag.section !== section) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const sourceSection = event.dataTransfer.getData('application/x-drill-section') as 'pre' | 'post';
+                    const sourceIndex = Number(event.dataTransfer.getData('application/x-drill-row'));
+                    if (sourceSection === section && Number.isFinite(sourceIndex)) moveDrillRow(section, sourceIndex, index);
+                    setDrillRowDrag(null);
+                  }}
+                >
+                  <td className="portal-drills-row-handle-cell">
+                    <button
+                      type="button"
+                      className="portal-drills-row-handle"
+                      draggable
+                      aria-label={`Move ${isPre ? 'pre-throw' : 'post-throw'} drill row ${index + 1}`}
+                      title="Drag to reorder"
+                      onDragStart={(event) => {
+                        setDrillRowDrag({ section, index });
+                        event.dataTransfer.effectAllowed = 'move';
+                        event.dataTransfer.setData('application/x-drill-section', section);
+                        event.dataTransfer.setData('application/x-drill-row', String(index));
+                      }}
+                      onDragEnd={() => setDrillRowDrag(null)}
+                    >
+                      <span aria-hidden="true">||</span>
+                    </button>
+                  </td>
                   {(['drill', 'sets', 'reps', 'weight', 'notes'] as const).map((field) => (
                     <td key={`${section}-${index}-${field}`}>
                       {field === 'drill' ? (

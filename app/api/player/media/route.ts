@@ -94,6 +94,10 @@ export async function GET(request: Request) {
     const fileName = String(url.searchParams.get('fileName') ?? '').trim();
     const rawContentType = String(url.searchParams.get('contentType') ?? '').trim();
     const contentType = rawContentType || inferMediaContentType(fileName);
+    const sizeBytes = Number(url.searchParams.get('sizeBytes') ?? 0) || 0;
+    if (sizeBytes > MAX_PLAYER_MEDIA_BYTES) {
+      return NextResponse.json({ error: 'Media file is too large. Limit is 350 MB.' }, { status: 400 });
+    }
 
     if (!isR2Configured()) {
       // Signal to client to fall back to direct upload
@@ -138,6 +142,10 @@ export async function POST(request: Request) {
     const mediaType = inferMediaType(contentType);
     if (!mediaType) return NextResponse.json({ error: 'Only photo, video, and PDF uploads are supported.' }, { status: 400 });
     if (!r2Key) return NextResponse.json({ error: 'r2Key is required.' }, { status: 400 });
+    const sizeBytes = Number(body.sizeBytes ?? 0) || 0;
+    if (sizeBytes > MAX_PLAYER_MEDIA_BYTES) {
+      return NextResponse.json({ error: 'Media file is too large. Limit is 350 MB.' }, { status: 400 });
+    }
 
     const created = await createPlayerMedia({
       organizationId: allowed.organizationId,
@@ -147,7 +155,7 @@ export async function POST(request: Request) {
       category: String(body.category ?? '').trim() || 'General',
       fileName,
       contentType,
-      sizeBytes: Number(body.sizeBytes ?? 0) || 0,
+      sizeBytes,
       r2Key,
       sourceType: String(body.sourceType ?? '').trim() || undefined,
       sourceLabel: String(body.sourceLabel ?? '').trim() || undefined,
@@ -155,7 +163,8 @@ export async function POST(request: Request) {
     });
     if (!created.ok) return NextResponse.json({ error: `DB error: ${created.error}` }, { status: 400 });
     const media = await listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId });
-    return NextResponse.json({ ok: true, media });
+    const createdMedia = media.find((item) => item.id === created.id) ?? null;
+    return NextResponse.json({ ok: true, media, createdMedia });
   }
 
   // FormData = direct upload (local dev fallback, no R2)
@@ -208,7 +217,8 @@ export async function POST(request: Request) {
   });
   if (!created.ok) return NextResponse.json({ error: `DB error: ${created.error}` }, { status: 400 });
   const media = await listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId });
-  return NextResponse.json({ ok: true, media });
+  const createdMedia = media.find((item) => item.id === created.id) ?? null;
+  return NextResponse.json({ ok: true, media, createdMedia });
 }
 
 // ── DELETE ───────────────────────────────────────────────────────────────────

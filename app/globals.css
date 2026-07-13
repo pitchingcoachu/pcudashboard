@@ -5180,12 +5180,16 @@ body.theme-light .portal-bullpen-summary-table th {
   table-layout: fixed;
 }
 
+.portal-drills-col-handle {
+  width: 5%;
+}
+
 .portal-drills-col-drill {
-  width: 34%;
+  width: 32%;
 }
 
 .portal-drills-col-compact {
-  width: 10%;
+  width: 9%;
 }
 
 .portal-drills-col-notes {
@@ -5207,6 +5211,41 @@ body.theme-light .portal-bullpen-summary-table th {
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.portal-drills-row-dragging {
+  opacity: 0.62;
+}
+
+.portal-drills-row-handle-cell {
+  text-align: center;
+  vertical-align: middle;
+}
+
+.portal-drills-row-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 40px;
+  border: 1px solid var(--calendar-grid-border, var(--border));
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  cursor: grab;
+  font-size: 0.82rem;
+  font-weight: 900;
+  line-height: 1;
+  touch-action: none;
+}
+
+.portal-drills-row-handle:active {
+  cursor: grabbing;
+}
+
+.portal-drills-row-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .portal-drills-table select,
 .portal-drills-table input,
 .portal-drills-table textarea {
@@ -5223,8 +5262,8 @@ body.theme-light .portal-bullpen-summary-table th {
   resize: vertical;
 }
 
-.portal-drills-table td:first-child input,
-.portal-drills-table td:first-child textarea {
+.portal-drills-table td:nth-child(2) input,
+.portal-drills-table td:nth-child(2) textarea {
   text-align: left;
 }
 

@@ -36,6 +36,7 @@ type NoteAttachment = {
   name: string;
   mimeType: string;
   dataUrl: string;
+  mediaId?: number;
   breakdownAnnotations?: BreakdownAnnotation[];
 };
 type PlayerMedia = {
@@ -107,6 +108,8 @@ function MediaTilePreview({ url, title, mimeType }: { url: string; title: string
 const DEFAULT_NOTE_CATEGORIES = ['Player Plan', 'Weight Room', 'Nutrition', 'Mental Training', 'Grips', 'Questionnaires'];
 const MULTI_ATTACHMENT_MIME = 'application/x.pcu-note-attachments+json';
 const NOTE_ATTACHMENT_LIMIT_LABEL = formatNoteAttachmentLimit();
+const PLAYER_MEDIA_LIMIT_BYTES = 350 * 1024 * 1024;
+const PLAYER_MEDIA_LIMIT_LABEL = '350 MB';
 
 function todayIsoDate(): string {
   const now = new Date();
@@ -209,13 +212,14 @@ function parseNoteAttachments(note: Pick<PlayerPlanNote, 'attachmentName' | 'att
   if (!dataUrl) return [];
   if (mimeType === MULTI_ATTACHMENT_MIME || dataUrl.startsWith('[')) {
     try {
-      const parsed = JSON.parse(dataUrl) as Array<{ name?: string; mimeType?: string; dataUrl?: string; breakdownAnnotations?: unknown }>;
+      const parsed = JSON.parse(dataUrl) as Array<{ name?: string; mimeType?: string; dataUrl?: string; mediaId?: unknown; breakdownAnnotations?: unknown }>;
       if (!Array.isArray(parsed)) return [];
       return parsed
         .map((entry) => ({
           name: String(entry?.name ?? '').trim() || 'attachment',
           mimeType: String(entry?.mimeType ?? '').trim(),
           dataUrl: String(entry?.dataUrl ?? '').trim(),
+          mediaId: Number(entry?.mediaId ?? 0) > 0 ? Number(entry?.mediaId ?? 0) : undefined,
           breakdownAnnotations: Array.isArray(entry?.breakdownAnnotations) ? entry.breakdownAnnotations as BreakdownAnnotation[] : [],
         }))
         .filter((entry) => entry.dataUrl.length > 0);
@@ -264,6 +268,27 @@ function validateSelectedAttachments(files: File[]): string {
     return `Attachment is too large. Please keep uploads under ${NOTE_ATTACHMENT_LIMIT_LABEL}.`;
   }
   return '';
+}
+
+function getPlayerMediaFromUploadResult(result: { media: unknown[]; createdMedia?: unknown }, file: File): PlayerMedia | null {
+  const created = result.createdMedia;
+  if (created && typeof created === 'object') return created as PlayerMedia;
+  return (result.media as PlayerMedia[]).find((media) => media.fileName === file.name && Number(media.sizeBytes) === file.size) ?? null;
+}
+
+function encodePlayerMediaAsNoteAttachments(media: PlayerMedia[]): {
+  attachmentName: string;
+  attachmentMimeType: string;
+  attachmentDataUrl: string;
+} {
+  const attachments: NoteAttachment[] = media.map((item) => ({
+    name: item.title || item.fileName,
+    mimeType: item.contentType,
+    dataUrl: `/api/player/media/${item.id}`,
+    mediaId: item.id,
+    breakdownAnnotations: item.breakdownAnnotations ?? [],
+  }));
+  return encodeAttachmentsForApi(attachments);
 }
 
 export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false }: PlayerNotesSuiteProps = {}) {
@@ -474,24 +499,51 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
       return;
     }
     if (!noteText.trim()) return;
-    const attachmentError = validateSelectedAttachments(noteFiles);
+    const attachmentError = selectedLinkedPlayerId > 0
+      ? noteFiles.find((file) => file.size > PLAYER_MEDIA_LIMIT_BYTES)
+        ? `Attachment is too large. Please keep each upload under ${PLAYER_MEDIA_LIMIT_LABEL}.`
+        : ''
+      : validateSelectedAttachments(noteFiles);
     if (attachmentError) {
       setMessage(attachmentError);
       return;
     }
     setMessage('');
     try {
-      const attachments: NoteAttachment[] = await Promise.all(
-        noteFiles.map(async (file) => ({
-          name: file.name,
-          mimeType: file.type,
-          dataUrl: await readFileAsDataUrl(file),
-        }))
-      );
-      const encoded = encodeAttachmentsForApi(attachments);
-      if (encoded.attachmentDataUrl.length > NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH) {
-        setMessage(`Attachments are too large. Please keep uploads under ${NOTE_ATTACHMENT_LIMIT_LABEL}.`);
-        return;
+      let encoded = { attachmentName: '', attachmentMimeType: '', attachmentDataUrl: '' };
+      let latestMedia: PlayerMedia[] | null = null;
+      if (noteFiles.length > 0 && selectedLinkedPlayerId > 0) {
+        const uploadedMedia: PlayerMedia[] = [];
+        for (let i = 0; i < noteFiles.length; i++) {
+          const file = noteFiles[i]!;
+          const result = await uploadPlayerMediaFile({
+            playerId: selectedLinkedPlayerId,
+            file,
+            title: file.name.replace(/\.[^.]+$/, '') || file.name,
+            category: noteCategory,
+            sourceType: 'player_notes',
+            sourceLabel: `Note - ${noteDate}`,
+          });
+          if (!result.ok) throw new Error(result.error);
+          latestMedia = result.media as PlayerMedia[];
+          const created = getPlayerMediaFromUploadResult(result, file);
+          if (!created) throw new Error(`Uploaded ${file.name}, but could not create a note attachment link.`);
+          uploadedMedia.push(created);
+        }
+        encoded = encodePlayerMediaAsNoteAttachments(uploadedMedia);
+      } else if (noteFiles.length > 0) {
+        const attachments: NoteAttachment[] = await Promise.all(
+          noteFiles.map(async (file) => ({
+            name: file.name,
+            mimeType: file.type,
+            dataUrl: await readFileAsDataUrl(file),
+          }))
+        );
+        encoded = encodeAttachmentsForApi(attachments);
+        if (encoded.attachmentDataUrl.length > NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH) {
+          setMessage(`Attachments are too large. Please keep uploads under ${NOTE_ATTACHMENT_LIMIT_LABEL}.`);
+          return;
+        }
       }
       const response = await fetch('/api/player/plan-notes', {
         method: 'POST',
@@ -512,6 +564,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
       if (!response.ok) throw new Error(payload.error ?? 'Failed to save note.');
       setNotes(Array.isArray(payload.notes) ? payload.notes : []);
       setCustomCategories((current) => uniqueNames([...current, noteCategory]));
+      if (latestMedia) setPlayerMedia(latestMedia);
       setNoteText('');
       setNoteFiles([]);
       setMessage('Note saved.');
@@ -614,7 +667,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   const noteMediaAttachments = useMemo(() => (
     notes.flatMap((note) =>
       parseNoteAttachments(note)
-        .filter((attachment) => attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/') || attachment.mimeType === 'application/pdf')
+        .filter((attachment) => !attachment.mediaId && (attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/') || attachment.mimeType === 'application/pdf'))
         .map((attachment, idx) => ({
           id: `note-${note.id}-${idx}`,
           noteId: note.id,
@@ -1068,7 +1121,11 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                 onChange={(event) => {
                   const files = event.target.files ? Array.from(event.target.files) : [];
                   setNoteFiles(files);
-                  const attachmentError = validateSelectedAttachments(files);
+                  const attachmentError = selectedLinkedPlayerId > 0
+                    ? files.find((file) => file.size > PLAYER_MEDIA_LIMIT_BYTES)
+                      ? `Attachment is too large. Please keep each upload under ${PLAYER_MEDIA_LIMIT_LABEL}.`
+                      : ''
+                    : validateSelectedAttachments(files);
                   if (attachmentError) setMessage(attachmentError);
                   else if (message.includes('too large')) setMessage('');
                 }}
@@ -1093,7 +1150,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             {noteFiles.length > 0 ? (
               <div className="portal-muted-text" style={{ margin: 0 }}>
                 {noteFiles.map((file) => file.name).join(', ')}
-                {` (${NOTE_ATTACHMENT_LIMIT_LABEL} max)`}
+                {` (${selectedLinkedPlayerId > 0 ? `${PLAYER_MEDIA_LIMIT_LABEL} max each` : `${NOTE_ATTACHMENT_LIMIT_LABEL} max`})`}
               </div>
             ) : null}
             {message ? <p className={message.includes('Failed') || message.includes('Unauthorized') ? 'auth-error' : 'auth-message'}>{message}</p> : null}
@@ -1154,6 +1211,13 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                                     type="button"
                                     className="btn btn-ghost"
                                     onClick={() => {
+                                      if (attachment.mediaId) {
+                                        const item = mediaGalleryItems.find((entry) => entry.id === `player-${attachment.mediaId}`);
+                                        if (item) {
+                                          openMediaGalleryItem(item);
+                                          return;
+                                        }
+                                      }
                                       if (attachment.mimeType.startsWith('image/') || attachment.mimeType.startsWith('video/') || attachment.mimeType === 'application/pdf') {
                                         const galleryId = `note-${note.id}-${idx}`;
                                         const item = mediaGalleryItems.find((entry) => entry.id === galleryId);
