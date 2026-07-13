@@ -57,7 +57,7 @@ def _terminate_advisory_lock_holders(lock_key: int) -> None:
             # classid (high 32 bits) and objid (low 32 bits) in pg_locks.
             cur.execute(
                 """
-                SELECT pid
+                SELECT a.pid
                 FROM pg_locks l
                 JOIN pg_stat_activity a ON a.pid = l.pid
                 WHERE l.locktype = 'advisory'
