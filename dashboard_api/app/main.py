@@ -9934,7 +9934,7 @@ def _try_pitching_overview_daily_rollup(
     )
 
 
-def _refresh_pro_daily_rollup(force: bool = False) -> None:
+def _refresh_pro_daily_rollup(force: bool = False, raise_on_failure: bool = False) -> None:
     global _PRO_DAILY_ROLLUP_LAST_AT
     now = time.monotonic()
     if (not force) and ((now - _PRO_DAILY_ROLLUP_LAST_AT) < _PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS):
@@ -9952,6 +9952,8 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
                 if force:
                     time.sleep(1.0)
             if not got_lock:
+                if raise_on_failure:
+                    raise RuntimeError("Could not acquire PRO rollup advisory lock after 120 attempts")
                 return
             cur.execute("SET LOCAL lock_timeout = '2s'")
             cur.execute("SET LOCAL statement_timeout = '1800s'")
@@ -11044,6 +11046,8 @@ def _refresh_pro_daily_rollup(force: bool = False) -> None:
             _kick_filters_snapshot_refresh_background(school_code="PRO", domain="catching", level_bucket=lvl)
     except Exception as exc:
         logger.warning("pro rollup refresh failed: %s", exc)
+        if raise_on_failure:
+            raise
         return
 
 
@@ -11909,6 +11913,12 @@ def _try_pro_pitching_overview_rollup(
         # A broad full-season PRO leaderboard must remain rollup-only. The raw
         # official totals pass scans pro_pitch_events and can exceed the request
         # timeout; the daily rollup already carries official run/out weights.
+        needs_official_totals = False
+    elif selected_pitcher_keys:
+        # Single-pitcher filtered views: skip raw pro_pitch_events scan.
+        # The daily rollup already aggregates official_er_w_sum / official_outs_w_sum
+        # per pitcher, so ERA/FIP/IP will use those weighted rollup values (see
+        # lines below that fall back to official_outs_split / official_er_split).
         needs_official_totals = False
     try:
         if not needs_official_totals:

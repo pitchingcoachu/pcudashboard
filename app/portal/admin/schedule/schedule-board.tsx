@@ -342,7 +342,7 @@ function getCalendarLinkTarget(item: ProgramItemRow): CalendarLinkTarget {
 
 function isDrillEligibleCategory(category: string): boolean {
   const value = String(category ?? '').trim().toLowerCase();
-  return value.includes('plyo') || value.includes('throw') || (value.includes('medicine') && value.includes('ball'));
+  return value.includes('drill') || value.includes('plyo') || value.includes('throw') || (value.includes('medicine') && value.includes('ball'));
 }
 
 export default function ScheduleBoard({ players, workouts, exercises, schoolCode, schoolLogoSrc, schoolLogoAlt, initialPlayerId }: ScheduleBoardProps) {
@@ -3052,17 +3052,22 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     <td key={`${section}-${index}-${field}`}>
                       {field === 'drill' ? (
                         <div className="portal-drill-picker-cell">
-                          <textarea
+                          <input
                             className="portal-schedule-control"
                             value={row.drill}
                             placeholder="Select drill"
-                            rows={2}
+                            list={`${section}-drill-options-${index}`}
                             onChange={(event) => updateRows((previous) => {
                               const next = [...previous];
                               next[index] = { ...(next[index] ?? emptyDrillRow()), drill: event.target.value };
                               return next;
                             })}
                           />
+                          <datalist id={`${section}-drill-options-${index}`}>
+                            {drillExerciseOptions.map((option) => (
+                              <option key={`${section}-${index}-drill-${option.id}`} value={option.name} />
+                            ))}
+                          </datalist>
                           {(() => {
                             const selected = drillExerciseOptions.find((option) => option.name === row.drill);
                             const videoUrl = String(selected?.instructionVideoUrl ?? '').trim();

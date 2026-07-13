@@ -2344,10 +2344,10 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     const splitColumn = String(tableColumns[0] ?? '');
     const scoped = new Map<string, Map<string, number[]>>();
     const globalByColumn = new Map<string, number[]>();
-    if (!splitColumn || !tableColumns.length) {
+    if (!splitColumn || !tableColumns.length || !baselineRows.length) {
       return { splitColumn, scoped, globalByColumn };
     }
-    const rows = baselineRows.length ? baselineRows : tableRows;
+    const rows = baselineRows;
     for (const row of rows) {
       const splitValue = getTableRowValue(row as Record<string, unknown>, splitColumn);
       const splitKey = String(splitValue ?? '').trim().toLowerCase();
@@ -7387,18 +7387,15 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 </div>
               </div>
               {showPitchTypeKey || showLocationChartKey || showExitVelocityKey || showBattedResultsKey ? (
-                <div className="portal-custom-reports-legend" style={{ display: 'grid', gap: 8 }}>
+                <div className="portal-custom-reports-legend" style={{ display: 'grid', gap: 8, marginTop: '-0.45rem' }}>
                   {showPitchTypeKey ? (
-                    <div>
-                      <div className="portal-muted-text" style={{ marginBottom: 6 }}>Pitch Types</div>
-                      <div className="portal-custom-reports-legend-grid">
-                        {pitchTypeLegend.map((pitchType) => (
-                          <span key={pitchType} className="portal-custom-reports-legend-item">
-                            <span className="portal-custom-reports-legend-dot" style={{ background: PITCH_COLORS[pitchType] ?? '#9ca3af' }} />
-                            <span>{pitchType}</span>
-                          </span>
-                        ))}
-                      </div>
+                    <div className="portal-custom-reports-legend-grid">
+                      {pitchTypeLegend.map((pitchType) => (
+                        <span key={pitchType} className="portal-custom-reports-legend-item">
+                          <span className="portal-custom-reports-legend-dot" style={{ background: PITCH_COLORS[pitchType] ?? '#9ca3af' }} />
+                          <span>{pitchType}</span>
+                        </span>
+                      ))}
                     </div>
                   ) : null}
                   {showLocationChartKey ? (
