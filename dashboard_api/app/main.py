@@ -9956,7 +9956,10 @@ def _refresh_pro_daily_rollup(force: bool = False, raise_on_failure: bool = Fals
                     raise RuntimeError("Could not acquire PRO rollup advisory lock after 120 attempts")
                 return
             cur.execute("SET LOCAL lock_timeout = '2s'")
-            cur.execute("SET LOCAL statement_timeout = '1800s'")
+            # Forced GitHub rebuilds can exceed 30 minutes on a single full-history
+            # INSERT...SELECT. The workflow already runs on a direct Neon connection,
+            # so disable the per-statement cap only for explicit forced refreshes.
+            cur.execute("SET LOCAL statement_timeout = '0'" if force else "SET LOCAL statement_timeout = '1800s'")
             # Avoid running DDL (especially ALTER TABLE) inside the long refresh
             # transaction. In Postgres, these locks can be held until commit and
             # block concurrent PRO overview reads.

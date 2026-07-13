@@ -1,43 +1,33 @@
 import type { Metadata } from 'next';
 import Image from 'next/image';
 import Link from 'next/link';
-import styles from './college-pricing.module.css';
+import styles from '../collegepricing/college-pricing.module.css';
 
 export const metadata: Metadata = {
-  title: 'College Pricing | PCU Dashboard',
-  description: 'PCU Dashboard pricing and service options for college baseball programs.',
-  alternates: { canonical: '/collegepricing' },
+  title: 'Facility Pricing | PCU Dashboard',
+  description: 'PCU Dashboard pricing and service options for baseball training facilities.',
+  alternates: { canonical: '/facilitypricing' },
 };
 
 const contactHref =
-  'mailto:info@pitchingcoachu.com?subject=PCU%20Dashboard%20College%20Pricing';
+  'mailto:info@pitchingcoachu.com?subject=PCU%20Dashboard%20Facility%20Pricing';
 
 const sharedFeatures = [
   'Player logins',
-  'Edgertronic camera integration',
-  'Motion capture data integration',
-  'Pro data access',
 ];
 
-const platformFeatures = [
+const programmingFeatures = [
   {
-    title: 'Dashboard Platform',
+    title: 'Program and Schedule Builder',
     items: [
-      'Comprehensive ball flight and batted ball data',
-      'Custom table and report builder',
-      'Leaderboards and trend charts',
-      'Player plan goal center',
-      'Player notes and performance tracking',
-      'Access to MLB and AAA data',
+      'Throwing calendar',
+      'Workout builder and tracker',
+      'Custom bullpen and drill scripts',
     ],
   },
-  {
-    title: 'Limited Support',
-    items: [],
-  },
 ];
 
-const platformDevelopmentFeatures = [
+const programmingDataFeatures = [
   {
     title: 'Dashboard Platform',
     items: [
@@ -55,15 +45,6 @@ const platformDevelopmentFeatures = [
       'Throwing calendar',
       'Workout builder and tracker',
       'Custom bullpen and drill scripts',
-    ],
-  },
-  {
-    title: 'Player Development Consulting',
-    subtitle: 'Pitching and hitting',
-    items: [
-      'x5, 1-hour zoom calls',
-      'Done-for-you postgame reports',
-      'Weekly advance reports on opposing pitchers and hitters',
     ],
   },
 ];
@@ -105,7 +86,7 @@ function CheckIcon() {
   );
 }
 
-export default function CollegePricingPage() {
+export default function FacilityPricingPage() {
   return (
     <main className={styles.page}>
       <div className={styles.shell}>
@@ -120,7 +101,7 @@ export default function CollegePricingPage() {
             />
             <span>
               <strong>PCU Dashboard</strong>
-              <small>College programs</small>
+              <small>Training facilities</small>
             </span>
           </Link>
           <div className={styles.headerActions}>
@@ -161,15 +142,15 @@ export default function CollegePricingPage() {
         </header>
 
         <section className={styles.intro}>
-          <p>College program pricing</p>
-          <h1>Choose the level of support your program needs.</h1>
-          <span>Two annual dashboard plans, plus optional services that can be added separately.</span>
+          <p>Facility pricing</p>
+          <h1>Choose the level of support your facility needs.</h1>
+          <span>Two annual platform options, plus optional services that can be added separately.</span>
         </section>
 
         <section className={styles.shared} aria-labelledby="shared-title">
           <div className={styles.sharedHeading}>
             <span>Included with both plans</span>
-            <h2 id="shared-title">Every dashboard plan includes</h2>
+            <h2 id="shared-title">Every facility plan includes</h2>
           </div>
           <ul>
             {sharedFeatures.map((feature) => (
@@ -178,52 +159,22 @@ export default function CollegePricingPage() {
           </ul>
         </section>
 
-        <section className={styles.pricingGrid} aria-label="College pricing options">
+        <section className={styles.pricingGrid} aria-label="Facility pricing options">
           <article className={styles.planCard}>
             <div className={styles.cardHeader}>
               <div>
-                <span className={styles.planLabel}>Dashboard plan</span>
-                <h2>Platform</h2>
+                <span className={styles.planLabel}>Programming plan</span>
+                <h2>Programming Platform</h2>
               </div>
               <div className={styles.price}>$7,500<small>/ year</small></div>
             </div>
             <p className={styles.planDescription}>
-              Full dashboard access for programs that want the data platform and essential support.
+              Programming tools for facilities that need scheduling, workouts, and throwing-plan delivery.
             </p>
             <div className={styles.featureGroups}>
-              {platformFeatures.map((group) => (
+              {programmingFeatures.map((group) => (
                 <div className={styles.featureGroup} key={group.title}>
                   <h3>{group.title}</h3>
-                  {group.items.length > 0 ? (
-                    <ul>
-                      {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
-                    </ul>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-            <div className={styles.buttonSlot}>
-              <a href={contactHref} className={styles.secondaryButton}>Ask about Platform</a>
-            </div>
-          </article>
-
-          <article className={`${styles.planCard} ${styles.featuredCard}`}>
-            <span className={styles.recommended}>Most comprehensive</span>
-            <div className={styles.cardHeader}>
-              <div>
-                <span className={styles.planLabel}>Dashboard + consulting</span>
-                <h2>Platform + Development</h2>
-              </div>
-              <div className={styles.price}>$12,000<small>/ year</small></div>
-            </div>
-            <p className={styles.planDescription}>
-              Dashboard access plus programming and ongoing pitching and hitting development support.
-            </p>
-            <div className={styles.featureGroups}>
-              {platformDevelopmentFeatures.map((group) => (
-                <div className={styles.featureGroup} key={group.title}>
-                  <h3>{group.title}</h3>
-                  {'subtitle' in group && group.subtitle ? <p>{group.subtitle}</p> : null}
                   <ul>
                     {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
                   </ul>
@@ -231,7 +182,34 @@ export default function CollegePricingPage() {
               ))}
             </div>
             <div className={styles.buttonSlot}>
-              <a href={contactHref} className={styles.primaryButton}>Ask about Platform + Development</a>
+              <a href={contactHref} className={styles.secondaryButton}>Ask about Programming Platform</a>
+            </div>
+          </article>
+
+          <article className={`${styles.planCard} ${styles.featuredCard}`}>
+            <span className={styles.recommended}>Most comprehensive</span>
+            <div className={styles.cardHeader}>
+              <div>
+                <span className={styles.planLabel}>Programming + data</span>
+                <h2>Programming and Data Platform</h2>
+              </div>
+              <div className={styles.price}>$12,000<small>/ year</small></div>
+            </div>
+            <p className={styles.planDescription}>
+              Programming tools plus dashboard data platform access for facilities that want both training delivery and performance analysis.
+            </p>
+            <div className={styles.featureGroups}>
+              {programmingDataFeatures.map((group) => (
+                <div className={styles.featureGroup} key={group.title}>
+                  <h3>{group.title}</h3>
+                  <ul>
+                    {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+            <div className={styles.buttonSlot}>
+              <a href={contactHref} className={styles.primaryButton}>Ask about Programming and Data</a>
             </div>
           </article>
 
@@ -239,11 +217,11 @@ export default function CollegePricingPage() {
             <div className={styles.cardHeader}>
               <div>
                 <span className={styles.planLabel}>Optional services</span>
-                <h2>À La Carte</h2>
+                <h2>A La Carte</h2>
               </div>
             </div>
             <p className={styles.planDescription}>
-              Add specialized data collection, analysis, or consulting based on your program’s needs.
+              Add specialized data collection, analysis, or consulting based on your facility's needs.
             </p>
             <div className={styles.addOnList}>
               {addOns.map((addOn) => (
@@ -272,7 +250,7 @@ export default function CollegePricingPage() {
         <section className={styles.contact}>
           <div>
             <span>Questions about fit?</span>
-            <h2>We’ll help you choose the right setup.</h2>
+            <h2>We'll help you choose the right setup.</h2>
           </div>
           <a href={contactHref}>Email PCU</a>
         </section>

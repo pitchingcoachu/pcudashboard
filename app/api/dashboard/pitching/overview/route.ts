@@ -356,6 +356,7 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
   pitcher: string;
   teamType: string;
   pitchTypes: string;
+  visualOption?: string;
   includeChartPoints: string;
   chartOnly: string;
   inZone: string;
@@ -372,6 +373,7 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
   hbMax: string;
   pcMin: string;
   pcMax: string;
+  allowPitchLevelVideoFallback?: boolean;
 }): Promise<NextResponse | null> {
   const {
     request,
@@ -384,6 +386,7 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
     pitcher,
     teamType,
     pitchTypes,
+    visualOption = '',
     includeChartPoints,
     chartOnly,
     inZone,
@@ -400,9 +403,13 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
     hbMax,
     pcMin,
     pcMax,
+    allowPitchLevelVideoFallback = false,
   } = params;
   if (!isTruthy(includeChartPoints) || !isTruthy(chartOnly)) return null;
-  if (String(schoolCode ?? '').trim().toUpperCase() !== 'LEAGUE') return null;
+  const upperSchoolCode = String(schoolCode ?? '').trim().toUpperCase();
+  if (upperSchoolCode === 'PRO') return null;
+  const wantsPitchLevelVideo = String(visualOption ?? '').trim().toLowerCase() === 'play video';
+  if (upperSchoolCode !== 'LEAGUE' && wantsPitchLevelVideo && !allowPitchLevelVideoFallback) return null;
   const hasUnsupportedFilters =
     hasValue(inZone) ||
     hasValue(qpLocations) ||
@@ -433,7 +440,10 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
     if (pitcher) rollup.searchParams.set('pitcher', pitcher);
     if (teamType) rollup.searchParams.set('team_type', teamType);
     if (pitchTypes) rollup.searchParams.set('pitch_types', pitchTypes);
-    const response = await fetch(rollup.toString(), { cache: 'no-store' });
+    const response = await fetch(rollup.toString(), {
+      cache: 'no-store',
+      headers: { cookie: request.headers.get('cookie') ?? '' },
+    });
     if (!response.ok) return null;
     const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     return NextResponse.json(payload, {
@@ -685,6 +695,7 @@ export async function GET(request: Request) {
       pitcher: scopedPitcher || pitcher,
       teamType,
       pitchTypes,
+      visualOption,
       includeChartPoints: includeChartPoints || '',
       chartOnly: chartOnly || '',
       inZone,
@@ -1174,6 +1185,37 @@ export async function GET(request: Request) {
       }
     }
     if (result.status < 200 || result.status >= 300) {
+      const chartFallback = await maybeReturnPitchingHeatmapRollupDirect({
+        request,
+        schoolCode,
+        startDate,
+        endDate,
+        sessionType,
+        hand,
+        batterSide,
+        pitcher: scopedPitcher || pitcher,
+        teamType,
+        pitchTypes,
+        visualOption,
+        includeChartPoints: url.searchParams.get('include_chart_points') ?? includeChartPoints,
+        chartOnly: url.searchParams.get('chart_only') ?? chartOnly,
+        inZone,
+        qpLocations,
+        zoneLocations,
+        pitchResults,
+        countFilter,
+        afterCountFilter,
+        veloMin,
+        veloMax,
+        ivbMin,
+        ivbMax,
+        hbMin,
+        hbMax,
+        pcMin,
+        pcMax,
+        allowPitchLevelVideoFallback: true,
+      });
+      if (chartFallback) return chartFallback;
       if (shouldFallbackProPitchTypesRollup && result.status >= 500) {
         const rollupPayload = await maybeReturnPitchingPitchTypesRollup({
           request,
@@ -1269,6 +1311,37 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    const chartFallback = await maybeReturnPitchingHeatmapRollupDirect({
+      request,
+      schoolCode,
+      startDate,
+      endDate,
+      sessionType,
+      hand,
+      batterSide,
+      pitcher: scopedPitcher || pitcher,
+      teamType,
+      pitchTypes,
+      visualOption,
+      includeChartPoints: url.searchParams.get('include_chart_points') ?? includeChartPoints,
+      chartOnly: url.searchParams.get('chart_only') ?? chartOnly,
+      inZone,
+      qpLocations,
+      zoneLocations,
+      pitchResults,
+      countFilter,
+      afterCountFilter,
+      veloMin,
+      veloMax,
+      ivbMin,
+      ivbMax,
+      hbMin,
+      hbMax,
+      pcMin,
+      pcMax,
+      allowPitchLevelVideoFallback: true,
+    });
+    if (chartFallback) return chartFallback;
     if (shouldFallbackProPitchTypesRollup) {
       const rollupPayload = await maybeReturnPitchingPitchTypesRollup({
         request,

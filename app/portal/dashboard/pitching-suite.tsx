@@ -4829,8 +4829,6 @@ export default function PitchingSuite({
 
   const refreshActionPitchVideoUrls = async (pitches: PitchActionPoint[]): Promise<PitchActionPoint[]> => {
     if (!pitches.length) return pitches;
-    const baseRequestKey = latestOverviewRequestKeyRef.current;
-    if (!baseRequestKey) return pitches;
     const ids = Array.from(
       new Set(
         pitches
@@ -4841,19 +4839,13 @@ export default function PitchingSuite({
     );
     if (!ids.length) return pitches;
     try {
-      const req = new URL(baseRequestKey, window.location.origin);
-      req.searchParams.set('with_video', 'Yes');
-      req.searchParams.set('include_chart_points', '1');
-      req.searchParams.set('include_row_pitches', '0');
-      req.searchParams.set('include_trend_rows', '0');
-      req.searchParams.set('chart_only', '1');
-      req.searchParams.set('chart_points_limit', '2500');
-      req.searchParams.set('force_raw', '1');
+      const req = new URL('/api/dashboard/pitching/video-lookup', window.location.origin);
+      req.searchParams.set('ids', ids.join(','));
       req.searchParams.set('_video_refresh', String(Date.now()));
       const response = await fetch(req.toString(), { cache: 'no-store' });
-      const payload = (await response.json().catch(() => ({}))) as { chart_points?: PitchActionPoint[]; error?: string };
+      const payload = (await response.json().catch(() => ({}))) as { pitches?: PitchActionPoint[]; error?: string };
       if (!response.ok || payload.error) return pitches;
-      const freshPoints = Array.isArray(payload.chart_points) ? payload.chart_points : [];
+      const freshPoints = Array.isArray(payload.pitches) ? payload.pitches : [];
       if (!freshPoints.length) return pitches;
       const byId = new Map<number, PitchActionPoint>();
       for (const point of freshPoints) {
