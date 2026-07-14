@@ -111,14 +111,18 @@ export async function upsertForcePlateSnapshotToNeon(args: {
   organizationId: number;
   schoolCode: string;
   snapshot: ValdSnapshot;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true; playerCount: number; testCount: number; metricRowCount: number } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureForcePlateNeonTables();
   const pool = getDbPool();
   const client = await pool.connect();
+  let playerCount = 0;
+  let testCount = 0;
+  let metricRowCount = 0;
   try {
     await client.query('BEGIN');
     for (const player of args.snapshot.players) {
+      playerCount += 1;
       const playerNorm = normalizeName(player.playerName);
       await client.query(
         `
@@ -144,6 +148,7 @@ export async function upsertForcePlateSnapshotToNeon(args: {
         testsById.set(row.testId, current);
       }
       for (const [testId, test] of testsById.entries()) {
+        testCount += 1;
         await client.query(
           `
             INSERT INTO force_plate_tests (
@@ -176,6 +181,7 @@ export async function upsertForcePlateSnapshotToNeon(args: {
         );
       }
       for (const row of player.metricRows) {
+        metricRowCount += 1;
         await client.query(
           `
             INSERT INTO force_plate_metric_rows (
@@ -205,7 +211,7 @@ export async function upsertForcePlateSnapshotToNeon(args: {
       }
     }
     await client.query('COMMIT');
-    return { ok: true };
+    return { ok: true, playerCount, testCount, metricRowCount };
   } catch (error) {
     await client.query('ROLLBACK');
     return { ok: false, error: error instanceof Error ? error.message : 'Failed to write force plate tables.' };

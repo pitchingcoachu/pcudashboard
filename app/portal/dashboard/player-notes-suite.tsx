@@ -227,7 +227,14 @@ function parseNoteAttachments(note: Pick<PlayerPlanNote, 'attachmentName' | 'att
       return [];
     }
   }
-  return [{ name: attachmentName || 'attachment', mimeType, dataUrl, breakdownAnnotations: [] }];
+  const mediaMatch = dataUrl.match(/^\/api\/player\/media\/(\d+)$/);
+  return [{
+    name: attachmentName || 'attachment',
+    mimeType,
+    dataUrl,
+    mediaId: mediaMatch ? Number(mediaMatch[1]) : undefined,
+    breakdownAnnotations: [],
+  }];
 }
 
 function encodeAttachmentsForApi(files: NoteAttachment[]): {
@@ -288,7 +295,11 @@ function encodePlayerMediaAsNoteAttachments(media: PlayerMedia[]): {
     mediaId: item.id,
     breakdownAnnotations: item.breakdownAnnotations ?? [],
   }));
-  return encodeAttachmentsForApi(attachments);
+  return {
+    attachmentName: media.length === 1 ? (media[0]?.title || media[0]?.fileName || 'attachment') : `${media.length} attachments`,
+    attachmentMimeType: MULTI_ATTACHMENT_MIME,
+    attachmentDataUrl: JSON.stringify(attachments),
+  };
 }
 
 export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false }: PlayerNotesSuiteProps = {}) {

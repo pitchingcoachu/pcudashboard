@@ -94,6 +94,8 @@ export async function GET(request: Request) {
     ok: true,
     routeVersion: ROUTE_VERSION,
     playerCount: synced.playerCount,
+    testCount: synced.testCount,
+    metricRowCount: synced.metricRowCount,
     fetchedAt: synced.fetchedAt,
     lookbackDaysUsed: synced.lookbackDaysUsed,
     forceFullSync: synced.forceFullSync,

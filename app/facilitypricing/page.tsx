@@ -12,22 +12,46 @@ export const metadata: Metadata = {
 const contactHref =
   'mailto:info@pitchingcoachu.com?subject=PCU%20Dashboard%20Facility%20Pricing';
 
-const sharedFeatures = [
-  'Player logins',
-];
+type FeatureGroup = {
+  title: string;
+  items: string[];
+  summary?: string;
+};
 
-const programmingFeatures = [
+const prices = {
+  annual: {
+    programming: '$3,000',
+    dataOnly: '$5,000',
+    data: '$7,500',
+    suffix: '/ year',
+  },
+  monthly: {
+    programming: '$400',
+    dataOnly: '$600',
+    data: '$800',
+    suffix: '/ month',
+  },
+};
+
+const programmingFeatures: FeatureGroup[] = [
   {
     title: 'Program and Schedule Builder',
     items: [
+      'Unlimited players',
       'Throwing calendar',
       'Workout builder and tracker',
       'Custom bullpen and drill scripts',
+      'Scheduled player questionnaires',
+      'Player goal setting and tracker',
+      'Weight log tracker',
+      'Player Notes',
+      'Upload videos, photos, PDF\'s',
+      'Video breakdown editor',
     ],
   },
 ];
 
-const programmingDataFeatures = [
+const dashboardPlatformFeatures: FeatureGroup[] = [
   {
     title: 'Dashboard Platform',
     items: [
@@ -37,44 +61,18 @@ const programmingDataFeatures = [
       'Player plan goal center',
       'Player notes and performance tracking',
       'Access to MLB and AAA data',
-    ],
-  },
-  {
-    title: 'Program and Schedule Builder',
-    items: [
-      'Throwing calendar',
-      'Workout builder and tracker',
-      'Custom bullpen and drill scripts',
+      'Edgertronic camera integration',
+      'MOCAP and force plate integration',
     ],
   },
 ];
 
-const addOns = [
-  {
-    title: 'On Campus MOCAP Analysis',
-    price: '$15,000',
-    items: [
-      'All pitchers',
-      'Reports and data added to the dashboard',
-      'Zoom call reviewing the analysis',
-      'Assistance with programming',
-    ],
-  },
+const programmingDataFeatures: FeatureGroup[] = [
+  ...dashboardPlatformFeatures,
   {
     title: 'Program and Schedule Builder',
-    subtitle: 'Only necessary for teams on the Platform plan',
-    price: '$3,000',
-    items: [
-      'Throwing calendar',
-      'Workout builder and tracker',
-      'Custom bullpen and drill scripts',
-    ],
-  },
-  {
-    title: 'Extra Zoom Calls',
-    price: '$300',
-    suffix: '/ hour',
     items: [],
+    summary: 'Includes every Programming Platform feature, including unlimited players.',
   },
 ];
 
@@ -86,7 +84,15 @@ function CheckIcon() {
   );
 }
 
-export default function FacilityPricingPage() {
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function FacilityPricingPage({ searchParams }: PageProps) {
+  const params = await searchParams;
+  const billing = params.billing === 'monthly' ? 'monthly' : 'annual';
+  const selectedPrices = prices[billing];
+
   return (
     <main className={styles.page}>
       <div className={styles.shell}>
@@ -144,19 +150,23 @@ export default function FacilityPricingPage() {
         <section className={styles.intro}>
           <p>Facility pricing</p>
           <h1>Choose the level of support your facility needs.</h1>
-          <span>Two annual platform options, plus optional services that can be added separately.</span>
-        </section>
-
-        <section className={styles.shared} aria-labelledby="shared-title">
-          <div className={styles.sharedHeading}>
-            <span>Included with both plans</span>
-            <h2 id="shared-title">Every facility plan includes</h2>
+          <span>Three platform options for facilities that need programming delivery, data tools, or both.</span>
+          <div className={styles.billingToggle} aria-label="Billing frequency">
+            <Link
+              href="/facilitypricing"
+              className={billing === 'annual' ? styles.billingToggleActive : undefined}
+              aria-current={billing === 'annual' ? 'page' : undefined}
+            >
+              Annual
+            </Link>
+            <Link
+              href="/facilitypricing?billing=monthly"
+              className={billing === 'monthly' ? styles.billingToggleActive : undefined}
+              aria-current={billing === 'monthly' ? 'page' : undefined}
+            >
+              Monthly
+            </Link>
           </div>
-          <ul>
-            {sharedFeatures.map((feature) => (
-              <li key={feature}><CheckIcon />{feature}</li>
-            ))}
-          </ul>
         </section>
 
         <section className={styles.pricingGrid} aria-label="Facility pricing options">
@@ -166,7 +176,7 @@ export default function FacilityPricingPage() {
                 <span className={styles.planLabel}>Programming plan</span>
                 <h2>Programming Platform</h2>
               </div>
-              <div className={styles.price}>$7,500<small>/ year</small></div>
+              <div className={styles.price}>{selectedPrices.programming}<small>{selectedPrices.suffix}</small></div>
             </div>
             <p className={styles.planDescription}>
               Programming tools for facilities that need scheduling, workouts, and throwing-plan delivery.
@@ -175,9 +185,12 @@ export default function FacilityPricingPage() {
               {programmingFeatures.map((group) => (
                 <div className={styles.featureGroup} key={group.title}>
                   <h3>{group.title}</h3>
-                  <ul>
-                    {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
-                  </ul>
+                  {group.summary ? <p>{group.summary}</p> : null}
+                  {group.items.length > 0 ? (
+                    <ul>
+                      {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
+                    </ul>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -186,14 +199,43 @@ export default function FacilityPricingPage() {
             </div>
           </article>
 
+          <article className={styles.planCard}>
+            <div className={styles.cardHeader}>
+              <div>
+                <span className={styles.planLabel}>Data plan</span>
+                <h2>Data Platform</h2>
+              </div>
+              <div className={styles.price}>{selectedPrices.dataOnly}<small>{selectedPrices.suffix}</small></div>
+            </div>
+            <p className={styles.planDescription}>
+              Dashboard data platform access for facilities focused on performance analysis and reporting.
+            </p>
+            <div className={styles.featureGroups}>
+              {dashboardPlatformFeatures.map((group) => (
+                <div className={styles.featureGroup} key={group.title}>
+                  <h3>{group.title}</h3>
+                  {group.summary ? <p>{group.summary}</p> : null}
+                  {group.items.length > 0 ? (
+                    <ul>
+                      {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
+                    </ul>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            <div className={styles.buttonSlot}>
+              <a href={contactHref} className={styles.secondaryButton}>Ask about Data Platform</a>
+            </div>
+          </article>
+
           <article className={`${styles.planCard} ${styles.featuredCard}`}>
             <span className={styles.recommended}>Most comprehensive</span>
             <div className={styles.cardHeader}>
               <div>
                 <span className={styles.planLabel}>Programming + data</span>
-                <h2>Programming and Data Platform</h2>
+                <h2>Combined Package</h2>
               </div>
-              <div className={styles.price}>$12,000<small>/ year</small></div>
+              <div className={styles.price}>{selectedPrices.data}<small>{selectedPrices.suffix}</small></div>
             </div>
             <p className={styles.planDescription}>
               Programming tools plus dashboard data platform access for facilities that want both training delivery and performance analysis.
@@ -202,47 +244,17 @@ export default function FacilityPricingPage() {
               {programmingDataFeatures.map((group) => (
                 <div className={styles.featureGroup} key={group.title}>
                   <h3>{group.title}</h3>
-                  <ul>
-                    {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
-                  </ul>
+                  {group.summary ? <p>{group.summary}</p> : null}
+                  {group.items.length > 0 ? (
+                    <ul>
+                      {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
+                    </ul>
+                  ) : null}
                 </div>
               ))}
             </div>
             <div className={styles.buttonSlot}>
-              <a href={contactHref} className={styles.primaryButton}>Ask about Programming and Data</a>
-            </div>
-          </article>
-
-          <article className={`${styles.planCard} ${styles.addOnCard}`}>
-            <div className={styles.cardHeader}>
-              <div>
-                <span className={styles.planLabel}>Optional services</span>
-                <h2>A La Carte</h2>
-              </div>
-            </div>
-            <p className={styles.planDescription}>
-              Add specialized data collection, analysis, or consulting based on your facility's needs.
-            </p>
-            <div className={styles.addOnList}>
-              {addOns.map((addOn) => (
-                <section className={styles.addOn} key={addOn.title}>
-                  <div className={styles.addOnHeading}>
-                    <div>
-                      <h3>{addOn.title}</h3>
-                      {'subtitle' in addOn && addOn.subtitle ? <p>{addOn.subtitle}</p> : null}
-                    </div>
-                    <strong>{addOn.price}<small>{addOn.suffix}</small></strong>
-                  </div>
-                  {addOn.items.length > 0 ? (
-                    <ul>
-                      {addOn.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
-                    </ul>
-                  ) : null}
-                </section>
-              ))}
-            </div>
-            <div className={styles.buttonSlot}>
-              <a href={contactHref} className={styles.secondaryButton}>Ask about add-ons</a>
+              <a href={contactHref} className={styles.primaryButton}>Ask about Combined Package</a>
             </div>
           </article>
         </section>

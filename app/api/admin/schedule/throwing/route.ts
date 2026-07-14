@@ -4,6 +4,7 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import {
   getRecoverableBullpenScripts,
+  getRecoverableThrowingTemplates,
   getRecoverableVelocityScripts,
   getScheduleThrowingState,
   getPcuSharedThrowingState,
@@ -37,6 +38,14 @@ type ScriptState = {
   selectedTemplateId: string;
   visibleTemplateIds: string[];
   notes?: string;
+};
+type ThrowingTemplate = {
+  id: string;
+  name: string;
+  weekCount: number;
+  byCell: Record<string, unknown>;
+  weekNotes: Record<string, unknown>;
+  updatedAt: string;
 };
 const SHARED_PLAYER_ID = 0;
 const DEFAULT_COLUMNS = ['Pitch Type', 'Ball Type', 'Stretch/Windup', 'Location', 'Situation', 'Notes'];
@@ -122,6 +131,52 @@ function normalizeTemplateList(raw: unknown): ScriptTemplate[] {
       };
     })
     .filter((row) => row.id && row.name);
+}
+
+function normalizeThrowingTemplates(raw: unknown): ThrowingTemplate[] {
+  const source = Array.isArray(raw) ? raw : [];
+  return source
+    .map((row) => {
+      const value = row && typeof row === 'object' ? row as Record<string, unknown> : {};
+      const id = String(value.id ?? '').trim();
+      const name = String(value.name ?? '').trim();
+      const weekCount = Math.max(1, Math.min(52, Number(value.weekCount ?? 4) || 4));
+      return {
+        id,
+        name,
+        weekCount,
+        byCell: value.byCell && typeof value.byCell === 'object' && !Array.isArray(value.byCell) ? value.byCell as Record<string, unknown> : {},
+        weekNotes: value.weekNotes && typeof value.weekNotes === 'object' && !Array.isArray(value.weekNotes) ? value.weekNotes as Record<string, unknown> : {},
+        updatedAt: String(value.updatedAt ?? ''),
+      };
+    })
+    .filter((template) => template.id && template.name);
+}
+
+function throwingTemplateMergeKey(template: ThrowingTemplate): string {
+  const name = template.name.trim().toLowerCase();
+  return name ? `name:${name}` : `id:${template.id.trim()}`;
+}
+
+function mergeThrowingTemplates(...lists: unknown[]): ThrowingTemplate[] {
+  const merged = new Map<string, ThrowingTemplate>();
+  for (const list of lists) {
+    for (const template of normalizeThrowingTemplates(list)) {
+      const key = throwingTemplateMergeKey(template);
+      const previous = merged.get(key);
+      if (!previous) {
+        merged.set(key, template);
+        continue;
+      }
+      const previousTime = Date.parse(previous.updatedAt);
+      const nextTime = Date.parse(template.updatedAt);
+      merged.set(key, Number.isFinite(nextTime) && (!Number.isFinite(previousTime) || nextTime >= previousTime) ? template : previous);
+    }
+  }
+  return Array.from(merged.values()).sort((a, b) => {
+    const byTime = (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0);
+    return byTime || a.name.localeCompare(b.name);
+  });
 }
 
 function normalizeScriptState(raw: unknown): ScriptState {
@@ -287,21 +342,13 @@ export async function GET(request: Request) {
   const sharedTemplatesObj = parseTemplatesObject(sharedState.templates);
   const pcuTemplatesObj = pcuSharedState ? parseTemplatesObject(pcuSharedState.templates) : null;
 
-  const orgThrowingTemplates = Array.isArray(sharedTemplatesObj.throwingTemplates)
-    ? (sharedTemplatesObj.throwingTemplates as unknown[])
-    : [];
-  const pcuThrowingTemplates = pcuTemplatesObj && Array.isArray(pcuTemplatesObj.throwingTemplates)
-    ? (pcuTemplatesObj.throwingTemplates as unknown[])
-    : [];
-  // Merge PCU throwing templates that aren't already present by name
-  const orgThrowingNames = new Set(orgThrowingTemplates.map((t) => String((t as Record<string, unknown>).name ?? '').trim().toLowerCase()).filter(Boolean));
-  const throwingTemplates = [
-    ...orgThrowingTemplates,
-    ...pcuThrowingTemplates.filter((t) => {
-      const name = String((t as Record<string, unknown>).name ?? '').trim().toLowerCase();
-      return name && !orgThrowingNames.has(name);
-    }),
-  ];
+  const recoveredThrowingTemplates = isSharedOnly ? [] : await getRecoverableThrowingTemplates({ organizationId });
+  const throwingTemplates = mergeThrowingTemplates(
+    pcuTemplatesObj?.throwingTemplates,
+    recoveredThrowingTemplates,
+    playerTemplatesObj.throwingTemplates,
+    sharedTemplatesObj.throwingTemplates
+  );
 
   const legacyBullpen = normalizeScriptState(playerTemplatesObj.bullpen);
   const legacyVelocity = normalizeScriptState(playerTemplatesObj.velocity);
@@ -433,7 +480,14 @@ export async function POST(request: Request) {
   const playerObj = parseTemplatesObject(currentPlayer.templates);
   const sharedObj = parseTemplatesObject(currentShared.templates);
 
-  const existingThrowingTemplates = Array.isArray(sharedObj.throwingTemplates) ? (sharedObj.throwingTemplates as unknown[]) : [];
+  const incomingThrowingTemplates = Array.isArray(body.templates) ? body.templates : [];
+  const recoveredThrowingTemplates = await getRecoverableThrowingTemplates({ organizationId });
+  const nextThrowingTemplates = mergeThrowingTemplates(
+    recoveredThrowingTemplates,
+    sharedObj.throwingTemplates,
+    playerObj.throwingTemplates,
+    incomingThrowingTemplates
+  );
 
   const hasBullpenTemplatesInput = Array.isArray(body.bullpenTemplates);
   const hasVelocityTemplatesInput = Array.isArray(body.velocityTemplates);
@@ -505,7 +559,7 @@ export async function POST(request: Request) {
     byDate: currentShared.byDate ?? {},
     weekNotes: currentShared.weekNotes ?? {},
     templates: {
-      throwingTemplates: Array.isArray(body.templates) ? body.templates : existingThrowingTemplates,
+      throwingTemplates: nextThrowingTemplates,
       bullpenTemplates: nextBullpenTemplates,
       velocityTemplates: nextVelocityTemplates,
       preThrowDrillTemplates: nextPreThrowDrillTemplates,

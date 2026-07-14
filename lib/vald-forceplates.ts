@@ -506,12 +506,29 @@ function normalizeMetricValue(metricName: string, metricUnit: string, value: num
   const normalized = String(metricName ?? '').trim().toLowerCase();
   const unit = String(metricUnit ?? '').trim().toLowerCase();
   if (
-    normalized === 'bodyweight in pounds' &&
+    normalized.includes('bodyweight') &&
+    normalized.includes('pound') &&
     (value < 130 || unit === 'kg' || unit === 'kilo' || unit === 'kilogram' || unit === 'kilograms')
   ) {
     return value * 2.20462262185;
   }
   return value;
+}
+
+function isBodyWeightMetric(metricName: string): boolean {
+  const normalized = String(metricName ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ');
+  return normalized.includes('body weight') || normalized.includes('bodyweight') || normalized.includes('athlete weight');
+}
+
+function normalizeBodyWeightUnit(metricName: string, metricUnit: string): string {
+  const normalizedName = String(metricName ?? '').trim().toLowerCase();
+  const normalizedUnit = String(metricUnit ?? '').trim().toLowerCase();
+  if (normalizedName.includes('pound') || normalizedUnit === 'lb' || normalizedUnit === 'lbs') return 'lb';
+  if (normalizedUnit === 'kg' || normalizedUnit.includes('kilogram')) return 'kg';
+  return metricUnit || 'kg';
 }
 
 function toShortDate(value: string): string {
@@ -649,18 +666,33 @@ export async function fetchValdForceDecksSnapshot(
     const trialRawByTestId = new Map<string, ValdTrialMetricPoint[]>();
     for (let idx = 0; idx < recent.length; idx += 1) {
       const test = recent[idx];
-      if (Number.isFinite(Number(test.weight)) && Number(test.weight) > 0) {
+      let hasBodyWeightMetricRow = false;
+      const addMetricValue = (metricName: string, metricUnit: string, value: number) => {
+        const key = `${metricName}__${metricUnit}`;
+        const entry = metricValues.get(key) ?? { unit: metricUnit, values: [] };
+        entry.values.push(value);
+        metricValues.set(key, entry);
+      };
+      const addBodyWeightMetricRow = (metricId: number, rawMetricName: string, rawMetricUnit: string, rawValue: number) => {
+        if (hasBodyWeightMetricRow || !Number.isFinite(rawValue) || rawValue <= 0) return;
+        const metricUnit = normalizeBodyWeightUnit(rawMetricName, rawMetricUnit);
+        const value = normalizeMetricValue(rawMetricName, rawMetricUnit, rawValue);
         metricRows.push({
           testId: test.testId,
           date: toShortDate(test.recordedDateUtc),
           dateTime: test.recordedDateUtc,
           testType: test.testType,
-          metricId: -1,
+          metricId,
           metricName: 'Body Weight',
-          metricUnit: 'kg',
-          value: Number(test.weight),
+          metricUnit,
+          value,
           pointType: 'average',
         });
+        addMetricValue('Body Weight', metricUnit, value);
+        hasBodyWeightMetricRow = true;
+      };
+      if (Number.isFinite(Number(test.weight)) && Number(test.weight) > 0) {
+        addBodyWeightMetricRow(-1, 'Body Weight', 'kg', Number(test.weight));
       }
       let trialMetrics: { aggregate: ValdTrialMetric[]; raw: ValdTrialMetricPoint[] } = { aggregate: [], raw: [] };
       if (idx < effectiveTrialFetchLimit) {
@@ -702,10 +734,11 @@ export async function fetchValdForceDecksSnapshot(
         const def = resultDefs.get(metric.resultId);
         const label = trialDef?.metricName ?? def?.resultName ?? `Metric ${metric.resultId}`;
         const unit = trialDef?.metricUnit ?? def?.resultUnitName ?? '';
-        const key = `${label}__${unit}`;
-        const entry = metricValues.get(key) ?? { unit, values: [] };
-        entry.values.push(Number(metric.value));
-        metricValues.set(key, entry);
+        if (isBodyWeightMetric(label)) {
+          addBodyWeightMetricRow(metric.resultId, label, unit, Number(metric.value));
+          continue;
+        }
+        addMetricValue(label, unit, Number(metric.value));
         metricRows.push({
           testId: test.testId,
           date: toShortDate(test.recordedDateUtc),

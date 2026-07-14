@@ -3952,6 +3952,40 @@ export async function getRecoverableVelocityScripts(input: {
   return result.rows.map((row) => row.script).filter(Boolean);
 }
 
+export async function getRecoverableThrowingTemplates(input: {
+  organizationId: number;
+}): Promise<unknown[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ template: unknown }>(
+    `
+      WITH expanded AS (
+        SELECT
+          template,
+          LOWER(TRIM(COALESCE(template->>'name', ''))) AS template_name,
+          updated_at AS sort_time
+        FROM schedule_throwing_state,
+          LATERAL jsonb_array_elements(
+            CASE
+              WHEN jsonb_typeof(templates_json) = 'array' THEN templates_json
+              WHEN jsonb_typeof(templates_json->'throwingTemplates') = 'array' THEN templates_json->'throwingTemplates'
+              ELSE '[]'::jsonb
+            END
+          ) AS template
+        WHERE organization_id = $1
+          AND player_id > 0
+      )
+      SELECT DISTINCT ON (template_name) template
+      FROM expanded
+      WHERE template_name <> ''
+      ORDER BY template_name, sort_time DESC
+    `,
+    [input.organizationId]
+  );
+  return result.rows.map((row) => row.template).filter(Boolean);
+}
+
 export async function saveScheduleThrowingState(input: {
   organizationId: number;
   playerId: number;

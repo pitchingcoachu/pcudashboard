@@ -27,7 +27,15 @@ export async function runForcePlateSync(args: {
   lookbackDaysOverride?: number | null;
   recentTestLimitOverride?: number | null;
   testsWindowDaysOverride?: number | null;
-}): Promise<{ ok: true; playerCount: number; fetchedAt: string; lookbackDaysUsed: number; forceFullSync: boolean } | { ok: false; error: string }> {
+}): Promise<{
+  ok: true;
+  playerCount: number;
+  testCount: number;
+  metricRowCount: number;
+  fetchedAt: string;
+  lookbackDaysUsed: number;
+  forceFullSync: boolean;
+} | { ok: false; error: string }> {
   const syncTrialFetchLimit = Math.max(0, Number(args.trialFetchLimitOverride ?? process.env.FORCE_PLATE_SYNC_TRIAL_FETCH_LIMIT ?? 100));
   const fullSyncLookbackDays = Math.max(30, Number(process.env.FORCE_PLATE_SYNC_LOOKBACK_DAYS ?? 3650));
   const incrementalPaddingDays = Math.max(1, Number(process.env.FORCE_PLATE_SYNC_PADDING_DAYS ?? 2));
@@ -140,6 +148,17 @@ export async function runForcePlateSync(args: {
       snapshot,
     });
     if (!writeNeon.ok) throw new Error(writeNeon.error);
+    if (writeNeon.testCount === 0 || writeNeon.metricRowCount === 0) {
+      const message = `Force plate sync wrote no useful VALD test data for ${processed} processed player(s).`;
+      await markForcePlateSyncRunCompleted({
+        organizationId: args.organizationId,
+        schoolCode: args.schoolCode,
+        ok: false,
+        error: message,
+        nextPlayerCursor: progressedCursor,
+      });
+      return { ok: false, error: message };
+    }
 
     await markForcePlateSyncRunCompleted({
       organizationId: args.organizationId,
@@ -151,6 +170,8 @@ export async function runForcePlateSync(args: {
     return {
       ok: true,
       playerCount: snapshot.players.length,
+      testCount: writeNeon.testCount,
+      metricRowCount: writeNeon.metricRowCount,
       fetchedAt: snapshot.fetchedAt,
       lookbackDaysUsed: syncLookbackDays,
       forceFullSync,

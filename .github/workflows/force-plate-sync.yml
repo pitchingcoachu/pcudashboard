@@ -23,7 +23,7 @@ jobs:
             exit 1
           fi
           SYNC_URL="$FORCE_PLATE_SYNC_URL"
-          SYNC_PARAMS="async=1&playerBatchSize=1&maxRunSeconds=25&lookbackDays=21&testsWindowDays=7&recentTestLimit=250&trialFetchLimit=25&requestTimeoutMs=8000&requestMaxAttempts=2"
+          SYNC_PARAMS="async=1&playerBatchSize=12&maxRunSeconds=240&lookbackDays=45&testsWindowDays=3&recentTestLimit=500&trialFetchLimit=0&requestTimeoutMs=15000&requestMaxAttempts=3"
           case "$SYNC_URL" in
             *\?*) SYNC_URL="${SYNC_URL}&${SYNC_PARAMS}" ;;
             *) SYNC_URL="${SYNC_URL}?${SYNC_PARAMS}" ;;
