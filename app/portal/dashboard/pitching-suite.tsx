@@ -1707,6 +1707,7 @@ function SearchableSingleSelect({
   placeholder,
   theme = 'dark',
   clearQueryOnSelect = true,
+  menuStyle,
 }: {
   options: OptionItem[];
   value: string;
@@ -1714,6 +1715,7 @@ function SearchableSingleSelect({
   placeholder?: string;
   theme?: 'dark' | 'light';
   clearQueryOnSelect?: boolean;
+  menuStyle?: React.CSSProperties;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -1757,7 +1759,10 @@ function SearchableSingleSelect({
       {open ? (
         <div
           className="portal-search-select-menu"
-          style={theme === 'light' ? { background: '#fff', borderColor: '#cbd5e1' } : undefined}
+          style={{
+            ...(theme === 'light' ? { background: '#fff', borderColor: '#cbd5e1' } : {}),
+            ...menuStyle,
+          }}
         >
           <input
             className="portal-search-select-input"
@@ -2392,6 +2397,7 @@ export default function PitchingSuite({
   const [actionSideBySide, setActionSideBySide] = useState(false);
   const [actionLeftPitchKey, setActionLeftPitchKey] = useState('');
   const [actionRightPitchKey, setActionRightPitchKey] = useState('');
+  const [actionCompareVideoOverrides, setActionCompareVideoOverrides] = useState<Record<string, { video_clip_1?: string | null; video_clip_2?: string | null; video_clip_3?: string | null }>>({});
   const [actionVideoPlaying, setActionVideoPlaying] = useState(false);
   const [actionVideoTime, setActionVideoTime] = useState(0);
   const [actionVideoDuration, setActionVideoDuration] = useState(0);
@@ -2399,6 +2405,7 @@ export default function PitchingSuite({
   const [actionVideoLoop, setActionVideoLoop] = useState(false);
   const [actionVideoRefreshNonce, setActionVideoRefreshNonce] = useState(0);
   const [breakdownMode, setBreakdownMode] = useState(false);
+  const [breakdownToolbarVisible, setBreakdownToolbarVisible] = useState(true);
   const [breakdownTool, setBreakdownTool] = useState<BreakdownTool>('line');
   const [breakdownColor, setBreakdownColor] = useState('#facc15');
   const [breakdownWidth, setBreakdownWidth] = useState(4);
@@ -2428,6 +2435,7 @@ export default function PitchingSuite({
   const recordingChunksRef = useRef<Blob[]>([]);
   const latestOverviewRequestKeyRef = useRef('');
   const actionVideoRetryKeysRef = useRef(new Set<string>());
+  const actionCompareVideoLookupKeysRef = useRef(new Set<string>());
 
   useEffect(() => {
     const syncTheme = () => setIsLightTheme(document.body.classList.contains('theme-light'));
@@ -2481,6 +2489,11 @@ export default function PitchingSuite({
     borderColor: actionModalTheme.border,
   };
   const actionModalSearchTheme: 'light' | 'dark' = isLightTheme ? 'light' : 'dark';
+  const actionModalSelectMenuStyle: React.CSSProperties = {
+    zIndex: 5000,
+    maxHeight: 'min(360px, 48vh)',
+    boxShadow: isLightTheme ? '0 18px 44px rgba(15,23,42,0.22)' : '0 18px 44px rgba(0,0,0,0.55)',
+  };
   const isGcu =
     String(selectedSchoolCode ?? '').toUpperCase() === 'GCU' ||
     String(filters?.school_code ?? '').toUpperCase() === 'GCU';
@@ -4887,11 +4900,14 @@ export default function PitchingSuite({
     setActionSideBySide(false);
     setActionLeftPitchKey('');
     setActionRightPitchKey('');
+    setActionCompareVideoOverrides({});
     setActionVideoPlaying(false);
     setActionVideoTime(0);
     setActionVideoDuration(0);
     setActionVideoRefreshNonce((value) => value + 1);
+    setBreakdownToolbarVisible(true);
     actionVideoRetryKeysRef.current.clear();
+    actionCompareVideoLookupKeysRef.current.clear();
   };
 
   useEffect(() => {
@@ -5543,6 +5559,36 @@ export default function PitchingSuite({
     return pitchIdentityKey(pitch);
   };
   const currentPitchKey = currentActionPitch ? pitchKeyFor(currentActionPitch) : '';
+  const actionPitchVideoByKey = useMemo(() => {
+    const next = new Map<string, PitchActionPoint>();
+    actionPitches.forEach((pitch) => {
+      const key = pitchIdentityKey(pitch);
+      const hasVideo = Boolean(pitch.video_clip_1 || pitch.video_clip_2 || pitch.video_clip_3);
+      if (key && hasVideo) next.set(key, pitch);
+    });
+    return next;
+  }, [actionPitches]);
+  const mergeActionCompareVideoOverride = (pitch: PitchActionPoint | null): PitchActionPoint | null => {
+    if (!pitch) return null;
+    const key = pitchIdentityKey(pitch);
+    const override = actionCompareVideoOverrides[key];
+    const refreshed = actionPitchVideoByKey.get(key);
+    if (refreshed) {
+      return {
+        ...pitch,
+        video_clip_1: refreshed.video_clip_1 ?? pitch.video_clip_1,
+        video_clip_2: refreshed.video_clip_2 ?? pitch.video_clip_2,
+        video_clip_3: refreshed.video_clip_3 ?? pitch.video_clip_3,
+      };
+    }
+    if (!override) return pitch;
+    return {
+      ...pitch,
+      video_clip_1: override.video_clip_1 ?? pitch.video_clip_1,
+      video_clip_2: override.video_clip_2 ?? pitch.video_clip_2,
+      video_clip_3: override.video_clip_3 ?? pitch.video_clip_3,
+    };
+  };
   const comparePitchPool = useMemo<PitchActionPoint[]>(
     () => (overview?.chart_points as PitchActionPoint[] | undefined) ?? [],
     [overview?.chart_points]
@@ -5567,18 +5613,18 @@ export default function PitchingSuite({
   const selectedLeftPitch = useMemo(
     () => {
       const idx = Number((actionLeftPitchKey || '').split(':')[0]);
-      if (Number.isInteger(idx) && idx >= 0 && idx < comparePitchPool.length) return comparePitchPool[idx];
-      return currentActionPitch ?? null;
+      if (Number.isInteger(idx) && idx >= 0 && idx < comparePitchPool.length) return mergeActionCompareVideoOverride(comparePitchPool[idx]);
+      return mergeActionCompareVideoOverride(currentActionPitch ?? null);
     },
-    [comparePitchPool, actionLeftPitchKey, currentActionPitch]
+    [comparePitchPool, actionLeftPitchKey, currentActionPitch, actionCompareVideoOverrides, actionPitchVideoByKey]
   );
   const selectedRightPitch = useMemo(
     () => {
       const idx = Number((actionRightPitchKey || '').split(':')[0]);
-      if (Number.isInteger(idx) && idx >= 0 && idx < comparePitchPool.length) return comparePitchPool[idx];
+      if (Number.isInteger(idx) && idx >= 0 && idx < comparePitchPool.length) return mergeActionCompareVideoOverride(comparePitchPool[idx]);
       return null;
     },
-    [comparePitchPool, actionRightPitchKey]
+    [comparePitchPool, actionRightPitchKey, actionCompareVideoOverrides, actionPitchVideoByKey]
   );
   const selectedLeftUrls = selectedLeftPitch
     ? [selectedLeftPitch.video_clip_1, selectedLeftPitch.video_clip_2, selectedLeftPitch.video_clip_3].filter(
@@ -5603,6 +5649,42 @@ export default function PitchingSuite({
       setActionRightPitchKey((fallback ?? comparePitchOptions[0]).value);
     }
   }, [actionSideBySide, comparePitchOptions, actionLeftPitchKey, actionRightPitchKey, currentPitchKey, comparePitchPool]);
+
+  useEffect(() => {
+    if (!actionSideBySide) return;
+    if (!actionLeftPitchKey || !actionRightPitchKey) return;
+    const selected = [selectedLeftPitch, selectedRightPitch].filter(Boolean) as PitchActionPoint[];
+    const missingVideo = selected.filter((pitch) => {
+      const key = pitchIdentityKey(pitch);
+      if (!key || actionCompareVideoLookupKeysRef.current.has(key)) return false;
+      const hasVideo = Boolean(pitch.video_clip_1 || pitch.video_clip_2 || pitch.video_clip_3);
+      return !hasVideo;
+    });
+    if (!missingVideo.length) return;
+    missingVideo.forEach((pitch) => actionCompareVideoLookupKeysRef.current.add(pitchIdentityKey(pitch)));
+    let cancelled = false;
+    void (async () => {
+      const refreshed = await refreshActionPitchVideoUrls(missingVideo);
+      if (cancelled) return;
+      setActionCompareVideoOverrides((current) => {
+        const next = { ...current };
+        refreshed.forEach((pitch, index) => {
+          const key = pitchIdentityKey(missingVideo[index] ?? pitch);
+          if (!key) return;
+          next[key] = {
+            video_clip_1: pitch.video_clip_1 ?? null,
+            video_clip_2: pitch.video_clip_2 ?? null,
+            video_clip_3: pitch.video_clip_3 ?? null,
+          };
+        });
+        return next;
+      });
+      setActionVideoRefreshNonce((value) => value + 1);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [actionSideBySide, selectedLeftPitch, selectedRightPitch]);
 
   const updateSyncedDuration = () => {
     const left = leftCompareVideoRef.current;
@@ -13272,10 +13354,10 @@ export default function PitchingSuite({
                 </div>
 
                 {actionMode === 'video' ? (
-                  <div style={{ display: 'grid', justifyItems: 'center', gap: 6, minHeight: 0, overflow: 'hidden' }}>
+                  <div style={{ display: 'grid', justifyItems: 'center', gap: 6, minHeight: 0, overflow: actionSideBySide ? 'visible' : 'hidden', position: 'relative', zIndex: 40 }}>
                     {actionSideBySide ? (
-                      <div style={{ width: 'min(1080px, 100%)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                        <div>
+                      <div style={{ width: 'min(1080px, 100%)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, position: 'relative', zIndex: 50, overflow: 'visible' }}>
+                        <div style={{ minWidth: 0, position: 'relative', zIndex: 52 }}>
                           <div style={{ fontSize: '0.75rem', color: actionModalTheme.muted, marginBottom: 4 }}>Left Video Pitch</div>
                           <SearchableSingleSelect
                             options={comparePitchOptions}
@@ -13283,9 +13365,10 @@ export default function PitchingSuite({
                             onChange={setActionLeftPitchKey}
                             placeholder="Select Left Pitch"
                             theme={actionModalSearchTheme}
+                            menuStyle={actionModalSelectMenuStyle}
                           />
                         </div>
-                        <div>
+                        <div style={{ minWidth: 0, position: 'relative', zIndex: 51 }}>
                           <div style={{ fontSize: '0.75rem', color: actionModalTheme.muted, marginBottom: 4 }}>Right Video Pitch</div>
                           <SearchableSingleSelect
                             options={comparePitchOptions.filter((option) => option.value !== actionLeftPitchKey)}
@@ -13293,6 +13376,7 @@ export default function PitchingSuite({
                             onChange={setActionRightPitchKey}
                             placeholder="Select Right Pitch"
                             theme={actionModalSearchTheme}
+                            menuStyle={actionModalSelectMenuStyle}
                           />
                         </div>
                       </div>
@@ -13441,7 +13525,8 @@ export default function PitchingSuite({
                             data-breakdown-ui="true"
                             style={{
                               position: 'absolute',
-                              top: 10,
+                              top: actionSideBySide ? 'auto' : 10,
+                              bottom: actionSideBySide ? 10 : 'auto',
                               left: 10,
                               zIndex: 12,
                               display: 'grid',
@@ -13452,19 +13537,30 @@ export default function PitchingSuite({
                             onPointerDown={(event) => event.stopPropagation()}
                             onClick={(event) => event.stopPropagation()}
                           >
-                            <div
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 6,
-                                flexWrap: 'wrap',
-                                padding: '0.35rem',
-                                border: '1px solid rgba(148,163,184,0.32)',
-                                borderRadius: 12,
-                                background: 'rgba(2,6,23,0.82)',
-                                boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
-                              }}
-                            >
+                            {breakdownToolbarVisible ? (
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  flexWrap: 'wrap',
+                                  padding: '0.35rem',
+                                  border: '1px solid rgba(148,163,184,0.32)',
+                                  borderRadius: 12,
+                                  background: 'rgba(2,6,23,0.82)',
+                                  boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
+                                }}
+                              >
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost"
+                                  aria-label="Hide breakdown toolbar"
+                                  title="Hide toolbar"
+                                  style={{ ...actionModalButtonStyle, width: 34, minWidth: 34, padding: 0, minHeight: 34 }}
+                                  onClick={() => setBreakdownToolbarVisible(false)}
+                                >
+                                  ×
+                                </button>
                               <button
                                 type="button"
                                 className={!breakdownMode ? 'btn btn-primary' : 'btn btn-ghost'}
@@ -13529,8 +13625,30 @@ export default function PitchingSuite({
                               <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }} onClick={() => setShowBreakdownNotePanel((value) => !value)}>
                                 Note / Save
                               </button>
-                            </div>
-                            {showBreakdownNotePanel ? (
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn btn-ghost"
+                                data-breakdown-ui="true"
+                                aria-label="Show breakdown toolbar"
+                                title="Show toolbar"
+                                style={{
+                                  ...actionModalButtonStyle,
+                                  width: 62,
+                                  minWidth: 62,
+                                  minHeight: 38,
+                                  padding: 0,
+                                  borderRadius: 12,
+                                  background: 'rgba(2,6,23,0.82)',
+                                  boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
+                                }}
+                                onClick={() => setBreakdownToolbarVisible(true)}
+                              >
+                                Tools
+                              </button>
+                            )}
+                            {breakdownToolbarVisible && showBreakdownNotePanel ? (
                               <div
                                 style={{
                                   width: 'min(520px, calc(100vw - 80px))',
