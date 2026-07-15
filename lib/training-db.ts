@@ -2510,13 +2510,12 @@ export async function createDashboardTrialCoach(input: {
     `
       SELECT id, trial_expires_at::text AS trial_expires_at
       FROM auth_users
-      WHERE LOWER(email) = LOWER($1)
-        AND organization_id = $2
-        AND role IN ('admin', 'coach')
+      WHERE LOWER(COALESCE(email, '')) = LOWER($1)
+         OR LOWER(COALESCE(username, '')) = LOWER($1)
       ORDER BY id ASC
       LIMIT 1
     `,
-    [normalizedEmail, organizationId]
+    [normalizedEmail]
   );
 
   if ((existing.rowCount ?? 0) > 0) {
@@ -2527,25 +2526,45 @@ export async function createDashboardTrialCoach(input: {
     };
   }
 
-  const inserted = await pool.query<{ id: number }>(
-    `
-      INSERT INTO auth_users (
-        email, username, name, phone, password, password_hash, app_url, role, organization_id, is_active, trial_expires_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $5, $6, 'coach', $7, TRUE, $8::timestamptz)
-      RETURNING id
-    `,
-    [
-      normalizedEmail,
-      normalizedEmail,
-      name,
-      (input.phone ?? '').trim() || null,
-      passwordHash,
-      DEFAULT_DASHBOARD_URL,
-      organizationId,
-      expiresAt,
-    ]
-  );
+  let inserted: { rows: Array<{ id: number }> };
+  try {
+    inserted = await pool.query<{ id: number }>(
+      `
+        INSERT INTO auth_users (
+          email, username, name, phone, password, password_hash, app_url, role, organization_id, is_active, trial_expires_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $5, $6, 'coach', $7, TRUE, $8::timestamptz)
+        RETURNING id
+      `,
+      [
+        normalizedEmail,
+        normalizedEmail,
+        name,
+        (input.phone ?? '').trim() || null,
+        passwordHash,
+        DEFAULT_DASHBOARD_URL,
+        organizationId,
+        expiresAt,
+      ]
+    );
+  } catch (error) {
+    const typed = error as { code?: string; constraint?: string; detail?: string; message?: string } | null;
+    const detail = String(typed?.detail ?? typed?.message ?? '').toLowerCase();
+    if (
+      typed?.code === '23505' &&
+      (typed.constraint === 'auth_users_pkey' ||
+        typed.constraint === 'auth_users_email_key' ||
+        detail.includes('(username)=') ||
+        detail.includes('(email)='))
+    ) {
+      return {
+        ok: false,
+        code: 'duplicate_trial',
+        error: 'A free trial has already been created for this email. Each email is limited to one trial.',
+      };
+    }
+    throw error;
+  }
   const userId = Number(inserted.rows[0]?.id ?? 0) || 0;
   if (userId <= 0) return { ok: false, error: 'Could not create trial coach account.' };
   const seeded = await seedDashboardTrialOrganizationFromPcu({
