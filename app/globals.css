@@ -5974,6 +5974,140 @@ body.theme-light .portal-throwing-notes::placeholder {
   right: 0.6rem;
 }
 
+.portal-video-mobile-close {
+  display: none;
+}
+
+@media (max-width: 1024px) {
+  .portal-media-breakdown-backdrop,
+  .portal-edger-video-backdrop {
+    padding: 0 !important;
+    place-items: stretch !important;
+    background: #000 !important;
+  }
+
+  .portal-media-breakdown-modal,
+  .portal-edger-video-modal {
+    width: 100vw !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0 !important;
+    border: 0 !important;
+    padding: calc(0.45rem + env(safe-area-inset-top, 0px)) 0.45rem calc(0.45rem + env(safe-area-inset-bottom, 0px)) !important;
+    overflow: hidden !important;
+  }
+
+  .portal-media-breakdown-modal {
+    gap: 0.4rem !important;
+  }
+
+  .portal-video-mobile-close {
+    display: grid;
+    place-items: center;
+    position: fixed;
+    top: calc(0.45rem + env(safe-area-inset-top, 0px));
+    right: calc(0.45rem + env(safe-area-inset-right, 0px));
+    z-index: 9000;
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.36);
+    background: rgba(2, 6, 23, 0.92);
+    color: #f8fafc;
+    font-size: 1.35rem;
+    font-weight: 900;
+    line-height: 1;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.34);
+  }
+
+  .portal-media-breakdown-header {
+    padding-right: 3rem;
+    align-items: flex-start !important;
+  }
+
+  .portal-media-breakdown-header h3 {
+    max-width: min(56vw, 560px);
+  }
+
+  .portal-media-breakdown-actions {
+    max-width: 100%;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+  }
+
+  .portal-media-breakdown-actions > button:last-child {
+    display: none;
+  }
+
+  .portal-media-breakdown-modal > div[style*="flex-wrap"] {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .portal-media-breakdown-video-panel,
+  .portal-media-breakdown-image-wrap,
+  .portal-media-breakdown-media-wrap {
+    min-height: 0;
+  }
+
+  .portal-media-breakdown-media-wrap,
+  .portal-media-breakdown-image-wrap {
+    flex: 1;
+  }
+
+  .portal-media-breakdown-video,
+  .portal-media-breakdown-image {
+    max-height: none !important;
+    height: 100% !important;
+    object-fit: contain !important;
+  }
+
+  .portal-edger-video-modal {
+    grid-template-rows: auto auto minmax(0, 1fr) !important;
+    gap: 0.35rem !important;
+  }
+
+  .portal-edger-video-nav {
+    padding-right: 3rem;
+  }
+
+  .portal-edger-video-picker {
+    max-height: 28dvh;
+    overflow: visible !important;
+  }
+
+  .portal-edger-video-view {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-height: 0 !important;
+    overflow: hidden;
+  }
+
+  .portal-edger-video-stage {
+    border-radius: 0 !important;
+    border-left: 0 !important;
+    border-right: 0 !important;
+  }
+
+  .portal-edger-video-controls {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+@media (max-width: 700px) {
+  .portal-media-breakdown-header {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .portal-media-breakdown-header h3 {
+    max-width: calc(100vw - 4.2rem);
+  }
+
+  .portal-media-breakdown-compare-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
 .portal-corr-modal {
   width: min(1100px, 96vw);
   max-height: 92vh;
@@ -7199,5 +7333,217 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
     white-space: normal;
     overflow-wrap: anywhere;
     text-align: right;
+  }
+}
+
+.global-feedback-button {
+  position: fixed;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 2147483000 !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 52px !important;
+  min-width: 52px !important;
+  height: 52px !important;
+  min-height: 52px !important;
+  padding: 0 !important;
+  border: 1px solid rgba(148, 163, 184, 0.42) !important;
+  border-radius: 999px !important;
+  background: rgba(15, 23, 42, 0.96) !important;
+  color: #f8fafc !important;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.38), 0 0 0 1px rgba(255, 255, 255, 0.05) inset !important;
+  cursor: pointer;
+  appearance: none;
+}
+
+.global-feedback-button:hover {
+  border-color: rgba(248, 250, 252, 0.62);
+  transform: translateY(-1px);
+}
+
+.global-feedback-button svg {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  fill: currentColor;
+}
+
+.global-feedback-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483001;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 23, 0.48);
+  backdrop-filter: blur(6px);
+}
+
+.global-feedback-modal {
+  width: min(460px, calc(100vw - 48px));
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  background: rgba(3, 7, 18, 0.98);
+  color: #f8fafc;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.52);
+}
+
+.global-feedback-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.global-feedback-header p {
+  margin: 0 0 4px;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.global-feedback-header h2 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 1.05rem;
+  line-height: 1.2;
+}
+
+.global-feedback-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.86);
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.global-feedback-form {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px 18px;
+}
+
+.global-feedback-form label {
+  display: grid;
+  gap: 6px;
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.global-feedback-form input,
+.global-feedback-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(148, 163, 184, 0.26) !important;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.86) !important;
+  color: #f8fafc !important;
+  font: inherit;
+  font-size: 0.9rem;
+  outline: none;
+  padding: 10px 11px;
+  appearance: none;
+  color-scheme: dark;
+}
+
+.global-feedback-form input {
+  color: #cbd5e1 !important;
+}
+
+.global-feedback-form textarea {
+  min-height: 150px;
+  resize: vertical;
+}
+
+.global-feedback-form input:focus,
+.global-feedback-form textarea:focus {
+  border-color: rgba(248, 250, 252, 0.62) !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18) !important;
+}
+
+.global-feedback-form input:-webkit-autofill,
+.global-feedback-form textarea:-webkit-autofill {
+  -webkit-text-fill-color: #f8fafc !important;
+  box-shadow: 0 0 0 1000px rgba(15, 23, 42, 0.96) inset !important;
+}
+
+.global-feedback-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.global-feedback-footer span {
+  color: #94a3b8;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.global-feedback-submit {
+  border: 1px solid rgba(248, 250, 252, 0.2);
+  border-radius: 999px;
+  background: #e11d48;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  padding: 0.72rem 1.15rem;
+  text-transform: uppercase;
+}
+
+.global-feedback-submit:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.global-feedback-success,
+.global-feedback-error {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.global-feedback-success {
+  color: #86efac;
+}
+
+.global-feedback-error {
+  color: #fecdd3;
+}
+
+@media (max-width: 640px) {
+  .global-feedback-button {
+    left: max(14px, env(safe-area-inset-left));
+    bottom: max(14px, env(safe-area-inset-bottom));
+    width: 48px !important;
+    min-width: 48px !important;
+    height: 48px !important;
+    min-height: 48px !important;
+  }
+
+  .global-feedback-overlay {
+    align-items: end;
+    padding: 12px;
+  }
+
+  .global-feedback-modal {
+    width: 100%;
   }
 }

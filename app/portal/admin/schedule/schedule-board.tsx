@@ -2474,15 +2474,42 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       weekNotes: throwingTemplateWeekNotes,
       updatedAt: nowIso,
     };
-    setThrowingTemplates((prev) => {
-      const index = prev.findIndex((template) => template.id === nextId);
-      if (index < 0) return [nextTemplate, ...prev];
-      const copy = [...prev];
-      copy[index] = nextTemplate;
-      return copy;
-    });
+    const existingIndex = throwingTemplates.findIndex((template) => template.id === nextId);
+    const nextTemplates = existingIndex < 0
+      ? [nextTemplate, ...throwingTemplates]
+      : throwingTemplates.map((template, index) => (index === existingIndex ? nextTemplate : template));
+    setThrowingTemplates(nextTemplates);
     setSelectedThrowingTemplateId(nextId);
     setError('');
+    void fetchWithTimeout('/api/admin/schedule/throwing', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        playerId: 0,
+        byDate: {},
+        weekNotes: {},
+        templates: nextTemplates,
+        bullpenState: {
+          current: bullpenCurrent,
+          selectedTemplateId: '',
+          visibleTemplateIds: [],
+          notes: '',
+        },
+        bullpenTemplates,
+        velocityState: {
+          current: velocityCurrent,
+          selectedTemplateId: '',
+          visibleTemplateIds: [],
+          notes: '',
+        },
+        velocityTemplates,
+        drillsState: normalizeDrillsState(null),
+        preThrowDrillTemplates,
+        postThrowDrillTemplates,
+      }),
+    }).catch((requestError) => {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to save throwing template.');
+    });
   };
 
   const selectThrowingTemplate = (templateId: string) => {
@@ -2507,13 +2534,33 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     if (!selectedThrowingTemplateId) return;
     const confirmed = window.confirm('Delete this throwing template?');
     if (!confirmed) return;
-    setThrowingTemplates((prev) => prev.filter((template) => template.id !== selectedThrowingTemplateId));
+    const nextTemplates = throwingTemplates.filter((template) => template.id !== selectedThrowingTemplateId);
+    setThrowingTemplates(nextTemplates);
     setSelectedThrowingTemplateId('');
     setThrowingTemplateName('');
     setThrowingTemplateWeekCount(4);
     setThrowingTemplateByCell({});
     setThrowingTemplateWeekNotes({});
     setError('');
+    void fetchWithTimeout('/api/admin/schedule/throwing', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        playerId: 0,
+        byDate: {},
+        weekNotes: {},
+        templates: nextTemplates,
+        bullpenState: { current: bullpenCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+        bullpenTemplates,
+        velocityState: { current: velocityCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+        velocityTemplates,
+        drillsState: normalizeDrillsState(null),
+        preThrowDrillTemplates,
+        postThrowDrillTemplates,
+      }),
+    }).catch((requestError) => {
+      setError(requestError instanceof Error ? requestError.message : 'Failed to delete throwing template.');
+    });
   };
 
   const applyWeekBuilderTemplateToMonth = () => {

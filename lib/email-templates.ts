@@ -17,6 +17,9 @@ export type DemoRequestTemplateVars = {
   phone: string;
   school_or_facility: string;
   role: string;
+  trial_login_url?: string;
+  trial_password?: string;
+  trial_expires_at?: string;
 };
 
 const DEFAULT_DEMO_REQUEST_TEMPLATE: EmailTemplate = {
@@ -27,7 +30,12 @@ const DEFAULT_DEMO_REQUEST_TEMPLATE: EmailTemplate = {
   bodyText: [
     'Hi {{name}},',
     '',
-    'Thanks for reaching out about the PCU Dashboard. We received your request and will follow up within 24 hours.',
+    'Thanks for reaching out about the PCU Dashboard. Your 7-day trial account has been created.',
+    '',
+    'Login: {{trial_login_url}}',
+    'Email: {{email}}',
+    'Password: {{trial_password}}',
+    'Trial expires: {{trial_expires_at}}',
     '',
     'Request details:',
     'School/Facility: {{school_or_facility}}',
@@ -38,7 +46,8 @@ const DEFAULT_DEMO_REQUEST_TEMPLATE: EmailTemplate = {
   ].join('\n'),
   bodyHtml: [
     '<p>Hi {{name}},</p>',
-    '<p>Thanks for reaching out about the PCU Dashboard. We received your request and will follow up within 24 hours.</p>',
+    '<p>Thanks for reaching out about the PCU Dashboard. Your 7-day trial account has been created.</p>',
+    '<p><strong>Login:</strong> <a href="{{trial_login_url}}">{{trial_login_url}}</a><br /><strong>Email:</strong> {{email}}<br /><strong>Password:</strong> {{trial_password}}<br /><strong>Trial expires:</strong> {{trial_expires_at}}</p>',
     '<p><strong>Request details:</strong><br />School/Facility: {{school_or_facility}}<br />Role: {{role}}<br />Phone: {{phone}}</p>',
     '<p>Pitching Coach U</p>',
   ].join('\n'),
@@ -146,9 +155,12 @@ export function renderDemoRequestTemplate(
     phone: vars.phone || 'Not provided',
     school_or_facility: vars.school_or_facility,
     role: vars.role,
+    trial_login_url: vars.trial_login_url ?? '',
+    trial_password: vars.trial_password ?? '',
+    trial_expires_at: vars.trial_expires_at ?? '',
   };
   const render = (value: string) =>
-    value.replace(/\{\{\s*(name|email|phone|school_or_facility|role)\s*\}\}/g, (_, key: string) => values[key] ?? '');
+    value.replace(/\{\{\s*(name|email|phone|school_or_facility|role|trial_login_url|trial_password|trial_expires_at)\s*\}\}/g, (_, key: string) => values[key] ?? '');
   const fromEmail = template.fromEmail.trim() || fallbackFromEmail;
   const fromName = template.fromName.trim();
   const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;

@@ -25,6 +25,17 @@ export type SessionUser = {
   playerId: number | null;
 };
 
+async function expireDueTrialAccounts(pool: Pool): Promise<void> {
+  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMPTZ;`);
+  await pool.query(`
+    UPDATE auth_users
+    SET is_active = FALSE, updated_at = NOW()
+    WHERE COALESCE(is_active, TRUE) = TRUE
+      AND trial_expires_at IS NOT NULL
+      AND trial_expires_at <= NOW()
+  `);
+}
+
 function isMissingSchemaError(error: unknown): boolean {
   const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code ?? '') : '';
   if (code === '42P01' || code === '42703') return true; // undefined_table / undefined_column
@@ -399,6 +410,7 @@ export async function ensureAuthDbReady(): Promise<void> {
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'admin';`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
   await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();`);
   await pool.query(`UPDATE auth_users SET username = LOWER(email) WHERE username IS NULL OR LENGTH(TRIM(username)) = 0;`);
@@ -839,6 +851,7 @@ export async function validateLoginWithDatabase(email: string, password: string)
 
   const normalizedEmail = email.trim().toLowerCase();
   const pool = getDbPool();
+  await queryWithLazyAuthBootstrap(() => expireDueTrialAccounts(pool));
   const result = await queryWithLazyAuthBootstrap(() =>
     pool.query<{
       id: number;
@@ -848,6 +861,7 @@ export async function validateLoginWithDatabase(email: string, password: string)
       app_url: string | null;
       role: string | null;
       is_active: boolean | null;
+      trial_expires_at: string | null;
       organization_id: number | null;
       player_id: number | null;
       }>(
@@ -860,6 +874,7 @@ export async function validateLoginWithDatabase(email: string, password: string)
           u.app_url,
           u.role,
           u.is_active,
+          u.trial_expires_at::text AS trial_expires_at,
           u.organization_id,
           p.id AS player_id
         FROM auth_users u
@@ -877,6 +892,8 @@ export async function validateLoginWithDatabase(email: string, password: string)
   if ((result.rowCount ?? 0) < 1) return null;
   for (const row of result.rows) {
     if (row.is_active === false) continue;
+    const trialExpiresAt = row.trial_expires_at ? Date.parse(row.trial_expires_at) : NaN;
+    if (Number.isFinite(trialExpiresAt) && trialExpiresAt <= Date.now()) continue;
     if (!verifyPassword(row.password_hash, password)) continue;
     const appUrl = row.app_url?.trim();
     if (!appUrl) continue;

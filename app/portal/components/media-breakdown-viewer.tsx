@@ -10,6 +10,7 @@ export type BreakdownAnnotation = {
   width: number;
   points: Array<{ x: number; y: number }>;
   text?: string;
+  fontSize?: number;
   angleMode?: 'acute' | 'obtuse';
 };
 
@@ -93,7 +94,7 @@ function renderAnnotation(annotation: BreakdownAnnotation, key: string) {
 
   if (annotation.tool === 'text') {
     return (
-      <text key={key} x={sx(pts[0].x)} y={sx(pts[0].y)} fill={annotation.color} fontSize={36} fontWeight={900} style={labelStyle}>
+      <text key={key} x={sx(pts[0].x)} y={sx(pts[0].y)} fill={annotation.color} fontSize={Math.max(16, Number(annotation.fontSize ?? 36))} fontWeight={900} style={labelStyle}>
         {annotation.text}
       </text>
     );
@@ -185,9 +186,10 @@ type VideoPanelProps = {
   compact?: boolean;
   initialAnnotations?: BreakdownAnnotation[];
   onAnnotationsChange?: (annotations: BreakdownAnnotation[]) => void;
+  textFontSize: number;
 };
 
-function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onActivate, isActive, syncRef, synced, compact, initialAnnotations, onAnnotationsChange }: VideoPanelProps) {
+function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onActivate, isActive, syncRef, synced, compact, initialAnnotations, onAnnotationsChange, textFontSize }: VideoPanelProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -207,6 +209,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   const [annotations, setAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [active, setActive] = useState<BreakdownAnnotation | null>(null);
   const [anglePending, setAnglePending] = useState<Array<{ x: number; y: number }>>([]);
+  const [draggingText, setDraggingText] = useState<{ id: string; dx: number; dy: number } | null>(null);
 
   useEffect(() => {
     setAnnotations(Array.isArray(initialAnnotations) ? initialAnnotations : []);
@@ -341,6 +344,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   // ── Annotation draw ──
   const distanceToAnnotation = (ann: BreakdownAnnotation, point: { x: number; y: number }) => {
     if (!ann.points.length) return 999;
+    if (ann.tool === 'text') return Math.hypot(ann.points[0].x - point.x, ann.points[0].y - point.y);
     return Math.min(...ann.points.map((p) => Math.hypot(p.x - point.x, p.y - point.y)));
   };
 
@@ -349,6 +353,18 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     onActivate?.();
     event.preventDefault();
     const point = pointOnOverlay(event, zoom, pan);
+    if (tool === 'text') {
+      const nearestText = annotations
+        .filter((item) => item.tool === 'text' && item.points.length > 0)
+        .map((item) => ({ item, d: distanceToAnnotation(item, point) }))
+        .sort((a, b) => a.d - b.d)[0];
+      if (nearestText && nearestText.d <= 0.08) {
+        const anchor = nearestText.item.points[0];
+        setDraggingText({ id: nearestText.item.id, dx: point.x - anchor.x, dy: point.y - anchor.y });
+        event.currentTarget.setPointerCapture(event.pointerId);
+        return;
+      }
+    }
     if (tool === 'erase') {
       setAnnotations((items) => {
         const nearest = items.map((item) => ({ item, d: distanceToAnnotation(item, point) })).sort((a, b) => a.d - b.d)[0];
@@ -359,7 +375,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     if (tool === 'text') {
       const text = window.prompt('Text label');
       if (!text?.trim()) return;
-      setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'text', color, width, points: [point], text: text.trim() }]);
+      setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'text', color, width, points: [point], text: text.trim(), fontSize: textFontSize }]);
       return;
     }
     if (tool === 'angle') {
@@ -373,6 +389,16 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   };
 
   const pointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (draggingText) {
+      event.preventDefault();
+      const point = pointOnOverlay(event, zoom, pan);
+      const nextPoint = {
+        x: Math.max(0, Math.min(1, point.x - draggingText.dx)),
+        y: Math.max(0, Math.min(1, point.y - draggingText.dy)),
+      };
+      setAnnotations((items) => items.map((item) => (item.id === draggingText.id ? { ...item, points: [nextPoint] } : item)));
+      return;
+    }
     if (!active) return;
     event.preventDefault();
     const point = pointOnOverlay(event, zoom, pan);
@@ -385,6 +411,10 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
 
   const finish = (event?: ReactPointerEvent<SVGSVGElement>) => {
     if (event && event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (draggingText) {
+      setDraggingText(null);
+      return;
+    }
     if (!active) return;
     setAnnotations((items) => [...items, active]);
     setActive(null);
@@ -407,12 +437,13 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   const canPan = isZoomed && !drawMode;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 }}>
+    <div className="portal-media-breakdown-video-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{title}</div>
 
       {/* Video + overlay wrapper — clips the zoom */}
       <div
         ref={mediaWrapRef}
+        className="portal-media-breakdown-media-wrap"
         style={{ position: 'relative', borderRadius: 10, overflow: 'hidden', background: '#000', cursor: canPan ? 'grab' : drawMode ? 'crosshair' : 'default' }}
         onClick={onActivate}
         onWheel={onWheel}
@@ -425,6 +456,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
         <div style={{ transform: transformStyle, transformOrigin: '50% 50%', willChange: zoom > 1 ? 'transform' : undefined }}>
           <video
             ref={videoRef}
+            className="portal-media-breakdown-video"
             src={url}
             playsInline
             preload="auto"
@@ -616,6 +648,7 @@ export default function MediaBreakdownViewer({
   const [drawMode, setDrawMode] = useState(false);
   const [color, setColor] = useState('#facc15');
   const [width, setWidth] = useState(4);
+  const [textFontSize, setTextFontSize] = useState(36);
   const [angleMode, setAngleMode] = useState<'acute' | 'obtuse'>('acute');
   const [anglePendingCount, setAnglePendingCount] = useState(0);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -631,6 +664,7 @@ export default function MediaBreakdownViewer({
 
   // Image-mode annotation state
   const [annotations, setAnnotations] = useState<BreakdownAnnotation[]>([]);
+  const [draggingImageText, setDraggingImageText] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [videoAnnotations, setVideoAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [active, setActive] = useState<BreakdownAnnotation | null>(null);
   const [anglePending, setAnglePending] = useState<Array<{ x: number; y: number }>>([]);
@@ -703,6 +737,18 @@ export default function MediaBreakdownViewer({
     if (!drawMode) return;
     event.preventDefault();
     const point = pointOnOverlay(event, imgZoom, imgPan);
+    if (tool === 'text') {
+      const nearestText = annotations
+        .filter((item) => item.tool === 'text' && item.points.length > 0)
+        .map((item) => ({ item, d: Math.hypot(item.points[0].x - point.x, item.points[0].y - point.y) }))
+        .sort((a, b) => a.d - b.d)[0];
+      if (nearestText && nearestText.d <= 0.08) {
+        const anchor = nearestText.item.points[0];
+        setDraggingImageText({ id: nearestText.item.id, dx: point.x - anchor.x, dy: point.y - anchor.y });
+        event.currentTarget.setPointerCapture(event.pointerId);
+        return;
+      }
+    }
     if (tool === 'erase') {
       setAnnotations((items) => {
         const nearest = items.map((item) => ({ item, d: Math.min(...item.points.map((p) => Math.hypot(p.x - point.x, p.y - point.y))) })).sort((a, b) => a.d - b.d)[0];
@@ -713,7 +759,7 @@ export default function MediaBreakdownViewer({
     if (tool === 'text') {
       const text = window.prompt('Text label');
       if (!text?.trim()) return;
-      setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'text', color, width, points: [point], text: text.trim() }]);
+      setAnnotations((items) => [...items, { id: `media-${Date.now()}`, tool: 'text', color, width, points: [point], text: text.trim(), fontSize: textFontSize }]);
       setSaveState('idle');
       return;
     }
@@ -728,6 +774,17 @@ export default function MediaBreakdownViewer({
   }
 
   function pointerMoveImage(event: ReactPointerEvent<SVGSVGElement>) {
+    if (draggingImageText) {
+      event.preventDefault();
+      const point = pointOnOverlay(event, imgZoom, imgPan);
+      const nextPoint = {
+        x: Math.max(0, Math.min(1, point.x - draggingImageText.dx)),
+        y: Math.max(0, Math.min(1, point.y - draggingImageText.dy)),
+      };
+      setAnnotations((items) => items.map((item) => (item.id === draggingImageText.id ? { ...item, points: [nextPoint] } : item)));
+      setSaveState('idle');
+      return;
+    }
     if (!active) return;
     event.preventDefault();
     const point = pointOnOverlay(event, imgZoom, imgPan);
@@ -740,6 +797,11 @@ export default function MediaBreakdownViewer({
 
   function finishImage(event?: ReactPointerEvent<SVGSVGElement>) {
     if (event && event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (draggingImageText) {
+      setDraggingImageText(null);
+      setSaveState('idle');
+      return;
+    }
     if (!active) return;
     setAnnotations((items) => [...items, active]);
     setSaveState('idle');
@@ -767,6 +829,11 @@ export default function MediaBreakdownViewer({
       <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700 }}>
         W<input type="range" min={2} max={14} value={width} onChange={(e) => setWidth(Number(e.target.value))} style={{ width: 50 }} />
       </label>
+      {drawMode && tool === 'text' ? (
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700 }}>
+          Font<input type="range" min={16} max={96} value={textFontSize} onChange={(e) => setTextFontSize(Number(e.target.value))} style={{ width: 70 }} />
+        </label>
+      ) : null}
       {!isVideo && (
         <>
           <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setAnnotations((items) => items.slice(0, -1)); setAnglePending([]); setAnglePendingCount(0); setSaveState('idle'); }} disabled={!annotations.length}>Undo</button>
@@ -787,6 +854,7 @@ export default function MediaBreakdownViewer({
   const imagePanel = (
     <div
       ref={imgWrapRef}
+      className="portal-media-breakdown-image-wrap"
       style={{ position: 'relative', marginTop: 4, borderRadius: 10, overflow: 'hidden', background: '#000', cursor: imgZoomed && !drawMode ? 'grab' : drawMode ? 'crosshair' : 'default' }}
       onWheel={onImgWheel}
       onPointerDown={onImgPanStart}
@@ -795,7 +863,7 @@ export default function MediaBreakdownViewer({
       onPointerCancel={onImgPanEnd}
     >
       <div style={{ transform: imgZoomed ? `translate(${imgPan.x * 100}%, ${imgPan.y * 100}%) scale(${imgZoom})` : undefined, transformOrigin: '50% 50%', willChange: imgZoomed ? 'transform' : undefined }}>
-        <img src={url} alt={title} style={{ width: '100%', maxHeight: compareMode && compareMedia ? '58vh' : '68vh', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} />
+        <img className="portal-media-breakdown-image" src={url} alt={title} style={{ width: '100%', maxHeight: compareMode && compareMedia ? '58vh' : '68vh', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} />
         <svg
           viewBox="0 0 1000 1000"
           preserveAspectRatio="none"
@@ -820,16 +888,17 @@ export default function MediaBreakdownViewer({
   );
 
   return (
-    <div className="portal-modal-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
+    <div className="portal-modal-backdrop portal-media-breakdown-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
       <div
-        className="portal-modal-panel"
+        className="portal-modal-panel portal-media-breakdown-modal"
         style={{ width: compareMode ? 'min(1600px, 98vw)' : 'min(1180px, 96vw)', maxHeight: '98vh', background: '#020617', color: '#f8fafc', display: 'flex', flexDirection: 'column', gap: 10, transition: 'width 0.2s ease' }}
         onClick={(e) => e.stopPropagation()}
       >
+        <button type="button" className="portal-video-mobile-close" aria-label="Close media viewer" onClick={onClose}>×</button>
         {/* Header */}
-        <div className="portal-row-between" style={{ gap: 10, flexShrink: 0 }}>
+        <div className="portal-row-between portal-media-breakdown-header" style={{ gap: 10, flexShrink: 0 }}>
           <h3 style={{ margin: 0, fontSize: '1rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</h3>
-          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          <div className="portal-media-breakdown-actions" style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
             {positionLabel ? <span style={{ alignSelf: 'center', color: '#94a3b8', fontSize: 12, fontWeight: 800 }}>{positionLabel}</span> : null}
             <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={onPrevious} disabled={!hasPrevious}>Previous</button>
             <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={onNext} disabled={!hasNext}>Next</button>
@@ -860,14 +929,14 @@ export default function MediaBreakdownViewer({
 
         {/* Media area */}
         {isVideo && compareMode && compareMedia ? (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flex: 1, minHeight: 0 }}>
-            <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact initialAnnotations={initialAnnotations} onAnnotationsChange={handleMainVideoAnnotationsChange} />
-            <VideoPanel url={compareMedia.url} title={`${compareMedia.playerName} - ${compareMedia.title}`} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact />
+          <div className="portal-media-breakdown-compare-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flex: 1, minHeight: 0 }}>
+            <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact initialAnnotations={initialAnnotations} onAnnotationsChange={handleMainVideoAnnotationsChange} textFontSize={textFontSize} />
+            <VideoPanel url={compareMedia.url} title={`${compareMedia.playerName} - ${compareMedia.title}`} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact textFontSize={textFontSize} />
           </div>
         ) : isVideo ? (
-          <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} initialAnnotations={initialAnnotations} onAnnotationsChange={handleMainVideoAnnotationsChange} />
+          <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} initialAnnotations={initialAnnotations} onAnnotationsChange={handleMainVideoAnnotationsChange} textFontSize={textFontSize} />
         ) : isImage && compareMode && compareMedia ? (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flex: 1, minHeight: 0 }}>
+          <div className="portal-media-breakdown-compare-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flex: 1, minHeight: 0 }}>
             <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{title}</div>
               {imagePanel}

@@ -56,8 +56,9 @@ export default async function ProfilesPage() {
   }));
 
   return (
-    <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
-      <header className="portal-header">
+    <>
+      <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
+        <header className="portal-header">
         <div className="portal-header-left">
           <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
         </div>
@@ -97,16 +98,17 @@ export default async function ProfilesPage() {
           <LogoutButton />
           <PortalThemeToggle />
         </div>
-      </header>
+        </header>
 
-      {canAccessProgramming ? (
-        <ProfilesList players={profileRows} />
-      ) : (
-        <section className="portal-panel">
-          <h2>Profiles</h2>
-          <p className="portal-muted-text">No profiles are available for this school.</p>
-        </section>
-      )}
-    </div>
+        {canAccessProgramming ? (
+          <ProfilesList players={profileRows} />
+        ) : (
+          <section className="portal-panel">
+            <h2>Profiles</h2>
+            <p className="portal-muted-text">No profiles are available for this school.</p>
+          </section>
+        )}
+      </div>
+    </>
   );
 }

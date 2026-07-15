@@ -2475,6 +2475,88 @@ export async function createStaffUser(input: {
   return { ok: true, reusedExistingPassword, userId: insertedUserId };
 }
 
+export async function createDashboardTrialCoach(input: {
+  name: string;
+  email: string;
+  phone?: string;
+  password: string;
+  trialDays?: number;
+}): Promise<
+  | { ok: true; userId: number; organizationId: number; expiresAt: string }
+  | { ok: false; error: string; code?: 'duplicate_trial' }
+> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  await ensureAuthDbReady();
+  const normalizedEmail = normalizeTrialEmail(input.email);
+  const name = input.name.trim();
+  const password = input.password;
+  if (!name || !normalizedEmail || !password) return { ok: false, error: 'Name, email, and password are required.' };
+  const organizationId = await ensureDashboardTrialOrganizationForCoach(normalizedEmail);
+  if (organizationId <= 0) return { ok: false, error: 'Could not create trial organization.' };
+
+  const trialDays = Math.max(1, Math.min(60, Number(input.trialDays ?? 7) || 7));
+  const pool = getDbPool();
+  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMPTZ;`);
+  await ensureAuthUsersIdSequence(pool);
+  const passwordHash = createPasswordHash(password);
+  const expiresAtResult = await pool.query<{ expires_at: string }>(
+    `SELECT (NOW() + ($1::int * INTERVAL '1 day'))::text AS expires_at`,
+    [trialDays]
+  );
+  const expiresAt = String(expiresAtResult.rows[0]?.expires_at ?? '');
+
+  const existing = await pool.query<{ id: number; trial_expires_at: string | null }>(
+    `
+      SELECT id, trial_expires_at::text AS trial_expires_at
+      FROM auth_users
+      WHERE LOWER(email) = LOWER($1)
+        AND organization_id = $2
+        AND role IN ('admin', 'coach')
+      ORDER BY id ASC
+      LIMIT 1
+    `,
+    [normalizedEmail, organizationId]
+  );
+
+  if ((existing.rowCount ?? 0) > 0) {
+    return {
+      ok: false,
+      code: 'duplicate_trial',
+      error: 'A free trial has already been created for this email. Each email is limited to one trial.',
+    };
+  }
+
+  const inserted = await pool.query<{ id: number }>(
+    `
+      INSERT INTO auth_users (
+        email, username, name, phone, password, password_hash, app_url, role, organization_id, is_active, trial_expires_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $5, $6, 'coach', $7, TRUE, $8::timestamptz)
+      RETURNING id
+    `,
+    [
+      normalizedEmail,
+      normalizedEmail,
+      name,
+      (input.phone ?? '').trim() || null,
+      passwordHash,
+      DEFAULT_DASHBOARD_URL,
+      organizationId,
+      expiresAt,
+    ]
+  );
+  const userId = Number(inserted.rows[0]?.id ?? 0) || 0;
+  if (userId <= 0) return { ok: false, error: 'Could not create trial coach account.' };
+  const seeded = await seedDashboardTrialOrganizationFromPcu({
+    organizationId,
+    coachUserId: userId,
+    createdByUserId: userId,
+  });
+  if (!seeded.ok) return { ok: false, error: seeded.error };
+  return { ok: true, userId, organizationId, expiresAt };
+}
+
 export async function setStaffActiveStatus(input: {
   organizationId: number;
   staffUserId: number;
@@ -2497,6 +2579,26 @@ export async function setStaffActiveStatus(input: {
   );
   if ((updated.rowCount ?? 0) !== 1) return { ok: false, error: 'Coach user not found.' };
   return { ok: true };
+}
+
+export async function deactivateExpiredDashboardTrialAccounts(): Promise<{ ok: true; deactivatedCount: number } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  await ensureAuthDbReady();
+  const pool = getDbPool();
+  await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS trial_expires_at TIMESTAMPTZ;`);
+  const result = await pool.query<{ id: number }>(
+    `
+      UPDATE auth_users
+      SET is_active = FALSE, updated_at = NOW()
+      WHERE COALESCE(is_active, TRUE) = TRUE
+        AND role IN ('admin', 'coach')
+        AND trial_expires_at IS NOT NULL
+        AND trial_expires_at <= NOW()
+      RETURNING id
+    `
+  );
+  return { ok: true, deactivatedCount: result.rowCount ?? 0 };
 }
 
 function normalizeActivityRole(value: string | null | undefined): 'admin' | 'coach' | 'player' | 'unknown' {
@@ -3974,7 +4076,7 @@ export async function getRecoverableThrowingTemplates(input: {
             END
           ) AS template
         WHERE organization_id = $1
-          AND player_id > 0
+          AND player_id >= 0
       )
       SELECT DISTINCT ON (template_name) template
       FROM expanded

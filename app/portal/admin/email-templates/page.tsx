@@ -56,6 +56,9 @@ export default async function EmailTemplatesPage({ searchParams }: PageProps) {
           <code>{'{{phone}}'}</code>
           <code>{'{{school_or_facility}}'}</code>
           <code>{'{{role}}'}</code>
+          <code>{'{{trial_login_url}}'}</code>
+          <code>{'{{trial_password}}'}</code>
+          <code>{'{{trial_expires_at}}'}</code>
         </div>
         <p style={{ marginTop: 14 }}>
           Video embeds are saved as clickable video links because most email inboxes block embedded video players.

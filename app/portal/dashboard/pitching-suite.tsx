@@ -264,6 +264,7 @@ type BreakdownAnnotation = {
   width: number;
   points: Array<{ x: number; y: number }>;
   text?: string;
+  fontSize?: number;
   angleMode?: 'acute' | 'obtuse';
 };
 const PITCH_TYPE_DISPLAY_ORDER = [
@@ -2409,8 +2410,11 @@ export default function PitchingSuite({
   const [breakdownTool, setBreakdownTool] = useState<BreakdownTool>('line');
   const [breakdownColor, setBreakdownColor] = useState('#facc15');
   const [breakdownWidth, setBreakdownWidth] = useState(4);
+  const [breakdownTextFontSize, setBreakdownTextFontSize] = useState(36);
   const [breakdownAnnotations, setBreakdownAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [activeBreakdownAnnotation, setActiveBreakdownAnnotation] = useState<BreakdownAnnotation | null>(null);
+  const [selectedBreakdownTextId, setSelectedBreakdownTextId] = useState('');
+  const [draggingBreakdownText, setDraggingBreakdownText] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const [breakdownAngleMode, setBreakdownAngleMode] = useState<'acute' | 'obtuse'>('acute');
   const [breakdownAnglePending, setBreakdownAnglePending] = useState<Array<{ x: number; y: number }>>([]);
   const [breakdownNoteText, setBreakdownNoteText] = useState('');
@@ -5851,6 +5855,10 @@ export default function PitchingSuite({
 
   const annotationDistance = (annotation: BreakdownAnnotation, point: { x: number; y: number }): number => {
     if (!annotation.points.length) return 999;
+    if (annotation.tool === 'text') {
+      const anchor = annotation.points[0];
+      return Math.hypot(anchor.x - point.x, anchor.y - point.y);
+    }
     if (annotation.tool === 'circle' && annotation.points.length >= 2) {
       const [a, b] = annotation.points;
       const cx = (a.x + b.x) / 2;
@@ -5880,6 +5888,20 @@ export default function PitchingSuite({
     if (!breakdownMode) return;
     event.preventDefault();
     const point = getBreakdownPoint(event);
+    if (breakdownTool === 'text') {
+      const nearestText = breakdownAnnotations
+        .filter((item) => item.tool === 'text' && item.points.length > 0)
+        .map((item) => ({ item, distance: annotationDistance(item, point) }))
+        .sort((a, b) => a.distance - b.distance)[0];
+      if (nearestText && nearestText.distance <= 0.08) {
+        const anchor = nearestText.item.points[0];
+        setSelectedBreakdownTextId(nearestText.item.id);
+        setBreakdownTextFontSize(Math.max(16, Math.min(96, Number(nearestText.item.fontSize ?? 36))));
+        setDraggingBreakdownText({ id: nearestText.item.id, dx: point.x - anchor.x, dy: point.y - anchor.y });
+        event.currentTarget.setPointerCapture(event.pointerId);
+        return;
+      }
+    }
     if (breakdownTool === 'erase') {
       setBreakdownAnnotations((items) => {
         if (!items.length) return items;
@@ -5894,17 +5916,20 @@ export default function PitchingSuite({
     if (breakdownTool === 'text') {
       const text = window.prompt('Text label');
       if (!text?.trim()) return;
+      const id = `bd-${Date.now()}-${Math.random().toString(16).slice(2)}`;
       setBreakdownAnnotations((items) => [
         ...items,
         {
-          id: `bd-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          id,
           tool: 'text',
           color: breakdownColor,
           width: breakdownWidth,
           points: [point],
           text: text.trim(),
+          fontSize: breakdownTextFontSize,
         },
       ]);
+      setSelectedBreakdownTextId(id);
       return;
     }
     if (breakdownTool === 'angle') {
@@ -5936,6 +5961,18 @@ export default function PitchingSuite({
   };
 
   const handleBreakdownPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (draggingBreakdownText) {
+      event.preventDefault();
+      const point = getBreakdownPoint(event);
+      const nextPoint = {
+        x: Math.max(0, Math.min(1, point.x - draggingBreakdownText.dx)),
+        y: Math.max(0, Math.min(1, point.y - draggingBreakdownText.dy)),
+      };
+      setBreakdownAnnotations((items) =>
+        items.map((item) => (item.id === draggingBreakdownText.id ? { ...item, points: [nextPoint] } : item))
+      );
+      return;
+    }
     if (!activeBreakdownAnnotation) return;
     event.preventDefault();
     const point = getBreakdownPoint(event);
@@ -5950,6 +5987,10 @@ export default function PitchingSuite({
   const finishBreakdownAnnotation = (event?: ReactPointerEvent<SVGSVGElement>) => {
     if (event && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (draggingBreakdownText) {
+      setDraggingBreakdownText(null);
+      return;
     }
     if (!activeBreakdownAnnotation) return;
     if (activeBreakdownAnnotation.tool === 'angle') return;
@@ -5972,7 +6013,7 @@ export default function PitchingSuite({
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     if (annotation.tool === 'text') {
-      ctx.font = '700 30px system-ui, -apple-system, sans-serif';
+      ctx.font = `700 ${Math.max(16, Number(annotation.fontSize ?? 36))}px system-ui, -apple-system, sans-serif`;
       ctx.fillText(annotation.text ?? '', points[0].x * width, points[0].y * height);
     } else if (annotation.tool === 'circle' && points.length >= 2) {
       const x = Math.min(points[0].x, points[1].x) * width;
@@ -6239,15 +6280,21 @@ export default function PitchingSuite({
     const sx = (value: number) => value * overlayUnits;
     const strokeWidth = annotation.width;
     if (annotation.tool === 'text') {
+      const selected = annotation.id === selectedBreakdownTextId;
       return (
         <text
           key={key}
           x={sx(pts[0].x)}
           y={sx(pts[0].y)}
           fill={annotation.color}
-          fontSize={36}
+          fontSize={Math.max(16, Number(annotation.fontSize ?? 36))}
           fontWeight={800}
-          style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.65)', strokeWidth: 5 }}
+          style={{
+            paintOrder: 'stroke',
+            stroke: selected ? 'rgba(250,204,21,0.95)' : 'rgba(0,0,0,0.65)',
+            strokeWidth: selected ? 7 : 5,
+            cursor: breakdownMode && breakdownTool === 'text' ? 'move' : undefined,
+          }}
         >
           {annotation.text}
         </text>
@@ -13244,10 +13291,10 @@ export default function PitchingSuite({
         </article>
       </div>
       {actionMode && currentActionPitch ? (
-        <div className="portal-modal-backdrop" onClick={() => setActionMode(null)}>
+        <div className={`portal-modal-backdrop${actionMode === 'video' ? ' portal-edger-video-backdrop' : ''}`} onClick={() => setActionMode(null)}>
           <div
             ref={actionModalCardRef}
-            className="portal-modal-card"
+            className={`portal-modal-card${actionMode === 'video' ? ' portal-edger-video-modal' : ''}`}
             onClick={(event) => event.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -13265,6 +13312,11 @@ export default function PitchingSuite({
               gap: actionMode === 'video' ? '0.45rem' : '0.65rem',
             }}
           >
+            {actionMode === 'video' ? (
+              <button type="button" className="portal-video-mobile-close" aria-label="Close video viewer" onClick={() => setActionMode(null)}>
+                ×
+              </button>
+            ) : null}
             {actionMode === 'edit' && canUsePitchEdits ? (
               <>
                 <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: actionModalTheme.textStrong }}>
@@ -13337,7 +13389,7 @@ export default function PitchingSuite({
               </>
             ) : (
               <>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '0.65rem' }}>
+                <div className="portal-edger-video-nav" style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '0.65rem' }}>
                   <div>
                     <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} disabled={actionIndex <= 0} onClick={() => setActionIndex((i) => Math.max(0, i - 1))}>
                       &lt; Prev
@@ -13354,7 +13406,7 @@ export default function PitchingSuite({
                 </div>
 
                 {actionMode === 'video' ? (
-                  <div style={{ display: 'grid', justifyItems: 'center', gap: 6, minHeight: 0, overflow: actionSideBySide ? 'visible' : 'hidden', position: 'relative', zIndex: 40 }}>
+                  <div className="portal-edger-video-picker" style={{ display: 'grid', justifyItems: 'center', gap: 6, minHeight: 0, overflow: actionSideBySide ? 'visible' : 'hidden', position: 'relative', zIndex: 40 }}>
                     {actionSideBySide ? (
                       <div style={{ width: 'min(1080px, 100%)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, position: 'relative', zIndex: 50, overflow: 'visible' }}>
                         <div style={{ minWidth: 0, position: 'relative', zIndex: 52 }}>
@@ -13412,6 +13464,7 @@ export default function PitchingSuite({
 
                 <div
                   ref={actionViewRef}
+                  className="portal-edger-video-view"
                   style={{
                     display: 'grid',
                     gridTemplateColumns:
@@ -13425,6 +13478,7 @@ export default function PitchingSuite({
                     {actionMode === 'video' ? (
                       <div
                         ref={breakdownCaptureRef}
+                        className="portal-edger-video-stage"
                         style={{
                           position: 'relative',
                           background: '#000',
@@ -13616,6 +13670,27 @@ export default function PitchingSuite({
                                 Width
                                 <input type="range" min={2} max={10} value={breakdownWidth} onChange={(event) => setBreakdownWidth(Number(event.target.value))} style={{ width: 88 }} />
                               </label>
+                              {breakdownMode && breakdownTool === 'text' ? (
+                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: '#e5e7eb', fontWeight: 800, fontSize: '0.74rem' }}>
+                                  Font
+                                  <input
+                                    type="range"
+                                    min={16}
+                                    max={96}
+                                    value={breakdownTextFontSize}
+                                    onChange={(event) => {
+                                      const next = Number(event.target.value);
+                                      setBreakdownTextFontSize(next);
+                                      if (selectedBreakdownTextId) {
+                                        setBreakdownAnnotations((items) =>
+                                          items.map((item) => (item.id === selectedBreakdownTextId ? { ...item, fontSize: next } : item))
+                                        );
+                                      }
+                                    }}
+                                    style={{ width: 88 }}
+                                  />
+                                </label>
+                              ) : null}
                               <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }} onClick={() => setBreakdownAnnotations((items) => items.slice(0, -1))} disabled={!breakdownAnnotations.length}>
                                 Undo
                               </button>
@@ -13704,7 +13779,7 @@ export default function PitchingSuite({
                     ) : null}
 
                     {actionMode === 'video' && hasActionVideo ? (
-                      <div style={{ display: 'grid', gap: 6 }}>
+                      <div className="portal-edger-video-controls" style={{ display: 'grid', gap: 6 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                         <button
                           type="button"

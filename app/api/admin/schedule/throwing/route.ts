@@ -342,7 +342,7 @@ export async function GET(request: Request) {
   const sharedTemplatesObj = parseTemplatesObject(sharedState.templates);
   const pcuTemplatesObj = pcuSharedState ? parseTemplatesObject(pcuSharedState.templates) : null;
 
-  const recoveredThrowingTemplates = isSharedOnly ? [] : await getRecoverableThrowingTemplates({ organizationId });
+  const recoveredThrowingTemplates = await getRecoverableThrowingTemplates({ organizationId });
   const throwingTemplates = mergeThrowingTemplates(
     pcuTemplatesObj?.throwingTemplates,
     recoveredThrowingTemplates,
@@ -482,12 +482,14 @@ export async function POST(request: Request) {
 
   const incomingThrowingTemplates = Array.isArray(body.templates) ? body.templates : [];
   const recoveredThrowingTemplates = await getRecoverableThrowingTemplates({ organizationId });
-  const nextThrowingTemplates = mergeThrowingTemplates(
-    recoveredThrowingTemplates,
-    sharedObj.throwingTemplates,
-    playerObj.throwingTemplates,
-    incomingThrowingTemplates
-  );
+  const nextThrowingTemplates = isSharedOnly && Array.isArray(body.templates)
+    ? mergeThrowingTemplates(incomingThrowingTemplates)
+    : mergeThrowingTemplates(
+        recoveredThrowingTemplates,
+        sharedObj.throwingTemplates,
+        playerObj.throwingTemplates,
+        incomingThrowingTemplates
+      );
 
   const hasBullpenTemplatesInput = Array.isArray(body.bullpenTemplates);
   const hasVelocityTemplatesInput = Array.isArray(body.velocityTemplates);
