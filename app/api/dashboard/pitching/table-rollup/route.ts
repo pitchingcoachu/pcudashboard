@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
 import { resolveDashboardApiBaseUrl } from '../../../../../lib/dashboard-access';
+import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../../../lib/league-team-name-map';
 
 function parseCsv(value: string | null): string[] {
   return String(value ?? '')
@@ -11,8 +12,38 @@ function parseCsv(value: string | null): string[] {
     .filter(Boolean);
 }
 function normalizeName(value: string): string {
-  return String(value ?? '').trim().toLowerCase();
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
+function normalizePitchType(value: string): string {
+  const token = String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!token || ['unknown', 'undefined', 'other'].includes(token)) return 'Undefined';
+  if (['fastball', 'fourseamfastball', 'fourseam', 'ff', 'fa'].includes(token)) return 'Fastball';
+  if (['sinker', 'oneseamfastball', 'twoseamfastball', 'twoseamfasball', 'twoseam', 'si', 'ft'].includes(token)) return 'Sinker';
+  if (['changeup', 'ch'].includes(token)) return 'ChangeUp';
+  if (['sweeper', 'st'].includes(token)) return 'Sweeper';
+  if (['splitter', 'splitfinger', 'splitfingerfastball', 'sp', 'fs'].includes(token)) return 'Splitter';
+  if (['curveball', 'cu', 'knucklecurve', 'kc'].includes(token)) return 'Curveball';
+  if (['cutter', 'fc'].includes(token)) return 'Cutter';
+  if (['slider', 'sl'].includes(token)) return 'Slider';
+  if (['knuckleball', 'kn'].includes(token)) return 'Knuckleball';
+  return String(value ?? '').trim() || 'Undefined';
+}
+const PITCH_TYPE_SQL = `
+CASE
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('', 'unknown', 'undefined', 'other') THEN 'Undefined'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('fastball', 'fourseamfastball', 'fourseam', 'ff', 'fa') THEN 'Fastball'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('sinker', 'oneseamfastball', 'twoseamfastball', 'twoseamfasball', 'twoseam', 'si', 'ft') THEN 'Sinker'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('changeup', 'ch') THEN 'ChangeUp'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('sweeper', 'st') THEN 'Sweeper'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('splitter', 'splitfinger', 'splitfingerfastball', 'sp', 'fs') THEN 'Splitter'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('curveball', 'cu', 'knucklecurve', 'kc') THEN 'Curveball'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('cutter', 'fc') THEN 'Cutter'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('slider', 'sl') THEN 'Slider'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('knuckleball', 'kn') THEN 'Knuckleball'
+  ELSE COALESCE(NULLIF(TRIM(pitch_type), ''), 'Undefined')
+END`;
+const LEAGUE_SCHOOL_EXCLUSION_SQL = "school_code NOT IN ('PRO', 'LEAGUE', 'TRIAL')";
+const LEAGUE_TEAM_EXCLUSION_SQL = "UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pitcher_team_norm), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL') AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(batter_team_norm_eff), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')";
 function normalizeHand(value: string): string {
   const raw = String(value ?? '').trim().toLowerCase();
   if (raw === 'right' || raw === 'r') return 'Right';
@@ -31,9 +62,14 @@ function maybeTeamCode(value: string): string {
   const raw = String(value ?? '').trim();
   if (!raw || raw.toLowerCase() === 'all') return '';
   const direct = raw.toUpperCase();
-  if (/^[A-Z0-9]{2,8}$/.test(direct)) return direct;
-  const paren = raw.match(/\(([A-Z0-9]{2,8})\)\s*$/i)?.[1];
+  if (/^[A-Z0-9_]{2,16}$/.test(direct)) return direct;
+  const paren = raw.match(/\(([A-Z0-9_]{2,16})\)\s*$/i)?.[1];
   if (paren) return String(paren).toUpperCase();
+  const token = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const matched = Object.entries(LEAGUE_TEAM_NAME_BY_CODE).find(
+    ([, label]) => String(label ?? '').toLowerCase().replace(/[^a-z0-9]/g, '') === token
+  );
+  if (matched) return matched[0].toUpperCase();
   return '';
 }
 
@@ -321,7 +357,7 @@ export async function GET(request: Request) {
   const pitcherNorms = Array.from(new Set(pitcherList.map(normalizeName).filter(Boolean)));
   const teamCode = maybeTeamCode(String(url.searchParams.get('team_type') ?? ''));
   const pitchTypes = parseCsv(url.searchParams.get('pitch_types'));
-  const pitchTypeSet = new Set(pitchTypes.map((value) => value.trim().toLowerCase()).filter(Boolean));
+  const pitchTypeSet = new Set(pitchTypes.map((value) => normalizePitchType(value).toLowerCase()).filter(Boolean));
   const columns = parseCsv(url.searchParams.get('custom_columns'));
   const defaultColumns = ['PA', 'Usage', 'InZone%', 'Strike%', 'FPS%', 'E+A%', 'SwStrk%', 'Whiff%', 'GB%', 'K%', 'BB%', 'CSW%', 'EV', 'PV/100', 'RV/100'];
   const plusMetrics: PlusMetricKey[] = ['Stuff+', 'QP+', 'Ctrl+', 'Pitching+'].filter((metric) => columns.includes(metric)) as PlusMetricKey[];
@@ -341,8 +377,8 @@ export async function GET(request: Request) {
 
   if (schoolCode === 'LEAGUE' && splitByNorm === 'Pitch Types' && columns.length === 0) {
     try {
-      const where: string[] = ['school_code = $1'];
-      const values: unknown[] = [schoolCode];
+      const where: string[] = [LEAGUE_SCHOOL_EXCLUSION_SQL, LEAGUE_TEAM_EXCLUSION_SQL];
+      const values: unknown[] = [];
       if (startDate) {
         values.push(startDate);
         where.push(`session_date >= $${values.length}::date`);
@@ -353,11 +389,11 @@ export async function GET(request: Request) {
       }
       if (sessionType) {
         values.push(sessionType);
-        where.push(`session_type_bucket = $${values.length}`);
+        where.push(`session_bucket = $${values.length}`);
       }
       if (hand) {
         values.push(hand);
-        where.push(`pitcherhand_norm = $${values.length}`);
+        where.push(`pitcherthrows_norm = $${values.length}`);
       }
       if (batterSide) {
         values.push(batterSide);
@@ -365,7 +401,7 @@ export async function GET(request: Request) {
       }
       if (teamCode) {
         values.push(teamCode);
-        where.push(`pitcher_team_code = $${values.length}`);
+        where.push(`pitcher_team_norm = $${values.length}`);
       }
       if (pitcherNorms.length) {
         values.push(pitcherNorms);
@@ -373,16 +409,16 @@ export async function GET(request: Request) {
       }
       if (pitchTypeSet.size) {
         values.push(Array.from(pitchTypeSet));
-        where.push(`pitch_type = ANY($${values.length}::text[])`);
+        where.push(`LOWER(${PITCH_TYPE_SQL}) = ANY($${values.length}::text[])`);
       }
       const q = `
         SELECT
-          COALESCE(NULLIF(TRIM(pitch_type), ''), 'Unknown') AS pitch,
-          SUM(pitch_n)::int AS pitches,
-          SUM(pa_n)::int AS pa_n,
-          SUM(inzone_n)::int AS in_zone_n,
-          SUM(comp_n)::int AS loc_n,
-          SUM(strike_n)::int AS strike_n,
+          ${PITCH_TYPE_SQL} AS pitch,
+          SUM(pitches)::int AS pitches,
+          SUM(bf_n)::int AS pa_n,
+          SUM(in_zone_n)::int AS in_zone_n,
+          SUM(pitches)::int AS loc_n,
+          GREATEST(SUM(csw_n)::int - SUM(whiff_n)::int, 0) + SUM(swing_n)::int AS strike_n,
           SUM(fps_num)::int AS fps_num,
           SUM(fps_den)::int AS fps_den,
           SUM(ea_num)::int AS ea_num,
@@ -398,7 +434,7 @@ export async function GET(request: Request) {
           SUM(ev_n)::int AS ev_n,
           SUM(pv_sum)::double precision AS pv_sum,
           SUM(rv_sum)::double precision AS rv_sum
-        FROM public.pitching_heatmap_daily_bins
+        FROM public.pitch_events_daily_rollup_league
         WHERE ${where.join(' AND ')}
         GROUP BY 1
       `;
@@ -579,7 +615,7 @@ export async function GET(request: Request) {
     );
   } else if (useLeaguePitcherEventRollup) {
     const eventWhere: string[] = schoolCode === 'LEAGUE'
-      ? ["school_code NOT IN ('PRO', 'LEAGUE')"]
+      ? [LEAGUE_SCHOOL_EXCLUSION_SQL, LEAGUE_TEAM_EXCLUSION_SQL]
       : ['school_code = $1'];
     const eventValues: unknown[] = schoolCode === 'LEAGUE' ? [] : [schoolCode];
     const addEvent = (clause: string, value?: unknown) => {
@@ -870,7 +906,7 @@ export async function GET(request: Request) {
   const filtered = result.rows.filter((row) => {
     if (splitByNorm === 'Pitcher' || splitByNorm === 'Pitcher Team' || splitByNorm === 'Pitcher Hand' || splitByNorm === 'Batter Hand' || splitByNorm === 'Count' || splitByNorm === 'After Count' || splitByNorm === 'Inning') return true;
     if (!pitchTypeSet.size) return true;
-    return pitchTypeSet.has(String(row.pitch_type ?? '').trim().toLowerCase());
+    return pitchTypeSet.has(normalizePitchType(String(row.pitch_type ?? '')).toLowerCase());
   });
   if (!filtered.length) return NextResponse.json({ table_rows: [], table_columns: [] });
 

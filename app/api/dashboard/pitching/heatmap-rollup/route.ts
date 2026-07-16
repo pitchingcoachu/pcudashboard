@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
+import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../../../lib/league-team-name-map';
 
 function parseCsv(value: string | null): string[] {
   return String(value ?? '')
@@ -10,8 +11,36 @@ function parseCsv(value: string | null): string[] {
     .filter(Boolean);
 }
 function normalizeName(value: string): string {
-  return String(value ?? '').trim().toLowerCase();
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 }
+function normalizePitchType(value: string): string {
+  const token = String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!token || ['unknown', 'undefined', 'other'].includes(token)) return 'Undefined';
+  if (['fastball', 'fourseamfastball', 'fourseam', 'ff', 'fa'].includes(token)) return 'Fastball';
+  if (['sinker', 'oneseamfastball', 'twoseamfastball', 'twoseamfasball', 'twoseam', 'si', 'ft'].includes(token)) return 'Sinker';
+  if (['changeup', 'ch'].includes(token)) return 'ChangeUp';
+  if (['sweeper', 'st'].includes(token)) return 'Sweeper';
+  if (['splitter', 'splitfinger', 'splitfingerfastball', 'sp', 'fs'].includes(token)) return 'Splitter';
+  if (['curveball', 'cu', 'knucklecurve', 'kc'].includes(token)) return 'Curveball';
+  if (['cutter', 'fc'].includes(token)) return 'Cutter';
+  if (['slider', 'sl'].includes(token)) return 'Slider';
+  if (['knuckleball', 'kn'].includes(token)) return 'Knuckleball';
+  return String(value ?? '').trim() || 'Undefined';
+}
+const PITCH_TYPE_SQL = `
+CASE
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('', 'unknown', 'undefined', 'other') THEN 'Undefined'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('fastball', 'fourseamfastball', 'fourseam', 'ff', 'fa') THEN 'Fastball'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('sinker', 'oneseamfastball', 'twoseamfastball', 'twoseamfasball', 'twoseam', 'si', 'ft') THEN 'Sinker'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('changeup', 'ch') THEN 'ChangeUp'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('sweeper', 'st') THEN 'Sweeper'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('splitter', 'splitfinger', 'splitfingerfastball', 'sp', 'fs') THEN 'Splitter'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('curveball', 'cu', 'knucklecurve', 'kc') THEN 'Curveball'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('cutter', 'fc') THEN 'Cutter'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('slider', 'sl') THEN 'Slider'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('knuckleball', 'kn') THEN 'Knuckleball'
+  ELSE COALESCE(NULLIF(TRIM(pitch_type), ''), 'Undefined')
+END`;
 function normalizeHand(value: string): string {
   const raw = String(value ?? '').trim().toLowerCase();
   if (raw === 'right' || raw === 'r') return 'Right';
@@ -30,9 +59,14 @@ function maybeTeamCode(value: string): string {
   const raw = String(value ?? '').trim();
   if (!raw || raw.toLowerCase() === 'all') return '';
   const direct = raw.toUpperCase();
-  if (/^[A-Z0-9]{2,8}$/.test(direct)) return direct;
-  const paren = raw.match(/\(([A-Z0-9]{2,8})\)\s*$/i)?.[1];
+  if (/^[A-Z0-9_]{2,16}$/.test(direct)) return direct;
+  const paren = raw.match(/\(([A-Z0-9_]{2,16})\)\s*$/i)?.[1];
   if (paren) return String(paren).toUpperCase();
+  const token = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const matched = Object.entries(LEAGUE_TEAM_NAME_BY_CODE).find(
+    ([, label]) => String(label ?? '').toLowerCase().replace(/[^a-z0-9]/g, '') === token
+  );
+  if (matched) return matched[0].toUpperCase();
   return '';
 }
 
@@ -57,7 +91,7 @@ export async function GET(request: Request) {
   const pitcherNorms = Array.from(new Set(pitcherList.map(normalizeName).filter(Boolean)));
   const teamCode = maybeTeamCode(String(url.searchParams.get('team_type') ?? ''));
   const pitchTypes = parseCsv(url.searchParams.get('pitch_types'));
-  const pitchTypeSet = new Set(pitchTypes.map((value) => value.trim().toLowerCase()).filter(Boolean));
+  const pitchTypeSet = new Set(pitchTypes.map((value) => normalizePitchType(value).toLowerCase()).filter(Boolean));
 
   const where: string[] = ['1=1'];
   const values: unknown[] = [];
@@ -79,6 +113,7 @@ export async function GET(request: Request) {
   if (batterSide) add('batterside_norm = ?', batterSide);
   if (teamCode) add('pitcher_team_code = ?', teamCode);
   if (pitcherNorms.length) add('pitcher_norm = ANY(?::text[])', pitcherNorms);
+  if (pitchTypeSet.size) add(`LOWER(${PITCH_TYPE_SQL}) = ANY(?::text[])`, Array.from(pitchTypeSet));
 
   const tableRef = schoolCode === 'PRO'
     ? 'public.pro_pitching_heatmap_daily_bins'
@@ -104,6 +139,18 @@ export async function GET(request: Request) {
       xiso_n: number;
       ev_sum: number;
       ev_n: number;
+      relspeed_sum: number;
+      relspeed_n: number;
+      ivb_sum: number;
+      ivb_n: number;
+      hb_sum: number;
+      hb_n: number;
+      spin_sum: number;
+      spin_n: number;
+      relheight_sum: number;
+      relheight_n: number;
+      relside_sum: number;
+      relside_n: number;
     }>;
   };
   try {
@@ -126,12 +173,24 @@ export async function GET(request: Request) {
       xiso_n: number;
       ev_sum: number;
       ev_n: number;
+      relspeed_sum: number;
+      relspeed_n: number;
+      ivb_sum: number;
+      ivb_n: number;
+      hb_sum: number;
+      hb_n: number;
+      spin_sum: number;
+      spin_n: number;
+      relheight_sum: number;
+      relheight_n: number;
+      relside_sum: number;
+      relside_n: number;
     }>(
       `
       SELECT
         plate_x_bin,
         plate_z_bin,
-        pitch_type,
+        ${PITCH_TYPE_SQL} AS pitch_type,
         SUM(pitch_n)::int AS pitch_n,
         SUM(swing_n)::int AS swing_n,
         SUM(whiff_n)::int AS whiff_n,
@@ -146,10 +205,22 @@ export async function GET(request: Request) {
         SUM(xiso_sum)::double precision AS xiso_sum,
         SUM(xiso_n)::int AS xiso_n,
         SUM(ev_sum)::double precision AS ev_sum,
-        SUM(ev_n)::int AS ev_n
+        SUM(ev_n)::int AS ev_n,
+        SUM(relspeed_sum)::double precision AS relspeed_sum,
+        SUM(relspeed_n)::int AS relspeed_n,
+        SUM(ivb_sum)::double precision AS ivb_sum,
+        SUM(ivb_n)::int AS ivb_n,
+        SUM(hb_sum)::double precision AS hb_sum,
+        SUM(hb_n)::int AS hb_n,
+        SUM(spin_sum)::double precision AS spin_sum,
+        SUM(spin_n)::int AS spin_n,
+        SUM(relheight_sum)::double precision AS relheight_sum,
+        SUM(relheight_n)::int AS relheight_n,
+        SUM(relside_sum)::double precision AS relside_sum,
+        SUM(relside_n)::int AS relside_n
       FROM ${tableRef}
       WHERE ${where.join(' AND ')}
-      GROUP BY plate_x_bin, plate_z_bin, pitch_type
+      GROUP BY plate_x_bin, plate_z_bin, ${PITCH_TYPE_SQL}
     `,
       values
     );
@@ -175,12 +246,24 @@ export async function GET(request: Request) {
       xiso_n: number;
       ev_sum: number;
       ev_n: number;
+      relspeed_sum: number;
+      relspeed_n: number;
+      ivb_sum: number;
+      ivb_n: number;
+      hb_sum: number;
+      hb_n: number;
+      spin_sum: number;
+      spin_n: number;
+      relheight_sum: number;
+      relheight_n: number;
+      relside_sum: number;
+      relside_n: number;
     }>(
       `
       SELECT
         plate_x_bin,
         plate_z_bin,
-        pitch_type,
+        ${PITCH_TYPE_SQL} AS pitch_type,
         SUM(pitch_n)::int AS pitch_n,
         SUM(swing_n)::int AS swing_n,
         SUM(whiff_n)::int AS whiff_n,
@@ -195,10 +278,22 @@ export async function GET(request: Request) {
         SUM(xiso_sum)::double precision AS xiso_sum,
         SUM(xiso_n)::int AS xiso_n,
         SUM(ev_sum)::double precision AS ev_sum,
-        SUM(ev_n)::int AS ev_n
+        SUM(ev_n)::int AS ev_n,
+        SUM(relspeed_sum)::double precision AS relspeed_sum,
+        SUM(relspeed_n)::int AS relspeed_n,
+        SUM(ivb_sum)::double precision AS ivb_sum,
+        SUM(ivb_n)::int AS ivb_n,
+        SUM(hb_sum)::double precision AS hb_sum,
+        SUM(hb_n)::int AS hb_n,
+        SUM(spin_sum)::double precision AS spin_sum,
+        SUM(spin_n)::int AS spin_n,
+        SUM(relheight_sum)::double precision AS relheight_sum,
+        SUM(relheight_n)::int AS relheight_n,
+        SUM(relside_sum)::double precision AS relside_sum,
+        SUM(relside_n)::int AS relside_n
       FROM public.pitching_heatmap_daily_bins
       WHERE ${where.join(' AND ')}
-      GROUP BY plate_x_bin, plate_z_bin, pitch_type
+      GROUP BY plate_x_bin, plate_z_bin, ${PITCH_TYPE_SQL}
     `,
       values
     );
@@ -213,6 +308,13 @@ export async function GET(request: Request) {
     .map((row) => {
       const x = -2.5 + ((Number(row.plate_x_bin) + 0.5) / 24) * 5.0;
       const z = 0 + ((Number(row.plate_z_bin) + 0.5) / 30) * 5.0;
+      const avg = (sum: unknown, n: unknown): number | null => {
+        const count = Number(n || 0);
+        if (!Number.isFinite(count) || count <= 0) return null;
+        const total = Number(sum || 0);
+        if (!Number.isFinite(total)) return null;
+        return total / count;
+      };
       return {
         plate_side: x,
         plate_height: z,
@@ -232,6 +334,12 @@ export async function GET(request: Request) {
         xiso_n: Number(row.xiso_n),
         ev_sum: Number(row.ev_sum),
         ev_n: Number(row.ev_n),
+        velo: avg(row.relspeed_sum, row.relspeed_n),
+        ivb: avg(row.ivb_sum, row.ivb_n),
+        hb: avg(row.hb_sum, row.hb_n),
+        spin: avg(row.spin_sum, row.spin_n),
+        release_height: avg(row.relheight_sum, row.relheight_n),
+        release_side: avg(row.relside_sum, row.relside_n),
       };
     });
 

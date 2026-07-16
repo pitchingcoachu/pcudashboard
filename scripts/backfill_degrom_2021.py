@@ -15,9 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from sync_pro_mlb_stats import (
     _fetch_game_pitches,
     _with_system_sslrootcert,
-    DDL,
     UPSERT,
-    UPSERT_NORM,
 )
 
 import json
@@ -45,24 +43,24 @@ DEGROM_GAME_PKS = [
 ENRICH_SQL = """
 UPDATE public.pro_mlb_pitch_events_raw r
 SET
-  estimated_woba_using_speedangle = s.estimated_woba,
-  woba_value                      = s.woba_value,
-  iso_value                       = s.iso_value,
-  babip_value                     = s.babip_value,
-  delta_pitcher_run_exp           = COALESCE(r.delta_pitcher_run_exp, s.delta_pitcher_run_exp),
-  zone                            = COALESCE(r.zone, s.zone),
+  estimated_woba_using_speedangle = s.s_estimated_woba,
+  woba_value                      = s.s_woba_value,
+  iso_value                       = s.s_iso_value,
+  babip_value                     = s.s_babip_value,
+  delta_pitcher_run_exp           = COALESCE(r.delta_pitcher_run_exp, s.s_delta_run_exp),
+  zone                            = COALESCE(r.zone, s.s_zone),
   updated_at                      = NOW()
 FROM (
   SELECT
     game_pk,
     at_bat_number,
     pitch_number,
-    estimated_woba  AS estimated_woba,
-    woba_value,
-    iso_value,
-    babip_value,
-    delta_pitcher_run_exp,
-    zone
+    estimated_woba          AS s_estimated_woba,
+    woba_value              AS s_woba_value,
+    iso_value               AS s_iso_value,
+    babip_value             AS s_babip_value,
+    delta_pitcher_run_exp   AS s_delta_run_exp,
+    zone                    AS s_zone
   FROM statcast_degrom
 ) s
 WHERE r.school_code = 'PRO'
@@ -84,10 +82,8 @@ def main() -> int:
     db_url = _with_system_sslrootcert(_require_env("DASHBOARD_DATABASE_URL"))
 
     with psycopg.connect(db_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(DDL)
-        conn.commit()
-        print("DDL applied.")
+        # Table already exists — skip DDL
+        print("Skipping DDL (table already exists).")
 
         total_pitches = 0
         total_upserted = 0
@@ -107,6 +103,9 @@ def main() -> int:
             for r in rows:
                 d = asdict(r)
                 d["raw_json"] = Jsonb(d["raw_json"])
+                # psycopg3 won't coerce empty string to NULL for date columns
+                if not d.get("game_date"):
+                    d["game_date"] = None
                 payloads.append(d)
 
             with conn.cursor() as cur:

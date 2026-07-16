@@ -2260,6 +2260,8 @@ export default function HittingSuite({
   const [heatmapStat, setHeatmapStat] = useState('Frequency');
   const [summaryRhpLocationView, setSummaryRhpLocationView] = useState('Pitch');
   const [summaryLhpLocationView, setSummaryLhpLocationView] = useState('Pitch');
+  const summaryRhpLocationViewTouchedRef = useRef(false);
+  const summaryLhpLocationViewTouchedRef = useRef(false);
   const [summarySprayView, setSummarySprayView] = useState<'Batted Balls' | 'Bins'>('Batted Balls');
   const [leaderboardSortColumn, setLeaderboardSortColumn] = useState('');
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
@@ -3584,6 +3586,14 @@ export default function HittingSuite({
     () => heatmapPoints.filter((p) => normalizedThrowHand(p.pitcherthrows) === 'L'),
     [heatmapPoints]
   );
+  useEffect(() => {
+    if (summaryRhpLocationViewTouchedRef.current) return;
+    setSummaryRhpLocationView(rhpHeatmapPoints.length > 100 ? 'Frequency' : 'Pitch');
+  }, [rhpHeatmapPoints.length]);
+  useEffect(() => {
+    if (summaryLhpLocationViewTouchedRef.current) return;
+    setSummaryLhpLocationView(lhpHeatmapPoints.length > 100 ? 'Frequency' : 'Pitch');
+  }, [lhpHeatmapPoints.length]);
   const tableModeOptions = useMemo(
     () => [
       { value: 'Results', label: 'Results' },
@@ -4897,7 +4907,10 @@ export default function HittingSuite({
                   selectedPitchTypes={pitchTypes}
                   strictRunValue={isPro}
                   viewOptions={summaryLocationViewOptions}
-                  onViewChange={setSummaryRhpLocationView}
+                  onViewChange={(next) => {
+                    summaryRhpLocationViewTouchedRef.current = true;
+                    setSummaryRhpLocationView(next);
+                  }}
                   onPointHover={setChartHover}
                   onPointLeave={() => setChartHover(null)}
                 />
@@ -4916,7 +4929,10 @@ export default function HittingSuite({
                   selectedPitchTypes={pitchTypes}
                   strictRunValue={isPro}
                   viewOptions={summaryLocationViewOptions}
-                  onViewChange={setSummaryLhpLocationView}
+                  onViewChange={(next) => {
+                    summaryLhpLocationViewTouchedRef.current = true;
+                    setSummaryLhpLocationView(next);
+                  }}
                   onPointHover={setChartHover}
                   onPointLeave={() => setChartHover(null)}
                 />

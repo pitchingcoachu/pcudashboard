@@ -47,6 +47,7 @@ export async function GET(request: Request) {
   const passthrough = [
     'game_key',
     'game_date',
+    'team_type',
     'opp_hitter',
     'hand',
     'batter_side',

@@ -5268,6 +5268,15 @@ def _normalize_team_code(value: str) -> str:
 
 
 _TEAM_PLACEHOLDER_CODES = {"", "ALL", "OPP", "OPPONENTS", "CAMPERS", "PRO"}
+_LEAGUE_EXCLUDED_SCHOOL_CODES = ("PRO", "LEAGUE", "TRIAL")
+_LEAGUE_EXCLUDED_TEAM_CODES = ("TRIAL", "DASHBOARDTRIAL")
+LEAGUE_SCHOOL_SCOPE_SQL = "school_code NOT IN ('PRO', 'LEAGUE', 'TRIAL')"
+LEAGUE_ROLLUP_TEAM_EXCLUSION_SQL = """
+(
+  UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pitcher_team_norm), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+  AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(batter_team_norm_eff), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+)
+"""
 
 
 def _is_placeholder_team_code(value: Any) -> bool:
@@ -6632,17 +6641,17 @@ def _ensure_performance_indexes() -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_rollup_league_college_date_pitcher
         ON public.pitch_events_daily_rollup_league (session_date, pitcher_name)
-        WHERE school_code NOT IN ('PRO','LEAGUE')
+        WHERE school_code NOT IN ('PRO','LEAGUE','TRIAL')
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_rollup_league_college_date_pitchtype
         ON public.pitch_events_daily_rollup_league (session_date, pitch_type)
-        WHERE school_code NOT IN ('PRO','LEAGUE')
+        WHERE school_code NOT IN ('PRO','LEAGUE','TRIAL')
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_rollup_league_college_date_batter
         ON public.pitch_events_daily_rollup_league (session_date, batter_name)
-        WHERE school_code NOT IN ('PRO','LEAGUE')
+        WHERE school_code NOT IN ('PRO','LEAGUE','TRIAL')
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_rollup_league_split_school_date_group
@@ -8815,7 +8824,7 @@ def _try_pitching_overview_daily_rollup(
         "pitch_types_count": len(selected_pitch_types),
     }
     school_rollup_scope_sql = (
-        "school_code NOT IN ('PRO', 'LEAGUE')"
+        LEAGUE_SCHOOL_SCOPE_SQL
         if school_code == "LEAGUE"
         else "school_code = %(school_code)s::text"
     )
@@ -8826,6 +8835,8 @@ def _try_pitching_overview_daily_rollup(
         "(%(pitchers_count)s::int = 0 OR pitcher_norm = ANY(%(pitchers_norm)s::text[]))",
         "(%(pitch_types_count)s::int = 0 OR pitch_type = ANY(%(pitch_types)s::text[]))",
     ]
+    if school_code == "LEAGUE":
+        where_parts.append(LEAGUE_ROLLUP_TEAM_EXCLUSION_SQL)
     if use_split_rollup:
         where_parts.append("split_group = %(split_group)s::text")
         params["split_group"] = split_clean
@@ -13005,7 +13016,7 @@ def _try_league_hitting_overview_rollup(
         return None
 
     school_rollup_scope_sql = (
-        "school_code NOT IN ('PRO', 'LEAGUE')"
+        LEAGUE_SCHOOL_SCOPE_SQL
         if school_code == "LEAGUE"
         else "school_code = %(school_code)s::text"
     )
@@ -13017,6 +13028,8 @@ def _try_league_hitting_overview_rollup(
         "(%(opp_pitchers_count)s::int = 0 OR pitcher_norm = ANY(%(opp_pitchers_norm)s::text[]))",
         "(%(pitch_types_count)s::int = 0 OR pitch_type = ANY(%(pitch_types)s::text[]))",
     ]
+    if school_code == "LEAGUE":
+        where.append(LEAGUE_ROLLUP_TEAM_EXCLUSION_SQL)
     params: Dict[str, Any] = {
         "school_code": school_code,
         "start_date": start_date,
@@ -18804,7 +18817,7 @@ def pitching_filters(
     school_code = _validate_school_code(school_code)
     level_norm = _pro_level_norm(level)
     filters_cache_key = _filters_cache_key(
-        f"pitching_filters:{level_norm}" if school_code == "PRO" else "pitching_filters:ball_types_v1",
+        f"pitching_filters:{level_norm}" if school_code == "PRO" else "pitching_filters:league_v2_ball_types_v1",
         school_code,
     )
     snapshot_level = level_norm if school_code == "PRO" else "All"
@@ -18821,6 +18834,8 @@ def pitching_filters(
             try:
                 if school_code not in {"LEAGUE", "PRO"} and "ball_types" not in snapshot_payload:
                     raise ValueError("pitching filters snapshot missing ball_types")
+                if school_code == "LEAGUE" and len(snapshot_payload.get("team_types") or []) <= 1:
+                    raise ValueError("league pitching filters snapshot missing team filters")
                 snapshot_response = PitchingFiltersResponse(**snapshot_payload)
                 _filters_cache_set(filters_cache_key, snapshot_response)
                 if _filters_snapshot_is_stale(snapshot_updated_at):
@@ -18862,27 +18877,45 @@ def pitching_filters(
                 reg = cur.fetchone() or {}
                 use_college_rollup_filters = bool(reg.get("table_name"))
             if school_code != "PRO" and use_college_rollup_filters:
+                rollup_school_where = (
+                    f"{LEAGUE_SCHOOL_SCOPE_SQL} AND {LEAGUE_ROLLUP_TEAM_EXCLUSION_SQL}"
+                    if school_code == "LEAGUE"
+                    else "school_code = %(school_code)s"
+                )
+                raw_school_where = (
+                    """
+                    UPPER(COALESCE(NULLIF(TRIM(school_code), ''), '')) NOT IN ('PRO', 'LEAGUE', 'TRIAL')
+                    AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pitcherteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                    AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(batterteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                    """
+                    if school_code == "LEAGUE"
+                    else "school_code = %(school_code)s"
+                )
                 cur.execute(
+                    (
                     """
                     SELECT
                       MIN(session_date)::text AS min_date,
                       MAX(session_date)::text AS max_date
                     FROM public.pitch_events_daily_rollup_league
-                    WHERE school_code = %(school_code)s
-                    """,
+                    WHERE """ + rollup_school_where + """
+                    """
+                    ),
                     {"school_code": school_code},
                 )
                 date_row = cur.fetchone() or {}
                 # Rollup snapshots can lag live ingest; keep date bounds current from raw rows.
                 # This ensures UI date pickers expose newly ingested days immediately.
                 cur.execute(
+                    (
                     """
                     SELECT
                       MIN(session_date)::text AS raw_min_date,
                       MAX(session_date)::text AS raw_max_date
                     FROM public.pitch_events
-                    WHERE school_code = %(school_code)s
-                    """,
+                    WHERE """ + raw_school_where + """
+                    """
+                    ),
                     {"school_code": school_code},
                 )
                 raw_date_row = cur.fetchone() or {}
@@ -18897,30 +18930,35 @@ def pitching_filters(
                     _refresh_league_daily_rollup(force=False, school_code=school_code)
 
                 cur.execute(
+                    (
                     """
                     SELECT DISTINCT NULLIF(TRIM(pitcher_name), '') AS pitcher
                     FROM public.pitch_events_daily_rollup_league
-                    WHERE school_code = %(school_code)s
+                    WHERE """ + rollup_school_where + """
                       AND NULLIF(TRIM(pitcher_name), '') IS NOT NULL
                     ORDER BY pitcher ASC
-                    """,
+                    """
+                    ),
                     {"school_code": school_code},
                 )
                 pitchers = [str(row["pitcher"]) for row in cur.fetchall()]
 
                 cur.execute(
+                    (
                     """
                     SELECT DISTINCT NULLIF(TRIM(batter_name), '') AS opp_hitter
                     FROM public.pitch_events_daily_rollup_league
-                    WHERE school_code = %(school_code)s
+                    WHERE """ + rollup_school_where + """
                       AND NULLIF(TRIM(batter_name), '') IS NOT NULL
                     ORDER BY opp_hitter ASC
-                    """,
+                    """
+                    ),
                     {"school_code": school_code},
                 )
                 opp_hitters = [str(row["opp_hitter"]) for row in cur.fetchall()]
 
                 cur.execute(
+                    (
                     """
                     SELECT pitch_type
                     FROM (
@@ -18940,10 +18978,11 @@ def pitching_filters(
                           ELSE 99
                         END AS pitch_sort
                       FROM public.pitch_events_daily_rollup_league
-                      WHERE school_code = %(school_code)s
+                      WHERE """ + rollup_school_where + """
                     ) t
                     ORDER BY t.pitch_sort ASC, t.pitch_type ASC
-                    """,
+                    """
+                    ),
                     {"school_code": school_code},
                 )
                 pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
@@ -18974,20 +19013,22 @@ def pitching_filters(
                     ball_types = [str(row["ball_type"]) for row in cur.fetchall() if str(row.get("ball_type") or "").strip()]
 
                 cur.execute(
+                    (
                     """
                     SELECT team_code
                     FROM (
                       SELECT DISTINCT NULLIF(TRIM(pitcher_team_norm), '') AS team_code
                       FROM public.pitch_events_daily_rollup_league
-                      WHERE school_code = %(school_code)s
+                      WHERE """ + rollup_school_where + """
                       UNION
                       SELECT DISTINCT NULLIF(TRIM(batter_team_norm_eff), '') AS team_code
                       FROM public.pitch_events_daily_rollup_league
-                      WHERE school_code = %(school_code)s
+                      WHERE """ + rollup_school_where + """
                     ) t
                     WHERE team_code IS NOT NULL
                     ORDER BY team_code
-                    """,
+                    """
+                    ),
                     {"school_code": school_code},
                 )
                 team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
@@ -18997,6 +19038,7 @@ def pitching_filters(
                     team_types = ["All", school_code, "Opponents", "Campers"]
 
                 cur.execute(
+                    (
                     """
                     SELECT team_code, array_agg(name ORDER BY name) AS names
                     FROM (
@@ -19004,12 +19046,13 @@ def pitching_filters(
                         NULLIF(TRIM(pitcher_team_norm), '') AS team_code,
                         NULLIF(TRIM(pitcher_name), '') AS name
                       FROM public.pitch_events_daily_rollup_league
-                      WHERE school_code = %(school_code)s
+                      WHERE """ + rollup_school_where + """
                     ) t
                     WHERE team_code IS NOT NULL AND name IS NOT NULL
                     GROUP BY team_code
                     ORDER BY team_code
-                    """,
+                    """
+                    ),
                     {"school_code": school_code},
                 )
                 pitchers_by_team_code = {
@@ -19020,6 +19063,7 @@ def pitching_filters(
                     pitchers_by_team_code = _league_add_labeled_team_keys(pitchers_by_team_code)
 
                 cur.execute(
+                    (
                     """
                     SELECT team_code, array_agg(name ORDER BY name) AS names
                     FROM (
@@ -19027,12 +19071,13 @@ def pitching_filters(
                         NULLIF(TRIM(pitcher_team_norm), '') AS team_code,
                         NULLIF(TRIM(batter_name), '') AS name
                       FROM public.pitch_events_daily_rollup_league
-                      WHERE school_code = %(school_code)s
+                      WHERE """ + rollup_school_where + """
                     ) t
                     WHERE team_code IS NOT NULL AND name IS NOT NULL
                     GROUP BY team_code
                     ORDER BY team_code
-                    """,
+                    """
+                    ),
                     {"school_code": school_code},
                 )
                 opp_hitters_by_team_code = {
@@ -20120,11 +20165,12 @@ def pitching_overview(
                NULL::text AS inning, NULL::text AS map_game_id, NULL::text AS map_game_uid
         WHERE FALSE
       ),"""
-    # For chart_only requests with large date windows, limit how many rows the DB
-    # returns — the chart builder only needs ~1200 points and will sample them anyway.
+    # For chart_only requests, limit how many rows the DB returns. The chart
+    # builder samples the returned rows down to chart_points_limit, so scanning
+    # 25k rows makes summary charts slow without improving what the user sees.
     chart_source_scan_limit: Optional[int] = None
     if chart_only and include_chart_points and not need_prev_counts and not need_pitch_number:
-        chart_source_scan_limit = max(2000, min(int((parsed_chart_points_limit or 350) * 35), 25000))
+        chart_source_scan_limit = max(2000, min(int((parsed_chart_points_limit or 350) * 6), 8000))
         params["chart_source_scan_limit"] = chart_source_scan_limit
 
     query = """
@@ -20295,7 +20341,18 @@ def pitching_overview(
                OR pe.session_date IS NULL
                OR pd_play.map_session_date = pe.session_date
              )
-        WHERE school_code = %(school_code)s
+        WHERE (
+            (
+              UPPER(COALESCE(%(school_code)s::text, '')) = 'LEAGUE'
+              AND UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) NOT IN ('PRO', 'LEAGUE', 'TRIAL')
+              AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+              AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.batterteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+            )
+            OR (
+              UPPER(COALESCE(%(school_code)s::text, '')) <> 'LEAGUE'
+              AND pe.school_code = %(school_code)s
+            )
+          )
           AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
           AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
           AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
@@ -20509,21 +20566,27 @@ def pitching_overview(
     try:
         with get_conn() as conn, conn.cursor() as cur:
             video_map_table = None
+            use_video_map_join = not (
+                chart_only
+                and include_chart_points
+                and (with_video or "").strip().lower() not in {"yes", "no"}
+            )
             # Prefer school-scoped table first so sites like PCU read their dedicated
             # mappings (video_map_pcu). TRIAL uses a materialized cache copied from
             # LSU's Edger map, with LSU as a fallback if the cache is absent.
             video_school_code = school_code
-            if school_code == "TRIAL":
-                table_candidates = [("public.video_map_trial", "TRIAL"), ("public.video_map_lsu", "LSU"), ("public.video_map", "TRIAL")]
-            else:
-                table_candidates = [(f"public.video_map_{school_code.lower()}", school_code), ("public.video_map", school_code)]
-            for candidate, candidate_school_code in table_candidates:
-                cur.execute("SELECT to_regclass(%(tbl)s)::text AS reg", {"tbl": candidate})
-                reg = (cur.fetchone() or {}).get("reg")
-                if reg:
-                    video_map_table = str(reg)
-                    video_school_code = candidate_school_code
-                    break
+            if use_video_map_join:
+                if school_code == "TRIAL":
+                    table_candidates = [("public.video_map_trial", "TRIAL"), ("public.video_map_lsu", "LSU"), ("public.video_map", "TRIAL")]
+                else:
+                    table_candidates = [(f"public.video_map_{school_code.lower()}", school_code), ("public.video_map", school_code)]
+                for candidate, candidate_school_code in table_candidates:
+                    cur.execute("SELECT to_regclass(%(tbl)s)::text AS reg", {"tbl": candidate})
+                    reg = (cur.fetchone() or {}).get("reg")
+                    if reg:
+                        video_map_table = str(reg)
+                        video_school_code = candidate_school_code
+                        break
             params["video_school_code"] = video_school_code
 
             if video_map_table:
@@ -20959,6 +21022,7 @@ def pitching_ab_report(
     pitcher: str = Query(..., min_length=1),
     game_date: Optional[date] = Query(default=None),
     game_key: Optional[str] = Query(default=None),
+    team_type: Optional[str] = Query(default=None),
     opp_hitter: Optional[str] = Query(default=None),
     hand: Optional[str] = Query(default=None),
     batter_side: Optional[str] = Query(default=None),
@@ -20994,9 +21058,44 @@ def pitching_ab_report(
         if value and value.lower() != "all"
     ] if school_code not in {"LEAGUE", "PRO"} else []
     game_key = (game_key or "").strip() or None
+    team_type_norm = _normalize_team_code(team_type or "")
+    if _is_placeholder_team_code(team_type_norm):
+        team_type_norm = ""
+    if school_code == "LEAGUE" and not team_type_norm:
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT NULLIF(TRIM(pitcher_team_norm), '') AS team_code
+                    FROM public.pitch_events_daily_rollup_league
+                    WHERE """ + LEAGUE_SCHOOL_SCOPE_SQL + """
+                      AND """ + LEAGUE_ROLLUP_TEAM_EXCLUSION_SQL + """
+                      AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
+                      AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
+                      AND pitcher_norm = ANY(%(pitchers_norm)s::text[])
+                      AND NULLIF(TRIM(pitcher_team_norm), '') IS NOT NULL
+                    GROUP BY 1
+                    ORDER BY SUM(pitches) DESC NULLS LAST, team_code ASC
+                    LIMIT 1
+                    """,
+                    {
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "pitchers_norm": selected_pitcher_keys,
+                    },
+                )
+                team_row = cur.fetchone() or {}
+                team_type_norm = _normalize_team_code(str(team_row.get("team_code") or ""))
+        except Exception:
+            team_type_norm = ""
+    if school_code == "LEAGUE" and team_type_norm:
+        team_markers_norm = [team_type_norm]
 
     params = {
         "school_code": school_code,
+        "team_type_norm": team_type_norm,
+        "pitchers_exact": selected_pitchers,
+        "pitchers_lower": [str(v or "").strip().lower() for v in selected_pitchers],
         "pitchers_norm": selected_pitcher_keys,
         "pitchers_count": len(selected_pitcher_keys),
         "opp_hitters_norm": selected_opp_hitter_keys,
@@ -21218,12 +21317,31 @@ def pitching_ab_report(
                     COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip3', '')), ''), '') AS video_clip_3,
                     ROW_NUMBER() OVER (ORDER BY session_date, COALESCE(created_at, NOW()), id) AS pitch_number
                   FROM public.pitch_events pe
-                  WHERE school_code = %(school_code)s
+                  WHERE (
+                    (
+                      UPPER(COALESCE(%(school_code)s::text, '')) = 'LEAGUE'
+                      AND UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) NOT IN ('PRO', 'LEAGUE', 'TRIAL')
+                      AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                      AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.batterteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                      AND (
+                        %(team_type_norm)s::text = ''
+                        OR """ + PITCHER_TEAM_NORM_SQL + """ = %(team_type_norm)s::text
+                        OR """ + HOME_TEAM_NORM_SQL + """ = %(team_type_norm)s::text
+                        OR """ + AWAY_TEAM_NORM_SQL + """ = %(team_type_norm)s::text
+                      )
+                    )
+                    OR (
+                      UPPER(COALESCE(%(school_code)s::text, '')) <> 'LEAGUE'
+                      AND school_code = %(school_code)s
+                    )
+                  )
                     AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
                     AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                     AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
                     AND (
                       %(pitchers_count)s::int = 0 OR
+                      COALESCE(NULLIF(TRIM(pitcher), ''), '') = ANY(%(pitchers_exact)s::text[]) OR
+                      lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')) = ANY(%(pitchers_lower)s::text[]) OR
                       """ + PITCHER_NAME_NORM_SQL + """ = ANY(%(pitchers_norm)s::text[])
                     )
                     AND (
@@ -21248,7 +21366,7 @@ def pitching_ab_report(
                       %(ball_types_count)s::int = 0 OR
                       COALESCE(
                         NULLIF(TRIM(COALESCE(
-                          __CUSTOM_LABEL_EXPR__,
+                          """ + _custom_label_col_expr() + """,
                           ''
                         )), ''),
                         'Baseball'

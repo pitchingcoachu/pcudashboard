@@ -978,6 +978,11 @@ function isLikelyLeagueTeamCode(value: string): boolean {
   return raw === upper && /^[A-Z0-9]{2,6}$/.test(raw);
 }
 
+function isMlbLeagueAggregateTeamLabel(value: unknown): boolean {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return normalized === 'AL' || normalized === 'NL' || normalized === 'AMERICAN LEAGUE' || normalized === 'NATIONAL LEAGUE';
+}
+
 function resolveLeagueTeamTypeForApi(
   teamTypeValue: string,
   byTeamMaps: Array<Record<string, string[]> | undefined>
@@ -2295,6 +2300,7 @@ export default function PitchingSuite({
   const lastAppliedHomeRequestRef = useRef<number>(0);
   const leaderboardTableExportRef = useRef<HTMLDivElement | null>(null);
   const pcuSearchPlayerDatePendingRef = useRef(false);
+  const summaryLocationViewTouchedRef = useRef(false);
   const [releaseView, setReleaseView] = useState('Averages Only');
   const [movementView, setMovementView] = useState('Averages and Pitches');
   const [locationView, setLocationView] = useState('Pitch');
@@ -2405,6 +2411,7 @@ export default function PitchingSuite({
   const [actionPlaybackRate, setActionPlaybackRate] = useState(1);
   const [actionVideoLoop, setActionVideoLoop] = useState(false);
   const [actionVideoRefreshNonce, setActionVideoRefreshNonce] = useState(0);
+  const [actionVideoLookupLoading, setActionVideoLookupLoading] = useState(false);
   const [breakdownMode, setBreakdownMode] = useState(false);
   const [breakdownToolbarVisible, setBreakdownToolbarVisible] = useState(true);
   const [breakdownTool, setBreakdownTool] = useState<BreakdownTool>('line');
@@ -2440,6 +2447,7 @@ export default function PitchingSuite({
   const latestOverviewRequestKeyRef = useRef('');
   const actionVideoRetryKeysRef = useRef(new Set<string>());
   const actionCompareVideoLookupKeysRef = useRef(new Set<string>());
+  const actionVideoLookupCacheRef = useRef(new Map<number, Pick<PitchActionPoint, 'video_clip_1' | 'video_clip_2' | 'video_clip_3'>>());
 
   useEffect(() => {
     const syncTheme = () => setIsLightTheme(document.body.classList.contains('theme-light'));
@@ -3376,6 +3384,8 @@ export default function PitchingSuite({
       return () => {
         active = false;
         window.clearTimeout(timeoutId);
+        overviewInflightRef.current.delete(requestKey);
+        if (chartRequestKey) overviewInflightRef.current.delete(chartRequestKey);
         controller.abort();
       };
     }
@@ -3540,6 +3550,8 @@ export default function PitchingSuite({
     return () => {
       active = false;
       window.clearTimeout(timeoutId);
+      overviewInflightRef.current.delete(requestKey);
+      if (chartRequestKey) overviewInflightRef.current.delete(chartRequestKey);
       controller.abort();
     };
   }, [
@@ -4577,6 +4589,11 @@ export default function PitchingSuite({
     if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
     const ballTypesParam = toBallTypesParamValue(selectedBallTypes);
     if (!isPro && !isLeague && ballTypesParam) params.set('ball_types', ballTypesParam);
+    if (isLeague && teamType && teamType !== 'All') {
+      params.set('team_type', resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code]));
+    } else if (teamType && teamType !== 'All') {
+      params.set('team_type', teamType);
+    }
 
     fetch(`/api/dashboard/pitching/ab-report?${params.toString()}`, { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
@@ -4607,11 +4624,15 @@ export default function PitchingSuite({
     endDate,
     sessionType,
     isPro,
+    isLeague,
     hand,
     batterSide,
     selectedHitters,
     selectedPitchTypes,
     selectedBallTypes,
+    teamType,
+    filters?.pitchers_by_team_code,
+    filters?.opp_hitters_by_team_code,
   ]);
 
   useEffect(() => {
@@ -4855,21 +4876,44 @@ export default function PitchingSuite({
       )
     );
     if (!ids.length) return pitches;
+    const cachedById = actionVideoLookupCacheRef.current;
+    let nextPitches = pitches.map((pitch) => {
+      const id = Number(pitch.pitch_event_id);
+      const cached = Number.isFinite(id) && id > 0 ? cachedById.get(Math.trunc(id)) : undefined;
+      return cached
+        ? {
+            ...pitch,
+            video_clip_1: cached.video_clip_1 ?? pitch.video_clip_1,
+            video_clip_2: cached.video_clip_2 ?? pitch.video_clip_2,
+            video_clip_3: cached.video_clip_3 ?? pitch.video_clip_3,
+          }
+        : pitch;
+    });
+    const missingIds = ids.filter((id) => !cachedById.has(id));
+    if (!missingIds.length) return nextPitches;
     try {
       const req = new URL('/api/dashboard/pitching/video-lookup', window.location.origin);
-      req.searchParams.set('ids', ids.join(','));
+      req.searchParams.set('ids', missingIds.join(','));
       req.searchParams.set('_video_refresh', String(Date.now()));
       const response = await fetch(req.toString(), { cache: 'no-store' });
       const payload = (await response.json().catch(() => ({}))) as { pitches?: PitchActionPoint[]; error?: string };
-      if (!response.ok || payload.error) return pitches;
+      if (!response.ok || payload.error) return nextPitches;
       const freshPoints = Array.isArray(payload.pitches) ? payload.pitches : [];
-      if (!freshPoints.length) return pitches;
+      if (!freshPoints.length) return nextPitches;
       const byId = new Map<number, PitchActionPoint>();
       for (const point of freshPoints) {
         const id = Number(point.pitch_event_id);
-        if (Number.isFinite(id) && id > 0) byId.set(Math.trunc(id), point);
+        if (Number.isFinite(id) && id > 0) {
+          const normalizedId = Math.trunc(id);
+          byId.set(normalizedId, point);
+          cachedById.set(normalizedId, {
+            video_clip_1: point.video_clip_1 ?? '',
+            video_clip_2: point.video_clip_2 ?? '',
+            video_clip_3: point.video_clip_3 ?? '',
+          });
+        }
       }
-      return pitches.map((pitch) => {
+      nextPitches = nextPitches.map((pitch) => {
         const id = Number(pitch.pitch_event_id);
         const fresh = Number.isFinite(id) && id > 0 ? byId.get(Math.trunc(id)) : undefined;
         if (!fresh) return pitch;
@@ -4880,22 +4924,23 @@ export default function PitchingSuite({
           video_clip_3: fresh.video_clip_3 ?? pitch.video_clip_3,
         };
       });
+      return nextPitches;
     } catch {
-      return pitches;
+      return nextPitches;
     }
   };
 
   const openActionModal = async (pitches: PitchActionPoint[]) => {
     const deduped = Array.from(new Map(pitches.map((pitch) => [pitchIdentityKey(pitch), pitch])).values());
     if (!deduped.length) return;
-    const refreshed = await refreshActionPitchVideoUrls(deduped);
     const nextMode: 'video' | 'edit' | 'spin' =
       visualOption === 'Pitch Edit' && canUsePitchEdits ? 'edit' : visualOption === 'Spin Visual' ? 'spin' : 'video';
-    setActionPitches(refreshed);
+    const firstPitchHasVideo = Boolean(deduped[0]?.video_clip_1 || deduped[0]?.video_clip_2 || deduped[0]?.video_clip_3);
+    setActionPitches(deduped);
     setActionIndex(0);
     setActionMode(nextMode);
-    setEditPitchType(refreshed[0]?.pitch_type ?? '');
-    setEditPitcher(resolvePitcherName(refreshed[0], selectedPitchers));
+    setEditPitchType(deduped[0]?.pitch_type ?? '');
+    setEditPitcher(resolvePitcherName(deduped[0], selectedPitchers));
     setEditBallType('');
     setActionSaveState('idle');
     setActionSaveMessage('');
@@ -4908,10 +4953,17 @@ export default function PitchingSuite({
     setActionVideoPlaying(false);
     setActionVideoTime(0);
     setActionVideoDuration(0);
+    setActionVideoLookupLoading(nextMode === 'video' && !firstPitchHasVideo);
     setActionVideoRefreshNonce((value) => value + 1);
     setBreakdownToolbarVisible(true);
     actionVideoRetryKeysRef.current.clear();
     actionCompareVideoLookupKeysRef.current.clear();
+
+    if (nextMode !== 'video') return;
+    const refreshed = await refreshActionPitchVideoUrls(deduped);
+    setActionPitches(refreshed);
+    setActionVideoLookupLoading(false);
+    setActionVideoRefreshNonce((value) => value + 1);
   };
 
   useEffect(() => {
@@ -5152,8 +5204,19 @@ export default function PitchingSuite({
     const n = Number(value);
     return Number.isFinite(n) ? n.toFixed(2) : '-';
   };
-  const tooltipHtml = (point: OverviewPayload['chart_points'][number]): string =>
-    `Pitcher: ${formatNameFirstLast(String(point.pitcher || '')) || '-'}\nBatter: ${formatNameFirstLast(String(point.batter || '')) || '-'}\nSession: ${point.session_type || '-'}\nResult: ${resolvePitchResultLabel(point.pitch_call, point.play_result)}\nVelo: ${fmt1(point.velo)} mph\nIVB: ${fmt1(point.ivb)} in\nHB: ${fmt1(point.hb)} in\nEV: ${fmt1(point.exit_speed)} mph\nLA: ${fmt1(point.angle)}°\nStuff+: ${fmt1(point.stuff_plus)}\nIn Zone: ${inZoneLabel(point.plate_side, point.plate_height)}`;
+  const tooltipHtml = (point: OverviewPayload['chart_points'][number]): string => {
+    const pitchCount = Number((point as { pitch_n?: unknown }).pitch_n);
+    const isAggregatePoint =
+      Number.isFinite(pitchCount) &&
+      pitchCount > 0 &&
+      !String(point.pitcher || '').trim() &&
+      !String(point.batter || '').trim() &&
+      !point.pitch_event_id;
+    if (isAggregatePoint) {
+      return `Pitch Type: ${point.pitch_type || '-'}\nPitches: ${Math.round(pitchCount)}\nVelo: ${fmt1(point.velo)} mph\nIVB: ${fmt1(point.ivb)} in\nHB: ${fmt1(point.hb)} in\nIn Zone: ${inZoneLabel(point.plate_side, point.plate_height)}`;
+    }
+    return `Pitcher: ${formatNameFirstLast(String(point.pitcher || '')) || '-'}\nBatter: ${formatNameFirstLast(String(point.batter || '')) || '-'}\nSession: ${point.session_type || '-'}\nResult: ${resolvePitchResultLabel(point.pitch_call, point.play_result)}\nVelo: ${fmt1(point.velo)} mph\nIVB: ${fmt1(point.ivb)} in\nHB: ${fmt1(point.hb)} in\nEV: ${fmt1(point.exit_speed)} mph\nLA: ${fmt1(point.angle)}°\nStuff+: ${fmt1(point.stuff_plus)}\nIn Zone: ${inZoneLabel(point.plate_side, point.plate_height)}`;
+  };
   const releaseTooltipHtml = (point: OverviewPayload['chart_points'][number]): string =>
     `Session: ${point.session_type || '-'}\nHeight: ${fmt2(point.release_height)} ft\nSide: ${fmt2(Number.isFinite(Number(point.release_side)) ? orientX(Number(point.release_side)) : null)} ft\nExtension: ${fmt2(point.extension)} ft`;
   const parseTiltToDegrees = (tilt: string): number | null => {
@@ -6539,6 +6602,10 @@ export default function PitchingSuite({
     () => ((overview?.heatmap_points as PitchActionPoint[] | undefined) ?? summaryPoints),
     [overview?.heatmap_points, summaryPoints]
   );
+  useEffect(() => {
+    if (summaryLocationViewTouchedRef.current) return;
+    setLocationView(summaryHeatmapPoints.length > 100 ? 'Frequency' : 'Pitch');
+  }, [summaryHeatmapPoints.length]);
   const activeSummaryPitchTypes = useMemo(
     () =>
       [...new Set(summaryPoints.map((point) => String(point.pitch_type || '').trim()).filter((value) => value && value !== 'Undefined'))].sort((a, b) => {
@@ -7359,6 +7426,82 @@ export default function PitchingSuite({
           row.y <= yMax
       );
     if (!valid.length) return [];
+    const pointPitchCount = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).pitch_n);
+      return n !== null && n > 0 ? n : 1;
+    };
+    const pointSwingCount = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).swing_n);
+      if (n !== null && n >= 0) return n;
+      return isSwingCall(pitch) ? 1 : 0;
+    };
+    const pointWhiffCount = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).whiff_n);
+      if (n !== null && n >= 0) return n;
+      return isWhiffCall(pitch) ? 1 : 0;
+    };
+    const pointInPlayCount = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).in_play_n);
+      if (n !== null && n >= 0) return n;
+      return isInPlayCall(pitch) ? 1 : 0;
+    };
+    const pointGbCount = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).gb_n);
+      if (n !== null && n >= 0) return n;
+      return isInPlayCall(pitch) && isGroundBall(pitch) ? 1 : 0;
+    };
+    const pointEvSum = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).ev_sum);
+      if (n !== null) return n;
+      const ev = toFiniteNumber(pitch.exit_speed);
+      return ev !== null ? ev : 0;
+    };
+    const pointEvCount = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).ev_n);
+      if (n !== null && n >= 0) return n;
+      return isInPlayCall(pitch) && toFiniteNumber(pitch.exit_speed) !== null ? 1 : 0;
+    };
+    const pointQpSum = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const qp = toFiniteNumber(pitch.qp_plus);
+      return qp !== null ? qp : 0;
+    };
+    const pointQpCount = (pitch: OverviewPayload['chart_points'][number]): number => {
+      return toFiniteNumber(pitch.qp_plus) !== null ? 1 : 0;
+    };
+    const pointRvSum = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).run_value_sum);
+      if (n !== null) return n;
+      const rv = runValue(pitch);
+      return typeof rv === 'number' && Number.isFinite(rv) ? rv * pointPitchCount(pitch) : 0;
+    };
+    const pointPvSum = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).pv_sum);
+      if (n !== null) return n;
+      const pv = pitchValue(pitch);
+      return Number.isFinite(pv) ? pv * pointPitchCount(pitch) : 0;
+    };
+    const pointXwobaSum = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).xwoba_sum);
+      if (n !== null) return n;
+      const x = toFiniteNumber(pitch.estimated_woba_using_speedangle);
+      return x !== null ? x : 0;
+    };
+    const pointXwobaCount = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).xwoba_n);
+      if (n !== null && n >= 0) return n;
+      return toFiniteNumber(pitch.estimated_woba_using_speedangle) !== null ? 1 : 0;
+    };
+    const pointXisoSum = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).xiso_sum);
+      if (n !== null) return n;
+      const x = toFiniteNumber(pitch.iso_value);
+      return x !== null ? x : 0;
+    };
+    const pointXisoCount = (pitch: OverviewPayload['chart_points'][number]): number => {
+      const n = toFiniteNumber((pitch as Record<string, unknown>).xiso_n);
+      if (n !== null && n >= 0) return n;
+      return toFiniteNumber(pitch.iso_value) !== null ? 1 : 0;
+    };
     const globalXwobaRows = valid.filter(
       (rowPoint) =>
         typeof rowPoint.p.estimated_woba_using_speedangle === 'number' &&
@@ -7370,26 +7513,25 @@ export default function PitchingSuite({
         Number.isFinite(rowPoint.p.iso_value)
     );
 
-    const globalSwingCount = valid.filter((rowPoint) => isSwingCall(rowPoint.p)).length;
-    const globalWhiffCount = valid.filter((rowPoint) => isWhiffCall(rowPoint.p)).length;
-    const globalInPlayCount = valid.filter((rowPoint) => isInPlayCall(rowPoint.p)).length;
-    const globalGbCount = valid.filter((rowPoint) => isInPlayCall(rowPoint.p) && isGroundBall(rowPoint.p)).length;
-    const globalEvRows = valid.filter((rowPoint) => isInPlayCall(rowPoint.p) && typeof rowPoint.p.exit_speed === 'number');
-    const globalQpRows = valid.filter((rowPoint) => typeof rowPoint.p.qp_plus === 'number' && Number.isFinite(rowPoint.p.qp_plus));
+    const globalPitchCount = valid.reduce((sum, rowPoint) => sum + pointPitchCount(rowPoint.p), 0);
+    const globalSwingCount = valid.reduce((sum, rowPoint) => sum + pointSwingCount(rowPoint.p), 0);
+    const globalWhiffCount = valid.reduce((sum, rowPoint) => sum + pointWhiffCount(rowPoint.p), 0);
+    const globalInPlayCount = valid.reduce((sum, rowPoint) => sum + pointInPlayCount(rowPoint.p), 0);
+    const globalGbCount = valid.reduce((sum, rowPoint) => sum + pointGbCount(rowPoint.p), 0);
+    const globalEvSum = valid.reduce((sum, rowPoint) => sum + pointEvSum(rowPoint.p), 0);
+    const globalEvCount = valid.reduce((sum, rowPoint) => sum + pointEvCount(rowPoint.p), 0);
+    const globalQpSum = valid.reduce((sum, rowPoint) => sum + pointQpSum(rowPoint.p), 0);
+    const globalQpCount = valid.reduce((sum, rowPoint) => sum + pointQpCount(rowPoint.p), 0);
     const globalEvAvg =
-      globalEvRows.length > 0
-        ? globalEvRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.exit_speed || 0), 0) / globalEvRows.length
+      globalEvCount > 0
+        ? globalEvSum / globalEvCount
         : 0;
     const globalQpAvg =
-      globalQpRows.length > 0
-        ? globalQpRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.qp_plus || 0), 0) / globalQpRows.length
+      globalQpCount > 0
+        ? globalQpSum / globalQpCount
         : 100;
-    const rvRows = valid
-      .map((rowPoint) => runValue(rowPoint.p))
-      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-    const globalRvAvg = rvRows.length > 0 ? rvRows.reduce((sum, value) => sum + value, 0) / rvRows.length : 0;
-    const pvRows = valid.map((rowPoint) => pitchValue(rowPoint.p)).filter((value) => Number.isFinite(value));
-    const globalPvAvg = pvRows.length > 0 ? pvRows.reduce((sum, value) => sum + value, 0) / pvRows.length : 0;
+    const globalRvAvg = globalPitchCount > 0 ? valid.reduce((sum, rowPoint) => sum + pointRvSum(rowPoint.p), 0) / globalPitchCount : 0;
+    const globalPvAvg = globalPitchCount > 0 ? valid.reduce((sum, rowPoint) => sum + pointPvSum(rowPoint.p), 0) / globalPitchCount : 0;
     const globalXwobaAvg =
       globalXwobaRows.length > 0
         ? globalXwobaRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.estimated_woba_using_speedangle || 0), 0) / globalXwobaRows.length
@@ -7399,9 +7541,9 @@ export default function PitchingSuite({
         ? globalXisoRows.reduce((sum, rowPoint) => sum + Number(rowPoint.p.iso_value || 0), 0) / globalXisoRows.length
         : 0.17;
 
-    const globalSwingRate = valid.length > 0 ? globalSwingCount / valid.length : 0;
+    const globalSwingRate = globalPitchCount > 0 ? globalSwingCount / globalPitchCount : 0;
     const globalWhiffRate = globalSwingCount > 0 ? globalWhiffCount / globalSwingCount : 0;
-    const globalSwStrkRate = valid.length > 0 ? globalWhiffCount / valid.length : 0;
+    const globalSwStrkRate = globalPitchCount > 0 ? globalWhiffCount / globalPitchCount : 0;
     const globalGbRate = globalInPlayCount > 0 ? globalGbCount / globalInPlayCount : 0;
     const globalContactRate = globalSwingCount > 0 ? (globalSwingCount - globalWhiffCount) / globalSwingCount : 0;
     const shrinkStrength = 8;
@@ -7436,40 +7578,35 @@ export default function PitchingSuite({
           const dy = (cy - rowPoint.y) / sigmaY;
           const w = Math.exp(-0.5 * (dx * dx + dy * dy));
           if (w < 1e-6) continue;
-          const swing = isSwingCall(rowPoint.p);
-          const inPlay = isInPlayCall(rowPoint.p);
-          const gb = isGroundBall(rowPoint.p);
-
-          sumW += w;
-          if (swing) swingW += w;
-          if (isWhiffCall(rowPoint.p)) whiffW += w;
-          if (inPlay) inPlayW += w;
-          if (gb) gbW += w;
-          if (inPlay && typeof rowPoint.p.exit_speed === 'number') {
-            evWSum += w * rowPoint.p.exit_speed;
-            evW += w;
+          const pitchN = pointPitchCount(rowPoint.p);
+          sumW += w * pitchN;
+          swingW += w * pointSwingCount(rowPoint.p);
+          whiffW += w * pointWhiffCount(rowPoint.p);
+          inPlayW += w * pointInPlayCount(rowPoint.p);
+          gbW += w * pointGbCount(rowPoint.p);
+          const evN = pointEvCount(rowPoint.p);
+          if (evN > 0) {
+            evWSum += w * pointEvSum(rowPoint.p);
+            evW += w * evN;
           }
-          if (typeof rowPoint.p.qp_plus === 'number' && Number.isFinite(rowPoint.p.qp_plus)) {
-            qpWSum += w * rowPoint.p.qp_plus;
-            qpW += w;
+          const qpN = pointQpCount(rowPoint.p);
+          if (qpN > 0) {
+            qpWSum += w * pointQpSum(rowPoint.p);
+            qpW += w * qpN;
           }
-          const rv = runValue(rowPoint.p);
-          if (typeof rv === 'number' && Number.isFinite(rv)) {
-            rvWSum += w * rv;
-            rvW += w;
+          rvWSum += w * pointRvSum(rowPoint.p);
+          rvW += w * pitchN;
+          pvWSum += w * pointPvSum(rowPoint.p);
+          pvW += w * pitchN;
+          const xwobaN = pointXwobaCount(rowPoint.p);
+          if (xwobaN > 0) {
+            xwobaWSum += w * pointXwobaSum(rowPoint.p);
+            xwobaW += w * xwobaN;
           }
-          const pv = pitchValue(rowPoint.p);
-          if (Number.isFinite(pv)) {
-            pvWSum += w * pv;
-            pvW += w;
-          }
-          if (typeof rowPoint.p.estimated_woba_using_speedangle === 'number' && Number.isFinite(rowPoint.p.estimated_woba_using_speedangle)) {
-            xwobaWSum += w * rowPoint.p.estimated_woba_using_speedangle;
-            xwobaW += w;
-          }
-          if (typeof rowPoint.p.iso_value === 'number' && Number.isFinite(rowPoint.p.iso_value)) {
-            xisoWSum += w * rowPoint.p.iso_value;
-            xisoW += w;
+          const xisoN = pointXisoCount(rowPoint.p);
+          if (xisoN > 0) {
+            xisoWSum += w * pointXisoSum(rowPoint.p);
+            xisoW += w * xisoN;
           }
         }
 
@@ -7485,8 +7622,7 @@ export default function PitchingSuite({
           value = ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
         }
         if (metric === 'PV/100') {
-          const localPv = (pvWSum + runValueShrinkStrength * globalPvAvg) / Math.max(eps, pvW + runValueShrinkStrength);
-          value = (localPv - globalPvAvg) * 100;
+          value = ((pvWSum + runValueShrinkStrength * globalPvAvg) / Math.max(eps, pvW + runValueShrinkStrength)) * 100;
         }
         if (metric === 'xWOBA') {
           value =
@@ -9069,8 +9205,14 @@ export default function PitchingSuite({
   // between mixed client fallback and server-calculated values.
   // Pitch-count min/max filtering is enforced server-side for consistency.
   const tableRowsWithPv = useMemo(() => {
-    return overview?.table_rows ?? [];
-  }, [overview?.table_rows]);
+    const rows = overview?.table_rows ?? [];
+    if (!isPro || !isLeaderboardPage || leaderboardViewBy !== 'Team' || String(level ?? '').trim().toUpperCase() !== 'MLB') {
+      return rows;
+    }
+    const firstColumn = displayedTableColumns[0] ?? overview?.table_columns?.[0] ?? '';
+    if (!firstColumn) return rows;
+    return rows.filter((row) => !isMlbLeagueAggregateTeamLabel((row as Record<string, unknown>)[firstColumn]));
+  }, [overview?.table_rows, overview?.table_columns, displayedTableColumns, isPro, isLeaderboardPage, leaderboardViewBy, level]);
   const leaderboardRows = useMemo(() => {
     const rows = tableRowsWithPv;
     if (!isLeaderboardPage) return rows;
@@ -10330,7 +10472,10 @@ export default function PitchingSuite({
                     <SearchableSingleSelect
                       options={summaryHeatmapOptions}
                       value={locationView}
-                      onChange={setLocationView}
+                      onChange={(next) => {
+                        summaryLocationViewTouchedRef.current = true;
+                        setLocationView(next);
+                      }}
                       placeholder="Pitch"
                     />
                   </div>
@@ -13491,7 +13636,11 @@ export default function PitchingSuite({
                           overflow: 'hidden',
                         }}
                       >
-                        {hasActionVideo ? (
+                        {actionVideoLookupLoading ? (
+                          <div style={{ color: '#f8fafc', fontSize: '2.35rem', fontWeight: 900, textAlign: 'center', letterSpacing: '0.01em' }}>
+                            Loading video...
+                          </div>
+                        ) : hasActionVideo ? (
                           actionSideBySide ? (
                             selectedLeftUrls.length >= 1 ? (
                               <div style={{ width: '100%', height: '100%', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 12, padding: 12, alignItems: 'stretch' }}>
@@ -13574,7 +13723,7 @@ export default function PitchingSuite({
                         ) : (
                           <div style={{ color: '#f8fafc', fontSize: '2rem', fontWeight: 700 }}>No video available</div>
                         )}
-                        {actionMode === 'video' && hasActionVideo ? (
+                        {actionMode === 'video' && hasActionVideo && !actionVideoLookupLoading ? (
                           <div
                             data-breakdown-ui="true"
                             style={{

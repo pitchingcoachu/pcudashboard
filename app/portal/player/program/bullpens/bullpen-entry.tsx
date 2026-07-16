@@ -278,7 +278,7 @@ function TrendBarChart({ data, metric }: {
   );
 }
 
-function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
+function VelocityScatterChart({ data, showLine }: { data: BullpenVelocityPoint[]; showLine: boolean }) {
   if (data.length < 1) {
     return (
       <div style={{ padding: '12px 0', color: '#94a3b8', fontSize: 13 }}>
@@ -315,6 +315,26 @@ function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
   for (const arr of pointsByDate.values()) {
     arr.sort((a, b) => a.pitchNumber - b.pitchNumber || a.comboLabel.localeCompare(b.comboLabel));
   }
+  const plottedPoints: Array<{ key: string; x: number; y: number; fill: string; point: BullpenVelocityPoint }> = [];
+  dates.forEach((date, dateIndex) => {
+    const groupLeft = pad.left + dateIndex * dateBand;
+    const groupCenter = groupLeft + dateBand / 2;
+    const points = pointsByDate.get(date) ?? [];
+    const pointGap = 12;
+    const pointsWidth = Math.max(0, (points.length - 1) * pointGap);
+    const pointsLeft = groupCenter - pointsWidth / 2;
+    points.forEach((point, pointIndex) => {
+      const combo = point.comboKey;
+      plottedPoints.push({
+        key: point.key,
+        x: pointsLeft + pointIndex * pointGap,
+        y: scaleY(point.value),
+        fill: colorByCombo.get(combo) ?? '#94a3b8',
+        point,
+      });
+    });
+  });
+  const linePoints = plottedPoints.map((point) => `${point.x},${point.y}`).join(' ');
   const ticks = [minV, minV + range / 2, maxV];
   return (
     <div style={{ display: 'grid', gap: 10 }}>
@@ -338,6 +358,17 @@ function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
             </g>
           ))}
           <line x1={pad.left} x2={W - pad.right} y1={baselineY} y2={baselineY} stroke="rgba(226,232,240,0.28)" strokeWidth={1} />
+          {showLine && plottedPoints.length > 1 ? (
+            <polyline
+              points={linePoints}
+              fill="none"
+              stroke="#f8fafc"
+              strokeWidth={2}
+              strokeOpacity={0.78}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+            />
+          ) : null}
           {dates.map((date, dateIndex) => {
             const groupLeft = pad.left + dateIndex * dateBand;
             const groupCenter = groupLeft + dateBand / 2;
@@ -350,14 +381,12 @@ function VelocityScatterChart({ data }: { data: BullpenVelocityPoint[] }) {
                 {dateIndex > 0 ? (
                   <line x1={groupLeft} x2={groupLeft} y1={pad.top} y2={baselineY + 10} stroke="rgba(148,163,184,0.12)" strokeWidth={1} />
                 ) : null}
-                {points.map((point, pointIndex) => {
-                  const combo = point.comboKey;
-                  const cx = pointsLeft + pointIndex * pointGap;
-                  const cy = scaleY(point.value);
-                  const fill = colorByCombo.get(combo) ?? '#94a3b8';
+                {points.map((point) => {
+                  const plotted = plottedPoints.find((entry) => entry.key === point.key);
+                  if (!plotted) return null;
                   return (
                     <g key={point.key}>
-                      <circle cx={cx} cy={cy} r={5.5} fill={fill} stroke="rgba(255,255,255,0.8)" strokeWidth={1.2} />
+                      <circle cx={plotted.x} cy={plotted.y} r={5.5} fill={plotted.fill} stroke="rgba(255,255,255,0.8)" strokeWidth={1.2} />
                       <title>{`${point.date}\nPitch #: ${point.pitchNumber}${formatVelocityContext(point)}\nVelocity: ${trendMetricFormat('velocity', point.value)}`}</title>
                     </g>
                   );
@@ -437,6 +466,15 @@ function getColumnValue(row: Record<string, string>, column: string | null, fall
   return String(row[column] ?? '').trim() || fallback;
 }
 
+function normalizeDrillName(value: string) {
+  const trimmed = String(value ?? '').trim();
+  const normalized = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (normalized === 'pulldown' || normalized === 'pulldowns' || normalized === 'pulldowndrill' || normalized === 'pulldowndrills') {
+    return 'Pulldowns';
+  }
+  return trimmed;
+}
+
 function getRowPitchType(row: Record<string, string>, fallback = 'Pitch') {
   return getColumnValue(row, row.__pitchTypeCol || null, fallback);
 }
@@ -450,7 +488,7 @@ function getRowBallType(row: Record<string, string>, fallback = 'Baseball') {
 }
 
 function getRowDrill(row: Record<string, string>, fallback = 'All') {
-  return getColumnValue(row, row.__drillCol || null, fallback);
+  return normalizeDrillName(getColumnValue(row, row.__drillCol || null, fallback));
 }
 
 function getRowBallWeight(row: Record<string, string>, fallback = 'All') {
@@ -649,6 +687,7 @@ export default function BullpenEntry({
   const [trendBallTypeFilter, setTrendBallTypeFilter] = useState('All');
   const [trendDrillFilter, setTrendDrillFilter] = useState('All');
   const [trendBallWeightFilter, setTrendBallWeightFilter] = useState('All');
+  const [showIndividualVelocityLine, setShowIndividualVelocityLine] = useState(false);
 
   // All rows across all entries, each annotated with date
   const allRows = useMemo(() => {
@@ -1421,12 +1460,22 @@ export default function BullpenEntry({
                   >
                     Individual Pitches
                   </button>
+                  {velocityTrendMode === 'individual' && trendDrillFilter !== 'All' ? (
+                    <button
+                      type="button"
+                      className={showIndividualVelocityLine ? 'btn btn-primary' : 'btn btn-ghost'}
+                      style={{ padding: '3px 10px', fontSize: 12, minHeight: 30 }}
+                      onClick={() => setShowIndividualVelocityLine((current) => !current)}
+                    >
+                      {showIndividualVelocityLine ? 'Hide Line' : 'Show Line'}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>
           </div>
           {trendMetric === 'velocity' && velocityTrendMode === 'individual' ? (
-            <VelocityScatterChart data={individualVelocityPoints} />
+            <VelocityScatterChart data={individualVelocityPoints} showLine={trendDrillFilter !== 'All' && showIndividualVelocityLine} />
           ) : (
             <TrendBarChart data={combinedTrendData} metric={trendMetric} />
           )}

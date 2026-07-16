@@ -769,6 +769,27 @@ function reorderPitchCountRows<T extends Record<string, unknown>>(rows: T[], spl
   return [...allRows, ...nonAllRows];
 }
 
+function pitchTypeRank(value: unknown): number {
+  const raw = String(value ?? '').trim();
+  if (!raw) return Number.MAX_SAFE_INTEGER;
+  const canonical = canonicalPitchType(raw) || normalizePitchTypeName(raw);
+  const rank = PITCH_ORDER.indexOf(canonical);
+  return rank >= 0 ? rank : Number.MAX_SAFE_INTEGER;
+}
+
+function reorderPitchTypeRows<T extends Record<string, unknown>>(rows: T[], splitColumn: string): T[] {
+  if (!splitColumn) return rows;
+  const allRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() === 'all');
+  const nonAllRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() !== 'all');
+  nonAllRows.sort((a, b) => {
+    const rankA = pitchTypeRank(a[splitColumn]);
+    const rankB = pitchTypeRank(b[splitColumn]);
+    if (rankA !== rankB) return rankA - rankB;
+    return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
+  });
+  return [...allRows, ...nonAllRows];
+}
+
 function SearchableSingleSelect({
   options,
   value,
@@ -1907,8 +1928,7 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
       if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
       if (metric === 'Run Values') value = ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
       if (metric === 'PV/100') {
-        const localPv = (pvWSum + runValueShrinkStrength * globalPvAvg) / Math.max(eps, pvW + runValueShrinkStrength);
-        value = (localPv - globalPvAvg) * 100;
+        value = ((pvWSum + runValueShrinkStrength * globalPvAvg) / Math.max(eps, pvW + runValueShrinkStrength)) * 100;
       }
       if (metric === 'xWOBA') {
         value =
@@ -5104,6 +5124,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         ? reorderInningRows(sortedRowsBase, tableColumns[0] ?? '')
                       : (config.splitBy || 'Pitch Types') === 'Pitch Count'
                         ? reorderPitchCountRows(sortedRowsBase, tableColumns[0] ?? '')
+                      : (config.splitBy || 'Pitch Types') === 'Pitch Types'
+                        ? reorderPitchTypeRows(sortedRowsBase, tableColumns[0] ?? '')
                       : sortedRowsBase;
                   const chartPoints = payload.chart_points ?? [];
                   const heatmapPoints = payload.heatmap_points ?? chartPoints;

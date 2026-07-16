@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
+import type { PoolClient } from 'pg';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
 import { resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
@@ -31,6 +32,67 @@ type VideoLookupRow = {
   video_clip_3: string | null;
 };
 
+type VideoMapMeta = {
+  tableName: string;
+  schoolCode: string;
+  hasSchoolCode: boolean;
+};
+
+const videoMapMetaCache = new Map<string, VideoMapMeta | null>();
+
+async function resolveVideoMapMeta(
+  client: PoolClient,
+  schoolCode: string
+): Promise<VideoMapMeta | null> {
+  const cacheKey = schoolCode.trim().toUpperCase();
+  if (videoMapMetaCache.has(cacheKey)) return videoMapMetaCache.get(cacheKey) ?? null;
+
+  const tableCandidates =
+    cacheKey === 'TRIAL'
+      ? [
+          ['public.video_map_trial', 'TRIAL'],
+          ['public.video_map_lsu', 'LSU'],
+          ['public.video_map', 'TRIAL'],
+        ]
+      : [
+          [`public.video_map_${cacheKey.toLowerCase()}`, cacheKey],
+          ['public.video_map', cacheKey],
+        ];
+
+  for (const [candidate, candidateSchoolCode] of tableCandidates) {
+    const tableResult = await client.query<{ reg: string | null }>(
+      `SELECT to_regclass($1)::text AS reg`,
+      [candidate]
+    );
+    const tableNameSafe = safeVideoMapTableName(tableResult.rows[0]?.reg);
+    if (!tableNameSafe) continue;
+
+    const [schemaName, tableName] = tableNameSafe.split('.', 2);
+    const colResult = await client.query<{ has_col: boolean }>(
+      `
+      SELECT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = $1
+          AND table_name = $2
+          AND column_name = 'school_code'
+      ) AS has_col
+      `,
+      [schemaName, tableName]
+    );
+    const meta = {
+      tableName: tableNameSafe,
+      schoolCode: candidateSchoolCode,
+      hasSchoolCode: Boolean(colResult.rows[0]?.has_col),
+    };
+    videoMapMetaCache.set(cacheKey, meta);
+    return meta;
+  }
+
+  videoMapMetaCache.set(cacheKey, null);
+  return null;
+}
+
 export async function GET(request: Request) {
   const session = getSessionFromCookies(await cookies());
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -56,49 +118,10 @@ export async function GET(request: Request) {
   const pool = getDbPool();
   const client = await pool.connect();
   try {
-    const tableCandidates =
-      schoolCode === 'TRIAL'
-        ? [
-            ['public.video_map_trial', 'TRIAL'],
-            ['public.video_map_lsu', 'LSU'],
-            ['public.video_map', 'TRIAL'],
-          ]
-        : [
-            [`public.video_map_${schoolCode.toLowerCase()}`, schoolCode],
-            ['public.video_map', schoolCode],
-          ];
-
-    let videoMapTable = '';
-    let videoSchoolCode = schoolCode;
-    for (const [candidate, candidateSchoolCode] of tableCandidates) {
-      const tableResult = await client.query<{ reg: string | null }>(
-        `SELECT to_regclass($1)::text AS reg`,
-        [candidate]
-      );
-      const reg = safeVideoMapTableName(tableResult.rows[0]?.reg);
-      if (!reg) continue;
-      videoMapTable = reg;
-      videoSchoolCode = candidateSchoolCode;
-      break;
-    }
-
-    let videoMapHasSchoolCode = false;
-    if (videoMapTable) {
-      const [schemaName, tableName] = videoMapTable.split('.', 2);
-      const colResult = await client.query<{ has_col: boolean }>(
-        `
-        SELECT EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = $1
-            AND table_name = $2
-            AND column_name = 'school_code'
-        ) AS has_col
-        `,
-        [schemaName, tableName]
-      );
-      videoMapHasSchoolCode = Boolean(colResult.rows[0]?.has_col);
-    }
+    const videoMapMeta = await resolveVideoMapMeta(client, schoolCode);
+    const videoMapTable = videoMapMeta?.tableName ?? '';
+    const videoSchoolCode = videoMapMeta?.schoolCode ?? schoolCode;
+    const videoMapHasSchoolCode = videoMapMeta?.hasSchoolCode ?? false;
 
     const pitchResult = await client.query<VideoLookupRow>(
       `

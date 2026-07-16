@@ -408,6 +408,7 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
   if (!isTruthy(includeChartPoints) || !isTruthy(chartOnly)) return null;
   const upperSchoolCode = String(schoolCode ?? '').trim().toUpperCase();
   if (upperSchoolCode === 'PRO') return null;
+  if (upperSchoolCode === 'LEAGUE' && hasValue(pitcher)) return null;
   const wantsPitchLevelVideo = String(visualOption ?? '').trim().toLowerCase() === 'play video';
   if (upperSchoolCode !== 'LEAGUE' && wantsPitchLevelVideo && !allowPitchLevelVideoFallback) return null;
   const hasUnsupportedFilters =
@@ -775,6 +776,9 @@ export async function GET(request: Request) {
   const includeChartsExplicitlyDisabled = hasValue(includeChartPoints) && !includeChartsRequested;
   const includeTrendRowsRequested = isTruthy(includeTrendRows);
   const requestedPitcher = percentileBaseline ? '' : pitcher;
+  if (isLeague && isTruthy(chartOnly) && includeChartsRequested && hasValue(requestedPitcher)) {
+    url.searchParams.set('force_raw', '1');
+  }
   const broadScope =
     !scopedPitcher &&
     !requestedPitcher &&
