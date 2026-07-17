@@ -9,7 +9,7 @@ export async function uploadPlayerMediaFile(args: {
   category: string;
   sourceType?: string;
   sourceLabel?: string;
-}): Promise<{ ok: true; media: unknown[]; createdMedia?: unknown } | { ok: false; error: string }> {
+}): Promise<{ ok: true; media: unknown[]; categories?: string[]; createdMedia?: unknown } | { ok: false; error: string }> {
   const { playerId, file, title, category, sourceType, sourceLabel } = args;
   if (file.size > MAX_PLAYER_MEDIA_BYTES) {
     return { ok: false, error: 'Media file is too large. Limit is 350 MB.' };
@@ -60,9 +60,14 @@ export async function uploadPlayerMediaFile(args: {
         sourceLabel: sourceLabel ?? '',
       }),
     });
-    const metaBody = await metaRes.json().catch(() => ({})) as { ok?: boolean; media?: unknown[]; createdMedia?: unknown; error?: string };
+    const metaBody = await metaRes.json().catch(() => ({})) as { ok?: boolean; media?: unknown[]; categories?: string[]; createdMedia?: unknown; error?: string };
     if (!metaRes.ok) return { ok: false, error: metaBody.error ?? 'Failed to save media record.' };
-    return { ok: true, media: Array.isArray(metaBody.media) ? metaBody.media : [], createdMedia: metaBody.createdMedia };
+    return {
+      ok: true,
+      media: Array.isArray(metaBody.media) ? metaBody.media : [],
+      categories: Array.isArray(metaBody.categories) ? metaBody.categories : undefined,
+      createdMedia: metaBody.createdMedia,
+    };
   }
 
   // Fallback: direct FormData POST (local dev, no R2)
@@ -74,9 +79,14 @@ export async function uploadPlayerMediaFile(args: {
   if (sourceType) form.set('sourceType', sourceType);
   if (sourceLabel) form.set('sourceLabel', sourceLabel);
   const res = await fetch('/api/player/media', { method: 'POST', body: form });
-  const resBody = await res.json().catch(() => ({})) as { ok?: boolean; media?: unknown[]; createdMedia?: unknown; error?: string };
+  const resBody = await res.json().catch(() => ({})) as { ok?: boolean; media?: unknown[]; categories?: string[]; createdMedia?: unknown; error?: string };
   if (!res.ok) return { ok: false, error: resBody.error ?? `Failed to upload ${file.name}.` };
-  return { ok: true, media: Array.isArray(resBody.media) ? resBody.media : [], createdMedia: resBody.createdMedia };
+  return {
+    ok: true,
+    media: Array.isArray(resBody.media) ? resBody.media : [],
+    categories: Array.isArray(resBody.categories) ? resBody.categories : undefined,
+    createdMedia: resBody.createdMedia,
+  };
 }
 
 function inferContentType(fileName: string): string {

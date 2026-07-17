@@ -132,6 +132,11 @@ function eventDetail(eventType: string, metadata: Record<string, unknown> | null
   if (eventType === 'note_added') {
     return metadataString(metadata, 'category') || metadataString(metadata, 'domain');
   }
+  if (eventType === 'media_uploaded') {
+    return [metadataString(metadata, 'mediaType'), metadataString(metadata, 'mediaTitle'), metadataString(metadata, 'playerName')]
+      .filter(Boolean)
+      .join(' | ');
+  }
   const suite = metadataString(metadata, 'suite');
   const subPage = metadataString(metadata, 'subPage');
   const tableMode = metadataString(metadata, 'tableMode');

@@ -315,7 +315,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
               className="portal-schedule-item"
               title={item.itemName}
               style={{
-                display: 'block',
+                minWidth: 0,
                 width: 'calc(100% - 0.35rem)',
                 margin: '0 auto',
                 boxSizing: 'border-box',
@@ -478,7 +478,7 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
                           className="portal-schedule-item"
                           title={item.itemName}
                           style={{
-                            display: 'block',
+                            minWidth: 0,
                             width: '100%',
                             textAlign: 'center',
                             color: 'var(--text-main)',

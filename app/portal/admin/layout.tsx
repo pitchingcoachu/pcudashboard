@@ -7,6 +7,7 @@ import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-bran
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
+import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 
@@ -133,6 +134,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <p>Logged In As</p>
             <h1>{session.name ?? session.email}</h1>
           </div>
+          <PortalNotificationsBell />
           <LogoutButton />
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">

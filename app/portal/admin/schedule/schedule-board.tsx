@@ -2282,7 +2282,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         </header>
         <div className="portal-schedule-day-body">
           {dayItems.map((item) => (
-            <div key={item.itemId} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div key={item.itemId} style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, maxWidth: '100%' }}>
               {builderMode === 'schedule' && (view === 'day' || view === 'week' || view === 'month') ? (
                 <input
                   type="checkbox"
@@ -2305,7 +2305,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 title={item.itemName}
                 style={{
                   flex: 1,
-                  display: 'block',
+                  minWidth: 0,
                   width: '100%',
                   boxSizing: 'border-box',
                   textAlign: 'center',
@@ -4845,7 +4845,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     <h4 style={{ marginTop: 0 }}>{column.label}</h4>
                     <div style={{ display: 'grid', gap: '0.45rem' }}>
                       {cycleItemsBySlot[column.key].map((item) => (
-                        <div key={item.itemId} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <div key={item.itemId} style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, maxWidth: '100%' }}>
                           <input
                             type="checkbox"
                             checked={selectedItemIds.has(item.itemId)}
@@ -4865,7 +4865,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                             className="portal-schedule-item"
                             title={item.itemName}
                             style={{
-                              display: 'block',
+                              minWidth: 0,
                               width: '100%',
                               textAlign: 'center',
                               color: 'var(--text-main)',

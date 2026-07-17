@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
+import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { deleteObjectFromR2, getR2Bucket, getR2Client, isR2Configured, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
@@ -8,7 +9,9 @@ import {
   createPlayerMedia,
   deletePlayerMedia,
   getPlayerByIdInOrganization,
+  listPlayerMediaCategoriesByOrganization,
   listPlayerMedia,
+  recordPortalActivityEvent,
   updatePlayerMedia,
 } from '../../../../lib/training-db';
 
@@ -78,7 +81,45 @@ async function requireManagedPlayer(playerId: number) {
   if (session.role === 'player' && player.id !== (session.playerId ?? -1)) {
     return { ok: false as const, status: 403, error: 'Forbidden' };
   }
-  return { ok: true as const, session, organizationId, playerId: player.id };
+  return { ok: true as const, session, organizationId, playerId: player.id, playerName: player.fullName };
+}
+
+async function recordMediaNotification(request: Request, input: {
+  allowed: Extract<Awaited<ReturnType<typeof requireManagedPlayer>>, { ok: true }>;
+  mediaType: 'photo' | 'video' | 'pdf';
+  mediaTitle: string;
+  category: string;
+  sourceType?: string | null;
+  sourceLabel?: string | null;
+}) {
+  const { userAgent, ipAddress } = await readActivityRequestMeta(request);
+  const profilePath = `/portal/player?previewPlayerId=${input.allowed.playerId}`;
+  const notesPath = '/portal/dashboard?suite=player-notes';
+  const path = input.sourceType === 'player_notes' || input.sourceType === 'workout_exercise' || input.sourceType === 'drill'
+    ? notesPath
+    : profilePath;
+  await recordPortalActivityEvent({
+    userId: input.allowed.session.userId ?? null,
+    email: input.allowed.session.email,
+    name: input.allowed.session.name ?? null,
+    role: input.allowed.session.role ?? 'admin',
+    organizationId: input.allowed.organizationId,
+    playerId: input.allowed.playerId,
+    dashboardSchoolCode: input.allowed.session.dashboardSchoolCode ?? null,
+    eventType: 'media_uploaded',
+    path,
+    metadata: {
+      playerId: input.allowed.playerId,
+      playerName: input.allowed.playerName,
+      mediaType: input.mediaType,
+      mediaTitle: input.mediaTitle,
+      category: input.category,
+      sourceType: input.sourceType ?? undefined,
+      sourceLabel: input.sourceLabel ?? undefined,
+    },
+    userAgent,
+    ipAddress,
+  }).catch(() => {});
 }
 
 // ── GET: list media ──────────────────────────────────────────────────────────
@@ -120,8 +161,11 @@ export async function GET(request: Request) {
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
   const rawType = url.searchParams.get('mediaType');
   const mediaType = rawType === 'photo' || rawType === 'video' || rawType === 'pdf' ? rawType : undefined;
-  const media = await listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId, mediaType });
-  return NextResponse.json({ media });
+  const [media, categories] = await Promise.all([
+    listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId, mediaType }),
+    listPlayerMediaCategoriesByOrganization({ organizationId: allowed.organizationId, mediaType }),
+  ]);
+  return NextResponse.json({ media, categories });
 }
 
 // ── POST: save metadata after presigned upload, OR direct upload in local dev ─
@@ -162,9 +206,20 @@ export async function POST(request: Request) {
       createdByUserId: allowed.session.userId ?? 0,
     });
     if (!created.ok) return NextResponse.json({ error: `DB error: ${created.error}` }, { status: 400 });
-    const media = await listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId });
+    await recordMediaNotification(request, {
+      allowed,
+      mediaType,
+      mediaTitle: String(body.title ?? '').trim() || fileName,
+      category: String(body.category ?? '').trim() || 'General',
+      sourceType: String(body.sourceType ?? '').trim() || null,
+      sourceLabel: String(body.sourceLabel ?? '').trim() || null,
+    });
+    const [media, categories] = await Promise.all([
+      listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId }),
+      listPlayerMediaCategoriesByOrganization({ organizationId: allowed.organizationId }),
+    ]);
     const createdMedia = media.find((item) => item.id === created.id) ?? null;
-    return NextResponse.json({ ok: true, media, createdMedia });
+    return NextResponse.json({ ok: true, media, categories, createdMedia });
   }
 
   // FormData = direct upload (local dev fallback, no R2)
@@ -216,9 +271,20 @@ export async function POST(request: Request) {
     createdByUserId: allowed.session.userId ?? 0,
   });
   if (!created.ok) return NextResponse.json({ error: `DB error: ${created.error}` }, { status: 400 });
-  const media = await listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId });
+  await recordMediaNotification(request, {
+    allowed,
+    mediaType,
+    mediaTitle: String(form.get('title') ?? '').trim() || file.name,
+    category: String(form.get('category') ?? '').trim() || 'General',
+    sourceType: String(form.get('sourceType') ?? '').trim() || null,
+    sourceLabel: String(form.get('sourceLabel') ?? '').trim() || null,
+  });
+  const [media, categories] = await Promise.all([
+    listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId }),
+    listPlayerMediaCategoriesByOrganization({ organizationId: allowed.organizationId }),
+  ]);
   const createdMedia = media.find((item) => item.id === created.id) ?? null;
-  return NextResponse.json({ ok: true, media, createdMedia });
+  return NextResponse.json({ ok: true, media, categories, createdMedia });
 }
 
 // ── DELETE ───────────────────────────────────────────────────────────────────
@@ -231,8 +297,11 @@ export async function DELETE(request: Request) {
   const deleted = await deletePlayerMedia({ organizationId: allowed.organizationId, mediaId });
   if (!deleted.ok) return NextResponse.json({ error: deleted.error }, { status: 404 });
   if (deleted.r2Key) await deleteObjectFromR2(deleted.r2Key);
-  const media = await listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId });
-  return NextResponse.json({ ok: true, media });
+  const [media, categories] = await Promise.all([
+    listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId }),
+    listPlayerMediaCategoriesByOrganization({ organizationId: allowed.organizationId }),
+  ]);
+  return NextResponse.json({ ok: true, media, categories });
 }
 
 // ── PATCH ────────────────────────────────────────────────────────────────────
@@ -254,6 +323,9 @@ export async function PATCH(request: Request) {
     ...(breakdownAnnotations !== undefined ? { breakdownAnnotations } : {}),
   });
   if (!updated.ok) return NextResponse.json({ error: updated.error }, { status: 400 });
-  const media = await listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId });
-  return NextResponse.json({ ok: true, media });
+  const [media, categories] = await Promise.all([
+    listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId }),
+    listPlayerMediaCategoriesByOrganization({ organizationId: allowed.organizationId }),
+  ]);
+  return NextResponse.json({ ok: true, media, categories });
 }

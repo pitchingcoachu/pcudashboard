@@ -100,9 +100,27 @@ type CustomTableConfig = {
   id: number;
   name: string;
   columns: string[];
+  createdByEmail?: string | null;
   createdAt?: string;
   updatedAt?: string;
 };
+
+function customTableOptionLabel(item: CustomTableConfig): string {
+  const name = String(item.name ?? '').trim();
+  const creator = String(item.createdByEmail ?? '').trim();
+  return creator ? `${name} (${creator})` : name;
+}
+
+function renderOptionLabel(label: string) {
+  const match = String(label ?? '').match(/^(.*)\s+\(([^()\s@]+@[^()\s@]+)\)$/);
+  if (!match) return label;
+  return (
+    <>
+      {match[1]}
+      <span className="portal-option-email"> ({match[2]})</span>
+    </>
+  );
+}
 
 type PaneState = {
   domain: Domain;
@@ -933,7 +951,7 @@ function SearchableSingleSelect({
   return (
     <div className="portal-search-select" ref={rootRef}>
       <button type="button" className="portal-search-select-trigger" onClick={() => setOpen((current) => !current)}>
-        {selected?.label ?? placeholder ?? 'Select'}
+        {selected ? renderOptionLabel(selected.label) : placeholder ?? 'Select'}
       </button>
       {open ? (
         <div className="portal-search-select-menu">
@@ -955,7 +973,7 @@ function SearchableSingleSelect({
                   setQuery('');
                 }}
               >
-                {option.label}
+                {renderOptionLabel(option.label)}
               </button>
             ))}
           </div>
@@ -1376,7 +1394,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
   const tableModeOptions = useMemo(() => {
     const values = filters?.table_modes?.length ? filters.table_modes : DOMAIN_TABLES[state.domain];
     const base = values.map((value) => ({ value, label: value }));
-    const custom = customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: item.name }));
+    const custom = customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: customTableOptionLabel(item) }));
     return [...base, ...custom];
   }, [filters?.table_modes, state.domain, customTables]);
   const splitByOptions = useMemo(() => {
@@ -2555,7 +2573,10 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
 
       <article className="portal-admin-card dashboard-panel" style={{ padding: 12, overflowX: 'auto' }}>
         <div className="portal-form-grid" style={{ marginBottom: 10, gridTemplateColumns: compact ? '1fr' : (!isProSchool ? 'repeat(5, minmax(140px, 240px))' : 'repeat(4, minmax(140px, 240px))') }}>
-          <ControlSelect label="Table" value={state.tableMode} options={tableModeOptions} onChange={(next) => setState((current) => ({ ...current, tableMode: next }))} />
+          <label style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+            <span>Table</span>
+            <SearchableSingleSelect options={tableModeOptions} value={state.tableMode} onChange={(next) => setState((current) => ({ ...current, tableMode: next }))} />
+          </label>
           <ControlSelect label="Split By" value={state.splitBy} options={splitByOptions} onChange={(next) => setState((current) => ({ ...current, splitBy: next }))} />
           {!isProSchool ? (
             <ControlSelect

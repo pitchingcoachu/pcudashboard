@@ -14,6 +14,7 @@ import ForcePlatesDashboard from './force-plates-dashboard';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
+import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 
 function normalizeName(value: string): string {
@@ -204,6 +205,7 @@ export default async function ForcePlatesPage({
             <p>Logged In As</p>
             <h1>{session.name ?? session.email}</h1>
           </div>
+          {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
           <LogoutButton />
           <PortalThemeToggle />
         </div>

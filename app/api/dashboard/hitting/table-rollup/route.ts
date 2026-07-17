@@ -104,6 +104,13 @@ function canonicalPitchType(value: string): string {
   return String(value ?? '').trim() || 'Unknown';
 }
 
+function isValidPitchType(value: unknown): boolean {
+  const token = String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  return !!token && !['unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null'].includes(token);
+}
+
+const VALID_PITCH_TYPE_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')";
+
 function pitchTypeSortRank(value: string): number {
   const canonical = canonicalPitchType(value);
   const idx = PITCH_TYPE_ORDER.indexOf(canonical as (typeof PITCH_TYPE_ORDER)[number]);
@@ -273,6 +280,7 @@ export async function GET(request: Request) {
   if (hand) add('pitcherthrows_norm = ?', hand);
   if (teamCode) add('batter_team_code = ?', teamCode);
   if (hitterNorms.length) add('batter_norm = ANY(?::text[])', hitterNorms);
+  add(VALID_PITCH_TYPE_SQL);
   const tableRef = isPro ? 'public.pro_hitting_heatmap_daily_bins' : 'public.hitting_heatmap_daily_bins';
 
   const result = await pool.query<AggRow>(
@@ -331,6 +339,7 @@ export async function GET(request: Request) {
   );
 
   const filtered = result.rows.filter((row) => {
+    if (!isValidPitchType(row.pitch_type)) return false;
     if (splitByNorm === 'Pitcher Hand' || splitByNorm === 'Batter Team' || splitByNorm === 'Count' || splitByNorm === 'After Count' || splitByNorm === 'Inning') return true;
     if (!pitchTypeSet.size) return true;
     return pitchTypeSet.has(String(row.pitch_type ?? '').trim().toLowerCase());

@@ -320,6 +320,8 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   const [noteFiles, setNoteFiles] = useState<File[]>([]);
   const [filterCategory, setFilterCategory] = useState('All');
   const [customCategories, setCustomCategories] = useState<string[]>([]);
+  const [orgNoteCategories, setOrgNoteCategories] = useState<string[]>([]);
+  const [orgMediaCategories, setOrgMediaCategories] = useState<string[]>([]);
   const [newCategoryDraft, setNewCategoryDraft] = useState('');
   const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
   const [filterStartDate, setFilterStartDate] = useState('');
@@ -340,12 +342,12 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [editingText, setEditingText] = useState('');
   const categoryOptions = useMemo(
-    () => uniqueNames([...DEFAULT_NOTE_CATEGORIES, ...customCategories, ...notes.map((note) => note.category)]),
-    [customCategories, notes]
+    () => uniqueNames([...DEFAULT_NOTE_CATEGORIES, ...orgNoteCategories, ...customCategories, ...notes.map((note) => note.category)]),
+    [customCategories, notes, orgNoteCategories]
   );
   const mediaCategoryOptions = useMemo(
-    () => uniqueNames(['General', 'Workout', 'Drills', 'Bullpen', 'Video Breakdown', ...customCategories, ...playerMedia.map((media) => media.category)]),
-    [customCategories, playerMedia]
+    () => uniqueNames(['General', 'Workout', 'Drills', 'Bullpen', 'Video Breakdown', ...orgMediaCategories, ...customCategories, ...playerMedia.map((media) => media.category)]),
+    [customCategories, orgMediaCategories, playerMedia]
   );
   const selectedLinkedPlayerId = useMemo(() => {
     if (isFixedPlayerMode) return fixedPlayerId;
@@ -441,10 +443,11 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
           : `/api/player/plan-notes?domain=General&dashboardPlayerName=${encodeURIComponent(selectedPlayerName)}`;
     fetch(notesUrl, { cache: 'no-store' })
       .then(async (response) => {
-        const payload = (await response.json().catch(() => ({}))) as { notes?: PlayerPlanNote[]; error?: string };
+        const payload = (await response.json().catch(() => ({}))) as { notes?: PlayerPlanNote[]; categories?: string[]; error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load notes.');
         if (!active) return;
         setNotes(Array.isArray(payload.notes) ? payload.notes : []);
+        if (Array.isArray(payload.categories)) setOrgNoteCategories(payload.categories);
       })
       .catch((error) => {
         if (!active) return;
@@ -467,10 +470,11 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
     setLoadingMedia(true);
     fetch(`/api/player/media?playerId=${selectedLinkedPlayerId}`, { cache: 'no-store' })
       .then(async (response) => {
-        const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+        const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; categories?: string[]; error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load media.');
         if (!active) return;
         setPlayerMedia(Array.isArray(payload.media) ? payload.media : []);
+        if (Array.isArray(payload.categories)) setOrgMediaCategories(payload.categories);
       })
       .catch((error) => {
         if (!active) return;
@@ -536,6 +540,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             sourceLabel: `Note - ${noteDate}`,
           });
           if (!result.ok) throw new Error(result.error);
+          if (Array.isArray(result.categories)) setOrgMediaCategories(result.categories);
           latestMedia = result.media as PlayerMedia[];
           const created = getPlayerMediaFromUploadResult(result, file);
           if (!created) throw new Error(`Uploaded ${file.name}, but could not create a note attachment link.`);
@@ -571,9 +576,10 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
           attachmentDataUrl: encoded.attachmentDataUrl,
         }),
       });
-      const payload = (await response.json().catch(() => ({}))) as { error?: string; notes?: PlayerPlanNote[] };
+      const payload = (await response.json().catch(() => ({}))) as { error?: string; notes?: PlayerPlanNote[]; categories?: string[] };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to save note.');
       setNotes(Array.isArray(payload.notes) ? payload.notes : []);
+      if (Array.isArray(payload.categories)) setOrgNoteCategories(payload.categories);
       setCustomCategories((current) => uniqueNames([...current, noteCategory]));
       if (latestMedia) setPlayerMedia(latestMedia);
       setNoteText('');
@@ -738,6 +744,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
           sourceType: 'player_notes',
         });
         if (!result.ok) throw new Error(result.error);
+        if (Array.isArray(result.categories)) setOrgMediaCategories(result.categories);
         lastMedia = result.media as PlayerMedia[];
       }
       setPlayerMedia(lastMedia);
@@ -759,9 +766,10 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
     try {
       const params = new URLSearchParams({ playerId: String(selectedLinkedPlayerId), mediaId: String(media.id) });
       const response = await fetch(`/api/player/media?${params.toString()}`, { method: 'DELETE' });
-      const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+      const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; categories?: string[]; error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to delete media.');
       setPlayerMedia(Array.isArray(payload.media) ? payload.media : []);
+      if (Array.isArray(payload.categories)) setOrgMediaCategories(payload.categories);
       setMediaMessage('Media deleted.');
     } catch (error) {
       setMediaMessage(error instanceof Error ? error.message : 'Failed to delete media.');
@@ -781,9 +789,10 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
           category: editingMediaCategory,
         }),
       });
-      const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+      const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; categories?: string[]; error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to update media.');
       setPlayerMedia(Array.isArray(payload.media) ? payload.media : []);
+      if (Array.isArray(payload.categories)) setOrgMediaCategories(payload.categories);
       setEditingMediaId(null);
       setMessage('Media updated.');
     } catch (error) {
@@ -802,9 +811,10 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
         breakdownAnnotations: annotations,
       }),
     });
-    const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+    const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; categories?: string[]; error?: string };
     if (!response.ok) throw new Error(payload.error ?? 'Failed to save markup.');
     if (Array.isArray(payload.media)) setPlayerMedia(payload.media);
+    if (Array.isArray(payload.categories)) setOrgMediaCategories(payload.categories);
     setMediaPreview((current) => current && current.url === `/api/player/media/${media.id}` ? { ...current, initialAnnotations: annotations } : current);
     setMediaMessage('Markup saved.');
   }

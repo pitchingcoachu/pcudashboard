@@ -15,7 +15,7 @@ function normalizeName(value: string): string {
 }
 function normalizePitchType(value: string): string {
   const token = String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (!token || ['unknown', 'undefined', 'other'].includes(token)) return 'Undefined';
+  if (!token || ['unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null'].includes(token)) return 'Undefined';
   if (['fastball', 'fourseamfastball', 'fourseam', 'ff', 'fa'].includes(token)) return 'Fastball';
   if (['sinker', 'oneseamfastball', 'twoseamfastball', 'twoseamfasball', 'twoseam', 'si', 'ft'].includes(token)) return 'Sinker';
   if (['changeup', 'ch'].includes(token)) return 'ChangeUp';
@@ -27,9 +27,23 @@ function normalizePitchType(value: string): string {
   if (['knuckleball', 'kn'].includes(token)) return 'Knuckleball';
   return String(value ?? '').trim() || 'Undefined';
 }
+function pitchTypeAliases(value: string): string[] {
+  const normalized = normalizePitchType(value);
+  if (normalized === 'Fastball') return ['Fastball', 'FourSeamFastBall', 'FourSeamFastball', 'FourSeam', 'FF', 'FA'];
+  if (normalized === 'Sinker') return ['Sinker', 'TwoSeamFastBall', 'TwoSeamFastball', 'TwoSeam', 'OneSeamFastBall', 'SI', 'FT'];
+  if (normalized === 'ChangeUp') return ['ChangeUp', 'Changeup', 'CH'];
+  if (normalized === 'Sweeper') return ['Sweeper', 'ST'];
+  if (normalized === 'Splitter') return ['Splitter', 'SplitFinger', 'SplitFingerFastBall', 'SP', 'FS'];
+  if (normalized === 'Curveball') return ['Curveball', 'KnuckleCurve', 'CU', 'KC'];
+  if (normalized === 'Cutter') return ['Cutter', 'FC'];
+  if (normalized === 'Slider') return ['Slider', 'SL'];
+  if (normalized === 'Knuckleball') return ['Knuckleball', 'KN'];
+  if (normalized === 'Undefined') return ['Undefined', 'Unknown', 'Other'];
+  return [normalized];
+}
 const PITCH_TYPE_SQL = `
 CASE
-  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('', 'unknown', 'undefined', 'other') THEN 'Undefined'
+  WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null') THEN 'Undefined'
   WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('fastball', 'fourseamfastball', 'fourseam', 'ff', 'fa') THEN 'Fastball'
   WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('sinker', 'oneseamfastball', 'twoseamfastball', 'twoseamfasball', 'twoseam', 'si', 'ft') THEN 'Sinker'
   WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('changeup', 'ch') THEN 'ChangeUp'
@@ -41,6 +55,9 @@ CASE
   WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('knuckleball', 'kn') THEN 'Knuckleball'
   ELSE COALESCE(NULLIF(TRIM(pitch_type), ''), 'Undefined')
 END`;
+const VALID_PITCH_TYPE_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')";
+const LEAGUE_SCHOOL_EXCLUSION_SQL = "school_code NOT IN ('PRO', 'LEAGUE', 'TRIAL')";
+const LEAGUE_TEAM_EXCLUSION_SQL = "pitcher_team_code NOT IN ('TRIAL', 'DASHBOARDTRIAL')";
 function normalizeHand(value: string): string {
   const raw = String(value ?? '').trim().toLowerCase();
   if (raw === 'right' || raw === 'r') return 'Right';
@@ -91,7 +108,9 @@ export async function GET(request: Request) {
   const pitcherNorms = Array.from(new Set(pitcherList.map(normalizeName).filter(Boolean)));
   const teamCode = maybeTeamCode(String(url.searchParams.get('team_type') ?? ''));
   const pitchTypes = parseCsv(url.searchParams.get('pitch_types'));
-  const pitchTypeSet = new Set(pitchTypes.map((value) => normalizePitchType(value).toLowerCase()).filter(Boolean));
+  const selectedPitchTypes = Array.from(new Set(pitchTypes.map((value) => normalizePitchType(value)).filter(Boolean)));
+  const pitchTypeSet = new Set(selectedPitchTypes.map((value) => value.toLowerCase()));
+  const pitchTypeAliasList = Array.from(new Set(pitchTypes.flatMap(pitchTypeAliases).filter(Boolean)));
 
   const where: string[] = ['1=1'];
   const values: unknown[] = [];
@@ -104,7 +123,12 @@ export async function GET(request: Request) {
     where.push(clause.replace('?', `$${values.length}`));
   };
 
-  add('school_code = ?', schoolCode);
+  if (schoolCode === 'LEAGUE') {
+    add(LEAGUE_SCHOOL_EXCLUSION_SQL);
+    add(LEAGUE_TEAM_EXCLUSION_SQL);
+  } else {
+    add('school_code = ?', schoolCode);
+  }
   if (schoolCode === 'PRO' && level !== 'ALL') add('level_bucket = ?', level);
   if (startDate) add('session_date >= ?::date', startDate);
   if (endDate) add('session_date <= ?::date', endDate);
@@ -113,7 +137,8 @@ export async function GET(request: Request) {
   if (batterSide) add('batterside_norm = ?', batterSide);
   if (teamCode) add('pitcher_team_code = ?', teamCode);
   if (pitcherNorms.length) add('pitcher_norm = ANY(?::text[])', pitcherNorms);
-  if (pitchTypeSet.size) add(`LOWER(${PITCH_TYPE_SQL}) = ANY(?::text[])`, Array.from(pitchTypeSet));
+  if (pitchTypeAliasList.length) add('pitch_type = ANY(?::text[])', pitchTypeAliasList);
+  add(VALID_PITCH_TYPE_SQL);
 
   const tableRef = schoolCode === 'PRO'
     ? 'public.pro_pitching_heatmap_daily_bins'
@@ -301,6 +326,7 @@ export async function GET(request: Request) {
 
   const chartPoints = result.rows
     .filter((row) => row.pitch_n > 0)
+    .filter((row) => normalizePitchType(String(row.pitch_type ?? '')) !== 'Undefined')
     .filter((row) => {
       if (!pitchTypeSet.size) return true;
       return pitchTypeSet.has(String(row.pitch_type ?? '').trim().toLowerCase());

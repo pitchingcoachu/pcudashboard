@@ -8,6 +8,9 @@ import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 
 type OptionItem = { value: string; label: string };
+const PRO_LEVEL_FILTER_OPTIONS = ['All', 'MLB', 'AAA'];
+const NCAA_LEVEL_FILTER_OPTIONS = ['All', 'D1', 'D2', 'D3', 'NAIA', 'JUCO'];
+
 type CatchingFiltersPayload = {
   school_code: string;
   min_date: string | null;
@@ -82,9 +85,27 @@ type CustomTableConfig = {
   id: number;
   name: string;
   columns: string[];
+  createdByEmail?: string | null;
   createdAt?: string;
   updatedAt?: string;
 };
+
+function customTableOptionLabel(item: CustomTableConfig): string {
+  const name = String(item.name ?? '').trim();
+  const creator = String(item.createdByEmail ?? '').trim();
+  return creator ? `${name} (${creator})` : name;
+}
+
+function renderOptionLabel(label: string) {
+  const match = String(label ?? '').match(/^(.*)\s+\(([^()\s@]+@[^()\s@]+)\)$/);
+  if (!match) return label;
+  return (
+    <>
+      {match[1]}
+      <span className="portal-option-email"> ({match[2]})</span>
+    </>
+  );
+}
 
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
 
@@ -226,7 +247,7 @@ function SearchableSingleSelect({
   return (
     <div className="portal-search-select" ref={rootRef}>
       <button type="button" className="portal-search-select-trigger" onClick={() => setOpen((current) => !current)}>
-        {selected?.label ?? placeholder ?? 'Select'}
+        {selected ? renderOptionLabel(selected.label) : placeholder ?? 'Select'}
       </button>
       {open ? (
         <div className="portal-search-select-menu">
@@ -243,7 +264,7 @@ function SearchableSingleSelect({
                   setQuery('');
                 }}
               >
-                {option.label}
+                {renderOptionLabel(option.label)}
               </button>
             ))}
           </div>
@@ -404,7 +425,7 @@ export default function CatchingSuite() {
   const [isMobileView, setIsMobileView] = useState(false);
 
   const [sessionType, setSessionType] = useState('All');
-  const [level, setLevel] = useState('MLB');
+  const [level, setLevel] = useState('D1');
   const [teamType, setTeamType] = useState('All');
   const [catcher, setCatcher] = useState('All');
   const [hand, setHand] = useState('All');
@@ -530,8 +551,15 @@ export default function CatchingSuite() {
 
   useEffect(() => {
     if (!isPro) return;
-    if (!level) setLevel('MLB');
+    if (!PRO_LEVEL_FILTER_OPTIONS.includes(level)) setLevel('MLB');
   }, [isPro, level]);
+
+  useEffect(() => {
+    if (!isLeague) return;
+    const options = filters?.level_options?.length ? filters.level_options : NCAA_LEVEL_FILTER_OPTIONS;
+    const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
+    if (!level || PRO_LEVEL_FILTER_OPTIONS.includes(level) || !options.includes(level)) setLevel(nextDefault);
+  }, [filters?.level_options, isLeague, level]);
 
   useEffect(() => {
     if (!dateStart && !dateEnd) return;
@@ -541,7 +569,7 @@ export default function CatchingSuite() {
     if (dateStart) params.set('start_date', dateStart);
     if (dateEnd) params.set('end_date', dateEnd);
     if (!isPro && sessionType && sessionType !== 'All') params.set('session_type', sessionType);
-    if (isPro && level && level !== 'All') params.set('level', level);
+    if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
     fetch(`/api/dashboard/catching/filters?${params.toString()}`, { signal: controller.signal })
       .then(async (res) => {
         const payload = (await res.json().catch(() => ({}))) as CatchingFiltersPayload & { error?: string };
@@ -558,7 +586,7 @@ export default function CatchingSuite() {
       active = false;
       controller.abort();
     };
-  }, [dateStart, dateEnd, sessionType, catcher, isPro, level]);
+  }, [dateStart, dateEnd, sessionType, catcher, isPro, isLeague, level]);
 
   useEffect(() => {
     let active = true;
@@ -566,7 +594,7 @@ export default function CatchingSuite() {
     if (dateStart) params.set('start_date', dateStart);
     if (dateEnd) params.set('end_date', dateEnd);
     if (!isPro && sessionType && sessionType !== 'All') params.set('session_type', sessionType);
-    if (isPro && level && level !== 'All') params.set('level', level);
+    if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
     if (teamType && teamType !== 'All') params.set('team_type', teamType);
     if (catcher && catcher !== 'All') params.set('catcher', catcher);
     if (hand && hand !== 'All') params.set('hand', hand);
@@ -693,7 +721,7 @@ export default function CatchingSuite() {
     return () => {
       active = false;
     };
-  }, [dateStart, dateEnd, sessionType, level, teamType, catcher, hand, batterSide, venue, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols, page, isPro]);
+  }, [dateStart, dateEnd, sessionType, level, teamType, catcher, hand, batterSide, venue, inZone, pitchTypes, zoneLocations, pitchResults, selectedCountFilters, selectedAfterCountFilters, veloMin, veloMax, pcMin, pcMax, tableMode, effectiveSplitBy, customCols, page, isPro, isLeague]);
 
   useEffect(() => {
     let active = true;
@@ -952,7 +980,7 @@ export default function CatchingSuite() {
         { value: 'Raw Data', label: 'Raw Data' },
         { value: 'Batted Ball Data', label: 'Batted Ball Data' },
         { value: 'Swing Decisions', label: 'Swing Decisions' },
-        ...customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: item.name })),
+        ...customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: customTableOptionLabel(item) })),
         { value: 'Custom', label: 'Custom' },
       ] satisfies OptionItem[],
     [customTables]
@@ -1091,22 +1119,23 @@ export default function CatchingSuite() {
                   End Date
                   <input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} />
                 </label>
-                {isPro ? (
+                {isPro || isLeague ? (
                   <label>
                     Level
                     <SearchableSingleSelect
-                      options={toOptions(filters?.level_options ?? ['All', 'MLB', 'AAA'])}
+                      options={toOptions(filters?.level_options ?? (isPro ? PRO_LEVEL_FILTER_OPTIONS : NCAA_LEVEL_FILTER_OPTIONS))}
                       value={level}
                       onChange={setLevel}
-                      placeholder="MLB"
+                      placeholder={isPro ? 'MLB' : 'D1'}
                     />
                   </label>
-                ) : (
+                ) : null}
+                {!isPro ? (
                   <label>
                     Session Type
                     <SearchableSingleSelect options={toOptions(withAll(['Season', 'Bullpen', 'Live BP']))} value={sessionType} onChange={setSessionType} placeholder="All" />
                   </label>
-                )}
+                ) : null}
                 <label>
                   Team
                   <SearchableSingleSelect options={teamTypeOptions} value={teamType} onChange={setTeamType} placeholder="All" />
@@ -1298,7 +1327,7 @@ export default function CatchingSuite() {
                         <SearchableSingleSelect
                           options={[
                             { value: 'new', label: 'New Custom Table' },
-                            ...customTables.map((item) => ({ value: String(item.id), label: item.name })),
+                            ...customTables.map((item) => ({ value: String(item.id), label: customTableOptionLabel(item) })),
                           ]}
                           value={selectedCustomTableId ? String(selectedCustomTableId) : 'new'}
                           onChange={(next) => {

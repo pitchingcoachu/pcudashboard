@@ -252,6 +252,19 @@ export type PortalActivityRecentEventRow = {
   createdAt: string;
 };
 
+export type PortalNotificationRow = {
+  id: number;
+  eventType: 'note_added' | 'media_uploaded';
+  title: string;
+  detail: string;
+  path: string;
+  actorName: string | null;
+  actorRole: 'admin' | 'coach' | 'player' | 'unknown';
+  playerId: number | null;
+  playerName: string | null;
+  createdAt: string;
+};
+
 export type TrackedExerciseRow = {
   exerciseId: number;
   name: string;
@@ -2635,6 +2648,7 @@ function normalizeActivityEventTypeForDb(value: string): PortalActivityEventType
   if (normalized === 'workout_logged') return 'workout_logged';
   if (normalized === 'questionnaire_completed') return 'questionnaire_completed';
   if (normalized === 'note_added') return 'note_added';
+  if (normalized === 'media_uploaded') return 'media_uploaded';
   return 'page_view';
 }
 
@@ -2865,6 +2879,105 @@ export async function listPortalActivityOverview(input: {
       metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : null,
       createdAt: row.created_at,
     })),
+  };
+}
+
+function notificationMetadataString(metadata: Record<string, unknown> | null, key: string): string {
+  const value = metadata?.[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+export async function listPortalNotifications(input: {
+  organizationId: number;
+  limit?: number;
+  sinceDays?: number;
+}): Promise<{ notifications: PortalNotificationRow[]; count: number }> {
+  const organizationId = Number(input.organizationId ?? 0);
+  if (!isDatabaseConfigured() || organizationId <= 0) return { notifications: [], count: 0 };
+  await ensureTrainingDbReady();
+  await ensurePortalActivityEventsTable();
+  const pool = getDbPool();
+  const limit = Math.max(5, Math.min(50, Number(input.limit ?? 15) || 15));
+  const sinceDays = Math.max(1, Math.min(90, Number(input.sinceDays ?? 30) || 30));
+
+  const rowsResult = await pool.query<{
+    id: string;
+    event_type: string;
+    path: string | null;
+    metadata: Record<string, unknown> | null;
+    name: string | null;
+    email: string;
+    role: string;
+    player_id: number | null;
+    created_at: string;
+  }>(
+    `
+      SELECT
+        id::text,
+        event_type,
+        path,
+        metadata,
+        name,
+        email,
+        role,
+        player_id,
+        created_at::text
+      FROM portal_activity_events
+      WHERE organization_id = $1
+        AND event_type IN ('note_added', 'media_uploaded')
+        AND created_at >= NOW() - ($2::int * INTERVAL '1 day')
+      ORDER BY created_at DESC, id DESC
+      LIMIT $3
+    `,
+    [organizationId, sinceDays, limit]
+  );
+
+  const countResult = await pool.query<{ count: string }>(
+    `
+      SELECT COUNT(*)::text AS count
+      FROM portal_activity_events
+      WHERE organization_id = $1
+        AND event_type IN ('note_added', 'media_uploaded')
+        AND created_at >= NOW() - ($2::int * INTERVAL '1 day')
+    `,
+    [organizationId, sinceDays]
+  );
+
+  const notifications = rowsResult.rows.map((row) => {
+    const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : null;
+    const eventType = row.event_type === 'media_uploaded' ? 'media_uploaded' : 'note_added';
+    const playerName = notificationMetadataString(metadata, 'playerName') || notificationMetadataString(metadata, 'dashboardPlayerName') || null;
+    const playerId = Number(row.player_id ?? metadata?.playerId ?? 0);
+    const mediaType = notificationMetadataString(metadata, 'mediaType');
+    const mediaTitle = notificationMetadataString(metadata, 'mediaTitle');
+    const noteCategory = notificationMetadataString(metadata, 'category');
+    const noteDomain = notificationMetadataString(metadata, 'domain');
+    const title = eventType === 'media_uploaded'
+      ? `${mediaType ? `${mediaType[0]?.toUpperCase() ?? ''}${mediaType.slice(1)}` : 'Media'} uploaded`
+      : 'Player note added';
+    const detailParts = [
+      playerName ? `for ${playerName}` : '',
+      eventType === 'media_uploaded' && mediaTitle ? mediaTitle : '',
+      eventType === 'note_added' && noteCategory ? noteCategory : '',
+      eventType === 'note_added' && noteDomain ? noteDomain : '',
+    ].filter(Boolean);
+    return {
+      id: Number(row.id),
+      eventType,
+      title,
+      detail: detailParts.join(' · ') || 'Recent player activity',
+      path: String(row.path ?? '').trim() || '/portal/dashboard',
+      actorName: String(row.name ?? '').trim() || String(row.email ?? '').trim() || null,
+      actorRole: normalizeActivityRole(row.role),
+      playerId: Number.isFinite(playerId) && playerId > 0 ? playerId : null,
+      playerName,
+      createdAt: row.created_at,
+    } satisfies PortalNotificationRow;
+  });
+
+  return {
+    notifications,
+    count: Number(countResult.rows[0]?.count ?? '0') || 0,
   };
 }
 
@@ -6945,6 +7058,41 @@ export async function deletePlayerPlanNote(input: {
   return { ok: true };
 }
 
+export async function listPlayerPlanNoteCategoriesByOrganization(input: {
+  organizationId: number;
+  domain?: 'Pitching' | 'Hitting' | 'Catching' | 'General';
+}): Promise<string[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const filteredDomain =
+    input.domain && (input.domain === 'Pitching' || input.domain === 'Hitting' || input.domain === 'Catching' || input.domain === 'General')
+      ? input.domain
+      : null;
+  const result = await pool.query<{ category: string }>(
+    `
+      SELECT category
+      FROM (
+        SELECT DISTINCT BTRIM(n.category) AS category
+        FROM player_plan_notes n
+        JOIN players p ON p.id = n.player_id
+        WHERE p.organization_id = $1
+          AND ($2::text IS NULL OR n.domain = $2::text)
+          AND BTRIM(COALESCE(n.category, '')) <> ''
+        UNION
+        SELECT DISTINCT BTRIM(category) AS category
+        FROM dashboard_player_notes
+        WHERE organization_id = $1
+          AND ($2::text IS NULL OR domain = $2::text)
+          AND BTRIM(COALESCE(category, '')) <> ''
+      ) categories
+      ORDER BY lower(category), category
+    `,
+    [input.organizationId, filteredDomain]
+  );
+  return result.rows.map((row) => String(row.category ?? '').trim()).filter(Boolean);
+}
+
 export async function listPlayerMedia(input: {
   organizationId: number;
   playerId: number;
@@ -7022,6 +7170,28 @@ export async function listPlayerMedia(input: {
       } satisfies PlayerMediaRow;
     })
     .filter((row): row is PlayerMediaRow => Boolean(row));
+}
+
+export async function listPlayerMediaCategoriesByOrganization(input: {
+  organizationId: number;
+  mediaType?: 'photo' | 'video' | 'pdf';
+}): Promise<string[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const mediaType = input.mediaType === 'photo' || input.mediaType === 'video' || input.mediaType === 'pdf' ? input.mediaType : null;
+  const result = await pool.query<{ category: string }>(
+    `
+      SELECT DISTINCT BTRIM(category) AS category
+      FROM player_media
+      WHERE organization_id = $1
+        AND ($2::text IS NULL OR media_type = $2::text)
+        AND BTRIM(COALESCE(category, '')) <> ''
+      ORDER BY lower(BTRIM(category)), BTRIM(category)
+    `,
+    [input.organizationId, mediaType]
+  );
+  return result.rows.map((row) => String(row.category ?? '').trim()).filter(Boolean);
 }
 
 export async function getPlayerMedia(input: {

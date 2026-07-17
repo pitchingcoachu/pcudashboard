@@ -4,6 +4,7 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
+import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
 
 export const maxDuration = 300;
 const PITCHING_OVERVIEW_CACHE_VERSION = 'adv-metrics-v9';
@@ -12,6 +13,21 @@ const RESPONSE_CACHE_HEADERS = {
   'cache-control': 'private, max-age=5, stale-while-revalidate=55',
 } as const;
 const SLOW_ROUTE_MS = 5000;
+const TAGGED_PITCH_TYPE_TOKEN_SQL = "regexp_replace(lower(COALESCE(TRIM(pe.taggedpitchtype), '')), '[^a-z0-9]', '', 'g')";
+const PITCH_TYPE_SQL = `
+CASE
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null') THEN 'Undefined'
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('fastball', 'fourseam', 'fourseamfastball', 'ff', 'fa') THEN 'Fastball'
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('sinker', 'oneseamfastball', 'twoseam', 'twoseamfastball', 'twoseamfasball', 'si', 'ft') THEN 'Sinker'
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('changeup', 'ch') THEN 'ChangeUp'
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('sweeper', 'st') THEN 'Sweeper'
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('splitter', 'splitfinger', 'splitfingerfastball', 'sp', 'fs') THEN 'Splitter'
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('curveball', 'cu', 'knucklecurve', 'kc') THEN 'Curveball'
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('cutter', 'fc') THEN 'Cutter'
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('slider', 'sl') THEN 'Slider'
+  WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('knuckleball', 'kn') THEN 'Knuckleball'
+  ELSE COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'Undefined')
+END`;
 
 function parseSortableNumber(value: unknown): number | null {
   if (value === null || value === undefined) return null;
@@ -209,6 +225,77 @@ function normalizeBallTypesParam(value: string): string {
   return selected.join(';');
 }
 
+function parseCsv(value: string): string[] {
+  return String(value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => entry.toLowerCase() !== 'all');
+}
+
+function normalizeName(value: string): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function normalizePitchType(value: string): string {
+  const token = String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!token || ['unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null'].includes(token)) return 'Undefined';
+  if (['fastball', 'fourseamfastball', 'fourseam', 'ff', 'fa'].includes(token)) return 'Fastball';
+  if (['sinker', 'oneseamfastball', 'twoseamfastball', 'twoseamfasball', 'twoseam', 'si', 'ft'].includes(token)) return 'Sinker';
+  if (['changeup', 'ch'].includes(token)) return 'ChangeUp';
+  if (['sweeper', 'st'].includes(token)) return 'Sweeper';
+  if (['splitter', 'splitfinger', 'splitfingerfastball', 'sp', 'fs'].includes(token)) return 'Splitter';
+  if (['curveball', 'cu', 'knucklecurve', 'kc'].includes(token)) return 'Curveball';
+  if (['cutter', 'fc'].includes(token)) return 'Cutter';
+  if (['slider', 'sl'].includes(token)) return 'Slider';
+  if (['knuckleball', 'kn'].includes(token)) return 'Knuckleball';
+  return String(value ?? '').trim() || 'Undefined';
+}
+
+function isValidPitchTypeValue(value: unknown): boolean {
+  return normalizePitchType(String(value ?? '')) !== 'Undefined';
+}
+
+function filterInvalidPitchTypeRows<T>(rows: T): T {
+  if (!Array.isArray(rows)) return rows;
+  return rows.filter((row) => {
+    if (!row || typeof row !== 'object') return true;
+    const pitchValue = (row as { pitch_type?: unknown; pitchType?: unknown; Pitch?: unknown }).pitch_type
+      ?? (row as { pitchType?: unknown }).pitchType
+      ?? (row as { Pitch?: unknown }).Pitch;
+    return pitchValue === undefined || isValidPitchTypeValue(pitchValue);
+  }) as T;
+}
+
+function scrubInvalidPitchTypePayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object') return payload;
+  const next: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
+  next.chart_points = filterInvalidPitchTypeRows(next.chart_points);
+  next.heatmap_points = filterInvalidPitchTypeRows(next.heatmap_points);
+  next.row_pitches = filterInvalidPitchTypeRows(next.row_pitches);
+  if (Array.isArray(next.pitch_type_legend)) {
+    next.pitch_type_legend = next.pitch_type_legend.filter(isValidPitchTypeValue);
+  }
+  if (Array.isArray(next.pitch_types)) {
+    next.pitch_types = next.pitch_types.filter((row) => {
+      if (typeof row === 'string') return isValidPitchTypeValue(row);
+      if (!row || typeof row !== 'object') return true;
+      const record = row as Record<string, unknown>;
+      const pitchValue = record.pitch_type ?? record.Pitch ?? record['Pitch Type'];
+      return pitchValue === undefined || isValidPitchTypeValue(pitchValue);
+    });
+  }
+  if (Array.isArray(next.table_rows)) {
+    next.table_rows = next.table_rows.filter((row) => {
+      if (!row || typeof row !== 'object') return true;
+      const record = row as Record<string, unknown>;
+      const pitchValue = record.pitch_type ?? record.Pitch ?? record['Pitch Type'];
+      return pitchValue === undefined || isValidPitchTypeValue(pitchValue);
+    });
+  }
+  return next;
+}
+
 function trimCustomColumnsForBaseline(raw: string, maxCols = 48): string {
   const deduped = Array.from(
     new Set(
@@ -345,6 +432,167 @@ async function maybeAttachPitchingHeatmapRollup(params: {
   }
 }
 
+async function maybeReturnRawPitchingChartPoints(params: {
+  schoolCode: string;
+  startDate: string;
+  endDate: string;
+  sessionType: string;
+  hand: string;
+  batterSide: string;
+  pitcher: string;
+  teamType: string;
+  pitchTypes: string;
+  chartPointsLimit: string;
+}): Promise<NextResponse | null> {
+  const {
+    schoolCode,
+    startDate,
+    endDate,
+    sessionType,
+    hand,
+    batterSide,
+    pitcher,
+    teamType,
+    pitchTypes,
+    chartPointsLimit,
+  } = params;
+  const upperSchool = String(schoolCode ?? '').trim().toUpperCase();
+  if (!upperSchool || upperSchool === 'PRO' || upperSchool === 'LEAGUE') return null;
+  if (!isDatabaseConfigured()) return null;
+
+  const pitcherNorms = parseCsv(pitcher).map(normalizeName).filter(Boolean);
+  const selectedPitchTypes = Array.from(new Set(parseCsv(pitchTypes).map(normalizePitchType)));
+  const limitRaw = Number(chartPointsLimit || '0');
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.max(100, Math.min(Math.trunc(limitRaw), 6000)) : 600;
+  const where: string[] = [
+    'pe.school_code = $1',
+    `NULLIF(TRIM(pe.taggedpitchtype), '') IS NOT NULL`,
+    `${TAGGED_PITCH_TYPE_TOKEN_SQL} NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')`,
+  ];
+  const values: unknown[] = [upperSchool];
+  const add = (clause: string, value: unknown) => {
+    values.push(value);
+    where.push(clause.replace('?', `$${values.length}`));
+  };
+  if (startDate) add('pe.session_date >= ?::date', startDate);
+  if (endDate) add('pe.session_date <= ?::date', endDate);
+  const session = String(sessionType ?? '').trim();
+  if (session && session.toLowerCase() !== 'all') {
+    if (session === 'Bullpen') {
+      where.push(`regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.session_type), ''), NULLIF(TRIM(pe.sessiontype), ''), '')), '\\s+', '', 'g') ~ '(bull|prac|bp)'`);
+    } else {
+      add(`COALESCE(NULLIF(TRIM(pe.session_type), ''), NULLIF(TRIM(pe.sessiontype), ''), '') = ?`, session);
+    }
+  }
+  const handNorm = String(hand ?? '').trim().toLowerCase();
+  if (handNorm === 'left' || handNorm === 'right') {
+    add(`UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.pitcherthrows), ''), ''), 1)) = ?`, handNorm === 'left' ? 'L' : 'R');
+  }
+  const batterSideNorm = String(batterSide ?? '').trim().toLowerCase();
+  if (batterSideNorm === 'left' || batterSideNorm === 'right') {
+    add(`UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.batterside), ''), ''), 1)) = ?`, batterSideNorm === 'left' ? 'L' : 'R');
+  }
+  if (pitcherNorms.length) {
+    add(`regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.pitcher), ''), NULLIF(TRIM(to_jsonb(pe)->>'Pitcher'), ''), NULLIF(TRIM(to_jsonb(pe)->>'pitcher_name'), ''), '')), '[^a-z0-9]', '', 'g') = ANY(?::text[])`, pitcherNorms);
+  }
+  if (selectedPitchTypes.length) {
+    add(`${PITCH_TYPE_SQL} = ANY(?::text[])`, selectedPitchTypes);
+  }
+  const team = String(teamType ?? '').trim();
+  if (team && team.toLowerCase() !== 'all') {
+    values.push(team);
+    const teamParam = `$${values.length}`;
+    values.push(team);
+    const teamJsonParam = `$${values.length}`;
+    where.push(`(
+      UPPER(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), '')) = UPPER(${teamParam}::text)
+      OR UPPER(COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'PitcherTeam'), ''), '')) = UPPER(${teamJsonParam}::text)
+    )`);
+  }
+
+  try {
+    await ensureAuthDbReady();
+    const pool = getDbPool();
+    const result = await pool.query<Record<string, unknown>>(
+      `
+      SELECT *
+      FROM (
+        SELECT
+          pe.id AS pitch_event_id,
+          pe.session_date::text AS session_date,
+          row_number() OVER (ORDER BY pe.session_date, COALESCE(pe.created_at, NOW()), pe.id) AS pitch_number,
+          (regexp_match(COALESCE(to_jsonb(pe)->>'pitchid', to_jsonb(pe)->>'pitchno', ''), '[-+]?[0-9]+'))[1]::int AS pitch_no,
+          COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'gameid'), ''), NULLIF(TRIM(to_jsonb(pe)->>'GameID'), ''), '') AS game_id,
+          COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'gameuid'), ''), NULLIF(TRIM(to_jsonb(pe)->>'GameUID'), ''), '') AS game_uid,
+          COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'gameforeignid'), ''), NULLIF(TRIM(to_jsonb(pe)->>'GameForeignID'), ''), '') AS game_foreign_id,
+          COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'inning'), ''), NULLIF(TRIM(to_jsonb(pe)->>'Inning'), ''), '') AS inning,
+          COALESCE(NULLIF(TRIM(pe.pitcher), ''), NULLIF(TRIM(to_jsonb(pe)->>'Pitcher'), ''), NULLIF(TRIM(to_jsonb(pe)->>'pitcher_name'), ''), 'Unknown Pitcher') AS pitcher,
+          COALESCE(NULLIF(TRIM(pe.batter), ''), '') AS batter,
+          COALESCE(NULLIF(TRIM(pe.catcher), ''), '') AS catcher,
+          COALESCE(NULLIF(TRIM(pe.pitcherthrows), ''), '') AS pitcherthrows,
+          COALESCE(NULLIF(TRIM(pe.batterside), ''), '') AS batterside,
+          ${PITCH_TYPE_SQL} AS pitch_type,
+          COALESCE(NULLIF(TRIM(pe.session_type), ''), NULLIF(TRIM(pe.sessiontype), ''), '') AS session_type,
+          COALESCE(NULLIF(TRIM(pe.pitchcall), ''), '') AS pitch_call,
+          COALESCE(NULLIF(TRIM(pe.playresult), ''), '') AS play_result,
+          COALESCE(NULLIF(TRIM(pe.korbb), ''), '') AS korbb,
+          COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), '') AS tagged_hit_type,
+          (regexp_match(COALESCE(pe.balls::text, ''), '[-+]?[0-9]+'))[1]::int AS balls_num,
+          (regexp_match(COALESCE(pe.strikes::text, ''), '[-+]?[0-9]+'))[1]::int AS strikes_num,
+          (regexp_match(COALESCE(to_jsonb(pe)->>'outs', ''), '[-+]?[0-9]+'))[1]::int AS outs_num,
+          (regexp_match(COALESCE(pe.outsonplay::text, ''), '[-+]?[0-9]+'))[1]::int AS outs_on_play_num,
+          (regexp_match(COALESCE(pe.relside, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS release_side,
+          (regexp_match(COALESCE(pe.relheight, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS release_height,
+          (regexp_match(COALESCE(pe.extension, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS extension,
+          (regexp_match(COALESCE(pe.horzbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS hb,
+          (regexp_match(COALESCE(pe.inducedvertbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS ivb,
+          (regexp_match(COALESCE(pe.platelocside, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS plate_side,
+          (regexp_match(COALESCE(pe.platelocheight, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS plate_height,
+          (regexp_match(COALESCE(pe.relspeed, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS velo,
+          (regexp_match(COALESCE(pe.spinrate, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS spin,
+          COALESCE(NULLIF(TRIM(pe.releasetilt), ''), '') AS release_tilt,
+          COALESCE(NULLIF(TRIM(pe.breaktilt), ''), '') AS break_tilt,
+          (regexp_match(COALESCE(pe.spinefficiency, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS spin_eff,
+          (regexp_match(COALESCE(pe.exitspeed, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS exit_speed,
+          (regexp_match(COALESCE(pe.angle, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS angle,
+          (regexp_match(COALESCE(pe.vertapprangle, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS vaa,
+          (regexp_match(COALESCE(pe.horzapprangle, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS haa,
+          COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'videoclip'), ''), '') AS video_clip_1,
+          COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'videoclip2'), ''), '') AS video_clip_2,
+          COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'videoclip3'), ''), '') AS video_clip_3
+        FROM public.pitch_events pe
+        WHERE ${where.join(' AND ')}
+      ) rows
+      WHERE pitch_type <> 'Undefined'
+      ORDER BY session_date DESC, pitch_event_id DESC
+      LIMIT $${values.length + 1}
+      `,
+      [...values, limit]
+    );
+    if (!result.rows.length) return null;
+    const chartPoints = result.rows.map((row) => ({ ...row, rel_speed: row.velo }));
+    return NextResponse.json(
+      {
+        school_code: upperSchool,
+        table_rows: [],
+        table_columns: [],
+        available_table_columns: [],
+        chart_points: chartPoints,
+        heatmap_points: chartPoints,
+        total_pitches: chartPoints.length,
+      },
+      {
+        headers: {
+          ...RESPONSE_CACHE_HEADERS,
+          'x-dashboard-fallback': 'pitching-raw-chart-points',
+        },
+      }
+    );
+  } catch {
+    return null;
+  }
+}
+
 async function maybeReturnPitchingHeatmapRollupDirect(params: {
   request: Request;
   schoolCode: string;
@@ -373,6 +621,7 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
   hbMax: string;
   pcMin: string;
   pcMax: string;
+  chartPointsLimit?: string;
   allowPitchLevelVideoFallback?: boolean;
 }): Promise<NextResponse | null> {
   const {
@@ -403,6 +652,7 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
     hbMax,
     pcMin,
     pcMax,
+    chartPointsLimit = '',
     allowPitchLevelVideoFallback = false,
   } = params;
   if (!isTruthy(includeChartPoints) || !isTruthy(chartOnly)) return null;
@@ -447,6 +697,22 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
     });
     if (!response.ok) return null;
     const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const chartPoints = Array.isArray(payload.chart_points) ? payload.chart_points : [];
+    const heatmapPoints = Array.isArray(payload.heatmap_points) ? payload.heatmap_points : [];
+    if (!chartPoints.length && !heatmapPoints.length) {
+      return maybeReturnRawPitchingChartPoints({
+        schoolCode,
+        startDate,
+        endDate,
+        sessionType,
+        hand,
+        batterSide,
+        pitcher,
+        teamType,
+        pitchTypes,
+        chartPointsLimit,
+      });
+    }
     return NextResponse.json(payload, {
       headers: {
         ...RESPONSE_CACHE_HEADERS,
@@ -713,6 +979,7 @@ export async function GET(request: Request) {
       hbMax,
       pcMin,
       pcMax,
+      chartPointsLimit,
     });
     if (directHeatmapRollup) return directHeatmapRollup;
 
@@ -1176,7 +1443,7 @@ export async function GET(request: Request) {
       const uncachedResponse = await fetch(url.toString(), { cache: 'no-store' });
       const uncachedPayload = (await uncachedResponse.json().catch(() => ({}))) as Record<string, unknown>;
       if (uncachedResponse.ok && hasNonEmptyTableRows(uncachedPayload)) {
-        return NextResponse.json(applyOverviewBackfills(uncachedPayload), {
+        return NextResponse.json(scrubInvalidPitchTypePayload(applyOverviewBackfills(uncachedPayload)), {
           headers: {
             ...RESPONSE_CACHE_HEADERS,
             'x-dashboard-cache': 'MISS',
@@ -1217,6 +1484,7 @@ export async function GET(request: Request) {
         hbMax,
         pcMin,
         pcMax,
+        chartPointsLimit: url.searchParams.get('chart_points_limit') ?? chartPointsLimit,
         allowPitchLevelVideoFallback: true,
       });
       if (chartFallback) return chartFallback;
@@ -1305,7 +1573,7 @@ export async function GET(request: Request) {
       pcMin,
       pcMax,
     });
-    return NextResponse.json(payloadWithRollupHeatmaps, {
+    return NextResponse.json(scrubInvalidPitchTypePayload(payloadWithRollupHeatmaps), {
       headers: {
         ...RESPONSE_CACHE_HEADERS,
         'x-dashboard-cache': result.cached ? 'HIT' : 'MISS',
@@ -1343,6 +1611,7 @@ export async function GET(request: Request) {
       hbMax,
       pcMin,
       pcMax,
+      chartPointsLimit: url.searchParams.get('chart_points_limit') ?? chartPointsLimit,
       allowPitchLevelVideoFallback: true,
     });
     if (chartFallback) return chartFallback;

@@ -116,6 +116,7 @@ WITH src AS (
     (NULLIF(BTRIM(pe.angle::text), '')::double precision) AS launch_angle
   FROM public.pitch_events pe
   WHERE pe.session_date IS NOT NULL
+    AND REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')
 ), agg AS (
   SELECT
     session_date,

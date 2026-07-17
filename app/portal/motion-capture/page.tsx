@@ -7,6 +7,7 @@ import { getPlayerForUser } from '../../../lib/training-db';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import LogoutButton from '../logout-button';
 import MobileNavSelect from '../mobile-nav-select';
+import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import MotionCaptureDashboard from './motion-capture-dashboard';
 
@@ -72,6 +73,7 @@ export default async function MotionCapturePage() {
             <p>Logged In As</p>
             <h1>{session.name ?? session.email}</h1>
           </div>
+          {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
           <LogoutButton />
           <PortalThemeToggle />
         </div>

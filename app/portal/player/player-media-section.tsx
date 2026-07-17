@@ -26,6 +26,19 @@ type MediaPreview = {
 
 type OrgPlayer = { playerId: number; fullName: string };
 
+function uniqueCategoryNames(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const name = String(value ?? '').trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
 function MediaTileFallback({ label }: { label: string }) {
   return (
     <span className="portal-media-tile-fallback">
@@ -64,6 +77,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
   const [loading, setLoading] = useState(false);
   const [mediaPreview, setMediaPreview] = useState<MediaPreview | null>(null);
   const [orgPlayers, setOrgPlayers] = useState<OrgPlayer[]>([]);
+  const [orgMediaCategories, setOrgMediaCategories] = useState<string[]>([]);
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [mediaTitle, setMediaTitle] = useState('');
   const [mediaCategory, setMediaCategory] = useState('General');
@@ -72,8 +86,12 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
   const [filterCategory, setFilterCategory] = useState('All');
 
   const categoryOptions = useMemo(
-    () => Array.from(new Set(media.map((m) => m.category))).sort(),
+    () => uniqueCategoryNames(media.map((m) => m.category)),
     [media]
+  );
+  const uploadCategoryOptions = useMemo(
+    () => uniqueCategoryNames(['General', 'Workout', 'Drills', 'Bullpen', 'Mechanics', 'Edger', ...orgMediaCategories, ...media.map((m) => m.category)]),
+    [media, orgMediaCategories]
   );
 
   useEffect(() => {
@@ -90,8 +108,9 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
     setLoading(true);
     fetch(`/api/player/media?playerId=${playerId}`, { cache: 'no-store' })
       .then((r) => r.json())
-      .then((data: { media?: PlayerMedia[] }) => {
+      .then((data: { media?: PlayerMedia[]; categories?: string[] }) => {
         if (Array.isArray(data.media)) setMedia(data.media);
+        if (Array.isArray(data.categories)) setOrgMediaCategories(data.categories);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -117,6 +136,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
         });
         if (!result.ok) throw new Error(result.error);
         lastMedia = result.media as PlayerMedia[];
+        if (Array.isArray(result.categories)) setOrgMediaCategories(result.categories);
       }
       setMedia(lastMedia);
       setMediaFiles([]);
@@ -157,9 +177,10 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ playerId, mediaId, breakdownAnnotations: annotations }),
     });
-    const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+    const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; categories?: string[]; error?: string };
     if (!response.ok) throw new Error(payload.error ?? 'Failed to save markup.');
     if (Array.isArray(payload.media)) setMedia(payload.media);
+    if (Array.isArray(payload.categories)) setOrgMediaCategories(payload.categories);
     setMediaPreview((current) => current && current.mediaId === mediaId ? { ...current, initialAnnotations: annotations } : current);
     setMessage('Markup saved.');
   }
@@ -167,12 +188,13 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
   async function deleteMedia(mediaId: number, title: string) {
     if (!window.confirm(`Delete "${title}"? This cannot be undone.`)) return;
     const response = await fetch(`/api/player/media?${new URLSearchParams({ playerId: String(playerId), mediaId: String(mediaId) }).toString()}`, { method: 'DELETE' });
-    const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; error?: string };
+    const payload = (await response.json().catch(() => ({}))) as { media?: PlayerMedia[]; categories?: string[]; error?: string };
     if (!response.ok) {
       setMessage(payload.error ?? 'Delete failed.');
       return;
     }
     setMedia(Array.isArray(payload.media) ? payload.media : []);
+    if (Array.isArray(payload.categories)) setOrgMediaCategories(payload.categories);
     setMediaPreview(null);
     setMessage('Media deleted.');
   }
@@ -207,10 +229,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
             onChange={(e) => setMediaCategory(e.target.value)}
           />
           <datalist id="player-media-cat-opts">
-            {['General', 'Workout', 'Drills', 'Bullpen', 'Mechanics', 'Edger'].map((c) => (
-              <option key={c} value={c} />
-            ))}
-            {categoryOptions.map((c) => <option key={`existing-${c}`} value={c} />)}
+            {uploadCategoryOptions.map((c) => <option key={`media-category-${c}`} value={c} />)}
           </datalist>
         </label>
         <button type="button" className="btn btn-primary" onClick={() => void upload()} disabled={!mediaFiles.length || uploading}>

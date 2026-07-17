@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
+import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import {
@@ -10,10 +11,12 @@ import {
   createPlayerPlanNote,
   getPlayerByIdInOrganization,
   getPlayerForUser,
+  listPlayerPlanNoteCategoriesByOrganization,
   listDashboardPlayerNotes,
   listDashboardPlayerNotesByOrganization,
   listPlayerSummariesByOrganization,
   listPlayerPlanNotesForPlayer,
+  recordPortalActivityEvent,
   updateDashboardPlayerNote,
   updatePlayerPlanNote,
 } from '../../../../lib/training-db';
@@ -23,6 +26,39 @@ function withAuthorPrefix(rawText: string, authorName: string): string {
   const author = String(authorName ?? '').trim() || 'Unknown';
   const withoutExistingPrefix = body.replace(/^Created By:\s.*(?:\r?\n){1,2}/i, '');
   return `Created By: ${author}\n\n${withoutExistingPrefix}`.trim();
+}
+
+async function recordNoteNotification(request: Request, input: {
+  session: NonNullable<ReturnType<typeof getSessionFromCookies>>;
+  organizationId: number;
+  playerId?: number | null;
+  playerName?: string | null;
+  dashboardPlayerName?: string | null;
+  domain: string;
+  category: string;
+}) {
+  const { userAgent, ipAddress } = await readActivityRequestMeta(request);
+  const playerId = Number(input.playerId ?? 0);
+  await recordPortalActivityEvent({
+    userId: input.session.userId ?? null,
+    email: input.session.email,
+    name: input.session.name ?? null,
+    role: input.session.role ?? 'admin',
+    organizationId: input.organizationId,
+    playerId: Number.isFinite(playerId) && playerId > 0 ? playerId : null,
+    dashboardSchoolCode: input.session.dashboardSchoolCode ?? null,
+    eventType: 'note_added',
+    path: playerId > 0 ? '/portal/dashboard?suite=player-notes' : '/portal/dashboard?suite=player-notes',
+    metadata: {
+      playerId: playerId > 0 ? playerId : undefined,
+      playerName: input.playerName ?? undefined,
+      dashboardPlayerName: input.dashboardPlayerName ?? undefined,
+      domain: input.domain,
+      category: input.category,
+    },
+    userAgent,
+    ipAddress,
+  }).catch(() => {});
 }
 
 async function resolveAllowedPlayerId(
@@ -77,7 +113,8 @@ export async function GET(request: Request) {
         dashboardPlayerName,
         domain: normalizedDomain,
       });
-      return NextResponse.json({ notes });
+      const categories = await listPlayerPlanNoteCategoriesByOrganization({ organizationId, domain: normalizedDomain });
+      return NextResponse.json({ notes, categories });
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to load notes.' }, { status: 500 });
     }
@@ -110,7 +147,8 @@ export async function GET(request: Request) {
         if (byDate !== 0) return byDate;
         return String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''));
       });
-      return NextResponse.json({ notes });
+      const categories = await listPlayerPlanNoteCategoriesByOrganization({ organizationId, domain: normalizedDomain });
+      return NextResponse.json({ notes, categories });
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to load notes.' }, { status: 500 });
     }
@@ -118,8 +156,11 @@ export async function GET(request: Request) {
 
   const allowed = await resolveAllowedPlayerId(session, playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
-  const notes = await listPlayerPlanNotesForPlayer({ playerId: allowed.playerId, domain: normalizedDomain });
-  return NextResponse.json({ notes });
+  const [notes, categories] = await Promise.all([
+    listPlayerPlanNotesForPlayer({ playerId: allowed.playerId, domain: normalizedDomain }),
+    listPlayerPlanNoteCategoriesByOrganization({ organizationId, domain: normalizedDomain }),
+  ]);
+  return NextResponse.json({ notes, categories });
 }
 
 export async function POST(request: Request) {
@@ -163,12 +204,22 @@ export async function POST(request: Request) {
         createdByUserId: session.userId ?? 0,
       });
       if (!created.ok) return NextResponse.json({ error: created.error }, { status: 400 });
-      const notes = await listDashboardPlayerNotes({
+      await recordNoteNotification(request, {
+        session,
         organizationId,
         dashboardPlayerName,
-        domain: domain as 'Pitching' | 'Hitting' | 'Catching' | 'General',
+        domain,
+        category,
       });
-      return NextResponse.json({ ok: true, notes });
+      const [notes, categories] = await Promise.all([
+        listDashboardPlayerNotes({
+          organizationId,
+          dashboardPlayerName,
+          domain: domain as 'Pitching' | 'Hitting' | 'Catching' | 'General',
+        }),
+        listPlayerPlanNoteCategoriesByOrganization({ organizationId, domain: domain as 'Pitching' | 'Hitting' | 'Catching' | 'General' }),
+      ]);
+      return NextResponse.json({ ok: true, notes, categories });
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to save note.' }, { status: 500 });
     }
@@ -194,9 +245,21 @@ export async function POST(request: Request) {
     createdByUserId: session.userId ?? 0,
   });
   if (!created.ok) return NextResponse.json({ error: created.error }, { status: 400 });
+  const player = await getPlayerByIdInOrganization({ organizationId, playerId: allowed.playerId });
+  await recordNoteNotification(request, {
+    session,
+    organizationId,
+    playerId: allowed.playerId,
+    playerName: player?.fullName ?? null,
+    domain,
+    category,
+  });
 
-  const notes = await listPlayerPlanNotesForPlayer({ playerId: allowed.playerId, domain });
-  return NextResponse.json({ ok: true, notes });
+  const [notes, categories] = await Promise.all([
+    listPlayerPlanNotesForPlayer({ playerId: allowed.playerId, domain }),
+    listPlayerPlanNoteCategoriesByOrganization({ organizationId, domain }),
+  ]);
+  return NextResponse.json({ ok: true, notes, categories });
 }
 
 export async function PATCH(request: Request) {

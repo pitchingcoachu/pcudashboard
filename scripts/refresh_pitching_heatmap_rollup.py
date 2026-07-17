@@ -92,7 +92,7 @@ WITH base_non_pro AS (
           OR REGEXP_REPLACE(LOWER(COALESCE(pe.playresult, '')), '[^a-z0-9]+', '_', 'g') = 'hit_by_pitch'
           THEN (0.34 + (0.35 * GREATEST(-0.08, LEAST(0.08, ((GREATEST(0, LEAST(3, COALESCE((NULLIF(BTRIM(pe.balls::text), ''))::int, 0))) - GREATEST(0, LEAST(2, COALESCE((NULLIF(BTRIM(pe.strikes::text), ''))::int, 0)))) * 0.02))))) - 0.031
         WHEN REGEXP_REPLACE(LOWER(COALESCE(pe.pitchcall, '')), '[^a-z0-9]+', '_', 'g') IN ('in_play', 'inplay', 'in_play_out_s', 'in_play_no_out', 'in_play_run_s')
-          OR REGEXP_REPLACE(LOWER(COALESCE(pe.playresult, '')), '[^a-z0-9]+', '_', 'g') <> ''
+          OR REGEXP_REPLACE(LOWER(COALESCE(pe.playresult, '')), '[^a-z0-9]+', '_', 'g') IN ('single', 'double', 'triple', 'home_run', 'homerun', 'field_error', 'error', 'out', 'fielders_choice', 'fielderschoice', 'sacrifice', 'double_play', 'doubleplay', 'triple_play', 'tripleplay')
           THEN CASE
             WHEN REGEXP_REPLACE(LOWER(COALESCE(pe.playresult, '')), '[^a-z0-9]+', '_', 'g') = 'single' THEN 0.48 - 0.031
             WHEN REGEXP_REPLACE(LOWER(COALESCE(pe.playresult, '')), '[^a-z0-9]+', '_', 'g') = 'double' THEN 0.78 - 0.031
@@ -133,6 +133,7 @@ WITH base_non_pro AS (
   FROM public.pitch_events pe
   WHERE pe.session_date IS NOT NULL
     AND UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) <> 'PRO'
+    AND REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')
 ), base_pro AS (
   SELECT
     pe.session_date::date AS session_date,
@@ -204,7 +205,7 @@ WITH base_non_pro AS (
           OR REGEXP_REPLACE(LOWER(COALESCE(pe.playresult, '')), '[^a-z0-9]+', '_', 'g') = 'hit_by_pitch'
           THEN (0.34 + (0.35 * GREATEST(-0.08, LEAST(0.08, ((GREATEST(0, LEAST(3, COALESCE((NULLIF(BTRIM(pe.balls::text), ''))::int, 0))) - GREATEST(0, LEAST(2, COALESCE((NULLIF(BTRIM(pe.strikes::text), ''))::int, 0)))) * 0.02))))) - 0.024
         WHEN REGEXP_REPLACE(LOWER(COALESCE(pe.pitchcall, '')), '[^a-z0-9]+', '_', 'g') IN ('in_play', 'inplay', 'in_play_out_s', 'in_play_no_out', 'in_play_run_s')
-          OR REGEXP_REPLACE(LOWER(COALESCE(pe.playresult, '')), '[^a-z0-9]+', '_', 'g') <> ''
+          OR REGEXP_REPLACE(LOWER(COALESCE(pe.playresult, '')), '[^a-z0-9]+', '_', 'g') IN ('single', 'double', 'triple', 'home_run', 'homerun', 'field_error', 'error', 'out', 'fielders_choice', 'fielderschoice', 'sacrifice', 'double_play', 'doubleplay', 'triple_play', 'tripleplay')
           THEN CASE
             WHEN REGEXP_REPLACE(LOWER(COALESCE(pe.playresult, '')), '[^a-z0-9]+', '_', 'g') = 'single' THEN 0.48 - 0.024
             WHEN REGEXP_REPLACE(LOWER(COALESCE(pe.playresult, '')), '[^a-z0-9]+', '_', 'g') = 'double' THEN 0.78 - 0.024
@@ -289,6 +290,7 @@ WITH base_non_pro AS (
     (NULLIF(BTRIM(pe.angle::text), '')::double precision) AS launch_angle
   FROM public.pro_pitch_events pe
   WHERE pe.session_date IS NOT NULL
+    AND REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')
 ), src AS (
   SELECT * FROM base_non_pro
   UNION ALL
@@ -346,6 +348,7 @@ WITH base_non_pro AS (
     NULLIF(TRIM(COALESCE(pd."PitchingPlus"::text, '')), '')::double precision AS pitching_plus
   FROM public.pitch_data pd
   WHERE pd."Date" IS NOT NULL
+    AND REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(pd."TaggedPitchType"), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')
 ), plus_agg AS (
   SELECT
     session_date, school_code, pitcher_norm, pitcherhand_norm, batterside_norm,

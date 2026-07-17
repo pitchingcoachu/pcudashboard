@@ -2135,6 +2135,184 @@ body.theme-light .portal-theme-toggle-btn.active {
   min-width: 0;
 }
 
+.portal-notifications {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.portal-notifications-btn {
+  position: relative;
+  display: inline-grid;
+  width: 2.15rem;
+  height: 2.15rem;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(10, 10, 10, 0.82);
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.portal-notifications-btn:hover,
+.portal-notifications-btn:focus-visible {
+  border-color: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.65);
+  outline: none;
+}
+
+.portal-notifications-btn svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: currentColor;
+}
+
+.portal-notifications-badge {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  display: inline-grid;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  place-items: center;
+  padding: 0 0.24rem;
+  border: 2px solid rgba(8, 8, 8, 0.95);
+  border-radius: 999px;
+  background: rgb(var(--portal-accent-rgb, 200, 16, 46));
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.portal-notifications-menu {
+  position: absolute;
+  z-index: 220;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  width: min(360px, calc(100vw - 1.2rem));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  background: rgba(8, 8, 8, 0.98);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.42);
+}
+
+.portal-notifications-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.72rem 0.78rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.portal-notifications-head strong {
+  font-size: 0.88rem;
+}
+
+.portal-notifications-head span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.portal-notifications-list {
+  display: grid;
+  max-height: min(430px, 70vh);
+  overflow-y: auto;
+}
+
+.portal-notification-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.55rem;
+  padding: 0.72rem 0.78rem;
+  color: var(--text-main);
+  text-decoration: none;
+}
+
+.portal-notification-item:hover,
+.portal-notification-item:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+}
+
+.portal-notification-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-top: 0.24rem;
+  border-radius: 999px;
+  background: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.95);
+}
+
+.portal-notification-dot.is-media {
+  background: #38bdf8;
+}
+
+.portal-notification-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.16rem;
+}
+
+.portal-notification-copy strong,
+.portal-notification-copy span,
+.portal-notification-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.portal-notification-copy strong {
+  font-size: 0.84rem;
+}
+
+.portal-notification-copy span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.portal-notification-copy small {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.portal-notifications-empty {
+  margin: 0;
+  padding: 0.9rem 0.78rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+body.theme-light .portal-notifications-btn {
+  border-color: rgba(15, 23, 42, 0.2);
+  background: rgba(255, 255, 255, 0.94);
+  color: #0f172a;
+}
+
+body.theme-light .portal-notifications-badge {
+  border-color: #fff;
+}
+
+body.theme-light .portal-notifications-menu {
+  border-color: rgba(15, 23, 42, 0.16);
+  background: rgba(255, 255, 255, 0.99);
+  box-shadow: 0 22px 48px rgba(15, 23, 42, 0.18);
+}
+
+body.theme-light .portal-notifications-head {
+  border-bottom-color: rgba(15, 23, 42, 0.1);
+}
+
+body.theme-light .portal-notification-item:hover,
+body.theme-light .portal-notification-item:focus-visible {
+  background: rgba(15, 23, 42, 0.06);
+}
+
 .portal-user-meta {
   display: grid;
   justify-items: end;
@@ -2897,6 +3075,15 @@ body:not(.theme-light) .portal-set-weights select option {
 
 .portal-search-select-option:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+
+.portal-option-email {
+  color: color-mix(in srgb, rgb(var(--portal-accent-rgb, 200, 16, 46)) 78%, #ffffff 22%);
+  font-weight: 700;
+}
+
+body.theme-light .portal-option-email {
+  color: rgb(var(--portal-accent-rgb, 200, 16, 46));
 }
 
 .portal-search-select-option-multi {
@@ -5644,6 +5831,7 @@ body.theme-light {
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 0;
   width: 100%;
+  min-width: 0;
 }
 
 .portal-schedule-day-grid {
@@ -5655,9 +5843,10 @@ body.theme-light {
 .portal-schedule-day {
   overflow: hidden;
   min-width: 0;
+  max-width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 10px;
-  padding: 0.45rem;
+  padding: clamp(0.28rem, 0.18rem + 0.35vw, 0.45rem);
   background: rgba(0, 0, 0, 0.28);
   min-height: 220px;
   aspect-ratio: 1 / 1;
@@ -5695,6 +5884,7 @@ body.theme-light {
   justify-content: space-between;
   align-items: center;
   gap: 0.35rem;
+  min-width: 0;
   font-size: 0.78rem;
 }
 
@@ -5702,6 +5892,7 @@ body.theme-light {
   display: inline-flex;
   align-items: baseline;
   gap: 0.35rem;
+  min-width: 0;
 }
 
 .portal-schedule-day-num {
@@ -5896,10 +6087,11 @@ body.theme-light .portal-throwing-notes::placeholder {
 .portal-schedule-item {
   width: 100%;
   min-width: 0;
+  max-width: 100%;
   box-sizing: border-box;
   border: 1px solid rgba(var(--portal-accent-rgb, 200, 16, 46), 0.45);
   border-radius: 6px;
-  padding: 0.24rem 0.4rem;
+  padding: clamp(0.18rem, 0.12rem + 0.2vw, 0.28rem) clamp(0.24rem, 0.16rem + 0.28vw, 0.42rem);
   background: rgba(var(--portal-accent-rgb, 200, 16, 46), 0.14);
   color: var(--text-main);
   display: grid;
@@ -5909,9 +6101,17 @@ body.theme-light .portal-throwing-notes::placeholder {
   text-align: center;
   cursor: pointer;
   overflow: hidden;
+  contain: inline-size;
+  line-height: 1.12;
 }
 
 .portal-schedule-item span {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: rgba(255, 255, 255, 0.75);
   font-size: 0.74rem;
 }
@@ -5927,8 +6127,47 @@ body.theme-light .portal-throwing-notes::placeholder {
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
-  font-size: clamp(0.68rem, 0.63rem + 0.2vw, 0.78rem);
+  font-size: clamp(0.64rem, 0.6rem + 0.18vw, 0.78rem);
   line-height: 1.12;
+}
+
+.portal-schedule-day-body > *,
+.portal-schedule-item > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 1180px) {
+  .portal-schedule-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .portal-workout-palette-list {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    max-height: 240px;
+  }
+}
+
+@media (max-width: 900px) {
+  .portal-schedule-calendar {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+
+  .portal-schedule-weekdays,
+  .portal-schedule-month-grid,
+  .portal-schedule-week-grid {
+    min-width: 680px;
+  }
+
+  .portal-schedule-day {
+    min-height: 148px !important;
+  }
+
+  .portal-schedule-day-empty {
+    min-height: 148px !important;
+  }
 }
 
 .portal-modal-backdrop {
@@ -6893,14 +7132,14 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 
   .portal-header {
     display: grid;
-    grid-template-columns: 64px minmax(0, 1fr) 64px;
+    grid-template-columns: 64px minmax(0, 1fr) 92px;
     align-items: center;
     gap: 0.42rem;
     padding: 0.4rem 0.55rem;
   }
 
   body.biomechanics-suite-active .portal-header {
-    grid-template-columns: 64px minmax(0, 1fr) 64px !important;
+    grid-template-columns: 64px minmax(0, 1fr) 92px !important;
   }
 
   .portal-header-left {
@@ -6916,14 +7155,14 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
     justify-self: center;
     justify-content: center;
     align-items: center;
-    gap: 0;
+    gap: 0.32rem;
     min-width: 0;
-    width: 64px;
+    width: 92px;
   }
 
   body.biomechanics-suite-active .portal-header-right {
-    width: 64px !important;
-    gap: 0 !important;
+    width: 92px !important;
+    gap: 0.32rem !important;
   }
 
   .portal-header-right .portal-user-meta,
@@ -6947,6 +7186,11 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   .portal-header-right .portal-header-logo-link {
     width: 40px;
     height: 40px;
+  }
+
+  .portal-notifications-btn {
+    width: 2rem;
+    height: 2rem;
   }
 
   .portal-header-logo--pcu-right {
@@ -7250,7 +7494,7 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   .portal-schedule-weekdays,
   .portal-schedule-month-grid,
   .portal-schedule-week-grid {
-    min-width: 0;
+    min-width: 680px;
   }
 
   .portal-schedule-toolbar,

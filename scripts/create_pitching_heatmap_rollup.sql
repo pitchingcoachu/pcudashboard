@@ -105,6 +105,11 @@ CREATE INDEX IF NOT EXISTS idx_pitching_heatmap_daily_bins_lookup
 CREATE INDEX IF NOT EXISTS idx_pitching_heatmap_daily_bins_pitcher
   ON public.pitching_heatmap_daily_bins (school_code, pitcher_norm, session_date);
 
+CREATE INDEX IF NOT EXISTS idx_pitching_heatmap_daily_bins_league_heatmap
+  ON public.pitching_heatmap_daily_bins (session_date, pitcherhand_norm, batterside_norm, pitch_type, plate_x_bin, plate_z_bin)
+  WHERE school_code NOT IN ('PRO','LEAGUE','TRIAL')
+    AND pitcher_team_code NOT IN ('TRIAL','DASHBOARDTRIAL');
+
 ALTER TABLE public.pitching_heatmap_daily_bins
   ADD COLUMN IF NOT EXISTS k_n integer NOT NULL DEFAULT 0;
 

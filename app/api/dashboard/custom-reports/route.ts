@@ -272,9 +272,10 @@ export async function GET() {
   const { organizationIds } = await resolveCustomReportOrganizationScope(session, schoolCode);
   const identityFallback = await resolveAuthIdentityFallback(session);
   const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
-  const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
+  const globalAdminEmails = parseGlobalAdminEmails();
+  const canShareAcrossSites = Boolean(normalizedEmail && globalAdminEmails.includes(normalizedEmail));
   const effectiveUserIds = Array.from(
     new Set([
       ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
@@ -291,20 +292,25 @@ export async function GET() {
       applies_to_all_schools: boolean;
       school_code: string;
       payload_json: unknown;
+      created_by_email: string | null;
       created_at: string;
       updated_at: string;
     }>(
       `
-      SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
+      SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, created_at, updated_at
       FROM dashboard_custom_reports
       WHERE (
-        (($5::boolean OR organization_id = ANY($1::int[])) AND (school_code = $2 OR applies_to_all_schools = TRUE))
-        OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
-        OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+        (school_code = $2 AND (
+          $5::boolean
+          OR organization_id = ANY($1::int[])
+          OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
+          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+        ))
+        OR (applies_to_all_schools = TRUE AND LOWER(COALESCE(created_by_email, '')) = ANY($7::text[]))
       )
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrgIds, schoolCode, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
+      [scopedOrgIds, schoolCode, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, globalAdminEmails]
     );
     let rows = result.rows;
     if (!rows.length) {
@@ -314,19 +320,25 @@ export async function GET() {
         applies_to_all_schools: boolean;
         school_code: string;
         payload_json: unknown;
+        created_by_email: string | null;
         created_at: string;
         updated_at: string;
       }>(
         `
-        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
+        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, created_at, updated_at
         FROM dashboard_custom_reports
-        WHERE $4::boolean
-           OR organization_id = ANY($1::int[])
-           OR ($2::boolean AND created_by_user_id = ANY($3::bigint[]))
-           OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
+        WHERE (
+          school_code = $6 AND (
+            $4::boolean
+            OR organization_id = ANY($1::int[])
+            OR ($2::boolean AND created_by_user_id = ANY($3::bigint[]))
+            OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
+          )
+        )
+        OR (applies_to_all_schools = TRUE AND LOWER(COALESCE(created_by_email, '')) = ANY($7::text[]))
         ORDER BY updated_at DESC, id DESC
         `,
-        [scopedOrgIds, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
+        [scopedOrgIds, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode, globalAdminEmails]
       );
       rows = fallback.rows;
     }
@@ -339,16 +351,18 @@ export async function GET() {
         applies_to_all_schools: boolean;
         school_code: string;
         payload_json: unknown;
+        created_by_email: string | null;
         created_at: string;
         updated_at: string;
       }>(
         `
-        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
+        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, created_at, updated_at
         FROM dashboard_custom_reports
-        WHERE school_code = $1 OR applies_to_all_schools = TRUE
+        WHERE school_code = $1
+          OR (applies_to_all_schools = TRUE AND LOWER(COALESCE(created_by_email, '')) = ANY($2::text[]))
         ORDER BY updated_at DESC, id DESC
         `,
-        [schoolCode]
+        [schoolCode, globalAdminEmails]
       );
       rows = schoolFallback.rows;
     }
@@ -389,11 +403,12 @@ export async function GET() {
         applies_to_all_schools: boolean;
         school_code: string;
         payload_json: unknown;
+        created_by_email: string | null;
         created_at: string;
         updated_at: string;
       }>(
         `
-        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_at, updated_at
+        SELECT id, name, applies_to_all_schools, school_code, payload_json, created_by_email, created_at, updated_at
         FROM dashboard_custom_reports
         WHERE
           lower(name) = ANY($1::text[])
@@ -431,6 +446,7 @@ export async function GET() {
         name: row.name,
         applyToAllSchools: Boolean(row.applies_to_all_schools),
         payload: row.payload_json ?? {},
+        createdByEmail: row.created_by_email ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       })),
@@ -453,6 +469,7 @@ export async function POST(request: Request) {
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
+  const canShareAcrossSites = Boolean(normalizedEmail && parseGlobalAdminEmails().includes(normalizedEmail));
   const effectiveUserIds = Array.from(
     new Set([
       ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
@@ -479,7 +496,7 @@ export async function POST(request: Request) {
     const id = Number(body.id);
     const name = String(body.name ?? '').trim();
     const payload = body.payload ?? {};
-    const applyToAllSchools = session.role === 'admin' ? Boolean(body.applyToAllSchools) : false;
+    const applyToAllSchools = canShareAcrossSites ? Boolean(body.applyToAllSchools) : false;
     if (!name) return NextResponse.json({ error: 'Report name is required.' }, { status: 400 });
 
     let saved;
@@ -489,6 +506,7 @@ export async function POST(request: Request) {
         name: string;
         applies_to_all_schools: boolean;
         payload_json: unknown;
+        created_by_email: string | null;
         created_at: string;
         updated_at: string;
       }>(
@@ -502,13 +520,18 @@ export async function POST(request: Request) {
          WHERE id = $2
            AND (
              $8::boolean
-             OR organization_id = ANY($1::int[])
-             OR ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
-             OR ($9::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($9))
+             OR (
+               school_code = $10
+               AND (
+                 organization_id = ANY($1::int[])
+                 OR ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
+                 OR ($9::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($9))
+               )
+             )
            )
-         RETURNING id, name, applies_to_all_schools, payload_json, created_at, updated_at
+         RETURNING id, name, applies_to_all_schools, payload_json, created_by_email, created_at, updated_at
         `,
-        [scopedOrgIds, id, name, JSON.stringify(payload), applyToAllSchools, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
+        [scopedOrgIds, id, name, JSON.stringify(payload), applyToAllSchools, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });
@@ -519,6 +542,7 @@ export async function POST(request: Request) {
         name: string;
         applies_to_all_schools: boolean;
         payload_json: unknown;
+        created_by_email: string | null;
         created_at: string;
         updated_at: string;
       }>(
@@ -528,9 +552,14 @@ export async function POST(request: Request) {
           FROM dashboard_custom_reports
           WHERE (
             $10::boolean
-            OR organization_id = ANY($1::int[])
-            OR ($7::boolean AND created_by_user_id = ANY($8::bigint[]))
-            OR ($11::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($11))
+            OR (
+              school_code = $2
+              AND (
+                organization_id = ANY($1::int[])
+                OR ($7::boolean AND created_by_user_id = ANY($8::bigint[]))
+                OR ($11::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($11))
+              )
+            )
           )
             AND school_code = $2
             AND applies_to_all_schools = $6
@@ -544,7 +573,7 @@ export async function POST(request: Request) {
                  applies_to_all_schools = $6,
                  updated_at = NOW()
            WHERE d.id IN (SELECT id FROM existing)
-           RETURNING d.id, d.name, d.applies_to_all_schools, d.payload_json, d.created_at, d.updated_at
+           RETURNING d.id, d.name, d.applies_to_all_schools, d.payload_json, d.created_by_email, d.created_at, d.updated_at
         ),
         inserted AS (
           INSERT INTO dashboard_custom_reports (
@@ -552,7 +581,7 @@ export async function POST(request: Request) {
           )
           SELECT $9, $2, $6, $3, $4::jsonb, $5, CASE WHEN $11::text <> '' THEN $11::text ELSE NULL END
           WHERE NOT EXISTS (SELECT 1 FROM existing)
-          RETURNING id, name, applies_to_all_schools, payload_json, created_at, updated_at
+          RETURNING id, name, applies_to_all_schools, payload_json, created_by_email, created_at, updated_at
         )
         SELECT * FROM updated
         UNION ALL
@@ -569,7 +598,7 @@ export async function POST(request: Request) {
           hasUserScope,
           effectiveUserIds,
           effectivePrimaryOrganizationId,
-          isGlobalAdmin,
+          canShareAcrossSites,
           normalizedEmail,
         ]
       );
@@ -582,6 +611,7 @@ export async function POST(request: Request) {
         name: row.name,
         applyToAllSchools: Boolean(row.applies_to_all_schools),
         payload: row.payload_json ?? {},
+        createdByEmail: row.created_by_email ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       },
@@ -604,6 +634,7 @@ export async function DELETE(request: Request) {
   const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
+  const canShareAcrossSites = Boolean(normalizedEmail && parseGlobalAdminEmails().includes(normalizedEmail));
   const effectiveUserIds = Array.from(
     new Set([
       ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
@@ -629,13 +660,18 @@ export async function DELETE(request: Request) {
       WHERE id = $1
         AND (
           $5::boolean
-          OR organization_id = ANY($2::int[])
-          OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
-          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+          OR (
+            school_code = $7
+            AND (
+              organization_id = ANY($2::int[])
+              OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
+              OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+            )
+          )
         )
       LIMIT 1
       `,
-      [id, scopedOrgIds, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
+      [id, scopedOrgIds, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode]
     );
     const existingName = String(protectedCheck.rows[0]?.name ?? '').trim();
     if (normalizedReportNameKey(existingName) === normalizedReportNameKey("Jared's Dashboard")) {
@@ -650,12 +686,17 @@ export async function DELETE(request: Request) {
       WHERE id = $1
         AND (
           $5::boolean
-          OR organization_id = ANY($2::int[])
-          OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
-          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+          OR (
+            school_code = $7
+            AND (
+              organization_id = ANY($2::int[])
+              OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
+              OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+            )
+          )
         )
       `,
-      [id, scopedOrgIds, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
+      [id, scopedOrgIds, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode]
     );
     if (!deleted.rowCount) {
       return NextResponse.json({ error: 'Custom report not found.' }, { status: 404 });

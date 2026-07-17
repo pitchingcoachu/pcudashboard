@@ -8,7 +8,8 @@ export type PortalActivityEventType =
   | 'bullpen_saved'
   | 'workout_logged'
   | 'questionnaire_completed'
-  | 'note_added';
+  | 'note_added'
+  | 'media_uploaded';
 
 export function canViewPortalActivity(input: { email?: string | null }): boolean {
   return String(input.email ?? '').trim().toLowerCase() === ACTIVITY_TRACKER_OWNER_EMAIL;
@@ -21,6 +22,7 @@ export function normalizeActivityEventType(value: string | null | undefined): Po
   if (normalized === 'workout_logged') return 'workout_logged';
   if (normalized === 'questionnaire_completed') return 'questionnaire_completed';
   if (normalized === 'note_added') return 'note_added';
+  if (normalized === 'media_uploaded') return 'media_uploaded';
   return 'page_view';
 }
 

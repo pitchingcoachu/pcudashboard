@@ -19,6 +19,7 @@ import MobileNavSelect from '../mobile-nav-select';
 import PreviewAthleteSelect from '../preview-athlete-select';
 import LogoutButton from '../logout-button';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
+import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import ProfileDashboard from './profile-dashboard';
 import PlayerQuestionnaireGate from './player-questionnaire-gate';
@@ -127,6 +128,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             <p>Logged In As</p>
             <h1>{session.name ?? session.email}</h1>
           </div>
+          {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
           <LogoutButton />
           <PortalThemeToggle />
         </div>
@@ -279,6 +281,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             <p>{session.role === 'admin' || session.role === 'coach' ? 'Previewing' : 'Logged In As'}</p>
             <h1>{session.role === 'admin' || session.role === 'coach' ? player.fullName : session.name ?? session.email}</h1>
           </div>
+          {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
           <LogoutButton />
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">

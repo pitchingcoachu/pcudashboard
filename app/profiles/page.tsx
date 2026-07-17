@@ -10,6 +10,7 @@ import { listPlayerProfilesWithPlanGoals } from '../../lib/training-db';
 import DashboardSchoolSelector from '../portal/dashboard/dashboard-school-selector';
 import LogoutButton from '../portal/logout-button';
 import MobileNavSelect from '../portal/mobile-nav-select';
+import PortalNotificationsBell from '../portal/notifications-bell';
 import PortalThemeToggle from '../portal/theme-toggle';
 import ProfilesList from './profiles-list';
 
@@ -95,6 +96,7 @@ export default async function ProfilesPage() {
             <p>Logged In As</p>
             <h1>{session.name ?? session.email}</h1>
           </div>
+          <PortalNotificationsBell />
           <LogoutButton />
           <PortalThemeToggle />
         </div>

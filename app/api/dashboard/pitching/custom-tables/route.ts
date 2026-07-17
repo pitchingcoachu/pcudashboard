@@ -256,9 +256,10 @@ export async function GET() {
   const { organizationIds } = await resolveCustomTableOrganizationScope(session, schoolCode);
   const identityFallback = await resolveAuthIdentityFallback(session);
   const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
-  const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
+  const globalAdminEmails = parseGlobalAdminEmails();
+  const canShareAcrossSites = Boolean(normalizedEmail && globalAdminEmails.includes(normalizedEmail));
   const effectiveUserIds = Array.from(
     new Set([
       ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
@@ -274,21 +275,25 @@ export async function GET() {
       name: string;
       school_code: string;
       columns_json: unknown;
+      created_by_email: string | null;
       created_at: string;
       updated_at: string;
     }>(
       `
-      SELECT id, name, school_code, columns_json, created_at, updated_at
+      SELECT id, name, school_code, columns_json, created_by_email, created_at, updated_at
       FROM dashboard_custom_tables
       WHERE (
-        $4::boolean
-        OR organization_id = ANY($1::int[])
-        OR ($2::boolean AND created_by_user_id = ANY($3::bigint[]))
-        OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
+        (school_code = $6 AND (
+          $4::boolean
+          OR organization_id = ANY($1::int[])
+          OR ($2::boolean AND created_by_user_id = ANY($3::bigint[]))
+          OR ($5::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($5))
+        ))
+        OR LOWER(COALESCE(created_by_email, '')) = ANY($7::text[])
       )
       ORDER BY updated_at DESC, id DESC
       `,
-      [scopedOrgIds, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
+      [scopedOrgIds, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode, globalAdminEmails]
     );
     let candidateRows = scopedResult.rows;
     if (!candidateRows.length) {
@@ -299,11 +304,12 @@ export async function GET() {
         name: string;
         school_code: string;
         columns_json: unknown;
+        created_by_email: string | null;
         created_at: string;
         updated_at: string;
       }>(
         `
-        SELECT id, name, school_code, columns_json, created_at, updated_at
+        SELECT id, name, school_code, columns_json, created_by_email, created_at, updated_at
         FROM dashboard_custom_tables
         WHERE school_code = $1
         ORDER BY updated_at DESC, id DESC
@@ -343,6 +349,7 @@ export async function GET() {
         id: Number(row.id),
         name: row.name,
         columns: normalizeColumns(row.columns_json),
+        createdByEmail: row.created_by_email ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       })),
@@ -363,9 +370,9 @@ export async function POST(request: Request) {
   const { primaryOrganizationId, organizationIds } = await resolveCustomTableOrganizationScope(session, schoolCode);
   const identityFallback = await resolveAuthIdentityFallback(session);
   const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
-  const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
+  const canShareAcrossSites = Boolean(normalizedEmail && parseGlobalAdminEmails().includes(normalizedEmail));
   const effectiveUserIds = Array.from(
     new Set([
       ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
@@ -381,7 +388,7 @@ export async function POST(request: Request) {
   if (
     !Number.isFinite(effectivePrimaryOrganizationId) ||
     effectivePrimaryOrganizationId <= 0 ||
-    (!scopedOrgIds.length && !isGlobalAdmin)
+    (!scopedOrgIds.length && !canShareAcrossSites)
   ) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
@@ -405,6 +412,7 @@ export async function POST(request: Request) {
         id: number;
         name: string;
         columns_json: unknown;
+        created_by_email: string | null;
         created_at: string;
         updated_at: string;
       }>(
@@ -417,13 +425,18 @@ export async function POST(request: Request) {
          WHERE id = $2
            AND (
              $7::boolean
-             OR organization_id = ANY($1::int[])
-             OR ($5::boolean AND created_by_user_id = ANY($6::bigint[]))
-             OR ($8::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($8))
+             OR (
+               school_code = $9
+               AND (
+                 organization_id = ANY($1::int[])
+                 OR ($5::boolean AND created_by_user_id = ANY($6::bigint[]))
+                 OR ($8::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($8))
+               )
+             )
            )
-         RETURNING id, name, columns_json, created_at, updated_at
+         RETURNING id, name, columns_json, created_by_email, created_at, updated_at
         `,
-        [scopedOrgIds, id, name, payload, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
+        [scopedOrgIds, id, name, payload, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode]
       );
       if (!saved.rowCount) {
         return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -433,6 +446,7 @@ export async function POST(request: Request) {
         id: number;
         name: string;
         columns_json: unknown;
+        created_by_email: string | null;
         created_at: string;
         updated_at: string;
       }>(
@@ -442,9 +456,14 @@ export async function POST(request: Request) {
           FROM dashboard_custom_tables
           WHERE (
             $9::boolean
-            OR organization_id = ANY($1::int[])
-            OR ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
-            OR ($10::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($10))
+            OR (
+              school_code = $2
+              AND (
+                organization_id = ANY($1::int[])
+                OR ($6::boolean AND created_by_user_id = ANY($7::bigint[]))
+                OR ($10::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($10))
+              )
+            )
           )
             AND school_code = $2
             AND lower(name) = lower($3)
@@ -456,7 +475,7 @@ export async function POST(request: Request) {
                  name = $3,
                  updated_at = NOW()
            WHERE d.id IN (SELECT id FROM existing)
-           RETURNING d.id, d.name, d.columns_json, d.created_at, d.updated_at
+           RETURNING d.id, d.name, d.columns_json, d.created_by_email, d.created_at, d.updated_at
         ),
         inserted AS (
           INSERT INTO dashboard_custom_tables (
@@ -464,11 +483,11 @@ export async function POST(request: Request) {
           )
           SELECT $8, $2, $3, $4::jsonb, $5, CASE WHEN $10::text <> '' THEN $10::text ELSE NULL END
           WHERE NOT EXISTS (SELECT 1 FROM existing)
-          RETURNING id, name, columns_json, created_at, updated_at
+          RETURNING id, name, columns_json, created_by_email, created_at, updated_at
         )
-        SELECT id, name, columns_json, created_at, updated_at FROM updated
+        SELECT id, name, columns_json, created_by_email, created_at, updated_at FROM updated
         UNION ALL
-        SELECT id, name, columns_json, created_at, updated_at FROM inserted
+        SELECT id, name, columns_json, created_by_email, created_at, updated_at FROM inserted
         `,
         [
           scopedOrgIds,
@@ -479,7 +498,7 @@ export async function POST(request: Request) {
           hasUserScope,
           effectiveUserIds,
           effectivePrimaryOrganizationId,
-          isGlobalAdmin,
+          canShareAcrossSites,
           normalizedEmail,
         ]
       );
@@ -491,6 +510,7 @@ export async function POST(request: Request) {
         id: Number(row.id),
         name: row.name,
         columns: normalizeColumns(row.columns_json),
+        createdByEmail: row.created_by_email ?? null,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       },
@@ -511,9 +531,9 @@ export async function DELETE(request: Request) {
   const { organizationIds } = await resolveCustomTableOrganizationScope(session, schoolCode);
   const identityFallback = await resolveAuthIdentityFallback(session);
   const scopedOrgIds = Array.from(new Set([...organizationIds, ...identityFallback.fallbackOrgIds]));
-  const isGlobalAdmin = isGlobalAdminSession(session);
   const userId = Number(session.userId ?? 0);
   const normalizedEmail = String(session.email ?? '').trim().toLowerCase();
+  const canShareAcrossSites = Boolean(normalizedEmail && parseGlobalAdminEmails().includes(normalizedEmail));
   const effectiveUserIds = Array.from(
     new Set([
       ...(Number.isFinite(userId) && userId > 0 ? [userId] : []),
@@ -521,7 +541,7 @@ export async function DELETE(request: Request) {
     ])
   );
   const hasUserScope = effectiveUserIds.length > 0;
-  if (!scopedOrgIds.length && !isGlobalAdmin && !hasUserScope) {
+  if (!scopedOrgIds.length && !canShareAcrossSites && !hasUserScope) {
     return NextResponse.json({ error: 'No valid organization scope for custom tables.' }, { status: 400 });
   }
   const url = new URL(request.url);
@@ -539,13 +559,18 @@ export async function DELETE(request: Request) {
       WHERE id = $1
         AND (
           $5::boolean
-          OR organization_id = ANY($2::int[])
-          OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
-          OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+          OR (
+            school_code = $7
+            AND (
+              organization_id = ANY($2::int[])
+              OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
+              OR ($6::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($6))
+            )
+          )
         )
       LIMIT 1
       `,
-      [id, scopedOrgIds, hasUserScope, effectiveUserIds, isGlobalAdmin, normalizedEmail]
+      [id, scopedOrgIds, hasUserScope, effectiveUserIds, canShareAcrossSites, normalizedEmail, schoolCode]
     );
     if (!(target.rowCount ?? 0)) {
       return NextResponse.json({ error: 'Custom table not found.' }, { status: 404 });
@@ -561,9 +586,14 @@ export async function DELETE(request: Request) {
         AND lower(regexp_replace(trim(name), '\\s+', ' ', 'g')) = $7
         AND (
           $5::boolean
-          OR organization_id = ANY($2::int[])
-          OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
-          OR ($8::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($8))
+          OR (
+            school_code = $9
+            AND (
+              organization_id = ANY($2::int[])
+              OR ($3::boolean AND created_by_user_id = ANY($4::bigint[]))
+              OR ($8::text <> '' AND LOWER(COALESCE(created_by_email, '')) = LOWER($8))
+            )
+          )
         )
       `,
       [
@@ -571,10 +601,11 @@ export async function DELETE(request: Request) {
         scopedOrgIds,
         hasUserScope,
         effectiveUserIds,
-        isGlobalAdmin,
+        canShareAcrossSites,
         target.rows[0].school_code,
         normalizedTableNameKey(target.rows[0].name),
         normalizedEmail,
+        schoolCode,
       ]
     );
     return NextResponse.json({ ok: (result.rowCount ?? 0) > 0, deletedCount: Number(result.rowCount ?? 0) });

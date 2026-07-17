@@ -13,6 +13,8 @@ import { dashboardActivityPath, dispatchPortalActivity } from './activity-events
 type OptionItem = { value: string; label: string };
 type HeatCell = { x: number; y: number; w: number; h: number; value: number; density: number };
 type Contact2dDisplay = 'individual' | 'average_pitch_type' | 'heat_exit_velocity' | 'heat_result' | 'heat_contact';
+const PRO_LEVEL_FILTER_OPTIONS = ['All', 'MLB', 'AAA'];
+const NCAA_LEVEL_FILTER_OPTIONS = ['All', 'D1', 'D2', 'D3', 'NAIA', 'JUCO'];
 
 type HittingFiltersPayload = {
   school_code: string;
@@ -130,9 +132,27 @@ type CustomTableConfig = {
   id: number;
   name: string;
   columns: string[];
+  createdByEmail?: string | null;
   createdAt?: string;
   updatedAt?: string;
 };
+
+function customTableOptionLabel(item: CustomTableConfig): string {
+  const name = String(item.name ?? '').trim();
+  const creator = String(item.createdByEmail ?? '').trim();
+  return creator ? `${name} (${creator})` : name;
+}
+
+function renderOptionLabel(label: string) {
+  const match = String(label ?? '').match(/^(.*)\s+\(([^()\s@]+@[^()\s@]+)\)$/);
+  if (!match) return label;
+  return (
+    <>
+      {match[1]}
+      <span className="portal-option-email"> ({match[2]})</span>
+    </>
+  );
+}
 
 const PITCH_COLORS: Record<string, string> = {
   Fastball: 'var(--portal-fastball-color)',
@@ -991,7 +1011,7 @@ function SearchableSingleSelect({
   return (
     <div className="portal-search-select" ref={rootRef}>
       <button type="button" className="portal-search-select-trigger" onClick={() => setOpen((current) => !current)}>
-        {selected?.label ?? placeholder ?? 'Select'}
+        {selected ? renderOptionLabel(selected.label) : placeholder ?? 'Select'}
       </button>
       {open ? (
         <div className="portal-search-select-menu">
@@ -1009,7 +1029,7 @@ function SearchableSingleSelect({
                 className="portal-search-select-option"
                 onClick={() => commitSelection(option.value)}
               >
-                {option.label}
+                {renderOptionLabel(option.label)}
               </button>
             ))}
           </div>
@@ -2225,7 +2245,7 @@ export default function HittingSuite({
   const [endDate, setEndDate] = useState('');
   const [hitter, setHitter] = useState('All');
   const [teamType, setTeamType] = useState('All');
-  const [level, setLevel] = useState('MLB');
+  const [level, setLevel] = useState(String(selectedSchoolCode ?? '').trim().toUpperCase() === 'LEAGUE' ? 'D1' : 'MLB');
   const [oppPitcher, setOppPitcher] = useState('All');
   const [hand, setHand] = useState('All');
   const [batterSide, setBatterSide] = useState('All');
@@ -2569,8 +2589,15 @@ export default function HittingSuite({
 
   useEffect(() => {
     if (!isPro) return;
-    if (!level) setLevel('MLB');
+    if (!PRO_LEVEL_FILTER_OPTIONS.includes(level)) setLevel('MLB');
   }, [isPro, level]);
+
+  useEffect(() => {
+    if (!isLeague) return;
+    const options = filters?.level_options?.length ? filters.level_options : NCAA_LEVEL_FILTER_OPTIONS;
+    const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
+    if (!level || PRO_LEVEL_FILTER_OPTIONS.includes(level) || !options.includes(level)) setLevel(nextDefault);
+  }, [filters?.level_options, isLeague, level]);
 
   const loadCustomTables = async () => {
     setLoadingCustomTables(true);
@@ -2679,7 +2706,7 @@ export default function HittingSuite({
       ? resolveLeagueTeamTypeForApi(teamType, [filters?.hitters_by_team_code, filters?.opp_pitchers_by_team_code])
       : teamType;
     if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
-    if (isPro && level && level !== 'All') {
+    if ((isPro || isLeague) && level && level !== 'All') {
       params.set('level', level);
     }
     if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
@@ -3263,7 +3290,7 @@ export default function HittingSuite({
       if (endDate) params.set('end_date', endDate);
       if (hitter && hitter !== 'All') params.set('hitter', hitter);
       if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
-      if (isPro && level && level !== 'All') params.set('level', level);
+      if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
       if (oppPitcher && oppPitcher !== 'All') params.set('opp_pitcher', oppPitcher);
       if (hand && hand !== 'All') params.set('hand', hand);
       if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
@@ -3600,7 +3627,7 @@ export default function HittingSuite({
       { value: 'Swing Decisions', label: 'Swing Decisions' },
       { value: 'Swing Metrics', label: 'Swing Metrics' },
       { value: 'Batted Ball Data', label: 'Batted Ball Data' },
-      ...customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: item.name })),
+      ...customTables.map((item) => ({ value: `custom_saved:${item.id}`, label: customTableOptionLabel(item) })),
       { value: 'Custom', label: 'Custom' },
     ],
     [customTables]
@@ -4624,14 +4651,14 @@ export default function HittingSuite({
                       placeholder="All"
                     />
                   </label>
-                  {isPro ? (
+                  {isPro || isLeague ? (
                     <label>
                       Level
                       <SearchableSingleSelect
-                        options={toOptions(filters.level_options ?? ['All', 'MLB', 'AAA'])}
+                        options={toOptions(filters.level_options ?? (isPro ? PRO_LEVEL_FILTER_OPTIONS : NCAA_LEVEL_FILTER_OPTIONS))}
                         value={level}
                         onChange={setLevel}
-                        placeholder="MLB"
+                        placeholder={isPro ? 'MLB' : 'D1'}
                       />
                     </label>
                   ) : null}
@@ -5131,7 +5158,7 @@ export default function HittingSuite({
                   <SearchableSingleSelect
                     options={[
                       { value: 'new', label: 'New Custom Table' },
-                      ...customTables.map((item) => ({ value: String(item.id), label: item.name })),
+                      ...customTables.map((item) => ({ value: String(item.id), label: customTableOptionLabel(item) })),
                     ]}
                     value={selectedCustomTableId ? String(selectedCustomTableId) : 'new'}
                     onChange={(next) => {

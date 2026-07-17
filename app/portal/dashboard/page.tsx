@@ -9,6 +9,7 @@ import DashboardSchoolSelector from './dashboard-school-selector';
 import DashboardShell from './dashboard-shell';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 import PortalThemeToggle from '../theme-toggle';
+import PortalNotificationsBell from '../notifications-bell';
 
 type PortalDashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -106,6 +107,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
             <p>Logged In As</p>
             <h1>{session.name ?? session.email}</h1>
           </div>
+          {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
           <LogoutButton />
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">

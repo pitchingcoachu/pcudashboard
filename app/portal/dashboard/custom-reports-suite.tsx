@@ -208,6 +208,7 @@ type SavedReportItem = {
   name: string;
   applyToAllSchools?: boolean;
   payload: unknown;
+  createdByEmail?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -216,9 +217,32 @@ type CustomTableConfig = {
   id: number;
   name: string;
   columns: string[];
+  createdByEmail?: string | null;
   createdAt?: string;
   updatedAt?: string;
 };
+
+function appendCreatorEmailLabel(name: string, email?: string | null): string {
+  const base = String(name ?? '').trim();
+  const creator = String(email ?? '').trim();
+  return creator ? `${base} (${creator})` : base;
+}
+
+function savedReportOptionLabel(item: SavedReportItem): string {
+  const base = String(item.name ?? '').replace(/\s*\(all schools\)\s*$/i, '').trim();
+  return appendCreatorEmailLabel(base, item.createdByEmail);
+}
+
+function renderOptionLabel(label: string) {
+  const match = String(label ?? '').match(/^(.*)\s+\(([^()\s@]+@[^()\s@]+)\)$/);
+  if (!match) return label;
+  return (
+    <>
+      {match[1]}
+      <span className="portal-option-email"> ({match[2]})</span>
+    </>
+  );
+}
 
 type CellConfig = {
   panelType: PanelType;
@@ -400,12 +424,18 @@ const PITCHING_TABLES = ['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Bann
 const HITTING_TABLES = ['Results', 'Swing Decisions'];
 const CATCHING_TABLES = ['Catching Data', 'Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data', 'Batted Ball Data', 'Swing Decisions'];
 const CATCHING_SPLIT_BY = UNIVERSAL_SPLIT_BY;
-const HEATMAP_STATS = ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'SwStrk%', 'Exit Velocity', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Run Values', 'PV/100', 'xWOBA', 'xISO'];
-const HITTING_HEATMAP_STATS = ['Frequency', 'Whiff Rate', 'SwStrk%', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Exit Velocity', 'Run Values', 'PV/100', 'xWOBA', 'xISO'] as const;
+const HEATMAP_STATS = ['Frequency', 'Called Strike Rate', 'Whiff Rate', 'SwStrk%', 'Exit Velocity', 'GB Rate', 'Contact Rate', 'Swing Rate', 'RV/100', 'PV/100', 'xWOBA', 'xISO'];
+const HITTING_HEATMAP_STATS = ['Frequency', 'Whiff Rate', 'SwStrk%', 'GB Rate', 'Contact Rate', 'Swing Rate', 'Exit Velocity', 'RV/100', 'PV/100', 'xWOBA', 'xISO'] as const;
 
 function heatmapStatsForReportType(reportType: ReportType): string[] {
   if (reportType === 'Hitting') return [...HITTING_HEATMAP_STATS];
   return HEATMAP_STATS;
+}
+
+function normalizeHeatmapStatValue(value: string | null | undefined, reportType?: ReportType): string {
+  const normalized = value === 'Run Values' ? 'RV/100' : value || '';
+  const available = reportType ? heatmapStatsForReportType(reportType) : HEATMAP_STATS;
+  return available.includes(normalized) ? normalized : 'Frequency';
 }
 const VELOCITY_CHART_OPTIONS = ['Velocity Chart (Game/Inning)', 'Average Velocity by Game', 'Average Velocity by Inning'];
 const RELEASE_VIEW_OPTIONS = ['Averages Only', 'Averages and Pitches', 'Pitches'];
@@ -724,7 +754,7 @@ function reorderTimesThroughOrderRows<T extends Record<string, unknown>>(rows: T
     if (rankA !== rankB) return rankA - rankB;
     return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
   });
-  return [...allRows, ...nonAllRows];
+  return [...nonAllRows, ...allRows];
 }
 
 function reorderInningRows<T extends Record<string, unknown>>(rows: T[], splitColumn: string): T[] {
@@ -745,7 +775,7 @@ function reorderInningRows<T extends Record<string, unknown>>(rows: T[], splitCo
     if (rankA !== rankB) return rankA - rankB;
     return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
   });
-  return [...allRows, ...nonAllRows];
+  return [...nonAllRows, ...allRows];
 }
 
 function reorderPitchCountRows<T extends Record<string, unknown>>(rows: T[], splitColumn: string): T[] {
@@ -766,7 +796,7 @@ function reorderPitchCountRows<T extends Record<string, unknown>>(rows: T[], spl
     if (rankA !== rankB) return rankA - rankB;
     return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
   });
-  return [...allRows, ...nonAllRows];
+  return [...nonAllRows, ...allRows];
 }
 
 function pitchTypeRank(value: unknown): number {
@@ -787,7 +817,15 @@ function reorderPitchTypeRows<T extends Record<string, unknown>>(rows: T[], spli
     if (rankA !== rankB) return rankA - rankB;
     return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
   });
-  return [...allRows, ...nonAllRows];
+  return [...nonAllRows, ...allRows];
+}
+
+function moveAllRowsToBottom<T extends Record<string, unknown>>(rows: T[], splitColumn: string): T[] {
+  if (!splitColumn) return rows;
+  const allRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() === 'all');
+  if (!allRows.length) return rows;
+  const nonAllRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() !== 'all');
+  return [...nonAllRows, ...allRows];
 }
 
 function SearchableSingleSelect({
@@ -820,7 +858,7 @@ function SearchableSingleSelect({
   return (
     <div className="portal-search-select" ref={rootRef}>
       <button type="button" className="portal-search-select-trigger" onClick={() => setOpen((current) => !current)}>
-        {selected?.label ?? placeholder ?? 'Select'}
+        {selected ? renderOptionLabel(selected.label) : placeholder ?? 'Select'}
       </button>
       {open ? (
         <div className="portal-search-select-menu">
@@ -837,7 +875,7 @@ function SearchableSingleSelect({
                   setQuery('');
                 }}
               >
-                {option.label}
+                {renderOptionLabel(option.label)}
               </button>
             ))}
           </div>
@@ -1141,7 +1179,7 @@ function normalizeCellConfig(input: Partial<CellConfig> | undefined): CellConfig
     zoneLocations: input?.zoneLocations?.length ? input.zoneLocations : base.zoneLocations,
   };
   merged.panelType = normalizePanelType(merged.panelType);
-  merged.heatStat = HEATMAP_STATS.includes(merged.heatStat) ? merged.heatStat : 'Frequency';
+  merged.heatStat = normalizeHeatmapStatValue(merged.heatStat);
   merged.velocityChart = VELOCITY_CHART_OPTIONS.includes(merged.velocityChart) ? merged.velocityChart : 'Velocity Chart (Game/Inning)';
   merged.releaseView = RELEASE_VIEW_OPTIONS.includes(merged.releaseView) ? merged.releaseView : 'Averages and Pitches';
   merged.movementView = MOVEMENT_VIEW_OPTIONS.includes(merged.movementView) ? merged.movementView : 'Averages and Pitches';
@@ -1680,8 +1718,8 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
   const rows = isProSchool ? 44 : 40;
   const cellW = (xMax - xMin) / cols;
   const cellH = (yMax - yMin) / rows;
-  const sigmaX = isProSchool ? 0.15 : 0.21;
-  const sigmaY = isProSchool ? 0.15 : 0.21;
+  const sigmaX = 0.15;
+  const sigmaY = 0.15;
   const eps = 1e-9;
   const normDesc = (value: unknown): string =>
     String(value ?? '')
@@ -1736,7 +1774,14 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
     })
     .filter(
       (row): row is { point: NonNullable<OverviewLitePayload['chart_points']>[number]; x: number; y: number } =>
-        row.x !== null && row.y !== null && row.x !== undefined && row.y !== undefined
+        row.x !== null &&
+        row.y !== null &&
+        row.x !== undefined &&
+        row.y !== undefined &&
+        row.x >= xMin &&
+        row.x <= xMax &&
+        row.y >= yMin &&
+        row.y <= yMax
     );
   if (!valid.length) return [] as Array<{ x: number; y: number; w: number; h: number; value: number; density: number }>;
 
@@ -1926,7 +1971,7 @@ function buildHeatCells(points: NonNullable<OverviewLitePayload['chart_points']>
       if (metric === 'Contact Rate') value = 100 * (((swingW - whiffW) + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
       if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
       if (metric === 'Exit Velocity') value = (evWSum + shrinkStrength * globalEvAvg) / Math.max(eps, evW + shrinkStrength);
-      if (metric === 'Run Values') value = ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
+      if (metric === 'RV/100') value = ((rvWSum + runValueShrinkStrength * globalRvAvg) / Math.max(eps, sumW + runValueShrinkStrength)) * 100;
       if (metric === 'PV/100') {
         value = ((pvWSum + runValueShrinkStrength * globalPvAvg) / Math.max(eps, pvW + runValueShrinkStrength)) * 100;
       }
@@ -2794,7 +2839,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     () =>
       savedReports.map((item) => ({
         value: String(item.id),
-        label: String(item.name ?? '').replace(/\s*\(all schools\)\s*$/i, '').trim(),
+        label: savedReportOptionLabel(item),
       })),
     [savedReports]
   );
@@ -5117,7 +5162,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     tableSort?.column && tableColumns.includes(tableSort.column)
                       ? sortTableRows(tableRows, tableSort.column, tableSort.direction, tableColumns[0] ?? '')
                       : tableRows;
-                  const sortedTableRows =
+                  const orderedTableRows =
                     (config.splitBy || 'Pitch Types') === 'Times Through Order'
                       ? reorderTimesThroughOrderRows(sortedRowsBase, tableColumns[0] ?? '')
                       : (config.splitBy || 'Pitch Types') === 'Inning'
@@ -5127,6 +5172,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                       : (config.splitBy || 'Pitch Types') === 'Pitch Types'
                         ? reorderPitchTypeRows(sortedRowsBase, tableColumns[0] ?? '')
                       : sortedRowsBase;
+                  const sortedTableRows = moveAllRowsToBottom(orderedTableRows, tableColumns[0] ?? '');
                   const chartPoints = payload.chart_points ?? [];
                   const heatmapPoints = payload.heatmap_points ?? chartPoints;
                   const { row: rowNumber, col: colNumber } = rowColFromCellId(cellId);
@@ -5182,7 +5228,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     if (String(entry).startsWith('custom_saved:')) {
                       const id = Number(String(entry).replace('custom_saved:', ''));
                       const found = customTables.find((item) => Number(item.id) === id);
-                      return { value: entry, label: found?.name || String(entry) };
+                      return { value: entry, label: found ? appendCreatorEmailLabel(found.name, found.createdByEmail) : String(entry) };
                     }
                     return { value: entry, label: entry };
                   });
@@ -5208,8 +5254,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const pieTotal = pitchTypeCountList.reduce((sum, entry) => sum + entry[1], 0) || 1;
                   const isProSchool = String(activeSchoolCode || schoolCode || '').trim().toUpperCase() === 'PRO';
                   const availableHeatStats = heatmapStatsForReportType(reportType);
-                  const selectedHeatStat =
-                    availableHeatStats.includes(config.heatStat || '') ? (config.heatStat || 'Frequency') : 'Frequency';
+                  const selectedHeatStat = normalizeHeatmapStatValue(config.heatStat, reportType);
                   const heatCells = isHeatMap ? buildHeatCells(heatmapPoints, selectedHeatStat, isProSchool) : [];
                   const gridColumnStart = hasRowLabels ? colNumber + 1 : colNumber;
                   const useCompactSummaryTable =
@@ -6100,23 +6145,32 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               <span>Least</span>
                               <span>Most</span>
                             </div>
-                            <div style={{ fontSize: '0.9rem', fontWeight: 600, textAlign: 'center' }}>{config.heatStat || 'Heatmap'}</div>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 600, textAlign: 'center' }}>{selectedHeatStat || 'Heatmap'}</div>
                           </div>
                           <svg viewBox="0 0 360 460" role="img" aria-label="Heatmap" onMouseLeave={() => setChartHover(null)}>
                             {(() => {
                               const w = 360;
                               const h = 460;
-                              const xMin = -2.1;
-                              const xMax = 2.1;
+                              const pad = 16;
+                              const xMin = -2.5;
+                              const xMax = 2.5;
                               const yMin = 0;
-                              const yMax = 5;
-                              const scale = w / (xMax - xMin);
-                              const px = (x: number) => (x - xMin) * scale;
-                              const py = (y: number) => (yMax - y) * scale;
+                              const yMax = 4.5;
+                              const plotW = w - pad * 2;
+                              const plotH = h - pad * 2;
+                              const xRange = xMax - xMin;
+                              const yRange = yMax - yMin;
+                              const scale = Math.min(plotW / xRange, plotH / yRange);
+                              const drawnW = xRange * scale;
+                              const drawnH = yRange * scale;
+                              const leftPad = (w - drawnW) / 2;
+                              const topPad = (h - drawnH) / 2;
+                              const px = (x: number) => leftPad + (x - xMin) * scale;
+                              const py = (y: number) => topPad + (yMax - y) * scale;
                               const valueLabel = selectedHeatStat;
                               const isPvMetric = valueLabel === 'PV/100';
                               const heatMetricLabel = valueLabel;
-                              const isRunValuesMetric = heatMetricLabel === 'Run Values' || heatMetricLabel === 'PV/100';
+                              const isRunValuesMetric = heatMetricLabel === 'RV/100' || heatMetricLabel === 'PV/100';
                               const strikeBottom = 1.5;
                               const strikeTop = 3.6;
                               const strikeLeft = -0.88;
@@ -6139,9 +6193,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                               const minVal = fixedScale?.min ?? dynamicMinVal;
                               const maxVal = fixedScale?.max ?? dynamicMaxVal;
                               const midVal = fixedScale?.mid ?? dynamicMidVal;
-                              const rvMin = isPvMetric ? -2 : (isProSchool ? -5 : -2);
-                              const rvMax = isPvMetric ? 2 : (isProSchool ? 5 : 2);
+                              const rvMin = isPvMetric ? -2 : -5;
+                              const rvMax = isPvMetric ? 2 : 5;
                               const densityMax = Math.max(1e-9, ...heatCells.map((c) => c.density));
+                              const zoom = 1.2;
+                              const zoomTransform = `translate(${w / 2} ${h / 2}) scale(${zoom}) translate(${-w / 2} ${-h / 2})`;
                               return (
                                 <>
                                   <defs>
@@ -6152,20 +6208,20 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       <feGaussianBlur stdDeviation={isProSchool ? 1.2 : 2.1} />
                                     </filter>
                                   </defs>
-                                  <g transform={`translate(${w / 2} ${h / 2}) scale(1.0) translate(${-w / 2} ${-h / 2})`} clipPath={`url(#custom-heat-clip-${cellId})`}>
+                                  <g transform={zoomTransform} clipPath={`url(#custom-heat-clip-${cellId})`}>
                                     <g filter={`url(#custom-heat-blur-${cellId})`}>
                                       {heatCells.map((c) => {
                                         const safeValue = Number.isFinite(c.value) ? c.value : 0;
                                         const cx = px(c.x + c.w / 2);
                                         const cy = py(c.y + c.h / 2);
-                                        const radius = isProSchool ? Math.max(2.0, c.w * scale * 1.45) : Math.max(2.8, c.w * scale * 2.05);
+                                        const radius = Math.max(2.0, c.w * scale * 1.45);
                                         const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                                         let fill = 'rgba(255,255,255,0.12)';
                                         if (valueLabel === 'Frequency') {
                                           fill = sequentialColor(safeValue, minVal, maxVal);
                                         } else if (isRunValuesMetric) {
                                           const rvClamped = Math.max(rvMin, Math.min(rvMax, safeValue));
-                                          fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
+                                          fill = divergingColor(rvClamped, rvMin, 0, rvMax);
                                         } else {
                                           fill = divergingColor(safeValue, minVal, midVal, maxVal);
                                         }
@@ -6204,14 +6260,14 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                       const safeValue = Number.isFinite(c.value) ? c.value : 0;
                                       const cx = px(c.x + c.w / 2);
                                       const cy = py(c.y + c.h / 2);
-                                      const radius = isProSchool ? Math.max(1.0, c.w * scale * 0.75) : Math.max(1.4, c.w * scale * 1.08);
+                                      const radius = Math.max(1.0, c.w * scale * 0.75);
                                       const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                                       let fill = 'rgba(255,255,255,0.12)';
                                       if (valueLabel === 'Frequency') {
                                         fill = sequentialColor(safeValue, minVal, maxVal);
                                       } else if (isRunValuesMetric) {
                                         const rvClamped = Math.max(rvMin, Math.min(rvMax, safeValue));
-                                        fill = divergingColor(isPvMetric ? rvClamped : -rvClamped, rvMin, 0, rvMax);
+                                        fill = divergingColor(rvClamped, rvMin, 0, rvMax);
                                       } else {
                                         fill = divergingColor(safeValue, minVal, midVal, maxVal);
                                       }

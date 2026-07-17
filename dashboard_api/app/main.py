@@ -14980,6 +14980,51 @@ PRO_TEAM_CODE_OVERLAP: List[str] = sorted(set(PRO_MLB_TEAM_CODES).intersection(s
 PRO_MLB_ONLY_TEAM_CODES: List[str] = sorted(set(PRO_MLB_TEAM_CODES) - set(PRO_TEAM_CODE_OVERLAP))
 PRO_AAA_ONLY_TEAM_CODES: List[str] = sorted(set(PRO_AAA_TEAM_CODES) - set(PRO_TEAM_CODE_OVERLAP))
 PRO_LEVEL_OPTIONS = ["All", "MLB", "AAA"]
+COLLEGE_DEFAULT_LEVEL_OPTIONS = ["All", "D1", "D2", "D3", "NAIA", "JUCO"]
+
+
+def _college_level_expr(alias: str = "pe") -> str:
+    json_expr = f"to_jsonb({alias})"
+    return (
+        "COALESCE("
+        f"NULLIF(TRIM({json_expr}->>'Level'), ''), "
+        f"NULLIF(TRIM({json_expr}->>'level'), ''), "
+        f"NULLIF(TRIM({json_expr}->>'level_bucket'), ''), "
+        f"NULLIF(TRIM({json_expr}->>'LevelBucket'), ''), "
+        "''"
+        ")"
+    )
+
+
+def _college_level_norm(value: Optional[str]) -> str:
+    raw = str(value or "").strip()
+    if not raw or raw.lower() == "all":
+        return "All"
+    return raw.upper()
+
+
+def _college_level_options_sort_key(value: str) -> tuple[int, str]:
+    upper = value.strip().upper()
+    preferred = {level: index for index, level in enumerate(COLLEGE_DEFAULT_LEVEL_OPTIONS)}
+    return (preferred.get(upper, 999), upper)
+
+
+def _college_level_options_from_rows(values: List[str]) -> List[str]:
+    cleaned: Dict[str, str] = {}
+    for value in values:
+        raw = str(value or "").strip()
+        if not raw:
+            continue
+        cleaned.setdefault(raw.upper(), raw.upper())
+    ordered = sorted(cleaned.values(), key=_college_level_options_sort_key)
+    return ["All", *[level for level in ordered if level != "All"]]
+
+
+def _college_level_where_sql(alias: str = "pe") -> str:
+    return (
+        "(%(college_level_filter)s::text = 'All' "
+        f"OR UPPER({_college_level_expr(alias)}) = %(college_level_filter)s::text)"
+    )
 
 
 def _pro_level_norm(value: Optional[str]) -> str:
@@ -18815,12 +18860,18 @@ def pitching_filters(
     force_refresh: bool = False,
 ) -> PitchingFiltersResponse:
     school_code = _validate_school_code(school_code)
-    level_norm = _pro_level_norm(level)
+    level_norm = _pro_level_norm(level) if school_code == "PRO" else _college_level_norm(level)
     filters_cache_key = _filters_cache_key(
-        f"pitching_filters:{level_norm}" if school_code == "PRO" else "pitching_filters:league_v2_ball_types_v1",
+        f"pitching_filters:{level_norm}"
+        if school_code == "PRO"
+        else (
+            f"pitching_filters:league_level_v1:{level_norm}"
+            if school_code == "LEAGUE"
+            else "pitching_filters:league_v2_ball_types_v1"
+        ),
         school_code,
     )
-    snapshot_level = level_norm if school_code == "PRO" else "All"
+    snapshot_level = level_norm if school_code in {"PRO", "LEAGUE"} else "All"
     if not force_refresh:
         cached_filters = _filters_cache_get(filters_cache_key)
         if cached_filters is not None:
@@ -18834,6 +18885,8 @@ def pitching_filters(
             try:
                 if school_code not in {"LEAGUE", "PRO"} and "ball_types" not in snapshot_payload:
                     raise ValueError("pitching filters snapshot missing ball_types")
+                if school_code == "LEAGUE" and "level_options" not in snapshot_payload:
+                    raise ValueError("league pitching filters snapshot missing level_options")
                 if school_code == "LEAGUE" and len(snapshot_payload.get("team_types") or []) <= 1:
                     raise ValueError("league pitching filters snapshot missing team filters")
                 snapshot_response = PitchingFiltersResponse(**snapshot_payload)
@@ -18868,6 +18921,7 @@ def pitching_filters(
     pitchers_by_team_code: Dict[str, List[str]] = {}
     opp_hitters_by_team_code: Dict[str, List[str]] = {}
     ball_types: List[str] = []
+    level_options: List[str] = ["All"]
     try:
         with get_conn() as conn, conn.cursor() as cur:
             session_types = ["Season", "All"] if school_code == "LEAGUE" else ["Season", "Bullpen", "Live BP", "All"]
@@ -18891,6 +18945,18 @@ def pitching_filters(
                     if school_code == "LEAGUE"
                     else "school_code = %(school_code)s"
                 )
+                if school_code == "LEAGUE":
+                    cur.execute(
+                        (
+                        """
+                        SELECT DISTINCT """ + _college_level_expr("pe") + """ AS level_value
+                        FROM public.pitch_events pe
+                        WHERE """ + raw_school_where + """
+                        """
+                        ),
+                        {"school_code": school_code},
+                    )
+                    level_options = _college_level_options_from_rows([str(row.get("level_value") or "") for row in cur.fetchall()])
                 cur.execute(
                     (
                     """
@@ -19228,6 +19294,7 @@ def pitching_filters(
         pitch_results=PITCH_RESULT_CHOICES,
         count_options=COUNT_CHOICES,
         after_count_options=COUNT_CHOICES,
+        level_options=level_options if school_code == "LEAGUE" else None,
         pitchers_by_team_code=pitchers_by_team_code or None,
         opp_hitters_by_team_code=opp_hitters_by_team_code or None,
     )
@@ -19235,7 +19302,7 @@ def pitching_filters(
     _save_filters_snapshot(
         school_code=school_code,
         domain="pitching",
-        level_bucket="All",
+        level_bucket=snapshot_level,
         payload=response.model_dump(),
     )
     return response
@@ -19373,7 +19440,8 @@ def pitching_overview(
     team_markers_norm = roster.get("team_markers_norm", [])
     selected_pitchers = _parse_name_list(pitcher)
     selected_pitcher_keys = _name_filter_keys(selected_pitchers)
-    level_filter = _pro_level_norm(level)
+    level_filter = _pro_level_norm(level) if school_code == "PRO" else _college_level_norm(level)
+    college_level_filter = level_filter if school_code == "LEAGUE" else "All"
     team_type = (team_type or "").strip() or None
     if team_type and team_type.lower() == "all":
         team_type = None
@@ -19720,6 +19788,7 @@ def pitching_overview(
 
     params = {
         "school_code": school_code,
+        "college_level_filter": college_level_filter,
         "start_date": start_date,
         "end_date": end_date,
         "pitchers_norm": selected_pitcher_keys,
@@ -20046,6 +20115,7 @@ def pitching_overview(
         school_code != "PRO"
         and not force_raw
         and not selected_ball_types
+        and college_level_filter == "All"
     )
     rollup_fast_response: Optional[PitchingOverviewResponse] = None
     if should_try_league_rollup_fast:
@@ -20354,6 +20424,7 @@ def pitching_overview(
             )
           )
           AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+          AND """ + _college_level_where_sql("pe") + """
           AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
           AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
           AND (
@@ -22629,12 +22700,14 @@ def hitting_filters(
     force_refresh: bool = False,
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
-    level_norm = _pro_level_norm(level)
+    level_norm = _pro_level_norm(level) if school_code == "PRO" else _college_level_norm(level)
     filters_cache_key = _filters_cache_key(
-        f"hitting_filters:{level_norm}" if school_code == "PRO" else "hitting_filters",
+        f"hitting_filters:{level_norm}"
+        if school_code == "PRO"
+        else (f"hitting_filters:league_level_v1:{level_norm}" if school_code == "LEAGUE" else "hitting_filters"),
         school_code,
     )
-    snapshot_level = level_norm if school_code == "PRO" else "All"
+    snapshot_level = level_norm if school_code in {"PRO", "LEAGUE"} else "All"
     if not force_refresh:
         cached_filters = _filters_cache_get(filters_cache_key)
         if cached_filters is not None:
@@ -22671,8 +22744,20 @@ def hitting_filters(
     team_markers_norm = sorted(set(roster.get("team_markers_norm", []) or []))
     hitters_by_team_code: Dict[str, List[str]] = {}
     opp_pitchers_by_team_code: Dict[str, List[str]] = {}
+    level_options: List[str] = ["All"]
     try:
         with get_conn() as conn, conn.cursor() as cur:
+            if school_code == "LEAGUE":
+                cur.execute(
+                    """
+                    SELECT DISTINCT """ + _college_level_expr("pe") + """ AS level_value
+                    FROM public.pitch_events pe
+                    WHERE UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) NOT IN ('PRO', 'LEAGUE', 'TRIAL')
+                      AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                      AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.batterteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                    """
+                )
+                level_options = _college_level_options_from_rows([str(row.get("level_value") or "") for row in cur.fetchall()])
             cur.execute(
                 """
                 SELECT
@@ -22853,12 +22938,13 @@ def hitting_filters(
             "Pitcher",
             "Catcher",
         ],
+        "level_options": level_options if school_code == "LEAGUE" else None,
     }
     _filters_cache_set(filters_cache_key, response)
     _save_filters_snapshot(
         school_code=school_code,
         domain="hitting",
-        level_bucket="All",
+        level_bucket=snapshot_level,
         payload=response,
     )
     return response
@@ -22918,7 +23004,8 @@ def hitting_overview(
     if chart_only:
         include_chart_points = True
 
-    level_filter = _pro_level_norm(level)
+    level_filter = _pro_level_norm(level) if school_code == "PRO" else _college_level_norm(level)
+    college_level_filter = level_filter if school_code == "LEAGUE" else "All"
     team_type_value = (team_type or "").strip() or "All"
     use_team_filter = team_type_value not in {"", "All"}
     selected_hitter_keys = _name_filter_keys(_parse_name_list(hitter))
@@ -22996,6 +23083,7 @@ def hitting_overview(
             league_all_selection
             and (not chart_only)
             and mode_raw in {"Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"}
+            and college_level_filter == "All"
         )
         # For large date windows with no pitcher/hitter selection, also push any
         # chart_only request onto a row-limited path so it can't fetch tens of
@@ -23026,6 +23114,7 @@ def hitting_overview(
             and split_by in {"Batter", "Batter Team"}
             and mode_raw in {"Results", "Swing Decisions", "Swing Metrics", "Batted Ball Data", "Custom"}
             and (not league_leaderboard_has_narrowing_filters)
+            and college_level_filter == "All"
         )
         if league_rollup_candidate:
             include_chart_points = False
@@ -23319,7 +23408,7 @@ def hitting_overview(
             total_pitches=int(response_payload.get("total_pitches") or 0),
         )
         return response_payload
-    if school_code != "PRO" and not force_raw:
+    if school_code != "PRO" and not force_raw and college_level_filter == "All":
         league_rollup_payload = _try_league_hitting_overview_rollup(
             school_code=school_code,
             start_date=start_date,
@@ -23369,7 +23458,7 @@ def hitting_overview(
                 total_pitches=int(league_rollup_payload.get("total_pitches") or 0),
             )
             return league_rollup_payload
-    if school_code != "PRO" and chart_only and include_chart_points and not force_raw:
+    if school_code != "PRO" and chart_only and include_chart_points and not force_raw and college_level_filter == "All":
         chart_rollup_payload = _try_league_hitting_overview_rollup(
             school_code=school_code,
             start_date=start_date,
@@ -23739,8 +23828,20 @@ def hitting_overview(
                   __PREV_STRIKES_SQL__,
                   __PITCH_NUMBER_SQL__
                 FROM public.pitch_events pe
-                WHERE school_code = %(school_code)s
+                WHERE (
+                    (
+                      UPPER(COALESCE(%(school_code)s::text, '')) = 'LEAGUE'
+                      AND UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) NOT IN ('PRO', 'LEAGUE', 'TRIAL')
+                      AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                      AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.batterteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                    )
+                    OR (
+                      UPPER(COALESCE(%(school_code)s::text, '')) <> 'LEAGUE'
+                      AND pe.school_code = %(school_code)s
+                    )
+                  )
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                  AND """ + _college_level_where_sql("pe") + """
                   AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
@@ -23766,6 +23867,7 @@ def hitting_overview(
                 ).replace("__PREV_BALLS_SQL__", prev_balls_sql).replace("__PREV_STRIKES_SQL__", prev_strikes_sql).replace("__PITCH_NUMBER_SQL__", pitch_number_sql),
                 {
                     "school_code": school_code,
+                    "college_level_filter": college_level_filter,
                     "start_date": start_date,
                     "end_date": end_date,
                     "team_markers_norm": sorted(team_markers_norm),
@@ -24078,12 +24180,14 @@ def catching_filters(
     force_refresh: bool = False,
 ) -> Dict[str, Any]:
     school_code = _validate_school_code(school_code)
-    level_filter = _pro_level_norm(level)
+    level_filter = _pro_level_norm(level) if school_code == "PRO" else _college_level_norm(level)
     filters_cache_key = _filters_cache_key(
-        f"catching_filters:{level_filter}" if school_code == "PRO" else "catching_filters",
+        f"catching_filters:{level_filter}"
+        if school_code == "PRO"
+        else (f"catching_filters:league_level_v1:{level_filter}" if school_code == "LEAGUE" else "catching_filters"),
         school_code,
     )
-    snapshot_level = level_filter if school_code == "PRO" else "All"
+    snapshot_level = level_filter if school_code in {"PRO", "LEAGUE"} else "All"
     can_use_snapshot = start_date is None and end_date is None and not (session_type or "").strip()
     if can_use_snapshot and not force_refresh:
         cached_filters = _filters_cache_get(filters_cache_key)
@@ -24132,6 +24236,23 @@ def catching_filters(
                     payload=response,
                 )
             return response
+    level_options: List[str] = ["All"]
+    if school_code == "LEAGUE":
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT """ + _college_level_expr("pe") + """ AS level_value
+                    FROM public.pitch_events pe
+                    WHERE UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) NOT IN ('PRO', 'LEAGUE', 'TRIAL')
+                      AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                      AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.batterteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                    """
+                )
+                level_options = _college_level_options_from_rows([str(row.get("level_value") or "") for row in cur.fetchall()])
+        except Exception:
+            level_options = ["All"]
+    if school_code == "PRO":
         sport_ids = _pro_level_sport_ids(level_filter)
         where_clauses = [
             "school_code = 'PRO'",
@@ -24406,6 +24527,7 @@ def catching_filters(
         "max_date": date_row.get("max_date"),
         "catchers": catchers,
         "team_types": team_types,
+        "level_options": level_options if school_code == "LEAGUE" else None,
         "pitch_types": pitch_types,
         "hands": ["All", "Left", "Right"],
         "batter_sides": ["All", "Left", "Right"],
@@ -24483,7 +24605,8 @@ def catching_overview(
     selected_custom_columns = _parse_csv_list(custom_columns)
     session_type_filter = _normalize_session_type_filter(session_type)
     venue_filter = _normalize_venue_filter(venue)
-    level_filter = _pro_level_norm(level)
+    level_filter = _pro_level_norm(level) if school_code == "PRO" else _college_level_norm(level)
+    college_level_filter = level_filter if school_code == "LEAGUE" else "All"
     parsed_velo_min = _parse_optional_float(velo_min, "velo_min")
     parsed_velo_max = _parse_optional_float(velo_max, "velo_max")
     parsed_pc_min = _parse_optional_int(pc_min, "pc_min")
@@ -24515,7 +24638,7 @@ def catching_overview(
             and (not team_type_value or str(team_type_value).strip().lower() == "all")
         )
         large_window = bool(span_days and span_days > 14)
-        league_rollup_candidate = large_window and league_all_selection and (not chart_only)
+        league_rollup_candidate = large_window and league_all_selection and (not chart_only) and college_level_filter == "All"
         if league_rollup_candidate:
             include_chart_points = False
             selected_in_zone = []
@@ -24905,8 +25028,20 @@ def catching_overview(
                   __PREV_STRIKES_SQL__,
                   __PITCH_NUMBER_SQL__
                 FROM public.pitch_events pe
-                WHERE school_code = %(school_code)s
+                WHERE (
+                    (
+                      UPPER(COALESCE(%(school_code)s::text, '')) = 'LEAGUE'
+                      AND UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) NOT IN ('PRO', 'LEAGUE', 'TRIAL')
+                      AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                      AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.batterteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')
+                    )
+                    OR (
+                      UPPER(COALESCE(%(school_code)s::text, '')) <> 'LEAGUE'
+                      AND pe.school_code = %(school_code)s
+                    )
+                  )
                   AND """ + SCHOOL_RELEVANT_TEAM_SQL + """
+                  AND """ + _college_level_where_sql("pe") + """
                   AND (""" + PITCH_TYPE_NORMALIZE_SQL + """) <> 'Undefined'
                   AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
                   AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
@@ -24927,6 +25062,7 @@ def catching_overview(
                 ).replace("__PREV_BALLS_SQL__", prev_balls_sql).replace("__PREV_STRIKES_SQL__", prev_strikes_sql).replace("__PITCH_NUMBER_SQL__", pitch_number_sql),
                 {
                     "school_code": school_code,
+                    "college_level_filter": college_level_filter,
                     "start_date": start_date,
                     "end_date": end_date,
                     "team_markers_norm": sorted(team_markers_norm),

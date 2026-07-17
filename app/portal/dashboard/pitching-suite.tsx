@@ -42,7 +42,9 @@ type FiltersPayload = {
 
 type OptionItem = { value: string; label: string };
 
-const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-06-30-cached-ball-types';
+const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-07-17-league-level-v1';
+const PRO_LEVEL_FILTER_OPTIONS = ['All', 'MLB', 'AAA'];
+const NCAA_LEVEL_FILTER_OPTIONS = ['All', 'D1', 'D2', 'D3', 'NAIA', 'JUCO'];
 
 function dashboardPageSlug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -232,9 +234,27 @@ type CustomTableConfig = {
   id: number;
   name: string;
   columns: string[];
+  createdByEmail?: string | null;
   createdAt: string;
   updatedAt: string;
 };
+
+function customTableOptionLabel(item: CustomTableConfig): string {
+  const name = String(item.name ?? '').trim();
+  const creator = String(item.createdByEmail ?? '').trim();
+  return creator ? `${name} (${creator})` : name;
+}
+
+function renderOptionLabel(label: string) {
+  const match = String(label ?? '').match(/^(.*)\s+\(([^()\s@]+@[^()\s@]+)\)$/);
+  if (!match) return label;
+  return (
+    <>
+      {match[1]}
+      <span className="portal-option-email"> ({match[2]})</span>
+    </>
+  );
+}
 
 type ManualVelocityEntry = {
   id: string;
@@ -1760,7 +1780,7 @@ function SearchableSingleSelect({
         }
         onClick={() => setOpen((current) => !current)}
       >
-        {selected?.label ?? placeholder ?? 'Select'}
+        {selected ? renderOptionLabel(selected.label) : placeholder ?? 'Select'}
       </button>
       {open ? (
         <div
@@ -1786,7 +1806,7 @@ function SearchableSingleSelect({
                 style={theme === 'light' ? { color: '#374151' } : undefined}
                 onClick={() => commitSelection(option.value)}
               >
-                {option.label}
+                {renderOptionLabel(option.label)}
               </button>
             ))}
           </div>
@@ -2157,7 +2177,7 @@ export default function PitchingSuite({
   const [batterSide, setBatterSide] = useState('All');
   const [venue, setVenue] = useState('All');
   const [sessionType, setSessionType] = useState('');
-  const [level, setLevel] = useState('MLB');
+  const [level, setLevel] = useState(initialSchoolCode === 'LEAGUE' ? 'D1' : 'MLB');
   const [qpLocations, setQpLocations] = useState('All');
   const [tableMode, setTableMode] = useState(shouldUsePcuDefaults ? 'Bullpen' : 'Live');
   const [splitBy, setSplitBy] = useState('Pitch Types');
@@ -2828,8 +2848,15 @@ export default function PitchingSuite({
 
   useEffect(() => {
     if (!isPro) return;
-    if (!level) setLevel('MLB');
+    if (!PRO_LEVEL_FILTER_OPTIONS.includes(level)) setLevel('MLB');
   }, [isPro, level]);
+
+  useEffect(() => {
+    if (!isLeague) return;
+    const options = filters?.level_options?.length ? filters.level_options : NCAA_LEVEL_FILTER_OPTIONS;
+    const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
+    if (!level || PRO_LEVEL_FILTER_OPTIONS.includes(level) || !options.includes(level)) setLevel(nextDefault);
+  }, [filters?.level_options, isLeague, level]);
 
   const loadManualEntries = useCallback(async () => {
     setLoadingManualEntries(true);
@@ -3074,7 +3101,7 @@ export default function PitchingSuite({
       ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
       : teamType;
     if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
-    if (isPro && level && level !== 'All') {
+    if ((isPro || isLeague) && level && level !== 'All') {
       params.set('level', level);
     }
     if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
@@ -3974,7 +4001,7 @@ export default function PitchingSuite({
       if (startDate) params.set('start_date', startDate);
       if (endDate) params.set('end_date', endDate);
       if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
-      if (isPro && level && level !== 'All') params.set('level', level);
+      if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
       if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
       if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
       if (stuffLevel) params.set('stuff_level', stuffLevel);
@@ -4270,7 +4297,7 @@ export default function PitchingSuite({
       if (startDate) params.set('start_date', startDate);
       if (endDate) params.set('end_date', endDate);
       if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
-      if (isPro && level && level !== 'All') params.set('level', level);
+      if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
       if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
       if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
       if (stuffLevel) params.set('stuff_level', stuffLevel);
@@ -8809,7 +8836,7 @@ export default function PitchingSuite({
     const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
     return customTables
       .filter((item) => normalize(item.name) !== 'jaredsdashboard')
-      .map((item) => ({ value: `custom_saved:${item.id}`, label: item.name }));
+      .map((item) => ({ value: `custom_saved:${item.id}`, label: customTableOptionLabel(item) }));
   }, [customTables]);
   const tableModeOptions = useMemo(
     () =>
@@ -9976,17 +10003,18 @@ export default function PitchingSuite({
                     placeholder="All"
                   />
                 </label>
-                {isPro ? (
+                {isPro || isLeague ? (
                   <label>
                     Level
                     <SearchableSingleSelect
-                      options={toOptions(filters.level_options ?? ['All', 'MLB', 'AAA'])}
+                      options={toOptions(filters.level_options ?? (isPro ? PRO_LEVEL_FILTER_OPTIONS : NCAA_LEVEL_FILTER_OPTIONS))}
                       value={level}
                       onChange={setLevel}
-                      placeholder="MLB"
+                      placeholder={isPro ? 'MLB' : 'D1'}
                     />
                   </label>
-                ) : (
+                ) : null}
+                {!isPro ? (
                   <label>
                     Session Type
                     <SearchableSingleSelect
@@ -10001,7 +10029,7 @@ export default function PitchingSuite({
                       placeholder="All"
                     />
                   </label>
-                )}
+                ) : null}
                 <label>
                   Pitchers
                   <SearchableMultiSelect options={pitcherOptions} values={selectedPitchers} onChange={setSelectedPitchers} />
@@ -10751,7 +10779,7 @@ export default function PitchingSuite({
                         <SearchableSingleSelect
                           options={[
                             { value: 'new', label: 'New Custom Table' },
-                            ...customTables.map((item) => ({ value: String(item.id), label: item.name })),
+                            ...customTables.map((item) => ({ value: String(item.id), label: customTableOptionLabel(item) })),
                           ]}
                           value={selectedCustomTableId ? String(selectedCustomTableId) : 'new'}
                           onChange={(next) => {
