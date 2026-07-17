@@ -7073,19 +7073,20 @@ export async function listPlayerPlanNoteCategoriesByOrganization(input: {
     `
       SELECT category
       FROM (
-        SELECT DISTINCT BTRIM(n.category) AS category
+        SELECT BTRIM(n.category) AS category
         FROM player_plan_notes n
         JOIN players p ON p.id = n.player_id
         WHERE p.organization_id = $1
           AND ($2::text IS NULL OR n.domain = $2::text)
           AND BTRIM(COALESCE(n.category, '')) <> ''
         UNION
-        SELECT DISTINCT BTRIM(category) AS category
+        SELECT BTRIM(category) AS category
         FROM dashboard_player_notes
         WHERE organization_id = $1
           AND ($2::text IS NULL OR domain = $2::text)
           AND BTRIM(COALESCE(category, '')) <> ''
       ) categories
+      GROUP BY category
       ORDER BY lower(category), category
     `,
     [input.organizationId, filteredDomain]
@@ -7182,12 +7183,16 @@ export async function listPlayerMediaCategoriesByOrganization(input: {
   const mediaType = input.mediaType === 'photo' || input.mediaType === 'video' || input.mediaType === 'pdf' ? input.mediaType : null;
   const result = await pool.query<{ category: string }>(
     `
-      SELECT DISTINCT BTRIM(category) AS category
-      FROM player_media
-      WHERE organization_id = $1
-        AND ($2::text IS NULL OR media_type = $2::text)
-        AND BTRIM(COALESCE(category, '')) <> ''
-      ORDER BY lower(BTRIM(category)), BTRIM(category)
+      SELECT category
+      FROM (
+        SELECT BTRIM(category) AS category
+        FROM player_media
+        WHERE organization_id = $1
+          AND ($2::text IS NULL OR media_type = $2::text)
+          AND BTRIM(COALESCE(category, '')) <> ''
+      ) categories
+      GROUP BY category
+      ORDER BY lower(category), category
     `,
     [input.organizationId, mediaType]
   );
