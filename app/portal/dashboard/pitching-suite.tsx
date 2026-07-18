@@ -42,7 +42,7 @@ type FiltersPayload = {
 
 type OptionItem = { value: string; label: string };
 
-const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-07-17-league-level-v1';
+const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-07-17-league-level-v2';
 const PRO_LEVEL_FILTER_OPTIONS = ['All', 'MLB', 'AAA'];
 const NCAA_LEVEL_FILTER_OPTIONS = ['All', 'D1', 'D2', 'D3', 'NAIA', 'JUCO'];
 
@@ -2853,9 +2853,10 @@ export default function PitchingSuite({
 
   useEffect(() => {
     if (!isLeague) return;
-    const options = filters?.level_options?.length ? filters.level_options : NCAA_LEVEL_FILTER_OPTIONS;
+    const options = Array.from(new Set([...(filters?.level_options ?? []), ...NCAA_LEVEL_FILTER_OPTIONS]));
     const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
-    if (!level || PRO_LEVEL_FILTER_OPTIONS.includes(level) || !options.includes(level)) setLevel(nextDefault);
+    const isProOnlyLevel = level === 'MLB' || level === 'AAA';
+    if (!level || isProOnlyLevel || !options.includes(level)) setLevel(nextDefault);
   }, [filters?.level_options, isLeague, level]);
 
   const loadManualEntries = useCallback(async () => {
@@ -3305,8 +3306,39 @@ export default function PitchingSuite({
     latestOverviewRequestKeyRef.current = requestKey;
     if (isLeaderboardPage) setCorrelationOverviewBaseQuery(params.toString());
     const shouldSkipProCompanionChart = isPro && isSummaryPage && isProAllSelection && proWindowDays > 14;
+    const shouldUseLeagueHeatmapCompanion =
+      isLeague &&
+      isHeatMapsPage &&
+      Boolean(pitchersParam) &&
+      !hittersParam &&
+      !zoneParam &&
+      !resultsParam &&
+      !countParam &&
+      !afterCountParam &&
+      !inZoneParam &&
+      !veloMin &&
+      !veloMax &&
+      !ivbMin &&
+      !ivbMax &&
+      !hbMin &&
+      !hbMax &&
+      !pcMin &&
+      !pcMax;
     const chartRequestKey = ((shouldForceProFastSummary || shouldScheduleCompanionCharts) && !shouldSkipProCompanionChart)
       ? (() => {
+          if (shouldUseLeagueHeatmapCompanion) {
+            const heatmapParams = new URLSearchParams();
+            heatmapParams.set('school_code', 'LEAGUE');
+            if (startDate) heatmapParams.set('start_date', startDate);
+            if (endDate) heatmapParams.set('end_date', endDate);
+            if (sessionType) heatmapParams.set('session_type', sessionType);
+            if (hand && hand !== 'All') heatmapParams.set('hand', hand);
+            if (batterSide && batterSide !== 'All') heatmapParams.set('batter_side', batterSide);
+            if (pitchersParam) heatmapParams.set('pitcher', pitchersParam);
+            if (apiTeamType && apiTeamType !== 'All') heatmapParams.set('team_type', apiTeamType);
+            if (pitchTypesParam) heatmapParams.set('pitch_types', pitchTypesParam);
+            return `/api/dashboard/pitching/heatmap-rollup?${heatmapParams.toString()}`;
+          }
           const chartParams = new URLSearchParams(params);
           chartParams.delete('force_raw');
           chartParams.set('include_chart_points', '1');
@@ -6532,7 +6564,15 @@ export default function PitchingSuite({
     </div>
   );
 
-  const summaryPoints = useMemo(() => overview?.chart_points ?? [], [overview]);
+  const rawSummaryPoints = useMemo(() => overview?.chart_points ?? [], [overview?.chart_points]);
+  const rawHeatmapPoints = useMemo(
+    () => ((overview?.heatmap_points as PitchActionPoint[] | undefined) ?? []),
+    [overview?.heatmap_points]
+  );
+  const summaryPoints = useMemo(
+    () => (rawSummaryPoints.length ? rawSummaryPoints : rawHeatmapPoints),
+    [rawSummaryPoints, rawHeatmapPoints]
+  );
   const resolveEditablePitchesForRow = useCallback(
     (row: Record<string, string | number | null>, rowKey: string): PitchActionPoint[] => {
       const mapped = (overview?.row_pitches_by_key?.[rowKey] ?? []) as PitchActionPoint[];
@@ -6626,8 +6666,8 @@ export default function PitchingSuite({
     [overview?.table_columns]
   );
   const summaryHeatmapPoints = useMemo(
-    () => ((overview?.heatmap_points as PitchActionPoint[] | undefined) ?? summaryPoints),
-    [overview?.heatmap_points, summaryPoints]
+    () => (rawHeatmapPoints.length ? rawHeatmapPoints : summaryPoints),
+    [rawHeatmapPoints, summaryPoints]
   );
   useEffect(() => {
     if (summaryLocationViewTouchedRef.current) return;
@@ -10007,14 +10047,14 @@ export default function PitchingSuite({
                   <label>
                     Level
                     <SearchableSingleSelect
-                      options={toOptions(filters.level_options ?? (isPro ? PRO_LEVEL_FILTER_OPTIONS : NCAA_LEVEL_FILTER_OPTIONS))}
+                      options={toOptions(isLeague ? Array.from(new Set([...(filters.level_options ?? []), ...NCAA_LEVEL_FILTER_OPTIONS])) : (filters.level_options ?? PRO_LEVEL_FILTER_OPTIONS))}
                       value={level}
                       onChange={setLevel}
                       placeholder={isPro ? 'MLB' : 'D1'}
                     />
                   </label>
                 ) : null}
-                {!isPro ? (
+                {!isPro && !isLeague ? (
                   <label>
                     Session Type
                     <SearchableSingleSelect

@@ -10,8 +10,8 @@ function parseCsv(value: string | null): string[] {
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
-function normalizeName(value: string): string {
-  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+function normalizeRollupName(value: string): string {
+  return String(value ?? '').trim().toLowerCase();
 }
 function normalizePitchType(value: string): string {
   const token = String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -56,8 +56,8 @@ CASE
   ELSE COALESCE(NULLIF(TRIM(pitch_type), ''), 'Undefined')
 END`;
 const VALID_PITCH_TYPE_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')";
-const LEAGUE_SCHOOL_EXCLUSION_SQL = "school_code NOT IN ('PRO', 'LEAGUE', 'TRIAL')";
-const LEAGUE_TEAM_EXCLUSION_SQL = "pitcher_team_code NOT IN ('TRIAL', 'DASHBOARDTRIAL')";
+const LEAGUE_ROLLUP_SCOPE_SQL = "school_code = 'LEAGUE'";
+const LEAGUE_TEAM_EXCLUSION_SQL = "UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pitcher_team_code), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')";
 function normalizeHand(value: string): string {
   const raw = String(value ?? '').trim().toLowerCase();
   if (raw === 'right' || raw === 'r') return 'Right';
@@ -105,7 +105,7 @@ export async function GET(request: Request) {
   const hand = normalizeHand(String(url.searchParams.get('hand') ?? ''));
   const batterSide = normalizeHand(String(url.searchParams.get('batter_side') ?? ''));
   const pitcherList = parseCsv(url.searchParams.get('pitcher'));
-  const pitcherNorms = Array.from(new Set(pitcherList.map(normalizeName).filter(Boolean)));
+  const pitcherNorms = Array.from(new Set(pitcherList.map(normalizeRollupName).filter(Boolean)));
   const teamCode = maybeTeamCode(String(url.searchParams.get('team_type') ?? ''));
   const pitchTypes = parseCsv(url.searchParams.get('pitch_types'));
   const selectedPitchTypes = Array.from(new Set(pitchTypes.map((value) => normalizePitchType(value)).filter(Boolean)));
@@ -124,7 +124,7 @@ export async function GET(request: Request) {
   };
 
   if (schoolCode === 'LEAGUE') {
-    add(LEAGUE_SCHOOL_EXCLUSION_SQL);
+    add(LEAGUE_ROLLUP_SCOPE_SQL);
     add(LEAGUE_TEAM_EXCLUSION_SQL);
   } else {
     add('school_code = ?', schoolCode);

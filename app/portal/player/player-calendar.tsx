@@ -13,6 +13,8 @@ type PlayerCalendarProps = {
   initialItems: ProgramItemRow[];
   initialStartDate: string;
   initialEndDate: string;
+  initialView?: ViewMode;
+  initialAnchorDate?: string;
   previewPlayerId?: number | null;
 };
 
@@ -145,11 +147,19 @@ function getCalendarLinkTarget(item: ProgramItemRow): 'none' | 'throwing' | 'bul
   return 'none';
 }
 
-export default function PlayerCalendar({ playerId, initialItems, initialStartDate, initialEndDate, previewPlayerId = null }: PlayerCalendarProps) {
+export default function PlayerCalendar({
+  playerId,
+  initialItems,
+  initialStartDate,
+  initialEndDate,
+  initialView = 'day',
+  initialAnchorDate,
+  previewPlayerId = null,
+}: PlayerCalendarProps) {
   const router = useRouter();
   const query = previewPlayerId && Number.isFinite(previewPlayerId) && previewPlayerId > 0 ? `?previewPlayerId=${previewPlayerId}` : '';
-  const [view, setView] = useState<ViewMode>('day');
-  const [anchorDate, setAnchorDate] = useState<string>(toIsoDate(new Date()));
+  const [view, setView] = useState<ViewMode>(initialView);
+  const [anchorDate, setAnchorDate] = useState<string>(initialAnchorDate ?? toIsoDate(new Date()));
   const [items, setItems] = useState<ProgramItemRow[]>(initialItems);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -157,6 +167,13 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
   const [catchPlayNotes, setCatchPlayNotes] = useState<{ highDay: string; mediumDay: string; lowDay: string }>({ highDay: '', mediumDay: '', lowDay: '' });
   const [cycleNotes, setCycleNotes] = useState('');
   const consumedInitialRef = useRef(false);
+  const loadedThrowingNotesRef = useRef(false);
+
+  useEffect(() => {
+    loadedThrowingNotesRef.current = false;
+    setCatchPlayNotes({ highDay: '', mediumDay: '', lowDay: '' });
+    setCycleNotes('');
+  }, [playerId, previewPlayerId]);
 
   const visibleRange = useMemo(() => {
     if (view === 'cycle') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
@@ -209,6 +226,9 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
 
   useEffect(() => {
     let cancelled = false;
+    if (view !== 'cycle' && !selectedItem) return () => { cancelled = true; };
+    if (loadedThrowingNotesRef.current) return () => { cancelled = true; };
+    loadedThrowingNotesRef.current = true;
     const playerIdParam = previewPlayerId && Number.isFinite(previewPlayerId) && previewPlayerId > 0
       ? `?playerId=${previewPlayerId}`
       : '';
@@ -222,9 +242,11 @@ export default function PlayerCalendar({ playerId, initialItems, initialStartDat
         }
         setCycleNotes(String(data.cycleNotes ?? ''));
       })
-      .catch(() => {});
+      .catch(() => {
+        loadedThrowingNotesRef.current = false;
+      });
     return () => { cancelled = true; };
-  }, [previewPlayerId]);
+  }, [previewPlayerId, selectedItem, view]);
 
   const itemsByDate = useMemo(() => {
     const map = new Map<string, ProgramItemRow[]>();

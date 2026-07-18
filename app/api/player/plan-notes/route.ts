@@ -48,7 +48,7 @@ async function recordNoteNotification(request: Request, input: {
     playerId: Number.isFinite(playerId) && playerId > 0 ? playerId : null,
     dashboardSchoolCode: input.session.dashboardSchoolCode ?? null,
     eventType: 'note_added',
-    path: playerId > 0 ? '/portal/dashboard?suite=player-notes' : '/portal/dashboard?suite=player-notes',
+    path: playerId > 0 ? `/portal/player?previewPlayerId=${playerId}` : '/profiles',
     metadata: {
       playerId: playerId > 0 ? playerId : undefined,
       playerName: input.playerName ?? undefined,

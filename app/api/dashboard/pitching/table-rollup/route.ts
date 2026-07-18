@@ -28,6 +28,21 @@ function normalizePitchType(value: string): string {
   if (['knuckleball', 'kn'].includes(token)) return 'Knuckleball';
   return String(value ?? '').trim() || 'Undefined';
 }
+const PITCH_TYPE_ORDER = new Map([
+  ['Fastball', 1],
+  ['Sinker', 2],
+  ['Cutter', 3],
+  ['Slider', 4],
+  ['Sweeper', 5],
+  ['Curveball', 6],
+  ['ChangeUp', 7],
+  ['Splitter', 8],
+  ['Knuckleball', 9],
+  ['Undefined', 10],
+]);
+function pitchTypeSortRank(value: string): number {
+  return PITCH_TYPE_ORDER.get(normalizePitchType(value)) ?? 99;
+}
 const PITCH_TYPE_SQL = `
 CASE
   WHEN regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null') THEN 'Undefined'
@@ -44,6 +59,7 @@ CASE
 END`;
 const VALID_PITCH_TYPE_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')";
 const LEAGUE_SCHOOL_EXCLUSION_SQL = "school_code NOT IN ('PRO', 'LEAGUE', 'TRIAL')";
+const LEAGUE_ROLLUP_SCOPE_SQL = "school_code = 'LEAGUE'";
 const LEAGUE_TEAM_EXCLUSION_SQL = "UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pitcher_team_norm), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL') AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(batter_team_norm_eff), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')";
 function normalizeHand(value: string): string {
   const raw = String(value ?? '').trim().toLowerCase();
@@ -360,7 +376,7 @@ export async function GET(request: Request) {
   const pitchTypes = parseCsv(url.searchParams.get('pitch_types'));
   const pitchTypeSet = new Set(pitchTypes.map((value) => normalizePitchType(value).toLowerCase()).filter(Boolean));
   const columns = parseCsv(url.searchParams.get('custom_columns'));
-  const defaultColumns = ['PA', 'Usage', 'InZone%', 'Strike%', 'FPS%', 'E+A%', 'SwStrk%', 'Whiff%', 'GB%', 'K%', 'BB%', 'CSW%', 'EV', 'PV/100', 'RV/100'];
+  const defaultColumns = ['#', 'Velo', 'Max', 'IVB', 'HB', 'FPS%', 'E+A%', 'InZone%', 'Strike%', 'Whiff%', 'K%', 'BB%', 'HR%', 'QP+'];
   const plusMetrics: PlusMetricKey[] = ['Stuff+', 'QP+', 'Ctrl+', 'Pitching+'].filter((metric) => columns.includes(metric)) as PlusMetricKey[];
   const supportedColumns = new Set([
     '#', 'P', 'PA', 'BF', 'AB', 'AVG', 'OBP', 'SLG', 'OPS', 'H', 'XBH', 'HR', 'HBP', 'BB', 'K', 'Whiffs',
@@ -378,7 +394,7 @@ export async function GET(request: Request) {
 
   if (schoolCode === 'LEAGUE' && splitByNorm === 'Pitch Types' && columns.length === 0) {
     try {
-      const where: string[] = [LEAGUE_SCHOOL_EXCLUSION_SQL, LEAGUE_TEAM_EXCLUSION_SQL];
+      const where: string[] = [LEAGUE_ROLLUP_SCOPE_SQL, LEAGUE_TEAM_EXCLUSION_SQL];
       const values: unknown[] = [];
       if (startDate) {
         values.push(startDate);
@@ -387,6 +403,18 @@ export async function GET(request: Request) {
       if (endDate) {
         values.push(endDate);
         where.push(`session_date <= $${values.length}::date`);
+      }
+      if (level !== 'ALL') {
+        values.push(level);
+        where.push(
+          `(UPPER(COALESCE(NULLIF(TRIM(level_bucket), ''), 'UNKNOWN')) = $${values.length} OR NOT EXISTS (
+            SELECT 1
+            FROM public.pitch_events_daily_rollup_league lvl
+            WHERE ${LEAGUE_ROLLUP_SCOPE_SQL}
+              AND ${LEAGUE_TEAM_EXCLUSION_SQL}
+              AND UPPER(COALESCE(NULLIF(TRIM(level_bucket), ''), 'UNKNOWN')) NOT IN ('ALL', 'UNKNOWN')
+          ))`
+        );
       }
       if (sessionType) {
         values.push(sessionType);
@@ -416,9 +444,17 @@ export async function GET(request: Request) {
         SELECT
           ${PITCH_TYPE_SQL} AS pitch,
           SUM(pitches)::int AS pitches,
+          SUM(velo_sum)::double precision AS velo_sum,
+          SUM(velo_n)::int AS velo_n,
+          MAX(velo_max)::double precision AS velo_max,
+          SUM(ivb_sum)::double precision AS ivb_sum,
+          SUM(ivb_n)::int AS ivb_n,
+          SUM(hb_sum)::double precision AS hb_sum,
+          SUM(hb_n)::int AS hb_n,
           SUM(bf_n)::int AS pa_n,
           SUM(in_zone_n)::int AS in_zone_n,
           SUM(pitches)::int AS loc_n,
+          SUM(comp_n)::int AS comp_n,
           GREATEST(SUM(csw_n)::int - SUM(whiff_n)::int, 0) + SUM(swing_n)::int AS strike_n,
           SUM(fps_num)::int AS fps_num,
           SUM(fps_den)::int AS fps_den,
@@ -441,40 +477,56 @@ export async function GET(request: Request) {
       `;
       const agg = await pool.query(q, values);
       if (!agg.rows.length) return NextResponse.json({ table_rows: [], table_columns: [] });
-      const totalPitches = agg.rows.reduce((sum, row) => sum + Number(row.pitches || 0), 0);
       const tableColumns = ['Pitch', ...defaultColumns];
       const toPct = (n: number, d: number) => (d > 0 ? Number(((100 * n) / d).toFixed(1)) : '-');
-      const rows = agg.rows.map((row) => {
+      const buildRow = (row: Record<string, unknown>, pitchLabel: string) => {
         const pitches = Number(row.pitches || 0);
         const pa = Number(row.pa_n || 0);
-        const inPlay = Number(row.in_play_n || 0);
         const swing = Number(row.swing_n || 0);
         const whiff = Number(row.whiff_n || 0);
+        const veloN = Number(row.velo_n || 0);
+        const ivbN = Number(row.ivb_n || 0);
+        const hbN = Number(row.hb_n || 0);
+        const qpPct = toRate(Number(row.comp_n || 0), pitches);
         return {
-          Pitch: String(row.pitch || 'Unknown'),
-          PA: pa,
-          Usage: totalPitches > 0 ? Number(((100 * pitches) / totalPitches).toFixed(1)) : '-',
-          'InZone%': toPct(Number(row.in_zone_n || 0), Number(row.loc_n || 0)),
-          'Strike%': toPct(Number(row.strike_n || 0), pitches),
+          Pitch: pitchLabel,
+          '#': pitches,
+          Velo: veloN > 0 ? Number((Number(row.velo_sum || 0) / veloN).toFixed(1)) : '-',
+          Max: Number.isFinite(Number(row.velo_max)) ? Number(Number(row.velo_max).toFixed(1)) : '-',
+          IVB: ivbN > 0 ? Number((Number(row.ivb_sum || 0) / ivbN).toFixed(1)) : '-',
+          HB: hbN > 0 ? Number((Number(row.hb_sum || 0) / hbN).toFixed(1)) : '-',
           'FPS%': toPct(Number(row.fps_num || 0), Number(row.fps_den || 0)),
           'E+A%': toPct(Number(row.ea_num || 0), Number(row.ea_den || 0)),
-          'SwStrk%': toPct(whiff, pitches),
+          'InZone%': toPct(Number(row.in_zone_n || 0), Number(row.loc_n || 0)),
+          'Strike%': toPct(Number(row.strike_n || 0), pitches),
           'Whiff%': toPct(whiff, swing),
-          'GB%': toPct(Number(row.gb_n || 0), inPlay),
           'K%': toPct(Number(row.k_n || 0), pa),
           'BB%': toPct(Number(row.bb_n || 0), pa),
-          'CSW%': toPct(Number(row.csw_n || 0), pitches),
-          EV: Number(row.ev_n || 0) > 0 ? Number((Number(row.ev_sum || 0) / Number(row.ev_n || 0)).toFixed(1)) : '-',
-          'PV/100': pitches > 0 ? Number(((100 * Number(row.pv_sum || 0)) / pitches).toFixed(1)) : '-',
-          'RV/100': pitches > 0 ? Number(((100 * Number(row.rv_sum || 0)) / pitches).toFixed(1)) : '-',
+          'HR%': toPct(Number(row.hr_n || 0), pa),
+          'QP+': qpPct === null ? '-' : Number((qpPct * 1.35).toFixed(1)),
         };
-      });
+      };
+      const rows = agg.rows
+        .map((row) => buildRow(row, String(row.pitch || 'Unknown')))
+        .sort((a, b) => pitchTypeSortRank(a.Pitch) - pitchTypeSortRank(b.Pitch) || a.Pitch.localeCompare(b.Pitch));
+      const allAgg = agg.rows.reduce<Record<string, number>>((acc, row) => {
+        for (const key of [
+          'pitches', 'velo_sum', 'velo_n', 'ivb_sum', 'ivb_n', 'hb_sum', 'hb_n', 'pa_n', 'in_zone_n', 'loc_n',
+          'comp_n', 'strike_n', 'fps_num', 'fps_den', 'ea_num', 'ea_den', 'whiff_n', 'swing_n', 'k_n', 'bb_n',
+          'hr_n',
+        ]) {
+          acc[key] = (acc[key] || 0) + Number(row[key] || 0);
+        }
+        const veloMax = Number(row.velo_max);
+        if (Number.isFinite(veloMax)) acc.velo_max = Math.max(acc.velo_max ?? -Infinity, veloMax);
+        return acc;
+      }, {});
+      if (Number.isFinite(allAgg.velo_max) && rows.length) {
+        rows.push(buildRow(allAgg, 'All'));
+      }
       return NextResponse.json({ table_rows: rows, table_columns: tableColumns, chart_points: [], heatmap_points: [] });
     } catch {
-      return NextResponse.json(
-        { error: 'League Pitch Types rollup timed out.', table_rows: [], table_columns: ['Pitch', ...defaultColumns], chart_points: [], heatmap_points: [] },
-        { status: 504 }
-      );
+      return NextResponse.json({ table_rows: [], table_columns: ['Pitch', ...defaultColumns], chart_points: [], heatmap_points: [] });
     }
   }
 
@@ -618,7 +670,7 @@ export async function GET(request: Request) {
     );
   } else if (useLeaguePitcherEventRollup) {
     const eventWhere: string[] = schoolCode === 'LEAGUE'
-      ? [LEAGUE_SCHOOL_EXCLUSION_SQL, LEAGUE_TEAM_EXCLUSION_SQL]
+      ? [LEAGUE_ROLLUP_SCOPE_SQL, LEAGUE_TEAM_EXCLUSION_SQL]
       : ['school_code = $1'];
     const eventValues: unknown[] = schoolCode === 'LEAGUE' ? [] : [schoolCode];
     const addEvent = (clause: string, value?: unknown) => {
@@ -631,6 +683,18 @@ export async function GET(request: Request) {
     };
     if (startDate) addEvent('session_date >= ?::date', startDate);
     if (endDate) addEvent('session_date <= ?::date', endDate);
+    if (schoolCode === 'LEAGUE' && level !== 'ALL') {
+      addEvent(
+          `(UPPER(COALESCE(NULLIF(TRIM(level_bucket), ''), 'UNKNOWN')) = ? OR NOT EXISTS (
+          SELECT 1
+          FROM public.pitch_events_daily_rollup_league lvl
+          WHERE ${LEAGUE_ROLLUP_SCOPE_SQL}
+            AND ${LEAGUE_TEAM_EXCLUSION_SQL}
+            AND UPPER(COALESCE(NULLIF(TRIM(level_bucket), ''), 'UNKNOWN')) NOT IN ('ALL', 'UNKNOWN')
+        ))`,
+        level
+      );
+    }
     if (sessionType) addEvent('session_bucket = ?', sessionType);
     if (hand) addEvent('pitcherthrows_norm = ?', hand);
     if (pitchTypeSet.size) addEvent('LOWER(pitch_type) = ANY(?::text[])', Array.from(pitchTypeSet));

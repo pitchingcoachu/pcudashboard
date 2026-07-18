@@ -556,7 +556,7 @@ export default function CatchingSuite() {
 
   useEffect(() => {
     if (!isLeague) return;
-    const options = filters?.level_options?.length ? filters.level_options : NCAA_LEVEL_FILTER_OPTIONS;
+    const options = Array.from(new Set([...(filters?.level_options ?? []), ...NCAA_LEVEL_FILTER_OPTIONS]));
     const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
     if (!level || PRO_LEVEL_FILTER_OPTIONS.includes(level) || !options.includes(level)) setLevel(nextDefault);
   }, [filters?.level_options, isLeague, level]);
@@ -1123,14 +1123,14 @@ export default function CatchingSuite() {
                   <label>
                     Level
                     <SearchableSingleSelect
-                      options={toOptions(filters?.level_options ?? (isPro ? PRO_LEVEL_FILTER_OPTIONS : NCAA_LEVEL_FILTER_OPTIONS))}
+                      options={toOptions(isLeague ? Array.from(new Set([...(filters?.level_options ?? []), ...NCAA_LEVEL_FILTER_OPTIONS])) : (filters?.level_options ?? PRO_LEVEL_FILTER_OPTIONS))}
                       value={level}
                       onChange={setLevel}
                       placeholder={isPro ? 'MLB' : 'D1'}
                     />
                   </label>
                 ) : null}
-                {!isPro ? (
+                {!isPro && !isLeague ? (
                   <label>
                     Session Type
                     <SearchableSingleSelect options={toOptions(withAll(['Season', 'Bullpen', 'Live BP']))} value={sessionType} onChange={setSessionType} placeholder="All" />

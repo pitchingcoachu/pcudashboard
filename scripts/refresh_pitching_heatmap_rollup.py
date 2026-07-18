@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+import argparse
+from datetime import date
 import os
 import sys
+
 import psycopg
 
 SQL = r'''
@@ -132,6 +135,9 @@ WITH base_non_pro AS (
     (NULLIF(BTRIM(pe.angle::text), '')::double precision) AS launch_angle
   FROM public.pitch_events pe
   WHERE pe.session_date IS NOT NULL
+    AND (%(start_date)s::date IS NULL OR pe.session_date::date >= %(start_date)s::date)
+    AND (%(end_date)s::date IS NULL OR pe.session_date::date <= %(end_date)s::date)
+    AND (%(school_code)s::text IS NULL OR UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) = %(school_code)s::text)
     AND UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) <> 'PRO'
     AND REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')
 ), base_pro AS (
@@ -290,6 +296,9 @@ WITH base_non_pro AS (
     (NULLIF(BTRIM(pe.angle::text), '')::double precision) AS launch_angle
   FROM public.pro_pitch_events pe
   WHERE pe.session_date IS NOT NULL
+    AND (%(start_date)s::date IS NULL OR pe.session_date::date >= %(start_date)s::date)
+    AND (%(end_date)s::date IS NULL OR pe.session_date::date <= %(end_date)s::date)
+    AND (%(school_code)s::text IS NULL OR %(school_code)s::text = 'PRO')
     AND REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')
 ), src AS (
   SELECT * FROM base_non_pro
@@ -348,6 +357,9 @@ WITH base_non_pro AS (
     NULLIF(TRIM(COALESCE(pd."PitchingPlus"::text, '')), '')::double precision AS pitching_plus
   FROM public.pitch_data pd
   WHERE pd."Date" IS NOT NULL
+    AND (%(start_date)s::date IS NULL OR pd."Date"::date >= %(start_date)s::date)
+    AND (%(end_date)s::date IS NULL OR pd."Date"::date <= %(end_date)s::date)
+    AND (%(school_code)s::text IS NULL OR %(school_code)s::text = 'PRO')
     AND REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(pd."TaggedPitchType"), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')
 ), plus_agg AS (
   SELECT
@@ -401,7 +413,7 @@ WITH base_non_pro AS (
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='fastballs' AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('calledstrike','strikecalled','swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS fps_fb_num,
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='off-speed' THEN 1 ELSE 0 END)::int AS fps_os_den,
     SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 AND LOWER(COALESCE(pitch_group,''))='off-speed' AND REGEXP_REPLACE(LOWER(COALESCE(pitch_call, '')), '[^a-z0-9]+', '', 'g') IN ('calledstrike','strikecalled','swingingstrike','swingingstrikeblocked','strikeswinging','foul','foultip','foulbunt','foulball','foulballfieldable','foulballnotfieldable','inplayouts','inplaynoout','inplayruns','inplay','hitintoplay') THEN 1 ELSE 0 END)::int AS fps_os_num,
-    SUM(CASE WHEN REGEXP_REPLACE(LOWER(COALESCE(tagged_hit_type, '')), '[^a-z0-9]+', '_', 'g') LIKE '%barrel%' THEN 1 ELSE 0 END)::int AS barrel_n,
+    SUM(CASE WHEN REGEXP_REPLACE(LOWER(COALESCE(tagged_hit_type, '')), '[^a-z0-9]+', '_', 'g') LIKE '%%barrel%%' THEN 1 ELSE 0 END)::int AS barrel_n,
     SUM(CASE WHEN xiso_n > 0 THEN xiso ELSE 0 END)::double precision AS xiso_sum,
     SUM(xiso_n)::int AS xiso_n,
     SUM(CASE WHEN relspeed IS NOT NULL THEN relspeed ELSE 0 END)::double precision AS relspeed_sum,
@@ -543,16 +555,115 @@ DO UPDATE SET
   updated_at = NOW();
 '''
 
+COUNT_SQL = r'''
+SELECT
+  COUNT(*)::int AS source_rows,
+  MIN(pe.session_date)::text AS source_min_date,
+  MAX(pe.session_date)::text AS source_max_date
+FROM public.pitch_events pe
+WHERE pe.session_date IS NOT NULL
+  AND (%(start_date)s::date IS NULL OR pe.session_date::date >= %(start_date)s::date)
+  AND (%(end_date)s::date IS NULL OR pe.session_date::date <= %(end_date)s::date)
+  AND (%(school_code)s::text IS NULL OR UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) = %(school_code)s::text)
+  AND UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) <> 'PRO'
+  AND REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(pe.taggedpitchtype), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')
+'''
+
+TARGET_COUNT_SQL = r'''
+SELECT
+  COUNT(*)::int AS target_bins,
+  COALESCE(SUM(pitch_n), 0)::int AS target_pitches,
+  MIN(session_date)::text AS target_min_date,
+  MAX(session_date)::text AS target_max_date
+FROM public.pitching_heatmap_daily_bins
+WHERE (%(school_code)s::text IS NULL OR school_code = %(school_code)s::text)
+  AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
+  AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
+'''
+
+DELETE_SQL = r'''
+DELETE FROM public.pitching_heatmap_daily_bins
+WHERE school_code = %(school_code)s::text
+  AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
+  AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
+'''
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Refresh pitching heatmap rollup bins.")
+    parser.add_argument("--school-code", help="Optional school scope, e.g. LEAGUE.")
+    parser.add_argument("--start-date", help="Optional inclusive start date, YYYY-MM-DD.")
+    parser.add_argument("--end-date", help="Optional inclusive end date, YYYY-MM-DD.")
+    parser.add_argument("--dry-run", action="store_true", help="Show source/target counts without changing data.")
+    parser.add_argument("--skip-counts", action="store_true", help="Skip source/target count queries before refresh.")
+    parser.add_argument("--skip-schema-setup", action="store_true", help="Skip create/alter/index setup when the rollup table already exists.")
+    parser.add_argument("--statement-timeout-ms", type=int, default=0, help="Optional Postgres statement timeout.")
+    args = parser.parse_args()
+
+    for attr in ("start_date", "end_date"):
+        value = getattr(args, attr)
+        if value:
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                parser.error(f"--{attr.replace('_', '-')} must be YYYY-MM-DD")
+    if args.start_date and args.end_date and args.start_date > args.end_date:
+        parser.error("--start-date must be on or before --end-date")
+    if (args.start_date or args.end_date) and not args.school_code:
+        parser.error("date-scoped refreshes require --school-code")
+    if not args.dry_run and (args.start_date or args.end_date or args.school_code) and not args.school_code:
+        parser.error("partial refreshes require --school-code")
+    return args
+
+def scoped_params(args):
+    school_code = (args.school_code or "").strip().upper() or None
+    return {
+        "school_code": school_code,
+        "start_date": args.start_date or None,
+        "end_date": args.end_date or None,
+    }
+
 def main():
+    args = parse_args()
+    params = scoped_params(args)
     dsn = os.getenv('DATABASE_URL', '').strip()
     if not dsn:
         print('DATABASE_URL missing', file=sys.stderr)
         return 1
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
-            with open('scripts/create_pitching_heatmap_rollup.sql', 'r', encoding='utf-8') as f:
-                cur.execute(f.read())
-            cur.execute(SQL)
+            if args.statement_timeout_ms > 0:
+                cur.execute("SELECT set_config('statement_timeout', %s, true)", (str(args.statement_timeout_ms),))
+            print(
+                "scope:",
+                f"school_code={params['school_code'] or 'ALL'}",
+                f"start_date={params['start_date'] or 'ALL'}",
+                f"end_date={params['end_date'] or 'ALL'}",
+            )
+            if not args.skip_counts:
+                cur.execute(COUNT_SQL, params)
+                source_counts = cur.fetchone()
+                print(
+                    "source:",
+                    f"rows={source_counts[0]}",
+                    f"min={source_counts[1]}",
+                    f"max={source_counts[2]}",
+                )
+            if args.dry_run:
+                conn.rollback()
+                print('ok: dry run only')
+                return 0
+            if not args.skip_schema_setup:
+                with open('scripts/create_pitching_heatmap_rollup.sql', 'r', encoding='utf-8') as f:
+                    cur.execute(f.read())
+            if args.statement_timeout_ms > 0:
+                cur.execute("SELECT set_config('statement_timeout', %s, true)", (str(args.statement_timeout_ms),))
+            cur.execute("SELECT pg_try_advisory_xact_lock(910004)")
+            if not cur.fetchone()[0]:
+                raise RuntimeError("another pitching heatmap refresh is already running")
+            if params["school_code"]:
+                cur.execute(DELETE_SQL, params)
+                print(f"deleted_target_bins={cur.rowcount}")
+            cur.execute(SQL, params)
         conn.commit()
     print('ok: refreshed pitching_heatmap_daily_bins')
     return 0

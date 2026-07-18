@@ -658,7 +658,9 @@ async function maybeReturnPitchingHeatmapRollupDirect(params: {
   if (!isTruthy(includeChartPoints) || !isTruthy(chartOnly)) return null;
   const upperSchoolCode = String(schoolCode ?? '').trim().toUpperCase();
   if (upperSchoolCode === 'PRO') return null;
-  if (upperSchoolCode === 'LEAGUE' && hasValue(pitcher)) return null;
+  // Heatmap-rollup bins are aggregate grid data, not individual pitches — skip for specific pitcher
+  // lookups so the Python backend returns actual pitch-level chart_points for scatter visualizations.
+  if (upperSchoolCode === 'LEAGUE' && String(pitcher ?? '').trim()) return null;
   const wantsPitchLevelVideo = String(visualOption ?? '').trim().toLowerCase() === 'play video';
   if (upperSchoolCode !== 'LEAGUE' && wantsPitchLevelVideo && !allowPitchLevelVideoFallback) return null;
   const hasUnsupportedFilters =

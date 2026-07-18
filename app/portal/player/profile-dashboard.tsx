@@ -506,6 +506,10 @@ export default function ProfileDashboard({
     textTransform: 'uppercase',
   };
 
+  useEffect(() => {
+    router.prefetch(fullProgramHref);
+  }, [fullProgramHref, router]);
+
   const sortedWeightLogs = useMemo(() => {
     const merged = new Map<string, BodyWeightLogRow>();
     for (const log of [...weightLogs, ...valdWeightLogs]) {

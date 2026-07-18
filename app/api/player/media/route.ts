@@ -94,10 +94,6 @@ async function recordMediaNotification(request: Request, input: {
 }) {
   const { userAgent, ipAddress } = await readActivityRequestMeta(request);
   const profilePath = `/portal/player?previewPlayerId=${input.allowed.playerId}`;
-  const notesPath = '/portal/dashboard?suite=player-notes';
-  const path = input.sourceType === 'player_notes' || input.sourceType === 'workout_exercise' || input.sourceType === 'drill'
-    ? notesPath
-    : profilePath;
   await recordPortalActivityEvent({
     userId: input.allowed.session.userId ?? null,
     email: input.allowed.session.email,
@@ -107,7 +103,7 @@ async function recordMediaNotification(request: Request, input: {
     playerId: input.allowed.playerId,
     dashboardSchoolCode: input.allowed.session.dashboardSchoolCode ?? null,
     eventType: 'media_uploaded',
-    path,
+    path: profilePath,
     metadata: {
       playerId: input.allowed.playerId,
       playerName: input.allowed.playerName,

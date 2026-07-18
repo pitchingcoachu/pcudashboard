@@ -69,6 +69,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
   const { ok, error } = readMessage(params);
 
   let effectivePlayerId: number | null = null;
+  let preloadedPlayer: Awaited<ReturnType<typeof getPlayerForUser>> = null;
 
   if (session.role === 'admin' || session.role === 'coach') {
     if (previewPlayerIdRaw) {
@@ -88,6 +89,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
       organizationId: programmingOrganizationId,
       userId: session.userId,
     });
+    preloadedPlayer = ownPlayer;
     effectivePlayerId = ownPlayer?.id ?? session.playerId;
   }
 
@@ -190,8 +192,11 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
     if (!allowed) redirect('/portal/admin/schedule');
   }
 
+  const initialRange = monthRange(month);
   const [player, items] = await Promise.all([
-    getPlayerByIdInOrganization({ organizationId: programmingOrganizationId, playerId: effectivePlayerId }),
+    preloadedPlayer
+      ? Promise.resolve(preloadedPlayer)
+      : getPlayerByIdInOrganization({ organizationId: programmingOrganizationId, playerId: effectivePlayerId }),
     listProgramItemsForPlayerByMonth({ playerId: effectivePlayerId, month }),
   ]);
 
@@ -206,8 +211,6 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
         })
       : [];
-  const initialRange = monthRange(month);
-
   return (
     <div className="portal-shell">
       <header className="portal-header">
@@ -354,6 +357,8 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           initialItems={items}
           initialStartDate={initialRange.startDate}
           initialEndDate={initialRange.endDate}
+          initialView="month"
+          initialAnchorDate={initialRange.startDate}
           previewPlayerId={session.role === 'admin' || session.role === 'coach' ? effectivePlayerId : null}
         />
       </section>

@@ -46,11 +46,25 @@ export default function PortalNotificationsBell() {
   const [loading, setLoading] = useState(false);
   const [count, setCount] = useState(0);
   const [notifications, setNotifications] = useState<PortalNotification[]>([]);
+  const [acknowledgedId, setAcknowledgedId] = useState(0);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const visibleCount = useMemo(() => (count > 99 ? '99+' : String(count)), [count]);
+  const newestNotificationId = useMemo(
+    () => notifications.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0),
+    [notifications]
+  );
 
   useEffect(() => {
+    const storageKey = 'portalNotificationsAcknowledgedId';
+    const readAcknowledgedId = () => {
+      try {
+        const stored = Number(window.localStorage.getItem(storageKey) ?? '0');
+        return Number.isFinite(stored) && stored > 0 ? stored : 0;
+      } catch {
+        return 0;
+      }
+    };
     let active = true;
     async function load() {
       setLoading(true);
@@ -59,8 +73,11 @@ export default function PortalNotificationsBell() {
         if (!response.ok) throw new Error('Failed to load notifications.');
         const payload = (await response.json().catch(() => ({}))) as NotificationsPayload;
         if (!active) return;
-        setCount(Number(payload.count ?? 0) || 0);
-        setNotifications(Array.isArray(payload.notifications) ? payload.notifications : []);
+        const rows = Array.isArray(payload.notifications) ? payload.notifications : [];
+        const currentAcknowledgedId = readAcknowledgedId();
+        setAcknowledgedId(currentAcknowledgedId);
+        setCount(currentAcknowledgedId > 0 ? rows.filter((item) => Number(item.id) > currentAcknowledgedId).length : (Number(payload.count ?? 0) || 0));
+        setNotifications(rows);
       } catch {
         if (!active) return;
         setCount(0);
@@ -76,6 +93,20 @@ export default function PortalNotificationsBell() {
       window.clearInterval(interval);
     };
   }, []);
+
+  function clearNotificationAlerts() {
+    if (newestNotificationId <= 0) {
+      setCount(0);
+      return;
+    }
+    setAcknowledgedId(newestNotificationId);
+    setCount(0);
+    try {
+      window.localStorage.setItem('portalNotificationsAcknowledgedId', String(newestNotificationId));
+    } catch {
+      // Ignore private browsing/storage failures; the current page still clears.
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -100,7 +131,10 @@ export default function PortalNotificationsBell() {
         className="portal-notifications-btn"
         aria-label={`Notifications${count ? `, ${count} recent` : ''}`}
         aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          clearNotificationAlerts();
+          setOpen((current) => !current);
+        }}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M12 22a2.6 2.6 0 0 0 2.45-1.75h-4.9A2.6 2.6 0 0 0 12 22Zm7.1-5.2-1.4-1.6V10a5.72 5.72 0 0 0-4.45-5.58V3.75a1.25 1.25 0 0 0-2.5 0v.67A5.72 5.72 0 0 0 6.3 10v5.2l-1.4 1.6a1.08 1.08 0 0 0 .82 1.78h12.56a1.08 1.08 0 0 0 .82-1.78ZM8.2 16.55V10a3.8 3.8 0 0 1 7.6 0v6.55H8.2Z" />
@@ -112,23 +146,26 @@ export default function PortalNotificationsBell() {
         <div className="portal-notifications-menu">
           <div className="portal-notifications-head">
             <strong>Notifications</strong>
-            <span>{count ? `${count} recent` : 'No recent alerts'}</span>
+            <span>{count ? `${count} new` : 'No new alerts'}</span>
           </div>
           <div className="portal-notifications-list">
             {loading && notifications.length === 0 ? <p className="portal-notifications-empty">Loading...</p> : null}
             {!loading && notifications.length === 0 ? <p className="portal-notifications-empty">No recent notes or uploads.</p> : null}
-            {notifications.map((item) => (
-              <Link key={item.id} href={item.path || '/portal/dashboard'} className="portal-notification-item" onClick={() => setOpen(false)}>
-                <span className={`portal-notification-dot ${item.eventType === 'media_uploaded' ? 'is-media' : 'is-note'}`} aria-hidden="true" />
-                <span className="portal-notification-copy">
-                  <strong>{item.title}</strong>
-                  <span>{item.detail}</span>
-                  <small>
-                    {item.actorName ? `${item.actorName} · ` : ''}{roleLabel(item.actorRole)} · {formatRelativeTime(item.createdAt)}
-                  </small>
-                </span>
-              </Link>
-            ))}
+            {notifications.map((item) => {
+              const isUnread = Number(item.id) > acknowledgedId;
+              return (
+                <Link key={item.id} href={item.path || '/portal/dashboard'} className="portal-notification-item" onClick={() => { clearNotificationAlerts(); setOpen(false); }}>
+                  <span className={isUnread ? `portal-notification-dot ${item.eventType === 'media_uploaded' ? 'is-media' : 'is-note'}` : 'portal-notification-dot-spacer'} aria-hidden="true" />
+                  <span className="portal-notification-copy">
+                    <strong>{item.title}</strong>
+                    <span>{item.detail}</span>
+                    <small>
+                      {item.actorName ? `${item.actorName} · ` : ''}{roleLabel(item.actorRole)} · {formatRelativeTime(item.createdAt)}
+                    </small>
+                  </span>
+                </Link>
+              );
+            })}
           </div>
         </div>
       ) : null}

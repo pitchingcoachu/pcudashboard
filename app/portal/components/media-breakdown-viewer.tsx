@@ -662,6 +662,50 @@ export default function MediaBreakdownViewer({
   const isVideo = mimeType.startsWith('video/');
   const isImage = mimeType.startsWith('image/');
 
+  useEffect(() => {
+    const scrollY = window.scrollY;
+    const { body, documentElement } = document;
+    const previousBodyStyles = {
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+      overflow: body.style.overflow,
+      touchAction: body.style.touchAction,
+      overscrollBehavior: body.style.overscrollBehavior,
+    };
+    const previousHtmlStyles = {
+      overflow: documentElement.style.overflow,
+      overscrollBehavior: documentElement.style.overscrollBehavior,
+    };
+
+    body.style.position = 'fixed';
+    body.style.top = `-${scrollY}px`;
+    body.style.left = '0';
+    body.style.right = '0';
+    body.style.width = '100%';
+    body.style.overflow = 'hidden';
+    body.style.touchAction = 'none';
+    body.style.overscrollBehavior = 'none';
+    documentElement.style.overflow = 'hidden';
+    documentElement.style.overscrollBehavior = 'none';
+
+    return () => {
+      body.style.position = previousBodyStyles.position;
+      body.style.top = previousBodyStyles.top;
+      body.style.left = previousBodyStyles.left;
+      body.style.right = previousBodyStyles.right;
+      body.style.width = previousBodyStyles.width;
+      body.style.overflow = previousBodyStyles.overflow;
+      body.style.touchAction = previousBodyStyles.touchAction;
+      body.style.overscrollBehavior = previousBodyStyles.overscrollBehavior;
+      documentElement.style.overflow = previousHtmlStyles.overflow;
+      documentElement.style.overscrollBehavior = previousHtmlStyles.overscrollBehavior;
+      window.scrollTo(0, scrollY);
+    };
+  }, []);
+
   // Image-mode annotation state
   const [annotations, setAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [draggingImageText, setDraggingImageText] = useState<{ id: string; dx: number; dy: number } | null>(null);

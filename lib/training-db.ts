@@ -2952,6 +2952,7 @@ export async function listPortalNotifications(input: {
     const mediaTitle = notificationMetadataString(metadata, 'mediaTitle');
     const noteCategory = notificationMetadataString(metadata, 'category');
     const noteDomain = notificationMetadataString(metadata, 'domain');
+    const profilePath = Number.isFinite(playerId) && playerId > 0 ? `/portal/player?previewPlayerId=${playerId}` : '/profiles';
     const title = eventType === 'media_uploaded'
       ? `${mediaType ? `${mediaType[0]?.toUpperCase() ?? ''}${mediaType.slice(1)}` : 'Media'} uploaded`
       : 'Player note added';
@@ -2966,7 +2967,7 @@ export async function listPortalNotifications(input: {
       eventType,
       title,
       detail: detailParts.join(' · ') || 'Recent player activity',
-      path: String(row.path ?? '').trim() || '/portal/dashboard',
+      path: profilePath,
       actorName: String(row.name ?? '').trim() || String(row.email ?? '').trim() || null,
       actorRole: normalizeActivityRole(row.role),
       playerId: Number.isFinite(playerId) && playerId > 0 ? playerId : null,
