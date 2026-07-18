@@ -438,7 +438,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
 
   return (
     <div className="portal-media-breakdown-video-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{title}</div>
+      <div className="portal-media-breakdown-panel-title" style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{title}</div>
 
       {/* Video + overlay wrapper — clips the zoom */}
       <div
@@ -453,7 +453,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
         onPointerCancel={onPanEnd}
       >
         {/* Inner wrapper that receives the transform */}
-        <div style={{ transform: transformStyle, transformOrigin: '50% 50%', willChange: zoom > 1 ? 'transform' : undefined }}>
+        <div className="portal-media-breakdown-stage-inner" style={{ transform: transformStyle, transformOrigin: '50% 50%', willChange: zoom > 1 ? 'transform' : undefined }}>
           <video
             ref={videoRef}
             className="portal-media-breakdown-video"
@@ -529,14 +529,15 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
       {/* Scrubber */}
       <div
         ref={scrubberRef}
+        className="portal-media-breakdown-scrubber"
         style={{ height: 24, borderRadius: 6, background: 'rgba(255,255,255,0.1)', cursor: 'pointer', position: 'relative', userSelect: 'none' }}
         onPointerDown={onScrubStart}
         onPointerMove={onScrubMove}
         onPointerUp={onScrubEnd}
         onPointerCancel={onScrubEnd}
       >
-        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${progress * 100}%`, background: 'rgba(239,68,68,0.85)', borderRadius: 6, pointerEvents: 'none' }} />
-        <div style={{ position: 'absolute', top: '50%', transform: 'translate(-50%,-50%)', left: `${progress * 100}%`, width: 16, height: 16, borderRadius: '50%', background: '#ef4444', border: '2px solid #fff', boxShadow: '0 1px 4px rgba(0,0,0,0.5)', pointerEvents: 'none' }} />
+        <div className="portal-media-breakdown-scrubber-progress" style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${progress * 100}%`, background: 'rgba(239,68,68,0.85)', borderRadius: 6, pointerEvents: 'none' }} />
+        <div className="portal-media-breakdown-scrubber-thumb" style={{ position: 'absolute', top: '50%', transform: 'translate(-50%,-50%)', left: `${progress * 100}%`, width: 16, height: 16, borderRadius: '50%', background: '#ef4444', border: '2px solid #fff', boxShadow: '0 1px 4px rgba(0,0,0,0.5)', pointerEvents: 'none' }} />
         <span style={{ position: 'absolute', left: 5, top: '50%', transform: 'translateY(-50%)', fontSize: 10, fontWeight: 700, color: '#fff', pointerEvents: 'none', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>{formatTime(currentTime)}</span>
         <span style={{ position: 'absolute', right: 5, top: '50%', transform: 'translateY(-50%)', fontSize: 10, fontWeight: 700, color: '#fff', pointerEvents: 'none', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>{formatTime(duration)}</span>
       </div>
@@ -547,7 +548,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
         <button type="button" className="btn btn-primary" style={{ fontSize: 12, padding: '3px 12px', minHeight: 0 }} onClick={togglePlay}>{playing ? '⏸' : '▶'}</button>
         <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => stepFrame(1)}>Frame ›</button>
         <button type="button" className={loop ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => setLoop((v) => !v)}>Loop</button>
-        <div style={{ display: 'flex', gap: 3, marginLeft: 4 }}>
+        <div className="portal-media-breakdown-speed-controls" style={{ display: 'flex', gap: 3, marginLeft: 4 }}>
           {[0.1, 0.25, 0.5, 1, 2].map((rate) => (
             <button key={rate} type="button" className={playbackRate === rate ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 10, padding: '2px 5px', minHeight: 0 }} onClick={() => setPlaybackRate(rate)}>
               {rate === 1 ? '1×' : `${rate}×`}
@@ -906,7 +907,7 @@ export default function MediaBreakdownViewer({
       onPointerUp={onImgPanEnd}
       onPointerCancel={onImgPanEnd}
     >
-      <div style={{ transform: imgZoomed ? `translate(${imgPan.x * 100}%, ${imgPan.y * 100}%) scale(${imgZoom})` : undefined, transformOrigin: '50% 50%', willChange: imgZoomed ? 'transform' : undefined }}>
+      <div className="portal-media-breakdown-stage-inner" style={{ transform: imgZoomed ? `translate(${imgPan.x * 100}%, ${imgPan.y * 100}%) scale(${imgZoom})` : undefined, transformOrigin: '50% 50%', willChange: imgZoomed ? 'transform' : undefined }}>
         <img className="portal-media-breakdown-image" src={url} alt={title} style={{ width: '100%', maxHeight: compareMode && compareMedia ? '58vh' : '68vh', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} />
         <svg
           viewBox="0 0 1000 1000"
@@ -934,7 +935,7 @@ export default function MediaBreakdownViewer({
   return (
     <div className="portal-modal-backdrop portal-media-breakdown-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
       <div
-        className="portal-modal-panel portal-media-breakdown-modal"
+        className={`portal-modal-panel portal-media-breakdown-modal${isVideo ? ' portal-media-breakdown-modal--video' : ''}${isImage ? ' portal-media-breakdown-modal--image' : ''}`}
         style={{ width: compareMode ? 'min(1600px, 98vw)' : 'min(1180px, 96vw)', maxHeight: '98vh', background: '#020617', color: '#f8fafc', display: 'flex', flexDirection: 'column', gap: 10, transition: 'width 0.2s ease' }}
         onClick={(e) => e.stopPropagation()}
       >

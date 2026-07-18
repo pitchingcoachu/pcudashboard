@@ -2889,6 +2889,11 @@ function notificationMetadataString(metadata: Record<string, unknown> | null, ke
 
 export async function listPortalNotifications(input: {
   organizationId: number;
+  playerId?: number | null;
+  eventTypes?: Array<'note_added' | 'media_uploaded'>;
+  actorRoles?: Array<'admin' | 'coach' | 'player'>;
+  mediaTypes?: Array<'photo' | 'video' | 'pdf'>;
+  playerPath?: string;
   limit?: number;
   sinceDays?: number;
 }): Promise<{ notifications: PortalNotificationRow[]; count: number }> {
@@ -2899,6 +2904,32 @@ export async function listPortalNotifications(input: {
   const pool = getDbPool();
   const limit = Math.max(5, Math.min(50, Number(input.limit ?? 15) || 15));
   const sinceDays = Math.max(1, Math.min(90, Number(input.sinceDays ?? 30) || 30));
+  const eventTypes = (Array.isArray(input.eventTypes) && input.eventTypes.length > 0 ? input.eventTypes : ['note_added', 'media_uploaded'])
+    .filter((value): value is 'note_added' | 'media_uploaded' => value === 'note_added' || value === 'media_uploaded');
+  const actorRoles = (Array.isArray(input.actorRoles) ? input.actorRoles : [])
+    .filter((value): value is 'admin' | 'coach' | 'player' => value === 'admin' || value === 'coach' || value === 'player');
+  const mediaTypes = (Array.isArray(input.mediaTypes) ? input.mediaTypes : [])
+    .filter((value): value is 'photo' | 'video' | 'pdf' => value === 'photo' || value === 'video' || value === 'pdf');
+  const filters = [
+    `organization_id = $1`,
+    `event_type = ANY($3::text[])`,
+    `created_at >= NOW() - ($2::int * INTERVAL '1 day')`,
+  ];
+  const queryParams: unknown[] = [organizationId, sinceDays, eventTypes];
+  const playerId = Number(input.playerId ?? 0);
+  if (Number.isFinite(playerId) && playerId > 0) {
+    queryParams.push(playerId);
+    filters.push(`player_id = $${queryParams.length}`);
+  }
+  if (actorRoles.length > 0) {
+    queryParams.push(actorRoles);
+    filters.push(`role = ANY($${queryParams.length}::text[])`);
+  }
+  if (mediaTypes.length > 0) {
+    queryParams.push(mediaTypes);
+    filters.push(`metadata->>'mediaType' = ANY($${queryParams.length}::text[])`);
+  }
+  const whereSql = filters.join('\n        AND ');
 
   const rowsResult = await pool.query<{
     id: string;
@@ -2923,24 +2954,20 @@ export async function listPortalNotifications(input: {
         player_id,
         created_at::text
       FROM portal_activity_events
-      WHERE organization_id = $1
-        AND event_type IN ('note_added', 'media_uploaded')
-        AND created_at >= NOW() - ($2::int * INTERVAL '1 day')
+      WHERE ${whereSql}
       ORDER BY created_at DESC, id DESC
-      LIMIT $3
+      LIMIT $${queryParams.length + 1}
     `,
-    [organizationId, sinceDays, limit]
+    [...queryParams, limit]
   );
 
   const countResult = await pool.query<{ count: string }>(
     `
       SELECT COUNT(*)::text AS count
       FROM portal_activity_events
-      WHERE organization_id = $1
-        AND event_type IN ('note_added', 'media_uploaded')
-        AND created_at >= NOW() - ($2::int * INTERVAL '1 day')
+      WHERE ${whereSql}
     `,
-    [organizationId, sinceDays]
+    queryParams
   );
 
   const notifications = rowsResult.rows.map((row) => {
@@ -2952,7 +2979,7 @@ export async function listPortalNotifications(input: {
     const mediaTitle = notificationMetadataString(metadata, 'mediaTitle');
     const noteCategory = notificationMetadataString(metadata, 'category');
     const noteDomain = notificationMetadataString(metadata, 'domain');
-    const profilePath = Number.isFinite(playerId) && playerId > 0 ? `/portal/player?previewPlayerId=${playerId}` : '/profiles';
+    const profilePath = input.playerPath || (Number.isFinite(playerId) && playerId > 0 ? `/portal/player?previewPlayerId=${playerId}` : '/profiles');
     const title = eventType === 'media_uploaded'
       ? `${mediaType ? `${mediaType[0]?.toUpperCase() ?? ''}${mediaType.slice(1)}` : 'Media'} uploaded`
       : 'Player note added';

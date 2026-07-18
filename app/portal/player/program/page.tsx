@@ -16,6 +16,7 @@ import PreviewAthleteSelect from '../../preview-athlete-select';
 import LogoutButton from '../../logout-button';
 import DashboardSchoolSelector from '../../dashboard/dashboard-school-selector';
 import PortalThemeToggle from '../../theme-toggle';
+import PortalNotificationsBell from '../../notifications-bell';
 import PlayerCalendar from '../player-calendar';
 
 type PlayerProgramPageProps = {
@@ -125,6 +126,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           </div>
           <LogoutButton />
           <PortalThemeToggle />
+          <PortalNotificationsBell />
         </div>
         </header>
         <section className="portal-panel">
@@ -177,6 +179,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           </div>
           <LogoutButton />
           <PortalThemeToggle />
+          <PortalNotificationsBell />
         </div>
         </header>
         <section className="portal-panel">
@@ -281,6 +284,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           </div>
           <LogoutButton />
           <PortalThemeToggle />
+          <PortalNotificationsBell />
           <div className="portal-social-row" aria-label="PCU Social Links">
             <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">
               <svg viewBox="0 0 24 24" aria-hidden="true">

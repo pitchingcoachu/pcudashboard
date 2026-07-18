@@ -107,7 +107,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
             <p>Logged In As</p>
             <h1>{session.name ?? session.email}</h1>
           </div>
-          {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
+          <PortalNotificationsBell />
           <LogoutButton />
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">

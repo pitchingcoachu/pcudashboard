@@ -128,7 +128,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             <p>Logged In As</p>
             <h1>{session.name ?? session.email}</h1>
           </div>
-          {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
+          <PortalNotificationsBell />
           <LogoutButton />
           <PortalThemeToggle />
         </div>
@@ -221,11 +221,12 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
 
   return (
     <div className="portal-shell">
-      <header className="portal-header">
+      <header className={`portal-header${session.role === 'admin' || session.role === 'coach' ? ' portal-header--player-search' : ''}`}>
         <div className="portal-header-left">
           <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
           {session.role === 'admin' || session.role === 'coach' ? (
             <PreviewAthleteSelect
+              key={effectivePlayerId}
               basePath="/portal/player"
               selectedPlayerId={effectivePlayerId}
               players={previewClients}
@@ -281,7 +282,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             <p>{session.role === 'admin' || session.role === 'coach' ? 'Previewing' : 'Logged In As'}</p>
             <h1>{session.role === 'admin' || session.role === 'coach' ? player.fullName : session.name ?? session.email}</h1>
           </div>
-          {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
+          <PortalNotificationsBell />
           <LogoutButton />
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">
