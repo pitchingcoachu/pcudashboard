@@ -486,7 +486,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
         </div>
 
         {/* Zoom controls — always visible, top-left corner */}
-        <div style={{ position: 'absolute', top: 6, left: 6, display: 'flex', gap: 3, zIndex: 10 }}>
+        <div className="portal-media-breakdown-zoom-controls" style={{ position: 'absolute', top: 6, left: 6, display: 'flex', gap: 3, zIndex: 10 }}>
           <button
             type="button"
             className="btn btn-ghost"
@@ -513,7 +513,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
         </div>
 
         {/* Undo/Clear — bottom-right */}
-        <div style={{ position: 'absolute', bottom: 6, right: 6, display: 'flex', gap: 4, zIndex: 10 }}>
+        <div className="portal-media-breakdown-overlay-actions" style={{ position: 'absolute', bottom: 6, right: 6, display: 'flex', gap: 4, zIndex: 10 }}>
           <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0, background: 'rgba(2,6,23,0.8)' }} onClick={(e) => { e.stopPropagation(); setAnnotations((items) => items.slice(0, -1)); setAnglePending([]); }} disabled={!annotations.length}>Undo</button>
           <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0, background: 'rgba(2,6,23,0.8)' }} onClick={(e) => { e.stopPropagation(); setAnnotations([]); setAnglePending([]); }} disabled={!annotations.length}>Clear</button>
         </div>
@@ -542,7 +542,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
       </div>
 
       {/* Playback controls */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      <div className="portal-media-breakdown-playback-controls" style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
         <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => stepFrame(-1)}>‹ Frame</button>
         <button type="button" className="btn btn-primary" style={{ fontSize: 12, padding: '3px 12px', minHeight: 0 }} onClick={togglePlay}>{playing ? '⏸' : '▶'}</button>
         <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => stepFrame(1)}>Frame ›</button>
@@ -855,7 +855,7 @@ export default function MediaBreakdownViewer({
   const allImageAnnotations = [...annotations, ...(active ? [active] : []), ...(anglePending.length > 0 ? [{ id: 'angle-preview', tool: 'angle' as const, color, width, points: anglePending, angleMode }] : [])];
 
   const toolbar = (
-    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 10, background: 'rgba(2,6,23,0.92)', border: '1px solid rgba(148,163,184,0.25)', flexShrink: 0 }}>
+    <div className="portal-media-breakdown-toolbar" style={{ display: 'flex', gap: 4, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 10, background: 'rgba(2,6,23,0.92)', border: '1px solid rgba(148,163,184,0.25)', flexShrink: 0 }}>
       <button type="button" className={!drawMode ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setDrawMode(false); setAnglePending([]); setAnglePendingCount(0); }}>View</button>
       {(['line', 'arrow', 'circle', 'pen', 'angle', 'text', 'erase'] as BreakdownTool[]).map((entry) => (
         <button key={entry} type="button" className={drawMode && tool === entry ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setDrawMode(true); setTool(entry); setAnglePending([]); setAnglePendingCount(0); }}>
