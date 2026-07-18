@@ -22,7 +22,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       DASHBOARD_DATABASE_URL: ${{ secrets.DASHBOARD_DATABASE_URL }}
       PRO_SYNC_LOOKBACK_DAYS: "3"
