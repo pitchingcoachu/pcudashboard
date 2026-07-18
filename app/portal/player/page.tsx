@@ -308,6 +308,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
       <section className="portal-panel portal-player-panel">
         {session.role === 'player' ? <PlayerQuestionnaireGate playerId={player.id} /> : null}
         <ProfileDashboard
+          key={player.id}
           playerId={player.id}
           isAdminPreview={session.role === 'admin' || session.role === 'coach'}
           fullProgramHref={fullProgramHref}

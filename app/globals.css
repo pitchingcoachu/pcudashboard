@@ -7814,13 +7814,13 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 
   .portal-header {
     display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) 52px;
+    grid-template-columns: 48px minmax(0, 1fr) 48px;
     align-items: center;
     gap: 0.42rem;
     position: sticky;
     top: env(safe-area-inset-top, 0px);
     z-index: 160;
-    padding: 0.32rem 0.45rem;
+    padding: 0.32rem 0.5rem 0.32rem 0.45rem;
     width: 100%;
     max-width: 100%;
     box-sizing: border-box;
@@ -7832,7 +7832,7 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   }
 
   body.biomechanics-suite-active .portal-header {
-    grid-template-columns: 48px minmax(0, 1fr) 52px !important;
+    grid-template-columns: 48px minmax(0, 1fr) 48px !important;
   }
 
   .portal-header-left {
@@ -8007,6 +8007,7 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
     align-items: center;
     justify-content: flex-end;
     min-width: 0;
+    padding-right: max(0.35rem, env(safe-area-inset-right, 0px));
   }
 
   .portal-header-nav-stack {
@@ -8509,7 +8510,7 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 @media (min-width: 601px) and (max-width: 780px) {
   .portal-header,
   body.biomechanics-suite-active .portal-header {
-    grid-template-columns: 48px minmax(0, 1fr) 52px !important;
+    grid-template-columns: 48px minmax(0, 1fr) 48px !important;
   }
 
   .portal-header--player-search {

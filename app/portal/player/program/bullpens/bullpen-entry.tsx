@@ -46,11 +46,16 @@ function isStrikeCol(col: string) {
   const normalized = col.trim().toLowerCase();
   return normalized === 'strike' || normalized === 'strikes' || normalized === 'strike or ball';
 }
+function isTwoThirdsCol(col: string) {
+  const normalized = col.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return normalized === '23' || normalized === 'twothirds';
+}
 
 function resolveColumnType(col: string, type: BullpenColumnType = DEFAULT_COLUMN_TYPE): BullpenColumnType {
   if (type !== 'auto') return type;
   if (isVelocityCol(col)) return 'velocity';
   if (isStrikeCol(col)) return 'strike';
+  if (isTwoThirdsCol(col)) return 'two-thirds';
   return 'text';
 }
 
@@ -121,6 +126,7 @@ type BullpenTrendBucket = {
   ballWeight: string;
   value: number;
   count: number;
+  yes: number;
 };
 
 type BullpenVelocityPoint = {
@@ -278,6 +284,69 @@ function TrendBarChart({ data, metric }: {
   );
 }
 
+function TwoThirdsTrendLineChart({ data }: { data: BullpenTrendBucket[] }) {
+  if (data.length < 1) {
+    return (
+      <div style={{ padding: '12px 0', color: '#94a3b8', fontSize: 13 }}>
+        No 2/3 trend data yet.
+      </div>
+    );
+  }
+  const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date));
+  const W = Math.max(720, sorted.length * 96 + 92);
+  const H = 310;
+  const pad = { top: 28, right: 22, bottom: 68, left: 58 };
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+  const xStep = sorted.length > 1 ? chartW / (sorted.length - 1) : 0;
+  const scaleX = (index: number) => pad.left + (sorted.length > 1 ? index * xStep : chartW / 2);
+  const scaleY = (value: number) => pad.top + (1 - value / 100) * chartH;
+  const ticks = [0, 50, 100];
+  const points = sorted.map((point, index) => ({
+    ...point,
+    x: scaleX(index),
+    y: scaleY(point.value),
+  }));
+  const linePoints = points.map((point) => `${point.x},${point.y}`).join(' ');
+  return (
+    <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+      <svg width={W} height={H} role="img" aria-label="2/3 percentage by date" style={{ display: 'block' }}>
+        <rect x={0} y={0} width={W} height={H} rx={8} fill="rgba(2,6,23,0.18)" />
+        {ticks.map((tick) => (
+          <g key={tick}>
+            <line x1={pad.left} x2={W - pad.right} y1={scaleY(tick)} y2={scaleY(tick)} stroke="rgba(148,163,184,0.14)" strokeWidth={1} />
+            <text x={pad.left - 8} y={scaleY(tick) + 4} textAnchor="end" fontSize={11} fontWeight={700} fill="#94a3b8">
+              {trendMetricFormat('two-thirds', tick)}
+            </text>
+          </g>
+        ))}
+        {points.length > 1 ? (
+          <polyline
+            points={linePoints}
+            fill="none"
+            stroke="#60a5fa"
+            strokeWidth={2.5}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        ) : null}
+        {points.map((point) => (
+          <g key={point.key}>
+            <circle cx={point.x} cy={point.y} r={5.5} fill="#60a5fa" stroke="rgba(255,255,255,0.82)" strokeWidth={1.4} />
+            <title>{`${point.date}\n2/3%: ${trendMetricFormat('two-thirds', point.value)}\nYes: ${point.yes}\nTotal: ${point.count}`}</title>
+            <text x={point.x} y={H - 38} textAnchor="middle" fontSize={11} fontWeight={800} fill="#e2e8f0">
+              {formatTrendDate(point.date)}
+            </text>
+          </g>
+        ))}
+        <text x={pad.left} y={18} fontSize={12} fontWeight={800} fill="#cbd5e1">
+          2/3% by Date
+        </text>
+      </svg>
+    </div>
+  );
+}
+
 function VelocityScatterChart({ data, showLine }: { data: BullpenVelocityPoint[]; showLine: boolean }) {
   if (data.length < 1) {
     return (
@@ -419,8 +488,19 @@ function getFactorKey(parts: string[]) {
   return parts.map((part) => part.replaceAll('|', '/').trim() || 'Unspecified').join('|');
 }
 
+function isDefaultBaseballFactor(value: string) {
+  return value.trim().toLowerCase() === 'baseball';
+}
+
 function getFactorLabel(parts: string[]) {
-  return parts.filter((part) => part && part !== 'All').join(' / ') || 'All';
+  const cleaned = parts.map((part) => part.trim()).filter(Boolean);
+  const primaryIndex = cleaned.findIndex((part) => part !== 'All');
+  if (primaryIndex < 0) return 'All';
+  const primary = cleaned[primaryIndex];
+  const supplements = cleaned
+    .slice(primaryIndex + 1)
+    .filter((part) => part !== 'All' && !isDefaultBaseballFactor(part));
+  return [primary, ...supplements].join(' / ');
 }
 
 function rowHasDrillColumn(row: Record<string, string>) {
@@ -746,12 +826,13 @@ export default function BullpenEntry({
   }, [trendBallTypeFilter, trendBallWeightFilter, trendDrillFilter, trendFilterOptions, trendPitchTypeFilter]);
 
   const filteredTrendRows = useMemo(() => allRows.filter((row) => {
+    if (trendMetric === 'two-thirds') return true;
     if (trendPitchTypeFilter !== 'All' && getRowPitchType(row, 'Unspecified') !== trendPitchTypeFilter) return false;
     if (trendBallTypeFilter !== 'All' && getRowBallType(row) !== trendBallTypeFilter) return false;
     if (trendDrillFilter !== 'All' && getRowDrill(row, 'All') !== trendDrillFilter) return false;
     if (trendBallWeightFilter !== 'All' && getRowBallWeight(row, 'All') !== trendBallWeightFilter) return false;
     return true;
-  }), [allRows, trendBallTypeFilter, trendBallWeightFilter, trendDrillFilter, trendPitchTypeFilter]);
+  }), [allRows, trendBallTypeFilter, trendBallWeightFilter, trendDrillFilter, trendMetric, trendPitchTypeFilter]);
 
   const trendMetricOptions = useMemo(() => {
     const options: Array<{ value: BullpenTrendMetric; label: string }> = [];
@@ -786,13 +867,13 @@ export default function BullpenEntry({
       const date = String(row.__date ?? '').trim();
       if (!date) continue;
       const velocityParts = trendMetric === 'velocity' ? getVelocityComboParts(row) : null;
-      const pitchType = velocityParts?.pitchType ?? getRowPitchType(row, 'Pitch');
-      const ballType = velocityParts?.ballType ?? getRowBallType(row);
+      const pitchType = trendMetric === 'two-thirds' ? 'All' : velocityParts?.pitchType ?? getRowPitchType(row, 'Pitch');
+      const ballType = trendMetric === 'two-thirds' ? 'All' : velocityParts?.ballType ?? getRowBallType(row);
       const drill = velocityParts?.drill ?? 'All';
       const ballWeight = velocityParts?.ballWeight ?? 'All';
-      const comboParts = velocityParts?.comboParts ?? [pitchType, ballType];
+      const comboParts = trendMetric === 'two-thirds' ? ['2/3'] : velocityParts?.comboParts ?? [pitchType, ballType];
       const comboKey = getFactorKey(comboParts);
-      const comboLabel = getFactorLabel(comboParts);
+      const comboLabel = trendMetric === 'two-thirds' ? '2/3' : getFactorLabel(comboParts);
       const rawValue = String(row[valueCol] ?? '').trim();
       if (!rawValue) continue;
       const key = `${date}|${comboKey}`;
@@ -824,11 +905,12 @@ export default function BullpenEntry({
         drill: group.drill,
         ballWeight: group.ballWeight,
         count: group.count,
+        yes: group.yes,
         value: trendMetric === 'velocity'
           ? (group.count ? group.sum / group.count : 0)
           : (group.count ? (group.yes / group.count) * 100 : 0),
       }))
-      .filter((bucket) => bucket.count > 0 && bucket.value > 0)
+      .filter((bucket) => bucket.count > 0)
       .sort((a, b) =>
         a.date.localeCompare(b.date) ||
         a.comboLabel.localeCompare(b.comboLabel)
@@ -1021,6 +1103,12 @@ export default function BullpenEntry({
     return Number.isFinite(velocity) && velocity > 0;
   });
   const summaryUsesDrillOnly = summaryVelocityRows.length > 0 && summaryVelocityRows.every(rowHasDrillColumn);
+  const showTrendFactorFilters = trendMetric !== 'two-thirds';
+  const hasActiveTrendFactorFilters =
+    trendPitchTypeFilter !== 'All' ||
+    trendBallTypeFilter !== 'All' ||
+    trendDrillFilter !== 'All' ||
+    trendBallWeightFilter !== 'All';
 
   if (!visibleTemplates.length) {
     return <p className="portal-muted-text" style={{ margin: 0 }}>No bullpen scripts assigned yet.</p>;
@@ -1362,59 +1450,63 @@ export default function BullpenEntry({
                   All Dates
                 </button>
               ) : null}
-              <label style={{ display: 'grid', gap: 3 }}>
-                <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Pitch Type</span>
-                <select
-                  className="portal-schedule-control"
-                  value={trendPitchTypeFilter}
-                  onChange={(e) => setTrendPitchTypeFilter(e.target.value)}
-                  style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
-                >
-                  <option value="All">All</option>
-                  {trendFilterOptions.pitchTypes.map((value) => <option key={`pitch-filter-${value}`} value={value}>{value}</option>)}
-                </select>
-              </label>
-              <label style={{ display: 'grid', gap: 3 }}>
-                <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Ball Type</span>
-                <select
-                  className="portal-schedule-control"
-                  value={trendBallTypeFilter}
-                  onChange={(e) => setTrendBallTypeFilter(e.target.value)}
-                  style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
-                >
-                  <option value="All">All</option>
-                  {trendFilterOptions.ballTypes.map((value) => <option key={`ball-filter-${value}`} value={value}>{value}</option>)}
-                </select>
-              </label>
-              {trendFilterOptions.drills.length > 0 ? (
-                <label style={{ display: 'grid', gap: 3 }}>
-                  <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Drill</span>
-                  <select
-                    className="portal-schedule-control"
-                    value={trendDrillFilter}
-                    onChange={(e) => setTrendDrillFilter(e.target.value)}
-                    style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
-                  >
-                    <option value="All">All</option>
-                    {trendFilterOptions.drills.map((value) => <option key={`drill-filter-${value}`} value={value}>{value}</option>)}
-                  </select>
-                </label>
+              {showTrendFactorFilters ? (
+                <>
+                  <label style={{ display: 'grid', gap: 3 }}>
+                    <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Pitch Type</span>
+                    <select
+                      className="portal-schedule-control"
+                      value={trendPitchTypeFilter}
+                      onChange={(e) => setTrendPitchTypeFilter(e.target.value)}
+                      style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
+                    >
+                      <option value="All">All</option>
+                      {trendFilterOptions.pitchTypes.map((value) => <option key={`pitch-filter-${value}`} value={value}>{value}</option>)}
+                    </select>
+                  </label>
+                  <label style={{ display: 'grid', gap: 3 }}>
+                    <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Ball Type</span>
+                    <select
+                      className="portal-schedule-control"
+                      value={trendBallTypeFilter}
+                      onChange={(e) => setTrendBallTypeFilter(e.target.value)}
+                      style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
+                    >
+                      <option value="All">All</option>
+                      {trendFilterOptions.ballTypes.map((value) => <option key={`ball-filter-${value}`} value={value}>{value}</option>)}
+                    </select>
+                  </label>
+                  {trendFilterOptions.drills.length > 0 ? (
+                    <label style={{ display: 'grid', gap: 3 }}>
+                      <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Drill</span>
+                      <select
+                        className="portal-schedule-control"
+                        value={trendDrillFilter}
+                        onChange={(e) => setTrendDrillFilter(e.target.value)}
+                        style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
+                      >
+                        <option value="All">All</option>
+                        {trendFilterOptions.drills.map((value) => <option key={`drill-filter-${value}`} value={value}>{value}</option>)}
+                      </select>
+                    </label>
+                  ) : null}
+                  {trendFilterOptions.ballWeights.length > 0 ? (
+                    <label style={{ display: 'grid', gap: 3 }}>
+                      <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Ball Weight</span>
+                      <select
+                        className="portal-schedule-control"
+                        value={trendBallWeightFilter}
+                        onChange={(e) => setTrendBallWeightFilter(e.target.value)}
+                        style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
+                      >
+                        <option value="All">All</option>
+                        {trendFilterOptions.ballWeights.map((value) => <option key={`weight-filter-${value}`} value={value}>{value}</option>)}
+                      </select>
+                    </label>
+                  ) : null}
+                </>
               ) : null}
-              {trendFilterOptions.ballWeights.length > 0 ? (
-                <label style={{ display: 'grid', gap: 3 }}>
-                  <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700 }}>Ball Weight</span>
-                  <select
-                    className="portal-schedule-control"
-                    value={trendBallWeightFilter}
-                    onChange={(e) => setTrendBallWeightFilter(e.target.value)}
-                    style={{ minHeight: 30, height: 30, fontSize: 12, padding: '0.25rem 0.45rem' }}
-                  >
-                    <option value="All">All</option>
-                    {trendFilterOptions.ballWeights.map((value) => <option key={`weight-filter-${value}`} value={value}>{value}</option>)}
-                  </select>
-                </label>
-              ) : null}
-              {(trendPitchTypeFilter !== 'All' || trendBallTypeFilter !== 'All' || trendDrillFilter !== 'All' || trendBallWeightFilter !== 'All') ? (
+              {showTrendFactorFilters && hasActiveTrendFactorFilters ? (
                 <button
                   type="button"
                   className="btn btn-ghost"
@@ -1476,6 +1568,8 @@ export default function BullpenEntry({
           </div>
           {trendMetric === 'velocity' && velocityTrendMode === 'individual' ? (
             <VelocityScatterChart data={individualVelocityPoints} showLine={trendDrillFilter !== 'All' && showIndividualVelocityLine} />
+          ) : trendMetric === 'two-thirds' ? (
+            <TwoThirdsTrendLineChart data={combinedTrendData} />
           ) : (
             <TrendBarChart data={combinedTrendData} metric={trendMetric} />
           )}
