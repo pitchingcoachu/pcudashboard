@@ -7814,7 +7814,7 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 
   .portal-header {
     display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) 44px;
+    grid-template-columns: 48px minmax(0, 1fr) 52px;
     align-items: center;
     gap: 0.42rem;
     position: sticky;
@@ -7832,7 +7832,7 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   }
 
   body.biomechanics-suite-active .portal-header {
-    grid-template-columns: 48px minmax(0, 1fr) 44px !important;
+    grid-template-columns: 48px minmax(0, 1fr) 52px !important;
   }
 
   .portal-header-left {
@@ -7976,11 +7976,11 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 
   .portal-nav-mobile-wrap {
     display: block;
-    width: 44px;
+    width: 40px;
     min-width: 0;
-    max-width: 44px;
+    max-width: 40px;
     margin-inline: 0;
-    justify-self: end;
+    justify-self: center;
   }
 
   body.biomechanics-suite-active .portal-nav-mobile-wrap {
@@ -8036,11 +8036,11 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   }
 
   .portal-nav-mobile {
-    width: 44px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
     box-sizing: border-box;
-    border-radius: 14px;
-    min-height: 44px;
+    border-radius: 12px;
+    min-height: 40px;
     padding: 0;
     place-items: center;
     line-height: 1;
@@ -8057,11 +8057,11 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
     grid-column: 1 / -1;
     grid-row: 1;
     justify-self: center;
-    width: 18px;
+    width: 17px;
     height: 2px;
     border-radius: 999px;
     background: currentColor;
-    box-shadow: 0 -6px 0 currentColor, 0 6px 0 currentColor;
+    box-shadow: 0 -5.5px 0 currentColor, 0 5.5px 0 currentColor;
   }
 
   .portal-nav-mobile::after {
@@ -8509,7 +8509,7 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 @media (min-width: 601px) and (max-width: 780px) {
   .portal-header,
   body.biomechanics-suite-active .portal-header {
-    grid-template-columns: 48px minmax(0, 1fr) 44px !important;
+    grid-template-columns: 48px minmax(0, 1fr) 52px !important;
   }
 
   .portal-header--player-search {
