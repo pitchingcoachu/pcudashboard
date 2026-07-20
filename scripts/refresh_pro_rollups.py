@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Force-refresh PRO daily rollups.
+Refresh PRO daily rollups.
 
 Usage:
-  .venv/bin/python scripts/refresh_pro_rollups.py
+  .venv/bin/python scripts/refresh_pro_rollups.py --incremental
+  .venv/bin/python scripts/refresh_pro_rollups.py --force
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 
@@ -76,7 +78,26 @@ def _terminate_advisory_lock_holders(lock_key: int) -> None:
                 cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Refresh PRO daily rollups.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Refresh the recent PRO rollup window instead of rebuilding all history.",
+    )
+    mode.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild PRO rollups from the first available PRO pitch date.",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = _parse_args()
+    force = args.force or not args.incremental
+
     _ensure_direct_connection()
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -85,15 +106,17 @@ def main() -> int:
 
     from dashboard_api.app.main import _refresh_pro_daily_rollup, _PRO_ROLLUP_ADVISORY_LOCK_KEY  # noqa: WPS433
 
-    _terminate_advisory_lock_holders(_PRO_ROLLUP_ADVISORY_LOCK_KEY)
+    if force:
+        _terminate_advisory_lock_holders(_PRO_ROLLUP_ADVISORY_LOCK_KEY)
 
     try:
-        _refresh_pro_daily_rollup(force=True, raise_on_failure=True)
+        _refresh_pro_daily_rollup(force=force, raise_on_failure=True)
     except Exception as exc:
         print(f"[refresh] ERROR: {exc}", file=sys.stderr)
         return 1
 
-    print("Refreshed PRO rollups.")
+    mode_label = "full" if force else "incremental"
+    print(f"Refreshed PRO rollups ({mode_label}).")
     return 0
 
 

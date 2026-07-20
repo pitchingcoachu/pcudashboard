@@ -1,9 +1,16 @@
 name: PRO Rollup Refresh
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      full_rebuild:
+        description: "Run a full PRO rollup rebuild instead of an incremental refresh"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 concurrency:
   group: pro-rollup-refresh
@@ -28,4 +35,9 @@ jobs:
         run: pip install -r dashboard_api/requirements.txt
 
       - name: Refresh PRO rollups
-        run: python scripts/refresh_pro_rollups.py
+        run: |
+          if [[ "${{ inputs.full_rebuild }}" == "true" ]]; then
+            python scripts/refresh_pro_rollups.py --force
+          else
+            python scripts/refresh_pro_rollups.py --incremental
+          fi

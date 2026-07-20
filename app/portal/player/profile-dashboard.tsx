@@ -155,6 +155,28 @@ function todayIsoDate(): string {
   return `${year}-${month}-${day}`;
 }
 
+function addDays(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatScheduleHeading(dateIso: string, todayIso: string): string {
+  if (dateIso === todayIso) return "Today's Schedule";
+  const date = new Date(`${dateIso}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return 'Schedule';
+  return `${date.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })} Schedule`;
+}
+
 function hashString(value: string): number {
   let hash = 0;
   for (let i = 0; i < value.length; i += 1) hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
@@ -453,6 +475,11 @@ export default function ProfileDashboard({
   } | null>(null);
   const pointerMapRef = useRef<Map<number, { x: number; y: number }>>(new Map());
 
+  const todayDateIso = useMemo(() => todayIsoDate(), []);
+  const [selectedScheduleDate, setSelectedScheduleDate] = useState(todayDateIso);
+  const [scheduleItems, setScheduleItems] = useState<ProgramItemRow[]>(todayItems);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleMessage, setScheduleMessage] = useState('');
   const [weightDate, setWeightDate] = useState(todayIsoDate());
   const [weightValue, setWeightValue] = useState('');
   const [weightNotes, setWeightNotes] = useState('');
@@ -509,6 +536,40 @@ export default function ProfileDashboard({
   useEffect(() => {
     router.prefetch(fullProgramHref);
   }, [fullProgramHref, router]);
+
+  useEffect(() => {
+    if (selectedScheduleDate === todayDateIso) {
+      setScheduleItems(todayItems);
+      setScheduleMessage('');
+      setScheduleLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setScheduleLoading(true);
+    setScheduleMessage('');
+
+    const endDate = addDays(selectedScheduleDate, 1);
+    fetch(`/api/player/program-items?playerId=${playerId}&startDate=${selectedScheduleDate}&endDate=${endDate}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { items?: ProgramItemRow[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load schedule.');
+        setScheduleItems(Array.isArray(payload.items) ? payload.items : []);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setScheduleItems([]);
+        setScheduleMessage(error instanceof Error ? error.message : 'Failed to load schedule.');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setScheduleLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [playerId, selectedScheduleDate, todayDateIso, todayItems]);
 
   const sortedWeightLogs = useMemo(() => {
     const merged = new Map<string, BodyWeightLogRow>();
@@ -1327,17 +1388,46 @@ export default function ProfileDashboard({
 
       <div className="portal-profile-three-col" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '0.85rem' }}>
         <article className="portal-admin-card">
-          <div className="portal-row-between">
-            <h3>Today&apos;s Schedule</h3>
-            <Link className="btn btn-ghost as-link" href={fullProgramHref}>
-              Click for Full Program
-            </Link>
+          <div className="portal-row-between portal-profile-schedule-head">
+            <div className="portal-profile-schedule-title-row">
+              <button
+                type="button"
+                className="btn btn-ghost portal-profile-schedule-arrow"
+                aria-label="Show previous day's schedule"
+                onClick={() => setSelectedScheduleDate((current) => addDays(current, -1))}
+              >
+                &lt;
+              </button>
+              <h3>{formatScheduleHeading(selectedScheduleDate, todayDateIso)}</h3>
+              <button
+                type="button"
+                className="btn btn-ghost portal-profile-schedule-arrow"
+                aria-label="Show next day's schedule"
+                onClick={() => setSelectedScheduleDate((current) => addDays(current, 1))}
+              >
+                &gt;
+              </button>
+            </div>
+            <div className="portal-choice-line-actions">
+              {selectedScheduleDate !== todayDateIso ? (
+                <button type="button" className="btn btn-ghost" onClick={() => setSelectedScheduleDate(todayDateIso)}>
+                  Today
+                </button>
+              ) : null}
+              <Link className="btn btn-ghost as-link" href={fullProgramHref}>
+                Click for Full Program
+              </Link>
+            </div>
           </div>
-          {todayItems.length === 0 ? (
-            <p className="portal-muted-text">No workouts assigned for today.</p>
+          {scheduleLoading ? (
+            <p className="portal-muted-text">Loading schedule...</p>
+          ) : scheduleMessage ? (
+            <p className="auth-error">{scheduleMessage}</p>
+          ) : scheduleItems.length === 0 ? (
+            <p className="portal-muted-text">No workouts assigned for {selectedScheduleDate === todayDateIso ? 'today' : formatDate(selectedScheduleDate)}.</p>
           ) : (
             <div className="portal-player-items">
-              {todayItems.map((item) => (
+              {scheduleItems.map((item) => (
                 <button
                   key={item.itemId}
                   type="button"

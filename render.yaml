@@ -24,6 +24,6 @@ services:
     env: python
     plan: starter
     branch: main
-    schedule: "*/30 * * * *"
+    schedule: "15 * * * *"
     buildCommand: pip install -r dashboard_api/requirements.txt
-    startCommand: python scripts/refresh_pro_rollups.py
+    startCommand: python scripts/refresh_pro_rollups.py --incremental

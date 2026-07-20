@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { formatTableDisplayValue } from '../../../lib/table-sort';
-import { formatPlayerPlanGoalSummary } from '../../../lib/player-plan-goal-display';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import type { PlayerPlanGoalRow } from '../../../lib/training-db';
 
@@ -523,12 +522,33 @@ function formatGoalValue(goal: ParsedGoal, value: number | null): string {
   return Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1);
 }
 
+function targetUnit(goal: ParsedGoal): string {
+  const label = metricLabel(goal).trim().toUpperCase();
+  if (label.includes('%')) return '%';
+  if (label === 'VELOCITY') return ' mph';
+  if (label === 'IVB' || label === 'HB') return '"';
+  if (label === 'SPIN RATE') return ' rpm';
+  if (label === 'EXTENSION' || label === 'RELEASE HEIGHT' || label === 'RELEASE SIDE') return ' ft';
+  return '';
+}
+
+function nonAll(values: string[]): string[] {
+  return values.filter((value) => value && value !== 'All');
+}
+
 function goalHeadline(goal: ParsedGoal): string {
-  const summary = formatPlayerPlanGoalSummary(goal);
-  if (summary) return summary;
   const direction = goal.comparator === 'Less Than' ? 'Decrease' : 'Increase';
-  const target = goal.targetValue || '-';
-  return `${direction} ${metricLabel(goal)} to ${target}`;
+  const metric = metricLabel(goal);
+  const pitchTypes = goal.category !== 'Hitting Stats' ? nonAll(goal.pitchTypes) : [];
+  const pitchTypePhrase = pitchTypes.length === 1 ? `${pitchTypes[0]} ` : '';
+  const target = goal.targetValue ? `${goal.targetValue}${targetUnit(goal)}` : '-';
+  return `${direction} ${pitchTypePhrase}${metric} to ${target}`.replace(/\s+/g, ' ').trim();
+}
+
+function subjectiveGoalText(goal: ParsedGoal): string {
+  const objective = goal.objectiveText.trim();
+  if (objective) return objective;
+  return goal.goalDescription.trim().startsWith('{') ? 'No goal note added.' : goal.goalDescription;
 }
 
 function playerNameCandidates(playerName: string): string[] {
@@ -571,8 +591,8 @@ function TrendChart({ goal, series }: { goal: ParsedGoal; series: Array<{ date: 
   const yTicks = [yMax, yMin + span / 2, yMin];
   const xLabelIndexes = series.length <= 6 ? series.map((_, index) => index) : [0, Math.floor((series.length - 1) / 2), series.length - 1];
   return (
-    <div style={{ position: 'relative' }}>
-      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height }} onMouseLeave={() => setHoveredPoint(null)}>
+    <div className="portal-profile-goal-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} onMouseLeave={() => setHoveredPoint(null)}>
         {yTicks.map((tick) => {
           const y = yFor(tick);
           return (
@@ -650,7 +670,7 @@ function StatTable({ goal, series }: { goal: ParsedGoal; series: Array<{ date: s
   if (!rows.length) return null;
   const target = goal.targetValue && Number.isFinite(Number(goal.targetValue)) ? Number(goal.targetValue) : null;
   return (
-    <div className="portal-table-wrap" style={{ marginTop: 8 }}>
+    <div className="portal-table-wrap portal-profile-goal-table">
       <table className="portal-table portal-table--compact" style={{ minWidth: 0 }}>
         <thead>
           <tr>
@@ -772,23 +792,28 @@ export default function ProfilePlanGoalsPanel({ playerId, playerName, goals, can
           </button>
         </div>
       </div>
-      {!expanded ? null : <div className="portal-profile-goals-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(520px, 100%), 1fr))' }}>
+      {!expanded ? null : <div className="portal-profile-goals-grid portal-profile-goals-grid--player">
         {parsedGoals.map((goal) => {
           const state = charts[goal.slotIndex];
           const series = buildSeries(goal, state.points);
+          const chartCapable = isChartCapableGoal(goal);
           return (
-            <article key={`goal-slot-${goal.slotIndex}`} className="portal-day-card">
-              <div className="portal-row-between">
+            <article key={`goal-slot-${goal.slotIndex}`} className="portal-day-card portal-profile-goal-card">
+              <div className="portal-row-between portal-profile-goal-head">
                 <h4 style={{ margin: 0 }}>Goal {goal.slotIndex}</h4>
                 <p className="portal-muted-text">Created: {formatTimestampDate(goal.createdAt)}</p>
               </div>
-              <p style={{ margin: 0, fontWeight: 700 }}>{goalHeadline(goal)}</p>
-              <p className="portal-muted-text" style={{ margin: 0 }}>
-                {goal.chartType || 'Trend'} | {goal.category || 'Goal'}
-              </p>
-              {!isChartCapableGoal(goal) ? (
-                <p style={{ margin: 0 }}>{goal.goalDescription}</p>
-              ) : state.loading ? (
+              {chartCapable ? (
+                <>
+                  <p className="portal-profile-goal-title">{goalHeadline(goal)}</p>
+                  <p className="portal-muted-text portal-profile-goal-meta">
+                    {goal.chartType || 'Trend'} | {goal.category || 'Goal'}
+                  </p>
+                </>
+              ) : (
+                <p className="portal-profile-goal-note">{subjectiveGoalText(goal)}</p>
+              )}
+              {!chartCapable ? null : state.loading ? (
                 <p className="portal-muted-text" style={{ margin: 0 }}>Loading chart...</p>
               ) : state.error ? (
                 <p className="auth-error" style={{ margin: 0 }}>{state.error}</p>
