@@ -93,6 +93,10 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
     () => uniqueCategoryNames(['General', 'Workout', 'Drills', 'Bullpen', 'Mechanics', 'Edger', ...orgMediaCategories, ...media.map((m) => m.category)]),
     [media, orgMediaCategories]
   );
+  const uploadCategorySelectOptions = useMemo(
+    () => uniqueCategoryNames([...uploadCategoryOptions, mediaCategory]),
+    [mediaCategory, uploadCategoryOptions]
+  );
 
   useEffect(() => {
     fetch('/api/dashboard/player-plans/players', { cache: 'no-store' })
@@ -224,10 +228,18 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
         <label>
           Category
           <input
+            className="portal-desktop-category-input"
             list="player-media-cat-opts"
             value={mediaCategory}
             onChange={(e) => setMediaCategory(e.target.value)}
           />
+          <select
+            className="portal-mobile-category-select"
+            value={mediaCategory}
+            onChange={(e) => setMediaCategory(e.target.value)}
+          >
+            {uploadCategorySelectOptions.map((c) => <option key={`media-category-select-${c}`} value={c}>{c}</option>)}
+          </select>
           <datalist id="player-media-cat-opts">
             {uploadCategoryOptions.map((c) => <option key={`media-category-${c}`} value={c} />)}
           </datalist>

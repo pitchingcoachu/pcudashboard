@@ -7,6 +7,7 @@ import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pr
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
+import NativeDateInput from '../components/native-date-input';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
@@ -10046,11 +10047,11 @@ export default function PitchingSuite({
               <div className="portal-form-grid">
                 <label>
                   Start Date
-                  <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+                  <NativeDateInput value={startDate} onChange={setStartDate} ariaLabel="Start Date" />
                 </label>
                 <label>
                   End Date
-                  <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+                  <NativeDateInput value={endDate} onChange={setEndDate} ariaLabel="End Date" />
                 </label>
 
                 <label>
@@ -12495,7 +12496,7 @@ export default function PitchingSuite({
                     <div className="portal-form-grid">
                       <label>
                         Date
-                        <input type="date" value={manualDate} onChange={(event) => setManualDate(event.target.value)} />
+                        <NativeDateInput value={manualDate} onChange={setManualDate} ariaLabel="Date" />
                       </label>
                       <label>
                         Pitcher
@@ -12647,11 +12648,11 @@ export default function PitchingSuite({
                     </label>
                     <label>
                       Date Start
-                      <input type="date" value={manualDateStart} onChange={(event) => setManualDateStart(event.target.value)} />
+                      <NativeDateInput value={manualDateStart} onChange={setManualDateStart} ariaLabel="Date Start" />
                     </label>
                     <label>
                       Date End
-                      <input type="date" value={manualDateEnd} onChange={(event) => setManualDateEnd(event.target.value)} />
+                      <NativeDateInput value={manualDateEnd} onChange={setManualDateEnd} ariaLabel="Date End" />
                     </label>
                     <label>
                       Weight Min (oz)

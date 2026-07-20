@@ -5,6 +5,7 @@ import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../.
 import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { getProTeamLogoUrl } from './pro-team-logos';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
+import NativeDateInput from '../components/native-date-input';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 
 type OptionItem = { value: string; label: string };
@@ -1113,11 +1114,11 @@ export default function CatchingSuite() {
               <div className="portal-form-grid">
                 <label>
                   Start Date
-                  <input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} />
+                  <NativeDateInput value={dateStart} onChange={setDateStart} ariaLabel="Start Date" />
                 </label>
                 <label>
                   End Date
-                  <input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} />
+                  <NativeDateInput value={dateEnd} onChange={setDateEnd} ariaLabel="End Date" />
                 </label>
                 {isPro || isLeague ? (
                   <label>

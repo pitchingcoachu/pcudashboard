@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
+import NativeDateInput from '../components/native-date-input';
 
 type Role = 'admin' | 'coach' | 'player';
 type ViewMode = 'Force' | 'Moments';
@@ -1858,11 +1859,11 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       <div style={{ display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap' }}>
         <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
           <span style={filterLabelStyle}>Start Date</span>
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="portal-select biomechanics-filter-control" style={selectStyle} />
+          <NativeDateInput value={startDate} onChange={setStartDate} className="portal-select biomechanics-filter-control" style={selectStyle} ariaLabel="Start Date" />
         </label>
         <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
           <span style={filterLabelStyle}>End Date</span>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="portal-select biomechanics-filter-control" style={selectStyle} />
+          <NativeDateInput value={endDate} onChange={setEndDate} className="portal-select biomechanics-filter-control" style={selectStyle} ariaLabel="End Date" />
         </label>
         <label style={{ display: 'grid', gap: 4, minWidth: filterControlMinWidth }}>
           <span style={filterLabelStyle}>Player</span>

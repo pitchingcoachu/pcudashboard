@@ -8233,8 +8233,23 @@ function normalizePlayerIds(value: unknown): number[] {
   );
 }
 
+const QUESTIONNAIRE_DAY_TIME_ZONE = 'America/Phoenix';
+
+function isoDateInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  return year && month && day ? `${year}-${month}-${day}` : date.toISOString().slice(0, 10);
+}
+
 function todayIsoForQuestionnaires(): string {
-  return new Date().toISOString().slice(0, 10);
+  return isoDateInTimeZone(new Date(), QUESTIONNAIRE_DAY_TIME_ZONE);
 }
 
 function addQuestionnaireDays(value: string, days: number): string {
@@ -8514,9 +8529,12 @@ export async function listPendingQuestionnairesForPlayer(input: {
     const response = await pool.query<{ id: string }>(
       `SELECT id::text AS id
        FROM questionnaire_responses
-       WHERE assignment_id = $1 AND player_id = $2 AND due_date = $3::date
+       WHERE organization_id = $1
+         AND player_id = $2
+         AND due_date = $3::date
+         AND (assignment_id = $4 OR questionnaire_id = $5)
        LIMIT 1`,
-      [Number(row.assignment_id), input.playerId, dueDate]
+      [input.organizationId, input.playerId, dueDate, Number(row.assignment_id), Number(row.questionnaire_id)]
     );
     if (response.rowCount) continue;
     pending.push({

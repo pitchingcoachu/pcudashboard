@@ -5,6 +5,7 @@ import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortD
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
+import NativeDateInput from '../components/native-date-input';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching';
 type ChartType = 'Heatmap' | 'Pitch Chart' | 'Velocity Chart' | 'Movement Plot' | 'Release Plot';
@@ -2467,11 +2468,11 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
           </label>
           <label style={{ display: 'grid', gap: 4 }}>
             <span>Start Date</span>
-            <input type="date" value={state.startDate} onChange={(event) => setState((current) => ({ ...current, startDate: event.target.value }))} />
+            <NativeDateInput value={state.startDate} onChange={(value) => setState((current) => ({ ...current, startDate: value }))} ariaLabel="Start Date" />
           </label>
           <label style={{ display: 'grid', gap: 4 }}>
             <span>End Date</span>
-            <input type="date" value={state.endDate} onChange={(event) => setState((current) => ({ ...current, endDate: event.target.value }))} />
+            <NativeDateInput value={state.endDate} onChange={(value) => setState((current) => ({ ...current, endDate: value }))} ariaLabel="End Date" />
           </label>
           <label style={{ display: 'grid', gap: 4 }}>
             <span>Chart</span>

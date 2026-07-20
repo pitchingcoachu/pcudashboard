@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import MediaBreakdownViewer, { type BreakdownAnnotation } from '../components/media-breakdown-viewer';
+import NativeDateInput from '../components/native-date-input';
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH, formatNoteAttachmentLimit } from '../../../lib/note-attachment-limits';
 import { uploadPlayerMediaFile } from '../../../lib/upload-player-media';
 
@@ -348,6 +349,14 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   const mediaCategoryOptions = useMemo(
     () => uniqueNames(['General', 'Workout', 'Drills', 'Bullpen', 'Video Breakdown', ...orgMediaCategories, ...customCategories, ...playerMedia.map((media) => media.category)]),
     [customCategories, orgMediaCategories, playerMedia]
+  );
+  const mediaUploadCategorySelectOptions = useMemo(
+    () => uniqueNames([...mediaCategoryOptions, mediaCategory]),
+    [mediaCategory, mediaCategoryOptions]
+  );
+  const mediaEditCategorySelectOptions = useMemo(
+    () => uniqueNames([...mediaCategoryOptions, editingMediaCategory]),
+    [editingMediaCategory, mediaCategoryOptions]
   );
   const selectedLinkedPlayerId = useMemo(() => {
     if (isFixedPlayerMode) return fixedPlayerId;
@@ -975,7 +984,14 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                 </label>
                 <label>
                   Category
-                  <input list="player-media-category-options" value={mediaCategory} onChange={(event) => setMediaCategory(event.target.value)} />
+                  <input className="portal-desktop-category-input" list="player-media-category-options" value={mediaCategory} onChange={(event) => setMediaCategory(event.target.value)} />
+                  <select
+                    className="portal-mobile-category-select"
+                    value={mediaCategory}
+                    onChange={(event) => setMediaCategory(event.target.value)}
+                  >
+                    {mediaUploadCategorySelectOptions.map((category) => <option key={`media-cat-select-${category}`} value={category}>{category}</option>)}
+                  </select>
                   <datalist id="player-media-category-options">
                     {mediaCategoryOptions.map((category) => <option key={`media-cat-${category}`} value={category} />)}
                   </datalist>
@@ -1025,7 +1041,14 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                     {editingMediaId === media.id ? (
                       <div style={{ display: 'grid', gap: 6 }}>
                         <input value={editingMediaTitle} onChange={(event) => setEditingMediaTitle(event.target.value)} />
-                        <input list="player-media-category-options" value={editingMediaCategory} onChange={(event) => setEditingMediaCategory(event.target.value)} />
+                        <input className="portal-desktop-category-input" list="player-media-category-options" value={editingMediaCategory} onChange={(event) => setEditingMediaCategory(event.target.value)} />
+                        <select
+                          className="portal-mobile-category-select"
+                          value={editingMediaCategory}
+                          onChange={(event) => setEditingMediaCategory(event.target.value)}
+                        >
+                          {mediaEditCategorySelectOptions.map((category) => <option key={`media-edit-cat-select-${category}`} value={category}>{category}</option>)}
+                        </select>
                         <div style={{ display: 'flex', gap: 6 }}>
                           <button type="button" className="btn btn-primary" onClick={() => void saveMediaEdits(media)}>Save</button>
                           <button type="button" className="btn btn-ghost" onClick={() => setEditingMediaId(null)}>Cancel</button>
@@ -1090,7 +1113,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             <div className="portal-form-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
               <label>
                 Date
-                <input type="date" value={noteDate} onChange={(event) => setNoteDate(event.target.value)} />
+                <NativeDateInput value={noteDate} onChange={setNoteDate} ariaLabel="Date" />
               </label>
               <label>
                 Category
@@ -1192,11 +1215,11 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
               </label>
               <label>
                 Start Date
-                <input type="date" value={filterStartDate} onChange={(event) => setFilterStartDate(event.target.value)} />
+                <NativeDateInput value={filterStartDate} onChange={setFilterStartDate} ariaLabel="Start Date" />
               </label>
               <label>
                 End Date
-                <input type="date" value={filterEndDate} onChange={(event) => setFilterEndDate(event.target.value)} />
+                <NativeDateInput value={filterEndDate} onChange={setFilterEndDate} ariaLabel="End Date" />
               </label>
             </div>
             {loadingPlayers || loadingNotes ? <p className="portal-muted-text">Loading notes...</p> : null}

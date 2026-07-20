@@ -7,6 +7,7 @@ import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pr
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
+import NativeDateInput from '../components/native-date-input';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 
@@ -4627,11 +4628,11 @@ export default function HittingSuite({
                 <div className="portal-form-grid">
                   <label>
                     Start Date
-                    <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+                    <NativeDateInput value={startDate} onChange={setStartDate} ariaLabel="Start Date" />
                   </label>
                   <label>
                     End Date
-                    <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+                    <NativeDateInput value={endDate} onChange={setEndDate} ariaLabel="End Date" />
                   </label>
                   <label>
                     Hitters

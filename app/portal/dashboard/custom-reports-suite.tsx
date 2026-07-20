@@ -9,6 +9,7 @@ import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
+import NativeDateInput from '../components/native-date-input';
 
 type OptionItem = { value: string; label: string };
 type ReportType = 'Pitching' | 'Hitting' | 'Catching';
@@ -4840,11 +4841,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 <div className="portal-form-grid portal-custom-reports-global-dates">
                   <label>
                     Global Start Date
-                    <input type="date" value={globalStartDate} onChange={(event) => setGlobalStartDate(event.target.value)} />
+                    <NativeDateInput value={globalStartDate} onChange={setGlobalStartDate} ariaLabel="Global Start Date" />
                   </label>
                   <label>
                     Global End Date
-                    <input type="date" value={globalEndDate} onChange={(event) => setGlobalEndDate(event.target.value)} />
+                    <NativeDateInput value={globalEndDate} onChange={setGlobalEndDate} ariaLabel="Global End Date" />
                   </label>
                 </div>
               ) : null}
@@ -5466,26 +5467,26 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                             {(config.filterSelect ?? []).includes('Dates') ? (
                               <>
                                 <label>Dates Start</label>
-                                <input
-                                  type="date"
+                                <NativeDateInput
                                   value={config.dateStart ?? ''}
-                                  onChange={(event) =>
+                                  onChange={(value) =>
                                     setCellConfigs((current) => ({
                                       ...current,
-                                      [cellId]: { ...(current[cellId] ?? emptyCell()), dateStart: event.target.value },
+                                      [cellId]: { ...(current[cellId] ?? emptyCell()), dateStart: value },
                                     }))
                                   }
+                                  ariaLabel="Dates Start"
                                 />
                                 <label>Dates End</label>
-                                <input
-                                  type="date"
+                                <NativeDateInput
                                   value={config.dateEnd ?? ''}
-                                  onChange={(event) =>
+                                  onChange={(value) =>
                                     setCellConfigs((current) => ({
                                       ...current,
-                                      [cellId]: { ...(current[cellId] ?? emptyCell()), dateEnd: event.target.value },
+                                      [cellId]: { ...(current[cellId] ?? emptyCell()), dateEnd: value },
                                     }))
                                   }
+                                  ariaLabel="Dates End"
                                 />
                               </>
                             ) : null}

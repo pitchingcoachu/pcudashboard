@@ -3105,8 +3105,58 @@ body:not(.theme-light) .portal-set-weights select option {
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  -webkit-appearance: none;
-  appearance: none;
+  color-scheme: dark;
+}
+
+.portal-native-date-input {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.portal-native-date-input input[type='date'] {
+  width: 100%;
+  padding-right: 2.45rem !important;
+}
+
+.portal-native-date-input input[type='date']::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0;
+}
+
+.portal-native-date-button {
+  position: absolute;
+  top: 50%;
+  right: 0.32rem;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 2rem !important;
+  height: 2rem;
+  min-height: 2rem;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-main);
+  cursor: pointer;
+  line-height: 1;
+  z-index: 2;
+}
+
+.portal-native-date-button:hover,
+.portal-native-date-button:focus-visible {
+  border-color: rgba(148, 163, 184, 0.5);
+  background: rgba(255, 255, 255, 0.11);
+}
+
+body.theme-light .portal-form-grid input[type='date'],
+body.theme-light .portal-inline-filter input[type='date'] {
+  color-scheme: light;
+}
+
+body.theme-light .portal-native-date-button {
+  background: rgba(15, 23, 42, 0.05);
+  border-color: rgba(15, 23, 42, 0.18);
 }
 
 .portal-form-grid button {
@@ -6515,6 +6565,18 @@ body.theme-light .portal-throwing-notes::placeholder {
   display: none;
 }
 
+.portal-media-breakdown-tool-icon {
+  display: none;
+}
+
+.portal-media-breakdown-tool-label {
+  display: inline;
+}
+
+.portal-mobile-category-select {
+  display: none;
+}
+
 @media (max-width: 1024px) {
   .portal-media-breakdown-backdrop,
   .portal-edger-video-backdrop {
@@ -6769,6 +6831,15 @@ body.theme-light .portal-throwing-notes::placeholder {
 }
 
 @media (max-width: 780px) {
+  .portal-desktop-category-input {
+    display: none !important;
+  }
+
+  .portal-mobile-category-select {
+    display: block !important;
+    width: 100%;
+  }
+
   .portal-media-breakdown-backdrop {
     z-index: 2147482000 !important;
     width: 100vw !important;
@@ -6826,21 +6897,26 @@ body.theme-light .portal-throwing-notes::placeholder {
   }
 
   .portal-media-breakdown-actions {
-    display: grid !important;
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
     gap: 0.28rem !important;
     min-width: 0;
     width: 100%;
     max-width: 100%;
-    overflow: hidden !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding-right: 2.55rem;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
     touch-action: manipulation !important;
   }
 
   .portal-media-breakdown-actions .btn,
   .portal-media-breakdown-actions button,
   .portal-media-breakdown-actions a {
+    flex: 0 0 auto !important;
     min-width: 0 !important;
-    width: 100% !important;
+    width: auto !important;
     height: 2.2rem !important;
     min-height: 2.2rem !important;
     padding: 0 0.42rem !important;
@@ -7032,7 +7108,7 @@ body.theme-light .portal-throwing-notes::placeholder {
   .portal-media-breakdown-toolbar {
     order: 2;
     flex: 0 0 auto !important;
-    display: flex !important;
+    display: none !important;
     flex-wrap: nowrap !important;
     align-items: center !important;
     gap: 0.35rem !important;
@@ -7048,22 +7124,39 @@ body.theme-light .portal-throwing-notes::placeholder {
     touch-action: pan-x !important;
   }
 
+  .portal-media-breakdown-toolbar.is-open {
+    display: flex !important;
+  }
+
   .portal-media-breakdown-toolbar .btn,
   .portal-media-breakdown-toolbar button {
     flex: 0 0 auto !important;
     width: auto !important;
-    min-width: 4.55rem !important;
+    min-width: 2.55rem !important;
     min-height: 2.35rem !important;
     height: 2.35rem !important;
-    padding: 0 0.72rem !important;
+    padding: 0 0.55rem !important;
     border-radius: 999px !important;
-    font-size: 0.68rem !important;
+    font-size: 0.8rem !important;
     line-height: 1 !important;
     letter-spacing: 0 !important;
     white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     touch-action: manipulation !important;
+  }
+
+  .portal-media-breakdown-tool-label {
+    display: none !important;
+  }
+
+  .portal-media-breakdown-tool-icon {
+    display: inline-grid !important;
+    place-items: center !important;
+    min-width: 1.05rem;
+    font-size: 0.96rem;
+    font-weight: 900;
+    line-height: 1;
   }
 
   .portal-media-breakdown-toolbar input[type='color'] {

@@ -49,6 +49,27 @@ type PlayerMediaItem = {
   createdAt: string;
 };
 
+const TOOL_LABELS: Record<BreakdownTool, string> = {
+  line: 'Line',
+  arrow: 'Arrow',
+  circle: 'Circle',
+  pen: 'Freehand',
+  text: 'Text',
+  angle: 'Angle',
+  erase: 'Erase',
+};
+
+const TOOL_ICONS: Record<BreakdownTool | 'view', string> = {
+  view: '□',
+  line: '/',
+  arrow: '↗',
+  circle: '○',
+  pen: '~',
+  text: 'T',
+  angle: '∠',
+  erase: '⌫',
+};
+
 // ── Geometry helpers ──────────────────────────────────────────────────────────
 
 function measureAngle(points: Array<{ x: number; y: number }>, mode: 'acute' | 'obtuse' = 'acute'): number | null {
@@ -647,6 +668,8 @@ export default function MediaBreakdownViewer({
 }: MediaBreakdownViewerProps) {
   const [tool, setTool] = useState<BreakdownTool>('line');
   const [drawMode, setDrawMode] = useState(false);
+  const [isMobileViewer, setIsMobileViewer] = useState(false);
+  const [showMobileTools, setShowMobileTools] = useState(false);
   const [color, setColor] = useState('#facc15');
   const [width, setWidth] = useState(4);
   const [textFontSize, setTextFontSize] = useState(36);
@@ -662,6 +685,18 @@ export default function MediaBreakdownViewer({
 
   const isVideo = mimeType.startsWith('video/');
   const isImage = mimeType.startsWith('image/');
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 780px)');
+    const sync = () => {
+      const mobile = media.matches;
+      setIsMobileViewer(mobile);
+      setShowMobileTools(!mobile);
+    };
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, [url]);
 
   useEffect(() => {
     const scrollY = window.scrollY;
@@ -856,12 +891,18 @@ export default function MediaBreakdownViewer({
   const allImageAnnotations = [...annotations, ...(active ? [active] : []), ...(anglePending.length > 0 ? [{ id: 'angle-preview', tool: 'angle' as const, color, width, points: anglePending, angleMode }] : [])];
 
   const toolbar = (
-    <div className="portal-media-breakdown-toolbar" style={{ display: 'flex', gap: 4, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 10, background: 'rgba(2,6,23,0.92)', border: '1px solid rgba(148,163,184,0.25)', flexShrink: 0 }}>
-      <button type="button" className={!drawMode ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setDrawMode(false); setAnglePending([]); setAnglePendingCount(0); }}>View</button>
+    <div className={`portal-media-breakdown-toolbar${showMobileTools ? ' is-open' : ''}`} style={{ display: 'flex', gap: 4, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 10, background: 'rgba(2,6,23,0.92)', border: '1px solid rgba(148,163,184,0.25)', flexShrink: 0 }}>
+      <button type="button" className={!drawMode ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setDrawMode(false); setAnglePending([]); setAnglePendingCount(0); }}>
+        <span className="portal-media-breakdown-tool-icon" aria-hidden="true">{TOOL_ICONS.view}</span>
+        <span className="portal-media-breakdown-tool-label">View</span>
+      </button>
       {(['line', 'arrow', 'circle', 'pen', 'angle', 'text', 'erase'] as BreakdownTool[]).map((entry) => (
-        <button key={entry} type="button" className={drawMode && tool === entry ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setDrawMode(true); setTool(entry); setAnglePending([]); setAnglePendingCount(0); }}>
-          {entry === 'pen' ? 'Freehand' : entry.charAt(0).toUpperCase() + entry.slice(1)}
-          {entry === 'angle' && anglePendingCount > 0 ? ` (${anglePendingCount}/3)` : ''}
+        <button key={entry} type="button" className={drawMode && tool === entry ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setDrawMode(true); setTool(entry); setAnglePending([]); setAnglePendingCount(0); }} title={TOOL_LABELS[entry]}>
+          <span className="portal-media-breakdown-tool-icon" aria-hidden="true">{TOOL_ICONS[entry]}</span>
+          <span className="portal-media-breakdown-tool-label">
+            {TOOL_LABELS[entry]}
+            {entry === 'angle' && anglePendingCount > 0 ? ` (${anglePendingCount}/3)` : ''}
+          </span>
         </button>
       ))}
       {drawMode && tool === 'angle' && (
@@ -961,6 +1002,16 @@ export default function MediaBreakdownViewer({
                 {synced ? 'Synced ✓' : 'Sync'}
               </button>
             )}
+            {isMobileViewer && (isVideo || isImage) ? (
+              <button
+                type="button"
+                className={showMobileTools ? 'btn btn-primary' : 'btn btn-ghost'}
+                style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}
+                onClick={() => setShowMobileTools((v) => !v)}
+              >
+                Tools
+              </button>
+            ) : null}
             <a className="btn btn-ghost" href={url} download={downloadName || title} style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}>Download</a>
             {onDelete ? (
               <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0, color: '#fca5a5' }} onClick={onDelete}>Delete</button>

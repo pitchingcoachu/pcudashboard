@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { formatTableDisplayValue } from '../../../lib/table-sort';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
+import NativeDateInput from '../components/native-date-input';
 
 type Domain = 'Pitching' | 'Hitting' | 'Catching';
 type GoalSlot = 1 | 2 | 3;
@@ -4421,11 +4422,11 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
               </label>
               <label>
                 Start Date
-                <input type="date" value={automationStartDate} onChange={(event) => setAutomationStartDate(event.target.value)} />
+                <NativeDateInput value={automationStartDate} onChange={setAutomationStartDate} ariaLabel="Start Date" />
               </label>
               <label>
                 End Date
-                <input type="date" value={automationEndDate} onChange={(event) => setAutomationEndDate(event.target.value)} />
+                <NativeDateInput value={automationEndDate} onChange={setAutomationEndDate} ariaLabel="End Date" />
               </label>
               <label>
                 Automation
@@ -5011,26 +5012,26 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                     <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(120px, 1fr))', gap: 8 }}>
                       <label className="portal-inline-filter">
                         Start Date
-                        <input
-                          type="date"
+                        <NativeDateInput
                           value={goal.startDate}
-                          onChange={(event) =>
+                          onChange={(value) =>
                             setPlanGoals((prev) =>
-                              prev.map((entry) => (entry.slotIndex === goal.slotIndex ? { ...entry, startDate: event.target.value } : entry))
+                              prev.map((entry) => (entry.slotIndex === goal.slotIndex ? { ...entry, startDate: value } : entry))
                             )
                           }
+                          ariaLabel="Start Date"
                         />
                       </label>
                       <label className="portal-inline-filter">
                         End Date
-                        <input
-                          type="date"
+                        <NativeDateInput
                           value={goal.endDate}
-                          onChange={(event) =>
+                          onChange={(value) =>
                             setPlanGoals((prev) =>
-                              prev.map((entry) => (entry.slotIndex === goal.slotIndex ? { ...entry, endDate: event.target.value } : entry))
+                              prev.map((entry) => (entry.slotIndex === goal.slotIndex ? { ...entry, endDate: value } : entry))
                             )
                           }
+                          ariaLabel="End Date"
                         />
                       </label>
                       {domain === 'Pitching' ? (
