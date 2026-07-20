@@ -5796,6 +5796,22 @@ LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
     "TRA_SPI": "Traverse City Pit Spitters",
     "WAU_WOO": "Wausau Woodchucks",
     "WIL_MAR": "Willmar Stingers",
+    # West Coast League
+    "BEL_BEL": "Bellingham Bells",
+    "PTA_LEF": "Port Angeles Lefties",
+    "COR_KNI": "Corvallis Knights",
+    "WWA_SWE": "Walla Walla Sweets",
+    "SPR_DRI": "Springfield Drifters",
+    "KAM_NOR": "Kamloops NorthPaws",
+    "WEN_APP": "Wenatchee AppleSox",
+    "POR_PIC": "Portland Pickles",
+    "KEL_FAL": "Kelowna Falcons",
+    "BEN_ELK": "Bend Elks",
+    "YAK_PIP": "Yakima Valley Pippins",
+    "VIC_HAR": "Victoria HarbourCats",
+    "MAR_BER": "Marion Berries",
+    "NAN_NIG": "Nanaimo NightOwls",
+    "EDM_RIV": "Edmonton Riverhawks",
 }
 LEAGUE_TEAM_CODE_BY_NAME = {value.lower(): code for code, value in LEAGUE_TEAM_NAME_BY_CODE.items()}
 LEAGUE_TEAM_CODE_BY_NAME_NORMALIZED = {

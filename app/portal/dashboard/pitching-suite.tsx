@@ -2413,11 +2413,26 @@ export default function PitchingSuite({
       setSelectedHitters(['All']);
       if (isProNavigate && homeNavigateRequest.navigationSource === 'search') {
         setLevel('All');
+      } else if (
+        (String(selectedSchoolCode ?? '').toUpperCase() === 'LEAGUE' || String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE') &&
+        homeNavigateRequest.navigationSource === 'search'
+      ) {
+        const targetNorm = homeNavigateRequest.targetValue.trim().toLowerCase();
+        const inCurrentLevel = (filters.pitchers ?? []).some((p) => p.trim().toLowerCase() === targetNorm);
+        if (!inCurrentLevel) setLevel('All');
       }
     } else {
       setTeamType(homeNavigateRequest.targetValue);
       setSelectedPitchers(['All']);
       setSelectedHitters(['All']);
+      if (
+        (String(selectedSchoolCode ?? '').toUpperCase() === 'LEAGUE' || String(filters?.school_code ?? '').toUpperCase() === 'LEAGUE') &&
+        homeNavigateRequest.navigationSource === 'search'
+      ) {
+        const targetNorm = homeNavigateRequest.targetValue.trim().toLowerCase();
+        const inCurrentLevel = (filters.team_types ?? []).some((t) => t.trim().toLowerCase() === targetNorm);
+        if (!inCurrentLevel) setLevel('All');
+      }
     }
     setAppliedFilterVersion((current) => current + 1);
   }, [homeNavigateRequest, loadingFilters, filters, selectedSchoolCode, role]);
@@ -8860,6 +8875,10 @@ export default function PitchingSuite({
       if (isPro) {
         const display = getProTeamDisplayName(rawText, (level as 'MLB' | 'AAA' | 'All') || 'All');
         if (display) nextTeam = display;
+      } else {
+        const upper = rawText.toUpperCase();
+        const mapped = LEAGUE_TEAM_NAME_BY_CODE[upper] ?? schoolNameFromTeamCodeFallback(upper);
+        if (mapped) nextTeam = mapped;
       }
       setTeamType(nextTeam);
       setSelectedPitchers(['All']);
