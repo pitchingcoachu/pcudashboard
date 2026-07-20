@@ -501,12 +501,13 @@ export async function POST(request: Request) {
   if (hasVelocityTemplatesInput) {
     nextVelocityTemplates = mergeTemplateLists(sharedObj.velocityTemplates, nextVelocityTemplates);
   }
-  const nextPreThrowDrillTemplates = normalizeDrillTemplates(
-    Array.isArray(body.preThrowDrillTemplates) ? body.preThrowDrillTemplates : sharedObj.preThrowDrillTemplates
-  );
-  const nextPostThrowDrillTemplates = normalizeDrillTemplates(
-    Array.isArray(body.postThrowDrillTemplates) ? body.postThrowDrillTemplates : sharedObj.postThrowDrillTemplates
-  );
+  // Only overwrite shared drill templates if the incoming array is non-empty.
+  // An empty array (sent when the drills page hasn't loaded templates) must not
+  // clobber templates that were saved by another session.
+  const incomingPre = normalizeDrillTemplates(body.preThrowDrillTemplates);
+  const incomingPost = normalizeDrillTemplates(body.postThrowDrillTemplates);
+  const nextPreThrowDrillTemplates = incomingPre.length > 0 ? incomingPre : normalizeDrillTemplates(sharedObj.preThrowDrillTemplates);
+  const nextPostThrowDrillTemplates = incomingPost.length > 0 ? incomingPost : normalizeDrillTemplates(sharedObj.postThrowDrillTemplates);
 
   if (nextBullpenTemplates.length === 0 && !hasBullpenTemplatesInput && !isSharedOnly) {
     nextBullpenTemplates = extractLegacyTemplates(playerObj.bullpen);
