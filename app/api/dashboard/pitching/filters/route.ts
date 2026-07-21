@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlayerName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
+import { schoolRosterAdditions } from '../../../../../lib/dashboard-roster-additions';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 const RESPONSE_CACHE_HEADERS = {
@@ -10,7 +11,7 @@ const RESPONSE_CACHE_HEADERS = {
   vary: 'Cookie',
 } as const;
 const SLOW_ROUTE_MS = 2500;
-const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'pcu-roster-2026-07-15-league-filters-v2';
+const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'pcu-roster-2026-07-20-bates-v1';
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
@@ -21,33 +22,6 @@ function resolveFiltersTimeoutMs(schoolCode: string): number {
 
 function uniqueNames(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
-}
-
-function schoolRosterAdditions(schoolCode: string): { pitchers: string[] } {
-  const upper = String(schoolCode ?? '').trim().toUpperCase();
-  if (upper === 'PCU') {
-    return {
-      pitchers: [
-        'Heather, Connor',
-        'Carr, Jordan',
-        'King, Stan',
-        'Jones, Grady',
-        'Birt, Henry',
-        'Clark, Hunter',
-        'Luna, Cael',
-        'Rodriguez, Diego',
-        'Jensen, Tyler',
-        'Liguori, Luke',
-        'Masi, Jack',
-        'Jacobs, Brody',
-        'Stevenson, Townsend',
-        'Tipton, Jonathan',
-        'Lambright, Gavin',
-        'Moorhouse, Richard',
-      ],
-    };
-  }
-  return { pitchers: [] };
 }
 
 function pickLatestGameDate(payload: Record<string, unknown>): string | null {

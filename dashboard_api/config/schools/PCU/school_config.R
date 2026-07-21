@@ -30,6 +30,7 @@ school_config <- list(
   "Game, Gaynor",
   "Game, Halverson",
   "Game, Chipman",
+  "Bates, Tyler",
   "Racioppo, Frank",
   "Silverio, Joseph",
   "Wells, Cameron",

@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, type CSSProperties } from 'react';
+import { useRef, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 
 type NativeDateInputProps = {
   value: string;
@@ -29,36 +29,33 @@ export default function NativeDateInput({ value, onChange, className, style, ari
     }
   }
 
+  function handlePointerDown(event: PointerEvent<HTMLInputElement>) {
+    const input = inputRef.current;
+    if (!input?.showPicker || disabled) return;
+    event.preventDefault();
+    openPicker();
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const input = inputRef.current;
+    if (!input?.showPicker || disabled) return;
+    event.preventDefault();
+    openPicker();
+  }
+
   return (
-    <span className="portal-native-date-input">
-      <input
-        ref={inputRef}
-        type="date"
-        value={value}
-        disabled={disabled}
-        aria-label={ariaLabel}
-        className={className}
-        style={style}
-        onClick={openPicker}
-        onFocus={openPicker}
-        onChange={(event) => onChange(event.target.value)}
-      />
-      <button
-        type="button"
-        className="portal-native-date-button"
-        aria-label={ariaLabel ? `Open ${ariaLabel} calendar` : 'Open calendar'}
-        disabled={disabled}
-        onPointerDown={(event) => {
-          event.preventDefault();
-          openPicker();
-        }}
-        onClick={(event) => {
-          event.preventDefault();
-          openPicker();
-        }}
-      >
-        <span aria-hidden="true">▦</span>
-      </button>
-    </span>
+    <input
+      ref={inputRef}
+      type="date"
+      value={value}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      className={className}
+      style={style}
+      onPointerDown={handlePointerDown}
+      onKeyDown={handleKeyDown}
+      onChange={(event) => onChange(event.target.value)}
+    />
   );
 }
