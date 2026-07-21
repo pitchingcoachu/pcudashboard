@@ -75,6 +75,8 @@ export function parseSortableNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export function sortTableRows<T extends SortableRow>(
   rows: T[],
   sortColumn: string,
@@ -86,13 +88,19 @@ export function sortTableRows<T extends SortableRow>(
   withIndex.sort((a, b) => {
     const av = a.row[sortColumn];
     const bv = b.row[sortColumn];
-    const aNum = parseSortableNumber(av);
-    const bNum = parseSortableNumber(bv);
+    const as = String(av ?? '').trim();
+    const bs = String(bv ?? '').trim();
     let cmp = 0;
-    if (aNum !== null && bNum !== null) {
-      cmp = aNum - bNum;
+    if (ISO_DATE_RE.test(as) && ISO_DATE_RE.test(bs)) {
+      cmp = as.localeCompare(bs);
     } else {
-      cmp = String(av ?? '').toLowerCase().localeCompare(String(bv ?? '').toLowerCase());
+      const aNum = parseSortableNumber(av);
+      const bNum = parseSortableNumber(bv);
+      if (aNum !== null && bNum !== null) {
+        cmp = aNum - bNum;
+      } else {
+        cmp = as.toLowerCase().localeCompare(bs.toLowerCase());
+      }
     }
     if (cmp === 0) cmp = a.idx - b.idx;
     return sortDirection === 'asc' ? cmp : -cmp;
