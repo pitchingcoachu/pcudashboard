@@ -38,6 +38,7 @@ type PanelType =
   | 'EV and LA';
 type FilterToken =
   | 'Dates'
+  | 'Level'
   | 'Session Type'
   | 'Pitch Types'
   | 'Batter Hand'
@@ -271,6 +272,7 @@ type CellConfig = {
   countFilter: string[];
   afterCountFilter: string[];
   zoneLocations: string[];
+  panelLevel?: string;
   veloMin?: string;
   veloMax?: string;
   ivbMin?: string;
@@ -373,6 +375,7 @@ const CATCHING_PANEL_TYPES: PanelType[] = [
 ];
 const FILTER_TOKENS: FilterToken[] = [
   'Dates',
+  'Level',
   'Session Type',
   'Pitch Types',
   'Batter Hand',
@@ -3421,13 +3424,16 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
           } else {
             params.set('table_mode', selectedTableMode);
           }
-          if (isProSchool && reportLevel && reportLevel !== 'All') {
-            params.set('level', reportLevel);
+          const effectivePanelLevel = cellFilters.includes('Level') && config.panelLevel && config.panelLevel !== 'All'
+            ? config.panelLevel
+            : (reportLevel && reportLevel !== 'All' ? reportLevel : '');
+          if ((isProSchool || isLeagueSchool) && effectivePanelLevel) {
+            params.set('level', effectivePanelLevel);
           }
           if (cellFilters.includes('Session Type')) {
             const sessionType = (config.sessionType || 'All').trim();
             if (isProSchool) {
-              if (reportLevel && reportLevel !== 'All') params.set('level', reportLevel);
+              if (effectivePanelLevel) params.set('level', effectivePanelLevel);
             } else if (sessionType && sessionType !== 'All') {
               params.set('session_type', sessionType);
             }
@@ -4529,6 +4535,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   const activeSchoolCode = schoolCode || initialSchoolCode;
   const schoolBrand = useMemo(() => resolveSchoolBrand(activeSchoolCode), [activeSchoolCode]);
   const isProSchool = String(activeSchoolCode || '').trim().toUpperCase() === 'PRO';
+  const isLeagueSchool = String(activeSchoolCode || '').trim().toUpperCase() === 'LEAGUE';
   const resolveExternalMetaForName = (nameRaw: string): ExternalPlayerMeta | undefined => {
     const name = String(nameRaw ?? '').trim();
     if (!name) return undefined;
@@ -4677,7 +4684,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                 {reportScope === 'Team' ? 'Team (Roster Source)' : 'Team'}
                 <SearchableSingleSelect options={teamOptions} value={reportTeam} onChange={handleReportTeamChange} />
               </label>
-              {isProSchool ? (
+              {(isProSchool || isLeagueSchool) ? (
                 <label>
                   Level
                   <SearchableSingleSelect
@@ -5237,7 +5244,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                     value: entry,
                     label: entry || 'Select',
                   }));
-                  const filterTokenOptions = FILTER_TOKENS.map((entry) => ({ value: entry, label: entry }));
+                  const filterTokenOptions = FILTER_TOKENS.filter((entry) => entry !== 'Level' || isLeagueSchool).map((entry) => ({ value: entry, label: entry }));
                   const splitByOptions = availableSplitByOptions.map((entry) => ({ value: entry, label: splitByLabel(entry) }));
                   const contentType = normalizePanelType(config.panelType);
                   const isNote = contentType === 'Note Section';
@@ -5487,6 +5494,21 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     }))
                                   }
                                   ariaLabel="Dates End"
+                                />
+                              </>
+                            ) : null}
+                            {(config.filterSelect ?? []).includes('Level') && isLeagueSchool ? (
+                              <>
+                                <label>Level</label>
+                                <SearchableSingleSelect
+                                  options={levelOptions.map((entry) => ({ value: entry, label: entry }))}
+                                  value={config.panelLevel || 'All'}
+                                  onChange={(next) =>
+                                    setCellConfigs((current) => ({
+                                      ...current,
+                                      [cellId]: { ...(current[cellId] ?? emptyCell()), panelLevel: next || 'All' },
+                                    }))
+                                  }
                                 />
                               </>
                             ) : null}
