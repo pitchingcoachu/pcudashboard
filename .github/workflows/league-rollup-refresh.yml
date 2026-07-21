@@ -1,0 +1,59 @@
+name: LEAGUE Rollup Refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      window_start:
+        description: "Start date YYYY-MM-DD (default: 2026-01-23)"
+        required: false
+        default: "2026-01-23"
+        type: string
+      window_end:
+        description: "End date YYYY-MM-DD (default: today)"
+        required: false
+        default: ""
+        type: string
+      batch_days:
+        description: "Days per batch (default: 14)"
+        required: false
+        default: "14"
+        type: string
+
+concurrency:
+  group: league-rollup-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      DASHBOARD_DATABASE_URL: ${{ secrets.DASHBOARD_DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r dashboard_api/requirements.txt
+
+      - name: Resolve end date
+        id: dates
+        run: |
+          END="${{ inputs.window_end }}"
+          if [ -z "$END" ]; then
+            END=$(date -u +%Y-%m-%d)
+          fi
+          echo "window_end=$END" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh LEAGUE rollup
+        run: |
+          python scripts/refresh_college_rollups.py \
+            --school LEAGUE \
+            --window-start "${{ inputs.window_start }}" \
+            --window-end "${{ steps.dates.outputs.window_end }}" \
+            --batch-days "${{ inputs.batch_days }}"
