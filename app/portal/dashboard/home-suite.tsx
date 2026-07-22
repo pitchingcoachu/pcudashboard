@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { getProTeamLogoUrl } from './pro-team-logos';
+import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
+import { getProTeamDisplayName, getProTeamLogoUrl } from './pro-team-logos';
 
 type Candidate = {
   type: 'player' | 'team';
@@ -69,6 +70,22 @@ function toFirstLast(value: string): string {
 
 function candidateLabel(candidate: Candidate): string {
   return toFirstLast(candidate.value);
+}
+
+function formatCandidateTeamName(isProSchool: boolean, value: string | null | undefined): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (isProSchool) return getProTeamDisplayName(raw);
+  const upper = raw.toUpperCase();
+  return LEAGUE_TEAM_NAME_BY_CODE[upper] ?? raw;
+}
+
+function searchCandidateLabelParts(isProSchool: boolean, candidate: Candidate): { primary: string; team: string } {
+  if (candidate.type === 'team') return { primary: formatCandidateTeamName(isProSchool, candidate.value) || candidateLabel(candidate), team: '' };
+  return {
+    primary: candidateLabel(candidate),
+    team: formatCandidateTeamName(isProSchool, candidate.team_code),
+  };
 }
 
 function resolveCandidateLogoUrl(candidate: Candidate): string {
@@ -236,13 +253,17 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
   }, []);
   useEffect(() => {
     if (!shouldLoadAlerts) {
-      setLoadingAlerts(false);
-      setAlertsPayload(null);
-      setAlertsError(null);
-      return () => {};
+      const timeoutId = window.setTimeout(() => {
+        setLoadingAlerts(false);
+        setAlertsPayload(null);
+        setAlertsError(null);
+      }, 0);
+      return () => window.clearTimeout(timeoutId);
     }
     let isMounted = true;
-    setLoadingAlerts(true);
+    const loadingTimeoutId = window.setTimeout(() => {
+      if (isMounted) setLoadingAlerts(true);
+    }, 0);
     fetchAlertsPayload()
       .then((payload) => {
         if (!isMounted) return;
@@ -260,6 +281,7 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
       });
     return () => {
       isMounted = false;
+      window.clearTimeout(loadingTimeoutId);
     };
   }, [shouldLoadAlerts]);
 
@@ -273,7 +295,14 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
         toFirstLast(candidate.value).toLowerCase().includes(needle)
     );
   }, [basePayload?.candidates, query]);
-  const filteredCandidates = useMemo(() => matchingCandidates.slice(0, 12), [matchingCandidates]);
+  const candidateGroups = useMemo(() => {
+    const players = matchingCandidates.filter((candidate) => candidate.type === 'player').slice(0, 12);
+    const teams = matchingCandidates.filter((candidate) => candidate.type === 'team').slice(0, 12);
+    return [
+      { key: 'players', label: 'Players', candidates: players },
+      { key: 'teams', label: 'Teams', candidates: teams },
+    ].filter((group) => group.candidates.length > 0);
+  }, [matchingCandidates]);
   const quickPanels = useMemo(
     () =>
       suiteOptions
@@ -507,7 +536,7 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
           />
           <div
             style={{
-              display: filteredCandidates.length ? 'grid' : 'none',
+              display: candidateGroups.length ? 'grid' : 'none',
               gap: 6,
               maxHeight: 320,
               overflowY: 'auto',
@@ -517,33 +546,58 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
               background: homeSearchDropdownBackground,
             }}
           >
-            {filteredCandidates.map((candidate) => {
-              const logoUrl = isProSchool ? resolveCandidateLogoUrl(candidate) : '';
-              return (
-                <button
-                  key={`${candidate.type}:${candidate.value}:${candidate.suite}`}
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => navigateToCandidate(candidate)}
+            {candidateGroups.map((group) => (
+              <div key={`home-candidate-group-${group.key}`} style={{ display: 'grid', gap: 5 }}>
+                <div
                   style={{
-                    textAlign: 'left',
-                    justifyContent: 'flex-start',
-                    width: '100%',
+                    padding: '4px 8px 2px',
+                    fontSize: 11,
+                    fontWeight: 800,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: 'rgba(226, 232, 240, 0.66)',
                   }}
                 >
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                    {logoUrl ? (
-                      <img
-                        src={logoUrl}
-                        alt={candidate.type === 'team' ? candidate.value : (candidate.team_code ?? '')}
-                        style={{ width: 16, height: 16, objectFit: 'contain' }}
-                      />
-                    ) : null}
-                    <span>{candidateLabel(candidate)}</span>
-                  </span>
-                </button>
-              );
-            })}
+                  {group.label}
+                </div>
+                {group.candidates.map((candidate) => {
+                  const logoUrl = isProSchool ? resolveCandidateLogoUrl(candidate) : '';
+                  const labelParts = searchCandidateLabelParts(isProSchool, candidate);
+                  return (
+                    <button
+                      key={`${candidate.type}:${candidate.value}:${candidate.suite}`}
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => navigateToCandidate(candidate)}
+                      style={{
+                        textAlign: 'left',
+                        justifyContent: 'space-between',
+                        width: '100%',
+                        gap: 10,
+                      }}
+                    >
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                        {logoUrl ? (
+                          <img
+                            src={logoUrl}
+                            alt={candidate.type === 'team' ? candidate.value : (candidate.team_code ?? '')}
+                            style={{ width: 16, height: 16, objectFit: 'contain', flex: '0 0 auto' }}
+                          />
+                        ) : null}
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {labelParts.primary}
+                          {labelParts.team ? (
+                            <span style={{ color: 'rgba(var(--portal-accent-rgb, 200, 16, 46), 0.88)' }}>
+                              {` (${labelParts.team})`}
+                            </span>
+                          ) : null}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         </div>
         {error ? <p style={{ margin: 0, color: '#ef4444' }}>{error}</p> : null}

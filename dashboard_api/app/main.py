@@ -2327,7 +2327,7 @@ def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
         return _bucket_metric(row.get("hb"), 5.0, "")
     if split == "Pitcher":
         return str(row.get("pitcher") or "Unknown")
-    if split == "Pitcher Team":
+    if split in {"Team", "Pitcher Team"}:
         norm = str(row.get("pitcher_team_norm") or "").strip()
         if norm:
             return norm
@@ -3239,6 +3239,8 @@ def _build_dynamic_table(
         "IVB": "InducedVert",
         "HB": "HorzBreak",
         "Pitcher": "Pitcher",
+        "Team": "Team",
+        "Pitcher Team": "Pitcher Team",
         "Batter": "Batter",
         "Catcher": "Catcher",
         "Game": "Game",
@@ -7692,10 +7694,20 @@ def _refresh_league_daily_rollup(
                       NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameuid', to_jsonb(pe)->>'GameUID', '')), ''),
                       NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameforeignid', to_jsonb(pe)->>'GameForeignID', '')), ''),
                       'g'
-                    ) || '|' || COALESCE(
-                      NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'playid', to_jsonb(pe)->>'play_id', pe.playid::text, '')), ''),
-                      pe.id::text
-                    ) AS pa_key,
+                    ) || '|pa|' || SUM(
+                      CASE WHEN
+                        (regexp_match(COALESCE(pe.balls::text, ''), '[-+]?[0-9]+'))[1]::int = 0
+                        AND (regexp_match(COALESCE(pe.strikes::text, ''), '[-+]?[0-9]+'))[1]::int = 0
+                      THEN 1 ELSE 0 END
+                    ) OVER (
+                      PARTITION BY pe.session_date,
+                        COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameid', to_jsonb(pe)->>'GameID', '')), ''),
+                          NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameuid', to_jsonb(pe)->>'GameUID', '')), ''),
+                          NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameforeignid', to_jsonb(pe)->>'GameForeignID', '')), ''),
+                          'g'),
+                        """ + PITCHER_NAME_NORM_SQL + """
+                      ORDER BY pe.id
+                    )::text AS pa_key,
                     (regexp_match(COALESCE(pe.balls::text, ''), '[-+]?[0-9]+'))[1]::int AS balls_num,
                     (regexp_match(COALESCE(pe.strikes::text, ''), '[-+]?[0-9]+'))[1]::int AS strikes_num,
                     (regexp_match(COALESCE(to_jsonb(pe)->>'outs', ''), '[-+]?[0-9]+'))[1]::int AS outs_num,
@@ -8011,10 +8023,21 @@ def _refresh_league_daily_rollup(
                         ''
                       )
                     ) AS away_team_code,
-                    COALESCE(
-                      NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'playid', to_jsonb(pe)->>'play_id', pe.playid::text, '')), ''),
-                      pe.id::text
-                    ) AS pa_key,
+                    SUM(
+                      CASE WHEN
+                        (regexp_match(COALESCE(pe.balls::text, ''), '[-+]?[0-9]+'))[1]::int = 0
+                        AND (regexp_match(COALESCE(pe.strikes::text, ''), '[-+]?[0-9]+'))[1]::int = 0
+                      THEN 1 ELSE 0 END
+                    ) OVER (
+                      PARTITION BY pe.session_date,
+                        COALESCE(
+                          NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameid', to_jsonb(pe)->>'GameID', '')), ''),
+                          NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameuid', to_jsonb(pe)->>'GameUID', '')), ''),
+                          NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'gameforeignid', to_jsonb(pe)->>'GameForeignID', '')), ''),
+                          'g'),
+                        """ + PITCHER_NAME_NORM_SQL + """
+                      ORDER BY pe.id
+                    )::text AS pa_key,
                     (regexp_match(COALESCE(pe.balls::text, ''), '[-+]?[0-9]+'))[1]::int AS balls_num,
                     (regexp_match(COALESCE(pe.strikes::text, ''), '[-+]?[0-9]+'))[1]::int AS strikes_num,
                     (regexp_match(COALESCE(to_jsonb(pe)->>'outs', ''), '[-+]?[0-9]+'))[1]::int AS outs_num,
@@ -8391,13 +8414,64 @@ def _refresh_league_daily_rollup(
                 )
                 cur.execute(
                     """
-                    INSERT INTO public.pitch_events_game_rollup_league
-                    SELECT *
+                    INSERT INTO public.pitch_events_game_rollup_league (
+                      school_code, session_date, level_bucket, split_group, split_value, pitch_type,
+                      pitcher_name, batter_name, catcher_name, pitcher_norm, batter_norm, catcher_norm,
+                      pitcher_team_norm, batter_team_norm_eff, pitcherthrows_norm, batterside_norm, session_bucket,
+                      pitches, velo_sum, velo_n, velo_max, spin_sum, spin_n, ivb_sum, ivb_n, hb_sum, hb_n,
+                      in_zone_n, loc_n, strike_n, swing_n, whiff_n, csw_n, comp_n, fps_num, fps_swing_num, fps_den,
+                      early_num, early_den, ahead_num, ahead_den, oneone_num, oneone_den,
+                      ea_num, ea_den, in_play_n, gb_n, fb_n, pu_n, barrel_n, ev_sum, ev_n, la_sum, la_n,
+                      rv_sum, pv_sum,
+                      count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
+                      bf_n, k_n, bb_n, hbp_n, single_n, double_n, triple_n, hr_n, sf_n,
+                      rel_height_sum, rel_height_n, rel_side_sum, rel_side_n, ext_sum, ext_n,
+                      spin_eff_sum, spin_eff_n, vaa_sum, vaa_n, haa_sum, haa_n,
+                      r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample
+                    )
+                    SELECT
+                      %(school_code)s::text,
+                      session_date, level_bucket, split_group, split_value, pitch_type,
+                      MIN(pitcher_name), MIN(batter_name), MIN(catcher_name),
+                      pitcher_norm, 'All'::text, 'All'::text,
+                      pitcher_team_norm, batter_team_norm_eff, pitcherthrows_norm, batterside_norm, session_bucket,
+                      SUM(pitches)::int,
+                      SUM(velo_sum)::double precision, SUM(velo_n)::int, MAX(velo_max)::double precision,
+                      SUM(spin_sum)::double precision, SUM(spin_n)::int,
+                      SUM(ivb_sum)::double precision, SUM(ivb_n)::int,
+                      SUM(hb_sum)::double precision, SUM(hb_n)::int,
+                      SUM(in_zone_n)::int, SUM(loc_n)::int, SUM(strike_n)::int, SUM(swing_n)::int,
+                      SUM(whiff_n)::int, SUM(csw_n)::int, SUM(comp_n)::int,
+                      SUM(fps_num)::int, SUM(fps_swing_num)::int, SUM(fps_den)::int,
+                      SUM(early_num)::int, SUM(early_den)::int,
+                      SUM(ahead_num)::int, SUM(ahead_den)::int,
+                      SUM(oneone_num)::int, SUM(oneone_den)::int,
+                      SUM(ea_num)::int, SUM(ea_den)::int,
+                      SUM(in_play_n)::int, SUM(gb_n)::int, SUM(fb_n)::int, SUM(pu_n)::int,
+                      SUM(barrel_n)::int, SUM(ev_sum)::double precision, SUM(ev_n)::int,
+                      SUM(la_sum)::double precision, SUM(la_n)::int,
+                      SUM(rv_sum)::double precision, SUM(pv_sum)::double precision,
+                      SUM(count_00_n)::int, SUM(count_behind_n)::int, SUM(count_even_n)::int,
+                      SUM(count_ahead_n)::int, SUM(count_lt2k_n)::int, SUM(count_2k_n)::int,
+                      SUM(count_00_n)::int, SUM(k_n)::int, SUM(bb_n)::int, SUM(hbp_n)::int,
+                      SUM(single_n)::int, SUM(double_n)::int, SUM(triple_n)::int, SUM(hr_n)::int, SUM(sf_n)::int,
+                      SUM(rel_height_sum)::double precision, SUM(rel_height_n)::int,
+                      SUM(rel_side_sum)::double precision, SUM(rel_side_n)::int,
+                      SUM(ext_sum)::double precision, SUM(ext_n)::int,
+                      SUM(spin_eff_sum)::double precision, SUM(spin_eff_n)::int,
+                      SUM(vaa_sum)::double precision, SUM(vaa_n)::int,
+                      SUM(haa_sum)::double precision, SUM(haa_n)::int,
+                      SUM(r_tilt_x_sum)::double precision, SUM(r_tilt_y_sum)::double precision,
+                      SUM(r_tilt_n)::int, COALESCE(MIN(NULLIF(r_tilt_sample, '')), '')
                     FROM public.pitch_events_daily_rollup_league_split
                     WHERE school_code = %(school_code)s
                       AND split_group = 'Game'
                       AND session_date >= %(refresh_start)s::date
                       AND session_date <= %(max_date)s::date
+                    GROUP BY
+                      session_date, level_bucket, split_group, split_value, pitch_type,
+                      pitcher_norm, pitcher_team_norm, batter_team_norm_eff,
+                      pitcherthrows_norm, batterside_norm, session_bucket
                     """,
                     {"school_code": school_filter, "refresh_start": refresh_start, "max_date": max_date},
                 )
@@ -9088,6 +9162,9 @@ def _try_pitching_overview_daily_rollup(
         alias="fps_swing_num",
         fallback_column="fps_num",
     )
+    # Older Game rollup rows can have bf_n keyed by pitch identity. count_00_n is
+    # the durable PA-start count used by Summary/Leaderboard BF.
+    bf_sum_select = "SUM(count_00_n)::int AS bf_n" if split_clean == "Game" else "SUM(bf_n)::int AS bf_n"
     mode_columns_map: Dict[str, List[str]] = {
         "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
@@ -9149,7 +9226,7 @@ def _try_pitching_overview_daily_rollup(
         )
 
     # Mirror the PRO critical leaderboard fast-path for LEAGUE requests.
-    if school_code == "LEAGUE" and mode_clean == "Live" and split_clean in {"Pitcher", "Pitcher Team"} and not include_chart_points:
+    if school_code == "LEAGUE" and mode_clean == "Live" and split_clean in {"Pitcher", "Team", "Pitcher Team"} and not include_chart_points:
         _leaderboard_perf_started = time.perf_counter()
         try:
             with get_conn() as conn, conn.cursor() as cur:
@@ -9261,6 +9338,57 @@ def _try_pitching_overview_daily_rollup(
                 parsed_ip_min,
                 parsed_ip_max,
             )
+            # Append an All row computed from raw totals so rate stats like K% are exact.
+            if split_clean == "Game" and table_rows:
+                all_pitches_sum = int(sum(int(r.get("pitches") or 0) for r in simple_rows))
+                all_velo_sum = float(sum(float(r.get("velo_sum") or 0.0) for r in simple_rows))
+                all_velo_n_sum = int(sum(int(r.get("velo_n") or 0) for r in simple_rows))
+                all_ivb_sum = float(sum(float(r.get("ivb_sum") or 0.0) for r in simple_rows))
+                all_ivb_n_sum = int(sum(int(r.get("ivb_n") or 0) for r in simple_rows))
+                all_hb_sum = float(sum(float(r.get("hb_sum") or 0.0) for r in simple_rows))
+                all_hb_n_sum = int(sum(int(r.get("hb_n") or 0) for r in simple_rows))
+                all_bf_n_sum = int(sum(int(r.get("bf_n") or 0) for r in simple_rows))
+                all_k_n_sum = int(sum(int(r.get("k_n") or 0) for r in simple_rows))
+                all_bb_n_sum = int(sum(int(r.get("bb_n") or 0) for r in simple_rows))
+                all_hr_n_sum = int(sum(int(r.get("hr_n") or 0) for r in simple_rows))
+                all_hbp_n_sum = int(sum(int(r.get("hbp_n") or 0) for r in simple_rows))
+                all_single_n = int(sum(int(r.get("single_n") or 0) for r in simple_rows))
+                all_double_n = int(sum(int(r.get("double_n") or 0) for r in simple_rows))
+                all_triple_n = int(sum(int(r.get("triple_n") or 0) for r in simple_rows))
+                all_hit_n = all_single_n + all_double_n + all_triple_n + all_hr_n_sum
+                all_outs_est = max(0, all_bf_n_sum - all_hit_n - all_bb_n_sum - all_hbp_n_sum)
+                all_ip_display = f"{all_outs_est // 3}.{all_outs_est % 3}" if all_outs_est > 0 else None
+                all_swing_n_sum = int(sum(int(r.get("swing_n") or 0) for r in simple_rows))
+                all_whiff_n_sum = int(sum(int(r.get("whiff_n") or 0) for r in simple_rows))
+                all_strike_n_sum = int(sum(int(r.get("strike_n") or 0) for r in simple_rows))
+                all_in_zone_n_sum = int(sum(int(r.get("in_zone_n") or 0) for r in simple_rows))
+                all_loc_n_sum = int(sum(int(r.get("loc_n") or 0) for r in simple_rows))
+                all_fps_num_sum = int(sum(int(r.get("fps_num") or 0) for r in simple_rows))
+                all_fps_den_sum = int(sum(int(r.get("fps_den") or 0) for r in simple_rows))
+                all_ea_num_sum = int(sum(int(r.get("ea_num") or 0) for r in simple_rows))
+                all_ea_den_sum = int(sum(int(r.get("ea_den") or 0) for r in simple_rows))
+                all_comp_n_sum = int(sum(int(r.get("comp_n") or 0) for r in simple_rows))
+                all_velo_max_vals = [float(r.get("velo_max")) for r in simple_rows if _is_num(r.get("velo_max"))]
+                all_qp_pct_num = (100.0 * all_comp_n_sum / all_pitches_sum) if all_pitches_sum > 0 else None
+                table_rows.append({
+                    split_col_name: "All",
+                    "#": all_pitches_sum,
+                    "BF": all_bf_n_sum,
+                    "IP": all_ip_display,
+                    "Velo": round(all_velo_sum / all_velo_n_sum, 1) if all_velo_n_sum > 0 else None,
+                    "Max": round(max(all_velo_max_vals), 1) if all_velo_max_vals else None,
+                    "IVB": round(all_ivb_sum / all_ivb_n_sum, 1) if all_ivb_n_sum > 0 else None,
+                    "HB": round(all_hb_sum / all_hb_n_sum, 1) if all_hb_n_sum > 0 else None,
+                    "FPS%": _safe_pct_simple(all_fps_num_sum, all_fps_den_sum),
+                    "E+A%": _safe_pct_simple(all_ea_num_sum, all_ea_den_sum),
+                    "InZone%": _safe_pct_simple(all_in_zone_n_sum, all_loc_n_sum),
+                    "Strike%": _safe_pct_simple(all_strike_n_sum, all_pitches_sum),
+                    "Whiff%": _safe_pct_simple(all_whiff_n_sum, all_swing_n_sum),
+                    "K%": _safe_pct_simple(all_k_n_sum, all_bf_n_sum),
+                    "BB%": _safe_pct_simple(all_bb_n_sum, all_bf_n_sum),
+                    "HR%": _safe_pct_simple(all_hr_n_sum, all_bf_n_sum),
+                    "QP+": round(all_qp_pct_num * 1.35, 1) if _is_num(all_qp_pct_num) else None,
+                })
             total_pitches = int(sum(int(r.get("pitches") or 0) for r in simple_rows))
             total_velo_n = int(sum(int(r.get("velo_n") or 0) for r in simple_rows))
             total_ivb_n = int(sum(int(r.get("ivb_n") or 0) for r in simple_rows))
@@ -9373,7 +9501,7 @@ def _try_pitching_overview_daily_rollup(
                   SUM(count_ahead_n)::int AS count_ahead_n,
                   SUM(count_lt2k_n)::int AS count_lt2k_n,
                   SUM(count_2k_n)::int AS count_2k_n,
-                  SUM(bf_n)::int AS bf_n,
+                  {bf_sum_select},
                   SUM(k_n)::int AS k_n,
                   SUM(bb_n)::int AS bb_n,
                   SUM(hbp_n)::int AS hbp_n,
@@ -19838,7 +19966,7 @@ def pitching_overview(
         league_leaderboard_rollup_candidate = (
             (not chart_only)
             and (not include_chart_points)
-            and split_by in {"Pitcher", "Pitcher Team"}
+            and split_by in {"Pitcher", "Team", "Pitcher Team"}
             and (not league_leaderboard_has_narrowing_filters)
         )
         # Long league windows can still time out when chart points trigger an

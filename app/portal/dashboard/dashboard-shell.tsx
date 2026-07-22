@@ -11,7 +11,8 @@ import HomeSuite from './home-suite';
 import PlayerNotesSuite from './player-notes-suite';
 import PlayerPlansSuite from './player-plans-suite';
 import PitchingSuite from './pitching-suite';
-import { getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
+import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
+import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import StuffCalculatorSuite from './stuff-calculator-suite';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 
@@ -130,6 +131,22 @@ function resolveCandidateLogoUrl(isPro: boolean, candidate: Candidate): string {
   }
   const teamSeed = playerTeam || inferProTeamCode(candidate.value) || candidate.value;
   return String(getProTeamLogoUrl(teamSeed) ?? '').trim();
+}
+
+function formatCandidateTeamName(isPro: boolean, value: string | null | undefined): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (isPro) return getProTeamDisplayName(raw);
+  const upper = raw.toUpperCase();
+  return LEAGUE_TEAM_NAME_BY_CODE[upper] ?? raw;
+}
+
+function candidateSearchLabelParts(isPro: boolean, candidate: Candidate): { primary: string; team: string } {
+  if (candidate.type === 'team') return { primary: formatCandidateTeamName(isPro, candidate.value) || toFirstLast(candidate.value), team: '' };
+  return {
+    primary: toFirstLast(candidate.value),
+    team: formatCandidateTeamName(isPro, candidate.team_code),
+  };
 }
 
 async function fetchHomePayload(signal?: AbortSignal): Promise<SearchPayload> {
@@ -344,7 +361,14 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
         toFirstLast(candidate.value).toLowerCase().includes(needle)
     );
   }, [navSearchPayload?.candidates, navSearchQuery]);
-  const navFilteredCandidates = useMemo(() => navMatchingCandidates.slice(0, 8), [navMatchingCandidates]);
+  const navCandidateGroups = useMemo(() => {
+    const players = navMatchingCandidates.filter((candidate) => candidate.type === 'player').slice(0, 8);
+    const teams = navMatchingCandidates.filter((candidate) => candidate.type === 'team').slice(0, 8);
+    return [
+      { key: 'players', label: 'Players', candidates: players },
+      { key: 'teams', label: 'Teams', candidates: teams },
+    ].filter((group) => group.candidates.length > 0);
+  }, [navMatchingCandidates]);
   const navigateFromNavCandidate = (candidate: Candidate) => {
     const dateWindow = navSearchPayload?.date_window;
     if (!dateWindow) return;
@@ -422,7 +446,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
                 color: '#f8fafc',
               }}
             />
-            {navFilteredCandidates.length > 0 ? (
+            {navCandidateGroups.length > 0 ? (
               <div
                 style={{
                   position: 'absolute',
@@ -440,29 +464,53 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
                   background: navSearchDropdownBackground,
                 }}
               >
-                {navFilteredCandidates.map((candidate) => {
-                  const logoUrl = resolveCandidateLogoUrl(isPro, candidate);
-                  return (
-                    <button
-                      key={`nav-candidate-${candidate.type}-${candidate.value}-${candidate.suite}`}
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() => navigateFromNavCandidate(candidate)}
-                      style={{ textAlign: 'left', justifyContent: 'flex-start', width: '100%' }}
+                {navCandidateGroups.map((group) => (
+                  <div key={`nav-candidate-group-${group.key}`} style={{ display: 'grid', gap: 4 }}>
+                    <div
+                      style={{
+                        padding: '4px 8px 2px',
+                        fontSize: 11,
+                        fontWeight: 800,
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        color: 'rgba(226, 232, 240, 0.64)',
+                      }}
                     >
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                        {logoUrl ? (
-                          <img
-                            src={logoUrl}
-                            alt={candidate.type === 'team' ? candidate.value : (candidate.team_code ?? '')}
-                            style={{ width: 16, height: 16, objectFit: 'contain' }}
-                          />
-                        ) : null}
-                        <span>{toFirstLast(candidate.value)}</span>
-                      </span>
-                    </button>
-                  );
-                })}
+                      {group.label}
+                    </div>
+                    {group.candidates.map((candidate) => {
+                      const logoUrl = resolveCandidateLogoUrl(isPro, candidate);
+                      const labelParts = candidateSearchLabelParts(isPro, candidate);
+                      return (
+                        <button
+                          key={`nav-candidate-${candidate.type}-${candidate.value}-${candidate.suite}`}
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => navigateFromNavCandidate(candidate)}
+                          style={{ textAlign: 'left', justifyContent: 'space-between', width: '100%', gap: 10 }}
+                        >
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                            {logoUrl ? (
+                              <img
+                                src={logoUrl}
+                                alt={candidate.type === 'team' ? candidate.value : (candidate.team_code ?? '')}
+                                style={{ width: 16, height: 16, objectFit: 'contain', flex: '0 0 auto' }}
+                              />
+                            ) : null}
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {labelParts.primary}
+                              {labelParts.team ? (
+                                <span style={{ color: 'rgba(var(--portal-accent-rgb, 200, 16, 46), 0.88)' }}>
+                                  {` (${labelParts.team})`}
+                                </span>
+                              ) : null}
+                            </span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
             ) : null}
           </div>

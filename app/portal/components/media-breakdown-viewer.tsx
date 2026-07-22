@@ -48,6 +48,11 @@ type PlayerMediaItem = {
   category: string;
   createdAt: string;
 };
+type AnnotationDragState = {
+  id: string;
+  anchor: { x: number; y: number };
+  points: Array<{ x: number; y: number }>;
+};
 
 const TOOL_LABELS: Record<BreakdownTool, string> = {
   line: 'Line',
@@ -60,14 +65,32 @@ const TOOL_LABELS: Record<BreakdownTool, string> = {
 };
 
 const TOOL_ICONS: Record<BreakdownTool | 'view', string> = {
-  view: '□',
-  line: '/',
+  view: '✥',
+  line: '╱',
   arrow: '↗',
   circle: '○',
   pen: '~',
   text: 'T',
   angle: '∠',
   erase: '⌫',
+};
+
+const TOOL_ORDER: BreakdownTool[] = ['line', 'arrow', 'circle', 'pen', 'angle', 'text', 'erase'];
+const glassPanelStyle: React.CSSProperties = {
+  border: '1px solid rgba(148,163,184,0.24)',
+  background: 'rgba(2,6,23,0.88)',
+  boxShadow: '0 18px 34px rgba(0,0,0,0.28)',
+  backdropFilter: 'blur(12px)',
+};
+const compactIconButtonStyle: React.CSSProperties = {
+  width: 36,
+  minWidth: 36,
+  minHeight: 36,
+  height: 36,
+  padding: 0,
+  borderRadius: 10,
+  fontSize: 17,
+  lineHeight: 1,
 };
 
 // ── Geometry helpers ──────────────────────────────────────────────────────────
@@ -190,6 +213,22 @@ function clampPan(pan: { x: number; y: number }, zoom: number) {
   };
 }
 
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function moveAnnotationPoints(drag: AnnotationDragState, point: { x: number; y: number }) {
+  const rawDx = point.x - drag.anchor.x;
+  const rawDy = point.y - drag.anchor.y;
+  const minX = Math.min(...drag.points.map((p) => p.x));
+  const maxX = Math.max(...drag.points.map((p) => p.x));
+  const minY = Math.min(...drag.points.map((p) => p.y));
+  const maxY = Math.max(...drag.points.map((p) => p.y));
+  const dx = Math.max(-minX, Math.min(1 - maxX, rawDx));
+  const dy = Math.max(-minY, Math.min(1 - maxY, rawDy));
+  return drag.points.map((p) => ({ x: clamp01(p.x + dx), y: clamp01(p.y + dy) }));
+}
+
 // ── Video panel ───────────────────────────────────────────────────────────────
 
 type VideoPanelProps = {
@@ -230,12 +269,15 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   const [annotations, setAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [active, setActive] = useState<BreakdownAnnotation | null>(null);
   const [anglePending, setAnglePending] = useState<Array<{ x: number; y: number }>>([]);
-  const [draggingText, setDraggingText] = useState<{ id: string; dx: number; dy: number } | null>(null);
+  const [draggingAnnotation, setDraggingAnnotation] = useState<AnnotationDragState | null>(null);
 
   useEffect(() => {
-    setAnnotations(Array.isArray(initialAnnotations) ? initialAnnotations : []);
-    setActive(null);
-    setAnglePending([]);
+    const timeoutId = window.setTimeout(() => {
+      setAnnotations(Array.isArray(initialAnnotations) ? initialAnnotations : []);
+      setActive(null);
+      setAnglePending([]);
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [initialAnnotations, url]);
 
   useEffect(() => {
@@ -374,14 +416,13 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     onActivate?.();
     event.preventDefault();
     const point = pointOnOverlay(event, zoom, pan);
-    if (tool === 'text') {
-      const nearestText = annotations
-        .filter((item) => item.tool === 'text' && item.points.length > 0)
+    if (tool !== 'erase') {
+      const nearestAnnotation = annotations
+        .filter((item) => item.points.length > 0)
         .map((item) => ({ item, d: distanceToAnnotation(item, point) }))
         .sort((a, b) => a.d - b.d)[0];
-      if (nearestText && nearestText.d <= 0.08) {
-        const anchor = nearestText.item.points[0];
-        setDraggingText({ id: nearestText.item.id, dx: point.x - anchor.x, dy: point.y - anchor.y });
+      if (nearestAnnotation && nearestAnnotation.d <= 0.08) {
+        setDraggingAnnotation({ id: nearestAnnotation.item.id, anchor: point, points: nearestAnnotation.item.points });
         event.currentTarget.setPointerCapture(event.pointerId);
         return;
       }
@@ -410,14 +451,11 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   };
 
   const pointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (draggingText) {
+    if (draggingAnnotation) {
       event.preventDefault();
       const point = pointOnOverlay(event, zoom, pan);
-      const nextPoint = {
-        x: Math.max(0, Math.min(1, point.x - draggingText.dx)),
-        y: Math.max(0, Math.min(1, point.y - draggingText.dy)),
-      };
-      setAnnotations((items) => items.map((item) => (item.id === draggingText.id ? { ...item, points: [nextPoint] } : item)));
+      const nextPoints = moveAnnotationPoints(draggingAnnotation, point);
+      setAnnotations((items) => items.map((item) => (item.id === draggingAnnotation.id ? { ...item, points: nextPoints } : item)));
       return;
     }
     if (!active) return;
@@ -432,8 +470,8 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
 
   const finish = (event?: ReactPointerEvent<SVGSVGElement>) => {
     if (event && event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (draggingText) {
-      setDraggingText(null);
+    if (draggingAnnotation) {
+      setDraggingAnnotation(null);
       return;
     }
     if (!active) return;
@@ -599,13 +637,17 @@ function ComparePicker({ players, mediaType, onPick, onCancel }: ComparePickerPr
   const filtered = players.filter((p) => p.fullName.toLowerCase().includes(search.toLowerCase()));
 
   useEffect(() => {
-    if (!selectedPlayer) { setMedia([]); return; }
-    setLoadingMedia(true);
+    if (!selectedPlayer) {
+      const timeoutId = window.setTimeout(() => setMedia([]), 0);
+      return () => window.clearTimeout(timeoutId);
+    }
+    const loadingTimeoutId = window.setTimeout(() => setLoadingMedia(true), 0);
     fetch(`/api/player/media?playerId=${selectedPlayer.playerId}&mediaType=${mediaType}`, { cache: 'no-store' })
       .then(async (r) => { const payload = (await r.json().catch(() => ({}))) as { media?: PlayerMediaItem[] }; setMedia(Array.isArray(payload.media) ? payload.media : []); })
       .catch(() => setMedia([]))
       .finally(() => setLoadingMedia(false));
-  }, [selectedPlayer]);
+    return () => window.clearTimeout(loadingTimeoutId);
+  }, [mediaType, selectedPlayer]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onCancel}>
@@ -668,7 +710,6 @@ export default function MediaBreakdownViewer({
 }: MediaBreakdownViewerProps) {
   const [tool, setTool] = useState<BreakdownTool>('line');
   const [drawMode, setDrawMode] = useState(false);
-  const [isMobileViewer, setIsMobileViewer] = useState(false);
   const [showMobileTools, setShowMobileTools] = useState(false);
   const [color, setColor] = useState('#facc15');
   const [width, setWidth] = useState(4);
@@ -690,7 +731,6 @@ export default function MediaBreakdownViewer({
     const media = window.matchMedia('(max-width: 780px)');
     const sync = () => {
       const mobile = media.matches;
-      setIsMobileViewer(mobile);
       setShowMobileTools(!mobile);
     };
     sync();
@@ -744,7 +784,7 @@ export default function MediaBreakdownViewer({
 
   // Image-mode annotation state
   const [annotations, setAnnotations] = useState<BreakdownAnnotation[]>([]);
-  const [draggingImageText, setDraggingImageText] = useState<{ id: string; dx: number; dy: number } | null>(null);
+  const [draggingImageAnnotation, setDraggingImageAnnotation] = useState<AnnotationDragState | null>(null);
   const [videoAnnotations, setVideoAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [active, setActive] = useState<BreakdownAnnotation | null>(null);
   const [anglePending, setAnglePending] = useState<Array<{ x: number; y: number }>>([]);
@@ -762,13 +802,16 @@ export default function MediaBreakdownViewer({
   }, []);
 
   useEffect(() => {
-    const next = Array.isArray(initialAnnotations) ? initialAnnotations : [];
-    setAnnotations(next);
-    setVideoAnnotations(next);
-    setActive(null);
-    setAnglePending([]);
-    setAnglePendingCount(0);
-    setSaveState('idle');
+    const timeoutId = window.setTimeout(() => {
+      const next = Array.isArray(initialAnnotations) ? initialAnnotations : [];
+      setAnnotations(next);
+      setVideoAnnotations(next);
+      setActive(null);
+      setAnglePending([]);
+      setAnglePendingCount(0);
+      setSaveState('idle');
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
   }, [initialAnnotations, url]);
 
   const saveAnnotations = async () => {
@@ -817,14 +860,13 @@ export default function MediaBreakdownViewer({
     if (!drawMode) return;
     event.preventDefault();
     const point = pointOnOverlay(event, imgZoom, imgPan);
-    if (tool === 'text') {
-      const nearestText = annotations
-        .filter((item) => item.tool === 'text' && item.points.length > 0)
-        .map((item) => ({ item, d: Math.hypot(item.points[0].x - point.x, item.points[0].y - point.y) }))
+    if (tool !== 'erase') {
+      const nearestAnnotation = annotations
+        .filter((item) => item.points.length > 0)
+        .map((item) => ({ item, d: Math.min(...item.points.map((p) => Math.hypot(p.x - point.x, p.y - point.y))) }))
         .sort((a, b) => a.d - b.d)[0];
-      if (nearestText && nearestText.d <= 0.08) {
-        const anchor = nearestText.item.points[0];
-        setDraggingImageText({ id: nearestText.item.id, dx: point.x - anchor.x, dy: point.y - anchor.y });
+      if (nearestAnnotation && nearestAnnotation.d <= 0.08) {
+        setDraggingImageAnnotation({ id: nearestAnnotation.item.id, anchor: point, points: nearestAnnotation.item.points });
         event.currentTarget.setPointerCapture(event.pointerId);
         return;
       }
@@ -854,14 +896,11 @@ export default function MediaBreakdownViewer({
   }
 
   function pointerMoveImage(event: ReactPointerEvent<SVGSVGElement>) {
-    if (draggingImageText) {
+    if (draggingImageAnnotation) {
       event.preventDefault();
       const point = pointOnOverlay(event, imgZoom, imgPan);
-      const nextPoint = {
-        x: Math.max(0, Math.min(1, point.x - draggingImageText.dx)),
-        y: Math.max(0, Math.min(1, point.y - draggingImageText.dy)),
-      };
-      setAnnotations((items) => items.map((item) => (item.id === draggingImageText.id ? { ...item, points: [nextPoint] } : item)));
+      const nextPoints = moveAnnotationPoints(draggingImageAnnotation, point);
+      setAnnotations((items) => items.map((item) => (item.id === draggingImageAnnotation.id ? { ...item, points: nextPoints } : item)));
       setSaveState('idle');
       return;
     }
@@ -877,8 +916,8 @@ export default function MediaBreakdownViewer({
 
   function finishImage(event?: ReactPointerEvent<SVGSVGElement>) {
     if (event && event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (draggingImageText) {
-      setDraggingImageText(null);
+    if (draggingImageAnnotation) {
+      setDraggingImageAnnotation(null);
       setSaveState('idle');
       return;
     }
@@ -890,50 +929,106 @@ export default function MediaBreakdownViewer({
 
   const allImageAnnotations = [...annotations, ...(active ? [active] : []), ...(anglePending.length > 0 ? [{ id: 'angle-preview', tool: 'angle' as const, color, width, points: anglePending, angleMode }] : [])];
 
-  const toolbar = (
-    <div className={`portal-media-breakdown-toolbar${showMobileTools ? ' is-open' : ''}`} style={{ display: 'flex', gap: 4, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 10, background: 'rgba(2,6,23,0.92)', border: '1px solid rgba(148,163,184,0.25)', flexShrink: 0 }}>
-      <button type="button" className={!drawMode ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setDrawMode(false); setAnglePending([]); setAnglePendingCount(0); }}>
-        <span className="portal-media-breakdown-tool-icon" aria-hidden="true">{TOOL_ICONS.view}</span>
-        <span className="portal-media-breakdown-tool-label">View</span>
-      </button>
-      {(['line', 'arrow', 'circle', 'pen', 'angle', 'text', 'erase'] as BreakdownTool[]).map((entry) => (
-        <button key={entry} type="button" className={drawMode && tool === entry ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setDrawMode(true); setTool(entry); setAnglePending([]); setAnglePendingCount(0); }} title={TOOL_LABELS[entry]}>
-          <span className="portal-media-breakdown-tool-icon" aria-hidden="true">{TOOL_ICONS[entry]}</span>
-          <span className="portal-media-breakdown-tool-label">
-            {TOOL_LABELS[entry]}
-            {entry === 'angle' && anglePendingCount > 0 ? ` (${anglePendingCount}/3)` : ''}
-          </span>
+  const toolbar = (isVideo || isImage) && showMobileTools ? (
+    <div
+      className="portal-media-breakdown-toolbar is-open"
+      style={{ ...glassPanelStyle, display: 'grid', gap: 8, padding: 8, borderRadius: 14, flexShrink: 0 }}
+    >
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          aria-label="Collapse tools"
+          title="Collapse tools"
+          style={{ ...compactIconButtonStyle, fontSize: 20 }}
+          onClick={() => setShowMobileTools(false)}
+        >
+          ×
         </button>
-      ))}
-      {drawMode && tool === 'angle' && (
-        <>
-          <button type="button" className={angleMode === 'acute' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => setAngleMode('acute')}>Acute</button>
-          <button type="button" className={angleMode === 'obtuse' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => setAngleMode('obtuse')}>Obtuse</button>
-        </>
-      )}
-      <input type="color" value={color} onChange={(e) => setColor(e.target.value)} aria-label="Color" style={{ width: 28, height: 28, padding: 1 }} />
-      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700 }}>
-        W<input type="range" min={2} max={14} value={width} onChange={(e) => setWidth(Number(e.target.value))} style={{ width: 50 }} />
-      </label>
-      {drawMode && tool === 'text' ? (
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700 }}>
-          Font<input type="range" min={16} max={96} value={textFontSize} onChange={(e) => setTextFontSize(Number(e.target.value))} style={{ width: 70 }} />
+        <button
+          type="button"
+          className={!drawMode ? 'btn btn-primary' : 'btn btn-ghost'}
+          aria-label="View and pan"
+          title="View and pan"
+          style={compactIconButtonStyle}
+          onClick={() => { setDrawMode(false); setAnglePending([]); setAnglePendingCount(0); }}
+        >
+          {TOOL_ICONS.view}
+        </button>
+        {TOOL_ORDER.map((entry) => (
+          <button
+            key={entry}
+            type="button"
+            className={drawMode && tool === entry ? 'btn btn-primary' : 'btn btn-ghost'}
+            aria-label={TOOL_LABELS[entry]}
+            title={entry === 'angle' && anglePendingCount > 0 ? `${TOOL_LABELS[entry]} (${anglePendingCount}/3)` : TOOL_LABELS[entry]}
+            style={compactIconButtonStyle}
+            onClick={() => { setDrawMode(true); setTool(entry); setAnglePending([]); setAnglePendingCount(0); }}
+          >
+            {TOOL_ICONS[entry]}
+          </button>
+        ))}
+        {!isVideo ? (
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ ...compactIconButtonStyle, fontSize: 11, fontWeight: 900 }}
+              onClick={() => { setAnnotations((items) => items.slice(0, -1)); setAnglePending([]); setAnglePendingCount(0); setSaveState('idle'); }}
+              disabled={!annotations.length}
+              title="Undo"
+            >
+              Undo
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ ...compactIconButtonStyle, fontSize: 11, fontWeight: 900 }}
+              onClick={() => { setAnnotations([]); setAnglePending([]); setAnglePendingCount(0); setSaveState('idle'); }}
+              disabled={!annotations.length}
+              title="Clear"
+            >
+              Clear
+            </button>
+          </>
+        ) : null}
+        {onSaveAnnotations ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ fontSize: 12, padding: '0 12px', minHeight: 36, borderRadius: 10, fontWeight: 900 }}
+            onClick={() => void saveAnnotations()}
+            disabled={saveState === 'saving'}
+          >
+            {saveState === 'saving' ? 'Saving...' : saveState === 'saved' ? 'Saved' : 'Save'}
+          </button>
+        ) : null}
+        {saveState === 'error' ? <span style={{ color: '#fca5a5', fontSize: 11, fontWeight: 800 }}>Save failed</span> : null}
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '2px 2px 0' }}>
+        {drawMode && tool === 'angle' ? (
+          <div style={{ display: 'inline-flex', gap: 4, padding: 3, borderRadius: 10, background: 'rgba(15,23,42,0.74)' }}>
+            <button type="button" className={angleMode === 'acute' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 11, padding: '4px 8px', minHeight: 0 }} onClick={() => setAngleMode('acute')}>Acute</button>
+            <button type="button" className={angleMode === 'obtuse' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 11, padding: '4px 8px', minHeight: 0 }} onClick={() => setAngleMode('obtuse')}>Obtuse</button>
+          </div>
+        ) : null}
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, color: '#e2e8f0' }}>
+          <span>Color</span>
+          <input type="color" value={color} onChange={(e) => setColor(e.target.value)} aria-label="Color" style={{ width: 32, height: 28, padding: 1, borderRadius: 8, border: '1px solid rgba(148,163,184,0.36)', background: 'rgba(15,23,42,0.9)' }} />
         </label>
-      ) : null}
-      {!isVideo && (
-        <>
-          <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setAnnotations((items) => items.slice(0, -1)); setAnglePending([]); setAnglePendingCount(0); setSaveState('idle'); }} disabled={!annotations.length}>Undo</button>
-          <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 8px', minHeight: 0 }} onClick={() => { setAnnotations([]); setAnglePending([]); setAnglePendingCount(0); setSaveState('idle'); }} disabled={!annotations.length}>Clear</button>
-        </>
-      )}
-      {onSaveAnnotations ? (
-        <button type="button" className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={() => void saveAnnotations()} disabled={saveState === 'saving'}>
-          {saveState === 'saving' ? 'Saving...' : saveState === 'saved' ? 'Saved' : 'Save Markup'}
-        </button>
-      ) : null}
-      {saveState === 'error' ? <span style={{ color: '#fca5a5', fontSize: 11, fontWeight: 800 }}>Save failed</span> : null}
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, color: '#e2e8f0' }}>
+          <span>Width</span>
+          <input type="range" min={2} max={14} value={width} onChange={(e) => setWidth(Number(e.target.value))} style={{ width: 86 }} />
+        </label>
+        {drawMode && tool === 'text' ? (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, color: '#e2e8f0' }}>
+            <span>Font</span>
+            <input type="range" min={16} max={96} value={textFontSize} onChange={(e) => setTextFontSize(Number(e.target.value))} style={{ width: 92 }} />
+          </label>
+        ) : null}
+      </div>
     </div>
-  );
+  ) : null;
 
   const imgZoomed = imgZoom > 1;
   const compareType: 'photo' | 'video' = isImage ? 'photo' : 'video';
@@ -1002,14 +1097,14 @@ export default function MediaBreakdownViewer({
                 {synced ? 'Synced ✓' : 'Sync'}
               </button>
             )}
-            {isMobileViewer && (isVideo || isImage) ? (
+            {(isVideo || isImage) ? (
               <button
                 type="button"
                 className={showMobileTools ? 'btn btn-primary' : 'btn btn-ghost'}
                 style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}
                 onClick={() => setShowMobileTools((v) => !v)}
               >
-                Tools
+                {showMobileTools ? 'Hide Tools' : 'Tools'}
               </button>
             ) : null}
             <a className="btn btn-ghost" href={url} download={downloadName || title} style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}>Download</a>

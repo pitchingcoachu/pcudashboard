@@ -325,6 +325,7 @@ export const LEAGUE_TEAM_NAME_BY_CODE: Record<string, string> = {
     "WAR_UNI1": "Warner University",
     "WAS_COU": "Washington State University",
     "WAS_HUS": "University of Washington",
+    "WAS_S": "Washington University",
     "WCC": "West Coast Conference",
     "WHI_PIR": "Whitworth University",
     "WIC_SHO": "Wichita State University",

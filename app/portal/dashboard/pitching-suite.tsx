@@ -46,6 +46,7 @@ type OptionItem = { value: string; label: string };
 const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-07-17-league-level-v2';
 const PRO_LEVEL_FILTER_OPTIONS = ['All', 'MLB', 'AAA'];
 const NCAA_LEVEL_FILTER_OPTIONS = ['All', 'D1', 'D2', 'D3', 'NAIA', 'JUCO'];
+const DEFAULT_COLLEGE_PERCENTILE_SCOPE = 'D1';
 
 function dashboardPageSlug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -288,6 +289,31 @@ type BreakdownAnnotation = {
   fontSize?: number;
   angleMode?: 'acute' | 'obtuse';
 };
+type BreakdownAnnotationDragState = {
+  id: string;
+  anchor: { x: number; y: number };
+  points: Array<{ x: number; y: number }>;
+};
+const BREAKDOWN_TOOL_LABELS: Record<BreakdownTool, string> = {
+  line: 'Line',
+  arrow: 'Arrow',
+  circle: 'Circle',
+  pen: 'Freehand',
+  text: 'Text',
+  angle: 'Angle',
+  erase: 'Erase',
+};
+const BREAKDOWN_TOOL_ICONS: Record<BreakdownTool | 'view', string> = {
+  view: '✥',
+  line: '╱',
+  arrow: '↗',
+  circle: '○',
+  pen: '~',
+  text: 'T',
+  angle: '∠',
+  erase: '⌫',
+};
+const BREAKDOWN_TOOL_ORDER: BreakdownTool[] = ['line', 'arrow', 'circle', 'pen', 'angle', 'text', 'erase'];
 const PITCH_TYPE_DISPLAY_ORDER = [
   'Fastball',
   'Sinker',
@@ -1249,6 +1275,7 @@ function applyPitchingSummarySplitFilter(params: URLSearchParams, splitBy: strin
     case 'Batter':
       params.set('opp_hitter', rowLabel);
       return true;
+    case 'Team':
     case 'Pitcher Team':
       params.set('team_type', rowLabel);
       return true;
@@ -2186,8 +2213,8 @@ export default function PitchingSuite({
   const [leaderboardSortDirection, setLeaderboardSortDirection] = useState<SortDirection>('desc');
   const [leaderboardStatView, setLeaderboardStatView] = useState<'Stats' | 'Percentile'>('Stats');
   const [summaryStatView, setSummaryStatView] = useState<'Stats' | 'Percentile'>('Stats');
-  const [leaderboardPercentileScope, setLeaderboardPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
-  const [summaryPercentileScope, setSummaryPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
+  const [leaderboardPercentileScope, setLeaderboardPercentileScope] = useState(DEFAULT_COLLEGE_PERCENTILE_SCOPE);
+  const [summaryPercentileScope, setSummaryPercentileScope] = useState(DEFAULT_COLLEGE_PERCENTILE_SCOPE);
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
   const [gameLogRows, setGameLogRows] = useState<Array<Record<string, unknown>>>([]);
@@ -2457,7 +2484,7 @@ export default function PitchingSuite({
   const [breakdownAnnotations, setBreakdownAnnotations] = useState<BreakdownAnnotation[]>([]);
   const [activeBreakdownAnnotation, setActiveBreakdownAnnotation] = useState<BreakdownAnnotation | null>(null);
   const [selectedBreakdownTextId, setSelectedBreakdownTextId] = useState('');
-  const [draggingBreakdownText, setDraggingBreakdownText] = useState<{ id: string; dx: number; dy: number } | null>(null);
+  const [draggingBreakdownAnnotation, setDraggingBreakdownAnnotation] = useState<BreakdownAnnotationDragState | null>(null);
   const [breakdownAngleMode, setBreakdownAngleMode] = useState<'acute' | 'obtuse'>('acute');
   const [breakdownAnglePending, setBreakdownAnglePending] = useState<Array<{ x: number; y: number }>>([]);
   const [breakdownNoteText, setBreakdownNoteText] = useState('');
@@ -2515,6 +2542,38 @@ export default function PitchingSuite({
     String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
     String(filters?.school_code ?? '').toUpperCase() === 'PRO' ||
     String(filters?.school_code ?? '').toUpperCase() === 'MLB';
+  const collegeLevelPercentileOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: string[] = [];
+    for (const raw of [...(filters?.level_options ?? []), ...NCAA_LEVEL_FILTER_OPTIONS]) {
+      const value = String(raw ?? '').trim();
+      if (!value) continue;
+      const upper = value.toUpperCase();
+      if (upper === 'MLB' || upper === 'AAA') continue;
+      if (seen.has(upper)) continue;
+      seen.add(upper);
+      options.push(value);
+    }
+    return options;
+  }, [filters?.level_options]);
+  const collegePercentileDefault = collegeLevelPercentileOptions.includes(DEFAULT_COLLEGE_PERCENTILE_SCOPE)
+    ? DEFAULT_COLLEGE_PERCENTILE_SCOPE
+    : (collegeLevelPercentileOptions[0] ?? 'All');
+  const percentileTeamLabel = useMemo(() => {
+    const school = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+    if (school && school !== 'PRO' && school !== 'LEAGUE') return school;
+    const teamRaw = String(teamType ?? '').trim();
+    if (teamRaw && teamRaw !== 'All' && isLikelyLeagueTeamCode(teamRaw)) return teamRaw.toUpperCase();
+    return 'Team';
+  }, [filters?.school_code, selectedSchoolCode, teamType]);
+  const percentileScopeOptions = useMemo(
+    () => [
+      ...collegeLevelPercentileOptions.map((value) => ({ value, label: value })),
+      { value: 'MLB', label: 'MLB' },
+      { value: 'TEAM', label: percentileTeamLabel },
+    ],
+    [collegeLevelPercentileOptions, percentileTeamLabel]
+  );
   const activeSchoolBrand = useMemo(
     () => resolveSchoolBrand(String(filters?.school_code ?? selectedSchoolCode ?? 'PCU')),
     [filters?.school_code, selectedSchoolCode]
@@ -2868,12 +2927,19 @@ export default function PitchingSuite({
   }, [isPro, level]);
 
   useEffect(() => {
-    if (!isLeague) return;
-    const options = Array.from(new Set([...(filters?.level_options ?? []), ...NCAA_LEVEL_FILTER_OPTIONS]));
+    if (isPro) return;
+    const options = collegeLevelPercentileOptions.length ? collegeLevelPercentileOptions : NCAA_LEVEL_FILTER_OPTIONS;
     const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
     const isProOnlyLevel = level === 'MLB' || level === 'AAA';
     if (!level || isProOnlyLevel || !options.includes(level)) setLevel(nextDefault);
-  }, [filters?.level_options, isLeague, level]);
+  }, [collegeLevelPercentileOptions, isPro, level]);
+
+  useEffect(() => {
+    if (isPro) return;
+    const validScopes = new Set([...collegeLevelPercentileOptions, 'MLB', 'TEAM']);
+    if (!validScopes.has(leaderboardPercentileScope)) setLeaderboardPercentileScope(collegePercentileDefault);
+    if (!validScopes.has(summaryPercentileScope)) setSummaryPercentileScope(collegePercentileDefault);
+  }, [collegeLevelPercentileOptions, collegePercentileDefault, isPro, leaderboardPercentileScope, summaryPercentileScope]);
 
   const loadManualEntries = useCallback(async () => {
     setLoadingManualEntries(true);
@@ -3239,7 +3305,6 @@ export default function PitchingSuite({
 
     const shouldLoadLeaderboardBaseline =
       isLeaderboard &&
-      !isLeague &&
       (leaderboardStatView === 'Percentile' || enableTableColors);
     const shouldLoadGameLogBaseline = isGameLogPage && (showCellPercentiles || enableTableColors);
     const shouldLoadPitchLogBaseline = isPitchLogPage && (showCellPercentiles || enableTableColors);
@@ -3280,7 +3345,7 @@ export default function PitchingSuite({
       const activePercentileScope =
         isPro
           ? 'MLB'
-          : (isLeaderboard || isGameLogPage || isPitchLogPage ? leaderboardPercentileScope : (isSummaryPage ? summaryPercentileScope : 'NCAA'));
+          : (isLeaderboard || isGameLogPage || isPitchLogPage ? leaderboardPercentileScope : (isSummaryPage ? summaryPercentileScope : collegePercentileDefault));
       if (!isPro) {
         if (activePercentileScope === 'TEAM') {
           const schoolTeamCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
@@ -3305,6 +3370,8 @@ export default function PitchingSuite({
         baselineParams.set('start_date', '2026-01-01');
         baselineParams.set('end_date', '2026-12-31');
         baselineParams.set('level', 'MLB');
+      } else if (!isPro && activePercentileScope !== 'TEAM') {
+        baselineParams.set('level', activePercentileScope);
       }
       setPercentileBaselineRequestKey(`/api/dashboard/pitching/overview?${baselineParams.toString()}`);
       if (selectedSinglePitcher && selectedSinglePitcherHandCode) {
@@ -3365,6 +3432,9 @@ export default function PitchingSuite({
           chartParams.set('chart_only', '1');
           chartParams.set('include_row_pitches', '0');
           chartParams.set('include_trend_rows', '0');
+          if (isLeague && isSummaryPage && Boolean(pitchersParam)) {
+            chartParams.set('force_raw', '1');
+          }
           return `/api/dashboard/pitching/overview?${chartParams.toString()}`;
         })()
       : null;
@@ -3683,6 +3753,7 @@ export default function PitchingSuite({
     selectedSinglePitcherHandCode,
     leaderboardPercentileScope,
     summaryPercentileScope,
+    collegePercentileDefault,
     enableTableColors,
     showCellPercentiles,
     summaryStatView,
@@ -3863,6 +3934,7 @@ export default function PitchingSuite({
           params.set('school_code', schoolTeamCode && schoolTeamCode !== 'PRO' && schoolTeamCode !== 'LEAGUE' ? schoolTeamCode : 'LEAGUE');
         } else {
           params.set('school_code', 'LEAGUE');
+          params.set('level', activeSummaryScope);
         }
         params.set('split_by', 'Pitcher');
         params.delete('pitcher');
@@ -3962,9 +4034,11 @@ export default function PitchingSuite({
   );
   const gameLogRowsWithPins = useMemo(() => {
     if (!sortedGameLogRows.length || !gameLogColumns.length) return sortedGameLogRows;
+    const apiAll = sortedGameLogRows.find((row) => String(row._game_pin_key ?? '') === '__game_all__') ?? null;
+    const gameRows = sortedGameLogRows.filter((row) => String(row._game_pin_key ?? '') !== '__game_all__');
     const pinned: Array<Record<string, unknown>> = [];
     const unpinned: Array<Record<string, unknown>> = [];
-    for (const row of sortedGameLogRows) {
+    for (const row of gameRows) {
       const key = String(row._game_pin_key ?? '');
       if (key && pinnedGameLogKeys.has(key)) pinned.push(row);
       else unpinned.push(row);
@@ -3972,7 +4046,7 @@ export default function PitchingSuite({
     const toTableRows = (rows: Array<Record<string, unknown>>) =>
       rows.map((row) => row as Record<string, string | number | null | undefined>);
     const pinnedAll = buildPinnedAllRow(gameLogColumns, toTableRows(pinned));
-    const allRow = buildPinnedAllRow(gameLogColumns, toTableRows(sortedGameLogRows));
+    const allRow = apiAll ?? buildPinnedAllRow(gameLogColumns, toTableRows(gameRows));
     const decorate = (row: Record<string, string | number | null | undefined> | null, kind: 'all' | 'all_pinned') => {
       if (!row) return null;
       return {
@@ -3985,7 +4059,7 @@ export default function PitchingSuite({
       } as Record<string, unknown>;
     };
     const pinnedAllRow = decorate(pinnedAll, 'all_pinned');
-    const allSummaryRow = decorate(allRow, 'all');
+    const allSummaryRow = decorate(allRow as Record<string, string | number | null | undefined> | null, 'all');
     return [
       ...pinned,
       ...(pinnedAllRow ? [pinnedAllRow] : []),
@@ -4115,6 +4189,7 @@ export default function PitchingSuite({
         seen.add(lower);
         return true;
       });
+      const apiAllRow = tableRows.find((row) => String((row as Record<string, unknown>)[splitColumn] ?? '').trim().toLowerCase() === 'all');
       const rows = tableRows
         .filter((row) => String((row as Record<string, unknown>)[splitColumn] ?? '').trim().toLowerCase() !== 'all')
         .map((row, rowIndex) => {
@@ -4170,6 +4245,18 @@ export default function PitchingSuite({
         if (byDate.length === 1) return { ...row, Opponent: byDate[0] };
         return row;
       });
+      if (apiAllRow) {
+        rowsResolved = [...rowsResolved, {
+          ...(apiAllRow as Record<string, unknown>),
+          [splitColumn]: 'All',
+          _game_pin_key: '__game_all__',
+          _game_key: 'all',
+          _game_venue_marker: '',
+          Team: 'All',
+          Date: '-',
+          Opponent: '-',
+        }];
+      }
       if (isPcuBullpenSelection && rowsResolved.length === 0 && chartPoints.length > 0) {
         const maxToken = normalizePercentileColumnToken('Max');
         const countTokens = new Set(['p', 'number']);
@@ -5991,6 +6078,21 @@ export default function PitchingSuite({
     };
   };
 
+  const moveBreakdownAnnotationPoints = (drag: BreakdownAnnotationDragState, point: { x: number; y: number }) => {
+    const rawDx = point.x - drag.anchor.x;
+    const rawDy = point.y - drag.anchor.y;
+    const minX = Math.min(...drag.points.map((p) => p.x));
+    const maxX = Math.max(...drag.points.map((p) => p.x));
+    const minY = Math.min(...drag.points.map((p) => p.y));
+    const maxY = Math.max(...drag.points.map((p) => p.y));
+    const dx = Math.max(-minX, Math.min(1 - maxX, rawDx));
+    const dy = Math.max(-minY, Math.min(1 - maxY, rawDy));
+    return drag.points.map((p) => ({
+      x: Math.max(0, Math.min(1, p.x + dx)),
+      y: Math.max(0, Math.min(1, p.y + dy)),
+    }));
+  };
+
   const annotationDistance = (annotation: BreakdownAnnotation, point: { x: number; y: number }): number => {
     if (!annotation.points.length) return 999;
     if (annotation.tool === 'text') {
@@ -6026,16 +6128,17 @@ export default function PitchingSuite({
     if (!breakdownMode) return;
     event.preventDefault();
     const point = getBreakdownPoint(event);
-    if (breakdownTool === 'text') {
-      const nearestText = breakdownAnnotations
-        .filter((item) => item.tool === 'text' && item.points.length > 0)
+    if (breakdownTool !== 'erase') {
+      const nearestAnnotation = breakdownAnnotations
+        .filter((item) => item.points.length > 0)
         .map((item) => ({ item, distance: annotationDistance(item, point) }))
         .sort((a, b) => a.distance - b.distance)[0];
-      if (nearestText && nearestText.distance <= 0.08) {
-        const anchor = nearestText.item.points[0];
-        setSelectedBreakdownTextId(nearestText.item.id);
-        setBreakdownTextFontSize(Math.max(16, Math.min(96, Number(nearestText.item.fontSize ?? 36))));
-        setDraggingBreakdownText({ id: nearestText.item.id, dx: point.x - anchor.x, dy: point.y - anchor.y });
+      if (nearestAnnotation && nearestAnnotation.distance <= 0.08) {
+        if (nearestAnnotation.item.tool === 'text') {
+          setSelectedBreakdownTextId(nearestAnnotation.item.id);
+          setBreakdownTextFontSize(Math.max(16, Math.min(96, Number(nearestAnnotation.item.fontSize ?? 36))));
+        }
+        setDraggingBreakdownAnnotation({ id: nearestAnnotation.item.id, anchor: point, points: nearestAnnotation.item.points });
         event.currentTarget.setPointerCapture(event.pointerId);
         return;
       }
@@ -6099,15 +6202,12 @@ export default function PitchingSuite({
   };
 
   const handleBreakdownPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (draggingBreakdownText) {
+    if (draggingBreakdownAnnotation) {
       event.preventDefault();
       const point = getBreakdownPoint(event);
-      const nextPoint = {
-        x: Math.max(0, Math.min(1, point.x - draggingBreakdownText.dx)),
-        y: Math.max(0, Math.min(1, point.y - draggingBreakdownText.dy)),
-      };
+      const nextPoints = moveBreakdownAnnotationPoints(draggingBreakdownAnnotation, point);
       setBreakdownAnnotations((items) =>
-        items.map((item) => (item.id === draggingBreakdownText.id ? { ...item, points: [nextPoint] } : item))
+        items.map((item) => (item.id === draggingBreakdownAnnotation.id ? { ...item, points: nextPoints } : item))
       );
       return;
     }
@@ -6126,8 +6226,8 @@ export default function PitchingSuite({
     if (event && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (draggingBreakdownText) {
-      setDraggingBreakdownText(null);
+    if (draggingBreakdownAnnotation) {
+      setDraggingBreakdownAnnotation(null);
       return;
     }
     if (!activeBreakdownAnnotation) return;
@@ -6581,13 +6681,28 @@ export default function PitchingSuite({
   );
 
   const rawSummaryPoints = useMemo(() => overview?.chart_points ?? [], [overview?.chart_points]);
+  const pitchLevelSummaryPoints = useMemo(
+    () =>
+      rawSummaryPoints.filter((point) => {
+        if (!point || typeof point !== 'object') return false;
+        const row = point as Record<string, unknown>;
+        const hasPitchIdentity =
+          row.pitch_event_id !== null && row.pitch_event_id !== undefined
+          || Boolean(String(point.session_date ?? '').trim())
+          || row.pitch_number !== null && row.pitch_number !== undefined
+          || row.pitch_no !== null && row.pitch_no !== undefined;
+        const isAggregateBin = row.pitch_n !== null && row.pitch_n !== undefined && !hasPitchIdentity;
+        return hasPitchIdentity && !isAggregateBin;
+      }),
+    [rawSummaryPoints]
+  );
   const rawHeatmapPoints = useMemo(
     () => ((overview?.heatmap_points as PitchActionPoint[] | undefined) ?? []),
     [overview?.heatmap_points]
   );
   const summaryPoints = useMemo(
-    () => (rawSummaryPoints.length ? rawSummaryPoints : rawHeatmapPoints),
-    [rawSummaryPoints, rawHeatmapPoints]
+    () => pitchLevelSummaryPoints,
+    [pitchLevelSummaryPoints]
   );
   const resolveEditablePitchesForRow = useCallback(
     (row: Record<string, string | number | null>, rowKey: string): PitchActionPoint[] => {
@@ -8951,7 +9066,7 @@ export default function PitchingSuite({
             { value: 'HB', label: 'HB' },
             { value: 'Batter', label: 'Batter' },
             { value: 'Catcher', label: 'Catcher' },
-            { value: 'Pitcher Team', label: 'Team' },
+            { value: 'Team', label: 'Team' },
           ]
         : [
             { value: 'All', label: 'All' },
@@ -9042,7 +9157,7 @@ export default function PitchingSuite({
       setLoadingOverview(true);
       setError('');
     }
-    setLeaderboardPercentileScope(next as 'NCAA' | 'TEAM' | 'MLB');
+    setLeaderboardPercentileScope(next);
   }, [isLeague, isLeaderboardPage]);
   const downloadLeaderboardPdf = useCallback(async () => {
     const wrapNode = leaderboardTableExportRef.current;
@@ -9293,7 +9408,7 @@ export default function PitchingSuite({
   // Pitch-count min/max filtering is enforced server-side for consistency.
   const tableRowsWithPv = useMemo(() => {
     const rows = overview?.table_rows ?? [];
-    if (!isPro || !isLeaderboardPage || leaderboardViewBy !== 'Team' || String(level ?? '').trim().toUpperCase() !== 'MLB') {
+    if (!isPro || !isLeaderboardPage || leaderboardViewBy !== 'Team') {
       return rows;
     }
     const firstColumn = displayedTableColumns[0] ?? overview?.table_columns?.[0] ?? '';
@@ -9321,13 +9436,6 @@ export default function PitchingSuite({
     ) as Array<Record<string, string | number | null>>;
     return sorted;
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
-  const percentileTeamLabel = useMemo(() => {
-    const school = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
-    if (school && school !== 'PRO' && school !== 'LEAGUE') return school;
-    const teamRaw = String(teamType ?? '').trim();
-    if (teamRaw && teamRaw !== 'All' && isLikelyLeagueTeamCode(teamRaw)) return teamRaw.toUpperCase();
-    return 'Team';
-  }, [filters?.school_code, selectedSchoolCode, teamType]);
   const percentileTableColumns = useMemo(
     () => (dashboardPage === 'Game Log' ? gameLogColumns : (dashboardPage === 'Pitch Log' ? pitchLogColumns : displayedTableColumns)),
     [dashboardPage, gameLogColumns, pitchLogColumns, displayedTableColumns]
@@ -9653,8 +9761,14 @@ export default function PitchingSuite({
                 : (summaryPitchTypeDistributions.get(key) ?? [])
             );
             if (rowDistribution.length > 1) return rowDistribution;
-            if (isSummaryPitchTypeRow) return [];
-            if (isStrictSummaryColumn) return globalDistributionUsable.length > 1 ? globalDistributionUsable : [];
+            const summaryGlobal = getSummaryGlobalDistributionByToken(column);
+            const summaryFallback = globalDistributionUsable.length > 1
+              ? globalDistributionUsable
+              : summaryGlobal.length > 1
+                ? summaryGlobal
+                : [];
+            if (isStrictSummaryColumn) return summaryFallback;
+            if (isSummaryPitchTypeRow) return summaryFallback;
             if (isAllSummaryRow) return globalDistributionUsable;
             return scopedDistributionUsable.length ? scopedDistributionUsable : globalDistributionUsable;
           })()
@@ -10067,7 +10181,7 @@ export default function PitchingSuite({
                   <label>
                     Level
                     <SearchableSingleSelect
-                      options={toOptions(isLeague ? Array.from(new Set([...(filters.level_options ?? []), ...NCAA_LEVEL_FILTER_OPTIONS])) : (filters.level_options ?? PRO_LEVEL_FILTER_OPTIONS))}
+                      options={toOptions(!isPro ? collegeLevelPercentileOptions : (filters.level_options ?? PRO_LEVEL_FILTER_OPTIONS))}
                       value={level}
                       onChange={setLevel}
                       placeholder={isPro ? 'MLB' : 'D1'}
@@ -10722,14 +10836,10 @@ export default function PitchingSuite({
                     <label>
                       Percentile By
                       <SearchableSingleSelect
-                        options={[
-                          { value: 'NCAA', label: 'NCAA' },
-                          { value: 'MLB', label: 'MLB' },
-                          { value: 'TEAM', label: percentileTeamLabel },
-                        ]}
+                        options={percentileScopeOptions}
                         value={leaderboardPercentileScope}
                         onChange={handleLeaderboardPercentileScopeSelection}
-                        placeholder="NCAA"
+                        placeholder={collegePercentileDefault}
                       />
                     </label>
                   ) : null}
@@ -10793,14 +10903,10 @@ export default function PitchingSuite({
                         <label>
                           <span>Percentile By</span>
                           <SearchableSingleSelect
-                            options={[
-                              { value: 'NCAA', label: 'NCAA' },
-                              { value: 'MLB', label: 'MLB' },
-                              { value: 'TEAM', label: percentileTeamLabel },
-                            ]}
+                            options={percentileScopeOptions}
                             value={summaryPercentileScope}
-                            onChange={(next) => setSummaryPercentileScope(next as 'NCAA' | 'TEAM' | 'MLB')}
-                            placeholder="NCAA"
+                            onChange={setSummaryPercentileScope}
+                            placeholder={collegePercentileDefault}
                           />
                         </label>
                       ) : null}
@@ -11211,7 +11317,13 @@ export default function PitchingSuite({
                                         })()
                                       : rawValue;
                                   const displayValue =
-                                    typeof value === 'string' || typeof value === 'number' || value === null || value === undefined
+                                    !isLeaderboardPage &&
+                                    dashboardPage === 'Summary' &&
+                                    colIndex === 0 &&
+                                    (normalizePercentileColumnToken(column) === normalizePercentileColumnToken('Team') ||
+                                      normalizePercentileColumnToken(column) === normalizePercentileColumnToken('Pitcher Team'))
+                                      ? formatTeamLabel(rawValue)
+                                      : typeof value === 'string' || typeof value === 'number' || value === null || value === undefined
                                       ? formatPitchingTableDisplayValue(column, value)
                                       : value;
                                   const renderedCellValue =
@@ -11430,16 +11542,12 @@ export default function PitchingSuite({
                 </label>
                 {!isPro ? (
                   <label>
-                    Percentile By
-                    <SearchableSingleSelect
-                      options={[
-                        { value: 'NCAA', label: 'NCAA' },
-                        { value: 'MLB', label: 'MLB' },
-                        { value: 'TEAM', label: percentileTeamLabel },
-                      ]}
+                  Percentile By
+                  <SearchableSingleSelect
+                      options={percentileScopeOptions}
                       value={leaderboardPercentileScope}
                       onChange={handleLeaderboardPercentileScopeSelection}
-                      placeholder="NCAA"
+                      placeholder={collegePercentileDefault}
                     />
                   </label>
                 ) : null}
@@ -11758,19 +11866,15 @@ export default function PitchingSuite({
                 </label>
                 {!isPro ? (
                   <label>
-                    Percentile By
-                    <SearchableSingleSelect
-                      options={[
-                        { value: 'NCAA', label: 'NCAA' },
-                        { value: 'MLB', label: 'MLB' },
-                        { value: 'TEAM', label: percentileTeamLabel },
-                      ]}
-                      value={leaderboardPercentileScope}
-                      onChange={handleLeaderboardPercentileScopeSelection}
-                      placeholder="NCAA"
-                    />
-                  </label>
-                ) : null}
+                      Percentile By
+                      <SearchableSingleSelect
+                        options={percentileScopeOptions}
+                        value={leaderboardPercentileScope}
+                        onChange={handleLeaderboardPercentileScopeSelection}
+                        placeholder={collegePercentileDefault}
+                      />
+                    </label>
+                  ) : null}
                 <div
                   style={{
                     display: 'flex',
@@ -13831,85 +13935,102 @@ export default function PitchingSuite({
                             {breakdownToolbarVisible ? (
                               <div
                                 style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 6,
-                                  flexWrap: 'wrap',
-                                  padding: '0.35rem',
+                                  display: 'grid',
+                                  gap: 8,
+                                  padding: '0.45rem',
                                   border: '1px solid rgba(148,163,184,0.32)',
-                                  borderRadius: 12,
-                                  background: 'rgba(2,6,23,0.82)',
-                                  boxShadow: '0 10px 24px rgba(0,0,0,0.28)',
+                                  borderRadius: 14,
+                                  background: 'rgba(2,6,23,0.88)',
+                                  boxShadow: '0 18px 34px rgba(0,0,0,0.3)',
+                                  backdropFilter: 'blur(12px)',
                                 }}
                               >
-                                <button
-                                  type="button"
-                                  className="btn btn-ghost"
-                                  aria-label="Hide breakdown toolbar"
-                                  title="Hide toolbar"
-                                  style={{ ...actionModalButtonStyle, width: 34, minWidth: 34, padding: 0, minHeight: 34 }}
-                                  onClick={() => setBreakdownToolbarVisible(false)}
-                                >
-                                  ×
-                                </button>
-                              <button
-                                type="button"
-                                className={!breakdownMode ? 'btn btn-primary' : 'btn btn-ghost'}
-                                style={!breakdownMode ? { padding: '0.32rem 0.58rem', minHeight: 0 } : { ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }}
-                                onClick={() => { setBreakdownMode(false); setBreakdownAnglePending([]); }}
-                              >
-                                View
-                              </button>
-                              {(['line', 'arrow', 'circle', 'pen', 'angle', 'text', 'erase'] as BreakdownTool[]).map((tool) => (
-                                <button
-                                  key={tool}
-                                  type="button"
-                                  className={breakdownMode && breakdownTool === tool ? 'btn btn-primary' : 'btn btn-ghost'}
-                                  style={breakdownMode && breakdownTool === tool ? { padding: '0.32rem 0.58rem', minHeight: 0 } : { ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }}
-                                  onClick={() => {
-                                    setBreakdownMode(true);
-                                    setBreakdownTool(tool);
-                                    setBreakdownAnglePending([]);
-                                  }}
-                                >
-                                  {tool === 'pen' ? 'Freehand' : tool.charAt(0).toUpperCase() + tool.slice(1)}
-                                  {tool === 'angle' && breakdownAnglePending.length > 0 ? ` (${breakdownAnglePending.length}/3)` : ''}
-                                </button>
-                              ))}
-                              {breakdownMode && breakdownTool === 'angle' ? (
-                                <>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                   <button
                                     type="button"
-                                    className={breakdownAngleMode === 'acute' ? 'btn btn-primary' : 'btn btn-ghost'}
-                                    style={breakdownAngleMode === 'acute' ? { padding: '0.32rem 0.58rem', minHeight: 0 } : { ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }}
-                                    onClick={() => setBreakdownAngleMode('acute')}
+                                    className="btn btn-ghost"
+                                    aria-label="Hide breakdown toolbar"
+                                    title="Hide toolbar"
+                                    style={{ ...actionModalButtonStyle, width: 36, minWidth: 36, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: 20 }}
+                                    onClick={() => setBreakdownToolbarVisible(false)}
                                   >
-                                    Acute
+                                    ×
                                   </button>
                                   <button
                                     type="button"
-                                    className={breakdownAngleMode === 'obtuse' ? 'btn btn-primary' : 'btn btn-ghost'}
-                                    style={breakdownAngleMode === 'obtuse' ? { padding: '0.32rem 0.58rem', minHeight: 0 } : { ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }}
-                                    onClick={() => setBreakdownAngleMode('obtuse')}
+                                    className={!breakdownMode ? 'btn btn-primary' : 'btn btn-ghost'}
+                                    aria-label="View and pan"
+                                    title="View and pan"
+                                    style={!breakdownMode ? { width: 36, minWidth: 36, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: 17 } : { ...actionModalButtonStyle, width: 36, minWidth: 36, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: 17 }}
+                                    onClick={() => { setBreakdownMode(false); setBreakdownAnglePending([]); }}
                                   >
-                                    Obtuse
+                                    {BREAKDOWN_TOOL_ICONS.view}
                                   </button>
-                                </>
-                              ) : null}
-                              <input
-                                type="color"
-                                value={breakdownColor}
-                                onChange={(event) => setBreakdownColor(event.target.value)}
-                                aria-label="Drawing color"
-                                style={{ width: 34, height: 34, border: '1px solid rgba(148,163,184,0.32)', borderRadius: 8, padding: 2, background: 'rgba(15,23,42,0.9)' }}
-                              />
-                              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: '#e5e7eb', fontWeight: 800, fontSize: '0.74rem' }}>
-                                Width
-                                <input type="range" min={2} max={10} value={breakdownWidth} onChange={(event) => setBreakdownWidth(Number(event.target.value))} style={{ width: 88 }} />
-                              </label>
-                              {breakdownMode && breakdownTool === 'text' ? (
-                                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: '#e5e7eb', fontWeight: 800, fontSize: '0.74rem' }}>
-                                  Font
+                                  {BREAKDOWN_TOOL_ORDER.map((tool) => (
+                                    <button
+                                      key={tool}
+                                      type="button"
+                                      className={breakdownMode && breakdownTool === tool ? 'btn btn-primary' : 'btn btn-ghost'}
+                                      aria-label={BREAKDOWN_TOOL_LABELS[tool]}
+                                      title={tool === 'angle' && breakdownAnglePending.length > 0 ? `${BREAKDOWN_TOOL_LABELS[tool]} (${breakdownAnglePending.length}/3)` : BREAKDOWN_TOOL_LABELS[tool]}
+                                      style={breakdownMode && breakdownTool === tool ? { width: 36, minWidth: 36, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: 17 } : { ...actionModalButtonStyle, width: 36, minWidth: 36, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: 17 }}
+                                      onClick={() => {
+                                        setBreakdownMode(true);
+                                        setBreakdownTool(tool);
+                                        setBreakdownAnglePending([]);
+                                      }}
+                                    >
+                                      {BREAKDOWN_TOOL_ICONS[tool]}
+                                    </button>
+                                  ))}
+                                  <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, width: 44, minWidth: 44, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: '0.68rem', fontWeight: 900 }} onClick={() => setBreakdownAnnotations((items) => items.slice(0, -1))} disabled={!breakdownAnnotations.length} title="Undo">
+                                    Undo
+                                  </button>
+                                  <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, width: 44, minWidth: 44, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: '0.68rem', fontWeight: 900 }} onClick={() => setBreakdownAnnotations([])} disabled={!breakdownAnnotations.length} title="Clear">
+                                    Clear
+                                  </button>
+                                  <button type="button" className={showBreakdownNotePanel ? 'btn btn-primary' : 'btn btn-ghost'} style={showBreakdownNotePanel ? { padding: '0 0.7rem', minHeight: 36, borderRadius: 10, fontSize: '0.72rem', fontWeight: 900 } : { ...actionModalButtonStyle, padding: '0 0.7rem', minHeight: 36, borderRadius: 10, fontSize: '0.72rem', fontWeight: 900 }} onClick={() => setShowBreakdownNotePanel((value) => !value)}>
+                                    Save
+                                  </button>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                  {breakdownMode && breakdownTool === 'angle' ? (
+                                    <div style={{ display: 'inline-flex', gap: 4, padding: 3, borderRadius: 10, background: 'rgba(15,23,42,0.74)' }}>
+                                      <button
+                                        type="button"
+                                        className={breakdownAngleMode === 'acute' ? 'btn btn-primary' : 'btn btn-ghost'}
+                                        style={breakdownAngleMode === 'acute' ? { padding: '0.26rem 0.5rem', minHeight: 0, fontSize: '0.72rem' } : { ...actionModalButtonStyle, padding: '0.26rem 0.5rem', minHeight: 0, fontSize: '0.72rem' }}
+                                        onClick={() => setBreakdownAngleMode('acute')}
+                                      >
+                                        Acute
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className={breakdownAngleMode === 'obtuse' ? 'btn btn-primary' : 'btn btn-ghost'}
+                                        style={breakdownAngleMode === 'obtuse' ? { padding: '0.26rem 0.5rem', minHeight: 0, fontSize: '0.72rem' } : { ...actionModalButtonStyle, padding: '0.26rem 0.5rem', minHeight: 0, fontSize: '0.72rem' }}
+                                        onClick={() => setBreakdownAngleMode('obtuse')}
+                                      >
+                                        Obtuse
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#e5e7eb', fontWeight: 800, fontSize: '0.72rem' }}>
+                                    Color
+                                    <input
+                                      type="color"
+                                      value={breakdownColor}
+                                      onChange={(event) => setBreakdownColor(event.target.value)}
+                                      aria-label="Drawing color"
+                                      style={{ width: 32, height: 28, border: '1px solid rgba(148,163,184,0.32)', borderRadius: 8, padding: 2, background: 'rgba(15,23,42,0.9)' }}
+                                    />
+                                  </label>
+                                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#e5e7eb', fontWeight: 800, fontSize: '0.72rem' }}>
+                                    Width
+                                    <input type="range" min={2} max={10} value={breakdownWidth} onChange={(event) => setBreakdownWidth(Number(event.target.value))} style={{ width: 88 }} />
+                                  </label>
+                                  {breakdownMode && breakdownTool === 'text' ? (
+                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#e5e7eb', fontWeight: 800, fontSize: '0.72rem' }}>
+                                      Font
                                   <input
                                     type="range"
                                     min={16}
@@ -13926,17 +14047,9 @@ export default function PitchingSuite({
                                     }}
                                     style={{ width: 88 }}
                                   />
-                                </label>
-                              ) : null}
-                              <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }} onClick={() => setBreakdownAnnotations((items) => items.slice(0, -1))} disabled={!breakdownAnnotations.length}>
-                                Undo
-                              </button>
-                              <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }} onClick={() => setBreakdownAnnotations([])} disabled={!breakdownAnnotations.length}>
-                                Clear
-                              </button>
-                              <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, padding: '0.32rem 0.58rem', minHeight: 0 }} onClick={() => setShowBreakdownNotePanel((value) => !value)}>
-                                Note / Save
-                              </button>
+                                    </label>
+                                  ) : null}
+                                </div>
                               </div>
                             ) : (
                               <button

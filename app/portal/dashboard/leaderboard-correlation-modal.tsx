@@ -659,10 +659,14 @@ export default function LeaderboardCorrelationModal({
     () => (open ? normalizeRowsForColumns(allTargetColumns, rows) : rows),
     [open, allTargetColumns, rows]
   );
-  const sourceRows = useMemo(
-    () => (open && fetchedAxisRows && fetchedAxisRows.length ? fetchedAxisRows : normalizedRows),
-    [open, fetchedAxisRows, normalizedRows]
-  );
+  const sourceRows = useMemo(() => {
+    const base = open && fetchedAxisRows && fetchedAxisRows.length ? fetchedAxisRows : normalizedRows;
+    if (viewByLabel !== 'Team') return base;
+    return base.filter((row) => {
+      const v = String(row[labelColumn] ?? '').trim().toUpperCase();
+      return v !== 'AL' && v !== 'NL' && v !== 'AMERICAN LEAGUE' && v !== 'NATIONAL LEAGUE';
+    });
+  }, [open, fetchedAxisRows, normalizedRows, viewByLabel, labelColumn]);
 
   const selectableAxisColumns = useMemo(
     () => (open ? rawSelectableAxisColumns : ([] as string[])),

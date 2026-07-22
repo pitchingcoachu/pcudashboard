@@ -14,6 +14,7 @@ const RESPONSE_CACHE_HEADERS = {
 } as const;
 const SLOW_ROUTE_MS = 5000;
 const TAGGED_PITCH_TYPE_TOKEN_SQL = "regexp_replace(lower(COALESCE(TRIM(pe.taggedpitchtype), '')), '[^a-z0-9]', '', 'g')";
+const PITCHER_NAME_NORM_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.pitcher), ''), '')), '[^a-z0-9]', '', 'g')";
 const PITCH_TYPE_SQL = `
 CASE
   WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null') THEN 'Undefined'
@@ -378,7 +379,6 @@ async function maybeAttachPitchingHeatmapRollup(params: {
   if (String(splitBy ?? '').trim().toLowerCase() === 'game') return payload;
   if (isTruthy(forceRaw)) return payload;
   const isChartOnly = isTruthy(chartOnly);
-  if (isChartOnly && String(schoolCode ?? '').trim().toUpperCase() !== 'LEAGUE') return payload;
   const hasUnsupportedFilters =
     hasValue(inZone) ||
     hasValue(qpLocations) ||
@@ -420,13 +420,15 @@ async function maybeAttachPitchingHeatmapRollup(params: {
     if (!rollupPoints.length) return payload;
     if (!payload || typeof payload !== 'object') return payload;
     const next = payload as Record<string, unknown>;
-    return {
-      ...next,
-      chart_points: rollupPoints,
-      heatmap_points: Array.isArray(rollupPayload.heatmap_points) && rollupPayload.heatmap_points.length
-        ? rollupPayload.heatmap_points
-        : rollupPoints,
-    };
+    const heatmapPoints = Array.isArray(rollupPayload.heatmap_points) && rollupPayload.heatmap_points.length
+      ? rollupPayload.heatmap_points
+      : rollupPoints;
+    if (isChartOnly) {
+      // chart_only requests already have individual pitch data in chart_points from the raw query.
+      // Only overwrite heatmap_points with binned zone data for the zone heatmap chart.
+      return { ...next, heatmap_points: heatmapPoints };
+    }
+    return { ...next, chart_points: rollupPoints, heatmap_points: heatmapPoints };
   } catch {
     return payload;
   }
@@ -443,6 +445,7 @@ async function maybeReturnRawPitchingChartPoints(params: {
   teamType: string;
   pitchTypes: string;
   chartPointsLimit: string;
+  level?: string;
 }): Promise<NextResponse | null> {
   const {
     schoolCode,
@@ -455,25 +458,48 @@ async function maybeReturnRawPitchingChartPoints(params: {
     teamType,
     pitchTypes,
     chartPointsLimit,
+    level = '',
   } = params;
   const upperSchool = String(schoolCode ?? '').trim().toUpperCase();
-  if (!upperSchool || upperSchool === 'PRO' || upperSchool === 'LEAGUE') return null;
+  if (!upperSchool || upperSchool === 'PRO') return null;
+  // LEAGUE is allowed only when a pitcher is specified (broad scans are too slow).
+  if (upperSchool === 'LEAGUE' && !String(pitcher ?? '').trim()) return null;
   if (!isDatabaseConfigured()) return null;
 
-  const pitcherNorms = parseCsv(pitcher).map(normalizeName).filter(Boolean);
+  const pitcherNorms = Array.from(
+    new Set([
+      normalizeName(pitcher),
+      ...parseCsv(pitcher).map(normalizeName),
+    ].filter(Boolean))
+  );
   const selectedPitchTypes = Array.from(new Set(parseCsv(pitchTypes).map(normalizePitchType)));
   const limitRaw = Number(chartPointsLimit || '0');
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.max(100, Math.min(Math.trunc(limitRaw), 6000)) : 600;
-  const where: string[] = [
-    'pe.school_code = $1',
-    `NULLIF(TRIM(pe.taggedpitchtype), '') IS NOT NULL`,
-    `${TAGGED_PITCH_TYPE_TOKEN_SQL} NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')`,
-  ];
-  const values: unknown[] = [upperSchool];
+
+  const where: string[] = [];
+  const values: unknown[] = [];
   const add = (clause: string, value: unknown) => {
     values.push(value);
     where.push(clause.replace('?', `$${values.length}`));
   };
+
+  if (upperSchool === 'LEAGUE') {
+    where.push(`pe.school_code = 'LEAGUE'`);
+    where.push(`UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')`);
+    const levelNorm = String(level ?? '').trim().toUpperCase();
+    if (levelNorm && levelNorm !== 'ALL') {
+      add(
+        `UPPER(COALESCE(NULLIF(TRIM(pe.level), ''), '')) = ?`,
+        levelNorm
+      );
+    }
+  } else {
+    values.push(upperSchool);
+    where.push(`pe.school_code = $${values.length}`);
+    where.push(`NULLIF(TRIM(pe.taggedpitchtype), '') IS NOT NULL`);
+    where.push(`${TAGGED_PITCH_TYPE_TOKEN_SQL} NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')`);
+  }
+
   if (startDate) add('pe.session_date >= ?::date', startDate);
   if (endDate) add('pe.session_date <= ?::date', endDate);
   const session = String(sessionType ?? '').trim();
@@ -493,21 +519,23 @@ async function maybeReturnRawPitchingChartPoints(params: {
     add(`UPPER(LEFT(COALESCE(NULLIF(TRIM(pe.batterside), ''), ''), 1)) = ?`, batterSideNorm === 'left' ? 'L' : 'R');
   }
   if (pitcherNorms.length) {
-    add(`regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.pitcher), ''), NULLIF(TRIM(to_jsonb(pe)->>'Pitcher'), ''), NULLIF(TRIM(to_jsonb(pe)->>'pitcher_name'), ''), '')), '[^a-z0-9]', '', 'g') = ANY(?::text[])`, pitcherNorms);
+    add(`${PITCHER_NAME_NORM_SQL} = ANY(?::text[])`, pitcherNorms);
   }
   if (selectedPitchTypes.length) {
     add(`${PITCH_TYPE_SQL} = ANY(?::text[])`, selectedPitchTypes);
   }
-  const team = String(teamType ?? '').trim();
-  if (team && team.toLowerCase() !== 'all') {
-    values.push(team);
-    const teamParam = `$${values.length}`;
-    values.push(team);
-    const teamJsonParam = `$${values.length}`;
-    where.push(`(
-      UPPER(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), '')) = UPPER(${teamParam}::text)
-      OR UPPER(COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'PitcherTeam'), ''), '')) = UPPER(${teamJsonParam}::text)
-    )`);
+  if (upperSchool !== 'LEAGUE') {
+    const team = String(teamType ?? '').trim();
+    if (team && team.toLowerCase() !== 'all') {
+      values.push(team);
+      const teamParam = `$${values.length}`;
+      values.push(team);
+      const teamJsonParam = `$${values.length}`;
+      where.push(`(
+        UPPER(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), '')) = UPPER(${teamParam}::text)
+        OR UPPER(COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'PitcherTeam'), ''), '')) = UPPER(${teamJsonParam}::text)
+      )`);
+    }
   }
 
   try {
@@ -748,7 +776,7 @@ async function fetchProSafePitchingLeaderboard(params: {
   if (level && level !== 'All') fallbackUrl.searchParams.set('level', level);
   fallbackUrl.searchParams.set('table_mode', tableMode || 'Live');
   if (customColumns) fallbackUrl.searchParams.set('custom_columns', customColumns);
-  fallbackUrl.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
+  fallbackUrl.searchParams.set('split_by', splitBy === 'Team' || splitBy === 'Pitcher Team' ? splitBy : 'Pitcher');
   fallbackUrl.searchParams.set('include_chart_points', '0');
   fallbackUrl.searchParams.set('include_row_pitches', '0');
   fallbackUrl.searchParams.set('include_trend_rows', '0');
@@ -783,7 +811,7 @@ async function fetchLeagueSafePitchingLeaderboard(params: {
   fallbackUrl.searchParams.set('team_type', 'All');
   fallbackUrl.searchParams.set('table_mode', tableMode || 'Live');
   if (customColumns) fallbackUrl.searchParams.set('custom_columns', customColumns);
-  fallbackUrl.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
+  fallbackUrl.searchParams.set('split_by', splitBy === 'Team' || splitBy === 'Pitcher Team' ? splitBy : 'Pitcher');
   fallbackUrl.searchParams.set('include_chart_points', '0');
   fallbackUrl.searchParams.set('include_row_pitches', '0');
   fallbackUrl.searchParams.set('include_trend_rows', '0');
@@ -985,6 +1013,67 @@ export async function GET(request: Request) {
     });
     if (directHeatmapRollup) return directHeatmapRollup;
 
+  // For LEAGUE chart_only requests with a specific pitcher, serve raw pitch points directly
+  // from the DB (fast index path) instead of going through the Python API which times out
+  // on 5+ month windows. heatmap_points come from the bins table for zone heatmap charts.
+  if (
+    isTruthy(chartOnly) &&
+    isTruthy(includeChartPoints) &&
+    String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' &&
+    String(scopedPitcher || pitcher).trim()
+  ) {
+    const leagueChartResponse = await maybeReturnRawPitchingChartPoints({
+      schoolCode,
+      startDate,
+      endDate,
+      sessionType,
+      hand,
+      batterSide,
+      pitcher: scopedPitcher || pitcher,
+      teamType,
+      pitchTypes,
+      chartPointsLimit,
+      level,
+    });
+    if (leagueChartResponse) {
+      const rawPayload = (await leagueChartResponse.json().catch(() => ({}))) as Record<string, unknown>;
+      const withHeatmap = await maybeAttachPitchingHeatmapRollup({
+        request,
+        payload: rawPayload,
+        schoolCode,
+        startDate,
+        endDate,
+        sessionType,
+        hand,
+        batterSide,
+        pitcher: scopedPitcher || pitcher,
+        teamType,
+        pitchTypes,
+        includeChartPoints: '1',
+        chartOnly: '1',
+        splitBy,
+        forceRaw,
+        inZone: '',
+        qpLocations: '',
+        zoneLocations: '',
+        pitchResults: '',
+        countFilter: '',
+        afterCountFilter: '',
+        veloMin: '',
+        veloMax: '',
+        ivbMin: '',
+        ivbMax: '',
+        hbMin: '',
+        hbMax: '',
+        pcMin: '',
+        pcMax: '',
+      });
+      return NextResponse.json(withHeatmap, {
+        headers: { ...RESPONSE_CACHE_HEADERS, 'x-dashboard-fallback': 'pitching-league-chart-direct' },
+      });
+    }
+  }
+
   const apiBase = resolveDashboardApiBaseUrl();
   const url = new URL(`${apiBase}/v1/pitching/overview`);
   url.searchParams.set('school_code', schoolCode);
@@ -1032,7 +1121,8 @@ export async function GET(request: Request) {
   if (ipMax) url.searchParams.set('ip_max', ipMax);
   const isLeague = String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE';
   const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
-  const isLeaderboardLikeSplit = splitBy === 'Pitcher' || splitBy === 'Pitcher Team';
+  const isTeamSplit = splitBy === 'Team' || splitBy === 'Pitcher Team';
+  const isLeaderboardLikeSplit = splitBy === 'Pitcher' || isTeamSplit;
   const normalizedTableMode = tableMode.toLowerCase();
   const proLeaderboardDefaultModeRequested = !normalizedTableMode || normalizedTableMode === 'live';
   const leagueLeaderboardDefaultModeRequested = !normalizedTableMode || normalizedTableMode === 'live';
@@ -1094,7 +1184,7 @@ export async function GET(request: Request) {
     const cappedLimit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, maxLimit) : maxLimit;
     url.searchParams.set('chart_points_limit', String(cappedLimit));
   }
-  const isProLeaderboardSplit = isPro && (splitBy === 'Pitcher' || splitBy === 'Pitcher Team');
+  const isProLeaderboardSplit = isPro && (splitBy === 'Pitcher' || isTeamSplit);
   const proLeaderboardSafeModeRequested = proLeaderboardDefaultModeRequested || customModeRequested;
   const proBroadScope =
     isPro &&
@@ -1261,7 +1351,7 @@ export async function GET(request: Request) {
     if (leagueLeaderboardDefaultModeRequested) {
       url.searchParams.set('table_mode', 'Live');
     }
-    url.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
+    url.searchParams.set('split_by', isTeamSplit ? splitBy : 'Pitcher');
     url.searchParams.set('include_chart_points', '0');
     url.searchParams.set('include_row_pitches', '0');
     url.searchParams.set('include_trend_rows', '0');
@@ -1316,7 +1406,7 @@ export async function GET(request: Request) {
     // Match league broad-window behavior: keep this request strictly rollup-safe.
     url.searchParams.set('team_type', 'All');
     url.searchParams.set('table_mode', 'Live');
-    url.searchParams.set('split_by', splitBy === 'Pitcher Team' ? 'Pitcher Team' : 'Pitcher');
+    url.searchParams.set('split_by', isTeamSplit ? splitBy : 'Pitcher');
     url.searchParams.set('include_chart_points', '0');
     url.searchParams.set('include_row_pitches', '0');
     url.searchParams.set('include_trend_rows', '0');

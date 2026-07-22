@@ -358,7 +358,8 @@ export async function GET(request: Request) {
 
   const splitBy = String(url.searchParams.get('split_by') ?? '').trim();
   const splitByNorm = splitBy || 'Pitch Types';
-  if (!['Pitch Types', 'Pitcher', 'Pitcher Team', 'Pitcher Hand', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(splitByNorm)) {
+  const isTeamSplit = splitByNorm === 'Team' || splitByNorm === 'Pitcher Team';
+  if (!['Pitch Types', 'Pitcher', 'Team', 'Pitcher Team', 'Pitcher Hand', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(splitByNorm)) {
     return NextResponse.json({ table_rows: [], table_columns: [] });
   }
 
@@ -559,13 +560,13 @@ export async function GET(request: Request) {
   let result: { rows: AggRow[] };
   const useProPitcherEventRollup =
     schoolCode === 'PRO' &&
-    (splitByNorm === 'Pitcher' || splitByNorm === 'Pitcher Team') &&
+    (splitByNorm === 'Pitcher' || isTeamSplit) &&
     !batterSide &&
     !teamCode &&
     !pitcherNorms.length;
   const useLeaguePitcherEventRollup =
     schoolCode !== 'PRO' &&
-    (splitByNorm === 'Pitcher' || splitByNorm === 'Pitcher Team') &&
+    (splitByNorm === 'Pitcher' || isTeamSplit) &&
     !batterSide &&
     !teamCode &&
     !pitcherNorms.length;
@@ -586,10 +587,10 @@ export async function GET(request: Request) {
     if (hand) addEvent('pitcherthrows_norm = ?', hand);
     if (pitchTypeSet.size) addEvent('LOWER(pitch_type) = ANY(?::text[])', Array.from(pitchTypeSet));
     addEvent(VALID_PITCH_TYPE_SQL);
-    const splitExpr = splitByNorm === 'Pitcher Team'
+    const splitExpr = isTeamSplit
       ? "CASE WHEN pitcher_team_code <> '' THEN pitcher_team_code ELSE 'Unknown' END"
       : "CASE WHEN pitcher_name <> '' THEN pitcher_name ELSE pitcher_norm END";
-    const splitGroupExpr = splitByNorm === 'Pitcher Team'
+    const splitGroupExpr = isTeamSplit
       ? "CASE WHEN pitcher_team_code <> '' THEN pitcher_team_code ELSE 'Unknown' END"
       : "pitcher_norm";
     result = await pool.query<AggRow>(
@@ -699,10 +700,10 @@ export async function GET(request: Request) {
     if (hand) addEvent('pitcherthrows_norm = ?', hand);
     if (pitchTypeSet.size) addEvent('LOWER(pitch_type) = ANY(?::text[])', Array.from(pitchTypeSet));
     addEvent(VALID_PITCH_TYPE_SQL);
-    const splitExpr = splitByNorm === 'Pitcher Team'
+    const splitExpr = isTeamSplit
       ? "CASE WHEN pitcher_team_norm <> '' THEN pitcher_team_norm ELSE 'Unknown' END"
       : "CASE WHEN pitcher_name <> '' THEN pitcher_name ELSE pitcher_norm END";
-    const splitGroupExpr = splitByNorm === 'Pitcher Team'
+    const splitGroupExpr = isTeamSplit
       ? "CASE WHEN pitcher_team_norm <> '' THEN pitcher_team_norm ELSE 'Unknown' END"
       : "pitcher_norm";
     result = await pool.query<AggRow>(
@@ -788,7 +789,7 @@ export async function GET(request: Request) {
         ${
           splitByNorm === 'Pitcher'
               ? "CASE WHEN pitcher_norm <> '' THEN pitcher_norm ELSE 'Unknown' END"
-              : splitByNorm === 'Pitcher Team'
+              : isTeamSplit
               ? "CASE WHEN pitcher_team_code <> '' THEN pitcher_team_code ELSE 'Unknown' END"
               : splitByNorm === 'Pitcher Hand'
               ? "CASE WHEN pitcherhand_norm <> '' THEN pitcherhand_norm ELSE 'Unknown' END"
@@ -883,7 +884,7 @@ export async function GET(request: Request) {
         ${
           splitByNorm === 'Pitcher'
               ? "CASE WHEN pitcher_norm <> '' THEN pitcher_norm ELSE 'Unknown' END"
-              : splitByNorm === 'Pitcher Team'
+              : isTeamSplit
               ? "CASE WHEN pitcher_team_code <> '' THEN pitcher_team_code ELSE 'Unknown' END"
               : splitByNorm === 'Pitcher Hand'
               ? "CASE WHEN pitcherhand_norm <> '' THEN pitcherhand_norm ELSE 'Unknown' END"
@@ -973,7 +974,7 @@ export async function GET(request: Request) {
 
   const filtered = result.rows.filter((row) => {
     if (normalizePitchType(String(row.pitch_type ?? '')) === 'Undefined') return false;
-    if (splitByNorm === 'Pitcher' || splitByNorm === 'Pitcher Team' || splitByNorm === 'Pitcher Hand' || splitByNorm === 'Batter Hand' || splitByNorm === 'Count' || splitByNorm === 'After Count' || splitByNorm === 'Inning') return true;
+    if (splitByNorm === 'Pitcher' || isTeamSplit || splitByNorm === 'Pitcher Hand' || splitByNorm === 'Batter Hand' || splitByNorm === 'Count' || splitByNorm === 'After Count' || splitByNorm === 'Inning') return true;
     if (!pitchTypeSet.size) return true;
     return pitchTypeSet.has(normalizePitchType(String(row.pitch_type ?? '')).toLowerCase());
   });
@@ -982,6 +983,8 @@ export async function GET(request: Request) {
   const splitColumn =
     splitByNorm === 'Pitcher'
       ? 'Pitcher'
+      : splitByNorm === 'Team'
+      ? 'Team'
       : splitByNorm === 'Pitcher Team'
       ? 'Pitcher Team'
       : splitByNorm === 'Pitcher Hand'
