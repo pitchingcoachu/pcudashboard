@@ -600,13 +600,19 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
         <span style={{ position: 'absolute', left: 5, top: '50%', transform: 'translateY(-50%)', fontSize: 10, fontWeight: 700, color: '#fff', pointerEvents: 'none', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>{formatTime(currentTime)}</span>
         <span style={{ position: 'absolute', right: 5, top: '50%', transform: 'translateY(-50%)', fontSize: 10, fontWeight: 700, color: '#fff', pointerEvents: 'none', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>{formatTime(duration)}</span>
       </div>
+      <div className="portal-media-breakdown-frame-ticks" aria-hidden="true">
+        {Array.from({ length: 19 }).map((_, index) => (
+          <span key={index} className={index === 9 ? 'is-center' : index % 3 === 0 ? 'is-major' : ''} />
+        ))}
+      </div>
 
       {/* Playback controls */}
       <div className="portal-media-breakdown-playback-controls" style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-        <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => stepFrame(-1)}>‹ Frame</button>
-        <button type="button" className="btn btn-primary" style={{ fontSize: 12, padding: '3px 12px', minHeight: 0 }} onClick={togglePlay}>{playing ? '⏸' : '▶'}</button>
-        <button type="button" className="btn btn-ghost" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => stepFrame(1)}>Frame ›</button>
-        <button type="button" className={loop ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => setLoop((v) => !v)}>Loop</button>
+        <button type="button" className="btn btn-ghost portal-media-breakdown-rate-button" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => setPlaybackRate((rate) => (rate === 1 ? 0.5 : rate === 0.5 ? 0.25 : 1))}>{playbackRate === 1 ? '1×' : `${playbackRate}×`}</button>
+        <button type="button" className={loop ? 'btn btn-primary portal-media-breakdown-loop-button' : 'btn btn-ghost portal-media-breakdown-loop-button'} style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => setLoop((v) => !v)}>↻</button>
+        <button type="button" className="btn btn-ghost portal-media-breakdown-step-button" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => stepFrame(-1)}>◁▌</button>
+        <button type="button" className="btn btn-primary portal-media-breakdown-play-button" style={{ fontSize: 12, padding: '3px 12px', minHeight: 0 }} onClick={togglePlay}>{playing ? 'Ⅱ' : '▶'}</button>
+        <button type="button" className="btn btn-ghost portal-media-breakdown-step-button" style={{ fontSize: 11, padding: '2px 7px', minHeight: 0 }} onClick={() => stepFrame(1)}>▐▷</button>
         <div className="portal-media-breakdown-speed-controls" style={{ display: 'flex', gap: 3, marginLeft: 4 }}>
           {[0.1, 0.25, 0.5, 1, 2].map((rate) => (
             <button key={rate} type="button" className={playbackRate === rate ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 10, padding: '2px 5px', minHeight: 0 }} onClick={() => setPlaybackRate(rate)}>
@@ -934,7 +940,7 @@ export default function MediaBreakdownViewer({
       className="portal-media-breakdown-toolbar is-open"
       style={{ ...glassPanelStyle, display: 'grid', gap: 8, padding: 8, borderRadius: 14, flexShrink: 0 }}
     >
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="portal-media-breakdown-tool-row" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <button
           type="button"
           className="btn btn-ghost"
@@ -1005,7 +1011,7 @@ export default function MediaBreakdownViewer({
         ) : null}
         {saveState === 'error' ? <span style={{ color: '#fca5a5', fontSize: 11, fontWeight: 800 }}>Save failed</span> : null}
       </div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '2px 2px 0' }}>
+      <div className="portal-media-breakdown-tool-settings" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '2px 2px 0' }}>
         {drawMode && tool === 'angle' ? (
           <div style={{ display: 'inline-flex', gap: 4, padding: 3, borderRadius: 10, background: 'rgba(15,23,42,0.74)' }}>
             <button type="button" className={angleMode === 'acute' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 11, padding: '4px 8px', minHeight: 0 }} onClick={() => setAngleMode('acute')}>Acute</button>
@@ -1076,6 +1082,23 @@ export default function MediaBreakdownViewer({
         onClick={(e) => e.stopPropagation()}
       >
         <button type="button" className="portal-video-mobile-close" aria-label="Close media viewer" onClick={onClose}>×</button>
+        {(isVideo || isImage) ? (
+          <div className="portal-media-breakdown-mobile-topbar" data-breakdown-ui="true">
+            <button type="button" className="portal-media-breakdown-mobile-icon" aria-label="Close media viewer" onClick={onClose}>×</button>
+            <button type="button" className={!drawMode ? 'portal-media-breakdown-mobile-icon is-active' : 'portal-media-breakdown-mobile-icon'} aria-label="View and pan" onClick={() => { setDrawMode(false); setAnglePending([]); setAnglePendingCount(0); }}>♙</button>
+            <button type="button" className="portal-media-breakdown-mobile-icon" aria-label="Save markup" onClick={() => void saveAnnotations()} disabled={!onSaveAnnotations || saveState === 'saving'}>◉</button>
+            <button
+              type="button"
+              className={compareMode ? 'portal-media-breakdown-mobile-icon is-active' : 'portal-media-breakdown-mobile-icon'}
+              aria-label="Compare"
+              onClick={() => { if (compareMode) { setCompareMode(false); setCompareMedia(null); setSynced(false); } else if (players && players.length > 0) { setCompareMode(true); setShowPicker(true); } }}
+              disabled={!players || players.length === 0}
+            >
+              ▭▶
+            </button>
+            <button type="button" className={showMobileTools ? 'portal-media-breakdown-mobile-icon is-active' : 'portal-media-breakdown-mobile-icon'} aria-label="Tools" onClick={() => setShowMobileTools((v) => !v)}>•••</button>
+          </div>
+        ) : null}
         {/* Header */}
         <div className="portal-row-between portal-media-breakdown-header" style={{ gap: 10, flexShrink: 0 }}>
           <h3 style={{ margin: 0, fontSize: '1rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</h3>

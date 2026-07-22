@@ -13917,6 +13917,7 @@ export default function PitchingSuite({
                         )}
                         {actionMode === 'video' && hasActionVideo && !actionVideoLookupLoading ? (
                           <div
+                            className="portal-edger-breakdown-ui"
                             data-breakdown-ui="true"
                             style={{
                               position: 'absolute',
@@ -13934,6 +13935,7 @@ export default function PitchingSuite({
                           >
                             {breakdownToolbarVisible ? (
                               <div
+                                className="portal-edger-breakdown-toolbar"
                                 style={{
                                   display: 'grid',
                                   gap: 8,
@@ -13945,7 +13947,7 @@ export default function PitchingSuite({
                                   backdropFilter: 'blur(12px)',
                                 }}
                               >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <div className="portal-edger-breakdown-tool-row" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                   <button
                                     type="button"
                                     className="btn btn-ghost"
@@ -13993,7 +13995,7 @@ export default function PitchingSuite({
                                     Save
                                   </button>
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                <div className="portal-edger-breakdown-tool-settings" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                                   {breakdownMode && breakdownTool === 'angle' ? (
                                     <div style={{ display: 'inline-flex', gap: 4, padding: 3, borderRadius: 10, background: 'rgba(15,23,42,0.74)' }}>
                                       <button
@@ -14075,6 +14077,7 @@ export default function PitchingSuite({
                             )}
                             {breakdownToolbarVisible && showBreakdownNotePanel ? (
                               <div
+                                className="portal-edger-breakdown-save-panel"
                                 style={{
                                   width: 'min(520px, calc(100vw - 80px))',
                                   display: 'grid',
