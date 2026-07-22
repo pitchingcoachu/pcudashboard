@@ -90,7 +90,7 @@ export default function DashboardChat({ isPro }: DashboardChatProps) {
     <>
       <button
         type="button"
-        className="btn btn-primary"
+        className="btn btn-primary dashboard-chat-toggle"
         onClick={() => setOpen((current) => !current)}
         style={{
           position: 'fixed',
@@ -105,6 +105,7 @@ export default function DashboardChat({ isPro }: DashboardChatProps) {
       </button>
       {open ? (
         <aside
+          className="dashboard-chat-panel"
           style={{
             position: 'fixed',
             right: 16,

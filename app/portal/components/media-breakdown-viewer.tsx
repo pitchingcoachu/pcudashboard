@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, type PointerEvent as ReactPointerEvent } from 'react';
 
 type BreakdownTool = 'line' | 'arrow' | 'circle' | 'pen' | 'text' | 'angle' | 'erase';
 export type BreakdownAnnotation = {
@@ -39,6 +39,7 @@ type CompareMedia = {
   url: string;
   mimeType: string;
 };
+type CompareLayout = 'side-by-side' | 'stacked' | 'overlay';
 
 type PlayerMediaItem = {
   id: number;
@@ -53,6 +54,7 @@ type AnnotationDragState = {
   anchor: { x: number; y: number };
   points: Array<{ x: number; y: number }>;
 };
+type RecordingCommand = { id: number; action: 'start' | 'stop' };
 
 const TOOL_LABELS: Record<BreakdownTool, string> = {
   line: 'Line',
@@ -76,6 +78,15 @@ const TOOL_ICONS: Record<BreakdownTool | 'view', string> = {
 };
 
 const TOOL_ORDER: BreakdownTool[] = ['line', 'arrow', 'circle', 'pen', 'angle', 'text', 'erase'];
+const DRAWING_COLOR_SWATCHES = ['#23f3f6', '#ffff00', '#f97316', '#ef4444', '#22c55e', '#ffffff'];
+const DRAWING_WIDTH_STEPS = [2, 4, 6, 8, 10, 14];
+const TEXT_SIZE_STEPS = [24, 36, 48, 64, 80, 96];
+const RECORDING_MIME_OPTIONS = [
+  { mimeType: 'video/mp4;codecs=h264,aac', extension: 'mp4' },
+  { mimeType: 'video/mp4', extension: 'mp4' },
+  { mimeType: 'video/webm;codecs=vp9,opus', extension: 'webm' },
+  { mimeType: 'video/webm', extension: 'webm' },
+];
 const glassPanelStyle: React.CSSProperties = {
   border: '1px solid rgba(148,163,184,0.24)',
   background: 'rgba(2,6,23,0.88)',
@@ -194,8 +205,22 @@ function renderAnnotation(annotation: BreakdownAnnotation, key: string) {
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 10);
-  return `${m}:${String(s).padStart(2, '0')}.${ms}`;
+  const hundredths = Math.floor((seconds % 1) * 100);
+  return `${m}:${String(s).padStart(2, '0')}.${String(hundredths).padStart(2, '0')}`;
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
 }
 
 // ── Zoom/pan helpers ──────────────────────────────────────────────────────────
@@ -247,23 +272,39 @@ type VideoPanelProps = {
   initialAnnotations?: BreakdownAnnotation[];
   onAnnotationsChange?: (annotations: BreakdownAnnotation[]) => void;
   textFontSize: number;
+  showTimer: boolean;
+  recordingCommand?: RecordingCommand | null;
+  onRecordingStarted?: () => void;
+  onRecordingReady?: (url: string, downloadName: string) => void;
+  onRecordingError?: (message: string) => void;
+  syncRole?: 'leader' | 'follower';
+  syncVersion?: number;
 };
 
-function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onActivate, isActive, syncRef, synced, compact, initialAnnotations, onAnnotationsChange, textFontSize }: VideoPanelProps) {
+function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onActivate, isActive, syncRef, synced, compact, initialAnnotations, onAnnotationsChange, textFontSize, showTimer, recordingCommand, onRecordingStarted, onRecordingReady, onRecordingError, syncRole, syncVersion = 0 }: VideoPanelProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [loop, setLoop] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
   const scrubberRef = useRef<HTMLDivElement | null>(null);
   const scrubbing = useRef(false);
+  const syncOffsetRef = useRef(0);
 
   // Zoom & pan state
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const panStart = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
   const mediaWrapRef = useRef<HTMLDivElement | null>(null);
+  const panelRecorderRef = useRef<MediaRecorder | null>(null);
+  const panelRecordingStreamRef = useRef<MediaStream | null>(null);
+  const panelRecordingAnimationRef = useRef<number | null>(null);
+  const panelRecordingChunksRef = useRef<Blob[]>([]);
+  const handledRecordingCommandIdRef = useRef(0);
+  const liveAnnotationsRef = useRef<BreakdownAnnotation[]>([]);
+  const liveShowTimerRef = useRef(false);
 
   // Annotation state
   const [annotations, setAnnotations] = useState<BreakdownAnnotation[]>([]);
@@ -276,6 +317,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
       setAnnotations(Array.isArray(initialAnnotations) ? initialAnnotations : []);
       setActive(null);
       setAnglePending([]);
+      setVideoFailed(false);
     }, 0);
     return () => window.clearTimeout(timeoutId);
   }, [initialAnnotations, url]);
@@ -284,20 +326,64 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     onAnnotationsChange?.(annotations);
   }, [annotations, onAnnotationsChange]);
 
+  useEffect(() => {
+    if (syncRole === 'leader' && syncRef) syncRef.current = videoRef.current;
+  }, [syncRef, syncRole, url]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const leader = syncRef?.current;
+    if (!synced || syncRole !== 'follower' || !video || !leader || leader === video) return;
+
+    syncOffsetRef.current = video.currentTime - leader.currentTime;
+
+    const syncToLeaderTime = () => {
+      const target = Math.max(0, Math.min(video.duration || Number.MAX_SAFE_INTEGER, leader.currentTime + syncOffsetRef.current));
+      if (Math.abs(video.currentTime - target) > 0.08) video.currentTime = target;
+      setCurrentTime(video.currentTime);
+    };
+    const syncPlay = () => {
+      syncToLeaderTime();
+      video.playbackRate = leader.playbackRate;
+      void video.play().catch(() => {});
+    };
+    const syncPause = () => {
+      video.pause();
+      syncToLeaderTime();
+    };
+    const syncRate = () => {
+      video.playbackRate = leader.playbackRate;
+    };
+
+    leader.addEventListener('timeupdate', syncToLeaderTime);
+    leader.addEventListener('seeking', syncToLeaderTime);
+    leader.addEventListener('play', syncPlay);
+    leader.addEventListener('pause', syncPause);
+    leader.addEventListener('ratechange', syncRate);
+    syncRate();
+    return () => {
+      leader.removeEventListener('timeupdate', syncToLeaderTime);
+      leader.removeEventListener('seeking', syncToLeaderTime);
+      leader.removeEventListener('play', syncPlay);
+      leader.removeEventListener('pause', syncPause);
+      leader.removeEventListener('ratechange', syncRate);
+    };
+  }, [syncRef, syncRole, syncVersion, synced]);
+
   // ── Video events ──
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     const onTime = () => {
       setCurrentTime(video.currentTime);
-      if (synced && syncRef?.current && syncRef.current !== video) {
+      if (synced && syncRole !== 'follower' && syncRef?.current && syncRef.current !== video) {
         const diff = Math.abs(syncRef.current.currentTime - video.currentTime);
         if (diff > 0.08) syncRef.current.currentTime = video.currentTime;
       }
     };
     const onDuration = () => setDuration(video.duration || 0);
-    const onPlay = () => { setPlaying(true); if (synced && syncRef?.current && syncRef.current !== video) syncRef.current.play().catch(() => {}); };
-    const onPause = () => { setPlaying(false); if (synced && syncRef?.current && syncRef.current !== video) syncRef.current.pause(); };
+    const onPlay = () => { setPlaying(true); if (synced && syncRole !== 'follower' && syncRef?.current && syncRef.current !== video) syncRef.current.play().catch(() => {}); };
+    const onPause = () => { setPlaying(false); if (synced && syncRole !== 'follower' && syncRef?.current && syncRef.current !== video) syncRef.current.pause(); };
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('loadedmetadata', onDuration);
     video.addEventListener('durationchange', onDuration);
@@ -310,10 +396,220 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
       video.removeEventListener('play', onPlay);
       video.removeEventListener('pause', onPause);
     };
-  }, [synced, syncRef]);
+  }, [synced, syncRef, syncRole]);
 
   useEffect(() => { if (isActive && syncRef) syncRef.current = videoRef.current; }, [isActive, syncRef]);
   useEffect(() => { const video = videoRef.current; if (!video) return; video.playbackRate = playbackRate; }, [playbackRate]);
+
+  const anglePreview: BreakdownAnnotation | null = useMemo(
+    () => anglePending.length > 0
+      ? { id: 'angle-preview', tool: 'angle', color, width, points: anglePending, angleMode }
+      : null,
+    [angleMode, anglePending, color, width]
+  );
+  const allAnnotations = useMemo(
+    () => [...annotations, ...(active ? [active] : []), ...(anglePreview ? [anglePreview] : [])],
+    [active, anglePreview, annotations]
+  );
+
+  useEffect(() => {
+    liveAnnotationsRef.current = allAnnotations;
+  }, [allAnnotations]);
+
+  useEffect(() => {
+    liveShowTimerRef.current = showTimer;
+  }, [showTimer]);
+
+  const stopPanelRecording = useCallback(() => {
+    if (panelRecorderRef.current?.state === 'recording') {
+      panelRecorderRef.current.stop();
+      return;
+    }
+    if (panelRecordingAnimationRef.current !== null) {
+      cancelAnimationFrame(panelRecordingAnimationRef.current);
+      panelRecordingAnimationRef.current = null;
+    }
+    panelRecordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    panelRecordingStreamRef.current = null;
+  }, []);
+
+  const drawAnnotationToCanvas = useCallback((ctx: CanvasRenderingContext2D, annotation: BreakdownAnnotation) => {
+    const pts = annotation.points;
+    if (!pts.length) return;
+    ctx.save();
+    ctx.scale(ctx.canvas.width / 1000, ctx.canvas.height / 1000);
+    ctx.strokeStyle = annotation.color;
+    ctx.fillStyle = annotation.color;
+    ctx.lineWidth = annotation.width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const sx = (value: number) => value * 1000;
+    const sy = (value: number) => value * 1000;
+    if (annotation.tool === 'text') {
+      const point = pts[0]!;
+      const fontSize = annotation.fontSize ?? 36;
+      ctx.font = `900 ${fontSize}px sans-serif`;
+      ctx.lineWidth = Math.max(3, fontSize * 0.14);
+      ctx.strokeStyle = 'rgba(0,0,0,0.82)';
+      ctx.strokeText(annotation.text ?? '', sx(point.x), sy(point.y));
+      ctx.fillStyle = annotation.color;
+      ctx.fillText(annotation.text ?? '', sx(point.x), sy(point.y));
+      ctx.restore();
+      return;
+    }
+    if (annotation.tool === 'circle') {
+      const a = pts[0]!;
+      const b = pts[1] ?? a;
+      const x = sx(Math.min(a.x, b.x));
+      const y = sy(Math.min(a.y, b.y));
+      const w = Math.abs(sx(b.x - a.x));
+      const h = Math.abs(sy(b.y - a.y));
+      ctx.beginPath();
+      ctx.ellipse(x + w / 2, y + h / 2, Math.max(2, w / 2), Math.max(2, h / 2), 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    ctx.beginPath();
+    pts.forEach((point, index) => {
+      const x = sx(point.x);
+      const y = sy(point.y);
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    if (annotation.tool === 'arrow' && pts.length >= 2) {
+      const a = pts[pts.length - 2]!;
+      const b = pts[pts.length - 1]!;
+      const angle = Math.atan2(sy(b.y - a.y), sx(b.x - a.x));
+      const size = Math.max(16, annotation.width * 4);
+      const bx = sx(b.x);
+      const by = sy(b.y);
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx - size * Math.cos(angle - Math.PI / 6), by - size * Math.sin(angle - Math.PI / 6));
+      ctx.lineTo(bx - size * Math.cos(angle + Math.PI / 6), by - size * Math.sin(angle + Math.PI / 6));
+      ctx.closePath();
+      ctx.fill();
+    }
+    if (annotation.tool === 'angle') {
+      for (const point of pts) {
+        ctx.beginPath();
+        ctx.arc(sx(point.x), sy(point.y), 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const value = measureAngle(pts, annotation.angleMode);
+      if (value !== null && pts[1]) {
+        const b = pts[1];
+        ctx.font = '900 36px sans-serif';
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = 'rgba(0,0,0,0.72)';
+        ctx.strokeText(`${Math.round(value)}°`, sx(b.x) + 18, sy(b.y) - 18);
+        ctx.fillStyle = annotation.color;
+        ctx.fillText(`${Math.round(value)}°`, sx(b.x) + 18, sy(b.y) - 18);
+      }
+    }
+    ctx.restore();
+  }, []);
+
+  const startPanelRecording = useCallback(() => {
+    const video = videoRef.current;
+    const wrap = mediaWrapRef.current;
+    if (!video || !wrap || typeof MediaRecorder === 'undefined') {
+      onRecordingError?.('Recording is not supported in this browser.');
+      return;
+    }
+    const rect = wrap.getBoundingClientRect();
+    const scale = Math.max(1, Math.min(window.devicePixelRatio || 1, 1920 / Math.max(1, rect.width), 1080 / Math.max(1, rect.height)));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(2, Math.round(rect.width * scale));
+    canvas.height = Math.max(2, Math.round(rect.height * scale));
+    const ctx = canvas.getContext('2d');
+    const captureStream = canvas.captureStream?.(30);
+    if (!ctx || !captureStream) {
+      onRecordingError?.('Canvas recording is not supported in this browser.');
+      return;
+    }
+    panelRecordingChunksRef.current = [];
+    const capturedVideo = video as HTMLVideoElement & { captureStream?: () => MediaStream; mozCaptureStream?: () => MediaStream };
+    const sourceStream = capturedVideo.captureStream?.() ?? capturedVideo.mozCaptureStream?.();
+    const audioTracks = sourceStream?.getAudioTracks() ?? [];
+    const stream = new MediaStream([...captureStream.getVideoTracks(), ...audioTracks]);
+    panelRecordingStreamRef.current = stream;
+    const recordingFormat = RECORDING_MIME_OPTIONS.find((option) => MediaRecorder.isTypeSupported(option.mimeType)) ?? RECORDING_MIME_OPTIONS[RECORDING_MIME_OPTIONS.length - 1]!;
+    const recorder = new MediaRecorder(stream, { mimeType: recordingFormat.mimeType });
+    panelRecorderRef.current = recorder;
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) panelRecordingChunksRef.current.push(event.data);
+    };
+    recorder.onstop = () => {
+      if (panelRecordingAnimationRef.current !== null) {
+        cancelAnimationFrame(panelRecordingAnimationRef.current);
+        panelRecordingAnimationRef.current = null;
+      }
+      const blob = new Blob(panelRecordingChunksRef.current, { type: recordingFormat.mimeType });
+      panelRecordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+      panelRecordingStreamRef.current = null;
+      onRecordingReady?.(URL.createObjectURL(blob), `video-breakdown-${Date.now()}.${recordingFormat.extension}`);
+    };
+    const renderFrame = () => {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+        const videoAspect = video.videoWidth / video.videoHeight;
+        const canvasAspect = canvas.width / canvas.height;
+        let drawWidth = canvas.width;
+        let drawHeight = canvas.height;
+        let drawX = 0;
+        let drawY = 0;
+        if (videoAspect > canvasAspect) {
+          drawHeight = canvas.width / videoAspect;
+          drawY = (canvas.height - drawHeight) / 2;
+        } else {
+          drawWidth = canvas.height * videoAspect;
+          drawX = (canvas.width - drawWidth) / 2;
+        }
+        ctx.drawImage(video, drawX, drawY, drawWidth, drawHeight);
+      }
+      for (const annotation of liveAnnotationsRef.current) drawAnnotationToCanvas(ctx, annotation);
+      if (liveShowTimerRef.current) {
+        const pad = 18 * scale;
+        ctx.font = `900 ${18 * scale}px sans-serif`;
+        const text = formatTime(video.currentTime || 0);
+        const metrics = ctx.measureText(text);
+        ctx.fillStyle = 'rgba(0,0,0,0.62)';
+        roundRect(ctx, pad, pad, metrics.width + 54 * scale, 34 * scale, 18 * scale);
+        ctx.fill();
+        ctx.strokeStyle = '#23f3f6';
+        ctx.lineWidth = 2.4 * scale;
+        ctx.beginPath();
+        ctx.arc(pad + 17 * scale, pad + 17 * scale, 8 * scale, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(pad + 17 * scale, pad + 17 * scale);
+        ctx.lineTo(pad + 17 * scale, pad + 11 * scale);
+        ctx.moveTo(pad + 17 * scale, pad + 17 * scale);
+        ctx.lineTo(pad + 21 * scale, pad + 17 * scale);
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.fillText(text, pad + 36 * scale, pad + 23 * scale);
+      }
+      panelRecordingAnimationRef.current = requestAnimationFrame(renderFrame);
+    };
+    renderFrame();
+    recorder.start();
+    onRecordingStarted?.();
+  }, [drawAnnotationToCanvas, onRecordingError, onRecordingReady, onRecordingStarted]);
+
+  useEffect(() => {
+    if (!recordingCommand || syncRole === 'follower') return;
+    if (handledRecordingCommandIdRef.current === recordingCommand.id) return;
+    handledRecordingCommandIdRef.current = recordingCommand.id;
+    if (recordingCommand.action === 'start') startPanelRecording();
+    else stopPanelRecording();
+  }, [recordingCommand, startPanelRecording, stopPanelRecording, syncRole]);
+
+  useEffect(() => () => stopPanelRecording(), [stopPanelRecording]);
 
   // ── Zoom & pan handlers ──
   function applyZoom(delta: number, pivot?: { x: number; y: number }) {
@@ -366,7 +662,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     const t = Math.max(0, Math.min(duration, fraction * duration));
     video.currentTime = t;
     setCurrentTime(t);
-    if (synced && syncRef?.current && syncRef.current !== video) syncRef.current.currentTime = t;
+    if (synced && syncRole !== 'follower' && syncRef?.current && syncRef.current !== video) syncRef.current.currentTime = t;
   }
   function getScrubFraction(clientX: number) {
     const bar = scrubberRef.current;
@@ -378,7 +674,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     scrubbing.current = true;
     e.currentTarget.setPointerCapture(e.pointerId);
     videoRef.current?.pause();
-    if (synced && syncRef?.current) syncRef.current.pause();
+    if (synced && syncRole !== 'follower' && syncRef?.current) syncRef.current.pause();
     scrubToFraction(getScrubFraction(e.clientX));
   }
   function onScrubMove(e: React.PointerEvent<HTMLDivElement>) { if (scrubbing.current) scrubToFraction(getScrubFraction(e.clientX)); }
@@ -394,7 +690,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     video.pause();
     const t = Math.max(0, Math.min(duration, video.currentTime + direction / 30));
     video.currentTime = t;
-    if (synced && syncRef?.current) { syncRef.current.pause(); syncRef.current.currentTime = t; }
+    if (synced && syncRole !== 'follower' && syncRef?.current) { syncRef.current.pause(); syncRef.current.currentTime = t; }
   }
 
   function togglePlay() {
@@ -479,11 +775,6 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
     setActive(null);
   };
 
-  const anglePreview: BreakdownAnnotation | null = anglePending.length > 0
-    ? { id: 'angle-preview', tool: 'angle', color, width, points: anglePending, angleMode }
-    : null;
-
-  const allAnnotations = [...annotations, ...(active ? [active] : []), ...(anglePreview ? [anglePreview] : [])];
   const progress = duration > 0 ? currentTime / duration : 0;
   const maxH = compact ? '38vh' : '62vh';
 
@@ -496,7 +787,7 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
   const canPan = isZoomed && !drawMode;
 
   return (
-    <div className="portal-media-breakdown-video-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 }}>
+    <div className={`portal-media-breakdown-video-panel${synced ? ' portal-media-breakdown-video-panel--synced' : ''}${syncRole ? ` portal-media-breakdown-video-panel--sync-${syncRole}` : ''}`} style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 }}>
       <div className="portal-media-breakdown-panel-title" style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{title}</div>
 
       {/* Video + overlay wrapper — clips the zoom */}
@@ -513,19 +804,24 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
       >
         {/* Inner wrapper that receives the transform */}
         <div className="portal-media-breakdown-stage-inner" style={{ transform: transformStyle, transformOrigin: '50% 50%', willChange: zoom > 1 ? 'transform' : undefined }}>
-          <video
-            ref={videoRef}
-            className="portal-media-breakdown-video"
-            src={url}
-            playsInline
-            preload="auto"
-            loop={loop}
-            style={{ width: '100%', maxHeight: maxH, display: 'block', pointerEvents: 'none' }}
-            onError={(e) => {
-              const v = e.currentTarget;
-              console.error('[MediaBreakdownViewer] video error:', v.error?.code, v.error?.message, 'src:', v.src);
-            }}
-          />
+          {videoFailed ? (
+            <div className="portal-media-breakdown-video-fallback" style={{ minHeight: maxH }}>
+              <strong>Video preview is not supported in this browser.</strong>
+              <span>Download the file or use an MP4/H.264 version.</span>
+              <a className="btn btn-primary" href={url} download={title}>Download</a>
+            </div>
+          ) : (
+            <video
+              ref={videoRef}
+              className="portal-media-breakdown-video"
+              src={url}
+              playsInline
+              preload="auto"
+              loop={loop}
+              style={{ width: '100%', maxHeight: maxH, display: 'block', pointerEvents: 'none' }}
+              onError={() => setVideoFailed(true)}
+            />
+          )}
           <svg
             viewBox="0 0 1000 1000"
             preserveAspectRatio="none"
@@ -542,6 +838,12 @@ function VideoPanel({ url, title, tool, drawMode, color, width, angleMode, onAct
           >
             {allAnnotations.map((ann) => renderAnnotation(ann, ann.id))}
           </svg>
+          {showTimer ? (
+            <div className="portal-media-breakdown-video-timer" aria-label="Video timer">
+              <span className="portal-media-breakdown-video-timer-icon">⏱</span>
+              <span>{formatTime(currentTime)}</span>
+            </div>
+          ) : null}
         </div>
 
         {/* Zoom controls — always visible, top-left corner */}
@@ -656,7 +958,7 @@ function ComparePicker({ players, mediaType, onPick, onCancel }: ComparePickerPr
   }, [mediaType, selectedPlayer]);
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onCancel}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 2147482120, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onCancel}>
       <div style={{ background: '#0f172a', border: '1px solid rgba(148,163,184,0.2)', borderRadius: 14, padding: 20, width: 'min(520px, 94vw)', maxHeight: '80vh', display: 'flex', flexDirection: 'column', gap: 14 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h4 style={{ margin: 0, fontSize: '1rem', color: '#f8fafc' }}>Pick comparison {mediaType}</h4>
@@ -720,6 +1022,7 @@ export default function MediaBreakdownViewer({
   const [color, setColor] = useState('#facc15');
   const [width, setWidth] = useState(4);
   const [textFontSize, setTextFontSize] = useState(36);
+  const [showTimer, setShowTimer] = useState(false);
   const [angleMode, setAngleMode] = useState<'acute' | 'obtuse'>('acute');
   const [anglePendingCount, setAnglePendingCount] = useState(0);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -727,17 +1030,28 @@ export default function MediaBreakdownViewer({
   const [compareMode, setCompareMode] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [compareMedia, setCompareMedia] = useState<CompareMedia | null>(null);
+  const [compareLayout, setCompareLayout] = useState<CompareLayout>('side-by-side');
   const [synced, setSynced] = useState(false);
+  const [syncVersion, setSyncVersion] = useState(0);
   const syncRef = useRef<HTMLVideoElement | null>(null);
+  const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'ready'>('idle');
+  const [recordingUrl, setRecordingUrl] = useState('');
+  const [recordingDownloadName, setRecordingDownloadName] = useState('video-breakdown.webm');
+  const [recordingCommand, setRecordingCommand] = useState<RecordingCommand | null>(null);
 
   const isVideo = mimeType.startsWith('video/');
   const isImage = mimeType.startsWith('image/');
 
   useEffect(() => {
+    return () => {
+      if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+    };
+  }, [recordingUrl]);
+
+  useEffect(() => {
     const media = window.matchMedia('(max-width: 780px)');
     const sync = () => {
-      const mobile = media.matches;
-      setShowMobileTools(!mobile);
+      setShowMobileTools(true);
     };
     sync();
     media.addEventListener('change', sync);
@@ -934,6 +1248,27 @@ export default function MediaBreakdownViewer({
   }
 
   const allImageAnnotations = [...annotations, ...(active ? [active] : []), ...(anglePending.length > 0 ? [{ id: 'angle-preview', tool: 'angle' as const, color, width, points: anglePending, angleMode }] : [])];
+  const cycleColor = () => {
+    const currentIndex = DRAWING_COLOR_SWATCHES.findIndex((swatch) => swatch.toLowerCase() === color.toLowerCase());
+    setColor(DRAWING_COLOR_SWATCHES[(currentIndex + 1) % DRAWING_COLOR_SWATCHES.length]);
+  };
+  const cycleWidth = () => {
+    const next = DRAWING_WIDTH_STEPS.find((step) => step > width) ?? DRAWING_WIDTH_STEPS[0];
+    setWidth(next);
+  };
+  const cycleTextSize = () => {
+    const next = TEXT_SIZE_STEPS.find((step) => step > textFontSize) ?? TEXT_SIZE_STEPS[0];
+    setTextFontSize(next);
+  };
+  const startRecording = () => {
+    if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+    setRecordingUrl('');
+    setRecordingState('recording');
+    setRecordingCommand({ id: Date.now(), action: 'start' });
+  };
+  const stopRecording = () => {
+    setRecordingCommand({ id: Date.now(), action: 'stop' });
+  };
 
   const toolbar = (isVideo || isImage) && showMobileTools ? (
     <div
@@ -961,6 +1296,91 @@ export default function MediaBreakdownViewer({
         >
           {TOOL_ICONS.view}
         </button>
+        {isVideo ? (
+          <button
+            type="button"
+            className={showTimer ? 'btn btn-primary portal-media-breakdown-timer-tool' : 'btn btn-ghost portal-media-breakdown-timer-tool'}
+            aria-label="Show timer"
+            title={showTimer ? 'Hide timer' : 'Show timer'}
+            style={compactIconButtonStyle}
+            onClick={() => setShowTimer((current) => !current)}
+          >
+            ⏱
+          </button>
+        ) : null}
+        {isVideo ? (
+          <button
+            type="button"
+            className={recordingState === 'recording' ? 'btn btn-primary portal-media-breakdown-record-tool is-recording' : 'btn btn-ghost portal-media-breakdown-record-tool'}
+            aria-label={recordingState === 'recording' ? 'Stop recording' : 'Record breakdown'}
+            title={recordingState === 'recording' ? 'Stop recording' : 'Record breakdown'}
+            style={compactIconButtonStyle}
+            onClick={() => {
+              if (recordingState === 'recording') {
+                stopRecording();
+              } else {
+                void startRecording();
+              }
+            }}
+          >
+            <span />
+          </button>
+        ) : null}
+        {recordingUrl ? (
+          <a
+            className="btn btn-ghost portal-media-breakdown-record-download"
+            href={recordingUrl}
+            download={recordingDownloadName}
+            title="Download recording"
+            style={compactIconButtonStyle}
+          >
+            ↓
+          </a>
+        ) : null}
+        <button
+          type="button"
+          className="btn btn-ghost portal-media-breakdown-color-tool"
+          aria-label="Change drawing color"
+          title="Color"
+          style={compactIconButtonStyle}
+          onClick={cycleColor}
+        >
+          <span className="portal-media-breakdown-color-tool-dot" style={{ background: color }} />
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost portal-media-breakdown-width-tool"
+          aria-label="Change drawing width"
+          title={`Width ${width}`}
+          style={compactIconButtonStyle}
+          onClick={cycleWidth}
+        >
+          <span style={{ width: Math.max(12, width + 8), height: Math.max(12, width + 8), borderWidth: Math.max(2, Math.min(5, width / 2)) }} />
+        </button>
+        {drawMode && tool === 'angle' ? (
+          <button
+            type="button"
+            className={angleMode === 'obtuse' ? 'btn btn-primary portal-media-breakdown-mode-tool' : 'btn btn-ghost portal-media-breakdown-mode-tool'}
+            aria-label="Toggle angle mode"
+            title={angleMode === 'acute' ? 'Angle: acute' : 'Angle: obtuse'}
+            style={compactIconButtonStyle}
+            onClick={() => setAngleMode((current) => (current === 'acute' ? 'obtuse' : 'acute'))}
+          >
+            <span>{angleMode === 'acute' ? 'Ac' : 'Ob'}</span>
+          </button>
+        ) : null}
+        {drawMode && tool === 'text' ? (
+          <button
+            type="button"
+            className="btn btn-ghost portal-media-breakdown-mode-tool"
+            aria-label="Change text size"
+            title={`Font ${textFontSize}`}
+            style={compactIconButtonStyle}
+            onClick={cycleTextSize}
+          >
+            <span>{textFontSize}</span>
+          </button>
+        ) : null}
         {TOOL_ORDER.map((entry) => (
           <button
             key={entry}
@@ -1010,28 +1430,6 @@ export default function MediaBreakdownViewer({
           </button>
         ) : null}
         {saveState === 'error' ? <span style={{ color: '#fca5a5', fontSize: 11, fontWeight: 800 }}>Save failed</span> : null}
-      </div>
-      <div className="portal-media-breakdown-tool-settings" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '2px 2px 0' }}>
-        {drawMode && tool === 'angle' ? (
-          <div style={{ display: 'inline-flex', gap: 4, padding: 3, borderRadius: 10, background: 'rgba(15,23,42,0.74)' }}>
-            <button type="button" className={angleMode === 'acute' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 11, padding: '4px 8px', minHeight: 0 }} onClick={() => setAngleMode('acute')}>Acute</button>
-            <button type="button" className={angleMode === 'obtuse' ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 11, padding: '4px 8px', minHeight: 0 }} onClick={() => setAngleMode('obtuse')}>Obtuse</button>
-          </div>
-        ) : null}
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, color: '#e2e8f0' }}>
-          <span>Color</span>
-          <input type="color" value={color} onChange={(e) => setColor(e.target.value)} aria-label="Color" style={{ width: 32, height: 28, padding: 1, borderRadius: 8, border: '1px solid rgba(148,163,184,0.36)', background: 'rgba(15,23,42,0.9)' }} />
-        </label>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, color: '#e2e8f0' }}>
-          <span>Width</span>
-          <input type="range" min={2} max={14} value={width} onChange={(e) => setWidth(Number(e.target.value))} style={{ width: 86 }} />
-        </label>
-        {drawMode && tool === 'text' ? (
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 800, color: '#e2e8f0' }}>
-            <span>Font</span>
-            <input type="range" min={16} max={96} value={textFontSize} onChange={(e) => setTextFontSize(Number(e.target.value))} style={{ width: 92 }} />
-          </label>
-        ) : null}
       </div>
     </div>
   ) : null;
@@ -1085,19 +1483,29 @@ export default function MediaBreakdownViewer({
         {(isVideo || isImage) ? (
           <div className="portal-media-breakdown-mobile-topbar" data-breakdown-ui="true">
             <button type="button" className="portal-media-breakdown-mobile-icon" aria-label="Close media viewer" onClick={onClose}>×</button>
-            <button type="button" className={!drawMode ? 'portal-media-breakdown-mobile-icon is-active' : 'portal-media-breakdown-mobile-icon'} aria-label="View and pan" onClick={() => { setDrawMode(false); setAnglePending([]); setAnglePendingCount(0); }}>♙</button>
-            <button type="button" className="portal-media-breakdown-mobile-icon" aria-label="Save markup" onClick={() => void saveAnnotations()} disabled={!onSaveAnnotations || saveState === 'saving'}>◉</button>
+            <button type="button" className="portal-media-breakdown-mobile-icon portal-media-breakdown-mobile-save" aria-label="Save markup" onClick={() => void saveAnnotations()} disabled={!onSaveAnnotations || saveState === 'saving'}>{saveState === 'saved' ? '✓' : 'Save'}</button>
             <button
               type="button"
               className={compareMode ? 'portal-media-breakdown-mobile-icon is-active' : 'portal-media-breakdown-mobile-icon'}
               aria-label="Compare"
-              onClick={() => { if (compareMode) { setCompareMode(false); setCompareMedia(null); setSynced(false); } else if (players && players.length > 0) { setCompareMode(true); setShowPicker(true); } }}
+              onClick={() => { if (compareMode) { setCompareMode(false); setCompareMedia(null); setSynced(false); setCompareLayout('side-by-side'); } else if (players && players.length > 0) { setCompareMode(true); setShowPicker(true); } }}
               disabled={!players || players.length === 0}
             >
               ▭▶
             </button>
-            <button type="button" className={showMobileTools ? 'portal-media-breakdown-mobile-icon is-active' : 'portal-media-breakdown-mobile-icon'} aria-label="Tools" onClick={() => setShowMobileTools((v) => !v)}>•••</button>
           </div>
+        ) : null}
+        {(isVideo || isImage) && !showMobileTools ? (
+          <button
+            type="button"
+            className="portal-media-breakdown-show-tools"
+            data-breakdown-ui="true"
+            aria-label="Show toolbar"
+            title="Show toolbar"
+            onClick={() => setShowMobileTools(true)}
+          >
+            ✥
+          </button>
         ) : null}
         {/* Header */}
         <div className="portal-row-between portal-media-breakdown-header" style={{ gap: 10, flexShrink: 0 }}>
@@ -1108,7 +1516,7 @@ export default function MediaBreakdownViewer({
             <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }} onClick={onNext} disabled={!hasNext}>Next</button>
             {(isVideo || isImage) && players && players.length > 0 && (
               <button type="button" className={compareMode ? 'btn btn-primary' : 'btn btn-ghost'} style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}
-                onClick={() => { if (compareMode) { setCompareMode(false); setCompareMedia(null); setSynced(false); } else { setCompareMode(true); setShowPicker(true); } }}>
+                onClick={() => { if (compareMode) { setCompareMode(false); setCompareMedia(null); setSynced(false); setCompareLayout('side-by-side'); } else { setCompareMode(true); setShowPicker(true); } }}>
                 {compareMode ? 'Exit Compare' : 'Compare'}
               </button>
             )}
@@ -1120,16 +1528,6 @@ export default function MediaBreakdownViewer({
                 {synced ? 'Synced ✓' : 'Sync'}
               </button>
             )}
-            {(isVideo || isImage) ? (
-              <button
-                type="button"
-                className={showMobileTools ? 'btn btn-primary' : 'btn btn-ghost'}
-                style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}
-                onClick={() => setShowMobileTools((v) => !v)}
-              >
-                {showMobileTools ? 'Hide Tools' : 'Tools'}
-              </button>
-            ) : null}
             <a className="btn btn-ghost" href={url} download={downloadName || title} style={{ fontSize: 12, padding: '3px 10px', minHeight: 0 }}>Download</a>
             {onDelete ? (
               <button type="button" className="btn btn-ghost" style={{ fontSize: 12, padding: '3px 10px', minHeight: 0, color: '#fca5a5' }} onClick={onDelete}>Delete</button>
@@ -1141,14 +1539,83 @@ export default function MediaBreakdownViewer({
         {/* Toolbar */}
         {toolbar}
 
+        {isVideo && compareMode && compareMedia ? (
+          <div className="portal-media-breakdown-compare-controls" data-breakdown-ui="true">
+            <button type="button" className="btn btn-ghost" onClick={() => setShowPicker(true)}>Swap</button>
+            <button type="button" className={compareLayout === 'side-by-side' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setCompareLayout('side-by-side')}>Side</button>
+            <button type="button" className={compareLayout === 'stacked' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setCompareLayout('stacked')}>Stack</button>
+            <button type="button" className={compareLayout === 'overlay' ? 'btn btn-primary' : 'btn btn-ghost'} onClick={() => setCompareLayout('overlay')}>Overlay</button>
+            <button
+              type="button"
+              className={synced ? 'btn btn-primary' : 'btn btn-ghost'}
+              onClick={() => {
+                setSynced((current) => {
+                  const next = !current;
+                  if (next) setSyncVersion((value) => value + 1);
+                  return next;
+                });
+              }}
+            >
+              {synced ? 'Synced' : 'Sync'}
+            </button>
+          </div>
+        ) : null}
+
         {/* Media area */}
         {isVideo && compareMode && compareMedia ? (
-          <div className="portal-media-breakdown-compare-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flex: 1, minHeight: 0 }}>
-            <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact initialAnnotations={initialAnnotations} onAnnotationsChange={handleMainVideoAnnotationsChange} textFontSize={textFontSize} />
-            <VideoPanel url={compareMedia.url} title={`${compareMedia.playerName} - ${compareMedia.title}`} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} compact textFontSize={textFontSize} />
+          <div className={`portal-media-breakdown-compare-grid portal-media-breakdown-compare-grid--${compareLayout}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flex: 1, minHeight: 0 }}>
+            <VideoPanel
+              url={url}
+              title={title}
+              tool={tool}
+              drawMode={drawMode}
+              color={color}
+              width={width}
+              angleMode={angleMode}
+              synced={synced}
+              syncRef={syncRef}
+              syncRole="leader"
+              syncVersion={syncVersion}
+              compact
+              initialAnnotations={initialAnnotations}
+              onAnnotationsChange={handleMainVideoAnnotationsChange}
+              textFontSize={textFontSize}
+              showTimer={showTimer}
+              recordingCommand={recordingCommand}
+              onRecordingStarted={() => setRecordingState('recording')}
+              onRecordingReady={(nextUrl, nextName) => {
+                if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+                setRecordingUrl(nextUrl);
+                setRecordingDownloadName(nextName);
+                setRecordingState('ready');
+              }}
+              onRecordingError={() => setRecordingState('idle')}
+            />
+            <VideoPanel url={compareMedia.url} title={`${compareMedia.playerName} - ${compareMedia.title}`} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} synced={synced} syncRef={syncRef} syncRole="follower" syncVersion={syncVersion} compact textFontSize={textFontSize} showTimer={showTimer} />
           </div>
         ) : isVideo ? (
-          <VideoPanel url={url} title={title} tool={tool} drawMode={drawMode} color={color} width={width} angleMode={angleMode} initialAnnotations={initialAnnotations} onAnnotationsChange={handleMainVideoAnnotationsChange} textFontSize={textFontSize} />
+          <VideoPanel
+            url={url}
+            title={title}
+            tool={tool}
+            drawMode={drawMode}
+            color={color}
+            width={width}
+            angleMode={angleMode}
+            initialAnnotations={initialAnnotations}
+            onAnnotationsChange={handleMainVideoAnnotationsChange}
+            textFontSize={textFontSize}
+            showTimer={showTimer}
+            recordingCommand={recordingCommand}
+            onRecordingStarted={() => setRecordingState('recording')}
+            onRecordingReady={(nextUrl, nextName) => {
+              if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+              setRecordingUrl(nextUrl);
+              setRecordingDownloadName(nextName);
+              setRecordingState('ready');
+            }}
+            onRecordingError={() => setRecordingState('idle')}
+          />
         ) : isImage && compareMode && compareMedia ? (
           <div className="portal-media-breakdown-compare-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flex: 1, minHeight: 0 }}>
             <div style={{ display: 'grid', gap: 8, minWidth: 0 }}>

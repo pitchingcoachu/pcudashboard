@@ -26,6 +26,34 @@ type MediaPreview = {
 
 type OrgPlayer = { playerId: number; fullName: string };
 
+function inferMediaContentType(fileName: string, mediaType: PlayerMedia['mediaType']): string {
+  const ext = String(fileName ?? '').split('.').pop()?.toLowerCase() ?? '';
+  const byExtension: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    heic: 'image/heic',
+    heif: 'image/heif',
+    avif: 'image/avif',
+    mp4: 'video/mp4',
+    m4v: 'video/mp4',
+    mov: 'video/quicktime',
+    qt: 'video/quicktime',
+    webm: 'video/webm',
+    pdf: 'application/pdf',
+  };
+  if (byExtension[ext]) return byExtension[ext];
+  if (mediaType === 'photo') return 'image/jpeg';
+  if (mediaType === 'pdf') return 'application/pdf';
+  return 'video/mp4';
+}
+
+function playerMediaContentType(item: PlayerMedia): string {
+  return String(item.contentType || '').trim() || inferMediaContentType(item.fileName, item.mediaType);
+}
+
 function uniqueCategoryNames(values: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -52,6 +80,7 @@ function MediaTileFallback({ label }: { label: string }) {
 
 function MediaTilePreview({ url, title, contentType, mediaType }: { url: string; title: string; contentType: string; mediaType: PlayerMedia['mediaType'] }) {
   const [imageFailed, setImageFailed] = useState(false);
+  const [videoFailed, setVideoFailed] = useState(false);
   const normalized = String(contentType ?? '').toLowerCase();
   const isUnsupportedImagePreview = normalized.includes('heic') || normalized.includes('heif');
   if (mediaType === 'photo' || normalized.startsWith('image/')) {
@@ -59,7 +88,8 @@ function MediaTilePreview({ url, title, contentType, mediaType }: { url: string;
     return <img src={url} alt={title} className="portal-media-tile-preview-media" loading="lazy" onError={() => setImageFailed(true)} />;
   }
   if (mediaType === 'video' || normalized.startsWith('video/')) {
-    return <video src={url} className="portal-media-tile-preview-media" muted playsInline preload="metadata" />;
+    if (videoFailed) return <MediaTileFallback label="Video" />;
+    return <video src={url} className="portal-media-tile-preview-media" muted playsInline preload="metadata" onError={() => setVideoFailed(true)} />;
   }
   if (mediaType === 'pdf' || normalized === 'application/pdf') {
     return (
@@ -164,7 +194,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
 
   function openMediaPreview(item: PlayerMedia) {
     const url = `/api/player/media/${item.id}`;
-    const mimeType = item.contentType || 'video/quicktime';
+    const mimeType = playerMediaContentType(item);
     setMediaPreview({
       title: item.title,
       url,
@@ -273,7 +303,7 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 10 }}>
         {filtered.map((m) => {
           const url = `/api/player/media/${m.id}`;
-          const mimeType = m.contentType || 'video/quicktime';
+          const mimeType = playerMediaContentType(m);
           return (
             <div key={m.id} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 10, padding: 10, background: 'rgba(0,0,0,0.16)', display: 'grid', gap: 6 }}>
               <button

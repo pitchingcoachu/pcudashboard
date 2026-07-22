@@ -314,6 +314,15 @@ const BREAKDOWN_TOOL_ICONS: Record<BreakdownTool | 'view', string> = {
   erase: '⌫',
 };
 const BREAKDOWN_TOOL_ORDER: BreakdownTool[] = ['line', 'arrow', 'circle', 'pen', 'angle', 'text', 'erase'];
+const BREAKDOWN_COLOR_SWATCHES = ['#23f3f6', '#ffff00', '#f97316', '#ef4444', '#22c55e', '#ffffff'];
+const BREAKDOWN_WIDTH_STEPS = [2, 4, 6, 8, 10];
+const BREAKDOWN_TEXT_SIZE_STEPS = [24, 36, 48, 64, 80, 96];
+const BREAKDOWN_RECORDING_MIME_OPTIONS = [
+  { mimeType: 'video/mp4;codecs=h264,aac', extension: 'mp4' },
+  { mimeType: 'video/mp4', extension: 'mp4' },
+  { mimeType: 'video/webm;codecs=vp9,opus', extension: 'webm' },
+  { mimeType: 'video/webm', extension: 'webm' },
+];
 const PITCH_TYPE_DISPLAY_ORDER = [
   'Fastball',
   'Sinker',
@@ -2494,6 +2503,7 @@ export default function PitchingSuite({
   const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'ready'>('idle');
   const [recordingUrl, setRecordingUrl] = useState('');
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
+  const [recordingDownloadName, setRecordingDownloadName] = useState('video-breakdown.webm');
   const [isLightTheme, setIsLightTheme] = useState(true);
   const [isActionModalFullscreen, setIsActionModalFullscreen] = useState(false);
   const isLeaderboardPage = dashboardPage === 'Leaderboard';
@@ -2507,10 +2517,37 @@ export default function PitchingSuite({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingAnimationRef = useRef<number | null>(null);
+  const breakdownAnnotationsRef = useRef<{
+    annotations: BreakdownAnnotation[];
+    active: BreakdownAnnotation | null;
+    pending: Array<{ x: number; y: number }>;
+    pendingColor: string;
+    pendingWidth: number;
+    pendingAngleMode: 'acute' | 'obtuse';
+  }>({
+    annotations: [],
+    active: null,
+    pending: [],
+    pendingColor: '#facc15',
+    pendingWidth: 4,
+    pendingAngleMode: 'acute',
+  });
   const latestOverviewRequestKeyRef = useRef('');
   const actionVideoRetryKeysRef = useRef(new Set<string>());
   const actionCompareVideoLookupKeysRef = useRef(new Set<string>());
   const actionVideoLookupCacheRef = useRef(new Map<number, Pick<PitchActionPoint, 'video_clip_1' | 'video_clip_2' | 'video_clip_3'>>());
+
+  useEffect(() => {
+    breakdownAnnotationsRef.current = {
+      annotations: breakdownAnnotations,
+      active: activeBreakdownAnnotation,
+      pending: breakdownAnglePending,
+      pendingColor: breakdownColor,
+      pendingWidth: breakdownWidth,
+      pendingAngleMode: breakdownAngleMode,
+    };
+  }, [activeBreakdownAnnotation, breakdownAngleMode, breakdownAnglePending, breakdownAnnotations, breakdownColor, breakdownWidth]);
 
   useEffect(() => {
     const syncTheme = () => setIsLightTheme(document.body.classList.contains('theme-light'));
@@ -6267,10 +6304,20 @@ export default function PitchingSuite({
       ctx.lineTo(points[1].x * width, points[1].y * height);
       ctx.lineTo(points[2].x * width, points[2].y * height);
       ctx.stroke();
-      const angle = measureBreakdownAngle(points);
+      for (const point of points) {
+        ctx.beginPath();
+        ctx.arc(point.x * width, point.y * height, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,0.78)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.strokeStyle = annotation.color;
+        ctx.lineWidth = annotation.width;
+      }
+      const angle = measureBreakdownAngle(points, annotation.angleMode ?? 'acute');
       if (angle !== null) {
         ctx.font = '800 30px system-ui, -apple-system, sans-serif';
-        ctx.fillText(`${angle.toFixed(0)}°`, points[1].x * width + 16, points[1].y * height - 16);
+        ctx.fillText(`${angle.toFixed(1)}°`, points[1].x * width + 16, points[1].y * height - 16);
       }
     } else {
       ctx.beginPath();
@@ -6442,45 +6489,158 @@ export default function PitchingSuite({
     if (recordingUrl) URL.revokeObjectURL(recordingUrl);
     setRecordingUrl('');
     try {
-      if (!navigator.mediaDevices?.getDisplayMedia || typeof MediaRecorder === 'undefined') {
-        setBreakdownMessage('Screen recording is not supported in this browser.');
+      const container = actionViewRef.current;
+      if (!container || typeof MediaRecorder === 'undefined') {
+        setBreakdownMessage('Recording is not supported in this browser.');
         return;
       }
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-      let micStream: MediaStream | null = null;
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch {
-        micStream = null;
+      const videos = actionSideBySide
+        ? [leftCompareVideoRef.current, rightCompareVideoRef.current].filter((video): video is HTMLVideoElement => Boolean(video))
+        : [singleActionVideoRef.current].filter((video): video is HTMLVideoElement => Boolean(video));
+      if (!videos.length) {
+        setBreakdownMessage('Video is not ready to record.');
+        return;
       }
-      const tracks = [...displayStream.getVideoTracks(), ...displayStream.getAudioTracks(), ...(micStream?.getAudioTracks() ?? [])];
-      const stream = new MediaStream(tracks);
+      if (recordingAnimationRef.current !== null) {
+        cancelAnimationFrame(recordingAnimationRef.current);
+        recordingAnimationRef.current = null;
+      }
+      const rect = container.getBoundingClientRect();
+      const scale = Math.min(2, window.devicePixelRatio || 1);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(2, Math.round(rect.width * scale));
+      canvas.height = Math.max(2, Math.round(rect.height * scale));
+      const canvasScaleX = canvas.width / Math.max(1, rect.width);
+      const canvasScaleY = canvas.height / Math.max(1, rect.height);
+      const ctx = canvas.getContext('2d');
+      const captureStream = canvas.captureStream?.(30);
+      if (!ctx || !captureStream) {
+        setBreakdownMessage('Canvas recording is not supported in this browser.');
+        return;
+      }
+      const { default: html2canvas } = await import('html2canvas');
+      let staticCanvas: HTMLCanvasElement | null = null;
+      try {
+        staticCanvas = await html2canvas(container, {
+          scale,
+          useCORS: true,
+          allowTaint: false,
+          backgroundColor: '#000000',
+          logging: false,
+          ignoreElements: (element) =>
+            element instanceof HTMLElement
+              ? element.dataset.breakdownUi === 'true' || element.dataset.breakdownRecordingIgnore === 'true'
+              : element.getAttribute?.('data-breakdown-recording-ignore') === 'true',
+        });
+      } catch {
+        staticCanvas = null;
+      }
+      const audioTracks = videos.flatMap((video) => {
+        const capturedVideo = video as HTMLVideoElement & { captureStream?: () => MediaStream; mozCaptureStream?: () => MediaStream };
+        return capturedVideo.captureStream?.().getAudioTracks() ?? capturedVideo.mozCaptureStream?.().getAudioTracks() ?? [];
+      });
+      const stream = new MediaStream([...captureStream.getVideoTracks(), ...audioTracks]);
       recordingStreamRef.current = stream;
       recordingChunksRef.current = [];
-      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
-        ? 'video/webm;codecs=vp9,opus'
-        : 'video/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
+      const recordingFormat = BREAKDOWN_RECORDING_MIME_OPTIONS.find((option) => MediaRecorder.isTypeSupported(option.mimeType)) ?? BREAKDOWN_RECORDING_MIME_OPTIONS[BREAKDOWN_RECORDING_MIME_OPTIONS.length - 1]!;
+      const recorder = new MediaRecorder(stream, { mimeType: recordingFormat.mimeType });
       mediaRecorderRef.current = recorder;
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) recordingChunksRef.current.push(event.data);
       };
       recorder.onstop = () => {
-        const blob = new Blob(recordingChunksRef.current, { type: 'video/webm' });
+        if (recordingAnimationRef.current !== null) {
+          cancelAnimationFrame(recordingAnimationRef.current);
+          recordingAnimationRef.current = null;
+        }
+        const blob = new Blob(recordingChunksRef.current, { type: recordingFormat.mimeType });
         setRecordingBlob(blob);
         setRecordingUrl(URL.createObjectURL(blob));
+        setRecordingDownloadName(`video-breakdown-${Date.now()}.${recordingFormat.extension}`);
         setRecordingState('ready');
         recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
         recordingStreamRef.current = null;
       };
-      displayStream.getVideoTracks()[0]?.addEventListener('ended', () => {
-        if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
-      });
+      const drawVideoToElementBox = (video: HTMLVideoElement) => {
+        const videoRect = video.getBoundingClientRect();
+        const x = (videoRect.left - rect.left) * canvasScaleX;
+        const y = (videoRect.top - rect.top) * canvasScaleY;
+        const width = videoRect.width * canvasScaleX;
+        const height = videoRect.height * canvasScaleY;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(x, y, width, height);
+        if (video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
+        const videoAspect = video.videoWidth / video.videoHeight;
+        const boxAspect = width / Math.max(1, height);
+        let drawWidth = width;
+        let drawHeight = height;
+        let drawX = x;
+        let drawY = y;
+        if (videoAspect > boxAspect) {
+          drawHeight = width / videoAspect;
+          drawY = y + (height - drawHeight) / 2;
+        } else {
+          drawWidth = height * videoAspect;
+          drawX = x + (width - drawWidth) / 2;
+        }
+        try {
+          ctx.drawImage(video, drawX, drawY, drawWidth, drawHeight);
+        } catch {
+          // Cross-origin video frames can block canvas export. Keep the static capture and overlays.
+        }
+      };
+      const renderFrame = () => {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (staticCanvas) {
+          ctx.drawImage(staticCanvas, 0, 0, canvas.width, canvas.height);
+        } else {
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        videos.forEach(drawVideoToElementBox);
+        const stage = breakdownCaptureRef.current;
+        if (stage) {
+          const stageRect = stage.getBoundingClientRect();
+          const overlay = stage.querySelector<SVGSVGElement>('[data-breakdown-recording-ignore="true"]');
+          const overlayRect = overlay?.getBoundingClientRect() ?? stageRect;
+          const stageX = (overlayRect.left - rect.left) * canvasScaleX;
+          const stageY = (overlayRect.top - rect.top) * canvasScaleY;
+          ctx.save();
+          ctx.translate(stageX, stageY);
+          ctx.scale(canvasScaleX, canvasScaleY);
+          const current = breakdownAnnotationsRef.current;
+          current.annotations.forEach((annotation) => drawAnnotationOnCanvas(ctx, annotation, overlayRect.width, overlayRect.height));
+          if (current.active) drawAnnotationOnCanvas(ctx, current.active, overlayRect.width, overlayRect.height);
+          if (current.pending.length > 0) {
+            drawAnnotationOnCanvas(
+              ctx,
+              {
+                id: 'angle-pending-recording',
+                tool: 'angle',
+                color: current.pendingColor,
+                width: current.pendingWidth,
+                points: current.pending,
+                angleMode: current.pendingAngleMode,
+              },
+              overlayRect.width,
+              overlayRect.height
+            );
+          }
+          ctx.restore();
+        }
+        recordingAnimationRef.current = requestAnimationFrame(renderFrame);
+      };
+      renderFrame();
       recorder.start();
       setRecordingState('recording');
-      setBreakdownMessage('Recording started. Choose this tab/window when prompted so the video and drawings are captured.');
+      setBreakdownMessage('Recording Edger breakdown.');
     } catch (error) {
       setBreakdownMessage(error instanceof Error ? error.message : 'Failed to start recording.');
+      if (recordingAnimationRef.current !== null) {
+        cancelAnimationFrame(recordingAnimationRef.current);
+        recordingAnimationRef.current = null;
+      }
       recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
       recordingStreamRef.current = null;
       setRecordingState('idle');
@@ -6490,6 +6650,10 @@ export default function PitchingSuite({
   const stopBreakdownRecording = () => {
     const recorder = mediaRecorderRef.current;
     if (recorder?.state === 'recording') recorder.stop();
+    if (recordingAnimationRef.current !== null) {
+      cancelAnimationFrame(recordingAnimationRef.current);
+      recordingAnimationRef.current = null;
+    }
   };
 
   const saveBreakdownRecording = async () => {
@@ -6499,7 +6663,7 @@ export default function PitchingSuite({
     }
     const dataUrl = await blobToDataUrl(recordingBlob);
     await saveBreakdownNote(
-      { name: `video-breakdown-${Date.now()}.webm`, mimeType: recordingBlob.type || 'video/webm', dataUrl },
+      { name: recordingDownloadName, mimeType: recordingBlob.type || 'video/webm', dataUrl },
       'Recorded video breakdown'
     );
   };
@@ -6507,6 +6671,7 @@ export default function PitchingSuite({
   useEffect(() => {
     return () => {
       if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+      if (recordingAnimationRef.current !== null) cancelAnimationFrame(recordingAnimationRef.current);
       recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, [recordingUrl]);
@@ -6593,6 +6758,7 @@ export default function PitchingSuite({
     <svg
       viewBox="0 0 1000 1000"
       preserveAspectRatio="none"
+      data-breakdown-recording-ignore="true"
       style={{
         position: 'absolute',
         inset: 0,
@@ -13968,6 +14134,51 @@ export default function PitchingSuite({
                                   >
                                     {BREAKDOWN_TOOL_ICONS.view}
                                   </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost portal-media-breakdown-color-tool"
+                                    aria-label="Change drawing color"
+                                    title="Color"
+                                    style={{ ...actionModalButtonStyle, width: 36, minWidth: 36, height: 36, padding: 0, minHeight: 36, borderRadius: 10 }}
+                                    onClick={() => {
+                                      const currentIndex = BREAKDOWN_COLOR_SWATCHES.findIndex((swatch) => swatch.toLowerCase() === breakdownColor.toLowerCase());
+                                      setBreakdownColor(BREAKDOWN_COLOR_SWATCHES[(currentIndex + 1) % BREAKDOWN_COLOR_SWATCHES.length]);
+                                    }}
+                                  >
+                                    <span className="portal-media-breakdown-color-tool-dot" style={{ background: breakdownColor }} />
+                                  </button>
+                                  {breakdownMode && breakdownTool === 'angle' ? (
+                                    <button
+                                      type="button"
+                                      className={breakdownAngleMode === 'obtuse' ? 'btn btn-primary portal-media-breakdown-mode-tool' : 'btn btn-ghost portal-media-breakdown-mode-tool'}
+                                      aria-label="Toggle angle mode"
+                                      title={breakdownAngleMode === 'acute' ? 'Angle: acute' : 'Angle: obtuse'}
+                                      style={breakdownAngleMode === 'obtuse' ? { width: 36, minWidth: 36, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: 17 } : { ...actionModalButtonStyle, width: 36, minWidth: 36, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: 17 }}
+                                      onClick={() => setBreakdownAngleMode((current) => (current === 'acute' ? 'obtuse' : 'acute'))}
+                                    >
+                                      <span>{breakdownAngleMode === 'acute' ? 'Ac' : 'Ob'}</span>
+                                    </button>
+                                  ) : null}
+                                  {breakdownMode && breakdownTool === 'text' ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost portal-media-breakdown-mode-tool"
+                                      aria-label="Change text size"
+                                      title={`Font ${breakdownTextFontSize}`}
+                                      style={{ ...actionModalButtonStyle, width: 36, minWidth: 36, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: 17 }}
+                                      onClick={() => {
+                                        const next = BREAKDOWN_TEXT_SIZE_STEPS.find((step) => step > breakdownTextFontSize) ?? BREAKDOWN_TEXT_SIZE_STEPS[0];
+                                        setBreakdownTextFontSize(next);
+                                        if (selectedBreakdownTextId) {
+                                          setBreakdownAnnotations((items) =>
+                                            items.map((item) => (item.id === selectedBreakdownTextId ? { ...item, fontSize: next } : item))
+                                          );
+                                        }
+                                      }}
+                                    >
+                                      <span>{breakdownTextFontSize}</span>
+                                    </button>
+                                  ) : null}
                                   {BREAKDOWN_TOOL_ORDER.map((tool) => (
                                     <button
                                       key={tool}
@@ -13991,66 +14202,41 @@ export default function PitchingSuite({
                                   <button type="button" className="btn btn-ghost" style={{ ...actionModalButtonStyle, width: 44, minWidth: 44, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: '0.68rem', fontWeight: 900 }} onClick={() => setBreakdownAnnotations([])} disabled={!breakdownAnnotations.length} title="Clear">
                                     Clear
                                   </button>
+                                  {recordingState === 'recording' ? (
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary portal-media-breakdown-record-tool is-recording"
+                                      style={{ width: 44, minWidth: 44, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: '0.66rem', fontWeight: 900 }}
+                                      onClick={stopBreakdownRecording}
+                                      title="Stop recording"
+                                    >
+                                      Stop
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost portal-media-breakdown-record-tool"
+                                      style={{ ...actionModalButtonStyle, width: 44, minWidth: 44, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: '0.66rem', fontWeight: 900 }}
+                                      onClick={() => void startBreakdownRecording()}
+                                      title="Record breakdown"
+                                    >
+                                      Rec
+                                    </button>
+                                  )}
+                                  {recordingUrl ? (
+                                    <a
+                                      className="btn btn-ghost portal-media-breakdown-record-download"
+                                      href={recordingUrl}
+                                      download={recordingDownloadName}
+                                      style={{ ...actionModalButtonStyle, width: 44, minWidth: 44, height: 36, padding: 0, minHeight: 36, borderRadius: 10, fontSize: '0.66rem', fontWeight: 900, display: 'inline-grid', placeItems: 'center', textDecoration: 'none' }}
+                                      title="Download recording"
+                                    >
+                                      DL
+                                    </a>
+                                  ) : null}
                                   <button type="button" className={showBreakdownNotePanel ? 'btn btn-primary' : 'btn btn-ghost'} style={showBreakdownNotePanel ? { padding: '0 0.7rem', minHeight: 36, borderRadius: 10, fontSize: '0.72rem', fontWeight: 900 } : { ...actionModalButtonStyle, padding: '0 0.7rem', minHeight: 36, borderRadius: 10, fontSize: '0.72rem', fontWeight: 900 }} onClick={() => setShowBreakdownNotePanel((value) => !value)}>
                                     Save
                                   </button>
-                                </div>
-                                <div className="portal-edger-breakdown-tool-settings" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                                  {breakdownMode && breakdownTool === 'angle' ? (
-                                    <div style={{ display: 'inline-flex', gap: 4, padding: 3, borderRadius: 10, background: 'rgba(15,23,42,0.74)' }}>
-                                      <button
-                                        type="button"
-                                        className={breakdownAngleMode === 'acute' ? 'btn btn-primary' : 'btn btn-ghost'}
-                                        style={breakdownAngleMode === 'acute' ? { padding: '0.26rem 0.5rem', minHeight: 0, fontSize: '0.72rem' } : { ...actionModalButtonStyle, padding: '0.26rem 0.5rem', minHeight: 0, fontSize: '0.72rem' }}
-                                        onClick={() => setBreakdownAngleMode('acute')}
-                                      >
-                                        Acute
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className={breakdownAngleMode === 'obtuse' ? 'btn btn-primary' : 'btn btn-ghost'}
-                                        style={breakdownAngleMode === 'obtuse' ? { padding: '0.26rem 0.5rem', minHeight: 0, fontSize: '0.72rem' } : { ...actionModalButtonStyle, padding: '0.26rem 0.5rem', minHeight: 0, fontSize: '0.72rem' }}
-                                        onClick={() => setBreakdownAngleMode('obtuse')}
-                                      >
-                                        Obtuse
-                                      </button>
-                                    </div>
-                                  ) : null}
-                                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#e5e7eb', fontWeight: 800, fontSize: '0.72rem' }}>
-                                    Color
-                                    <input
-                                      type="color"
-                                      value={breakdownColor}
-                                      onChange={(event) => setBreakdownColor(event.target.value)}
-                                      aria-label="Drawing color"
-                                      style={{ width: 32, height: 28, border: '1px solid rgba(148,163,184,0.32)', borderRadius: 8, padding: 2, background: 'rgba(15,23,42,0.9)' }}
-                                    />
-                                  </label>
-                                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#e5e7eb', fontWeight: 800, fontSize: '0.72rem' }}>
-                                    Width
-                                    <input type="range" min={2} max={10} value={breakdownWidth} onChange={(event) => setBreakdownWidth(Number(event.target.value))} style={{ width: 88 }} />
-                                  </label>
-                                  {breakdownMode && breakdownTool === 'text' ? (
-                                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#e5e7eb', fontWeight: 800, fontSize: '0.72rem' }}>
-                                      Font
-                                  <input
-                                    type="range"
-                                    min={16}
-                                    max={96}
-                                    value={breakdownTextFontSize}
-                                    onChange={(event) => {
-                                      const next = Number(event.target.value);
-                                      setBreakdownTextFontSize(next);
-                                      if (selectedBreakdownTextId) {
-                                        setBreakdownAnnotations((items) =>
-                                          items.map((item) => (item.id === selectedBreakdownTextId ? { ...item, fontSize: next } : item))
-                                        );
-                                      }
-                                    }}
-                                    style={{ width: 88 }}
-                                  />
-                                    </label>
-                                  ) : null}
                                 </div>
                               </div>
                             ) : (
@@ -14116,7 +14302,7 @@ export default function PitchingSuite({
                                       <button type="button" className="btn btn-primary" style={{ padding: '0.42rem 0.7rem' }} onClick={() => void saveBreakdownRecording()} disabled={breakdownSaving}>
                                         Save Recording
                                       </button>
-                                      <a className="btn btn-ghost" href={recordingUrl} download={`video-breakdown-${Date.now()}.webm`} style={{ ...actionModalButtonStyle, padding: '0.42rem 0.7rem' }}>
+                                      <a className="btn btn-ghost" href={recordingUrl} download={recordingDownloadName} style={{ ...actionModalButtonStyle, padding: '0.42rem 0.7rem' }}>
                                         Download Recording
                                       </a>
                                     </>
