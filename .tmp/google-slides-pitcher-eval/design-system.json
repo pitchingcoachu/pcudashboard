@@ -1,0 +1,4280 @@
+{
+  "version": 1,
+  "kind": "slides-derived-design-system",
+  "pageSizePt": {
+    "width": 959.9744094488188,
+    "height": 540
+  },
+  "multiMaster": false,
+  "masters": [
+    {
+      "masterId": "p6",
+      "displayName": "Office Theme",
+      "effectivePageProperties": {
+        "pageBackgroundFill": {
+          "propertyState": "NOT_RENDERED",
+          "solidFill": {
+            "color": {
+              "rgbColor": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            "alpha": 1
+          }
+        },
+        "colorScheme": {
+          "colors": [
+            {
+              "type": "DARK1",
+              "color": {}
+            },
+            {
+              "type": "LIGHT1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "DARK2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            },
+            {
+              "type": "LIGHT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "ACCENT1",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.44705883,
+                "blue": 0.76862746
+              }
+            },
+            {
+              "type": "ACCENT2",
+              "color": {
+                "red": 0.92941177,
+                "green": 0.49019608,
+                "blue": 0.19215687
+              }
+            },
+            {
+              "type": "ACCENT3",
+              "color": {
+                "red": 0.64705884,
+                "green": 0.64705884,
+                "blue": 0.64705884
+              }
+            },
+            {
+              "type": "ACCENT4",
+              "color": {
+                "red": 1,
+                "green": 0.7529412
+              }
+            },
+            {
+              "type": "ACCENT5",
+              "color": {
+                "red": 0.35686275,
+                "green": 0.60784316,
+                "blue": 0.8352941
+              }
+            },
+            {
+              "type": "ACCENT6",
+              "color": {
+                "red": 0.4392157,
+                "green": 0.6784314,
+                "blue": 0.2784314
+              }
+            },
+            {
+              "type": "HYPERLINK",
+              "color": {
+                "red": 0.019607844,
+                "green": 0.3882353,
+                "blue": 0.75686276
+              }
+            },
+            {
+              "type": "FOLLOWED_HYPERLINK",
+              "color": {
+                "red": 0.58431375,
+                "green": 0.30980393,
+                "blue": 0.44705883
+              }
+            },
+            {
+              "type": "TEXT1",
+              "color": {}
+            },
+            {
+              "type": "BACKGROUND1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "TEXT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "BACKGROUND2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            }
+          ]
+        }
+      },
+      "themeColors": {
+        "DARK1": {},
+        "LIGHT1": {
+          "red": 1,
+          "green": 1,
+          "blue": 1
+        },
+        "DARK2": {
+          "red": 0.26666668,
+          "green": 0.32941177,
+          "blue": 0.41568628
+        },
+        "LIGHT2": {
+          "red": 0.90588236,
+          "green": 0.9019608,
+          "blue": 0.9019608
+        },
+        "ACCENT1": {
+          "red": 0.26666668,
+          "green": 0.44705883,
+          "blue": 0.76862746
+        },
+        "ACCENT2": {
+          "red": 0.92941177,
+          "green": 0.49019608,
+          "blue": 0.19215687
+        },
+        "ACCENT3": {
+          "red": 0.64705884,
+          "green": 0.64705884,
+          "blue": 0.64705884
+        },
+        "ACCENT4": {
+          "red": 1,
+          "green": 0.7529412
+        },
+        "ACCENT5": {
+          "red": 0.35686275,
+          "green": 0.60784316,
+          "blue": 0.8352941
+        },
+        "ACCENT6": {
+          "red": 0.4392157,
+          "green": 0.6784314,
+          "blue": 0.2784314
+        },
+        "HYPERLINK": {
+          "red": 0.019607844,
+          "green": 0.3882353,
+          "blue": 0.75686276
+        },
+        "FOLLOWED_HYPERLINK": {
+          "red": 0.58431375,
+          "green": 0.30980393,
+          "blue": 0.44705883
+        },
+        "TEXT1": {},
+        "BACKGROUND1": {
+          "red": 1,
+          "green": 1,
+          "blue": 1
+        },
+        "TEXT2": {
+          "red": 0.90588236,
+          "green": 0.9019608,
+          "blue": 0.9019608
+        },
+        "BACKGROUND2": {
+          "red": 0.26666668,
+          "green": 0.32941177,
+          "blue": 0.41568628
+        }
+      },
+      "elementKinds": {},
+      "placeholderObjectIds": [],
+      "protectedRegions": []
+    }
+  ],
+  "layouts": [
+    {
+      "layoutId": "p7",
+      "masterId": "p6",
+      "name": "DEFAULT",
+      "displayName": "DEFAULT",
+      "effectivePageProperties": {
+        "pageBackgroundFill": {
+          "propertyState": "NOT_RENDERED",
+          "solidFill": {
+            "color": {
+              "rgbColor": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              },
+              "themeColor": "LIGHT1"
+            },
+            "alpha": 1
+          }
+        },
+        "colorScheme": {
+          "colors": [
+            {
+              "type": "DARK1",
+              "color": {}
+            },
+            {
+              "type": "LIGHT1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "DARK2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            },
+            {
+              "type": "LIGHT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "ACCENT1",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.44705883,
+                "blue": 0.76862746
+              }
+            },
+            {
+              "type": "ACCENT2",
+              "color": {
+                "red": 0.92941177,
+                "green": 0.49019608,
+                "blue": 0.19215687
+              }
+            },
+            {
+              "type": "ACCENT3",
+              "color": {
+                "red": 0.64705884,
+                "green": 0.64705884,
+                "blue": 0.64705884
+              }
+            },
+            {
+              "type": "ACCENT4",
+              "color": {
+                "red": 1,
+                "green": 0.7529412
+              }
+            },
+            {
+              "type": "ACCENT5",
+              "color": {
+                "red": 0.35686275,
+                "green": 0.60784316,
+                "blue": 0.8352941
+              }
+            },
+            {
+              "type": "ACCENT6",
+              "color": {
+                "red": 0.4392157,
+                "green": 0.6784314,
+                "blue": 0.2784314
+              }
+            },
+            {
+              "type": "HYPERLINK",
+              "color": {
+                "red": 0.019607844,
+                "green": 0.3882353,
+                "blue": 0.75686276
+              }
+            },
+            {
+              "type": "FOLLOWED_HYPERLINK",
+              "color": {
+                "red": 0.58431375,
+                "green": 0.30980393,
+                "blue": 0.44705883
+              }
+            },
+            {
+              "type": "TEXT1",
+              "color": {}
+            },
+            {
+              "type": "BACKGROUND1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "TEXT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "BACKGROUND2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            }
+          ]
+        }
+      },
+      "themeColors": {
+        "DARK1": {},
+        "LIGHT1": {
+          "red": 1,
+          "green": 1,
+          "blue": 1
+        },
+        "DARK2": {
+          "red": 0.26666668,
+          "green": 0.32941177,
+          "blue": 0.41568628
+        },
+        "LIGHT2": {
+          "red": 0.90588236,
+          "green": 0.9019608,
+          "blue": 0.9019608
+        },
+        "ACCENT1": {
+          "red": 0.26666668,
+          "green": 0.44705883,
+          "blue": 0.76862746
+        },
+        "ACCENT2": {
+          "red": 0.92941177,
+          "green": 0.49019608,
+          "blue": 0.19215687
+        },
+        "ACCENT3": {
+          "red": 0.64705884,
+          "green": 0.64705884,
+          "blue": 0.64705884
+        },
+        "ACCENT4": {
+          "red": 1,
+          "green": 0.7529412
+        },
+        "ACCENT5": {
+          "red": 0.35686275,
+          "green": 0.60784316,
+          "blue": 0.8352941
+        },
+        "ACCENT6": {
+          "red": 0.4392157,
+          "green": 0.6784314,
+          "blue": 0.2784314
+        },
+        "HYPERLINK": {
+          "red": 0.019607844,
+          "green": 0.3882353,
+          "blue": 0.75686276
+        },
+        "FOLLOWED_HYPERLINK": {
+          "red": 0.58431375,
+          "green": 0.30980393,
+          "blue": 0.44705883
+        },
+        "TEXT1": {},
+        "BACKGROUND1": {
+          "red": 1,
+          "green": 1,
+          "blue": 1
+        },
+        "TEXT2": {
+          "red": 0.90588236,
+          "green": 0.9019608,
+          "blue": 0.9019608
+        },
+        "BACKGROUND2": {
+          "red": 0.26666668,
+          "green": 0.32941177,
+          "blue": 0.41568628
+        }
+      },
+      "elementKinds": {},
+      "placeholderSlots": [],
+      "signature": {
+        "placeholderCounts": {},
+        "placeholderTypes": [],
+        "textSlotCount": 0,
+        "mediaSlotCount": 0,
+        "textAreaRatio": 0,
+        "mediaAreaRatio": 0,
+        "dominantMediaAspectRatio": null,
+        "dominantMediaAreaRatio": null,
+        "dominantMediaPanel": null
+      },
+      "previewSlideIds": [
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5"
+      ],
+      "usageCount": 5,
+      "protectedRegions": []
+    }
+  ],
+  "slides": [
+    {
+      "slideId": "p1",
+      "index": 0,
+      "layoutId": "p7",
+      "masterId": "p6",
+      "isSkipped": false,
+      "titlePreview": "PHOTO PLACEHOLDER",
+      "effectivePageProperties": {
+        "pageBackgroundFill": {
+          "propertyState": "NOT_RENDERED",
+          "solidFill": {
+            "color": {
+              "rgbColor": {
+                "red": 0.14509805,
+                "green": 0.16078432,
+                "blue": 0.1764706
+              },
+              "themeColor": "LIGHT1"
+            },
+            "alpha": 1
+          }
+        },
+        "colorScheme": {
+          "colors": [
+            {
+              "type": "DARK1",
+              "color": {}
+            },
+            {
+              "type": "LIGHT1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "DARK2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            },
+            {
+              "type": "LIGHT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "ACCENT1",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.44705883,
+                "blue": 0.76862746
+              }
+            },
+            {
+              "type": "ACCENT2",
+              "color": {
+                "red": 0.92941177,
+                "green": 0.49019608,
+                "blue": 0.19215687
+              }
+            },
+            {
+              "type": "ACCENT3",
+              "color": {
+                "red": 0.64705884,
+                "green": 0.64705884,
+                "blue": 0.64705884
+              }
+            },
+            {
+              "type": "ACCENT4",
+              "color": {
+                "red": 1,
+                "green": 0.7529412
+              }
+            },
+            {
+              "type": "ACCENT5",
+              "color": {
+                "red": 0.35686275,
+                "green": 0.60784316,
+                "blue": 0.8352941
+              }
+            },
+            {
+              "type": "ACCENT6",
+              "color": {
+                "red": 0.4392157,
+                "green": 0.6784314,
+                "blue": 0.2784314
+              }
+            },
+            {
+              "type": "HYPERLINK",
+              "color": {
+                "red": 0.019607844,
+                "green": 0.3882353,
+                "blue": 0.75686276
+              }
+            },
+            {
+              "type": "FOLLOWED_HYPERLINK",
+              "color": {
+                "red": 0.58431375,
+                "green": 0.30980393,
+                "blue": 0.44705883
+              }
+            },
+            {
+              "type": "TEXT1",
+              "color": {}
+            },
+            {
+              "type": "BACKGROUND1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "TEXT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "BACKGROUND2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            }
+          ]
+        }
+      },
+      "placeholderLineage": [],
+      "effectiveContent": {
+        "directContentObjectIds": [
+          "p1_i3",
+          "p1_i5"
+        ],
+        "inheritedVisualObjectIds": [],
+        "hasDirectContent": true,
+        "hasInheritedVisual": false
+      },
+      "localComposition": {
+        "objects": [
+          {
+            "objectId": "p1_i2",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 50.4,
+              "y": 44.64,
+              "width": 860.4000000000001,
+              "height": 450,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.7468949098462682,
+            "aspectRatio": 1.9120000000000001,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.7468949098462682
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p1_i3",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 332.64,
+              "y": 249.12,
+              "width": 295.20000000000005,
+              "height": 12.95999999999998,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.007380196732606461,
+            "aspectRatio": 22.777777777777818,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.007380196732606461
+            },
+            "mediaGeometry": null,
+            "textPreview": "PHOTO PLACEHOLDER",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p1_i4",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 0,
+              "y": 352.8,
+              "width": 959.9759842519685,
+              "height": 187.2,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.3466672353607414,
+            "aspectRatio": 5.128076838952824,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "horizontal-band",
+              "areaRatio": 0.3466672353607414
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p1_i5",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 61.2,
+              "y": 370.8,
+              "width": 712.8000000000001,
+              "height": 82.80000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.11385303496033157,
+            "aspectRatio": 8.608695652173912,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.11385303496033157
+            },
+            "mediaGeometry": null,
+            "textPreview": "How to Evaluate a Pitcher's Performance",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p1_i6",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 61.2,
+              "y": 470.16,
+              "width": 151.20000000000005,
+              "height": 5.759999999999991,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0016800447846583818,
+            "aspectRatio": 26.25000000000005,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "bottom",
+              "classification": "left-bottom",
+              "areaRatio": 0.0016800447846583818
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          }
+        ],
+        "contentBearingObjectIds": [
+          "p1_i3",
+          "p1_i5"
+        ],
+        "slideLocalContentObjectIds": [
+          "p1_i3",
+          "p1_i5"
+        ],
+        "slideLocalDecorationObjectIds": [
+          "p1_i2",
+          "p1_i4",
+          "p1_i6"
+        ]
+      },
+      "mediaSignature": {
+        "mediaObjectCount": 0,
+        "occupiedAreaRatio": 0,
+        "dominantObjectId": null,
+        "dominantAspectRatio": null,
+        "dominantAreaRatio": null,
+        "dominantPanel": null
+      },
+      "protectedRegions": [],
+      "attentionReasons": []
+    },
+    {
+      "slideId": "p2",
+      "index": 1,
+      "layoutId": "p7",
+      "masterId": "p6",
+      "isSkipped": false,
+      "titlePreview": "The Big 3",
+      "effectivePageProperties": {
+        "pageBackgroundFill": {
+          "propertyState": "NOT_RENDERED",
+          "solidFill": {
+            "color": {
+              "rgbColor": {
+                "red": 0.96862745,
+                "green": 0.972549,
+                "blue": 0.95686275
+              },
+              "themeColor": "LIGHT1"
+            },
+            "alpha": 1
+          }
+        },
+        "colorScheme": {
+          "colors": [
+            {
+              "type": "DARK1",
+              "color": {}
+            },
+            {
+              "type": "LIGHT1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "DARK2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            },
+            {
+              "type": "LIGHT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "ACCENT1",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.44705883,
+                "blue": 0.76862746
+              }
+            },
+            {
+              "type": "ACCENT2",
+              "color": {
+                "red": 0.92941177,
+                "green": 0.49019608,
+                "blue": 0.19215687
+              }
+            },
+            {
+              "type": "ACCENT3",
+              "color": {
+                "red": 0.64705884,
+                "green": 0.64705884,
+                "blue": 0.64705884
+              }
+            },
+            {
+              "type": "ACCENT4",
+              "color": {
+                "red": 1,
+                "green": 0.7529412
+              }
+            },
+            {
+              "type": "ACCENT5",
+              "color": {
+                "red": 0.35686275,
+                "green": 0.60784316,
+                "blue": 0.8352941
+              }
+            },
+            {
+              "type": "ACCENT6",
+              "color": {
+                "red": 0.4392157,
+                "green": 0.6784314,
+                "blue": 0.2784314
+              }
+            },
+            {
+              "type": "HYPERLINK",
+              "color": {
+                "red": 0.019607844,
+                "green": 0.3882353,
+                "blue": 0.75686276
+              }
+            },
+            {
+              "type": "FOLLOWED_HYPERLINK",
+              "color": {
+                "red": 0.58431375,
+                "green": 0.30980393,
+                "blue": 0.44705883
+              }
+            },
+            {
+              "type": "TEXT1",
+              "color": {}
+            },
+            {
+              "type": "BACKGROUND1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "TEXT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "BACKGROUND2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            }
+          ]
+        }
+      },
+      "placeholderLineage": [],
+      "effectiveContent": {
+        "directContentObjectIds": [
+          "p2_i3",
+          "p2_i5",
+          "p2_i8",
+          "p2_i9",
+          "p2_i12",
+          "p2_i13",
+          "p2_i16",
+          "p2_i17"
+        ],
+        "inheritedVisualObjectIds": [],
+        "hasDirectContent": true,
+        "hasInheritedVisual": false
+      },
+      "localComposition": {
+        "objects": [
+          {
+            "objectId": "p2_i2",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 0,
+              "y": 0,
+              "width": 959.9759842519685,
+              "height": 25.92,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.04800007874225651,
+            "aspectRatio": 37.036110503548166,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "horizontal-band",
+              "areaRatio": 0.04800007874225651
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i3",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 44.64,
+              "y": 52.56,
+              "width": 849.6,
+              "height": 31.680000000000007,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.051921384059204344,
+            "aspectRatio": 26.818181818181813,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.051921384059204344
+            },
+            "mediaGeometry": null,
+            "textPreview": "The Big 3",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i4",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 44.64,
+              "y": 96.48,
+              "width": 867.6,
+              "height": 236.2204724409449,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.3953517461710553,
+            "aspectRatio": 3.67284,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "horizontal-band",
+              "areaRatio": 0.3953517461710553
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i5",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 884.16,
+              "y": 507.6,
+              "width": 32.39999999999998,
+              "height": 11.519999999999982,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0007200191934250199,
+            "aspectRatio": 2.8125000000000027,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "bottom",
+              "classification": "right-bottom",
+              "areaRatio": 0.0007200191934250199
+            },
+            "mediaGeometry": null,
+            "textPreview": "02",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i6",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 59.04,
+              "y": 136.79999999999998,
+              "width": 255.60000000000005,
+              "height": 277.20000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.1366786434185623,
+            "aspectRatio": 0.9220779220779222,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.1366786434185623
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i7",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 59.04,
+              "y": 136.79999999999998,
+              "width": 5.759999999999998,
+              "height": 277.20000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0030800821052070367,
+            "aspectRatio": 0.02077922077922077,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.0030800821052070367
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i8",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 77.76,
+              "y": 154.08,
+              "width": 218.16000000000003,
+              "height": 18.72,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.00787821000805878,
+            "aspectRatio": 11.653846153846155,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "top",
+              "classification": "left-top",
+              "areaRatio": 0.00787821000805878
+            },
+            "mediaGeometry": null,
+            "textPreview": "K%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i9",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 77.76,
+              "y": 192.96,
+              "width": 218.16000000000003,
+              "height": 208.79999999999998,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.08787234239757868,
+            "aspectRatio": 1.0448275862068968,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.08787234239757868
+            },
+            "mediaGeometry": null,
+            "textPreview": "Generate swing and miss",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i10",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 352.08,
+              "y": 136.79999999999998,
+              "width": 255.60000000000008,
+              "height": 277.20000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.13667864341856234,
+            "aspectRatio": 0.9220779220779222,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.13667864341856234
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i11",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 352.08,
+              "y": 136.79999999999998,
+              "width": 5.759999999999991,
+              "height": 277.20000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.003080082105207033,
+            "aspectRatio": 0.020779220779220745,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.003080082105207033
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i12",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 370.8,
+              "y": 154.08,
+              "width": 218.16000000000003,
+              "height": 18.72,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.00787821000805878,
+            "aspectRatio": 11.653846153846155,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.00787821000805878
+            },
+            "mediaGeometry": null,
+            "textPreview": "BB%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i13",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 370.8,
+              "y": 192.96,
+              "width": 218.16000000000003,
+              "height": 208.79999999999998,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.08787234239757868,
+            "aspectRatio": 1.0448275862068968,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.08787234239757868
+            },
+            "mediaGeometry": null,
+            "textPreview": "Limit free bases",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i14",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 645.1200000000001,
+              "y": 136.79999999999998,
+              "width": 255.60000000000002,
+              "height": 277.20000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.1366786434185623,
+            "aspectRatio": 0.922077922077922,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.1366786434185623
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i15",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 645.1200000000001,
+              "y": 136.79999999999998,
+              "width": 5.759999999999991,
+              "height": 277.20000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.003080082105207033,
+            "aspectRatio": 0.020779220779220745,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.003080082105207033
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i16",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 663.84,
+              "y": 154.08,
+              "width": 218.15999999999997,
+              "height": 18.72,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.007878210008058776,
+            "aspectRatio": 11.653846153846153,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "top",
+              "classification": "right-top",
+              "areaRatio": 0.007878210008058776
+            },
+            "mediaGeometry": null,
+            "textPreview": "Barrel%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p2_i17",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 663.84,
+              "y": 192.96,
+              "width": 218.15999999999997,
+              "height": 208.79999999999998,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.08787234239757866,
+            "aspectRatio": 1.0448275862068965,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.08787234239757866
+            },
+            "mediaGeometry": null,
+            "textPreview": "Limit damage",
+            "mediaIdentity": null
+          }
+        ],
+        "contentBearingObjectIds": [
+          "p2_i3",
+          "p2_i5",
+          "p2_i8",
+          "p2_i9",
+          "p2_i12",
+          "p2_i13",
+          "p2_i16",
+          "p2_i17"
+        ],
+        "slideLocalContentObjectIds": [
+          "p2_i3",
+          "p2_i5",
+          "p2_i8",
+          "p2_i9",
+          "p2_i12",
+          "p2_i13",
+          "p2_i16",
+          "p2_i17"
+        ],
+        "slideLocalDecorationObjectIds": [
+          "p2_i2",
+          "p2_i4",
+          "p2_i6",
+          "p2_i7",
+          "p2_i10",
+          "p2_i11",
+          "p2_i14",
+          "p2_i15"
+        ]
+      },
+      "mediaSignature": {
+        "mediaObjectCount": 0,
+        "occupiedAreaRatio": 0,
+        "dominantObjectId": null,
+        "dominantAspectRatio": null,
+        "dominantAreaRatio": null,
+        "dominantPanel": null
+      },
+      "protectedRegions": [],
+      "attentionReasons": []
+    },
+    {
+      "slideId": "p3",
+      "index": 2,
+      "layoutId": "p7",
+      "masterId": "p6",
+      "isSkipped": false,
+      "titlePreview": "Why Use Rates Instead of /9?",
+      "effectivePageProperties": {
+        "pageBackgroundFill": {
+          "propertyState": "NOT_RENDERED",
+          "solidFill": {
+            "color": {
+              "rgbColor": {
+                "red": 0.96862745,
+                "green": 0.972549,
+                "blue": 0.95686275
+              },
+              "themeColor": "LIGHT1"
+            },
+            "alpha": 1
+          }
+        },
+        "colorScheme": {
+          "colors": [
+            {
+              "type": "DARK1",
+              "color": {}
+            },
+            {
+              "type": "LIGHT1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "DARK2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            },
+            {
+              "type": "LIGHT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "ACCENT1",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.44705883,
+                "blue": 0.76862746
+              }
+            },
+            {
+              "type": "ACCENT2",
+              "color": {
+                "red": 0.92941177,
+                "green": 0.49019608,
+                "blue": 0.19215687
+              }
+            },
+            {
+              "type": "ACCENT3",
+              "color": {
+                "red": 0.64705884,
+                "green": 0.64705884,
+                "blue": 0.64705884
+              }
+            },
+            {
+              "type": "ACCENT4",
+              "color": {
+                "red": 1,
+                "green": 0.7529412
+              }
+            },
+            {
+              "type": "ACCENT5",
+              "color": {
+                "red": 0.35686275,
+                "green": 0.60784316,
+                "blue": 0.8352941
+              }
+            },
+            {
+              "type": "ACCENT6",
+              "color": {
+                "red": 0.4392157,
+                "green": 0.6784314,
+                "blue": 0.2784314
+              }
+            },
+            {
+              "type": "HYPERLINK",
+              "color": {
+                "red": 0.019607844,
+                "green": 0.3882353,
+                "blue": 0.75686276
+              }
+            },
+            {
+              "type": "FOLLOWED_HYPERLINK",
+              "color": {
+                "red": 0.58431375,
+                "green": 0.30980393,
+                "blue": 0.44705883
+              }
+            },
+            {
+              "type": "TEXT1",
+              "color": {}
+            },
+            {
+              "type": "BACKGROUND1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "TEXT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "BACKGROUND2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            }
+          ]
+        }
+      },
+      "placeholderLineage": [],
+      "effectiveContent": {
+        "directContentObjectIds": [
+          "p3_i3",
+          "p3_i5",
+          "p3_i6",
+          "p3_i8",
+          "p3_i9",
+          "p3_i11",
+          "p3_i12",
+          "p3_i13"
+        ],
+        "inheritedVisualObjectIds": [],
+        "hasDirectContent": true,
+        "hasInheritedVisual": false
+      },
+      "localComposition": {
+        "objects": [
+          {
+            "objectId": "p3_i2",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 0,
+              "y": 0,
+              "width": 959.9759842519685,
+              "height": 25.92,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.04800007874225651,
+            "aspectRatio": 37.036110503548166,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "horizontal-band",
+              "areaRatio": 0.04800007874225651
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i3",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 44.64,
+              "y": 52.56,
+              "width": 849.6,
+              "height": 31.680000000000007,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.051921384059204344,
+            "aspectRatio": 26.818181818181813,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.051921384059204344
+            },
+            "mediaGeometry": null,
+            "textPreview": "Why Use Rates Instead of /9?",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i4",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 44.64,
+              "y": 96.48,
+              "width": 867.6,
+              "height": 236.2204724409449,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.3953517461710553,
+            "aspectRatio": 3.67284,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "horizontal-band",
+              "areaRatio": 0.3953517461710553
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i5",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 884.16,
+              "y": 507.6,
+              "width": 32.39999999999998,
+              "height": 11.519999999999982,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0007200191934250199,
+            "aspectRatio": 2.8125000000000027,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "bottom",
+              "classification": "right-bottom",
+              "areaRatio": 0.0007200191934250199
+            },
+            "mediaGeometry": null,
+            "textPreview": "03",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i6",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 61.2,
+              "y": 133.20000000000002,
+              "width": 820.8000000000001,
+              "height": 36,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.057001519479480886,
+            "aspectRatio": 22.8,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.057001519479480886
+            },
+            "mediaGeometry": null,
+            "textPreview": "Rates tell us more accurately how a pitcher performs per batter they face.",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i7",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 64.8,
+              "y": 216,
+              "width": 388.8,
+              "height": 154.79999999999995,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.11610309493978471,
+            "aspectRatio": 2.511627906976745,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.11610309493978471
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i8",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 90,
+              "y": 241.92,
+              "width": 108,
+              "height": 15.840000000000003,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.003300087969864683,
+            "aspectRatio": 6.818181818181817,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.003300087969864683
+            },
+            "mediaGeometry": null,
+            "textPreview": "Pitcher A",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i9",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 90,
+              "y": 280.8,
+              "width": 302.40000000000003,
+              "height": 43.19999999999999,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.025200671769875754,
+            "aspectRatio": 7.000000000000003,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.025200671769875754
+            },
+            "mediaGeometry": null,
+            "textPreview": "2 strikeouts 3 batters faced",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i10",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 506.16,
+              "y": 216,
+              "width": 388.8,
+              "height": 154.79999999999995,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.11610309493978471,
+            "aspectRatio": 2.511627906976745,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.11610309493978471
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i11",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 531.36,
+              "y": 241.92,
+              "width": 108,
+              "height": 15.840000000000003,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.003300087969864683,
+            "aspectRatio": 6.818181818181817,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.003300087969864683
+            },
+            "mediaGeometry": null,
+            "textPreview": "Pitcher B",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i12",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 531.36,
+              "y": 280.8,
+              "width": 302.4,
+              "height": 43.19999999999999,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.025200671769875747,
+            "aspectRatio": 7.000000000000001,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.025200671769875747
+            },
+            "mediaGeometry": null,
+            "textPreview": "2 strikeouts 5 batters faced",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p3_i13",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 154.79999999999998,
+              "y": 439.2,
+              "width": 648,
+              "height": 21.600000000000023,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.02700071975343834,
+            "aspectRatio": 29.999999999999968,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.02700071975343834
+            },
+            "mediaGeometry": null,
+            "textPreview": "Same inning total. Different performance per opportunity.",
+            "mediaIdentity": null
+          }
+        ],
+        "contentBearingObjectIds": [
+          "p3_i3",
+          "p3_i5",
+          "p3_i6",
+          "p3_i8",
+          "p3_i9",
+          "p3_i11",
+          "p3_i12",
+          "p3_i13"
+        ],
+        "slideLocalContentObjectIds": [
+          "p3_i3",
+          "p3_i5",
+          "p3_i6",
+          "p3_i8",
+          "p3_i9",
+          "p3_i11",
+          "p3_i12",
+          "p3_i13"
+        ],
+        "slideLocalDecorationObjectIds": [
+          "p3_i2",
+          "p3_i4",
+          "p3_i7",
+          "p3_i10"
+        ]
+      },
+      "mediaSignature": {
+        "mediaObjectCount": 0,
+        "occupiedAreaRatio": 0,
+        "dominantObjectId": null,
+        "dominantAspectRatio": null,
+        "dominantAreaRatio": null,
+        "dominantPanel": null
+      },
+      "protectedRegions": [],
+      "attentionReasons": []
+    },
+    {
+      "slideId": "p4",
+      "index": 3,
+      "layoutId": "p7",
+      "masterId": "p6",
+      "isSkipped": false,
+      "titlePreview": "K%, BB%, Barrel%",
+      "effectivePageProperties": {
+        "pageBackgroundFill": {
+          "propertyState": "NOT_RENDERED",
+          "solidFill": {
+            "color": {
+              "rgbColor": {
+                "red": 0.96862745,
+                "green": 0.972549,
+                "blue": 0.95686275
+              },
+              "themeColor": "LIGHT1"
+            },
+            "alpha": 1
+          }
+        },
+        "colorScheme": {
+          "colors": [
+            {
+              "type": "DARK1",
+              "color": {}
+            },
+            {
+              "type": "LIGHT1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "DARK2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            },
+            {
+              "type": "LIGHT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "ACCENT1",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.44705883,
+                "blue": 0.76862746
+              }
+            },
+            {
+              "type": "ACCENT2",
+              "color": {
+                "red": 0.92941177,
+                "green": 0.49019608,
+                "blue": 0.19215687
+              }
+            },
+            {
+              "type": "ACCENT3",
+              "color": {
+                "red": 0.64705884,
+                "green": 0.64705884,
+                "blue": 0.64705884
+              }
+            },
+            {
+              "type": "ACCENT4",
+              "color": {
+                "red": 1,
+                "green": 0.7529412
+              }
+            },
+            {
+              "type": "ACCENT5",
+              "color": {
+                "red": 0.35686275,
+                "green": 0.60784316,
+                "blue": 0.8352941
+              }
+            },
+            {
+              "type": "ACCENT6",
+              "color": {
+                "red": 0.4392157,
+                "green": 0.6784314,
+                "blue": 0.2784314
+              }
+            },
+            {
+              "type": "HYPERLINK",
+              "color": {
+                "red": 0.019607844,
+                "green": 0.3882353,
+                "blue": 0.75686276
+              }
+            },
+            {
+              "type": "FOLLOWED_HYPERLINK",
+              "color": {
+                "red": 0.58431375,
+                "green": 0.30980393,
+                "blue": 0.44705883
+              }
+            },
+            {
+              "type": "TEXT1",
+              "color": {}
+            },
+            {
+              "type": "BACKGROUND1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "TEXT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "BACKGROUND2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            }
+          ]
+        }
+      },
+      "placeholderLineage": [],
+      "effectiveContent": {
+        "directContentObjectIds": [
+          "p4_i3",
+          "p4_i5",
+          "p4_i8",
+          "p4_i9",
+          "p4_i10",
+          "p4_i12",
+          "p4_i13",
+          "p4_i16",
+          "p4_i17",
+          "p4_i18",
+          "p4_i20",
+          "p4_i21",
+          "p4_i24",
+          "p4_i25",
+          "p4_i26",
+          "p4_i28",
+          "p4_i29"
+        ],
+        "inheritedVisualObjectIds": [],
+        "hasDirectContent": true,
+        "hasInheritedVisual": false
+      },
+      "localComposition": {
+        "objects": [
+          {
+            "objectId": "p4_i2",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 0,
+              "y": 0,
+              "width": 959.9759842519685,
+              "height": 25.92,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.04800007874225651,
+            "aspectRatio": 37.036110503548166,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "horizontal-band",
+              "areaRatio": 0.04800007874225651
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i3",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 44.64,
+              "y": 52.56,
+              "width": 849.6,
+              "height": 31.680000000000007,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.051921384059204344,
+            "aspectRatio": 26.818181818181813,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.051921384059204344
+            },
+            "mediaGeometry": null,
+            "textPreview": "K%, BB%, Barrel%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i4",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 44.64,
+              "y": 96.48,
+              "width": 867.6,
+              "height": 236.2204724409449,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.3953517461710553,
+            "aspectRatio": 3.67284,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "horizontal-band",
+              "areaRatio": 0.3953517461710553
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i5",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 884.16,
+              "y": 507.6,
+              "width": 32.39999999999998,
+              "height": 11.519999999999982,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0007200191934250199,
+            "aspectRatio": 2.8125000000000027,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "bottom",
+              "classification": "right-bottom",
+              "areaRatio": 0.0007200191934250199
+            },
+            "mediaGeometry": null,
+            "textPreview": "04",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i6",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 61.2,
+              "y": 133.20000000000002,
+              "width": 262.8,
+              "height": 284.4,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.1441788433500729,
+            "aspectRatio": 0.9240506329113926,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.1441788433500729
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i7",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 61.2,
+              "y": 133.20000000000002,
+              "width": 262.8,
+              "height": 51.84,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.026280700560013293,
+            "aspectRatio": 5.069444444444445,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "top",
+              "classification": "left-top",
+              "areaRatio": 0.026280700560013293
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i8",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 61.2,
+              "y": 149.04000000000002,
+              "width": 262.8,
+              "height": 15.840000000000003,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.008030214060004063,
+            "aspectRatio": 16.590909090909086,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "top",
+              "classification": "left-top",
+              "areaRatio": 0.008030214060004063
+            },
+            "mediaGeometry": null,
+            "textPreview": "K%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i9",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 86.4,
+              "y": 226.8,
+              "width": 212.4,
+              "height": 14.400000000000006,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005900157279455041,
+            "aspectRatio": 14.749999999999995,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.005900157279455041
+            },
+            "mediaGeometry": null,
+            "textPreview": "MLB Average",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i10",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 86.4,
+              "y": 250.56,
+              "width": 212.4,
+              "height": 33.120000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.01357036174274659,
+            "aspectRatio": 6.413043478260869,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.01357036174274659
+            },
+            "mediaGeometry": null,
+            "textPreview": "22.5%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i11",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 105.84,
+              "y": 308.16,
+              "width": 172.79999999999998,
+              "height": 236.2204724409449,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.07874225649879939,
+            "aspectRatio": 0.73152,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "bottom",
+              "classification": "left-bottom",
+              "areaRatio": 0.07874225649879939
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i12",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 86.4,
+              "y": 331.2,
+              "width": 212.4,
+              "height": 14.399999999999977,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005900157279455029,
+            "aspectRatio": 14.750000000000023,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "bottom",
+              "classification": "left-bottom",
+              "areaRatio": 0.005900157279455029
+            },
+            "mediaGeometry": null,
+            "textPreview": "College Average",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i13",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 86.4,
+              "y": 354.96,
+              "width": 212.4,
+              "height": 33.120000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.01357036174274659,
+            "aspectRatio": 6.413043478260869,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "bottom",
+              "classification": "left-bottom",
+              "areaRatio": 0.01357036174274659
+            },
+            "mediaGeometry": null,
+            "textPreview": "20%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i14",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 348.48,
+              "y": 133.20000000000002,
+              "width": 262.79999999999995,
+              "height": 284.4,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.14417884335007286,
+            "aspectRatio": 0.9240506329113923,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.14417884335007286
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i15",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 348.48,
+              "y": 133.20000000000002,
+              "width": 262.79999999999995,
+              "height": 51.84,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.026280700560013286,
+            "aspectRatio": 5.069444444444443,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.026280700560013286
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i16",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 348.48,
+              "y": 149.04000000000002,
+              "width": 262.79999999999995,
+              "height": 15.840000000000003,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.008030214060004062,
+            "aspectRatio": 16.590909090909083,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.008030214060004062
+            },
+            "mediaGeometry": null,
+            "textPreview": "BB%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i17",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 373.68,
+              "y": 226.8,
+              "width": 212.40000000000003,
+              "height": 14.400000000000006,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005900157279455042,
+            "aspectRatio": 14.749999999999996,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.005900157279455042
+            },
+            "mediaGeometry": null,
+            "textPreview": "MLB Average",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i18",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 373.68,
+              "y": 250.56,
+              "width": 212.40000000000003,
+              "height": 33.120000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.013570361742746591,
+            "aspectRatio": 6.41304347826087,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.013570361742746591
+            },
+            "mediaGeometry": null,
+            "textPreview": "8.7%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i19",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 393.12,
+              "y": 308.16,
+              "width": 172.79999999999995,
+              "height": 236.2204724409449,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.07874225649879937,
+            "aspectRatio": 0.7315199999999998,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.07874225649879937
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i20",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 373.68,
+              "y": 331.2,
+              "width": 212.40000000000003,
+              "height": 14.399999999999977,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005900157279455031,
+            "aspectRatio": 14.750000000000025,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.005900157279455031
+            },
+            "mediaGeometry": null,
+            "textPreview": "College Average",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i21",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 373.68,
+              "y": 354.96,
+              "width": 212.40000000000003,
+              "height": 33.120000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.013570361742746591,
+            "aspectRatio": 6.41304347826087,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.013570361742746591
+            },
+            "mediaGeometry": null,
+            "textPreview": "11%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i22",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 635.76,
+              "y": 133.20000000000002,
+              "width": 262.79999999999995,
+              "height": 284.4,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.14417884335007286,
+            "aspectRatio": 0.9240506329113923,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.14417884335007286
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i23",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 635.76,
+              "y": 133.20000000000002,
+              "width": 262.79999999999995,
+              "height": 51.84,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.026280700560013286,
+            "aspectRatio": 5.069444444444443,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "top",
+              "classification": "right-top",
+              "areaRatio": 0.026280700560013286
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i24",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 635.76,
+              "y": 149.04000000000002,
+              "width": 262.79999999999995,
+              "height": 15.840000000000003,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.008030214060004062,
+            "aspectRatio": 16.590909090909083,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "top",
+              "classification": "right-top",
+              "areaRatio": 0.008030214060004062
+            },
+            "mediaGeometry": null,
+            "textPreview": "Barrel%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i25",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 660.96,
+              "y": 226.8,
+              "width": 212.39999999999998,
+              "height": 14.400000000000006,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.00590015727945504,
+            "aspectRatio": 14.749999999999993,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.00590015727945504
+            },
+            "mediaGeometry": null,
+            "textPreview": "MLB Average",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i26",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 660.96,
+              "y": 250.56,
+              "width": 212.39999999999998,
+              "height": 33.120000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.013570361742746588,
+            "aspectRatio": 6.413043478260868,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.013570361742746588
+            },
+            "mediaGeometry": null,
+            "textPreview": "18%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i27",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 680.4,
+              "y": 308.16,
+              "width": 172.79999999999995,
+              "height": 236.2204724409449,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.07874225649879937,
+            "aspectRatio": 0.7315199999999998,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "bottom",
+              "classification": "right-bottom",
+              "areaRatio": 0.07874225649879937
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i28",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 660.96,
+              "y": 331.2,
+              "width": 212.39999999999998,
+              "height": 14.399999999999977,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005900157279455028,
+            "aspectRatio": 14.750000000000021,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "bottom",
+              "classification": "right-bottom",
+              "areaRatio": 0.005900157279455028
+            },
+            "mediaGeometry": null,
+            "textPreview": "College Average",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p4_i29",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 660.96,
+              "y": 354.96,
+              "width": 212.39999999999998,
+              "height": 33.120000000000005,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.013570361742746588,
+            "aspectRatio": 6.413043478260868,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "bottom",
+              "classification": "right-bottom",
+              "areaRatio": 0.013570361742746588
+            },
+            "mediaGeometry": null,
+            "textPreview": "17%",
+            "mediaIdentity": null
+          }
+        ],
+        "contentBearingObjectIds": [
+          "p4_i3",
+          "p4_i5",
+          "p4_i8",
+          "p4_i9",
+          "p4_i10",
+          "p4_i12",
+          "p4_i13",
+          "p4_i16",
+          "p4_i17",
+          "p4_i18",
+          "p4_i20",
+          "p4_i21",
+          "p4_i24",
+          "p4_i25",
+          "p4_i26",
+          "p4_i28",
+          "p4_i29"
+        ],
+        "slideLocalContentObjectIds": [
+          "p4_i3",
+          "p4_i5",
+          "p4_i8",
+          "p4_i9",
+          "p4_i10",
+          "p4_i12",
+          "p4_i13",
+          "p4_i16",
+          "p4_i17",
+          "p4_i18",
+          "p4_i20",
+          "p4_i21",
+          "p4_i24",
+          "p4_i25",
+          "p4_i26",
+          "p4_i28",
+          "p4_i29"
+        ],
+        "slideLocalDecorationObjectIds": [
+          "p4_i2",
+          "p4_i4",
+          "p4_i6",
+          "p4_i7",
+          "p4_i11",
+          "p4_i14",
+          "p4_i15",
+          "p4_i19",
+          "p4_i22",
+          "p4_i23",
+          "p4_i27"
+        ]
+      },
+      "mediaSignature": {
+        "mediaObjectCount": 0,
+        "occupiedAreaRatio": 0,
+        "dominantObjectId": null,
+        "dominantAspectRatio": null,
+        "dominantAreaRatio": null,
+        "dominantPanel": null
+      },
+      "protectedRegions": [],
+      "attentionReasons": []
+    },
+    {
+      "slideId": "p5",
+      "index": 4,
+      "layoutId": "p7",
+      "masterId": "p6",
+      "isSkipped": false,
+      "titlePreview": "Decision Tree",
+      "effectivePageProperties": {
+        "pageBackgroundFill": {
+          "propertyState": "NOT_RENDERED",
+          "solidFill": {
+            "color": {
+              "rgbColor": {
+                "red": 0.96862745,
+                "green": 0.972549,
+                "blue": 0.95686275
+              },
+              "themeColor": "LIGHT1"
+            },
+            "alpha": 1
+          }
+        },
+        "colorScheme": {
+          "colors": [
+            {
+              "type": "DARK1",
+              "color": {}
+            },
+            {
+              "type": "LIGHT1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "DARK2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            },
+            {
+              "type": "LIGHT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "ACCENT1",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.44705883,
+                "blue": 0.76862746
+              }
+            },
+            {
+              "type": "ACCENT2",
+              "color": {
+                "red": 0.92941177,
+                "green": 0.49019608,
+                "blue": 0.19215687
+              }
+            },
+            {
+              "type": "ACCENT3",
+              "color": {
+                "red": 0.64705884,
+                "green": 0.64705884,
+                "blue": 0.64705884
+              }
+            },
+            {
+              "type": "ACCENT4",
+              "color": {
+                "red": 1,
+                "green": 0.7529412
+              }
+            },
+            {
+              "type": "ACCENT5",
+              "color": {
+                "red": 0.35686275,
+                "green": 0.60784316,
+                "blue": 0.8352941
+              }
+            },
+            {
+              "type": "ACCENT6",
+              "color": {
+                "red": 0.4392157,
+                "green": 0.6784314,
+                "blue": 0.2784314
+              }
+            },
+            {
+              "type": "HYPERLINK",
+              "color": {
+                "red": 0.019607844,
+                "green": 0.3882353,
+                "blue": 0.75686276
+              }
+            },
+            {
+              "type": "FOLLOWED_HYPERLINK",
+              "color": {
+                "red": 0.58431375,
+                "green": 0.30980393,
+                "blue": 0.44705883
+              }
+            },
+            {
+              "type": "TEXT1",
+              "color": {}
+            },
+            {
+              "type": "BACKGROUND1",
+              "color": {
+                "red": 1,
+                "green": 1,
+                "blue": 1
+              }
+            },
+            {
+              "type": "TEXT2",
+              "color": {
+                "red": 0.90588236,
+                "green": 0.9019608,
+                "blue": 0.9019608
+              }
+            },
+            {
+              "type": "BACKGROUND2",
+              "color": {
+                "red": 0.26666668,
+                "green": 0.32941177,
+                "blue": 0.41568628
+              }
+            }
+          ]
+        }
+      },
+      "placeholderLineage": [],
+      "effectiveContent": {
+        "directContentObjectIds": [
+          "p5_i3",
+          "p5_i5",
+          "p5_i7",
+          "p5_i9",
+          "p5_i11",
+          "p5_i15",
+          "p5_i19",
+          "p5_i21",
+          "p5_i23",
+          "p5_i27",
+          "p5_i31",
+          "p5_i33",
+          "p5_i35",
+          "p5_i39",
+          "p5_i47",
+          "p5_i48"
+        ],
+        "inheritedVisualObjectIds": [],
+        "hasDirectContent": true,
+        "hasInheritedVisual": false
+      },
+      "localComposition": {
+        "objects": [
+          {
+            "objectId": "p5_i2",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 0,
+              "y": 0,
+              "width": 959.9759842519685,
+              "height": 25.92,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.04800007874225651,
+            "aspectRatio": 37.036110503548166,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "horizontal-band",
+              "areaRatio": 0.04800007874225651
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i3",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 44.64,
+              "y": 52.56,
+              "width": 849.6,
+              "height": 31.680000000000007,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.051921384059204344,
+            "aspectRatio": 26.818181818181813,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.051921384059204344
+            },
+            "mediaGeometry": null,
+            "textPreview": "Decision Tree",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i4",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 44.64,
+              "y": 96.48,
+              "width": 867.6,
+              "height": 236.2204724409449,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.3953517461710553,
+            "aspectRatio": 3.67284,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "horizontal-band",
+              "areaRatio": 0.3953517461710553
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i5",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 884.16,
+              "y": 507.6,
+              "width": 32.39999999999998,
+              "height": 11.519999999999982,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0007200191934250199,
+            "aspectRatio": 2.8125000000000027,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "bottom",
+              "classification": "right-bottom",
+              "areaRatio": 0.0007200191934250199
+            },
+            "mediaGeometry": null,
+            "textPreview": "05",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i6",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 131.76,
+              "y": 118.8,
+              "width": 97.19999999999999,
+              "height": 39.59999999999998,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0074251979321955305,
+            "aspectRatio": 2.4545454545454555,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "top",
+              "classification": "left-top",
+              "areaRatio": 0.0074251979321955305
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i7",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 136.08,
+              "y": 132.12,
+              "width": 88.56,
+              "height": 11.52000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0019680524620283944,
+            "aspectRatio": 7.687499999999994,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "top",
+              "classification": "left-top",
+              "areaRatio": 0.0019680524620283944
+            },
+            "mediaGeometry": null,
+            "textPreview": "K%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i8",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 74.16,
+              "y": 205.2,
+              "width": 84.96000000000001,
+              "height": 31.680000000000007,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005192138405920435,
+            "aspectRatio": 2.6818181818181817,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.005192138405920435
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i9",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 78.47999999999999,
+              "y": 214.56,
+              "width": 76.32,
+              "height": 11.52000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0016960452111789413,
+            "aspectRatio": 6.624999999999994,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.0016960452111789413
+            },
+            "mediaGeometry": null,
+            "textPreview": "RHH",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i10",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 212.4,
+              "y": 205.2,
+              "width": 84.96000000000001,
+              "height": 31.680000000000007,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005192138405920435,
+            "aspectRatio": 2.6818181818181817,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.005192138405920435
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i11",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 216.72,
+              "y": 214.56,
+              "width": 76.31999999999996,
+              "height": 11.52000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0016960452111789406,
+            "aspectRatio": 6.624999999999991,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.0016960452111789406
+            },
+            "mediaGeometry": null,
+            "textPreview": "LHH",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i12",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 116.63999999999999,
+              "y": 158.4,
+              "width": 63.360000000000014,
+              "height": 46.80000000000001,
+              "rotatedOrSkewed": true
+            },
+            "areaRatio": 0.005720152481098786,
+            "aspectRatio": 1.3538461538461537,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "top",
+              "classification": "left-top",
+              "areaRatio": 0.005720152481098786
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i13",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 180,
+              "y": 158.4,
+              "width": 74.88,
+              "height": 46.80000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.006760180204934926,
+            "aspectRatio": 1.5999999999999994,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "top",
+              "classification": "left-top",
+              "areaRatio": 0.006760180204934926
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i14",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 81.35999999999999,
+              "y": 291.59999999999997,
+              "width": 216.00000000000003,
+              "height": 66.24000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.027600735747959168,
+            "aspectRatio": 3.260869565217391,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "bottom",
+              "classification": "left-bottom",
+              "areaRatio": 0.027600735747959168
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i15",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 85.68,
+              "y": 318.24,
+              "width": 207.36,
+              "height": 11.519999999999982,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.004608122837920132,
+            "aspectRatio": 18.00000000000003,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.004608122837920132
+            },
+            "mediaGeometry": null,
+            "textPreview": "Whiff% CSW% Stuff",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i16",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 116.64,
+              "y": 236.88,
+              "width": 24.480000000000004,
+              "height": 54.72000000000003,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0025840688830698014,
+            "aspectRatio": 0.4473684210526314,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.0025840688830698014
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i17",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 234.72,
+              "y": 236.88,
+              "width": 20.159999999999997,
+              "height": 54.72000000000003,
+              "rotatedOrSkewed": true
+            },
+            "areaRatio": 0.0021280567272339537,
+            "aspectRatio": 0.3684210526315787,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "middle",
+              "classification": "left-middle",
+              "areaRatio": 0.0021280567272339537
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i18",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 409.68,
+              "y": 118.8,
+              "width": 97.19999999999999,
+              "height": 39.59999999999998,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0074251979321955305,
+            "aspectRatio": 2.4545454545454555,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.0074251979321955305
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i19",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 414,
+              "y": 132.12,
+              "width": 88.56,
+              "height": 11.52000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0019680524620283944,
+            "aspectRatio": 7.687499999999994,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.0019680524620283944
+            },
+            "mediaGeometry": null,
+            "textPreview": "BB%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i20",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 352.08,
+              "y": 205.2,
+              "width": 84.95999999999998,
+              "height": 31.680000000000007,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005192138405920433,
+            "aspectRatio": 2.6818181818181808,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.005192138405920433
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i21",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 356.4,
+              "y": 214.56,
+              "width": 76.32,
+              "height": 11.52000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0016960452111789413,
+            "aspectRatio": 6.624999999999994,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.0016960452111789413
+            },
+            "mediaGeometry": null,
+            "textPreview": "RHH",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i22",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 490.32,
+              "y": 205.2,
+              "width": 84.95999999999998,
+              "height": 31.680000000000007,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005192138405920433,
+            "aspectRatio": 2.6818181818181808,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.005192138405920433
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i23",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 494.64,
+              "y": 214.56,
+              "width": 76.32000000000005,
+              "height": 11.52000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0016960452111789426,
+            "aspectRatio": 6.624999999999998,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.0016960452111789426
+            },
+            "mediaGeometry": null,
+            "textPreview": "LHH",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i24",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 394.56,
+              "y": 158.4,
+              "width": 63.360000000000014,
+              "height": 46.80000000000001,
+              "rotatedOrSkewed": true
+            },
+            "areaRatio": 0.005720152481098786,
+            "aspectRatio": 1.3538461538461537,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.005720152481098786
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i25",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 457.92,
+              "y": 158.4,
+              "width": 74.87999999999994,
+              "height": 46.80000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.006760180204934922,
+            "aspectRatio": 1.5999999999999983,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "top",
+              "classification": "center-top",
+              "areaRatio": 0.006760180204934922
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i26",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 359.28,
+              "y": 291.59999999999997,
+              "width": 216,
+              "height": 66.24000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.027600735747959165,
+            "aspectRatio": 3.2608695652173907,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.027600735747959165
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i27",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 363.6,
+              "y": 318.24,
+              "width": 207.36,
+              "height": 11.519999999999982,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.004608122837920132,
+            "aspectRatio": 18.00000000000003,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.004608122837920132
+            },
+            "mediaGeometry": null,
+            "textPreview": "InZone% Strike% FPS% E+A%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i28",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 394.56,
+              "y": 236.88,
+              "width": 24.480000000000018,
+              "height": 54.72000000000003,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.002584068883069803,
+            "aspectRatio": 0.4473684210526317,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.002584068883069803
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i29",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 512.6400000000001,
+              "y": 236.88,
+              "width": 20.159999999999968,
+              "height": 54.72000000000003,
+              "rotatedOrSkewed": true
+            },
+            "areaRatio": 0.0021280567272339503,
+            "aspectRatio": 0.3684210526315782,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "classification": "center-middle",
+              "areaRatio": 0.0021280567272339503
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i30",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 687.6,
+              "y": 118.8,
+              "width": 97.20000000000005,
+              "height": 39.59999999999998,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.007425197932195536,
+            "aspectRatio": 2.454545454545457,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "top",
+              "classification": "right-top",
+              "areaRatio": 0.007425197932195536
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i31",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 691.92,
+              "y": 132.12,
+              "width": 88.56000000000006,
+              "height": 11.52000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0019680524620283957,
+            "aspectRatio": 7.687499999999998,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "top",
+              "classification": "right-top",
+              "areaRatio": 0.0019680524620283957
+            },
+            "mediaGeometry": null,
+            "textPreview": "Barrel%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i32",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 630,
+              "y": 205.2,
+              "width": 84.96000000000004,
+              "height": 31.680000000000007,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005192138405920437,
+            "aspectRatio": 2.6818181818181825,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.005192138405920437
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i33",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 634.32,
+              "y": 214.56,
+              "width": 76.32000000000005,
+              "height": 11.52000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0016960452111789426,
+            "aspectRatio": 6.624999999999998,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.0016960452111789426
+            },
+            "mediaGeometry": null,
+            "textPreview": "RHH",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i34",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 768.24,
+              "y": 205.2,
+              "width": 84.96000000000004,
+              "height": 31.680000000000007,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.005192138405920437,
+            "aspectRatio": 2.6818181818181825,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.005192138405920437
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i35",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 772.56,
+              "y": 214.56,
+              "width": 76.31999999999994,
+              "height": 11.52000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.00169604521117894,
+            "aspectRatio": 6.6249999999999885,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.00169604521117894
+            },
+            "mediaGeometry": null,
+            "textPreview": "LHH",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i36",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 672.48,
+              "y": 158.4,
+              "width": 63.360000000000014,
+              "height": 46.80000000000001,
+              "rotatedOrSkewed": true
+            },
+            "areaRatio": 0.005720152481098786,
+            "aspectRatio": 1.3538461538461537,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "top",
+              "classification": "right-top",
+              "areaRatio": 0.005720152481098786
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i37",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 735.84,
+              "y": 158.4,
+              "width": 74.88,
+              "height": 46.80000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.006760180204934926,
+            "aspectRatio": 1.5999999999999994,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "top",
+              "classification": "right-top",
+              "areaRatio": 0.006760180204934926
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i38",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 637.1999999999999,
+              "y": 291.59999999999997,
+              "width": 216,
+              "height": 66.24000000000001,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.027600735747959165,
+            "aspectRatio": 3.2608695652173907,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "bottom",
+              "classification": "right-bottom",
+              "areaRatio": 0.027600735747959165
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i39",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 641.52,
+              "y": 318.24,
+              "width": 207.36,
+              "height": 11.519999999999982,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.004608122837920132,
+            "aspectRatio": 18.00000000000003,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.004608122837920132
+            },
+            "mediaGeometry": null,
+            "textPreview": "Location GB%",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i40",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 672.48,
+              "y": 236.88,
+              "width": 24.480000000000018,
+              "height": 54.72000000000003,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.002584068883069803,
+            "aspectRatio": 0.4473684210526317,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.002584068883069803
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i41",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 790.5600000000001,
+              "y": 236.88,
+              "width": 20.159999999999968,
+              "height": 54.72000000000003,
+              "rotatedOrSkewed": true
+            },
+            "areaRatio": 0.0021280567272339503,
+            "aspectRatio": 0.3684210526315782,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "middle",
+              "classification": "right-middle",
+              "areaRatio": 0.0021280567272339503
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i42",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 169.2,
+              "y": 381.6,
+              "width": 626.3999999999999,
+              "height": 236.22047244094495,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.2854406798081478,
+            "aspectRatio": 2.6517599999999986,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.2854406798081478
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i43",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 189.36,
+              "y": 357.84,
+              "width": 290.88,
+              "height": 92.16000000000003,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.05171337851443712,
+            "aspectRatio": 3.156249999999999,
+            "panel": {
+              "horizontal": "left",
+              "vertical": "bottom",
+              "classification": "left-bottom",
+              "areaRatio": 0.05171337851443712
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i44",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 467.28,
+              "y": 357.84,
+              "width": 12.95999999999998,
+              "height": 92.16000000000003,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.0023040614189600663,
+            "aspectRatio": 0.14062499999999975,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.0023040614189600663
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i45",
+            "kind": "line",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 480.24000000000007,
+              "y": 357.84,
+              "width": 264.96,
+              "height": 92.16000000000003,
+              "rotatedOrSkewed": true
+            },
+            "areaRatio": 0.04710525567651698,
+            "aspectRatio": 2.874999999999999,
+            "panel": {
+              "horizontal": "right",
+              "vertical": "bottom",
+              "classification": "right-bottom",
+              "areaRatio": 0.04710525567651698
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i46",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-decoration",
+            "contentBearing": false,
+            "boundsPt": {
+              "x": 378,
+              "y": 450,
+              "width": 205.20000000000005,
+              "height": 39.60000000000002,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.015675417856857256,
+            "aspectRatio": 5.18181818181818,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.015675417856857256
+            },
+            "mediaGeometry": null,
+            "textPreview": null,
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i47",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 382.32,
+              "y": 463.32,
+              "width": 196.56,
+              "height": 11.519999999999982,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.004368116440111791,
+            "aspectRatio": 17.06250000000003,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.004368116440111791
+            },
+            "mediaGeometry": null,
+            "textPreview": "Pitch Usage",
+            "mediaIdentity": null
+          },
+          {
+            "objectId": "p5_i48",
+            "kind": "shape",
+            "placeholder": null,
+            "classification": "slide-local-content",
+            "contentBearing": true,
+            "boundsPt": {
+              "x": 86.4,
+              "y": 496.8,
+              "width": 784.8000000000001,
+              "height": 14.399999999999977,
+              "rotatedOrSkewed": false
+            },
+            "areaRatio": 0.021800581134257566,
+            "aspectRatio": 54.50000000000009,
+            "panel": {
+              "horizontal": "center",
+              "vertical": "bottom",
+              "classification": "center-bottom",
+              "areaRatio": 0.021800581134257566
+            },
+            "mediaGeometry": null,
+            "textPreview": "Determine the weak link by batter handedness, then check whether pitch usage supports or explains the result.",
+            "mediaIdentity": null
+          }
+        ],
+        "contentBearingObjectIds": [
+          "p5_i3",
+          "p5_i5",
+          "p5_i7",
+          "p5_i9",
+          "p5_i11",
+          "p5_i15",
+          "p5_i19",
+          "p5_i21",
+          "p5_i23",
+          "p5_i27",
+          "p5_i31",
+          "p5_i33",
+          "p5_i35",
+          "p5_i39",
+          "p5_i47",
+          "p5_i48"
+        ],
+        "slideLocalContentObjectIds": [
+          "p5_i3",
+          "p5_i5",
+          "p5_i7",
+          "p5_i9",
+          "p5_i11",
+          "p5_i15",
+          "p5_i19",
+          "p5_i21",
+          "p5_i23",
+          "p5_i27",
+          "p5_i31",
+          "p5_i33",
+          "p5_i35",
+          "p5_i39",
+          "p5_i47",
+          "p5_i48"
+        ],
+        "slideLocalDecorationObjectIds": [
+          "p5_i2",
+          "p5_i4",
+          "p5_i6",
+          "p5_i8",
+          "p5_i10",
+          "p5_i12",
+          "p5_i13",
+          "p5_i14",
+          "p5_i16",
+          "p5_i17",
+          "p5_i18",
+          "p5_i20",
+          "p5_i22",
+          "p5_i24",
+          "p5_i25",
+          "p5_i26",
+          "p5_i28",
+          "p5_i29",
+          "p5_i30",
+          "p5_i32",
+          "p5_i34",
+          "p5_i36",
+          "p5_i37",
+          "p5_i38",
+          "p5_i40",
+          "p5_i41",
+          "p5_i42",
+          "p5_i43",
+          "p5_i44",
+          "p5_i45",
+          "p5_i46"
+        ]
+      },
+      "mediaSignature": {
+        "mediaObjectCount": 0,
+        "occupiedAreaRatio": 0,
+        "dominantObjectId": null,
+        "dominantAspectRatio": null,
+        "dominantAreaRatio": null,
+        "dominantPanel": null
+      },
+      "protectedRegions": [],
+      "attentionReasons": []
+    }
+  ],
+  "placeholders": {},
+  "source": {
+    "presentation": {
+      "id": "1sPu_6E3eSnRBO7KoxZtb0Vq0ghGERj2J2bl0wMLgfYU",
+      "title": "Pitcher Performance Evaluation - Staff Presentation",
+      "revisionId": "LSh7MW_hp_mg4w",
+      "locale": "en-US",
+      "pageSizePt": {
+        "width": 959.9744094488188,
+        "height": 540
+      },
+      "slideCount": 5,
+      "slideIds": [
+        "p1",
+        "p2",
+        "p3",
+        "p4",
+        "p5"
+      ]
+    },
+    "snapshotSha256": "4a9498880926f42eb68b793f6b289998afbeb27ce4c9bb55297d9b02a25a23a5"
+  }
+}

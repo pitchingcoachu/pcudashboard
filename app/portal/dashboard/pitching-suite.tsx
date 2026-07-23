@@ -279,6 +279,7 @@ type PitchActionPoint = OverviewPayload['chart_points'][number];
 type PitchEditSelectMode = 'single' | 'lasso';
 type PlotLasso = { startX: number; startY: number; endX: number; endY: number; dragging: boolean } | null;
 type BreakdownTool = 'line' | 'arrow' | 'circle' | 'pen' | 'text' | 'angle' | 'erase';
+type ActionCompareLayout = 'side-by-side' | 'stacked' | 'overlay';
 type BreakdownAnnotation = {
   id: string;
   tool: Exclude<BreakdownTool, 'erase'>;
@@ -2146,6 +2147,813 @@ function AbPaChart({
   );
 }
 
+const DNA_METRIC_COLUMNS = ['Velo', 'IVB', 'HB', 'Spin', 'Ext', 'Height', 'Side'] as const;
+type DnaMetricColumn = (typeof DNA_METRIC_COLUMNS)[number];
+const DNA_METRIC_LABELS: Record<DnaMetricColumn, string> = {
+  Velo: 'Velo',
+  IVB: 'IVB',
+  HB: 'HB',
+  Spin: 'Spin',
+  Ext: 'Extension',
+  Height: 'Rel. Height',
+  Side: 'Rel. Side',
+};
+
+type DnaPitcherRow = {
+  key: string;
+  pitcher: string;
+  teamCode: string;
+  teamLabel: string;
+  metrics: Partial<Record<DnaMetricColumn, number>>;
+  pitches: number;
+  throwsHand: 'R' | 'L';
+};
+
+// Metrics whose sign is an artifact of which arm a pitcher throws with (e.g. a
+// lefty's glove-side break/release is numerically the mirror of a righty's).
+// Flipping lefties onto the same sign convention as righties lets pitchers
+// with equivalent shapes land near each other in PCA space regardless of hand.
+const HANDEDNESS_MIRRORED_COLUMNS = new Set<DnaMetricColumn>(['HB', 'Side']);
+
+function normalizeForHandedness(row: DnaPitcherRow): Partial<Record<DnaMetricColumn, number>> {
+  if (row.throwsHand !== 'L') return row.metrics;
+  const normalized: Partial<Record<DnaMetricColumn, number>> = { ...row.metrics };
+  for (const col of HANDEDNESS_MIRRORED_COLUMNS) {
+    const value = normalized[col];
+    if (value !== undefined) normalized[col] = -value;
+  }
+  return normalized;
+}
+
+type DnaPoint = {
+  key: string;
+  pitcher: string;
+  teamCode: string;
+  teamLabel: string;
+  pc1: number;
+  pc2: number;
+  metrics: Partial<Record<DnaMetricColumn, number>>;
+};
+
+// Symmetric eigendecomposition via the cyclic Jacobi method. Matrices here are
+// small (<= 7x7, one dimension per DNA metric) so this converges in a handful
+// of sweeps without needing a linear-algebra dependency.
+function jacobiEigenDecomposition(matrixIn: number[][]): { values: number[]; vectors: number[][] } {
+  const n = matrixIn.length;
+  const a = matrixIn.map((row) => [...row]);
+  const v: number[][] = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => (i === j ? 1 : 0)));
+
+  for (let sweep = 0; sweep < 100; sweep += 1) {
+    let off = 0;
+    for (let i = 0; i < n; i += 1) {
+      for (let j = i + 1; j < n; j += 1) off += a[i][j] * a[i][j];
+    }
+    if (off < 1e-12) break;
+
+    for (let p = 0; p < n; p += 1) {
+      for (let q = p + 1; q < n; q += 1) {
+        if (Math.abs(a[p][q]) < 1e-14) continue;
+        const theta = (a[q][q] - a[p][p]) / (2 * a[p][q]);
+        const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+        const c = 1 / Math.sqrt(t * t + 1);
+        const s = t * c;
+        const app = a[p][p];
+        const aqq = a[q][q];
+        const apq = a[p][q];
+        a[p][p] = c * c * app - 2 * s * c * apq + s * s * aqq;
+        a[q][q] = s * s * app + 2 * s * c * apq + c * c * aqq;
+        a[p][q] = 0;
+        a[q][p] = 0;
+        for (let k = 0; k < n; k += 1) {
+          if (k === p || k === q) continue;
+          const akp = a[k][p];
+          const akq = a[k][q];
+          a[k][p] = c * akp - s * akq;
+          a[p][k] = a[k][p];
+          a[k][q] = s * akp + c * akq;
+          a[q][k] = a[k][q];
+        }
+        for (let k = 0; k < n; k += 1) {
+          const vkp = v[k][p];
+          const vkq = v[k][q];
+          v[k][p] = c * vkp - s * vkq;
+          v[k][q] = s * vkp + c * vkq;
+        }
+      }
+    }
+  }
+
+  const values = Array.from({ length: n }, (_, i) => a[i][i]);
+  const order = values.map((_, i) => i).sort((i, j) => values[j] - values[i]);
+  return {
+    values: order.map((i) => values[i]),
+    vectors: order.map((i) => v.map((row) => row[i])),
+  };
+}
+
+function computePitcherDnaPca(
+  rows: DnaPitcherRow[],
+  columns: DnaMetricColumn[]
+): {
+  points: DnaPoint[];
+  loadings: Record<DnaMetricColumn, { pc1: number; pc2: number }>;
+  varianceExplainedPct: { pc1: number; pc2: number };
+} {
+  const empty = {
+    points: [] as DnaPoint[],
+    loadings: {} as Record<DnaMetricColumn, { pc1: number; pc2: number }>,
+    varianceExplainedPct: { pc1: 0, pc2: 0 },
+  };
+  const usableRows = rows.filter((row) => columns.every((col) => Number.isFinite(row.metrics[col])));
+  if (usableRows.length < 3) return empty;
+
+  const usable = usableRows.map((row) => ({ row, handednessNormalized: normalizeForHandedness(row) }));
+  const n = usable.length;
+  const p = columns.length;
+  const means = columns.map((col) => usable.reduce((sum, entry) => sum + (entry.handednessNormalized[col] as number), 0) / n);
+  const stds = columns.map((col, ci) => {
+    const variance = usable.reduce((sum, entry) => sum + ((entry.handednessNormalized[col] as number) - means[ci]) ** 2, 0) / Math.max(1, n - 1);
+    return Math.sqrt(variance) || 1;
+  });
+
+  const z = usable.map((entry) => columns.map((col, ci) => ((entry.handednessNormalized[col] as number) - means[ci]) / stds[ci]));
+
+  const cov: number[][] = Array.from({ length: p }, () => Array.from({ length: p }, () => 0));
+  for (let i = 0; i < p; i += 1) {
+    for (let j = 0; j < p; j += 1) {
+      let sum = 0;
+      for (let k = 0; k < n; k += 1) sum += z[k][i] * z[k][j];
+      cov[i][j] = sum / Math.max(1, n - 1);
+    }
+  }
+
+  const { vectors, values } = jacobiEigenDecomposition(cov);
+  const pc1Vec = vectors[0] ?? columns.map(() => 0);
+  const pc2Vec = vectors[1] ?? columns.map(() => 0);
+
+  const points: DnaPoint[] = usable.map((entry, k) => ({
+    key: entry.row.key,
+    pitcher: entry.row.pitcher,
+    teamCode: entry.row.teamCode,
+    teamLabel: entry.row.teamLabel,
+    pc1: z[k].reduce((sum, value, ci) => sum + value * pc1Vec[ci], 0),
+    pc2: z[k].reduce((sum, value, ci) => sum + value * pc2Vec[ci], 0),
+    metrics: entry.row.metrics,
+  }));
+
+  const loadings = {} as Record<DnaMetricColumn, { pc1: number; pc2: number }>;
+  columns.forEach((col, ci) => {
+    loadings[col] = { pc1: pc1Vec[ci], pc2: pc2Vec[ci] };
+  });
+
+  // Each column was standardized to unit variance, so the eigenvalues of the
+  // covariance matrix sum to the number of columns (total variance = p).
+  // An eigenvalue's share of that total is the fraction of variance its
+  // component explains.
+  const totalVariance = values.reduce((sum, value) => sum + Math.max(0, value), 0) || 1;
+  const varianceExplainedPct = {
+    pc1: (Math.max(0, values[0] ?? 0) / totalVariance) * 100,
+    pc2: (Math.max(0, values[1] ?? 0) / totalVariance) * 100,
+  };
+
+  return { points, loadings, varianceExplainedPct };
+}
+
+function PitcherDnaPanel({
+  filters,
+  startDate,
+  endDate,
+  sharedFilterParams,
+  selectedSchoolCode,
+  isPro,
+  isLeague,
+  level,
+  onNavigateToPitcher,
+}: {
+  filters: FiltersPayload | null;
+  startDate: string;
+  endDate: string;
+  sharedFilterParams: URLSearchParams;
+  selectedSchoolCode: string;
+  isPro: boolean;
+  isLeague: boolean;
+  level: string;
+  onNavigateToPitcher: (pitcherName: string) => void;
+}) {
+  const [rows, setRows] = useState<DnaPitcherRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [hoveredPitcher, setHoveredPitcher] = useState<string | null>(null);
+  const [chartTitle, setChartTitle] = useState('Pitcher DNA');
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isExportingPng, setIsExportingPng] = useState(false);
+  const [isLightTheme, setIsLightTheme] = useState(false);
+  const [logoDataUri, setLogoDataUri] = useState<string | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const sharedFilterParamsKey = sharedFilterParams.toString();
+
+  const normalizePitcherKey = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  // Maps a pitcher's display name to their team code / label, so same-named
+  // pitchers on different teams (a real occurrence on League/Pro) can be told
+  // apart -- used for unique React keys, the hover tooltip, and click-to-Summary.
+  const pitcherTeamByName = useMemo(() => {
+    const lookup = new Map<string, { teamCode: string; teamLabel: string }>();
+    const byTeamCode = filters?.pitchers_by_team_code;
+    if (byTeamCode && Object.keys(byTeamCode).length > 0) {
+      for (const [teamCode, names] of Object.entries(byTeamCode)) {
+        const teamLabel = isPro
+          ? getProTeamDisplayName(teamCode, (level as 'MLB' | 'AAA' | 'All') || 'All')
+          : (LEAGUE_TEAM_NAME_BY_CODE[teamCode.toUpperCase()] ?? teamCode);
+        for (const name of names ?? []) {
+          const key = normalizePitcherKey(name);
+          if (key) lookup.set(key, { teamCode, teamLabel });
+        }
+      }
+    }
+    return lookup;
+  }, [filters?.pitchers_by_team_code, isPro, level]);
+
+  const resolvePitcherTeam = useCallback(
+    (pitcherName: string): { teamCode: string; teamLabel: string } => {
+      const fromLookup = pitcherTeamByName.get(normalizePitcherKey(pitcherName));
+      if (fromLookup) return fromLookup;
+      // Single-team sites (a college) -- every pitcher belongs to the school itself.
+      const fallbackCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+      return { teamCode: fallbackCode, teamLabel: fallbackCode };
+    },
+    [pitcherTeamByName, filters?.school_code, selectedSchoolCode]
+  );
+
+  // Inline the logo as a data URI (rather than an <image href="/...">) so it's
+  // guaranteed to render both on-screen and when the SVG is serialized/redrawn
+  // to a canvas for PNG export -- a plain path reference can silently fail or
+  // taint the canvas in that export path.
+  useEffect(() => {
+    let active = true;
+    fetch('/pitching-coach-u-logo.png')
+      .then((res) => res.blob())
+      .then(
+        (blob) =>
+          new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result));
+            reader.onerror = () => reject(new Error('Failed to read logo image.'));
+            reader.readAsDataURL(blob);
+          })
+      )
+      .then((dataUri) => {
+        if (active) setLogoDataUri(dataUri);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const syncTheme = () => setIsLightTheme(document.body.classList.contains('theme-light'));
+    syncTheme();
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!filters || !startDate || !endDate) return;
+    let active = true;
+    const controller = new AbortController();
+
+    const buildParams = (handOverride: 'R' | 'L' | null) => {
+      const params = new URLSearchParams(sharedFilterParamsKey);
+      params.set('start_date', startDate);
+      params.set('end_date', endDate);
+      params.set('split_by', 'Pitcher');
+      params.set('table_mode', 'Custom');
+      params.set('custom_columns', ['#', ...DNA_METRIC_COLUMNS].join(','));
+      params.set('include_chart_points', '0');
+      params.set('include_row_pitches', '0');
+      params.set('include_trend_rows', '0');
+      params.delete('visual_option');
+      // The backend's `hand` param expects the full word ("Right"/"Left"), not
+      // a single-letter code -- matches canonicalizeHandLabel's convention
+      // used everywhere else in this file.
+      if (handOverride) params.set('hand', handOverride === 'R' ? 'Right' : 'Left');
+      return params;
+    };
+
+    const parseTableRows = (payload: Partial<OverviewPayload> | null, throwsHand: 'R' | 'L'): DnaPitcherRow[] => {
+      const tableRows = Array.isArray(payload?.table_rows) ? (payload!.table_rows as Array<Record<string, string | number | null>>) : [];
+      return tableRows
+        .map((row) => {
+          const pitcherName = String(row.Pitcher ?? row.pitcher ?? '').trim();
+          if (!pitcherName || pitcherName.toLowerCase() === 'all') return null;
+          const pitches = parseSortableNumber(row['#']) ?? 0;
+          const metrics: Partial<Record<DnaMetricColumn, number>> = {};
+          for (const col of DNA_METRIC_COLUMNS) {
+            const parsed = parseSortableNumber(row[col]);
+            if (parsed !== null) metrics[col] = parsed;
+          }
+          const { teamCode, teamLabel } = resolvePitcherTeam(pitcherName);
+          return {
+            key: `${normalizePitcherKey(pitcherName)}::${teamCode}`,
+            pitcher: pitcherName,
+            teamCode,
+            teamLabel,
+            metrics,
+            pitches,
+            throwsHand,
+          };
+        })
+        .filter((row): row is DnaPitcherRow => row !== null);
+    };
+
+    // Fetch right- and left-handed pitchers separately (mirroring the sidebar's
+    // own hand filter, or split R/L when it's set to All) so each pitcher's
+    // handedness is known -- needed to flip HB / Release Side into a
+    // hand-neutral orientation before PCA (see normalizeForHandedness).
+    const requestedHandRaw = new URLSearchParams(sharedFilterParamsKey).get('hand');
+    const requestedHand: 'R' | 'L' | null =
+      requestedHandRaw === 'Right' ? 'R' : requestedHandRaw === 'Left' ? 'L' : null;
+    const handsToFetch: Array<'R' | 'L'> = requestedHand ? [requestedHand] : ['R', 'L'];
+
+    Promise.resolve()
+      .then(() => {
+        if (!active) return null;
+        setLoading(true);
+        setErrorMessage('');
+        return Promise.all(
+          handsToFetch.map((handValue) =>
+            fetch(`/api/dashboard/pitching/overview?${buildParams(requestedHand ? null : handValue).toString()}`, {
+              signal: controller.signal,
+              cache: 'no-store',
+            }).then((res) => (res.ok ? res.json() : null))
+          )
+        );
+      })
+      .then((payloads: Array<Partial<OverviewPayload> | null> | null) => {
+        if (!active || !payloads) return;
+        const mergedRows = handsToFetch.flatMap((handValue, i) => parseTableRows(payloads[i], handValue));
+        // A pitcher can occasionally show up twice under the same name+team key
+        // (e.g. inconsistent handedness tagging across appearances causing them
+        // to land in both the Right and Left fetches, or duplicate roster
+        // entries upstream). Keep the row with the larger sample so the chart
+        // never renders two dots -- and two React children -- for one key.
+        const byKey = new Map<string, DnaPitcherRow>();
+        for (const row of mergedRows) {
+          const existing = byKey.get(row.key);
+          if (!existing || row.pitches > existing.pitches) byKey.set(row.key, row);
+        }
+        setRows(Array.from(byKey.values()));
+      })
+      .catch((err) => {
+        if (!active || (err && err.name === 'AbortError')) return;
+        setErrorMessage('Failed to load Pitcher DNA data.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [filters, startDate, endDate, sharedFilterParamsKey, resolvePitcherTeam]);
+
+  const { points, loadings, varianceExplainedPct } = useMemo(() => computePitcherDnaPca(rows, [...DNA_METRIC_COLUMNS]), [rows]);
+
+  const matchedPitcher = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return null;
+    return points.find((point) => point.pitcher.toLowerCase().includes(q)) ?? null;
+  }, [points, searchQuery]);
+
+  const highlightedKey = matchedPitcher?.key ?? hoveredPitcher;
+
+  const bounds = useMemo(() => {
+    if (!points.length) return { minX: -1, maxX: 1, minY: -1, maxY: 1 };
+    const xs = points.map((point) => point.pc1);
+    const ys = points.map((point) => point.pc2);
+    const pad = (min: number, max: number) => {
+      const span = max - min || 1;
+      return { min: min - span * 0.1, max: max + span * 0.1 };
+    };
+    const xPadded = pad(Math.min(...xs), Math.max(...xs));
+    const yPadded = pad(Math.min(...ys), Math.max(...ys));
+    return { minX: xPadded.min, maxX: xPadded.max, minY: yPadded.min, maxY: yPadded.max };
+  }, [points]);
+
+  const width = 860;
+  const height = 620;
+  const marginPx = 32;
+  const topMarginPx = 80;
+  const toSvgX = (value: number) =>
+    marginPx + ((value - bounds.minX) / (bounds.maxX - bounds.minX || 1)) * (width - marginPx * 2);
+  const toSvgY = (value: number) =>
+    height - marginPx - ((value - bounds.minY) / (bounds.maxY - bounds.minY || 1)) * (height - marginPx - topMarginPx);
+
+  const allLoadings = useMemo(() => {
+    return DNA_METRIC_COLUMNS
+      .map((col) => ({ col, ...loadings[col] }))
+      .filter((entry) => Number.isFinite(entry.pc1) && Number.isFinite(entry.pc2));
+  }, [loadings]);
+
+  // Only draw arrows for the metrics that actually explain this 2D view --
+  // with 7 metrics crammed into PC1/PC2, showing all of them clutters the
+  // chart with overlapping arrows/labels near the center. The full list with
+  // exact PC1/PC2 values still lives in the side panel table below.
+  const MAX_CHART_ARROWS = 5;
+  const chartArrowLoadings = useMemo(() => {
+    return [...allLoadings]
+      .sort((a, b) => (b.pc1 * b.pc1 + b.pc2 * b.pc2) - (a.pc1 * a.pc1 + a.pc2 * a.pc2))
+      .slice(0, MAX_CHART_ARROWS);
+  }, [allLoadings]);
+
+  const originX = toSvgX(0);
+  const originY = toSvgY(0);
+
+  // Scale loading vectors so the longest one's tip reaches almost all the way
+  // to the plot's outer edge (in pixel space, from the origin), regardless of
+  // how tightly the pitcher dots are clustered. Anchoring to the dot cloud's
+  // own spread (as PCA scatters are mean-centered, that cloud sits right on
+  // top of the origin) meant arrows never escaped the densest part of the
+  // chart -- this guarantees arrows and their labels clear the dots.
+  const vectorScale = useMemo(() => {
+    const plotHalfWidthPx = Math.min(originX - marginPx, width - marginPx - originX);
+    const plotHalfHeightPx = Math.min(originY - topMarginPx, height - marginPx - originY);
+    const availablePx = Math.max(40, Math.min(plotHalfWidthPx, plotHalfHeightPx)) * 0.8;
+    const maxLoadingMag = Math.max(
+      0.001,
+      ...chartArrowLoadings.map((entry) => Math.sqrt(entry.pc1 * entry.pc1 + entry.pc2 * entry.pc2))
+    );
+    return availablePx / maxLoadingMag;
+  }, [originX, originY, width, height, marginPx, topMarginPx, chartArrowLoadings]);
+
+  const dnaChartColors = useMemo(
+    () =>
+      isLightTheme
+        ? {
+            background: '#ffffff',
+            title: '#111827',
+            axisLine: 'rgba(100,116,139,0.4)',
+            axisLabel: '#475569',
+            vector: '#1f2937',
+            dot: 'rgba(37,99,235,0.4)',
+            dotStroke: 'rgba(30,64,175,0.35)',
+          }
+        : {
+            // Matches .portal-admin-card / .portal-day-card's dark background
+            // (rgba(10,10,10,0.76)) so the chart card blends with the rest of
+            // the dashboard instead of standing out as its own dark navy box.
+            background: '#0a0a0a',
+            title: '#f8fafc',
+            axisLine: 'rgba(148,163,184,0.4)',
+            axisLabel: '#ffffff',
+            vector: '#e2e8f0',
+            dot: 'rgba(56,189,248,0.5)',
+            dotStroke: 'rgba(226,232,240,0.35)',
+          },
+    [isLightTheme]
+  );
+
+  // Spread overlapping vector labels apart along the plot's outer ring so
+  // metrics whose arrows point in nearly the same direction don't stack their
+  // text on top of each other.
+  const vectorLabelPositions = useMemo(() => {
+    const withAngle = chartArrowLoadings.map((entry) => {
+      const tipX = originX + entry.pc1 * vectorScale;
+      const tipY = originY - entry.pc2 * vectorScale;
+      return { col: entry.col, tipX, tipY, angle: Math.atan2(tipY - originY, tipX - originX) };
+    });
+    withAngle.sort((a, b) => a.angle - b.angle);
+    const minAngleGapRad = (30 * Math.PI) / 180;
+    for (let i = 1; i < withAngle.length; i += 1) {
+      const prev = withAngle[i - 1];
+      const curr = withAngle[i];
+      if (curr.angle - prev.angle < minAngleGapRad) {
+        curr.angle = prev.angle + minAngleGapRad;
+      }
+    }
+    const positions = new Map<DnaMetricColumn, { x: number; y: number; anchor: 'start' | 'end' }>();
+    withAngle.forEach((entry) => {
+      const labelRadius = Math.hypot(entry.tipX - originX, entry.tipY - originY) + 20;
+      const x = originX + Math.cos(entry.angle) * labelRadius;
+      const y = originY + Math.sin(entry.angle) * labelRadius;
+      positions.set(entry.col, { x, y, anchor: Math.cos(entry.angle) >= 0 ? 'start' : 'end' });
+    });
+    return positions;
+  }, [chartArrowLoadings, vectorScale, originX, originY]);
+
+  // For the highlighted pitcher, rank metrics by how much each one's loading
+  // direction explains that pitcher's displacement from the cohort average
+  // (projection of the pitcher's PC1/PC2 position onto the metric's vector).
+  // Uses all metrics, not just the ones drawn as arrows, since this ranking
+  // doesn't have the same clutter problem a shared chart legend does.
+  const highlightedPoint = useMemo(() => points.find((p) => p.key === highlightedKey) ?? null, [points, highlightedKey]);
+
+  const highlightedPitcherDrivers = useMemo(() => {
+    if (!highlightedPoint) return [];
+    return allLoadings
+      .map((entry) => ({
+        col: entry.col,
+        projection: highlightedPoint.pc1 * entry.pc1 + highlightedPoint.pc2 * entry.pc2,
+      }))
+      .sort((a, b) => Math.abs(b.projection) - Math.abs(a.projection));
+  }, [highlightedPoint, allLoadings]);
+
+  const downloadPng = useCallback(async () => {
+    const svgNode = svgRef.current;
+    if (!svgNode) return;
+    setIsExportingPng(true);
+    try {
+      const exportScale = 3;
+      const serializer = new XMLSerializer();
+      const clone = svgNode.cloneNode(true) as SVGSVGElement;
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      const svgString = serializer.serializeToString(clone);
+      const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+      const objectUrl = URL.createObjectURL(svgBlob);
+      try {
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const next = new Image();
+          next.onload = () => resolve(next);
+          next.onerror = () => reject(new Error('Failed to render chart for export.'));
+          next.src = objectUrl;
+        });
+        const canvas = document.createElement('canvas');
+        canvas.width = width * exportScale;
+        canvas.height = height * exportScale;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.scale(exportScale, exportScale);
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/png');
+        const link = document.createElement('a');
+        const safeName = chartTitle.trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'pitcher-dna';
+        link.href = dataUrl;
+        link.download = `${safeName}.png`;
+        link.click();
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    } finally {
+      setIsExportingPng(false);
+    }
+  }, [width, height, chartTitle]);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+        {isEditingTitle ? (
+          <input
+            type="text"
+            autoFocus
+            value={chartTitle}
+            onChange={(event) => setChartTitle(event.target.value)}
+            onBlur={() => setIsEditingTitle(false)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === 'Escape') {
+                event.currentTarget.blur();
+              }
+            }}
+            placeholder="Pitcher DNA"
+            style={{
+              font: 'inherit',
+              fontSize: '1.3rem',
+              fontWeight: 700,
+              margin: 0,
+              background: 'transparent',
+              border: '1px solid rgba(148,163,184,0.5)',
+              borderRadius: 6,
+              padding: '2px 6px',
+              minWidth: 200,
+            }}
+          />
+        ) : (
+          <h3
+            onClick={() => setIsEditingTitle(true)}
+            title="Click to edit title"
+            style={{ margin: 0, cursor: 'text', padding: '2px 6px', borderRadius: 6 }}
+          >
+            {chartTitle.trim() || 'Pitcher DNA'}
+          </h3>
+        )}
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <input
+            type="text"
+            className="portal-search-select-input"
+            placeholder="Search for a pitcher..."
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            style={{ minWidth: 220 }}
+          />
+          <button type="button" className="btn btn-ghost" onClick={() => { void downloadPng(); }} disabled={isExportingPng || !points.length}>
+            {isExportingPng ? 'Downloading...' : 'Download PNG'}
+          </button>
+        </div>
+      </div>
+      <p className="portal-muted-text" style={{ marginTop: 0 }}>
+        Pitchers with similar stuff sit close together. Arrows show which metric is pulling pitchers in that direction.
+        {points.length > 0 ? <> Showing {points.length} pitcher{points.length === 1 ? '' : 's'}.</> : null}
+      </p>
+      {loading ? <p>Loading Pitcher DNA...</p> : null}
+      {errorMessage ? <p className="portal-muted-text">{errorMessage}</p> : null}
+      {!loading && !errorMessage && points.length === 0 ? (
+        <p className="portal-muted-text">Not enough pitchers with complete data for the current filters (need at least 3).</p>
+      ) : null}
+      {points.length > 0 ? (
+        <div className="portal-admin-grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 260px', gap: 14, alignItems: 'start' }}>
+          <article className="portal-day-card" style={{ overflowX: 'auto', background: dnaChartColors.background }}>
+            <svg ref={svgRef} width={width} height={height} style={{ maxWidth: '100%', height: 'auto' }}>
+              <defs>
+                <marker id="dna-arrow-head" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+                  <path d="M0,0 L8,4 L0,8 Z" fill={dnaChartColors.vector} />
+                </marker>
+              </defs>
+              <rect x={0} y={0} width={width} height={height} fill={dnaChartColors.background} />
+              <text x={marginPx} y={30} fontSize={18} fontWeight={700} fill={dnaChartColors.title}>{chartTitle || 'Pitcher DNA'}</text>
+              <text x={marginPx} y={48} fontSize={12} fill={dnaChartColors.axisLabel}>{points.length} pitcher{points.length === 1 ? '' : 's'}</text>
+              {logoDataUri ? (
+                <image
+                  href={logoDataUri}
+                  xlinkHref={logoDataUri}
+                  x={width - 70}
+                  y={6}
+                  width={64}
+                  height={64}
+                  preserveAspectRatio="xMidYMid meet"
+                />
+              ) : null}
+              <line x1={marginPx} y1={height - marginPx} x2={width - marginPx} y2={height - marginPx} stroke={dnaChartColors.axisLine} />
+              <line x1={marginPx} y1={topMarginPx} x2={marginPx} y2={height - marginPx} stroke={dnaChartColors.axisLine} />
+              <text x={width / 2} y={height - 6} textAnchor="middle" fontSize={12} fontWeight={700} fill={dnaChartColors.axisLabel}>PC1 ({varianceExplainedPct.pc1.toFixed(0)}%)</text>
+              <text x={12} y={(height + topMarginPx) / 2} textAnchor="middle" fontSize={12} fontWeight={700} fill={dnaChartColors.axisLabel} transform={`rotate(-90 12 ${(height + topMarginPx) / 2})`}>PC2 ({varianceExplainedPct.pc2.toFixed(0)}%)</text>
+              {chartArrowLoadings.map((entry) => {
+                const tipX = originX + entry.pc1 * vectorScale;
+                const tipY = originY - entry.pc2 * vectorScale;
+                const label = vectorLabelPositions.get(entry.col);
+                return (
+                  <g key={`vector-${entry.col}`}>
+                    <line
+                      x1={originX}
+                      y1={originY}
+                      x2={tipX}
+                      y2={tipY}
+                      stroke={dnaChartColors.vector}
+                      strokeWidth={2.6}
+                      markerEnd="url(#dna-arrow-head)"
+                    />
+                    {label ? (
+                      <>
+                        {Math.hypot(label.x - tipX, label.y - tipY) > 10 ? (
+                          <line
+                            x1={tipX}
+                            y1={tipY}
+                            x2={label.x}
+                            y2={label.y}
+                            stroke={dnaChartColors.vector}
+                            strokeWidth={1}
+                            strokeDasharray="2,3"
+                            opacity={0.6}
+                          />
+                        ) : null}
+                        <text
+                          x={label.x}
+                          y={label.y}
+                          fontSize={15}
+                          fontWeight={800}
+                          textAnchor={label.anchor}
+                          dominantBaseline="middle"
+                          fill={dnaChartColors.vector}
+                          stroke={dnaChartColors.background}
+                          strokeWidth={4.5}
+                          paintOrder="stroke"
+                        >
+                          {DNA_METRIC_LABELS[entry.col]}
+                        </text>
+                      </>
+                    ) : null}
+                  </g>
+                );
+              })}
+              {points.filter((point) => highlightedKey !== point.key).map((point) => {
+                const x = toSvgX(point.pc1);
+                const y = toSvgY(point.pc2);
+                return (
+                  <circle
+                    key={point.key}
+                    cx={x}
+                    cy={y}
+                    r={5}
+                    fill={dnaChartColors.dot}
+                    stroke={dnaChartColors.dotStroke}
+                    strokeWidth={1}
+                    onMouseEnter={() => setHoveredPitcher(point.key)}
+                    onMouseLeave={() => setHoveredPitcher((current) => (current === point.key ? null : current))}
+                    onClick={() => onNavigateToPitcher(point.pitcher)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                );
+              })}
+              {highlightedPoint ? (
+                <g>
+                  <circle
+                    cx={toSvgX(highlightedPoint.pc1)}
+                    cy={toSvgY(highlightedPoint.pc2)}
+                    r={8}
+                    fill="#f97316"
+                    stroke={dnaChartColors.background}
+                    strokeWidth={2}
+                    onMouseEnter={() => setHoveredPitcher(highlightedPoint.key)}
+                    onMouseLeave={() => setHoveredPitcher((current) => (current === highlightedPoint.key ? null : current))}
+                    onClick={() => onNavigateToPitcher(highlightedPoint.pitcher)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  <text
+                    x={toSvgX(highlightedPoint.pc1) + 12}
+                    y={toSvgY(highlightedPoint.pc2) - 18}
+                    fontSize={13}
+                    fontWeight={700}
+                    fill={dnaChartColors.title}
+                    stroke={dnaChartColors.background}
+                    strokeWidth={4}
+                    paintOrder="stroke"
+                  >
+                    {formatNameFirstLast(highlightedPoint.pitcher)}
+                  </text>
+                  <text
+                    x={toSvgX(highlightedPoint.pc1) + 12}
+                    y={toSvgY(highlightedPoint.pc2) - 2}
+                    fontSize={11}
+                    fill={dnaChartColors.axisLabel}
+                    stroke={dnaChartColors.background}
+                    strokeWidth={4}
+                    paintOrder="stroke"
+                  >
+                    ({highlightedPoint.teamLabel})
+                  </text>
+                </g>
+              ) : null}
+            </svg>
+          </article>
+          <article className="portal-day-card">
+            <h4 style={{ marginTop: 0 }}>Metric Loadings</h4>
+            <p className="portal-muted-text" style={{ fontSize: '0.8rem' }}>
+              How much each metric contributes to PC1 / PC2. Only the top {MAX_CHART_ARROWS} by strength are drawn as arrows on the chart to keep it readable.
+            </p>
+            <div style={{ display: 'grid', gap: 6, fontSize: '0.85rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 60px', fontWeight: 700 }}>
+                <span>Metric</span>
+                <span>PC1</span>
+                <span>PC2</span>
+              </div>
+              {allLoadings.map((entry) => (
+                <div key={entry.col} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 60px' }}>
+                  <span>{DNA_METRIC_LABELS[entry.col]}</span>
+                  <span>{entry.pc1.toFixed(2)}</span>
+                  <span>{entry.pc2.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+            {highlightedPoint ? (
+              <div style={{ marginTop: 14 }}>
+                <h4 style={{ marginBottom: 0 }}>{formatNameFirstLast(highlightedPoint.pitcher)}</h4>
+                <p className="portal-muted-text" style={{ fontSize: '0.8rem', marginTop: 0 }}>({highlightedPoint.teamLabel})</p>
+                {highlightedPitcherDrivers.length ? (
+                  <p className="portal-muted-text" style={{ fontSize: '0.8rem', marginTop: 0 }}>
+                    Biggest driver: <strong>{DNA_METRIC_LABELS[highlightedPitcherDrivers[0].col]}</strong>
+                    {highlightedPitcherDrivers[1] ? <> (then {DNA_METRIC_LABELS[highlightedPitcherDrivers[1].col]})</> : null}
+                  </p>
+                ) : null}
+                <div style={{ display: 'grid', gap: 3, fontSize: '0.82rem' }}>
+                  {highlightedPitcherDrivers.map(({ col }) => {
+                    const value = highlightedPoint.metrics[col];
+                    return (
+                      <div key={col} style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                        <span className="portal-muted-text">{DNA_METRIC_LABELS[col]}</span>
+                        <span>{value !== undefined ? value : '-'}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{ marginTop: 10, width: '100%' }}
+                  onClick={() => onNavigateToPitcher(highlightedPoint.pitcher)}
+                >
+                  View Summary
+                </button>
+              </div>
+            ) : null}
+          </article>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function PitchingSuite({
   role,
   selectedSchoolCode,
@@ -2168,7 +2976,7 @@ export default function PitchingSuite({
   const isPlayerRole = role === 'player';
   const initialSchoolCode = String(selectedSchoolCode ?? '').trim().toUpperCase();
   const shouldUsePcuDefaults = initialSchoolCode === 'PCU';
-  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry'>('Summary');
+  const [dashboardPage, setDashboardPage] = useState<'Summary' | 'Leaderboard' | 'Game Log' | 'Pitch Log' | 'AB Report' | 'Velocity' | 'HeatMaps' | 'QP Locations' | 'Trend' | 'Velo Manual Entry' | 'Pitcher DNA'>('Summary');
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
   const [filters, setFilters] = useState<FiltersPayload | null>(null);
@@ -2474,6 +3282,7 @@ export default function PitchingSuite({
     setAppliedFilterVersion((current) => current + 1);
   }, [homeNavigateRequest, loadingFilters, filters, selectedSchoolCode, role]);
   const [actionSideBySide, setActionSideBySide] = useState(false);
+  const [actionCompareLayout, setActionCompareLayout] = useState<ActionCompareLayout>('side-by-side');
   const [actionLeftPitchKey, setActionLeftPitchKey] = useState('');
   const [actionRightPitchKey, setActionRightPitchKey] = useState('');
   const [actionCompareVideoOverrides, setActionCompareVideoOverrides] = useState<Record<string, { video_clip_1?: string | null; video_clip_2?: string | null; video_clip_3?: string | null }>>({});
@@ -2579,6 +3388,89 @@ export default function PitchingSuite({
     String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
     String(filters?.school_code ?? '').toUpperCase() === 'PRO' ||
     String(filters?.school_code ?? '').toUpperCase() === 'MLB';
+  const dnaSharedFilterParams = useMemo(() => {
+    const params = new URLSearchParams();
+    const apiTeamType = isLeague
+      ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code])
+      : teamType;
+    if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
+    if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
+    if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
+    if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
+    if (hand && hand !== 'All') params.set('hand', hand);
+    if (batterSide && batterSide !== 'All') params.set('batter_side', batterSide);
+    if (venue && venue !== 'All') params.set('venue', venue);
+    if (!isPro && sessionType) params.set('session_type', sessionType);
+    if (qpLocations && qpLocations !== 'All') params.set('qp_locations', qpLocations);
+
+    const pitchersParam = toParamValue(selectedPitchers);
+    const hittersParam = toParamValue(selectedHitters);
+    const pitchTypesParam = toParamValue(selectedPitchTypes);
+    const ballTypesParam = toBallTypesParamValue(selectedBallTypes);
+    const zoneParam = toParamValue(selectedZoneLocations);
+    const resultsParam = toParamValue(selectedPitchResults);
+    const countParam = toParamValue(selectedCountFilters);
+    const afterCountParam = toParamValue(selectedAfterCountFilters);
+    const inZoneParam = toParamValue(selectedInZone);
+
+    if (pitchersParam) params.set('pitcher', pitchersParam);
+    if (hittersParam) params.set('opp_hitter', hittersParam);
+    if (pitchTypesParam) params.set('pitch_types', pitchTypesParam);
+    if (!isPro && !isLeague && ballTypesParam) params.set('ball_types', ballTypesParam);
+    if (zoneParam) params.set('zone_locations', zoneParam);
+    if (resultsParam) params.set('pitch_results', resultsParam);
+    if (countParam) params.set('count_filter', countParam);
+    if (afterCountParam) params.set('after_count_filter', afterCountParam);
+    if (inZoneParam) params.set('in_zone', inZoneParam);
+    if (veloMin) params.set('velo_min', veloMin);
+    if (veloMax) params.set('velo_max', veloMax);
+    if (ivbMin) params.set('ivb_min', ivbMin);
+    if (ivbMax) params.set('ivb_max', ivbMax);
+    if (hbMin) params.set('hb_min', hbMin);
+    if (hbMax) params.set('hb_max', hbMax);
+    if (pcMin) params.set('pc_min', pcMin);
+    if (pcMax) params.set('pc_max', pcMax);
+    if (bfMin) params.set('bf_min', bfMin);
+    if (bfMax) params.set('bf_max', bfMax);
+    if (ipMin) params.set('ip_min', ipMin);
+    if (ipMax) params.set('ip_max', ipMax);
+    return params;
+  }, [
+    isLeague,
+    isPro,
+    teamType,
+    filters?.pitchers_by_team_code,
+    filters?.opp_hitters_by_team_code,
+    level,
+    withVideo,
+    breakLines,
+    hand,
+    batterSide,
+    venue,
+    sessionType,
+    qpLocations,
+    selectedPitchers,
+    selectedHitters,
+    selectedPitchTypes,
+    selectedBallTypes,
+    selectedZoneLocations,
+    selectedPitchResults,
+    selectedCountFilters,
+    selectedAfterCountFilters,
+    selectedInZone,
+    veloMin,
+    veloMax,
+    ivbMin,
+    ivbMax,
+    hbMin,
+    hbMax,
+    pcMin,
+    pcMax,
+    bfMin,
+    bfMax,
+    ipMin,
+    ipMax,
+  ]);
   const collegeLevelPercentileOptions = useMemo(() => {
     const seen = new Set<string>();
     const options: string[] = [];
@@ -5856,8 +6748,8 @@ export default function PitchingSuite({
     };
   };
   const comparePitchPool = useMemo<PitchActionPoint[]>(
-    () => (overview?.chart_points as PitchActionPoint[] | undefined) ?? [],
-    [overview?.chart_points]
+    () => (actionPitches.length ? actionPitches : ((overview?.chart_points as PitchActionPoint[] | undefined) ?? [])),
+    [actionPitches, overview?.chart_points]
   );
   const comparePitchOptions = useMemo(
     () =>
@@ -10614,6 +11506,7 @@ export default function PitchingSuite({
                   <option value="HeatMaps">HeatMaps</option>
                   {canShowLeagueHeavyPages ? <option value="QP Locations">QP Locations</option> : null}
                   {canShowVeloManualEntry ? <option value="Velo Manual Entry">Velo Manual Entry</option> : null}
+                  <option value="Pitcher DNA">Pitcher DNA</option>
                 </select>
               </label>
             ) : (
@@ -10696,6 +11589,13 @@ export default function PitchingSuite({
                     Velo Manual Entry
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  className={dashboardPage === 'Pitcher DNA' ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setDashboardPage('Pitcher DNA')}
+                >
+                  Pitcher DNA
+                </button>
               </div>
             )}
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
@@ -13478,6 +14378,24 @@ export default function PitchingSuite({
                 </div>
               )}
             </>
+          ) : dashboardPage === 'Pitcher DNA' ? (
+            <PitcherDnaPanel
+              filters={filters}
+              startDate={startDate}
+              endDate={endDate}
+              sharedFilterParams={dnaSharedFilterParams}
+              selectedSchoolCode={initialSchoolCode}
+              isPro={isPro}
+              isLeague={isLeague}
+              level={level}
+              onNavigateToPitcher={(pitcherName) => {
+                setTeamType('All');
+                setSelectedPitchers([pitcherName]);
+                setSplitBy('Pitch Types');
+                setTableMode(shouldUsePcuDefaults ? 'Bullpen' : 'Live');
+                setDashboardPage('Summary');
+              }}
+            />
           ) : (
             <>
               <h3>{overviewHeaderLabel}</h3>
@@ -13937,9 +14855,42 @@ export default function PitchingSuite({
                       </div>
                     ) : null}
                     <div style={{ display: 'flex', justifyContent: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => setActionSideBySide((v) => !v)}>
-                        {actionSideBySide ? 'Single View' : 'Side-by-Side'}
+                      <button
+                        type="button"
+                        className={actionSideBySide ? 'btn btn-primary' : 'btn btn-ghost'}
+                        style={actionSideBySide ? { padding: '0.42rem 0.75rem' } : actionModalButtonStyle}
+                        onClick={() => setActionSideBySide((v) => !v)}
+                      >
+                        {actionSideBySide ? 'Single View' : 'Compare'}
                       </button>
+                      {actionSideBySide ? (
+                        <>
+                          <button
+                            type="button"
+                            className={actionCompareLayout === 'side-by-side' ? 'btn btn-primary' : 'btn btn-ghost'}
+                            style={actionCompareLayout === 'side-by-side' ? { padding: '0.42rem 0.75rem' } : actionModalButtonStyle}
+                            onClick={() => setActionCompareLayout('side-by-side')}
+                          >
+                            Side
+                          </button>
+                          <button
+                            type="button"
+                            className={actionCompareLayout === 'stacked' ? 'btn btn-primary' : 'btn btn-ghost'}
+                            style={actionCompareLayout === 'stacked' ? { padding: '0.42rem 0.75rem' } : actionModalButtonStyle}
+                            onClick={() => setActionCompareLayout('stacked')}
+                          >
+                            Stack
+                          </button>
+                          <button
+                            type="button"
+                            className={actionCompareLayout === 'overlay' ? 'btn btn-primary' : 'btn btn-ghost'}
+                            style={actionCompareLayout === 'overlay' ? { padding: '0.42rem 0.75rem' } : actionModalButtonStyle}
+                            onClick={() => setActionCompareLayout('overlay')}
+                          >
+                            Overlay
+                          </button>
+                        </>
+                      ) : null}
                       <button type="button" className="btn btn-ghost" style={actionModalButtonStyle} onClick={() => void toggleActionModalFullscreen()}>
                         {isActionModalFullscreen ? 'Exit Full Screen' : 'Full Screen'}
                       </button>
@@ -14001,9 +14952,31 @@ export default function PitchingSuite({
                         ) : hasActionVideo ? (
                           actionSideBySide ? (
                             selectedLeftUrls.length >= 1 ? (
-                              <div style={{ width: '100%', height: '100%', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 12, padding: 12, alignItems: 'stretch' }}>
-                                <div style={{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', gap: 8, minWidth: 0 }}>
-                                  {renderCompactVideoMetrics(selectedLeftPitch, 'left')}
+                              <div
+                                style={{
+                                  width: '100%',
+                                  height: '100%',
+                                  display: 'grid',
+                                  gridTemplateColumns: actionCompareLayout === 'side-by-side' ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'minmax(0, 1fr)',
+                                  gridTemplateRows: actionCompareLayout === 'stacked' ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'minmax(0, 1fr)',
+                                  gap: actionCompareLayout === 'overlay' ? 0 : 12,
+                                  padding: 12,
+                                  alignItems: 'stretch',
+                                  position: 'relative',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: 'grid',
+                                    gridTemplateRows: actionCompareLayout === 'overlay' ? 'minmax(0, 1fr)' : 'auto minmax(0, 1fr)',
+                                    gap: 8,
+                                    minWidth: 0,
+                                    minHeight: 0,
+                                    gridColumn: actionCompareLayout === 'overlay' ? '1 / 2' : undefined,
+                                    gridRow: actionCompareLayout === 'overlay' ? '1 / 2' : undefined,
+                                  }}
+                                >
+                                  {actionCompareLayout !== 'overlay' ? renderCompactVideoMetrics(selectedLeftPitch, 'left') : null}
                                   <video
                                     key={`left-${actionLeftPitchKey}-${selectedLeftUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
                                     ref={leftCompareVideoRef}
@@ -14022,8 +14995,21 @@ export default function PitchingSuite({
                                 </div>
                                 {selectedRightPitch ? (
                                   selectedRightUrls.length ? (
-                                    <div style={{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', gap: 8, minWidth: 0 }}>
-                                      {renderCompactVideoMetrics(selectedRightPitch, 'right')}
+                                    <div
+                                      style={{
+                                        display: 'grid',
+                                        gridTemplateRows: actionCompareLayout === 'overlay' ? 'minmax(0, 1fr)' : 'auto minmax(0, 1fr)',
+                                        gap: 8,
+                                        minWidth: 0,
+                                        minHeight: 0,
+                                        gridColumn: actionCompareLayout === 'overlay' ? '1 / 2' : undefined,
+                                        gridRow: actionCompareLayout === 'overlay' ? '1 / 2' : undefined,
+                                        opacity: actionCompareLayout === 'overlay' ? 0.58 : 1,
+                                        mixBlendMode: actionCompareLayout === 'overlay' ? 'screen' : undefined,
+                                        pointerEvents: actionCompareLayout === 'overlay' ? 'none' : undefined,
+                                      }}
+                                    >
+                                      {actionCompareLayout !== 'overlay' ? renderCompactVideoMetrics(selectedRightPitch, 'right') : null}
                                       <video
                                         key={`right-${actionRightPitchKey}-${selectedRightUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
                                         ref={rightCompareVideoRef}
@@ -14054,6 +15040,24 @@ export default function PitchingSuite({
                                     </div>
                                   </>
                                 )}
+                                {actionCompareLayout === 'overlay' ? (
+                                  <div
+                                    style={{
+                                      position: 'absolute',
+                                      left: 18,
+                                      top: 18,
+                                      right: 18,
+                                      zIndex: 4,
+                                      display: 'grid',
+                                      gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+                                      gap: 8,
+                                      pointerEvents: 'none',
+                                    }}
+                                  >
+                                    {renderCompactVideoMetrics(selectedLeftPitch, 'left')}
+                                    {renderCompactVideoMetrics(selectedRightPitch, 'right')}
+                                  </div>
+                                ) : null}
                               </div>
                             ) : (
                               <div style={{ color: '#f8fafc', fontSize: '1.05rem', fontWeight: 700, textAlign: 'center' }}>
