@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "presentation": {
+    "id": "1sPu_6E3eSnRBO7KoxZtb0Vq0ghGERj2J2bl0wMLgfYU",
+    "title": "Pitcher Performance Evaluation - Staff Presentation",
+    "revisionId": "bSSOGYw8MEDFOA",
+    "slideCount": 25
+  },
+  "snapshotSha256": "fda5c25469c06dc6c42c2d6eb16749c85f97d98ee6375f70a1d1b967683bf205",
+  "summary": {
+    "totalIssues": 0,
+    "reportedIssues": 0,
+    "truncated": false,
+    "bySeverity": {},
+    "byCode": {}
+  },
+  "issues": []
+}
