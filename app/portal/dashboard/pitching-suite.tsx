@@ -2341,7 +2341,15 @@ function computePitcherDnaPca(
   const points: DnaPoint[] = usable.map((entry, k) => {
     const zScores = {} as Partial<Record<DnaMetricColumn, number>>;
     columns.forEach((col, ci) => {
-      zScores[col] = z[k][ci];
+      // z[k] is computed from the handedness-normalized (sign-flipped for
+      // lefties) value, matching how the PCA position is derived. But the
+      // metric VALUE we display next to it (entry.row.metrics) is the
+      // pitcher's real, unflipped number -- so flip the z-score's sign back
+      // here too, otherwise a lefty's displayed raw HB and its "std. dev."
+      // can show opposite signs for the same stat, which reads as a
+      // contradiction even though the underlying math is consistent.
+      const isFlippedForDisplay = entry.row.throwsHand === 'L' && HANDEDNESS_MIRRORED_COLUMNS.has(col);
+      zScores[col] = isFlippedForDisplay ? -z[k][ci] : z[k][ci];
     });
     return {
       key: entry.row.key,
@@ -2401,6 +2409,12 @@ function PitcherDnaPanel({
   const [errorMessage, setErrorMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [hoveredPitcher, setHoveredPitcher] = useState<string | null>(null);
+  // Clicking a dot (or a "Most Similar" entry) pins the side panel to that
+  // pitcher so it stays put while the mouse moves elsewhere -- hover alone
+  // used to be the only way to populate the panel, which meant moving your
+  // cursor toward the panel to click something in it un-hovered the dot and
+  // made the whole panel disappear before you could click anything in it.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [viewBy, setViewBy] = useState<'Player' | 'Team'>('Player');
   const [chartTitle, setChartTitle] = useState('Pitcher DNA');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -2586,13 +2600,14 @@ function PitcherDnaPanel({
     [pcaInputRows]
   );
 
-  // On Pro, show each team's actual logo instead of a plain dot in Team view.
+  // On Pro, show each team's actual logo -- instead of a plain dot in Team
+  // view, and next to team names in the "Most Similar" list in Player view.
   // Logos are remote (MLB CDN) so they're fetched through the existing
   // image-proxy route and inlined as data URIs, same reasoning as the PCU
   // logo above -- guarantees they render in the PNG export too, and only the
   // teams actually shown are fetched (not every MLB/AAA team up front).
   useEffect(() => {
-    if (!isPro || viewBy !== 'Team' || !points.length) return;
+    if (!isPro || !points.length) return;
     let active = true;
     const teamCodes = Array.from(new Set(points.map((point) => point.teamCode).filter(Boolean)));
     const missing = teamCodes.filter((code) => !teamLogoDataUris.has(code));
@@ -2636,11 +2651,23 @@ function PitcherDnaPanel({
     return points.find((point) => point.pitcher.toLowerCase().includes(q)) ?? null;
   }, [points, searchQuery]);
 
-  const highlightedKey = matchedPitcher?.key ?? hoveredPitcher;
+  // Priority: an active hover always wins (temporary preview of whatever's
+  // under the cursor); otherwise fall back to whichever pitcher/team was
+  // last clicked/selected (persists after the mouse moves away); otherwise
+  // fall back to a text search match.
+  const highlightedKey = hoveredPitcher ?? selectedKey ?? matchedPitcher?.key ?? null;
 
   const handlePointClick = (point: DnaPoint) => {
     if (viewBy === 'Team') onNavigateToTeam(point.teamCode);
     else onNavigateToPitcher(point.pitcher);
+  };
+
+  // Pins the side panel to a pitcher/team without leaving the DNA page --
+  // used when clicking a dot's label area or a "Most Similar" entry, so you
+  // can browse between related pitchers before deciding to navigate away.
+  const selectPoint = (point: DnaPoint) => {
+    setSelectedKey(point.key);
+    setSearchQuery('');
   };
 
   const bounds = useMemo(() => {
@@ -2774,6 +2801,23 @@ function PitcherDnaPanel({
       .sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore));
   }, [highlightedPoint]);
 
+  const NEAREST_NEIGHBOR_COUNT = 3;
+
+  // "Closest" = smallest straight-line distance in the same PC1/PC2 space the
+  // chart itself is plotted in, so this list agrees with what you'd eyeball
+  // as "sitting near" the selected dot.
+  const nearestNeighbors = useMemo(() => {
+    if (!highlightedPoint) return [];
+    return points
+      .filter((point) => point.key !== highlightedPoint.key)
+      .map((point) => ({
+        point,
+        distance: Math.hypot(point.pc1 - highlightedPoint.pc1, point.pc2 - highlightedPoint.pc2),
+      }))
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, NEAREST_NEIGHBOR_COUNT);
+  }, [highlightedPoint, points]);
+
   const downloadPng = useCallback(async () => {
     const svgNode = svgRef.current;
     if (!svgNode) return;
@@ -2877,7 +2921,10 @@ function PitcherDnaPanel({
             className="portal-search-select-input"
             placeholder={viewBy === 'Team' ? 'Search for a team...' : 'Search for a pitcher...'}
             value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              setSelectedKey(null);
+            }}
             style={{ minWidth: 180, flex: '1 1 180px' }}
           />
           <button type="button" className="btn btn-ghost" style={{ flexShrink: 0 }} onClick={() => { void downloadPng(); }} disabled={isExportingPng || !points.length}>
@@ -3137,6 +3184,43 @@ function PitcherDnaPanel({
                     );
                   })}
                 </div>
+                {nearestNeighbors.length ? (
+                  <div style={{ marginTop: 14 }}>
+                    <h4 style={{ marginBottom: 4, fontSize: '0.9rem' }}>Most Similar</h4>
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      {nearestNeighbors.map(({ point, distance }) => (
+                        <button
+                          key={point.key}
+                          type="button"
+                          onClick={() => selectPoint(point)}
+                          title="Click to view this one"
+                          style={{
+                            display: 'block',
+                            textAlign: 'left',
+                            textTransform: 'none',
+                            background: 'rgba(148,163,184,0.08)',
+                            border: '1px solid rgba(148,163,184,0.18)',
+                            borderRadius: 8,
+                            padding: '6px 10px',
+                            cursor: 'pointer',
+                            color: 'inherit',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.85rem', fontWeight: 700 }}>
+                            {viewBy === 'Team' ? point.pitcher : formatNameFirstLast(point.pitcher)}
+                          </div>
+                          <div className="portal-muted-text" style={{ fontSize: '0.75rem', fontWeight: 400, display: 'flex', alignItems: 'center', gap: 5 }}>
+                            {viewBy === 'Player' && isPro && teamLogoDataUris.get(point.teamCode) ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={teamLogoDataUris.get(point.teamCode)} alt="" width={14} height={14} style={{ objectFit: 'contain', flexShrink: 0 }} />
+                            ) : null}
+                            <span>{viewBy === 'Player' ? point.teamLabel : `distance ${distance.toFixed(2)}`}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <button
                   type="button"
                   className="btn btn-ghost"
