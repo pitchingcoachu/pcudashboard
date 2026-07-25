@@ -1503,6 +1503,8 @@ const TREND_METRIC_OPTIONS: OptionItem[] = [
   { value: 'Spin', label: 'Spin' },
   { value: 'IVB', label: 'IVB' },
   { value: 'HB', label: 'HB' },
+  { value: 'Release Height', label: 'Release Height' },
+  { value: 'Release Side', label: 'Release Side' },
   { value: 'Stuff+', label: 'Stuff+' },
   { value: 'QP+', label: 'QP+' },
   { value: 'InZone%', label: 'InZone%' },
@@ -2300,7 +2302,14 @@ function jacobiEigenDecomposition(matrixIn: number[][]): { values: number[]; vec
 
 function computePitcherDnaPca(
   rows: DnaPitcherRow[],
-  columns: DnaMetricColumn[]
+  columns: DnaMetricColumn[],
+  // Whether the cohort feeding this chart is scoped to a single pitch type
+  // (e.g. "Sweeper" only, not a blended arsenal). Only in that case is there
+  // one unambiguous "more break" direction for HB/Rel. Side -- when multiple
+  // pitch types are mixed together, a pitcher's blended HB sign depends on
+  // their arsenal mix (more sinkers vs. more sliders), so there's no single
+  // "positive = more" direction that would be honest to apply.
+  isSinglePitchTypeScope: boolean
 ): {
   points: DnaPoint[];
   loadings: Record<DnaMetricColumn, { pc1: number; pc2: number }>;
@@ -2338,6 +2347,28 @@ function computePitcherDnaPca(
   const pc1Vec = vectors[0] ?? columns.map(() => 0);
   const pc2Vec = vectors[1] ?? columns.map(() => 0);
 
+  // When the cohort is scoped to one pitch type, HB/Rel. Side have one
+  // unambiguous "more break" direction PER HAND: whichever raw sign that
+  // hand's own pitchers lean toward for this pitch type (e.g. righties'
+  // sweepers average negative HB, lefties' sweepers average positive HB in
+  // this data -- mirror images of each other, as expected). We derive each
+  // hand's direction empirically from that hand's own raw (unflipped) values,
+  // not the handedness-normalized mean, so the two hands are judged against
+  // their own natural convention rather than one forced to match the other's.
+  // With multiple pitch types blended together there's no single correct
+  // direction (a sinker-heavy vs. slider-heavy arsenal disagree), so this
+  // only applies in the single-pitch-type case.
+  const moreBreakIsPositiveByHand: Record<'R' | 'L', boolean[]> = { R: [], L: [] };
+  (['R', 'L'] as const).forEach((hand) => {
+    const handRows = usable.filter((entry) => entry.row.throwsHand === hand);
+    moreBreakIsPositiveByHand[hand] = columns.map((col) => {
+      if (!HANDEDNESS_MIRRORED_COLUMNS.has(col)) return true;
+      if (!handRows.length) return true;
+      const rawMean = handRows.reduce((sum, entry) => sum + (entry.row.metrics[col] as number), 0) / handRows.length;
+      return rawMean >= 0;
+    });
+  });
+
   const points: DnaPoint[] = usable.map((entry, k) => {
     const zScores = {} as Partial<Record<DnaMetricColumn, number>>;
     columns.forEach((col, ci) => {
@@ -2348,8 +2379,17 @@ function computePitcherDnaPca(
       // here too, otherwise a lefty's displayed raw HB and its "std. dev."
       // can show opposite signs for the same stat, which reads as a
       // contradiction even though the underlying math is consistent.
-      const isFlippedForDisplay = entry.row.throwsHand === 'L' && HANDEDNESS_MIRRORED_COLUMNS.has(col);
-      zScores[col] = isFlippedForDisplay ? -z[k][ci] : z[k][ci];
+      const isFlippedForHandedness = entry.row.throwsHand === 'L' && HANDEDNESS_MIRRORED_COLUMNS.has(col);
+      let zScore = isFlippedForHandedness ? -z[k][ci] : z[k][ci];
+      // Single-pitch-type view: reorient so "more break" always reads
+      // positive, using THIS pitcher's own hand's natural sign convention
+      // (not the opposite hand's), regardless of which raw sign that pitch
+      // type happens to use in this data.
+      const moreBreakIsPositive = moreBreakIsPositiveByHand[entry.row.throwsHand][ci];
+      if (isSinglePitchTypeScope && HANDEDNESS_MIRRORED_COLUMNS.has(col) && !moreBreakIsPositive) {
+        zScore = -zScore;
+      }
+      zScores[col] = zScore;
     });
     return {
       key: entry.row.key,
@@ -2390,6 +2430,7 @@ function PitcherDnaPanel({
   isPro,
   isLeague,
   level,
+  selectedPitchTypes,
   onNavigateToPitcher,
   onNavigateToTeam,
 }: {
@@ -2401,6 +2442,7 @@ function PitcherDnaPanel({
   isPro: boolean;
   isLeague: boolean;
   level: string;
+  selectedPitchTypes: string[];
   onNavigateToPitcher: (pitcherName: string) => void;
   onNavigateToTeam: (teamCode: string) => void;
 }) {
@@ -2415,6 +2457,8 @@ function PitcherDnaPanel({
   // cursor toward the panel to click something in it un-hovered the dot and
   // made the whole panel disappear before you could click anything in it.
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState(false);
+  const searchRootRef = useRef<HTMLDivElement | null>(null);
   const [viewBy, setViewBy] = useState<'Player' | 'Team'>('Player');
   const [chartTitle, setChartTitle] = useState('Pitcher DNA');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -2456,6 +2500,18 @@ function PitcherDnaPanel({
       return { teamCode: fallbackCode, teamLabel: fallbackCode };
     },
     [pitcherTeamByName, filters?.school_code, selectedSchoolCode]
+  );
+
+  // Resolves which logo (if any) to show for a given team code: Pro team
+  // logos on the Pro site, or the PCU logo for PCU's own single-school site
+  // (every pitcher there belongs to "PCU" via resolvePitcherTeam's fallback).
+  const resolveTeamLogo = useCallback(
+    (teamCode: string): string | undefined => {
+      if (isPro) return teamLogoDataUris.get(teamCode);
+      if (teamCode === 'PCU') return logoDataUri ?? undefined;
+      return undefined;
+    },
+    [isPro, teamLogoDataUris, logoDataUri]
   );
 
   // Inline the logo as a data URI (rather than an <image href="/...">) so it's
@@ -2595,9 +2651,14 @@ function PitcherDnaPanel({
 
   const pcaInputRows = useMemo(() => (viewBy === 'Team' ? aggregateRowsByTeam(rows) : rows), [rows, viewBy]);
 
+  const isSinglePitchTypeScope = useMemo(
+    () => selectedPitchTypes.filter((value) => value.trim() && value.trim().toLowerCase() !== 'all').length === 1,
+    [selectedPitchTypes]
+  );
+
   const { points, loadings, varianceExplainedPct } = useMemo(
-    () => computePitcherDnaPca(pcaInputRows, [...DNA_METRIC_COLUMNS]),
-    [pcaInputRows]
+    () => computePitcherDnaPca(pcaInputRows, [...DNA_METRIC_COLUMNS], isSinglePitchTypeScope),
+    [pcaInputRows, isSinglePitchTypeScope]
   );
 
   // On Pro, show each team's actual logo -- instead of a plain dot in Team
@@ -2650,6 +2711,23 @@ function PitcherDnaPanel({
     if (!q) return null;
     return points.find((point) => point.pitcher.toLowerCase().includes(q)) ?? null;
   }, [points, searchQuery]);
+
+  // All matches for the current search text, so the dropdown can list every
+  // name that matches rather than silently guessing/picking just one.
+  const searchMatches = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    return points.filter((point) => point.pitcher.toLowerCase().includes(q)).slice(0, 25);
+  }, [points, searchQuery]);
+
+  useEffect(() => {
+    const onDocClick = (event: MouseEvent) => {
+      if (!searchRootRef.current) return;
+      if (!searchRootRef.current.contains(event.target as Node)) setIsSearchDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
 
   // Priority: an active hover always wins (temporary preview of whatever's
   // under the cursor); otherwise fall back to whichever pitcher/team was
@@ -2916,17 +2994,49 @@ function PitcherDnaPanel({
               Team
             </button>
           </div>
-          <input
-            type="text"
-            className="portal-search-select-input"
-            placeholder={viewBy === 'Team' ? 'Search for a team...' : 'Search for a pitcher...'}
-            value={searchQuery}
-            onChange={(event) => {
-              setSearchQuery(event.target.value);
-              setSelectedKey(null);
-            }}
-            style={{ minWidth: 180, flex: '1 1 180px' }}
-          />
+          <div ref={searchRootRef} style={{ position: 'relative', flex: '1 1 180px', minWidth: 180 }}>
+            <input
+              type="text"
+              className="portal-search-select-input"
+              placeholder={viewBy === 'Team' ? 'Search for a team...' : 'Search for a pitcher...'}
+              value={searchQuery}
+              onChange={(event) => {
+                setSearchQuery(event.target.value);
+                setSelectedKey(null);
+                setIsSearchDropdownOpen(true);
+              }}
+              onFocus={() => setIsSearchDropdownOpen(true)}
+              style={{ width: '100%' }}
+            />
+            {isSearchDropdownOpen && searchMatches.length ? (
+              <div className="portal-search-select-menu" style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20 }}>
+                <div className="portal-search-select-options">
+                  {searchMatches.map((point) => (
+                    <button
+                      key={point.key}
+                      type="button"
+                      className="portal-search-select-option"
+                      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                      onClick={() => {
+                        selectPoint(point);
+                        setSearchQuery(point.pitcher);
+                        setIsSearchDropdownOpen(false);
+                      }}
+                    >
+                      {resolveTeamLogo(point.teamCode) ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={resolveTeamLogo(point.teamCode)} alt="" width={16} height={16} style={{ objectFit: 'contain', flexShrink: 0 }} />
+                      ) : null}
+                      <span>
+                        {viewBy === 'Team' ? point.pitcher : formatNameFirstLast(point.pitcher)}
+                        {viewBy === 'Player' ? <span className="portal-option-email"> ({point.teamLabel})</span> : null}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
           <button type="button" className="btn btn-ghost" style={{ flexShrink: 0 }} onClick={() => { void downloadPng(); }} disabled={isExportingPng || !points.length}>
             {isExportingPng ? 'Downloading...' : 'Download PNG'}
           </button>
@@ -3026,7 +3136,7 @@ function PitcherDnaPanel({
               {points.filter((point) => highlightedKey !== point.key).map((point) => {
                 const x = toSvgX(point.pc1);
                 const y = toSvgY(point.pc2);
-                const logoUri = viewBy === 'Team' ? teamLogoDataUris.get(point.teamCode) : undefined;
+                const logoUri = viewBy === 'Team' ? resolveTeamLogo(point.teamCode) : undefined;
                 if (logoUri) {
                   const size = 28;
                   return (
@@ -3067,7 +3177,7 @@ function PitcherDnaPanel({
                   {(() => {
                     const hx = toSvgX(highlightedPoint.pc1);
                     const hy = toSvgY(highlightedPoint.pc2);
-                    const highlightedLogoUri = viewBy === 'Team' ? teamLogoDataUris.get(highlightedPoint.teamCode) : undefined;
+                    const highlightedLogoUri = viewBy === 'Team' ? resolveTeamLogo(highlightedPoint.teamCode) : undefined;
                     if (highlightedLogoUri) {
                       const size = 40;
                       return (
@@ -3165,6 +3275,7 @@ function PitcherDnaPanel({
                     Biggest driver: <strong>{DNA_METRIC_LABELS[highlightedPitcherDrivers[0].col]}</strong>
                     {highlightedPitcherDrivers[1] ? <> (then {DNA_METRIC_LABELS[highlightedPitcherDrivers[1].col]})</> : null}
                     {' '}— ranked by how far each raw value is from the cohort average, in standard deviations.
+                    {isSinglePitchTypeScope ? ' For HB/Rel. Side, a positive std. dev. always means more break for this pitch type.' : ''}
                   </p>
                 ) : null}
                 <div style={{ display: 'grid', gap: 3, fontSize: '0.82rem' }}>
@@ -3210,9 +3321,9 @@ function PitcherDnaPanel({
                             {viewBy === 'Team' ? point.pitcher : formatNameFirstLast(point.pitcher)}
                           </div>
                           <div className="portal-muted-text" style={{ fontSize: '0.75rem', fontWeight: 400, display: 'flex', alignItems: 'center', gap: 5 }}>
-                            {viewBy === 'Player' && isPro && teamLogoDataUris.get(point.teamCode) ? (
+                            {viewBy === 'Player' && resolveTeamLogo(point.teamCode) ? (
                               // eslint-disable-next-line @next/next/no-img-element
-                              <img src={teamLogoDataUris.get(point.teamCode)} alt="" width={14} height={14} style={{ objectFit: 'contain', flexShrink: 0 }} />
+                              <img src={resolveTeamLogo(point.teamCode)} alt="" width={14} height={14} style={{ objectFit: 'contain', flexShrink: 0 }} />
                             ) : null}
                             <span>{viewBy === 'Player' ? point.teamLabel : `distance ${distance.toFixed(2)}`}</span>
                           </div>
@@ -8411,6 +8522,10 @@ export default function PitchingSuite({
       ivbN: number;
       hbSum: number;
       hbN: number;
+      relHeightSum: number;
+      relHeightN: number;
+      relSideSum: number;
+      relSideN: number;
       stuffSum: number;
       stuffN: number;
       qpSum: number;
@@ -8518,6 +8633,10 @@ export default function PitchingSuite({
       ivbN: 0,
       hbSum: 0,
       hbN: 0,
+      relHeightSum: 0,
+      relHeightN: 0,
+      relSideSum: 0,
+      relSideN: 0,
       stuffSum: 0,
       stuffN: 0,
       qpSum: 0,
@@ -8567,6 +8686,8 @@ export default function PitchingSuite({
         Spin: agg.spinN > 0 ? agg.spinSum / agg.spinN : null,
         IVB: agg.ivbN > 0 ? agg.ivbSum / agg.ivbN : null,
         HB: agg.hbN > 0 ? agg.hbSum / agg.hbN : null,
+        'Release Height': agg.relHeightN > 0 ? agg.relHeightSum / agg.relHeightN : null,
+        'Release Side': agg.relSideN > 0 ? agg.relSideSum / agg.relSideN : null,
         'Stuff+': agg.stuffN > 0 ? agg.stuffSum / agg.stuffN : null,
         'QP+': agg.qpN > 0 ? agg.qpSum / agg.qpN : null,
         'InZone%': pct(agg.inZoneN, agg.locN),
@@ -8687,6 +8808,14 @@ export default function PitchingSuite({
       if (typeof point.hb === 'number' && Number.isFinite(point.hb)) {
         agg.hbSum += point.hb;
         agg.hbN += 1;
+      }
+      if (typeof point.release_height === 'number' && Number.isFinite(point.release_height)) {
+        agg.relHeightSum += point.release_height;
+        agg.relHeightN += 1;
+      }
+      if (typeof point.release_side === 'number' && Number.isFinite(point.release_side)) {
+        agg.relSideSum += point.release_side;
+        agg.relSideN += 1;
       }
       if (typeof point.stuff_plus === 'number' && Number.isFinite(point.stuff_plus)) {
         agg.stuffSum += point.stuff_plus;
@@ -14672,6 +14801,7 @@ export default function PitchingSuite({
               isPro={isPro}
               isLeague={isLeague}
               level={level}
+              selectedPitchTypes={selectedPitchTypes}
               onNavigateToPitcher={(pitcherName) => {
                 setTeamType('All');
                 setSelectedPitchers([pitcherName]);

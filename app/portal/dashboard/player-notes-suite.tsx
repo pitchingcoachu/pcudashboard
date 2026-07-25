@@ -984,7 +984,13 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                 </label>
                 <label>
                   Category
-                  <input className="portal-desktop-category-input" list="player-media-category-options" value={mediaCategory} onChange={(event) => setMediaCategory(event.target.value)} />
+                  <select
+                    className="portal-desktop-category-input"
+                    value={mediaCategory}
+                    onChange={(event) => setMediaCategory(event.target.value)}
+                  >
+                    {mediaUploadCategorySelectOptions.map((category) => <option key={`media-cat-desktop-select-${category}`} value={category}>{category}</option>)}
+                  </select>
                   <select
                     className="portal-mobile-category-select"
                     value={mediaCategory}
@@ -992,9 +998,6 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                   >
                     {mediaUploadCategorySelectOptions.map((category) => <option key={`media-cat-select-${category}`} value={category}>{category}</option>)}
                   </select>
-                  <datalist id="player-media-category-options">
-                    {mediaCategoryOptions.map((category) => <option key={`media-cat-${category}`} value={category} />)}
-                  </datalist>
                 </label>
                 <button type="button" className="btn btn-primary" onClick={() => void uploadMedia()} disabled={!mediaFiles.length || uploadingMedia}>
                   {uploadingMedia ? 'Uploading...' : 'Upload'}
@@ -1041,7 +1044,13 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                     {editingMediaId === media.id ? (
                       <div style={{ display: 'grid', gap: 6 }}>
                         <input value={editingMediaTitle} onChange={(event) => setEditingMediaTitle(event.target.value)} />
-                        <input className="portal-desktop-category-input" list="player-media-category-options" value={editingMediaCategory} onChange={(event) => setEditingMediaCategory(event.target.value)} />
+                        <select
+                          className="portal-desktop-category-input"
+                          value={editingMediaCategory}
+                          onChange={(event) => setEditingMediaCategory(event.target.value)}
+                        >
+                          {mediaEditCategorySelectOptions.map((category) => <option key={`media-edit-cat-desktop-select-${category}`} value={category}>{category}</option>)}
+                        </select>
                         <select
                           className="portal-mobile-category-select"
                           value={editingMediaCategory}

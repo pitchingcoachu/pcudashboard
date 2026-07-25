@@ -257,12 +257,13 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
         </label>
         <label>
           Category
-          <input
+          <select
             className="portal-desktop-category-input"
-            list="player-media-cat-opts"
             value={mediaCategory}
             onChange={(e) => setMediaCategory(e.target.value)}
-          />
+          >
+            {uploadCategorySelectOptions.map((c) => <option key={`media-category-desktop-select-${c}`} value={c}>{c}</option>)}
+          </select>
           <select
             className="portal-mobile-category-select"
             value={mediaCategory}
@@ -270,9 +271,6 @@ export default function PlayerMediaSection({ playerId, isPlayer }: { playerId: n
           >
             {uploadCategorySelectOptions.map((c) => <option key={`media-category-select-${c}`} value={c}>{c}</option>)}
           </select>
-          <datalist id="player-media-cat-opts">
-            {uploadCategoryOptions.map((c) => <option key={`media-category-${c}`} value={c} />)}
-          </datalist>
         </label>
         <button type="button" className="btn btn-primary" onClick={() => void upload()} disabled={!mediaFiles.length || uploading}>
           {uploading ? 'Uploading...' : 'Upload'}

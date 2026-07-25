@@ -1,4 +1,5 @@
 export const LEAGUE_TEAM_NAME_BY_CODE: Record<string, string> = {
+    "USABASEBALL": "USA Baseball",
     "ABI_WIL": "Abilene Christian University",
     "AIR_FOR": "United States Air Force Academy",
     "AKR_ZIP": "University of Akron",

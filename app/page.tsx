@@ -2,41 +2,31 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { type FormEvent, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import pearlClam from '../pearl/clam transparent.png';
+import pearlLockup from '../pearl/pearl-lockup-transparent.png';
+
+const CALENDLY_URL = 'https://calendly.com/pitchingcoachu/pcu-dashboard-call';
 
 type HomeSession = {
   name: string | null;
   email: string;
 };
 
-type DemoFollowupPreview = {
-  subject: string;
-  html: string;
-  text: string;
-};
-
-function demoFollowupKicker(message: string): string {
-  const normalized = message.toLowerCase();
-  if (normalized.includes('local preview')) return 'Local email preview';
-  if (normalized.includes('failed') || normalized.includes('verify resend')) return 'Email preview';
-  return 'Email sent to you';
-}
-
-
 const galleryImages = [
-  { src: '/dashboard-shot-1.png', alt: 'PCU dashboard overview screen' },
-  { src: '/dashboard-shot-2.png', alt: 'PCU analytics view showing pitching insights' },
-  { src: '/dashboard-shot-3.png', alt: 'PCU command and development trends view' },
-  { src: '/dashboard-shot-4.png', alt: 'PCU module interface for staff decision support' },
-  { src: '/dashboard-shot-5.png', alt: 'PCU reporting and athlete snapshot view' },
-  { src: '/dashboard-shot-6.png', alt: 'PCU dashboard screenshot 6' },
-  { src: '/dashboard-shot-7.png', alt: 'PCU dashboard screenshot 7' },
-  { src: '/dashboard-shot-8.png', alt: 'PCU dashboard screenshot 8' },
-  { src: '/dashboard-shot-9.png', alt: 'PCU dashboard screenshot 9' },
-  { src: '/dashboard-shot-10.png', alt: 'PCU dashboard screenshot 10' },
-  { src: '/dashboard-shot-11.png', alt: 'PCU dashboard screenshot 11' },
-  { src: '/dashboard-shot-12.png', alt: 'PCU dashboard screenshot 12' },
-  { src: '/dashboard-shot-13.png', alt: 'PCU dashboard screenshot 13' },
+  { src: '/dashboard-shot-1.png', alt: 'Pearl Player Development dashboard overview screen' },
+  { src: '/dashboard-shot-2.png', alt: 'Pearl analytics view showing pitching insights' },
+  { src: '/dashboard-shot-3.png', alt: 'Pearl command and development trends view' },
+  { src: '/dashboard-shot-4.png', alt: 'Pearl module interface for staff decision support' },
+  { src: '/dashboard-shot-5.png', alt: 'Pearl reporting and athlete snapshot view' },
+  { src: '/dashboard-shot-6.png', alt: 'Pearl dashboard screenshot 6' },
+  { src: '/dashboard-shot-7.png', alt: 'Pearl dashboard screenshot 7' },
+  { src: '/dashboard-shot-8.png', alt: 'Pearl dashboard screenshot 8' },
+  { src: '/dashboard-shot-9.png', alt: 'Pearl dashboard screenshot 9' },
+  { src: '/dashboard-shot-10.png', alt: 'Pearl dashboard screenshot 10' },
+  { src: '/dashboard-shot-11.png', alt: 'Pearl dashboard screenshot 11' },
+  { src: '/dashboard-shot-12.png', alt: 'Pearl dashboard screenshot 12' },
+  { src: '/dashboard-shot-13.png', alt: 'Pearl dashboard screenshot 13' },
 ];
 
 const dashboardIncludes = [
@@ -44,19 +34,19 @@ const dashboardIncludes = [
     title: 'Clear data that impacts performance on the field.',
     description: 'Tools we offer to directly track and impact your players: custom tables and reports, at bat and game logs, trend charts and heatmaps, and more.',
     image: '/visual.png',
-    alt: 'Data visuals in the PCU Dashboard',
+    alt: 'Data visuals in Pearl Player Development',
   },
   {
     title: 'Organized and structured programming.',
     description: 'Create custom training plans that are easily accessible for all players. Track weight room exercises, bullpen plans, and drill packages.',
     image: '/schedule.png',
-    alt: 'Schedule and programming in the PCU Dashboard',
+    alt: 'Schedule and programming in Pearl Player Development',
   },
   {
     title: 'Coaches that have been there.',
     description: 'Not a software company. A team of coaches who\'ve used this data in real programs — available to help you make sense of it.',
     image: '/IMG_1982.JPG',
-    alt: 'PCU coaches working with players',
+    alt: 'Pearl coaches working with players',
   },
 ];
 
@@ -68,7 +58,7 @@ const faqItems = [
   },
   {
     question: 'Do we need someone tech-savvy to run it?',
-    answer: 'No. The PCU Dashboard was built by coaches for coaches — no technical background needed.',
+    answer: 'No. Pearl Player Development was built by coaches for coaches — no technical background needed.',
   },
   {
     question: 'How much does it cost?',
@@ -102,9 +92,9 @@ const faqItems = [
 const testimonials = [
   {
     paragraphs: [
-      'The PCU Dashboard has been an invaluable tool for our program and pitching staff this year.',
+      'Pearl Player Development has been an invaluable tool for our program and pitching staff this year.',
       'The ability for myself as the pitching coach and our players to be able to see, sort, and understand actionable data in an easy to use interface has been tremendous.',
-      'PCU staff continues to evolve the app constantly, making it better with new upgraded features that save time and energy for myself and allow player development to be at the foresight.',
+      'Pearl staff continues to evolve the app constantly, making it better with new upgraded features that save time and energy for myself and allow player development to be at the foresight.',
     ],
     name: 'Nate Cole',
     school: 'Harvard University',
@@ -118,8 +108,8 @@ const testimonials = [
   },
   {
     paragraphs: [
-      'The PCU Dashboard has been a game changer for our pitching development.',
-      'What stands out most is how simple and actionable everything is. There’s a lot of data in baseball right now, but PCU does an incredible job of organizing it in a way that actually helps coaches coach.',
+      'Pearl Player Development has been a game changer for our pitching development.',
+      'What stands out most is how simple and actionable everything is. There’s a lot of data in baseball right now, but Pearl does an incredible job of organizing it in a way that actually helps coaches coach.',
       'The dashboard makes it easy to see what truly matters without getting lost in noise.',
     ],
     name: 'Jamie Tutko',
@@ -165,7 +155,7 @@ const testimonials = [
   },
   {
     paragraphs: [
-      'The PCU Dashboard has been a total game changer for our pitching staff.',
+      'Pearl Player Development has been a total game changer for our pitching staff.',
       'Easy to navigate and grab the information and data you are looking for to assist in your player development.',
       'Always updating and adding new great features.',
     ],
@@ -181,7 +171,7 @@ const testimonials = [
   },
   {
     paragraphs: [
-      'The PCU Dashboard has been a huge outside help in terms of player development.',
+      'Pearl Player Development has been a huge outside help in terms of player development.',
       'Creating individual goals based on our needs and letting guys have access to their own data has kept everyone on the same page. I think this has allowed for guys to eliminate clutter in the player development aspect and focus in on 2-3 key individual areas.',
       'The other important feature that we utilize is the trending/comparing tool. It allows us to track progress as well as make adjustments easier by being able to look back at previous bullpens/Lives and see what small changes need to be made on a week to week basis.',
     ],
@@ -220,9 +210,6 @@ export default function Home() {
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isContactOpen, setIsContactOpen] = useState(false);
   const [contactCopied, setContactCopied] = useState(false);
-  const [isSubmittingDemo, setIsSubmittingDemo] = useState(false);
-  const [demoFormMessage, setDemoFormMessage] = useState<string>('');
-  const [demoFollowupPreview, setDemoFollowupPreview] = useState<DemoFollowupPreview | null>(null);
   const [homeSession, setHomeSession] = useState<HomeSession | null>(null);
   const contactEmail = 'info@pitchingcoachu.com';
   const topNavRef = useRef<HTMLElement | null>(null);
@@ -330,122 +317,36 @@ export default function Home() {
       setContactCopied(false);
     }
   };
-  const handleDemoSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setDemoFormMessage('');
-    setDemoFollowupPreview(null);
-    setIsSubmittingDemo(true);
-
-    const form = event.currentTarget;
-    const formData = new FormData(form);
-    const payload = {
-      name: String(formData.get('name') ?? ''),
-      email: String(formData.get('email') ?? ''),
-      phone: String(formData.get('phone') ?? ''),
-      school_or_facility: String(formData.get('school_or_facility') ?? ''),
-      role: String(formData.get('role') ?? ''),
-    };
-
-    try {
-      const response = await fetch('/api/demo-request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = (await response.json().catch(() => ({}))) as {
-        warnings?: string[];
-        error?: string;
-        followupPreview?: DemoFollowupPreview | null;
-      };
-
-      if (!response.ok) {
-        const errorMessage =
-          typeof data.error === 'string' && data.error.length > 0
-            ? data.error
-            : 'Could not submit right now. Please email info@pitchingcoachu.com.';
-        setDemoFormMessage(errorMessage);
-        setDemoFollowupPreview(null);
-        return;
-      }
-
-      form.reset();
-      setDemoFollowupPreview(data.followupPreview ?? null);
-      if (data.warnings && data.warnings.length > 0) {
-        setDemoFormMessage(
-          'Thanks. Your request was saved, but email notification failed. Please verify RESEND settings.'
-        );
-      } else {
-        setDemoFormMessage('Thank you for your interest in the PCU Dashboard! We will contact you within 24 hours.');
-      }
-    } catch {
-      setDemoFormMessage('Could not submit right now. Please email info@pitchingcoachu.com.');
-      setDemoFollowupPreview(null);
-    } finally {
-      setIsSubmittingDemo(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!demoFollowupPreview) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setDemoFollowupPreview(null);
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [demoFollowupPreview]);
-
-  const scrollToDemo = () => {
-    const demoSection = document.getElementById('demo');
-    if (demoSection) {
-      demoSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-    setIsMobileNavOpen(false);
-    setIsContactOpen(false);
-  };
   const profileLabel = homeSession?.name?.trim() || homeSession?.email || 'Profile';
   const profileInitial = profileLabel.charAt(0).toUpperCase();
 
   return (
-    <div className={`page-shell ${isLoaded ? 'page-loaded' : ''}`}>
-      <header className="top-nav" ref={topNavRef}>
-        <div className="brand-row">
-          <Image
-            src="/pitching-coach-u-logo.png"
-            alt="Pitching Coach U logo"
-            width={58}
-            height={58}
-            priority
-            className="brand-logo"
-          />
-          <div className="brand-block">
-            <h1>PCU Dashboard</h1>
-          </div>
-        </div>
-        <button
-          type="button"
-          className="nav-menu-toggle"
-          onClick={() => setIsMobileNavOpen((prev) => !prev)}
-          aria-expanded={isMobileNavOpen}
-          aria-controls="site-nav-actions"
-        >
-          {isMobileNavOpen ? 'Close' : 'Menu'}
-        </button>
-        <div
-          id="site-nav-actions"
-          className={`nav-actions ${isMobileNavOpen ? 'is-open' : ''}`}
-        >
-          <Link
-            href="https://pitchingcoachu.com"
+    <div className={`page-shell pearl-home ${isLoaded ? 'page-loaded' : ''}`}>
+      <main>
+        <section className="hero-panel hero-panel--integrated" ref={topNavRef}>
+          <div className="hero-utility-bar">
+            <button
+              type="button"
+              className="nav-menu-toggle"
+              onClick={() => setIsMobileNavOpen((prev) => !prev)}
+              aria-expanded={isMobileNavOpen}
+              aria-controls="site-nav-actions"
+            >
+              {isMobileNavOpen ? 'Close' : 'Menu'}
+            </button>
+            <div
+              id="site-nav-actions"
+              className={`nav-actions ${isMobileNavOpen ? 'is-open' : ''}`}
+            >
+          <a
+            href={CALENDLY_URL}
+            className="btn btn-ghost"
             target="_blank"
-            rel="noopener noreferrer"
-            className="btn btn-ghost as-link"
+            rel="noreferrer"
             onClick={() => setIsMobileNavOpen(false)}
           >
-            PCU Website
-          </Link>
-          <button type="button" className="btn btn-ghost" onClick={scrollToDemo}>
-            Request 7-Day Free Trial
-          </button>
+            Schedule Demo
+          </a>
           <div className="contact-popover-wrap" ref={contactPopoverRef}>
             <button type="button" className="btn btn-ghost" onClick={() => setIsContactOpen((prev) => !prev)}>
               Contact
@@ -485,7 +386,7 @@ export default function Home() {
               target="_blank"
               rel="noopener noreferrer"
               className="social-link"
-              aria-label="PCU on X"
+              aria-label="Pearl Player Development on X"
               onClick={() => setIsMobileNavOpen(false)}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -497,7 +398,7 @@ export default function Home() {
               target="_blank"
               rel="noopener noreferrer"
               className="social-link"
-              aria-label="PCU on Instagram"
+              aria-label="Pearl Player Development on Instagram"
               onClick={() => setIsMobileNavOpen(false)}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -509,7 +410,7 @@ export default function Home() {
               target="_blank"
               rel="noopener noreferrer"
               className="social-link"
-              aria-label="PCU on YouTube"
+              aria-label="Pearl Player Development on YouTube"
               onClick={() => setIsMobileNavOpen(false)}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -517,26 +418,49 @@ export default function Home() {
               </svg>
             </Link>
           </div>
-        </div>
-      </header>
-
-      <main>
-        <section className="hero-panel">
-          <div className="hero-layout">
+            </div>
+          </div>
+          <div className="hero-brand-layout">
+            <div className="hero-brand-lockup">
+              <div className="hero-brand-clam-frame">
+                <Image
+                  src={pearlClam}
+                  alt=""
+                  aria-hidden="true"
+                  priority
+                  unoptimized
+                  className="hero-brand-clam-image"
+                  sizes="(max-width: 980px) 42vw, 280px"
+                />
+              </div>
+              <div className="hero-brand-wordmark-frame">
+                <Image
+                  src={pearlLockup}
+                  alt="Pearl Player Development"
+                  priority
+                  unoptimized
+                  className="hero-brand-wordmark-image"
+                  sizes="(max-width: 980px) 58vw, 430px"
+                />
+              </div>
+            </div>
             <div className="hero-copy">
-              <p className="hero-eyebrow">Baseball Player Development Software</p>
               <h2>Built by coaches, for coaches.</h2>
               <p className="hero-subcopy">
-                The PCU Dashboard helps college baseball programs and facilities analyze and understand their pitch data — so coaches spend less time digging through information and more time developing players.
+                The player development hub for high level baseball coaches and programs.
               </p>
               <div className="hero-actions">
-                <button type="button" className="btn btn-primary" onClick={scrollToDemo}>
-                  Request 7-Day Free Trial
-                </button>
+                <a href={CALENDLY_URL} className="btn btn-primary" target="_blank" rel="noreferrer">
+                  Schedule Demo
+                </a>
               </div>
               <p className="hero-trusted-label">Trusted by 25+ college programs and facilities</p>
             </div>
-            <figure className="hero-preview">
+          </div>
+        </section>
+
+        <section className="content-panel hero-video-panel">
+            <figure className="hero-preview hero-preview--below">
               <video
                 src="/intro.MOV"
                 className="hero-preview-image"
@@ -544,7 +468,7 @@ export default function Home() {
                 muted={isHeroMuted}
                 loop
                 playsInline
-                aria-label="PCU dashboard intro video"
+                aria-label="Pearl Player Development dashboard intro video"
                 style={{ objectFit: 'cover', width: '100%', height: '100%' }}
               />
               <div className="hero-preview-fade" />
@@ -557,7 +481,6 @@ export default function Home() {
                 {isHeroMuted ? 'Unmute' : 'Mute'}
               </button>
             </figure>
-          </div>
         </section>
 
         <section className="content-panel testimonials-panel reveal-section" data-reveal>
@@ -624,9 +547,9 @@ export default function Home() {
         <section className="content-panel cta-mid-panel reveal-section" data-reveal>
           <div className="cta-mid-inner">
             <h3>Ready to see it for yourself?</h3>
-            <button type="button" className="btn btn-primary" onClick={scrollToDemo}>
-              Request 7-Day Free Trial
-            </button>
+            <a href={CALENDLY_URL} className="btn btn-primary" target="_blank" rel="noreferrer">
+              Schedule Demo
+            </a>
           </div>
         </section>
 
@@ -686,68 +609,15 @@ export default function Home() {
         </section>
 
         <section id="demo" className="content-panel form-panel reveal-section" data-reveal>
-          <div className="section-head">
-            <h3>Request 7-Day Free Trial</h3>
+          <div className="cta-mid-inner">
+            <h3>See Pearl in action</h3>
+            <p>Choose a time that works for you and your staff.</p>
+            <a href={CALENDLY_URL} className="btn btn-primary" target="_blank" rel="noreferrer">
+              Schedule Demo
+            </a>
           </div>
-          <form className="lead-form" onSubmit={handleDemoSubmit}>
-            <label>
-              Name
-              <input type="text" name="name" autoComplete="name" required />
-            </label>
-            <label>
-              Email
-              <input type="email" name="email" autoComplete="email" required />
-            </label>
-            <label>
-              Phone
-              <input type="tel" name="phone" autoComplete="tel" />
-            </label>
-            <label>
-              School or Facility
-              <input type="text" name="school_or_facility" required />
-            </label>
-            <label>
-              Role
-              <input type="text" name="role" required />
-            </label>
-            <button type="submit" className="btn btn-primary">
-              {isSubmittingDemo ? 'Submitting...' : 'Submit Request'}
-            </button>
-            {demoFormMessage && <p className="lead-form-message">{demoFormMessage}</p>}
-          </form>
         </section>
       </main>
-
-      {demoFollowupPreview ? (
-        <div
-          className="demo-followup-modal-overlay"
-          role="presentation"
-          onClick={() => setDemoFollowupPreview(null)}
-        >
-          <section
-            className="demo-followup-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="demo-followup-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              type="button"
-              className="demo-followup-close"
-              aria-label="Close email preview"
-              onClick={() => setDemoFollowupPreview(null)}
-            >
-              x
-            </button>
-            <p className="lead-followup-kicker">{demoFollowupKicker(demoFormMessage)}</p>
-            <h4 id="demo-followup-title">{demoFollowupPreview.subject}</h4>
-            <div
-              className="lead-followup-body"
-              dangerouslySetInnerHTML={{ __html: demoFollowupPreview.html }}
-            />
-          </section>
-        </div>
-      ) : null}
 
       {activeIndex !== null && (
         <div className="lightbox-overlay" onClick={closeLightbox} role="dialog" aria-modal="true" aria-label="Image viewer">

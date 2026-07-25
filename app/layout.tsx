@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import StatDefinitionTooltips from './stat-definition-tooltips';
+import pearlMark from '../pearl/clam transparent.png';
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -11,39 +12,35 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   metadataBase: new URL('https://www.pcudashboard.com'),
   title: {
-    default: 'PCU Dashboard | Performance Data Built for Coaches and Players',
+    default: 'Pearl Player Development | Data Built for Coaches and Players',
     template: '%s',
   },
   description:
-    'PCU Dashboard helps coaches, players, and programs track development, improve decisions, and align communication with one clear pitching performance platform.',
+    'Pearl Player Development helps coaches, players, and programs track development, improve decisions, and align communication through one clear performance platform.',
   openGraph: {
-    title: 'PCU Dashboard | Performance Data Built for Coaches and Players',
+    title: 'Pearl Player Development | Data Built for Coaches and Players',
     description:
-      'PCU Dashboard helps coaches, players, and programs track development, improve decisions, and align communication with one clear pitching performance platform.',
+      'Pearl Player Development helps coaches, players, and programs track development, improve decisions, and align communication through one clear performance platform.',
     url: 'https://www.pcudashboard.com',
     images: [
       {
         url: '/dashboard-shot-14.png',
-        alt: 'PCU Dashboard preview',
+        alt: 'Pearl Player Development dashboard preview',
       },
     ],
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'PCU Dashboard | Performance Data Built for Coaches and Players',
+    title: 'Pearl Player Development | Data Built for Coaches and Players',
     description:
-      'PCU Dashboard helps coaches, players, and programs track development, improve decisions, and align communication with one clear pitching performance platform.',
+      'Pearl Player Development helps coaches, players, and programs track development, improve decisions, and align communication through one clear performance platform.',
     images: ['/dashboard-shot-14.png'],
   },
   icons: {
-    icon: [
-      { url: '/favicon.ico', type: 'image/x-icon' },
-      { url: '/favicon-32x32.png', sizes: '32x32', type: 'image/png' },
-      { url: '/favicon-16x16.png', sizes: '16x16', type: 'image/png' },
-    ],
-    shortcut: '/favicon.ico',
-    apple: '/pitching-coach-u-logo.png',
+    icon: [{ url: pearlMark.src, type: 'image/png' }],
+    shortcut: pearlMark.src,
+    apple: pearlMark.src,
   },
 };
 

@@ -4764,6 +4764,10 @@ def _build_trend_rows(
                 "ivb_n": 0,
                 "hb_sum": 0.0,
                 "hb_n": 0,
+                "rel_height_sum": 0.0,
+                "rel_height_n": 0,
+                "rel_side_sum": 0.0,
+                "rel_side_n": 0,
                 "stuff_sum": 0.0,
                 "stuff_n": 0,
                 "qp_sum": 0.0,
@@ -4850,6 +4854,12 @@ def _build_trend_rows(
         if _is_num(row.get("hb")):
             agg["hb_sum"] += float(row.get("hb"))
             agg["hb_n"] += 1
+        if _is_num(row.get("rel_height")):
+            agg["rel_height_sum"] += float(row.get("rel_height"))
+            agg["rel_height_n"] += 1
+        if _is_num(row.get("rel_side")):
+            agg["rel_side_sum"] += float(row.get("rel_side"))
+            agg["rel_side_n"] += 1
 
         stuff = avg_stuff_by_pitch_type.get(str(row.get("pitch_type") or ""))
         if _is_num(stuff):
@@ -5097,6 +5107,8 @@ def _build_trend_rows(
                     "Spin": (agg["spin_sum"] / agg["spin_n"]) if agg["spin_n"] else None,
                     "IVB": (agg["ivb_sum"] / agg["ivb_n"]) if agg["ivb_n"] else None,
                     "HB": (agg["hb_sum"] / agg["hb_n"]) if agg["hb_n"] else None,
+                    "Release Height": (agg["rel_height_sum"] / agg["rel_height_n"]) if agg["rel_height_n"] else None,
+                    "Release Side": (agg["rel_side_sum"] / agg["rel_side_n"]) if agg["rel_side_n"] else None,
                     "Stuff+": (agg["stuff_sum"] / agg["stuff_n"]) if agg["stuff_n"] else None,
                     "QP+": (agg["qp_sum"] / agg["qp_n"]) if agg["qp_n"] else None,
                     "InZone%": _pct(agg["in_zone_n"], pitches),
@@ -5405,6 +5417,7 @@ def _resolve_college_opp_placeholders(
 
 
 LEAGUE_TEAM_NAME_BY_CODE: Dict[str, str] = {
+    "USABASEBALL": "USA Baseball",
     "ABI_WIL": "Abilene Christian University",
     "AIR_FOR": "United States Air Force Academy",
     "AKR_ZIP": "University of Akron",
@@ -5963,11 +5976,15 @@ def _league_team_codes_sql_expr() -> str:
     return """
     SELECT team_code
     FROM (
-      SELECT DISTINCT NULLIF(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '') AS team_code
+      SELECT DISTINCT
+        CASE WHEN NULLIF(TRIM(level), '') = 'USA Baseball' THEN 'USABASEBALL'
+             ELSE NULLIF(UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')), '') END AS team_code
       FROM public.pitch_events
       WHERE school_code = %(school_code)s
       UNION
-      SELECT DISTINCT NULLIF(UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')), '') AS team_code
+      SELECT DISTINCT
+        CASE WHEN NULLIF(TRIM(level), '') = 'USA Baseball' THEN 'USABASEBALL'
+             ELSE NULLIF(UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')), '') END AS team_code
       FROM public.pitch_events
       WHERE school_code = %(school_code)s
     ) t
@@ -5977,11 +5994,22 @@ def _league_team_codes_sql_expr() -> str:
 
 
 def _league_name_map_sql_expr(team_col: str, name_col: str) -> str:
+    # Tournament/showcase events (USA Baseball) mint a fresh, one-off team
+    # code per squad/pool per event, so hardcoding a display name per code in
+    # LEAGUE_TEAM_NAME_BY_CODE isn't sustainable -- new codes appear with
+    # every new event. Any row whose `level` says "USA Baseball" is grouped
+    # under the synthetic "USABASEBALL" code instead of its raw per-event
+    # code; that code is mapped to the display name "USA Baseball" in
+    # LEAGUE_TEAM_NAME_BY_CODE like every other team, so it flows through the
+    # existing normalized-code pipeline instead of needing special-casing.
     return f"""
     SELECT team_code, array_agg(name ORDER BY name) AS names
     FROM (
       SELECT DISTINCT
-        NULLIF(UPPER(COALESCE(NULLIF(TRIM({team_col}), ''), '')), '') AS team_code,
+        CASE
+          WHEN NULLIF(TRIM(level), '') = 'USA Baseball' THEN 'USABASEBALL'
+          ELSE NULLIF(UPPER(COALESCE(NULLIF(TRIM({team_col}), ''), '')), '')
+        END AS team_code,
         NULLIF(TRIM({name_col}), '') AS name
       FROM public.pitch_events
       WHERE school_code = %(school_code)s
@@ -14225,19 +14253,43 @@ def _append_college_rollup_team_filter(
         return
     if school_code == "LEAGUE":
         target_col = pitcher_team_col if role == "pitching" else batter_team_col
-        where_parts.append(f"{target_col} = %(team_type_norm)s::text")
-        params["team_type_norm"] = team_norm
+        if team_norm == "USABASEBALL":
+            # "USABASEBALL" is a synthetic code -- USA Baseball tournament
+            # events mint a fresh per-squad team code with every event, so
+            # they're grouped for display/filtering by the shared
+            # level_bucket rather than a literal team code that would never
+            # match any row (see _league_name_map_sql_expr).
+            where_parts.append("UPPER(COALESCE(NULLIF(TRIM(level_bucket), ''), '')) = 'USA BASEBALL'")
+        else:
+            where_parts.append(f"{target_col} = %(team_type_norm)s::text")
+            params["team_type_norm"] = team_norm
         return
 
     school_norm = _normalize_team_code(school_code)
     if team_raw == school_code or team_norm == school_norm:
         markers = _load_school_roster(school_code).get("team_markers_norm", [])
+        target_col = pitcher_team_col if role == "pitching" else batter_team_col
         if markers:
             params["rollup_team_markers_norm"] = markers
-            target_col = pitcher_team_col if role == "pitching" else batter_team_col
-            where_parts.append(f"{target_col} = ANY(%(rollup_team_markers_norm)s::text[])")
+            team_clause = f"{target_col} = ANY(%(rollup_team_markers_norm)s::text[])"
+            # PCU's rollup rows are frequently ingested with a blank team code
+            # rather than the school's own marker (mirrors the same carve-out
+            # in _filter_pitching_rows_by_team_type for raw rows). Without this,
+            # filtering to the school's own team silently drops any pitcher/
+            # batter whose rows never got tagged, even though they're clearly
+            # on the roster.
+            if school_code == "PCU":
+                roster = _load_school_roster(school_code)
+                roster_norm = sorted({*roster.get("team_only_norm", []), *roster.get("campers_norm", [])})
+                name_col = "pitcher_norm" if role == "pitching" else "batter_norm"
+                if roster_norm:
+                    params["rollup_roster_norm"] = roster_norm
+                    team_clause = (
+                        f"({team_clause} OR (COALESCE(NULLIF({target_col}, ''), '') = '' "
+                        f"AND {name_col} = ANY(%(rollup_roster_norm)s::text[])))"
+                    )
+            where_parts.append(team_clause)
         else:
-            target_col = pitcher_team_col if role == "pitching" else batter_team_col
             where_parts.append(f"{target_col} = %(team_type_norm)s::text")
             params["team_type_norm"] = team_norm
         return
@@ -19443,11 +19495,15 @@ def pitching_filters(
                     """
                     SELECT team_code
                     FROM (
-                      SELECT DISTINCT NULLIF(TRIM(pitcher_team_norm), '') AS team_code
+                      SELECT DISTINCT
+                        CASE WHEN UPPER(NULLIF(TRIM(level_bucket), '')) = 'USA BASEBALL' THEN 'USABASEBALL'
+                             ELSE NULLIF(TRIM(pitcher_team_norm), '') END AS team_code
                       FROM public.pitch_events_daily_rollup_league
                       WHERE """ + rollup_school_where + """
                       UNION
-                      SELECT DISTINCT NULLIF(TRIM(batter_team_norm_eff), '') AS team_code
+                      SELECT DISTINCT
+                        CASE WHEN UPPER(NULLIF(TRIM(level_bucket), '')) = 'USA BASEBALL' THEN 'USABASEBALL'
+                             ELSE NULLIF(TRIM(batter_team_norm_eff), '') END AS team_code
                       FROM public.pitch_events_daily_rollup_league
                       WHERE """ + rollup_school_where + """
                     ) t
@@ -19463,13 +19519,24 @@ def pitching_filters(
                 else:
                     team_types = ["All", school_code, "Opponents", "Campers"]
 
+                # USA Baseball tournament/showcase events mint a fresh per-squad
+                # team code with every event, so they're grouped under the
+                # synthetic "USABASEBALL" code (mapped to the display name
+                # "USA Baseball" in LEAGUE_TEAM_NAME_BY_CODE) instead of their
+                # raw per-event codes, which would never get a real name.
+                usa_baseball_case_sql = (
+                    "CASE WHEN UPPER(NULLIF(TRIM(level_bucket), '')) = 'USA BASEBALL' "
+                    "THEN 'USABASEBALL' ELSE NULLIF(TRIM(pitcher_team_norm), '') END"
+                    if school_code == "LEAGUE"
+                    else "NULLIF(TRIM(pitcher_team_norm), '')"
+                )
                 cur.execute(
                     (
                     """
                     SELECT team_code, array_agg(name ORDER BY name) AS names
                     FROM (
                       SELECT DISTINCT
-                        NULLIF(TRIM(pitcher_team_norm), '') AS team_code,
+                        """ + usa_baseball_case_sql + """ AS team_code,
                         NULLIF(TRIM(pitcher_name), '') AS name
                       FROM public.pitch_events_daily_rollup_league
                       WHERE """ + rollup_school_where + """
@@ -19494,7 +19561,7 @@ def pitching_filters(
                     SELECT team_code, array_agg(name ORDER BY name) AS names
                     FROM (
                       SELECT DISTINCT
-                        NULLIF(TRIM(pitcher_team_norm), '') AS team_code,
+                        """ + usa_baseball_case_sql + """ AS team_code,
                         NULLIF(TRIM(batter_name), '') AS name
                       FROM public.pitch_events_daily_rollup_league
                       WHERE """ + rollup_school_where + """
