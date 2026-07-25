@@ -30,6 +30,10 @@ export default function NativeDateInput({ value, onChange, className, style, ari
   }
 
   function handlePointerDown(event: PointerEvent<HTMLInputElement>) {
+    // Mobile browsers already open their native date UI from the normal touch
+    // event. Preventing that event and calling showPicker() ourselves can cause
+    // the native sheet to open and immediately dismiss on iOS/Android.
+    if (event.pointerType !== 'mouse') return;
     const input = inputRef.current;
     if (!input?.showPicker || disabled) return;
     event.preventDefault();

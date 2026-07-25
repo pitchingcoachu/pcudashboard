@@ -1505,6 +1505,7 @@ const TREND_METRIC_OPTIONS: OptionItem[] = [
   { value: 'HB', label: 'HB' },
   { value: 'Release Height', label: 'Release Height' },
   { value: 'Release Side', label: 'Release Side' },
+  { value: 'Extension', label: 'Extension' },
   { value: 'Stuff+', label: 'Stuff+' },
   { value: 'QP+', label: 'QP+' },
   { value: 'InZone%', label: 'InZone%' },
@@ -4802,11 +4803,16 @@ export default function PitchingSuite({
     const applyChartPayload = (payload: OverviewPayload) => {
       setOverview((previous) => {
         if (!previous) return payload;
+        const incomingChartPoints = Array.isArray(payload.chart_points) ? payload.chart_points : [];
+        const incomingHeatmapPoints = Array.isArray(payload.heatmap_points) ? payload.heatmap_points : [];
+        const incomingTrendRows = Array.isArray(payload.trend_rows) ? payload.trend_rows : [];
         return {
           ...previous,
-          chart_points: Array.isArray(payload.chart_points) ? payload.chart_points : (previous.chart_points ?? []),
-          heatmap_points: Array.isArray(payload.heatmap_points) ? payload.heatmap_points : (previous.heatmap_points ?? []),
-          trend_rows: Array.isArray(payload.trend_rows) ? payload.trend_rows : (previous.trend_rows ?? []),
+          chart_points: incomingChartPoints.length > 0 ? incomingChartPoints : (previous.chart_points ?? []),
+          heatmap_points: incomingHeatmapPoints.length > 0 ? incomingHeatmapPoints : (previous.heatmap_points ?? []),
+          // Chart-only companion responses intentionally omit trend rows. Keep
+          // the full-dataset response instead of replacing it with an empty list.
+          trend_rows: incomingTrendRows.length > 0 ? incomingTrendRows : (previous.trend_rows ?? []),
         };
       });
     };
@@ -4858,6 +4864,10 @@ export default function PitchingSuite({
         controller.abort();
       };
     }
+    // Trend aggregation can take materially longer than the bounded chart query
+    // on large PRO date ranges. Start the companion request immediately so the
+    // page can render a stable preview while the exact full-range rows finish.
+    if (isTrendPage && chartRequestKey) loadCompanionChart(chartRequestKey);
     const inflightOverview = overviewInflightRef.current.get(requestKey);
     const overviewPromise =
       inflightOverview ??
@@ -6180,7 +6190,7 @@ export default function PitchingSuite({
 
   useEffect(() => {
     if (!isPro || !customTablesLoaded || proDefaultTableAppliedRef.current) return;
-    const canApplyDefault = selectedCustomTableId === null && (tableMode === 'Live' || tableMode === 'Custom');
+    const canApplyDefault = selectedCustomTableId === null && tableMode === 'Live';
     if (!canApplyDefault) return;
     setTableMode('Live');
     setSelectedCustomTableId(null);
@@ -6189,18 +6199,6 @@ export default function PitchingSuite({
     setAppliedFilterVersion((current) => current + 1);
     proDefaultTableAppliedRef.current = true;
   }, [isPro, customTablesLoaded, selectedCustomTableId, tableMode]);
-
-  useEffect(() => {
-    if (!isPro || !customTablesLoaded) return;
-    if (tableMode !== 'Custom' || selectedCustomTableId !== null) return;
-    const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '');
-    const preferred = customTables.find((item) => normalize(item.name) === 'jaredsdashboard');
-    if (!preferred) return;
-    setSelectedCustomTableId(preferred.id);
-    setCustomTableName(preferred.name);
-    setCustomTableColumns(preferred.columns ?? []);
-    setAppliedFilterVersion((current) => current + 1);
-  }, [isPro, customTablesLoaded, customTables, tableMode, selectedCustomTableId]);
 
   useEffect(() => {
     if (dashboardPage !== 'Leaderboard') {
@@ -8526,6 +8524,8 @@ export default function PitchingSuite({
       relHeightN: number;
       relSideSum: number;
       relSideN: number;
+      extensionSum: number;
+      extensionN: number;
       stuffSum: number;
       stuffN: number;
       qpSum: number;
@@ -8572,7 +8572,11 @@ export default function PitchingSuite({
     };
 
     const backendTrendRows = overview?.trend_rows ?? [];
-    if (backendTrendRows.length > 0) {
+    const backendHasSelectedMetric = backendTrendRows.some((row) => {
+      const metricValue = row.values?.[trendMetric];
+      return typeof metricValue === 'number' && Number.isFinite(metricValue);
+    });
+    if (backendTrendRows.length > 0 && backendHasSelectedMetric) {
       const rowsBySession = TREND_SESSION_ORDER.reduce((acc, session) => {
         const rows = backendTrendRows
           .filter((row) => row.session_bucket === session)
@@ -8637,6 +8641,8 @@ export default function PitchingSuite({
       relHeightN: 0,
       relSideSum: 0,
       relSideN: 0,
+      extensionSum: 0,
+      extensionN: 0,
       stuffSum: 0,
       stuffN: 0,
       qpSum: 0,
@@ -8688,6 +8694,7 @@ export default function PitchingSuite({
         HB: agg.hbN > 0 ? agg.hbSum / agg.hbN : null,
         'Release Height': agg.relHeightN > 0 ? agg.relHeightSum / agg.relHeightN : null,
         'Release Side': agg.relSideN > 0 ? agg.relSideSum / agg.relSideN : null,
+        Extension: agg.extensionN > 0 ? agg.extensionSum / agg.extensionN : null,
         'Stuff+': agg.stuffN > 0 ? agg.stuffSum / agg.stuffN : null,
         'QP+': agg.qpN > 0 ? agg.qpSum / agg.qpN : null,
         'InZone%': pct(agg.inZoneN, agg.locN),
@@ -8816,6 +8823,10 @@ export default function PitchingSuite({
       if (typeof point.release_side === 'number' && Number.isFinite(point.release_side)) {
         agg.relSideSum += point.release_side;
         agg.relSideN += 1;
+      }
+      if (typeof point.extension === 'number' && Number.isFinite(point.extension)) {
+        agg.extensionSum += point.extension;
+        agg.extensionN += 1;
       }
       if (typeof point.stuff_plus === 'number' && Number.isFinite(point.stuff_plus)) {
         agg.stuffSum += point.stuff_plus;

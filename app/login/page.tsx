@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getSessionFromCookies } from '../../lib/auth';
+import pearlLockup from '../../pearl/pearl-lockup-transparent.png';
 
 type LoginPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -26,39 +27,85 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const error = typeof params.error === 'string' ? getErrorMessage(params.error) : '';
 
   return (
-    <div className="auth-shell">
-      <section className="auth-card">
-        <Image
-          src="/pitching-coach-u-logo.png"
-          alt="Pitching Coach U logo"
-          width={64}
-          height={64}
-          priority
-          className="brand-logo"
-        />
-        <p className="hero-eyebrow">PCU Dashboard Access</p>
-        <h1>Log In</h1>
-        <form className="auth-form" method="post" action="/api/auth/login?mode=web">
-          <label>
-            Email
-            <input type="email" name="email" autoComplete="email" required />
-          </label>
-          <label>
-            Password
-            <input type="password" name="password" autoComplete="current-password" required />
-          </label>
-          <button type="submit" className="btn btn-primary">
-            Log In
-          </button>
-          {error && <p className="auth-error">{error}</p>}
-          <Link href="/forgot-password" className="auth-link">
-            Forgot password?
+    <div className="auth-shell pearl-auth-shell">
+      <div className="pearl-auth-glow pearl-auth-glow--cyan" aria-hidden="true" />
+      <div className="pearl-auth-glow pearl-auth-glow--violet" aria-hidden="true" />
+
+      <main className="pearl-auth-layout">
+        <section className="pearl-auth-brand" aria-label="Pearl Player Development">
+          <Link href="/" className="pearl-auth-lockup-link" aria-label="Pearl Player Development home">
+            <span className="pearl-auth-lockup">
+              <Image
+                src={pearlLockup}
+                alt="Pearl Player Development"
+                fill
+                sizes="(max-width: 820px) 90vw, 48vw"
+                priority
+                className="pearl-auth-lockup-image"
+              />
+            </span>
           </Link>
-        </form>
-        <Link href="/" className="btn btn-ghost as-link">
-          Back to Home
-        </Link>
-      </section>
+          <div className="pearl-auth-brand-copy">
+            <p className="pearl-auth-kicker">
+              <strong><em>The</em></strong> player development hub for baseball coaches and programs.
+            </p>
+          </div>
+          <div className="pearl-auth-signal" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
+            <span />
+          </div>
+        </section>
+
+        <section className="auth-card pearl-auth-card">
+          <div className="pearl-auth-card-heading">
+            <p className="hero-eyebrow">Pearl Player Development</p>
+            <h1>Welcome back.</h1>
+            <p>Log in to continue to your player development hub.</p>
+          </div>
+          <form className="auth-form pearl-auth-form" method="post" action="/api/auth/login?mode=web">
+            <label>
+              Email
+              <input
+                type="email"
+                name="email"
+                autoComplete="email"
+                placeholder="you@yourprogram.com"
+                required
+              />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                name="password"
+                autoComplete="current-password"
+                placeholder="Enter your password"
+                required
+              />
+            </label>
+            <button type="submit" className="btn btn-primary pearl-auth-submit">
+              Log In
+            </button>
+            {error ? (
+              <p className="auth-error" role="alert">
+                {error}
+              </p>
+            ) : null}
+            <Link href="/forgot-password" className="auth-link">
+              Forgot password?
+            </Link>
+          </form>
+          <div className="pearl-auth-card-footer">
+            <span>Secure access for Pearl partners</span>
+            <Link href="/">Back to home</Link>
+          </div>
+        </section>
+      </main>
     </div>
   );
 }

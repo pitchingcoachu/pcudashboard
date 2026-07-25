@@ -4768,6 +4768,8 @@ def _build_trend_rows(
                 "rel_height_n": 0,
                 "rel_side_sum": 0.0,
                 "rel_side_n": 0,
+                "extension_sum": 0.0,
+                "extension_n": 0,
                 "stuff_sum": 0.0,
                 "stuff_n": 0,
                 "qp_sum": 0.0,
@@ -4860,6 +4862,9 @@ def _build_trend_rows(
         if _is_num(row.get("rel_side")):
             agg["rel_side_sum"] += float(row.get("rel_side"))
             agg["rel_side_n"] += 1
+        if _is_num(row.get("ext_value")):
+            agg["extension_sum"] += float(row.get("ext_value"))
+            agg["extension_n"] += 1
 
         stuff = avg_stuff_by_pitch_type.get(str(row.get("pitch_type") or ""))
         if _is_num(stuff):
@@ -5109,6 +5114,7 @@ def _build_trend_rows(
                     "HB": (agg["hb_sum"] / agg["hb_n"]) if agg["hb_n"] else None,
                     "Release Height": (agg["rel_height_sum"] / agg["rel_height_n"]) if agg["rel_height_n"] else None,
                     "Release Side": (agg["rel_side_sum"] / agg["rel_side_n"]) if agg["rel_side_n"] else None,
+                    "Extension": (agg["extension_sum"] / agg["extension_n"]) if agg["extension_n"] else None,
                     "Stuff+": (agg["stuff_sum"] / agg["stuff_n"]) if agg["stuff_n"] else None,
                     "QP+": (agg["qp_sum"] / agg["qp_n"]) if agg["qp_n"] else None,
                     "InZone%": _pct(agg["in_zone_n"], pitches),

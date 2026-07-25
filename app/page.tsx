@@ -446,8 +446,8 @@ export default function Home() {
             </div>
             <div className="hero-copy">
               <h2>Built by coaches, for coaches.</h2>
-              <p className="hero-subcopy">
-                The player development hub for high level baseball coaches and programs.
+              <p className="hero-subcopy hero-subcopy--positioning">
+                <strong><em>The</em></strong> player development hub for baseball coaches and programs.
               </p>
               <div className="hero-actions">
                 <a href={CALENDLY_URL} className="btn btn-primary" target="_blank" rel="noreferrer">
