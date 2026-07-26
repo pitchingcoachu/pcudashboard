@@ -504,7 +504,7 @@ export default function LeaderboardCorrelationModal({
   useEffect(() => {
     if (!open || logoDataUrl) return;
     let cancelled = false;
-    fetch('/pitching-coach-u-logo.png')
+    fetch('/pearl-clam-transparent.png')
       .then(async (response) => {
         const blob = await response.blob();
         return await new Promise<string>((resolve, reject) => {

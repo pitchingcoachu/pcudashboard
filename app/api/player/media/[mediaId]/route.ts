@@ -5,6 +5,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { getR2Client, getR2Bucket } from '../../../../../lib/biomechanics-storage';
+import { resolvePlayerContentOrganizationId } from '../../../../../lib/player-content-scope';
 import { getPlayerMedia } from '../../../../../lib/training-db';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 
@@ -47,7 +48,7 @@ export async function GET(request: Request, context: { params: Promise<{ mediaId
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   // Players can access their own media (canManagePlayer enforces ownership below)
-  const organizationId = Number(session.organizationId ?? 0);
+  const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ error: 'No organization found for session.' }, { status: 403 });
 
   const { mediaId: rawMediaId } = await context.params;

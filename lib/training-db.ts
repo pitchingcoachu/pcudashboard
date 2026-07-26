@@ -1762,6 +1762,7 @@ export async function resolveOrganizationIdForSchool(input: {
   schoolCode: string;
   fallbackOrganizationId?: number;
   createIfMissing?: boolean;
+  allowFallbackIfUnresolved?: boolean;
 }): Promise<number> {
   if (!isDatabaseConfigured()) return Number(input.fallbackOrganizationId ?? 0) || 0;
   await ensureTrainingDbReady();
@@ -1770,7 +1771,8 @@ export async function resolveOrganizationIdForSchool(input: {
   if (!schoolCode) return Number.isFinite(fallbackOrganizationId) && fallbackOrganizationId > 0 ? fallbackOrganizationId : 0;
   const normalizedFallback = Number.isFinite(fallbackOrganizationId) && fallbackOrganizationId > 0 ? fallbackOrganizationId : 0;
   if (schoolCode === 'TRIAL') return normalizedFallback || resolveDashboardTrialTemplateOrganizationId();
-  const cacheKey = `resolve_org_id_for_school:${schoolCode}:${normalizedFallback}:${input.createIfMissing ? 1 : 0}`;
+  const allowFallbackIfUnresolved = input.allowFallbackIfUnresolved !== false;
+  const cacheKey = `resolve_org_id_for_school:${schoolCode}:${normalizedFallback}:${input.createIfMissing ? 1 : 0}:${allowFallbackIfUnresolved ? 1 : 0}`;
   return _withTrainingReadCache(cacheKey, 45_000, async () => {
     const schoolByOrgId = parseOrgSchoolMap();
     const pool = getDbPool();
@@ -1795,11 +1797,13 @@ export async function resolveOrganizationIdForSchool(input: {
       `
         SELECT id
         FROM organizations
-        WHERE UPPER(TRIM(name)) = $1
-        ORDER BY id ASC
+        WHERE UPPER(TRIM(name)) IN ($1, $2)
+        ORDER BY
+          CASE WHEN UPPER(TRIM(name)) = $1 THEN 0 ELSE 1 END,
+          id ASC
         LIMIT 1
       `,
-      [schoolCode]
+      [schoolCode, `${schoolCode} ORGANIZATION`]
     );
     if ((byName.rowCount ?? 0) > 0) {
       const orgId = Number(byName.rows[0]?.id ?? 0);
@@ -1841,7 +1845,7 @@ export async function resolveOrganizationIdForSchool(input: {
       }
     }
 
-    return normalizedFallback;
+    return allowFallbackIfUnresolved ? normalizedFallback : 0;
   });
 }
 
@@ -6860,6 +6864,7 @@ export async function clearPlayerPlanGoalsForPlayer(input: {
 }
 
 export async function listPlayerPlanNotesForPlayer(input: {
+  organizationId: number;
   playerId: number;
   domain?: 'Pitching' | 'Hitting' | 'Catching' | 'General';
   limit?: number;
@@ -6886,24 +6891,26 @@ export async function listPlayerPlanNotesForPlayer(input: {
   }>(
     `
       SELECT
-        id,
-        player_id,
-        domain,
-        note_date::text,
-        category,
-        note_text,
-        attachment_name,
-        attachment_mime_type,
-        attachment_data_url,
-        created_at::text,
-        created_by_user_id
-      FROM player_plan_notes
-      WHERE player_id = $1
-        AND ($2::text IS NULL OR domain = $2::text)
-      ORDER BY note_date DESC, created_at DESC
-      LIMIT $3
+        n.id,
+        n.player_id,
+        n.domain,
+        n.note_date::text,
+        n.category,
+        n.note_text,
+        n.attachment_name,
+        n.attachment_mime_type,
+        n.attachment_data_url,
+        n.created_at::text,
+        n.created_by_user_id
+      FROM player_plan_notes n
+      JOIN players p ON p.id = n.player_id
+      WHERE n.player_id = $1
+        AND p.organization_id = $2
+        AND ($3::text IS NULL OR n.domain = $3::text)
+      ORDER BY n.note_date DESC, n.created_at DESC
+      LIMIT $4
     `,
-    [input.playerId, filteredDomain, limit]
+    [input.playerId, input.organizationId, filteredDomain, limit]
   );
 
   return result.rows
@@ -8343,6 +8350,148 @@ export async function createQuestionnaire(input: {
     return { ok: false, error: error instanceof Error ? error.message : 'Failed to create questionnaire.' };
   } finally {
     client.release();
+  }
+}
+
+export async function updateQuestionnaire(input: {
+  questionnaireId: number;
+  organizationId: number;
+  userId: number | null;
+  name: string;
+  questions: unknown;
+  assignments: Array<{
+    id?: number;
+    groupName?: string;
+    playerIds?: unknown;
+    notifyStartDate?: string;
+    frequency?: unknown;
+  }>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const questionnaireId = Number(input.questionnaireId);
+  const name = input.name.trim().replace(/\s+/g, ' ');
+  const questions = normalizeQuestionnaireQuestions(input.questions);
+  if (!Number.isFinite(questionnaireId) || questionnaireId <= 0) {
+    return { ok: false, error: 'Questionnaire is required.' };
+  }
+  if (!name) return { ok: false, error: 'Questionnaire name is required.' };
+  if (!questions.length) return { ok: false, error: 'Add at least one question.' };
+
+  const assignments = input.assignments
+    .map((assignment) => ({
+      id: Number.isFinite(Number(assignment.id)) && Number(assignment.id) > 0 ? Number(assignment.id) : null,
+      groupName: String(assignment.groupName ?? '').trim().replace(/\s+/g, ' '),
+      playerIds: normalizePlayerIds(assignment.playerIds),
+      notifyStartDate: /^\d{4}-\d{2}-\d{2}$/.test(String(assignment.notifyStartDate ?? ''))
+        ? String(assignment.notifyStartDate)
+        : todayIsoForQuestionnaires(),
+      frequency: normalizeQuestionnaireFrequency(assignment.frequency),
+    }))
+    .filter((assignment) => assignment.playerIds.length > 0)
+    .slice(0, 20);
+  if (!assignments.length) return { ok: false, error: 'Choose at least one player to receive this questionnaire.' };
+
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const updated = await client.query(
+      `UPDATE questionnaires
+       SET name = $3, questions_json = $4::jsonb, updated_at = NOW()
+       WHERE id = $1 AND organization_id = $2`,
+      [questionnaireId, input.organizationId, name, JSON.stringify(questions)]
+    );
+    if (updated.rowCount !== 1) {
+      await client.query('ROLLBACK');
+      return { ok: false, error: 'Questionnaire was not found.' };
+    }
+
+    const activeAssignmentIds: number[] = [];
+    for (const assignment of assignments) {
+      if (assignment.id) {
+        const assignmentUpdated = await client.query(
+          `UPDATE questionnaire_assignments
+           SET group_name = $4,
+               player_ids_json = $5::jsonb,
+               notify_start_date = $6::date,
+               frequency = $7,
+               is_active = TRUE,
+               updated_at = NOW()
+           WHERE id = $1 AND questionnaire_id = $2 AND organization_id = $3`,
+          [
+            assignment.id,
+            questionnaireId,
+            input.organizationId,
+            assignment.groupName,
+            JSON.stringify(assignment.playerIds),
+            assignment.notifyStartDate,
+            assignment.frequency,
+          ]
+        );
+        if (assignmentUpdated.rowCount !== 1) {
+          throw new Error('One of the questionnaire assignments was not found.');
+        }
+        activeAssignmentIds.push(assignment.id);
+        continue;
+      }
+
+      const created = await client.query<{ id: string }>(
+        `INSERT INTO questionnaire_assignments
+          (questionnaire_id, organization_id, group_name, player_ids_json, notify_start_date, frequency, created_by_user_id, updated_at)
+         VALUES ($1, $2, $3, $4::jsonb, $5::date, $6, $7, NOW())
+         RETURNING id::text AS id`,
+        [
+          questionnaireId,
+          input.organizationId,
+          assignment.groupName,
+          JSON.stringify(assignment.playerIds),
+          assignment.notifyStartDate,
+          assignment.frequency,
+          input.userId,
+        ]
+      );
+      activeAssignmentIds.push(Number(created.rows[0]?.id ?? 0));
+    }
+
+    await client.query(
+      `UPDATE questionnaire_assignments
+       SET is_active = FALSE, updated_at = NOW()
+       WHERE questionnaire_id = $1
+         AND organization_id = $2
+         AND NOT (id = ANY($3::bigint[]))`,
+      [questionnaireId, input.organizationId, activeAssignmentIds]
+    );
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to update questionnaire.' };
+  } finally {
+    client.release();
+  }
+}
+
+export async function deleteQuestionnaire(input: {
+  questionnaireId: number;
+  organizationId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const questionnaireId = Number(input.questionnaireId);
+  if (!Number.isFinite(questionnaireId) || questionnaireId <= 0) {
+    return { ok: false, error: 'Questionnaire is required.' };
+  }
+  const pool = getDbPool();
+  try {
+    const result = await pool.query(
+      `DELETE FROM questionnaires
+       WHERE id = $1 AND organization_id = $2`,
+      [questionnaireId, input.organizationId]
+    );
+    return result.rowCount === 1 ? { ok: true } : { ok: false, error: 'Questionnaire was not found.' };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to delete questionnaire.' };
   }
 }
 

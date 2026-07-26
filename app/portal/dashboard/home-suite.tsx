@@ -458,6 +458,7 @@ export default function HomeSuite({ role, selectedSchoolCode, activeSuite, suite
   function resolveHeavyLeaderboardWindow(): { startDate: string; endDate: string } {
     const endDate = todayYmd();
     if (isProSchool) return { startDate: '2026-03-25', endDate };
+    if (isLeagueSchool) return { startDate: '2026-02-13', endDate: '2026-06-22' };
     return { startDate: '2026-02-13', endDate };
   }
   function resolveGameLogTargetTeam(): string {

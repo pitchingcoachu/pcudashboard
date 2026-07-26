@@ -1,4 +1,8 @@
 .page {
+  --pearl-cyan: #18dad5;
+  --pearl-cyan-bright: #72f6e7;
+  --pearl-blue: #2d8dff;
+  --pearl-violet: #783cff;
   display: block;
   width: 100%;
   min-width: 0;
@@ -6,10 +10,11 @@
   margin: 0;
   padding: 0;
   background:
-    radial-gradient(circle at 14% 4%, rgba(200, 16, 46, 0.2), transparent 34%),
-    radial-gradient(circle at 88% 8%, rgba(200, 16, 46, 0.1), transparent 28%),
-    linear-gradient(128deg, #050505 0%, #0b0b0b 50%, #141414 100%);
-  color: #f4f7ff;
+    radial-gradient(circle at 12% 3%, rgba(20, 221, 218, 0.17), transparent 34%),
+    radial-gradient(circle at 89% 7%, rgba(120, 60, 255, 0.17), transparent 31%),
+    radial-gradient(circle at 52% 92%, rgba(45, 141, 255, 0.1), transparent 42%),
+    linear-gradient(132deg, #010512 0%, #030a1a 50%, #07051a 100%);
+  color: #f6fbff;
   font-family: Manrope, sans-serif;
 }
 
@@ -28,30 +33,47 @@
   justify-content: space-between;
   gap: 20px;
   padding: 14px 18px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(72, 222, 228, 0.2);
   border-radius: 22px;
-  background: rgba(8, 8, 8, 0.8);
+  background:
+    linear-gradient(100deg, rgba(18, 217, 213, 0.05), rgba(105, 66, 255, 0.05)),
+    rgba(2, 7, 20, 0.86);
   backdrop-filter: blur(14px);
+  box-shadow: 0 18px 55px rgba(0, 2, 12, 0.34);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 13px;
-  color: #f4f7ff;
+  gap: 14px;
+  min-width: 0;
+  color: #f6fbff;
   text-decoration: none;
 }
 
-.brand img {
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 999px;
-  object-fit: cover;
-  box-shadow: 0 0 0 4px rgba(200, 16, 46, 0.22);
+.brandLogoFrame {
+  position: relative;
+  display: block;
+  width: clamp(190px, 20vw, 250px);
+  aspect-ratio: 2.7 / 1;
+  overflow: hidden;
 }
 
-.brand span { display: grid; gap: 3px; }
-.brand strong { font: 400 25px/.9 'Bebas Neue', sans-serif; letter-spacing: .05em; }
-.brand small { color: #aeb3bd; font-size: 9px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.brandLogo {
+  object-fit: cover;
+  object-position: 50% 49%;
+  filter: drop-shadow(0 8px 20px rgba(0, 2, 12, 0.32));
+}
+
+.brandAudience {
+  padding-left: 14px;
+  border-left: 1px solid rgba(91, 221, 229, 0.2);
+  color: #9fb2c8;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
 
 .headerActions { display: flex; align-items: center; gap: 14px; }
 .socialNav { display: flex; align-items: center; gap: 7px; }
@@ -62,11 +84,11 @@
   place-items: center;
   border: 1px solid rgba(255, 255, 255, .15);
   border-radius: 999px;
-  color: #c8102e;
-  background: rgba(200, 16, 46, .1);
+  color: #55e9e2;
+  background: rgba(20, 217, 213, .08);
   transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
 }
-.socialNav a:hover { transform: translateY(-1px); border-color: rgba(200, 16, 46, .9); background: rgba(200, 16, 46, .17); }
+.socialNav a:hover { transform: translateY(-1px); border-color: rgba(73, 226, 225, .8); background: rgba(32, 143, 255, .14); }
 .socialNav svg { width: 16px; height: 16px; fill: currentColor; }
 
 .backLink {
@@ -83,7 +105,7 @@
   transition: border-color 180ms ease, background 180ms ease;
 }
 
-.backLink:hover { border-color: rgba(200, 16, 46, .9); background: rgba(200, 16, 46, .12); }
+.backLink:hover { border-color: rgba(48, 224, 221, .65); background: rgba(20, 217, 213, .1); }
 
 .intro {
   padding: clamp(70px, 9vw, 120px) clamp(20px, 5vw, 72px) 58px;
@@ -95,7 +117,7 @@
 .planLabel,
 .contact span {
   margin: 0;
-  color: #e5475f;
+  color: #69eee6;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .18em;
@@ -108,6 +130,9 @@
   font: 400 clamp(54px, 7vw, 96px)/.9 'Bebas Neue', sans-serif;
   letter-spacing: .015em;
   text-transform: uppercase;
+  background: linear-gradient(96deg, #ffffff 14%, #bffbf6 57%, #c9c1ff 100%);
+  background-clip: text;
+  color: transparent;
 }
 
 .intro > span {
@@ -125,9 +150,9 @@
   gap: 4px;
   margin-top: 28px;
   padding: 5px;
-  border: 1px solid rgba(255, 255, 255, .16);
+  border: 1px solid rgba(82, 210, 232, .18);
   border-radius: 999px;
-  background: rgba(255, 255, 255, .05);
+  background: rgba(8, 26, 48, .48);
 }
 
 .billingToggle a {
@@ -150,9 +175,9 @@
 }
 
 .billingToggle .billingToggleActive {
-  color: #fff;
-  background: linear-gradient(135deg, #c8102e, #8f0f24);
-  box-shadow: 0 10px 26px rgba(200, 16, 46, .25);
+  color: #020817;
+  background: linear-gradient(118deg, #72f6e7 0%, #18dad5 48%, #2d8dff 100%);
+  box-shadow: 0 10px 28px rgba(20, 217, 213, .22);
 }
 
 .shared {
@@ -162,9 +187,11 @@
   align-items: center;
   margin: 0 clamp(0px, 3vw, 42px) 28px;
   padding: 26px clamp(22px, 3vw, 38px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(72, 222, 228, 0.19);
   border-radius: 20px;
-  background: linear-gradient(135deg, rgba(200, 16, 46, .16), rgba(255, 255, 255, .035));
+  background:
+    radial-gradient(circle at 8% 50%, rgba(20, 217, 213, .12), transparent 40%),
+    linear-gradient(135deg, rgba(45, 141, 255, .09), rgba(120, 60, 255, .06));
 }
 
 .sharedHeading h2 {
@@ -201,7 +228,7 @@
   height: 16px;
   flex: 0 0 auto;
   fill: none;
-  stroke: #e33b55;
+  stroke: #58eee4;
   stroke-width: 2;
 }
 
@@ -220,19 +247,29 @@
   min-width: 0;
   padding: clamp(24px, 3vw, 34px);
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(88, 204, 226, 0.18);
   border-radius: 22px;
-  background: linear-gradient(165deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .018) 62%), rgba(10, 10, 10, .88);
+  background:
+    linear-gradient(165deg, rgba(29, 112, 164, .09), rgba(91, 62, 180, .025) 62%),
+    rgba(3, 9, 24, .91);
   box-shadow: 0 22px 60px rgba(0, 0, 0, .25);
 }
 
 .featuredCard {
-  border-color: rgba(200, 16, 46, .75);
-  background: linear-gradient(160deg, rgba(200, 16, 46, .16), rgba(255, 255, 255, .025) 50%), rgba(10, 10, 10, .92);
-  box-shadow: 0 22px 70px rgba(200, 16, 46, .13);
+  border-color: rgba(52, 226, 221, .68);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(117, 60, 255, .12), transparent 42%),
+    linear-gradient(160deg, rgba(20, 217, 213, .13), rgba(45, 141, 255, .035) 50%),
+    rgba(3, 9, 24, .94);
+  box-shadow: 0 22px 70px rgba(20, 217, 213, .11);
 }
 
-.addOnCard { background: linear-gradient(160deg, rgba(255,255,255,.07), rgba(255,255,255,.02) 52%), #111; }
+.addOnCard {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(120, 60, 255, .09), transparent 40%),
+    linear-gradient(160deg, rgba(37, 135, 190, .1), rgba(255,255,255,.018) 52%),
+    #040b1d;
+}
 
 .recommended {
   position: absolute;
@@ -240,8 +277,8 @@
   right: 0;
   padding: 8px 13px;
   border-radius: 0 21px 0 12px;
-  background: linear-gradient(135deg, #c8102e, #8f0f24);
-  color: white;
+  background: linear-gradient(118deg, #72f6e7, #18dad5 52%, #2d8dff);
+  color: #020817;
   font-size: 8px;
   font-weight: 800;
   letter-spacing: .1em;
@@ -285,11 +322,16 @@
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
-.primaryButton { border: 1px solid rgba(200, 16, 46, .95); background: linear-gradient(135deg, #c8102e, #8f0f24); box-shadow: 0 10px 28px rgba(200, 16, 46, .28); }
-.secondaryButton { border: 1px solid rgba(255, 255, 255, .18); background: rgba(255, 255, 255, .04); }
+.primaryButton {
+  border: 1px solid rgba(84, 239, 231, .78);
+  color: #020817;
+  background: linear-gradient(118deg, #72f6e7 0%, #18dad5 46%, #2d8dff 100%);
+  box-shadow: 0 12px 30px rgba(20, 217, 213, .23);
+}
+.secondaryButton { border: 1px solid rgba(74, 218, 228, .21); background: rgba(34, 122, 164, .07); }
 .buttonSlot { margin-top: auto; padding-top: 32px; }
 .buttonSlot .primaryButton, .buttonSlot .secondaryButton { margin-top: 0; }
-.primaryButton:hover, .secondaryButton:hover { transform: translateY(-1px); border-color: rgba(200, 16, 46, .92); }
+.primaryButton:hover, .secondaryButton:hover { transform: translateY(-1px); border-color: rgba(56, 231, 224, .8); }
 
 .addOnList { display: grid; }
 .addOn { padding: 20px 0; border-bottom: 1px solid rgba(255, 255, 255, .12); }
@@ -307,13 +349,28 @@
   gap: 32px;
   margin: 28px clamp(0px, 3vw, 42px) 0;
   padding: clamp(28px, 4vw, 48px);
-  border: 1px solid rgba(200, 16, 46, .65);
+  border: 1px solid rgba(49, 224, 220, .58);
   border-radius: 22px;
-  background: linear-gradient(135deg, rgba(200, 16, 46, .2), rgba(200, 16, 46, .04));
+  background:
+    radial-gradient(circle at 100% 0%, rgba(120, 60, 255, .13), transparent 42%),
+    linear-gradient(135deg, rgba(20, 217, 213, .15), rgba(45, 141, 255, .045));
 }
 
 .contact h2 { margin: 10px 0 0; font: 400 clamp(34px, 4vw, 54px)/.95 'Bebas Neue', sans-serif; letter-spacing: .02em; text-transform: uppercase; }
-.contact a { flex: 0 0 auto; border: 1px solid rgba(200,16,46,.9); border-radius: 999px; padding: 14px 22px; color: white; background: linear-gradient(135deg, #c8102e, #8f0f24); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-decoration: none; text-transform: uppercase; }
+.contact a {
+  flex: 0 0 auto;
+  border: 1px solid rgba(84, 239, 231, .78);
+  border-radius: 999px;
+  padding: 14px 22px;
+  color: #020817;
+  background: linear-gradient(118deg, #72f6e7 0%, #18dad5 46%, #2d8dff 100%);
+  box-shadow: 0 12px 30px rgba(20, 217, 213, .2);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
 
 .footer { display: flex; justify-content: space-between; gap: 20px; padding: 30px clamp(4px, 3vw, 44px) 0; color: #767b84; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .footer a { color: #aeb3bd; text-decoration: none; text-transform: none; }
@@ -329,9 +386,8 @@
 @media (max-width: 700px) {
   .shell { padding: 10px 10px 28px; }
   .header { padding: 12px 14px; border-radius: 18px; }
-  .brand img { width: 40px; height: 40px; }
-  .brand strong { font-size: 21px; }
-  .brand small { display: none; }
+  .brandLogoFrame { width: 180px; }
+  .brandAudience { display: none; }
   .headerActions { gap: 10px; }
   .socialNav { gap: 5px; }
   .socialNav a { width: 32px; height: 32px; }

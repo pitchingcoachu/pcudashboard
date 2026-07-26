@@ -10,8 +10,8 @@ export type SchoolBrand = {
 
 const DEFAULT_BRAND: SchoolBrand = {
   schoolCode: 'PCU',
-  logoSrc: null,
-  logoAlt: 'School logo',
+  logoSrc: '/pearl-clam-transparent.png',
+  logoAlt: 'Pearl Player Development',
   accent: '#c8102e',
   accentSoft: '#8f0f24',
   accentRgb: '200, 16, 46',
@@ -19,6 +19,15 @@ const DEFAULT_BRAND: SchoolBrand = {
 };
 
 const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
+  PCU: {
+    schoolCode: 'PCU',
+    logoSrc: '/pitching-coach-u-logo.png',
+    logoAlt: 'Pitching Coach U logo',
+    accent: '#c8102e',
+    accentSoft: '#8f0f24',
+    accentRgb: '200, 16, 46',
+    accentRgbSecondary: '200, 16, 46',
+  },
   OSU: {
     schoolCode: 'OSU',
     logoSrc: '/osu-logo.png',

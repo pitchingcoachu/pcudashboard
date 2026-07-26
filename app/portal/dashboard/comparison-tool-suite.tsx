@@ -221,6 +221,55 @@ const PITCH_COLORS: Record<string, string> = {
   Knuckleball: 'darkblue',
   Undefined: '#9ca3af',
 };
+const PITCH_TYPE_DISPLAY_ORDER = [
+  'Fastball',
+  'Sinker',
+  'Cutter',
+  'Slider',
+  'Sweeper',
+  'Curveball',
+  'ChangeUp',
+  'Splitter',
+  'Knuckleball',
+  'Undefined',
+] as const;
+const PITCH_TYPE_ALIASES: Record<string, (typeof PITCH_TYPE_DISPLAY_ORDER)[number]> = {
+  fastball: 'Fastball',
+  fourseamfastball: 'Fastball',
+  fourseam: 'Fastball',
+  ff: 'Fastball',
+  fa: 'Fastball',
+  sinker: 'Sinker',
+  oneseamfastball: 'Sinker',
+  twoseamfastball: 'Sinker',
+  twoseam: 'Sinker',
+  si: 'Sinker',
+  ft: 'Sinker',
+  cutter: 'Cutter',
+  fc: 'Cutter',
+  slider: 'Slider',
+  sl: 'Slider',
+  sweeper: 'Sweeper',
+  st: 'Sweeper',
+  curveball: 'Curveball',
+  curve: 'Curveball',
+  knucklecurve: 'Curveball',
+  cu: 'Curveball',
+  kc: 'Curveball',
+  changeup: 'ChangeUp',
+  change: 'ChangeUp',
+  ch: 'ChangeUp',
+  splitter: 'Splitter',
+  splitfinger: 'Splitter',
+  splitfingerfastball: 'Splitter',
+  sp: 'Splitter',
+  fs: 'Splitter',
+  knuckleball: 'Knuckleball',
+  kn: 'Knuckleball',
+  undefined: 'Undefined',
+  unknown: 'Undefined',
+  other: 'Undefined',
+};
 const COLOR_COLUMNS_BY_MODE: Record<string, string[]> = {
   Process: ['InZone%', 'Comp%', 'Strike%', 'Swing%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'QP%', 'Ctrl+', 'QP+', 'Stuff+', 'Pitching+', 'RV/100'],
   Live: ['InZone%', 'Strike%', 'FPS%', 'FPS(FB)%', 'FPS(OS)%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'Whiff%'],
@@ -352,6 +401,28 @@ function placeAllRowsAtBottom<T extends Record<string, unknown>>(rows: T[], spli
   const nonAllRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() !== 'all');
   if (!nonAllRows.length) return rows;
   return [...nonAllRows, ...allRows];
+}
+function pitchTypeSortRank(value: unknown): number {
+  const raw = String(value ?? '').trim();
+  if (!raw) return PITCH_TYPE_DISPLAY_ORDER.length;
+  const directIndex = PITCH_TYPE_DISPLAY_ORDER.findIndex((pitchType) => pitchType.toLowerCase() === raw.toLowerCase());
+  if (directIndex >= 0) return directIndex;
+  const canonical = PITCH_TYPE_ALIASES[raw.toLowerCase().replace(/[^a-z0-9]/g, '')];
+  if (!canonical) return PITCH_TYPE_DISPLAY_ORDER.length;
+  return PITCH_TYPE_DISPLAY_ORDER.indexOf(canonical);
+}
+function reorderPitchTypeRows<T extends Record<string, unknown>>(
+  rows: T[],
+  splitColumn: string,
+  direction: SortDirection = 'asc'
+): T[] {
+  if (!splitColumn) return rows;
+  return [...rows].sort((a, b) => {
+    const rankA = pitchTypeSortRank(a[splitColumn]);
+    const rankB = pitchTypeSortRank(b[splitColumn]);
+    if (rankA !== rankB) return direction === 'desc' ? rankB - rankA : rankA - rankB;
+    return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
+  });
 }
 function normalizePitchTypeName(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -1423,8 +1494,13 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
   const splitColName = tableColumns[0] ?? '';
   const sortedRows = useMemo(() => {
     const splitColumn = tableColumns[0] ?? '';
-    const sortCol = state.sortColumn && tableColumns.includes(state.sortColumn) ? state.sortColumn : (tableColumns[1] ?? tableColumns[0] ?? '');
-    const baseRows = sortTableRows(overview?.table_rows ?? [], sortCol, state.sortDirection, splitColumn);
+    const rows = overview?.table_rows ?? [];
+    const hasExplicitSort = Boolean(state.sortColumn && tableColumns.includes(state.sortColumn));
+    const sortCol = hasExplicitSort ? state.sortColumn : (tableColumns[1] ?? tableColumns[0] ?? '');
+    const baseRows =
+      state.splitBy === 'Pitch Types' && (!hasExplicitSort || sortCol === splitColumn)
+        ? reorderPitchTypeRows(rows, splitColumn, hasExplicitSort ? state.sortDirection : 'asc')
+        : sortTableRows(rows, sortCol, state.sortDirection, splitColumn);
     const orderedRows = state.splitBy === 'Times Through Order'
       ? reorderTimesThroughOrderRows(baseRows, splitColumn)
       : state.splitBy === 'Inning'

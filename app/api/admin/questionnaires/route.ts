@@ -1,13 +1,48 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
+import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
 import {
   createQuestionnaire,
+  deleteQuestionnaire,
   listPlayerChoicesByOrganization,
   listQuestionnaireResponses,
   listQuestionnairesForOrganization,
+  updateQuestionnaire,
 } from '../../../../lib/training-db';
+
+type QuestionnaireAssignmentInput = Record<string, unknown> & {
+  id?: unknown;
+  playerIds?: unknown;
+};
+
+async function sanitizeAssignments(input: {
+  assignments: QuestionnaireAssignmentInput[];
+  organizationId: number;
+  coachUserId: number | null;
+  preservedPlayerIds?: number[];
+}) {
+  const allowedPlayers = await listPlayerChoicesByOrganization({
+    organizationId: input.organizationId,
+    assignedCoachUserId: input.coachUserId,
+    activeOnly: true,
+  });
+  const allowedPlayerIds = new Set(allowedPlayers.map((player) => player.playerId));
+  for (const playerId of input.preservedPlayerIds ?? []) allowedPlayerIds.add(playerId);
+  return input.assignments.map((assignment) => ({
+    ...assignment,
+    id: Number(assignment.id),
+    playerIds: Array.isArray(assignment.playerIds)
+      ? assignment.playerIds.map((id) => Number(id)).filter((id) => allowedPlayerIds.has(id))
+      : [],
+  }));
+}
+
+function canManageQuestionnaire(input: {
+  role?: string;
+}) {
+  return input.role === 'admin' || input.role === 'coach';
+}
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
@@ -15,7 +50,7 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolvePlayerContentOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
     return NextResponse.json({ questionnaires: [], responses: [] });
   }
@@ -44,7 +79,7 @@ export async function POST(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolvePlayerContentOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
     return NextResponse.json({ error: 'Programming data is not available for this school.' }, { status: 403 });
   }
@@ -52,21 +87,14 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   if (!body || typeof body !== 'object') return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
 
-  const assignments = Array.isArray((body as { assignments?: unknown }).assignments)
+  const assignments: QuestionnaireAssignmentInput[] = Array.isArray((body as { assignments?: unknown }).assignments)
     ? ((body as { assignments: Array<Record<string, unknown>> }).assignments ?? [])
     : [];
-  const allowedPlayers = await listPlayerChoicesByOrganization({
+  const sanitizedAssignments = await sanitizeAssignments({
+    assignments,
     organizationId,
-    assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
-    activeOnly: true,
+    coachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
   });
-  const allowedPlayerIds = new Set(allowedPlayers.map((player) => player.playerId));
-  const sanitizedAssignments = assignments.map((assignment) => ({
-    ...assignment,
-    playerIds: Array.isArray(assignment.playerIds)
-      ? assignment.playerIds.map((id) => Number(id)).filter((id) => allowedPlayerIds.has(id))
-      : [],
-  }));
 
   const result = await createQuestionnaire({
     organizationId,
@@ -82,4 +110,94 @@ export async function POST(request: Request) {
     listQuestionnaireResponses({ organizationId }),
   ]);
   return NextResponse.json({ ok: true, id: result.id, questionnaires, responses });
+}
+
+export async function PATCH(request: Request) {
+  const cookieStore = await cookies();
+  const session = getSessionFromCookies(cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  const organizationId = await resolvePlayerContentOrganizationId(session);
+  if (!Number.isFinite(organizationId) || organizationId <= 0) {
+    return NextResponse.json({ error: 'Programming data is not available for this school.' }, { status: 403 });
+  }
+
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body !== 'object') return NextResponse.json({ error: 'Invalid request.' }, { status: 400 });
+  const questionnaireId = Number((body as { questionnaireId?: unknown }).questionnaireId);
+  const currentQuestionnaires = await listQuestionnairesForOrganization(organizationId);
+  const current = currentQuestionnaires.find((questionnaire) => questionnaire.id === questionnaireId);
+  if (!current) return NextResponse.json({ error: 'Questionnaire was not found.' }, { status: 404 });
+  if (
+    !canManageQuestionnaire({
+      role: session.role,
+    })
+  ) {
+    return NextResponse.json({ error: 'You do not have permission to edit questionnaires.' }, { status: 403 });
+  }
+
+  const assignments: QuestionnaireAssignmentInput[] = Array.isArray((body as { assignments?: unknown }).assignments)
+    ? ((body as { assignments: Array<Record<string, unknown>> }).assignments ?? [])
+    : [];
+  const sanitizedAssignments = await sanitizeAssignments({
+    assignments,
+    organizationId,
+    coachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+    preservedPlayerIds: current.assignments.flatMap((assignment) => assignment.playerIds),
+  });
+  const result = await updateQuestionnaire({
+    questionnaireId,
+    organizationId,
+    userId: session.userId ?? null,
+    name: String((body as { name?: unknown }).name ?? ''),
+    questions: (body as { questions?: unknown }).questions,
+    assignments: sanitizedAssignments,
+  });
+  if (!result.ok) {
+    const status = result.error === 'Questionnaire was not found.' ? 404 : 400;
+    return NextResponse.json({ error: result.error }, { status });
+  }
+
+  const [questionnaires, responses] = await Promise.all([
+    listQuestionnairesForOrganization(organizationId),
+    listQuestionnaireResponses({ organizationId }),
+  ]);
+  return NextResponse.json({ ok: true, questionnaires, responses });
+}
+
+export async function DELETE(request: Request) {
+  const cookieStore = await cookies();
+  const session = getSessionFromCookies(cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  const organizationId = await resolvePlayerContentOrganizationId(session);
+  if (!Number.isFinite(organizationId) || organizationId <= 0) {
+    return NextResponse.json({ error: 'Programming data is not available for this school.' }, { status: 403 });
+  }
+
+  const body = await request.json().catch(() => null);
+  const questionnaireId = Number(body && typeof body === 'object' ? (body as { questionnaireId?: unknown }).questionnaireId : 0);
+  const currentQuestionnaires = await listQuestionnairesForOrganization(organizationId);
+  const current = currentQuestionnaires.find((questionnaire) => questionnaire.id === questionnaireId);
+  if (!current) return NextResponse.json({ error: 'Questionnaire was not found.' }, { status: 404 });
+  if (
+    !canManageQuestionnaire({
+      role: session.role,
+    })
+  ) {
+    return NextResponse.json({ error: 'You do not have permission to delete questionnaires.' }, { status: 403 });
+  }
+
+  const result = await deleteQuestionnaire({ questionnaireId, organizationId });
+  if (!result.ok) {
+    const status = result.error === 'Questionnaire was not found.' ? 404 : 400;
+    return NextResponse.json({ error: result.error }, { status });
+  }
+  const [questionnaires, responses] = await Promise.all([
+    listQuestionnairesForOrganization(organizationId),
+    listQuestionnaireResponses({ organizationId }),
+  ]);
+  return NextResponse.json({ ok: true, questionnaires, responses });
 }

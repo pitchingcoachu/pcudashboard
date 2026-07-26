@@ -240,14 +240,14 @@ export default function TestingBuilder({ players, schoolCode, schoolLogoSrc, sch
 
       <section className="portal-testing-main">
         <header className="portal-testing-header">
-          <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-testing-header-logo" />
+          <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" className="portal-testing-header-logo" />
           <div className="portal-testing-header-center">
             <h2>{reportName || 'Testing Dashboard'}</h2>
             <p>{players.find((player) => String(player.id) === playerId)?.name ?? 'Select Player'}</p>
             {headerNote.trim() ? <div className="portal-testing-header-note">{headerNote}</div> : null}
           </div>
           <img
-            src={schoolLogoSrc ?? '/pitching-coach-u-logo.png'}
+            src={schoolLogoSrc ?? '/pearl-clam-transparent.png'}
             alt={schoolLogoSrc ? schoolLogoAlt : `${schoolCode} logo`}
             className="portal-testing-header-logo"
           />

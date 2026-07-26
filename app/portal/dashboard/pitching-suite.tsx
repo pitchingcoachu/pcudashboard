@@ -337,6 +337,7 @@ const PITCH_TYPE_DISPLAY_ORDER = [
   'Undefined',
 ] as const;
 const LEAGUE_SEASON_START = '2026-02-13';
+const LEAGUE_D1_SEASON_END = '2026-06-22';
 const PRO_SEASON_START = '2026-03-25';
 const HANDED_MOVEMENT_PERCENTILE_COLUMNS = new Set(
   ['IVB', 'HB', 'Side', 'rTilt', 'bTilt'].map((column) => normalizePercentileColumnToken(column))
@@ -2521,7 +2522,7 @@ function PitcherDnaPanel({
   // taint the canvas in that export path.
   useEffect(() => {
     let active = true;
-    fetch('/pitching-coach-u-logo.png')
+    fetch('/pearl-clam-transparent.png')
       .then((res) => res.blob())
       .then(
         (blob) =>
@@ -4186,8 +4187,13 @@ export default function PitchingSuite({
         setEndDate(nextDate || seasonStart);
       } else if (isLeagueSchool) {
         const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
-        setStartDate(leagueStart);
-        setEndDate(nextDate || leagueStart);
+        if (level === 'D1') {
+          setStartDate(LEAGUE_SEASON_START);
+          setEndDate(LEAGUE_D1_SEASON_END);
+        } else {
+          setStartDate(leagueStart);
+          setEndDate(nextDate || leagueStart);
+        }
       } else {
         setStartDate(nextDate);
         setEndDate(nextDate);
@@ -15932,8 +15938,8 @@ export default function PitchingSuite({
                     </div>
                     <div style={{ display: 'grid', justifyContent: 'center' }}>
                       <img
-                        src="/pitching-coach-u-logo.png"
-                        alt="PCU"
+                        src="/pearl-clam-transparent.png"
+                        alt="Pearl Player Development"
                         style={{ width: 74, height: 74, objectFit: 'contain' }}
                       />
                     </div>
@@ -15958,7 +15964,7 @@ export default function PitchingSuite({
           primaryColumnName={correlationColumns[0] ?? ''}
           formatValue={isPitchLogPage ? formatPitchLogCellDisplayValue : formatPitchingTableDisplayValue}
           correlationQueryBase={isLeaderboardPage ? correlationOverviewBaseQuery : undefined}
-          siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
+          siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pearl-clam-transparent.png'}
           siteLogoAlt={activeSchoolBrand.logoAlt}
           pointLogoSrcForLabel={(label) => {
             if (!isPro || leaderboardViewBy !== 'Team') return '';

@@ -1202,9 +1202,9 @@ export default function BullpenEntry({
       {template ? (
         <div className="portal-panel" style={{ minHeight: 'unset', padding: '0.75rem', borderRadius: 10, border: '1px solid var(--calendar-grid-border, var(--border))', background: 'rgba(0,0,0,0.16)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr 56px', alignItems: 'center', gap: '0.5rem', marginBottom: '0.6rem' }}>
-            <img src="/pitching-coach-u-logo.png" alt="PCU" style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'start' }} />
+            <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'start' }} />
             <h3 style={{ margin: 0, textAlign: 'center', fontSize: '1.05rem', fontWeight: 800 }}>{template.name}</h3>
-            <img src="/pitching-coach-u-logo.png" alt="PCU" style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'end' }} />
+            <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'end' }} />
           </div>
           <datalist id="bullpen-pitch-type-list">
             {['Fastball', 'Sinker', 'Cutter', 'Slider', 'Sweeper', 'Curveball', 'Changeup', 'Splitter', 'Knuckleball'].map((pt) => (

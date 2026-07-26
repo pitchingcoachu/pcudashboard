@@ -4587,7 +4587,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     );
   }, [hitterDisplay, reportPlayers, reportScope, reportTeam, reportType, teamScopeExternalMeta, teamScopePlayerMeta]);
   const customReportRightLogoSrc = useMemo(() => {
-    if (!isProSchool) return schoolBrand.logoSrc ?? '/pitching-coach-u-logo.png';
+    if (!isProSchool) return schoolBrand.logoSrc ?? '/pearl-clam-transparent.png';
     const chosen = reportScope === 'Single Player' ? selectedValues(reportPlayers) : [];
     let teamCode = '';
     if (chosen.length === 1) {
@@ -4614,7 +4614,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
   }, [isProSchool, schoolBrand.logoSrc, schoolBrand.logoAlt, schoolCode]);
   const rightLogoIsPcu = useMemo(() => {
     const src = String(customReportRightLogoSrc ?? '').trim().toLowerCase();
-    return src.endsWith('/pitching-coach-u-logo.png') || src === '/pitching-coach-u-logo.png';
+    return src.endsWith('/pearl-clam-transparent.png') || src === '/pearl-clam-transparent.png';
   }, [customReportRightLogoSrc]);
 
   useEffect(() => {
@@ -5097,7 +5097,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               className={`portal-day-card portal-custom-reports-canvas${isExportingPdf ? ' portal-custom-reports-canvas--export' : ''}`}
             >
               <div className="portal-custom-reports-brandbar">
-                <img src="/pitching-coach-u-logo.png" alt="PCU" className="portal-custom-reports-brand-logo portal-custom-reports-brand-logo--pcu" />
+                <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" className="portal-custom-reports-brand-logo portal-custom-reports-brand-logo--pcu" />
                 <header className="portal-custom-reports-header">
                   <h3>{reportHeaderTitle}</h3>
                   <p>{reportHeaderPlayer}</p>

@@ -205,7 +205,7 @@ const lowerTestimonials = testimonials.slice(3);
 
 export default function Home() {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const [isHeroMuted, setIsHeroMuted] = useState(true);
+  const [hasHeroVideoStarted, setHasHeroVideoStarted] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isContactOpen, setIsContactOpen] = useState(false);
@@ -214,6 +214,7 @@ export default function Home() {
   const contactEmail = 'info@pitchingcoachu.com';
   const topNavRef = useRef<HTMLElement | null>(null);
   const contactPopoverRef = useRef<HTMLDivElement | null>(null);
+  const heroVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setIsLoaded(true), 40);
@@ -460,26 +461,50 @@ export default function Home() {
         </section>
 
         <section className="content-panel hero-video-panel">
+            <div className="hero-video-heading">
+              <h2>Start Here</h2>
+              <svg className="hero-video-heading-arrow" viewBox="0 0 48 58" aria-hidden="true">
+                <path d="M24 2v48M7 34l17 17 17-17" />
+              </svg>
+            </div>
             <figure className="hero-preview hero-preview--below">
               <video
-                src="/intro.MOV"
+                ref={heroVideoRef}
+                src="/pearl-home-video.m4v"
                 className="hero-preview-image"
-                autoPlay
-                muted={isHeroMuted}
-                loop
+                controls
+                preload="metadata"
+                poster="/pearl-social-preview.png"
                 playsInline
                 aria-label="Pearl Player Development dashboard intro video"
+                onPlay={() => setHasHeroVideoStarted(true)}
+                onEnded={() => setHasHeroVideoStarted(false)}
                 style={{ objectFit: 'cover', width: '100%', height: '100%' }}
               />
-              <div className="hero-preview-fade" />
-              <button
-                type="button"
-                className="hero-video-audio-toggle"
-                onClick={() => setIsHeroMuted((prev) => !prev)}
-                aria-label={isHeroMuted ? 'Unmute intro video' : 'Mute intro video'}
-              >
-                {isHeroMuted ? 'Unmute' : 'Mute'}
-              </button>
+              {!hasHeroVideoStarted ? (
+                <>
+                  <div className="hero-preview-fade" />
+                  <button
+                    type="button"
+                    className="hero-video-start"
+                    onClick={() => {
+                      const playPromise = heroVideoRef.current?.play();
+                      if (playPromise) void playPromise.catch(() => setHasHeroVideoStarted(false));
+                    }}
+                    aria-label="Start the Pearl Player Development introduction video"
+                  >
+                    <span className="hero-video-start-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24">
+                        <path d="M8 5.5v13l10-6.5L8 5.5Z" />
+                      </svg>
+                    </span>
+                    <span>
+                      <small>Watch the introduction</small>
+                      <strong>Start Here</strong>
+                    </span>
+                  </button>
+                </>
+              ) : null}
             </figure>
         </section>
 

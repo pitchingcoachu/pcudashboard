@@ -2,8 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { readActivityRequestMeta } from '../../../../lib/portal-activity';
-import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
-import { canManagePlayer } from '../../../../lib/portal-access';
+import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
 import {
   deleteDashboardPlayerNote,
   deletePlayerPlanNote,
@@ -63,12 +62,15 @@ async function recordNoteNotification(request: Request, input: {
 
 async function resolveAllowedPlayerId(
   session: { role?: string; organizationId?: number; userId?: number; playerId?: number | null } | null,
-  requestedPlayerId: number
+  requestedPlayerId: number,
+  organizationId: number
 ) {
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
+  if (!Number.isFinite(organizationId) || organizationId <= 0) {
+    return { ok: false as const, status: 403, error: 'Player content is not available for this organization.' };
+  }
 
   if (session.role === 'player') {
-    const organizationId = resolveProgrammingOrganizationId(session);
     const ownPlayer = await getPlayerForUser({
       organizationId,
       userId: session.userId ?? 0,
@@ -78,12 +80,6 @@ async function resolveAllowedPlayerId(
     return { ok: true as const, playerId: allowed };
   }
 
-  const allowed = await canManagePlayer(
-    session as { role?: 'admin' | 'coach' | 'player'; organizationId?: number; userId?: number; playerId?: number | null },
-    requestedPlayerId
-  );
-  if (!allowed) return { ok: false as const, status: 403, error: 'Forbidden' };
-  const organizationId = resolveProgrammingOrganizationId(session);
   const player = await getPlayerByIdInOrganization({
     organizationId,
     playerId: requestedPlayerId,
@@ -97,7 +93,7 @@ export async function GET(request: Request) {
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ notes: [] });
 
   const url = new URL(request.url);
@@ -133,7 +129,7 @@ export async function GET(request: Request) {
       const playerNoteGroups = await Promise.all(
         playerRows.map(async (player) => ({
           playerName: player.fullName,
-          notes: await listPlayerPlanNotesForPlayer({ playerId: player.playerId, domain: normalizedDomain }),
+          notes: await listPlayerPlanNotesForPlayer({ organizationId, playerId: player.playerId, domain: normalizedDomain }),
         }))
       );
       const playerNotes = playerNoteGroups.flatMap((group) =>
@@ -154,10 +150,10 @@ export async function GET(request: Request) {
     }
   }
 
-  const allowed = await resolveAllowedPlayerId(session, playerId);
+  const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
   const [notes, categories] = await Promise.all([
-    listPlayerPlanNotesForPlayer({ playerId: allowed.playerId, domain: normalizedDomain }),
+    listPlayerPlanNotesForPlayer({ organizationId, playerId: allowed.playerId, domain: normalizedDomain }),
     listPlayerPlanNoteCategoriesByOrganization({ organizationId, domain: normalizedDomain }),
   ]);
   return NextResponse.json({ notes, categories });
@@ -168,7 +164,7 @@ export async function POST(request: Request) {
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ error: 'Programming data is not available for this school.' }, { status: 403 });
 
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
@@ -229,7 +225,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Valid playerId or dashboardPlayerName is required.' }, { status: 400 });
   }
 
-  const allowed = await resolveAllowedPlayerId(session, playerId);
+  const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
   const created = await createPlayerPlanNote({
@@ -256,7 +252,7 @@ export async function POST(request: Request) {
   });
 
   const [notes, categories] = await Promise.all([
-    listPlayerPlanNotesForPlayer({ playerId: allowed.playerId, domain }),
+    listPlayerPlanNotesForPlayer({ organizationId, playerId: allowed.playerId, domain }),
     listPlayerPlanNoteCategoriesByOrganization({ organizationId, domain }),
   ]);
   return NextResponse.json({ ok: true, notes, categories });
@@ -267,7 +263,7 @@ export async function PATCH(request: Request) {
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ error: 'Programming data is not available for this school.' }, { status: 403 });
 
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
@@ -282,7 +278,7 @@ export async function PATCH(request: Request) {
   const authoredNoteText = withAuthorPrefix(noteText, String(session.name ?? session.email ?? '').trim());
 
   if (Number.isFinite(playerId) && playerId > 0) {
-    const allowed = await resolveAllowedPlayerId(session, playerId);
+    const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
     if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
     const updated = await updatePlayerPlanNote({
       organizationId,
@@ -318,14 +314,14 @@ export async function DELETE(request: Request) {
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ error: 'Programming data is not available for this school.' }, { status: 403 });
 
   const url = new URL(request.url);
   const noteId = Number(url.searchParams.get('noteId') ?? '0');
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
   if (Number.isFinite(playerId) && playerId > 0) {
-    const allowed = await resolveAllowedPlayerId(session, playerId);
+    const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
     if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
     const deleted = await deletePlayerPlanNote({
       organizationId,

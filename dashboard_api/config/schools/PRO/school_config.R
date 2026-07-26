@@ -16,7 +16,7 @@ school_config <- list(
     background = "#0a0a0a",
     background_secondary = "#151515"
   ),
-  logo = "PCUlogo.png",
+  logo = "pearl-clam-transparent.png",
   display = list(
     school_name = "PRO",
     team_label = "PRO"

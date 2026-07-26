@@ -1,5 +1,6 @@
 import { requirePortalSession } from '../../../../lib/portal-session';
-import { resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
+import { resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
+import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
 import {
   listPlayerChoicesByOrganization,
   listQuestionnaireResponses,
@@ -9,7 +10,7 @@ import QuestionnaireBuilder from './questionnaire-builder';
 
 export default async function AdminQuestionnairesPage() {
   const session = await requirePortalSession();
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolvePlayerContentOrganizationId(session);
   const schoolCode = resolveProgrammingSchoolCode(session);
   const [playersRaw, questionnaires, responses] =
     organizationId > 0
@@ -41,7 +42,12 @@ export default async function AdminQuestionnairesPage() {
           <p>No programming data is configured for {schoolCode} yet.</p>
         </article>
       ) : (
-        <QuestionnaireBuilder players={players} initialQuestionnaires={questionnaires} initialResponses={responses} />
+        <QuestionnaireBuilder
+          players={players}
+          initialQuestionnaires={questionnaires}
+          initialResponses={responses}
+          viewerRole={session.role}
+        />
       )}
     </div>
   );

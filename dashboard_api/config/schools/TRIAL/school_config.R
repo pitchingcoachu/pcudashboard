@@ -12,7 +12,7 @@ school_config <- list(
     background          = "#ffffff",
     background_secondary= "#f7f7f8"
   ),
-  logo = "pitching-coach-u-logo.png",
+  logo = "pearl-clam-transparent.png",
   coaches_emails = c(),
   notes_api = list(
     base_url = "",

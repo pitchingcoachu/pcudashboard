@@ -2039,8 +2039,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
       header.style.gap = '18px';
       header.style.marginBottom = '22px';
       const leftLogo = document.createElement('img');
-      leftLogo.src = '/pitching-coach-u-logo.png';
-      leftLogo.alt = 'PCU';
+      leftLogo.src = '/pearl-clam-transparent.png';
+      leftLogo.alt = 'Pearl Player Development';
       leftLogo.style.width = '56px';
       leftLogo.style.height = '56px';
       leftLogo.style.objectFit = 'contain';

@@ -127,8 +127,8 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
               </svg>
             </Link>
           </div>
-          <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="PCU Home">
-            <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo portal-header-logo--pcu-right" />
+          <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="Pearl home">
+            <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" className="portal-header-logo portal-header-logo--pcu-right" />
           </Link>
         </div>
       </header>

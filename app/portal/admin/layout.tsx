@@ -57,8 +57,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           ) : (
             <Link href="/portal/admin" className="portal-header-logo-link" aria-label={`${brand.schoolCode} Home`}>
               <img
-                src={brand.logoSrc ?? '/pitching-coach-u-logo.png'}
-                alt={brand.logoSrc ? brand.logoAlt : 'PCU logo'}
+                src={brand.logoSrc ?? '/pearl-clam-transparent.png'}
+                alt={brand.logoSrc ? brand.logoAlt : 'Pearl Player Development'}
                 className={`portal-header-logo${brand.logoSrc ? ' portal-header-logo--school' : ''}`}
               />
             </Link>
@@ -154,8 +154,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
               </svg>
             </Link>
           </div>
-          <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="PCU Home">
-            <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo portal-header-logo--pcu-right" />
+          <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="Pearl home">
+            <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" className="portal-header-logo portal-header-logo--pcu-right" />
           </Link>
         </div>
       </header>

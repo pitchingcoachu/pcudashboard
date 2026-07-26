@@ -1373,7 +1373,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       const pageHeight = pdf.internal.pageSize.getHeight();
       const margin = 18;
       const targetWidth = pageWidth - margin * 2;
-      const logoData = await loadImageDataUrl('/pitching-coach-u-logo.png');
+      const logoData = await loadImageDataUrl('/pearl-clam-transparent.png');
       const logoW = 56;
       const logoH = 56;
       const selectedPlayerName = players.find((player) => player.id === playerId)?.name ?? '';
@@ -3229,8 +3229,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       };
 
       const [leftLogo, rightLogo] = await Promise.all([
-        loadImageDataUrl(schoolLogoSrc ?? '/pitching-coach-u-logo.png'),
-        loadImageDataUrl('/pitching-coach-u-logo.png'),
+        loadImageDataUrl(schoolLogoSrc ?? '/pearl-clam-transparent.png'),
+        loadImageDataUrl('/pearl-clam-transparent.png'),
       ]);
 
       const logoW = 42;
@@ -4359,7 +4359,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 }}
               >
                 <img
-                  src={schoolLogoSrc ?? '/pitching-coach-u-logo.png'}
+                  src={schoolLogoSrc ?? '/pearl-clam-transparent.png'}
                   alt={schoolLogoSrc ? schoolLogoAlt : `${schoolCode} logo`}
                   style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'start' }}
                 />
@@ -4375,8 +4375,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                   {activeCurrent.title.trim() || (view === 'velocity' ? 'Velocity Script' : 'Bullpen Script')}
                 </h3>
                 <img
-                  src="/pitching-coach-u-logo.png"
-                  alt="PCU logo"
+                  src="/pearl-clam-transparent.png"
+                  alt="Pearl Player Development"
                   style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'end' }}
                 />
               </div>

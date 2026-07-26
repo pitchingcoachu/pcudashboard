@@ -32,7 +32,7 @@ export default function ProfilesList({ players }: ProfilesListProps) {
     setIsDownloadingPdf(true);
     try {
       const { jsPDF } = await import('jspdf');
-      const logoDataUrl = await fetch('/pitching-coach-u-logo.png')
+      const logoDataUrl = await fetch('/pearl-clam-transparent.png')
         .then((response) => response.blob())
         .then(
           (blob) =>

@@ -432,8 +432,8 @@ export default function WorkoutLogModal({
         >
           <h3 style={{ margin: 0, minWidth: 0, fontSize: '1.7rem', lineHeight: 1.05 }}>{item.itemName}</h3>
           <img
-            src="/pitching-coach-u-logo.png"
-            alt="PCU logo"
+            src="/pearl-clam-transparent.png"
+            alt="Pearl Player Development"
             className="portal-modal-logo"
             style={{
               width: '42px',

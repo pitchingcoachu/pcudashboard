@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
 import { readActivityRequestMeta } from '../../../../lib/portal-activity';
+import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
 import { deleteObjectFromR2, getR2Bucket, getR2Client, isR2Configured, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
@@ -73,7 +74,7 @@ async function requireManagedPlayer(playerId: number) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
-  const organizationId = Number(session.organizationId ?? 0);
+  const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return { ok: false as const, status: 403, error: 'No organization found for session.' };
   if (!Number.isFinite(playerId) || playerId <= 0) return { ok: false as const, status: 400, error: 'Valid playerId is required.' };
   const player = await getPlayerByIdInOrganization({ organizationId, playerId });
@@ -185,6 +186,10 @@ export async function POST(request: Request) {
     const sizeBytes = Number(body.sizeBytes ?? 0) || 0;
     if (sizeBytes > MAX_PLAYER_MEDIA_BYTES) {
       return NextResponse.json({ error: 'Media file is too large. Limit is 350 MB.' }, { status: 400 });
+    }
+    const expectedKeyPrefix = `player-media/org-${allowed.organizationId}/player-${allowed.playerId}/`;
+    if (!r2Key.startsWith(expectedKeyPrefix)) {
+      return NextResponse.json({ error: 'Upload does not belong to the selected organization and player.' }, { status: 403 });
     }
 
     const created = await createPlayerMedia({

@@ -1820,7 +1820,7 @@ export default function CatchingSuite() {
           rows={leaderboardRowsWithPins}
           viewByLabel={leaderboardViewBy}
           primaryColumnName={(overview?.table_columns ?? [])[0] ?? ''}
-          siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
+          siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pearl-clam-transparent.png'}
           siteLogoAlt={activeSchoolBrand.logoAlt}
         />
       ) : null}

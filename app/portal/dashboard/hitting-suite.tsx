@@ -9,6 +9,7 @@ import { calcPitchValue } from './pitch-value';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import NativeDateInput from '../components/native-date-input';
 import { resolveSchoolBrand } from '../../../lib/school-brand';
+import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
 
 type OptionItem = { value: string; label: string };
@@ -281,6 +282,7 @@ const RESULTS_TABLE_COLUMNS_TEMPLATE = [
   'LA',
 ] as const;
 const LEAGUE_SEASON_START = '2026-02-13';
+const LEAGUE_D1_SEASON_END = '2026-06-22';
 const LOWER_IS_BETTER_PERCENTILE_COLUMNS = new Set(
   ['BB%', 'HR%'].map((column) =>
     String(column ?? '')
@@ -2533,8 +2535,13 @@ export default function HittingSuite({
         setEndDate(nextDate || seasonStart);
       } else if (isLeagueSchool) {
         const leagueStart = minDate && minDate > LEAGUE_SEASON_START ? minDate : LEAGUE_SEASON_START;
-        setStartDate(leagueStart);
-        setEndDate(nextDate || leagueStart);
+        if (level === 'D1') {
+          setStartDate(LEAGUE_SEASON_START);
+          setEndDate(LEAGUE_D1_SEASON_END);
+        } else {
+          setStartDate(leagueStart);
+          setEndDate(nextDate || leagueStart);
+        }
       } else {
         setStartDate(nextDate);
         setEndDate(nextDate);
@@ -5826,7 +5833,8 @@ export default function HittingSuite({
                                 const raw = String(value ?? '').trim();
                                 if (!raw) return '-';
                                 if (isPro) return raw;
-                                return leagueTeamLabelByCode[raw.toUpperCase()] ?? raw;
+                                const code = raw.toUpperCase();
+                                return LEAGUE_TEAM_NAME_BY_CODE[code] ?? leagueTeamLabelByCode[code] ?? raw;
                               };
                               return (
                                 <td
@@ -5981,8 +5989,11 @@ export default function HittingSuite({
                   ))}
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '280px minmax(0, 1fr)', gap: 12, alignItems: 'start' }}>
-                  <div className="dashboard-panel" style={{ display: 'grid', gap: 10 }}>
+                <div
+                  className="portal-swing-data-layout"
+                  style={{ display: 'grid', gridTemplateColumns: '280px minmax(0, 1fr)', gap: 12, alignItems: 'start' }}
+                >
+                  <div className="dashboard-panel portal-swing-data-controls" style={{ display: 'grid', gap: 10 }}>
                     {swingTab === '2D Contact' ? (
                       <>
                         <label>
@@ -6927,7 +6938,7 @@ export default function HittingSuite({
           rows={correlationRows}
           viewByLabel={isLeaderboardPage ? leaderboardViewBy : 'Player'}
           primaryColumnName={correlationColumns[0] ?? ''}
-          siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
+          siteLogoSrc={activeSchoolBrand.logoSrc ?? '/pearl-clam-transparent.png'}
           siteLogoAlt={activeSchoolBrand.logoAlt}
           pointLogoSrcForLabel={(label) => {
             if (!isPro || leaderboardViewBy !== 'Team') return '';

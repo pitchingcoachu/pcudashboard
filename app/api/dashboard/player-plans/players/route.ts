@@ -3,7 +3,7 @@ import { cookies } from 'next/headers';
 import { getSessionFromCookies } from '../../../../../lib/auth';
 import { getPlayerForUser, listPlayerSummariesByOrganization } from '../../../../../lib/training-db';
 import { logApiTiming } from '../../../../../lib/request-timing';
-import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
+import { resolvePlayerContentOrganizationId } from '../../../../../lib/player-content-scope';
 
 export async function GET() {
   const startedAtMs = Date.now();
@@ -14,7 +14,7 @@ export async function GET() {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return finish(401, { error: 'Unauthorized' });
-  const mappedOrganizationId = resolveSchoolScopedOrganizationId(session);
+  const mappedOrganizationId = await resolvePlayerContentOrganizationId(session);
   const scopedOrganizationId =
     Number.isFinite(Number(mappedOrganizationId)) && Number(mappedOrganizationId) > 0
       ? Number(mappedOrganizationId)

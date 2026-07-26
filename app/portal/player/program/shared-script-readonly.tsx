@@ -91,8 +91,8 @@ export default function SharedScriptReadonly({
       };
 
       const [leftLogo, rightLogo] = await Promise.all([
-        loadImageDataUrl('/pitching-coach-u-logo.png'),
-        loadImageDataUrl('/pitching-coach-u-logo.png'),
+        loadImageDataUrl('/pearl-clam-transparent.png'),
+        loadImageDataUrl('/pearl-clam-transparent.png'),
       ]);
 
       const logoW = 42;
@@ -210,11 +210,11 @@ export default function SharedScriptReadonly({
             marginBottom: '0.6rem',
           }}
         >
-          <img src="/pitching-coach-u-logo.png" alt="PCU logo" style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'start' }} />
+          <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'start' }} />
           <h3 style={{ margin: 0, textAlign: 'center', fontSize: '1.05rem', fontWeight: 800, letterSpacing: '0.01em' }}>
             {current.title?.trim() || (mode === 'velocity' ? 'Velocity Script' : 'Bullpen Script')}
           </h3>
-          <img src="/pitching-coach-u-logo.png" alt="PCU logo" style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'end' }} />
+          <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" style={{ width: 48, height: 48, objectFit: 'contain', justifySelf: 'end' }} />
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>

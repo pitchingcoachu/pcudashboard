@@ -24,8 +24,8 @@ export default async function TutorialsPage() {
     <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
       <header className="portal-header">
         <div className="portal-header-left">
-          <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="PCU Home">
-            <img src="/pitching-coach-u-logo.png" alt="PCU logo" className="portal-header-logo" />
+          <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="Pearl home">
+            <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" className="portal-header-logo" />
           </Link>
           {brand.logoSrc ? <img src={brand.logoSrc} alt={brand.logoAlt} className="portal-header-logo portal-header-logo--school" /> : null}
         </div>

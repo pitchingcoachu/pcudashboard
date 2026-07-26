@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
+import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
 import { getPlayerForUser, listPortalNotifications } from '../../../../lib/training-db';
 
 export async function GET(request: Request) {
@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ count: 0, notifications: [] });
 
   const url = new URL(request.url);

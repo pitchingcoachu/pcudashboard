@@ -77,8 +77,8 @@ export default function DashboardSchoolSelector({ options, initialValue, logoOnl
         title={saving ? 'Switching school...' : `School: ${formatSchoolCodeLabel(value)}`}
       >
         <img
-          src={activeBrand.logoSrc ?? '/pitching-coach-u-logo.png'}
-          alt={activeBrand.logoSrc ? activeBrand.logoAlt : 'PCU logo'}
+          src={activeBrand.logoSrc ?? '/pearl-clam-transparent.png'}
+          alt={activeBrand.logoSrc ? activeBrand.logoAlt : 'Pearl Player Development'}
           className={`portal-school-switcher-trigger-logo portal-school-switcher-trigger-logo--${activeBrand.schoolCode}`}
         />
         {!logoOnly ? <span className="portal-school-switcher-trigger-label">{formatSchoolCodeLabel(value)}</span> : null}
@@ -104,8 +104,8 @@ export default function DashboardSchoolSelector({ options, initialValue, logoOnl
                 aria-current={selected ? 'true' : undefined}
               >
                 <img
-                  src={brand.logoSrc ?? '/pitching-coach-u-logo.png'}
-                  alt={brand.logoSrc ? brand.logoAlt : 'PCU logo'}
+                  src={brand.logoSrc ?? '/pearl-clam-transparent.png'}
+                  alt={brand.logoSrc ? brand.logoAlt : 'Pearl Player Development'}
                   className={`portal-school-switcher-option-logo portal-school-switcher-option-logo--${brand.schoolCode}`}
                 />
                 <span>{formatSchoolCodeLabel(schoolCode)}</span>

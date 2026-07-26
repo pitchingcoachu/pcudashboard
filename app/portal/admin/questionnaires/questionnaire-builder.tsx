@@ -18,6 +18,7 @@ type QuestionDraft = {
 };
 
 type AssignmentDraft = {
+  id?: number;
   groupName: string;
   playerIds: number[];
   notifyStartDate: string;
@@ -28,6 +29,7 @@ type Props = {
   players: PlayerOption[];
   initialQuestionnaires: QuestionnaireRow[];
   initialResponses: QuestionnaireResponseRow[];
+  viewerRole: string;
 };
 
 const QUESTION_TYPES: Array<{ value: QuestionnaireQuestionType; label: string }> = [
@@ -53,31 +55,41 @@ function newQuestion(): QuestionDraft {
   };
 }
 
+function newAssignment(): AssignmentDraft {
+  return {
+    groupName: '',
+    playerIds: [],
+    notifyStartDate: todayIso(),
+    frequency: 'once',
+  };
+}
+
 function shortDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export default function QuestionnaireBuilder({ players, initialQuestionnaires, initialResponses }: Props) {
+export default function QuestionnaireBuilder({
+  players,
+  initialQuestionnaires,
+  initialResponses,
+  viewerRole,
+}: Props) {
   const [name, setName] = useState('');
   const [questions, setQuestions] = useState<QuestionDraft[]>([newQuestion()]);
-  const [assignment, setAssignment] = useState<AssignmentDraft>({
-    groupName: '',
-    playerIds: [],
-    notifyStartDate: todayIso(),
-    frequency: 'once',
-  });
+  const [assignments, setAssignments] = useState<AssignmentDraft[]>([newAssignment()]);
   const [questionnaires, setQuestionnaires] = useState(initialQuestionnaires);
   const [responses, setResponses] = useState(initialResponses);
   const [filterQuestionnaireId, setFilterQuestionnaireId] = useState('');
   const [filterPlayerId, setFilterPlayerId] = useState('');
   const [filterGroupName, setFilterGroupName] = useState('');
   const [saving, setSaving] = useState(false);
+  const [deletingQuestionnaireId, setDeletingQuestionnaireId] = useState<number | null>(null);
+  const [editingQuestionnaireId, setEditingQuestionnaireId] = useState<number | null>(null);
   const [loadingResponses, setLoadingResponses] = useState(false);
   const [message, setMessage] = useState('');
 
-  const selectedAll = assignment.playerIds.length > 0 && assignment.playerIds.length === players.length;
   const groupNames = useMemo(
     () =>
       Array.from(new Set(questionnaires.flatMap((questionnaire) => questionnaire.assignments.map((row) => row.groupName).filter(Boolean)))).sort((a, b) =>
@@ -92,13 +104,85 @@ export default function QuestionnaireBuilder({ players, initialQuestionnaires, i
     setQuestions((previous) => previous.map((question, idx) => (idx === index ? { ...question, ...patch } : question)));
   }
 
-  function togglePlayer(playerId: number) {
-    setAssignment((previous) => {
-      const next = new Set(previous.playerIds);
+  function updateAssignment(index: number, patch: Partial<AssignmentDraft>) {
+    setAssignments((previous) => previous.map((assignment, idx) => (idx === index ? { ...assignment, ...patch } : assignment)));
+  }
+
+  function togglePlayer(assignmentIndex: number, playerId: number) {
+    setAssignments((previous) => previous.map((assignment, index) => {
+      if (index !== assignmentIndex) return assignment;
+      const next = new Set(assignment.playerIds);
       if (next.has(playerId)) next.delete(playerId);
       else next.add(playerId);
-      return { ...previous, playerIds: Array.from(next) };
-    });
+      return { ...assignment, playerIds: Array.from(next) };
+    }));
+  }
+
+  function resetBuilder() {
+    setName('');
+    setQuestions([newQuestion()]);
+    setAssignments([newAssignment()]);
+    setEditingQuestionnaireId(null);
+  }
+
+  function canManage() {
+    return viewerRole === 'admin' || viewerRole === 'coach';
+  }
+
+  function editQuestionnaire(questionnaire: QuestionnaireRow) {
+    setEditingQuestionnaireId(questionnaire.id);
+    setName(questionnaire.name);
+    setQuestions(
+      questionnaire.questions.map((question) => ({
+        id: question.id,
+        prompt: question.prompt,
+        type: question.type,
+        optionsText: question.options.join('\n'),
+        scaleMin: question.scaleMin,
+        scaleMax: question.scaleMax,
+      }))
+    );
+    const activeAssignments = questionnaire.assignments.filter((assignment) => assignment.isActive);
+    setAssignments(
+      activeAssignments.length
+        ? activeAssignments.map((assignment) => ({
+            id: assignment.id,
+            groupName: assignment.groupName,
+            playerIds: assignment.playerIds,
+            notifyStartDate: assignment.notifyStartDate,
+            frequency: assignment.frequency,
+          }))
+        : [newAssignment()]
+    );
+    setMessage(`Editing "${questionnaire.name}".`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  async function removeQuestionnaire(questionnaire: QuestionnaireRow) {
+    const confirmed = window.confirm(
+      `Delete "${questionnaire.name}"? This permanently deletes the questionnaire, its assignments, and all submitted responses.`
+    );
+    if (!confirmed) return;
+    setDeletingQuestionnaireId(questionnaire.id);
+    setMessage('');
+    try {
+      const response = await fetch('/api/admin/questionnaires', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questionnaireId: questionnaire.id }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? 'Failed to delete questionnaire.');
+      setQuestionnaires(Array.isArray(result.questionnaires) ? result.questionnaires : []);
+      setResponses(Array.isArray(result.responses) ? result.responses : []);
+      if (editingQuestionnaireId === questionnaire.id) resetBuilder();
+      if (filterQuestionnaireId === String(questionnaire.id)) setFilterQuestionnaireId('');
+      setMessage('Questionnaire deleted.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to delete questionnaire.');
+    } finally {
+      setDeletingQuestionnaireId(null);
+    }
   }
 
   async function refreshResponses(nextFilters?: { questionnaireId?: string; playerId?: string; groupName?: string }) {
@@ -129,6 +213,7 @@ export default function QuestionnaireBuilder({ players, initialQuestionnaires, i
     setMessage('');
     try {
       const payload = {
+        questionnaireId: editingQuestionnaireId,
         name,
         questions: questions.map((question) => ({
           id: question.id,
@@ -141,10 +226,10 @@ export default function QuestionnaireBuilder({ players, initialQuestionnaires, i
           scaleMin: question.scaleMin,
           scaleMax: question.scaleMax,
         })),
-        assignments: [assignment],
+        assignments,
       };
       const response = await fetch('/api/admin/questionnaires', {
-        method: 'POST',
+        method: editingQuestionnaireId ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -152,10 +237,9 @@ export default function QuestionnaireBuilder({ players, initialQuestionnaires, i
       if (!response.ok) throw new Error(result.error ?? 'Failed to save questionnaire.');
       setQuestionnaires(Array.isArray(result.questionnaires) ? result.questionnaires : []);
       setResponses(Array.isArray(result.responses) ? result.responses : []);
-      setName('');
-      setQuestions([newQuestion()]);
-      setAssignment({ groupName: '', playerIds: [], notifyStartDate: todayIso(), frequency: 'once' });
-      setMessage('Questionnaire saved.');
+      const wasEditing = editingQuestionnaireId != null;
+      resetBuilder();
+      setMessage(wasEditing ? 'Questionnaire updated.' : 'Questionnaire saved.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to save questionnaire.');
     } finally {
@@ -166,7 +250,55 @@ export default function QuestionnaireBuilder({ players, initialQuestionnaires, i
   return (
     <div className="portal-questionnaire-layout">
       <article className="portal-admin-card portal-questionnaire-builder-card">
-        <h3>Build Questionnaire</h3>
+        <div className="portal-questionnaire-section-head">
+          <h3>{editingQuestionnaireId ? 'Edit Questionnaire' : 'Build Questionnaire'}</h3>
+          {editingQuestionnaireId ? (
+            <button type="button" className="btn btn-ghost" onClick={resetBuilder} disabled={saving}>
+              Cancel Edit
+            </button>
+          ) : null}
+        </div>
+
+        {questionnaires.length ? (
+          <div className="portal-questionnaire-section">
+            <h4>Built Questionnaires</h4>
+            <div className="portal-questionnaire-manage-list">
+              {questionnaires.map((questionnaire) => {
+                const manageable = canManage();
+                const activeAssignments = questionnaire.assignments.filter((assignment) => assignment.isActive);
+                return (
+                  <div className="portal-questionnaire-manage-row" key={questionnaire.id}>
+                    <div>
+                      <strong>{questionnaire.name}</strong>
+                      <span>
+                        {questionnaire.questions.length} {questionnaire.questions.length === 1 ? 'question' : 'questions'} ·{' '}
+                        {activeAssignments.length} active {activeAssignments.length === 1 ? 'assignment' : 'assignments'}
+                      </span>
+                    </div>
+                    {manageable ? (
+                      <div className="portal-questionnaire-manage-actions">
+                        <button type="button" className="btn btn-ghost" onClick={() => editQuestionnaire(questionnaire)} disabled={saving}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost portal-questionnaire-delete-button"
+                          onClick={() => void removeQuestionnaire(questionnaire)}
+                          disabled={deletingQuestionnaireId === questionnaire.id}
+                        >
+                          {deletingQuestionnaireId === questionnaire.id ? 'Deleting...' : 'Delete'}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="portal-questionnaire-owner-note">Created by another coach</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
         <label className="portal-inline-filter">
           Questionnaire Name
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Daily Readiness" />
@@ -236,53 +368,92 @@ export default function QuestionnaireBuilder({ players, initialQuestionnaires, i
         </div>
 
         <div className="portal-questionnaire-section">
-          <h4>Who Gets Notified</h4>
-          <div className="portal-testing-grid-2">
-            <label className="portal-inline-filter">
-              Group Name
-              <input value={assignment.groupName} onChange={(event) => setAssignment((previous) => ({ ...previous, groupName: event.target.value }))} placeholder="Starters" />
-            </label>
-            <label className="portal-inline-filter">
-              Notify Starting
-              <input
-                type="date"
-                value={assignment.notifyStartDate}
-                onChange={(event) => setAssignment((previous) => ({ ...previous, notifyStartDate: event.target.value }))}
-              />
-            </label>
-            <label className="portal-inline-filter">
-              Frequency
-              <select
-                value={assignment.frequency}
-                onChange={(event) => setAssignment((previous) => ({ ...previous, frequency: event.target.value as AssignmentDraft['frequency'] }))}
-              >
-                <option value="once">Once</option>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
-              </select>
-            </label>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => setAssignment((previous) => ({ ...previous, playerIds: selectedAll ? [] : players.map((player) => player.id) }))}
-            >
-              {selectedAll ? 'Clear Players' : 'Select All Players'}
+          <div className="portal-questionnaire-section-head">
+            <h4>Who Gets Notified</h4>
+            <button type="button" className="btn btn-ghost" onClick={() => setAssignments((previous) => [...previous, newAssignment()])}>
+              Add Assignment
             </button>
           </div>
-          <div className="portal-questionnaire-player-list">
-            {players.map((player) => (
-              <label key={player.id} className="portal-questionnaire-player-option">
-                <input type="checkbox" checked={assignment.playerIds.includes(player.id)} onChange={() => togglePlayer(player.id)} />
-                <span>{player.name}</span>
-              </label>
-            ))}
-          </div>
+          {assignments.map((assignment, assignmentIndex) => {
+            const visiblePlayerIds = new Set(players.map((player) => player.id));
+            const hiddenPlayerIds = assignment.playerIds.filter((playerId) => !visiblePlayerIds.has(playerId));
+            const selectedAll = players.length > 0 && players.every((player) => assignment.playerIds.includes(player.id));
+            return (
+              <div className="portal-question-card" key={assignment.id ?? `new-assignment-${assignmentIndex}`}>
+                <div className="portal-questionnaire-section-head">
+                  <strong>Assignment {assignmentIndex + 1}</strong>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setAssignments((previous) => previous.filter((_, index) => index !== assignmentIndex))}
+                    disabled={assignments.length <= 1}
+                  >
+                    Remove
+                  </button>
+                </div>
+                <div className="portal-testing-grid-2">
+                  <label className="portal-inline-filter">
+                    Group Name
+                    <input
+                      value={assignment.groupName}
+                      onChange={(event) => updateAssignment(assignmentIndex, { groupName: event.target.value })}
+                      placeholder="Starters"
+                    />
+                  </label>
+                  <label className="portal-inline-filter">
+                    Notify Starting
+                    <input
+                      type="date"
+                      value={assignment.notifyStartDate}
+                      onChange={(event) => updateAssignment(assignmentIndex, { notifyStartDate: event.target.value })}
+                    />
+                  </label>
+                  <label className="portal-inline-filter">
+                    Frequency
+                    <select
+                      value={assignment.frequency}
+                      onChange={(event) =>
+                        updateAssignment(assignmentIndex, { frequency: event.target.value as AssignmentDraft['frequency'] })
+                      }
+                    >
+                      <option value="once">Once</option>
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() =>
+                      updateAssignment(assignmentIndex, {
+                        playerIds: selectedAll ? hiddenPlayerIds : [...hiddenPlayerIds, ...players.map((player) => player.id)],
+                      })
+                    }
+                  >
+                    {selectedAll ? 'Clear Players' : 'Select All Players'}
+                  </button>
+                </div>
+                <div className="portal-questionnaire-player-list">
+                  {players.map((player) => (
+                    <label key={player.id} className="portal-questionnaire-player-option">
+                      <input
+                        type="checkbox"
+                        checked={assignment.playerIds.includes(player.id)}
+                        onChange={() => togglePlayer(assignmentIndex, player.id)}
+                      />
+                      <span>{player.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         {message ? <p className="portal-questionnaire-message">{message}</p> : null}
         <button type="button" className="btn btn-primary" onClick={saveQuestionnaire} disabled={saving}>
-          {saving ? 'Saving...' : 'Save Questionnaire'}
+          {saving ? 'Saving...' : editingQuestionnaireId ? 'Update Questionnaire' : 'Save Questionnaire'}
         </button>
       </article>
 
