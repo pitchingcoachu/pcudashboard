@@ -5097,7 +5097,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
               className={`portal-day-card portal-custom-reports-canvas${isExportingPdf ? ' portal-custom-reports-canvas--export' : ''}`}
             >
               <div className="portal-custom-reports-brandbar">
-                <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" className="portal-custom-reports-brand-logo portal-custom-reports-brand-logo--pcu" />
+                <img
+                  src={isExportingPdf ? '/pearl-lockup-stacked-black-transparent.png' : '/pearl-clam-transparent.png'}
+                  alt="Pearl Player Development"
+                  className="portal-custom-reports-brand-logo portal-custom-reports-brand-logo--pcu"
+                />
                 <header className="portal-custom-reports-header">
                   <h3>{reportHeaderTitle}</h3>
                   <p>{reportHeaderPlayer}</p>

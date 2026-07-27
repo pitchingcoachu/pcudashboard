@@ -1626,6 +1626,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const isSinglePlayerPdf = Boolean(isSingleAppliedPlayer);
       const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
       const pageBgHex = isLightTheme ? '#f8fafc' : '#000000';
+      const pearlLogoSrc = isLightTheme
+        ? '/pearl-lockup-stacked-black-transparent.png'
+        : '/pearl-clam-transparent.png';
       const exportRoot = summaryCardRef.current.cloneNode(true) as HTMLDivElement;
       exportRoot.style.width = isSinglePlayerPdf ? '1360px' : '920px';
       exportRoot.style.position = 'fixed';
@@ -1643,13 +1646,13 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       pdfLogoRow.style.alignItems = 'center';
       pdfLogoRow.style.margin = '0 0 4px 0';
       const leftLogo = document.createElement('img');
-      leftLogo.src = '/pearl-clam-transparent.png';
+      leftLogo.src = pearlLogoSrc;
       leftLogo.alt = 'Pearl Player Development';
       leftLogo.style.width = '70px';
       leftLogo.style.height = '70px';
       leftLogo.style.objectFit = 'contain';
       const rightLogo = document.createElement('img');
-      rightLogo.src = '/pearl-clam-transparent.png';
+      rightLogo.src = pearlLogoSrc;
       rightLogo.alt = 'Pearl Player Development';
       rightLogo.style.width = '70px';
       rightLogo.style.height = '70px';
@@ -1751,6 +1754,9 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       ]);
       const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
       const pageBgHex = isLightTheme ? '#f8fafc' : '#000000';
+      const pearlLogoSrc = isLightTheme
+        ? '/pearl-lockup-stacked-black-transparent.png'
+        : '/pearl-clam-transparent.png';
       const exportRoot = compareCardRef.current.cloneNode(true) as HTMLDivElement;
       exportRoot.style.width = '1400px';
       exportRoot.style.position = 'fixed';
@@ -1768,13 +1774,13 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       pdfLogoRow.style.alignItems = 'center';
       pdfLogoRow.style.margin = '0 0 8px 0';
       const leftLogo = document.createElement('img');
-      leftLogo.src = '/pearl-clam-transparent.png';
+      leftLogo.src = pearlLogoSrc;
       leftLogo.alt = 'Pearl Player Development';
       leftLogo.style.width = '70px';
       leftLogo.style.height = '70px';
       leftLogo.style.objectFit = 'contain';
       const rightLogo = document.createElement('img');
-      rightLogo.src = '/pearl-clam-transparent.png';
+      rightLogo.src = pearlLogoSrc;
       rightLogo.alt = 'Pearl Player Development';
       rightLogo.style.width = '70px';
       rightLogo.style.height = '70px';

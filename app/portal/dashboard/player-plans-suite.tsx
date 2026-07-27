@@ -2000,6 +2000,9 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
       const pageBg = isLightMode ? '#ffffff' : '#05070d';
       const textColor = isLightMode ? '#111827' : '#f8fafc';
       const mutedColor = isLightMode ? '#475569' : '#cbd5e1';
+      const pearlLogoSrc = isLightMode
+        ? '/pearl-lockup-stacked-black-transparent.png'
+        : '/pearl-clam-transparent.png';
       const source = goalsExportRef.current.cloneNode(true) as HTMLDivElement;
       source.querySelectorAll('button,label,[data-player-plan-pdf-ignore="true"]').forEach((node) => node.remove());
       source.querySelectorAll<HTMLElement>('.portal-day-card').forEach((card) => {
@@ -2039,7 +2042,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
       header.style.gap = '18px';
       header.style.marginBottom = '22px';
       const leftLogo = document.createElement('img');
-      leftLogo.src = '/pearl-clam-transparent.png';
+      leftLogo.src = pearlLogoSrc;
       leftLogo.alt = 'Pearl Player Development';
       leftLogo.style.width = '56px';
       leftLogo.style.height = '56px';

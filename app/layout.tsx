@@ -49,11 +49,11 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
-      { url: '/pearl-favicon-v3.ico', sizes: '64x64', type: 'image/x-icon' },
-      { url: '/pearl-favicon-v3.png', sizes: '512x512', type: 'image/png' },
+      { url: '/pearl-favicon-v5.ico', sizes: '64x64', type: 'image/x-icon' },
+      { url: '/pearl-favicon-v5.png', sizes: '512x512', type: 'image/png' },
     ],
-    shortcut: '/pearl-favicon-v3.ico',
-    apple: '/pearl-favicon-v3.png',
+    shortcut: '/pearl-favicon-v5.ico',
+    apple: '/pearl-favicon-v5.png',
   },
 };
 

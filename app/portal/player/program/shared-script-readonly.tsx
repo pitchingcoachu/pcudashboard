@@ -73,6 +73,9 @@ export default function SharedScriptReadonly({
       const pageHeight = pdf.internal.pageSize.getHeight();
       const margin = 28;
       const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+      const pearlLogoSrc = isLightTheme
+        ? '/pearl-lockup-stacked-black-transparent.png'
+        : '/pearl-clam-transparent.png';
 
       const loadImageDataUrl = async (src: string): Promise<string | null> => {
         try {
@@ -91,8 +94,8 @@ export default function SharedScriptReadonly({
       };
 
       const [leftLogo, rightLogo] = await Promise.all([
-        loadImageDataUrl('/pearl-clam-transparent.png'),
-        loadImageDataUrl('/pearl-clam-transparent.png'),
+        loadImageDataUrl(pearlLogoSrc),
+        loadImageDataUrl(pearlLogoSrc),
       ]);
 
       const logoW = 42;

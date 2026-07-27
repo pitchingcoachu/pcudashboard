@@ -1373,7 +1373,10 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       const pageHeight = pdf.internal.pageSize.getHeight();
       const margin = 18;
       const targetWidth = pageWidth - margin * 2;
-      const logoData = await loadImageDataUrl('/pearl-clam-transparent.png');
+      const pearlLogoSrc = isLightTheme
+        ? '/pearl-lockup-stacked-black-transparent.png'
+        : '/pearl-clam-transparent.png';
+      const logoData = await loadImageDataUrl(pearlLogoSrc);
       const logoW = 56;
       const logoH = 56;
       const selectedPlayerName = players.find((player) => player.id === playerId)?.name ?? '';
@@ -3211,6 +3214,9 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       const isLightTheme =
         typeof document !== 'undefined' &&
         document.body.classList.contains('theme-light');
+      const pearlLogoSrc = isLightTheme
+        ? '/pearl-lockup-stacked-black-transparent.png'
+        : '/pearl-clam-transparent.png';
 
       const loadImageDataUrl = async (src: string): Promise<string | null> => {
         try {
@@ -3229,8 +3235,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       };
 
       const [leftLogo, rightLogo] = await Promise.all([
-        loadImageDataUrl(schoolLogoSrc ?? '/pearl-clam-transparent.png'),
-        loadImageDataUrl('/pearl-clam-transparent.png'),
+        loadImageDataUrl(schoolLogoSrc ?? pearlLogoSrc),
+        loadImageDataUrl(pearlLogoSrc),
       ]);
 
       const logoW = 42;
@@ -4529,6 +4535,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 state={{ selectedTemplateId: selectedBullpenTemplateId, visibleTemplateIds: visibleBullpenTemplateIds }}
                 playerId={playerId}
                 previewQuery={`?previewPlayerId=${playerId}`}
+                schoolLogoSrc={schoolLogoSrc}
+                schoolLogoAlt={schoolLogoAlt}
               />
             </div>
           )}

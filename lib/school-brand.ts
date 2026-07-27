@@ -12,10 +12,10 @@ const DEFAULT_BRAND: SchoolBrand = {
   schoolCode: 'PCU',
   logoSrc: '/pearl-clam-transparent.png',
   logoAlt: 'Pearl Player Development',
-  accent: '#c8102e',
-  accentSoft: '#8f0f24',
-  accentRgb: '200, 16, 46',
-  accentRgbSecondary: '200, 16, 46',
+  accent: '#dcc1a1',
+  accentSoft: '#ffffff',
+  accentRgb: '220, 193, 161',
+  accentRgbSecondary: '255, 255, 255',
 };
 
 const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
@@ -56,10 +56,10 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     schoolCode: 'TRIAL',
     logoSrc: '/pearl-clam-transparent.png',
     logoAlt: 'Pearl Player Development',
-    accent: '#14d9d5',
-    accentSoft: '#6d3cff',
-    accentRgb: '20, 217, 213',
-    accentRgbSecondary: '109, 60, 255',
+    accent: '#dcc1a1',
+    accentSoft: '#ffffff',
+    accentRgb: '220, 193, 161',
+    accentRgbSecondary: '255, 255, 255',
   },
   CNU: {
     schoolCode: 'CNU',

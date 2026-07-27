@@ -104,7 +104,7 @@ export default async function AdminHomePage() {
     .map(({ status, count }) => `${status}: ${count}`)
     .join(' | ');
   return (
-    <div style={{ display: 'grid', gap: 20 }}>
+    <div className={isTrialSchool ? 'portal-admin-home portal-admin-home--trial' : 'portal-admin-home'} style={{ display: 'grid', gap: 20 }}>
       <PlayerSearch />
     <div className="portal-admin-grid">
       {programmingOrganizationId <= 0 ? (

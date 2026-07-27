@@ -502,9 +502,12 @@ export default function LeaderboardCorrelationModal({
   }, []);
 
   useEffect(() => {
-    if (!open || logoDataUrl) return;
+    if (!open) return;
     let cancelled = false;
-    fetch('/pearl-clam-transparent.png')
+    const pearlLogoSrc = isLightTheme
+      ? '/pearl-lockup-stacked-black-transparent.png'
+      : '/pearl-clam-transparent.png';
+    fetch(pearlLogoSrc)
       .then(async (response) => {
         const blob = await response.blob();
         return await new Promise<string>((resolve, reject) => {
@@ -521,7 +524,7 @@ export default function LeaderboardCorrelationModal({
     return () => {
       cancelled = true;
     };
-  }, [open, logoDataUrl]);
+  }, [isLightTheme, open]);
 
   useEffect(() => {
     if (!open || !siteLogoSrc) {

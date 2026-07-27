@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import pearlClam from '../pearl/clam transparent.png';
+import pearlHeroBars from '../pearl/pearl-hero-bars-transparent.png';
 import pearlLockup from '../pearl/pearl-lockup-transparent.png';
 
 const CALENDLY_URL = 'https://calendly.com/pitchingcoachu/pcu-dashboard-call';
@@ -423,27 +423,23 @@ export default function Home() {
           </div>
           <div className="hero-brand-layout">
             <div className="hero-brand-lockup">
-              <div className="hero-brand-clam-frame">
-                <Image
-                  src={pearlClam}
-                  alt=""
-                  aria-hidden="true"
-                  priority
-                  unoptimized
-                  className="hero-brand-clam-image"
-                  sizes="(max-width: 980px) 42vw, 280px"
-                />
-              </div>
-              <div className="hero-brand-wordmark-frame">
-                <Image
-                  src={pearlLockup}
-                  alt="Pearl Player Development"
-                  priority
-                  unoptimized
-                  className="hero-brand-wordmark-image"
-                  sizes="(max-width: 980px) 58vw, 430px"
-                />
-              </div>
+              <Image
+                src={pearlHeroBars}
+                alt=""
+                aria-hidden="true"
+                priority
+                unoptimized
+                className="hero-brand-bars-image"
+                sizes="(max-width: 980px) 92vw, 700px"
+              />
+              <Image
+                src={pearlLockup}
+                alt="Pearl Player Development"
+                priority
+                unoptimized
+                className="hero-brand-lockup-image"
+                sizes="(max-width: 980px) 92vw, 700px"
+              />
             </div>
             <div className="hero-copy">
               <h2>Built by coaches, for coaches.</h2>

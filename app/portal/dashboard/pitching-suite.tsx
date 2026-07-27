@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
@@ -2153,6 +2154,11 @@ function AbPaChart({
 
 const DNA_METRIC_COLUMNS = ['Velo', 'IVB', 'HB', 'Spin', 'Ext', 'Height', 'Side'] as const;
 type DnaMetricColumn = (typeof DNA_METRIC_COLUMNS)[number];
+const ARSENAL_PITCH_TYPES = ['Fastball', 'Sinker', 'Cutter', 'Slider', 'Sweeper', 'Curveball', 'ChangeUp', 'Splitter'] as const;
+type ArsenalPitchType = (typeof ARSENAL_PITCH_TYPES)[number];
+const MIN_ARSENAL_PITCHES_PER_TYPE = 10;
+const MIN_ARSENAL_TOTAL_PITCHES = 50;
+const MIN_ARSENAL_PITCH_TYPES = 2;
 const DNA_METRIC_LABELS: Record<DnaMetricColumn, string> = {
   Velo: 'Velo',
   IVB: 'IVB',
@@ -2172,6 +2178,129 @@ type DnaPitcherRow = {
   pitches: number;
   throwsHand: 'R' | 'L';
 };
+
+type ArsenalPitchRow = DnaPitcherRow & {
+  pitchType: ArsenalPitchType;
+};
+
+type ArsenalComparisonPitchRow = ArsenalPitchRow & {
+  usage: number;
+};
+
+const ARSENAL_PITCH_COLORS: Record<ArsenalPitchType, string> = {
+  Fastball: '#f8fafc',
+  Sinker: '#f59e0b',
+  Cutter: '#a78bfa',
+  Slider: '#ef4444',
+  Sweeper: '#ec4899',
+  Curveball: '#3b82f6',
+  ChangeUp: '#22c55e',
+  Splitter: '#06b6d4',
+};
+
+const ARSENAL_PITCH_ABBREVIATIONS: Record<ArsenalPitchType, string> = {
+  Fastball: 'FB',
+  Sinker: 'SI',
+  Cutter: 'CT',
+  Slider: 'SL',
+  Sweeper: 'SW',
+  Curveball: 'CB',
+  ChangeUp: 'CH',
+  Splitter: 'SP',
+};
+
+type ArsenalMovementBounds = {
+  maxX: number;
+  maxY: number;
+};
+
+function ArsenalMovementPlot({
+  rows,
+  bounds,
+}: {
+  rows: ArsenalComparisonPitchRow[];
+  bounds: ArsenalMovementBounds;
+}) {
+  const width = 330;
+  const height = 260;
+  const margin = { top: 20, right: 18, bottom: 38, left: 44 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const x = (value: number) => margin.left + ((value + bounds.maxX) / (bounds.maxX * 2)) * plotWidth;
+  const y = (value: number) =>
+    margin.top + (1 - (value + bounds.maxY) / (bounds.maxY * 2)) * plotHeight;
+  const xTicks = Array.from({ length: bounds.maxX / 5 + 1 }, (_, index) => -bounds.maxX + index * 10);
+  const yTicks = Array.from({ length: bounds.maxY / 5 + 1 }, (_, index) => -bounds.maxY + index * 10);
+  const usableRows = rows.filter(
+    (row) => Number.isFinite(row.metrics.HB) && Number.isFinite(row.metrics.IVB)
+  );
+
+  return (
+    <svg
+      className="portal-arsenal-movement-plot"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label="Horizontal and induced vertical movement plot"
+    >
+      <defs>
+        <filter id="arsenal-dot-glow" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="3" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+      {xTicks.map((tick) => (
+        <g key={`x-${tick}`}>
+          <line x1={x(tick)} x2={x(tick)} y1={margin.top} y2={height - margin.bottom} className="portal-arsenal-gridline" />
+          <text x={x(tick)} y={height - 18} textAnchor="middle" className="portal-arsenal-axis-tick">
+            {tick}
+          </text>
+        </g>
+      ))}
+      {yTicks.map((tick) => (
+        <g key={`y-${tick}`}>
+          <line x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} className="portal-arsenal-gridline" />
+          <text x={margin.left - 9} y={y(tick) + 3} textAnchor="end" className="portal-arsenal-axis-tick">
+            {tick}
+          </text>
+        </g>
+      ))}
+      <line x1={x(0)} x2={x(0)} y1={margin.top} y2={height - margin.bottom} className="portal-arsenal-zero-line" />
+      <line x1={margin.left} x2={width - margin.right} y1={y(0)} y2={y(0)} className="portal-arsenal-zero-line" />
+      <text x={margin.left + plotWidth / 2} y={height - 2} textAnchor="middle" className="portal-arsenal-axis-label">
+        HB
+      </text>
+      <text
+        x={13}
+        y={margin.top + plotHeight / 2}
+        textAnchor="middle"
+        transform={`rotate(-90 13 ${margin.top + plotHeight / 2})`}
+        className="portal-arsenal-axis-label"
+      >
+        IVB
+      </text>
+      {usableRows.map((row) => {
+        const hb = row.metrics.HB as number;
+        const ivb = row.metrics.IVB as number;
+        const radius = Math.max(9, Math.min(15, 7 + Math.sqrt(Math.max(0, row.usage)) * 0.85));
+        const color = ARSENAL_PITCH_COLORS[row.pitchType];
+        return (
+          <g key={row.pitchType} transform={`translate(${x(hb)} ${y(ivb)})`}>
+            <title>
+              {row.pitchType}: {ivb.toFixed(1)} IVB, {hb.toFixed(1)} HB, {row.usage.toFixed(1)}% usage
+            </title>
+            <circle r={radius} fill={color} fillOpacity={0.92} stroke="#020617" strokeWidth={2.5} filter="url(#arsenal-dot-glow)" />
+            <text y={3.5} textAnchor="middle" className="portal-arsenal-pitch-label">
+              {ARSENAL_PITCH_ABBREVIATIONS[row.pitchType]}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
 
 // Metrics whose sign is an artifact of which arm a pitcher throws with (e.g. a
 // lefty's glove-side break/release is numerically the mirror of a righty's).
@@ -2244,6 +2373,17 @@ type DnaPoint = {
   // loadings (they'd rank as equally "driving" even if the pitcher's real
   // values for them are very different).
   zScores: Partial<Record<DnaMetricColumn, number>>;
+  arsenalFeatureValues?: Record<string, number>;
+  arsenalFeatureZScores?: Record<string, number>;
+  similarityVector?: number[];
+  repertoire?: ArsenalPitchType[];
+};
+
+type ArsenalFeatureLoading = {
+  key: string;
+  label: string;
+  pc1: number;
+  pc2: number;
 };
 
 // Symmetric eigendecomposition via the cyclic Jacobi method. Matrices here are
@@ -2423,6 +2563,151 @@ function computePitcherDnaPca(
   return { points, loadings, varianceExplainedPct };
 }
 
+function computeArsenalDnaPca(rows: ArsenalPitchRow[]): {
+  points: DnaPoint[];
+  loadings: ArsenalFeatureLoading[];
+  varianceExplainedPct: { pc1: number; pc2: number };
+} {
+  const empty = {
+    points: [] as DnaPoint[],
+    loadings: [] as ArsenalFeatureLoading[],
+    varianceExplainedPct: { pc1: 0, pc2: 0 },
+  };
+  const byPitcher = new Map<string, ArsenalPitchRow[]>();
+  for (const row of rows) {
+    if (row.pitches < MIN_ARSENAL_PITCHES_PER_TYPE) continue;
+    const current = byPitcher.get(row.key) ?? [];
+    current.push(row);
+    byPitcher.set(row.key, current);
+  }
+
+  const profiles = Array.from(byPitcher.entries())
+    .map(([key, pitchRows]) => {
+      const totalPitches = pitchRows.reduce((sum, row) => sum + row.pitches, 0);
+      return { key, pitchRows, totalPitches };
+    })
+    .filter(
+      (profile) =>
+        profile.totalPitches >= MIN_ARSENAL_TOTAL_PITCHES &&
+        profile.pitchRows.length >= MIN_ARSENAL_PITCH_TYPES
+    );
+  if (profiles.length < 3) return empty;
+
+  const featureDefs: Array<{
+    key: string;
+    label: string;
+    pitchType: ArsenalPitchType;
+    metric: DnaMetricColumn | 'Usage';
+    presentMean: number;
+  }> = [];
+  for (const pitchType of ARSENAL_PITCH_TYPES) {
+    const pitchRows = profiles
+      .map((profile) => profile.pitchRows.find((row) => row.pitchType === pitchType))
+      .filter((row): row is ArsenalPitchRow => Boolean(row));
+    if (pitchRows.length < 3) continue;
+    featureDefs.push({
+      key: `${pitchType}|Usage`,
+      label: `${pitchType} Usage`,
+      pitchType,
+      metric: 'Usage',
+      presentMean: 0,
+    });
+    for (const metric of DNA_METRIC_COLUMNS) {
+      const values = pitchRows
+        .map((row) => normalizeForHandedness(row)[metric])
+        .filter((value): value is number => Number.isFinite(value));
+      if (values.length < 3) continue;
+      featureDefs.push({
+        key: `${pitchType}|${metric}`,
+        label: `${pitchType} ${DNA_METRIC_LABELS[metric]}`,
+        pitchType,
+        metric,
+        presentMean: values.reduce((sum, value) => sum + value, 0) / values.length,
+      });
+    }
+  }
+  if (featureDefs.length < 2) return empty;
+
+  const rawMatrix = profiles.map((profile) =>
+    featureDefs.map((feature) => {
+      const row = profile.pitchRows.find((pitchRow) => pitchRow.pitchType === feature.pitchType);
+      if (feature.metric === 'Usage') return row ? (row.pitches / profile.totalPitches) * 100 : 0;
+      if (!row) return feature.presentMean;
+      return normalizeForHandedness(row)[feature.metric] ?? feature.presentMean;
+    })
+  );
+  const means = featureDefs.map((_, featureIndex) =>
+    rawMatrix.reduce((sum, values) => sum + values[featureIndex], 0) / profiles.length
+  );
+  const stds = featureDefs.map((_, featureIndex) => {
+    const variance =
+      rawMatrix.reduce((sum, values) => sum + (values[featureIndex] - means[featureIndex]) ** 2, 0) /
+      Math.max(1, profiles.length - 1);
+    return Math.sqrt(variance) || 1;
+  });
+  const standardized = rawMatrix.map((values) =>
+    values.map((value, featureIndex) => (value - means[featureIndex]) / stds[featureIndex])
+  );
+
+  const featureCount = featureDefs.length;
+  const cov = Array.from({ length: featureCount }, () => Array.from({ length: featureCount }, () => 0));
+  for (let i = 0; i < featureCount; i += 1) {
+    for (let j = i; j < featureCount; j += 1) {
+      let sum = 0;
+      for (let rowIndex = 0; rowIndex < standardized.length; rowIndex += 1) {
+        sum += standardized[rowIndex][i] * standardized[rowIndex][j];
+      }
+      const value = sum / Math.max(1, standardized.length - 1);
+      cov[i][j] = value;
+      cov[j][i] = value;
+    }
+  }
+  const { vectors, values } = jacobiEigenDecomposition(cov);
+  const pc1Vector = vectors[0] ?? featureDefs.map(() => 0);
+  const pc2Vector = vectors[1] ?? featureDefs.map(() => 0);
+  const points = profiles.map((profile, profileIndex): DnaPoint => {
+    const firstRow = profile.pitchRows[0];
+    const arsenalFeatureValues: Record<string, number> = {};
+    const arsenalFeatureZScores: Record<string, number> = {};
+    featureDefs.forEach((feature, featureIndex) => {
+      arsenalFeatureValues[feature.key] = rawMatrix[profileIndex][featureIndex];
+      arsenalFeatureZScores[feature.key] = standardized[profileIndex][featureIndex];
+    });
+    return {
+      key: profile.key,
+      pitcher: firstRow.pitcher,
+      teamCode: firstRow.teamCode,
+      teamLabel: firstRow.teamLabel,
+      pc1: standardized[profileIndex].reduce((sum, value, featureIndex) => sum + value * pc1Vector[featureIndex], 0),
+      pc2: standardized[profileIndex].reduce((sum, value, featureIndex) => sum + value * pc2Vector[featureIndex], 0),
+      metrics: {},
+      zScores: {},
+      arsenalFeatureValues,
+      arsenalFeatureZScores,
+      similarityVector: standardized[profileIndex],
+      repertoire: profile.pitchRows
+        .slice()
+        .sort((a, b) => b.pitches - a.pitches)
+        .map((row) => row.pitchType),
+    };
+  });
+  const loadings = featureDefs.map((feature, featureIndex) => ({
+    key: feature.key,
+    label: feature.label,
+    pc1: pc1Vector[featureIndex] ?? 0,
+    pc2: pc2Vector[featureIndex] ?? 0,
+  }));
+  const totalVariance = values.reduce((sum, value) => sum + Math.max(0, value), 0) || 1;
+  return {
+    points,
+    loadings,
+    varianceExplainedPct: {
+      pc1: (Math.max(0, values[0] ?? 0) / totalVariance) * 100,
+      pc2: (Math.max(0, values[1] ?? 0) / totalVariance) * 100,
+    },
+  };
+}
+
 function PitcherDnaPanel({
   filters,
   startDate,
@@ -2449,6 +2734,7 @@ function PitcherDnaPanel({
   onNavigateToTeam: (teamCode: string) => void;
 }) {
   const [rows, setRows] = useState<DnaPitcherRow[]>([]);
+  const [arsenalRows, setArsenalRows] = useState<ArsenalPitchRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -2461,7 +2747,10 @@ function PitcherDnaPanel({
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState(false);
   const searchRootRef = useRef<HTMLDivElement | null>(null);
-  const [viewBy, setViewBy] = useState<'Player' | 'Team'>('Player');
+  const [viewBy, setViewBy] = useState<'Player' | 'Team' | 'Arsenal'>('Player');
+  const isArsenalView = viewBy === 'Arsenal';
+  const [showArsenalComparison, setShowArsenalComparison] = useState(false);
+  const [isExportingArsenalComparison, setIsExportingArsenalComparison] = useState(false);
   const [chartTitle, setChartTitle] = useState('Pitcher DNA');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isExportingPng, setIsExportingPng] = useState(false);
@@ -2469,6 +2758,7 @@ function PitcherDnaPanel({
   const [logoDataUri, setLogoDataUri] = useState<string | null>(null);
   const [teamLogoDataUris, setTeamLogoDataUris] = useState<Map<string, string>>(new Map());
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const arsenalComparisonRef = useRef<HTMLElement | null>(null);
   const sharedFilterParamsKey = sharedFilterParams.toString();
 
   const normalizePitcherKey = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -2551,7 +2841,7 @@ function PitcherDnaPanel({
   }, []);
 
   useEffect(() => {
-    if (!filters || !startDate || !endDate) return;
+    if (isArsenalView || !filters || !startDate || !endDate) return;
     let active = true;
     const controller = new AbortController();
 
@@ -2649,7 +2939,96 @@ function PitcherDnaPanel({
       active = false;
       controller.abort();
     };
-  }, [filters, startDate, endDate, sharedFilterParamsKey, resolvePitcherTeam]);
+  }, [filters, startDate, endDate, sharedFilterParamsKey, resolvePitcherTeam, isArsenalView]);
+
+  useEffect(() => {
+    if (!isArsenalView || !filters || !startDate || !endDate) return;
+    let active = true;
+    const controller = new AbortController();
+    const requestedHandRaw = new URLSearchParams(sharedFilterParamsKey).get('hand');
+    const requestedHand: 'R' | 'L' | null =
+      requestedHandRaw === 'Right' ? 'R' : requestedHandRaw === 'Left' ? 'L' : null;
+    const handsToFetch: Array<'R' | 'L'> = requestedHand ? [requestedHand] : ['R', 'L'];
+
+    const buildParams = (handValue: 'R' | 'L') => {
+      const params = new URLSearchParams(sharedFilterParamsKey);
+      params.set('school_code', String(filters.school_code ?? selectedSchoolCode).trim().toUpperCase());
+      params.set('start_date', startDate);
+      params.set('end_date', endDate);
+      params.set('split_by', 'Pitcher Arsenal');
+      params.set('custom_columns', ['P', ...DNA_METRIC_COLUMNS].join(','));
+      params.set('hand', handValue === 'R' ? 'Right' : 'Left');
+      if (level) params.set('level', level);
+      params.delete('pitch_types');
+      return params;
+    };
+    const parseArsenalRows = (
+      payload: { table_rows?: Array<Record<string, string | number | null>> } | null,
+      throwsHand: 'R' | 'L'
+    ): ArsenalPitchRow[] => {
+      const tableRows = Array.isArray(payload?.table_rows) ? payload.table_rows : [];
+      return tableRows
+        .map((row) => {
+          const pitcherName = String(row.Pitcher ?? '').trim();
+          const rawPitchType = String(row.Pitch ?? '').trim();
+          const pitchType = ARSENAL_PITCH_TYPES.find(
+            (candidate) => candidate.toLowerCase() === rawPitchType.toLowerCase()
+          );
+          if (!pitcherName || pitcherName.toLowerCase() === 'all' || !pitchType) return null;
+          const pitches = parseSortableNumber(row.P) ?? 0;
+          const metrics: Partial<Record<DnaMetricColumn, number>> = {};
+          for (const metric of DNA_METRIC_COLUMNS) {
+            const value = parseSortableNumber(row[metric]);
+            if (value !== null) metrics[metric] = value;
+          }
+          const { teamCode, teamLabel } = resolvePitcherTeam(pitcherName);
+          return {
+            key: `${normalizePitcherKey(pitcherName)}::${teamCode}`,
+            pitcher: pitcherName,
+            teamCode,
+            teamLabel,
+            metrics,
+            pitches,
+            throwsHand,
+            pitchType,
+          };
+        })
+        .filter((row): row is ArsenalPitchRow => row !== null);
+    };
+
+    setLoading(true);
+    setErrorMessage('');
+    Promise.all(
+      handsToFetch.map((handValue) =>
+        fetch(`/api/dashboard/pitching/table-rollup?${buildParams(handValue).toString()}`, {
+          signal: controller.signal,
+          cache: 'no-store',
+        }).then((response) => (response.ok ? response.json() : null))
+      )
+    )
+      .then((payloads) => {
+        if (!active) return;
+        const merged = handsToFetch.flatMap((handValue, index) => parseArsenalRows(payloads[index], handValue));
+        const byPitcherAndType = new Map<string, ArsenalPitchRow>();
+        for (const row of merged) {
+          const key = `${row.key}::${row.pitchType}`;
+          const existing = byPitcherAndType.get(key);
+          if (!existing || row.pitches > existing.pitches) byPitcherAndType.set(key, row);
+        }
+        setArsenalRows(Array.from(byPitcherAndType.values()));
+      })
+      .catch((error) => {
+        if (!active || (error && error.name === 'AbortError')) return;
+        setErrorMessage('Failed to load Arsenal DNA data.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [endDate, filters, isArsenalView, level, resolvePitcherTeam, selectedSchoolCode, sharedFilterParamsKey, startDate]);
 
   const pcaInputRows = useMemo(() => (viewBy === 'Team' ? aggregateRowsByTeam(rows) : rows), [rows, viewBy]);
 
@@ -2658,10 +3037,14 @@ function PitcherDnaPanel({
     [selectedPitchTypes]
   );
 
-  const { points, loadings, varianceExplainedPct } = useMemo(
+  const standardPca = useMemo(
     () => computePitcherDnaPca(pcaInputRows, [...DNA_METRIC_COLUMNS], isSinglePitchTypeScope),
     [pcaInputRows, isSinglePitchTypeScope]
   );
+  const arsenalPca = useMemo(() => computeArsenalDnaPca(arsenalRows), [arsenalRows]);
+  const points = viewBy === 'Arsenal' ? arsenalPca.points : standardPca.points;
+  const loadings = standardPca.loadings;
+  const varianceExplainedPct = viewBy === 'Arsenal' ? arsenalPca.varianceExplainedPct : standardPca.varianceExplainedPct;
 
   // On Pro, show each team's actual logo -- instead of a plain dot in Team
   // view, and next to team names in the "Most Similar" list in Player view.
@@ -2772,11 +3155,12 @@ function PitcherDnaPanel({
   const toSvgY = (value: number) =>
     height - marginPx - ((value - bounds.minY) / (bounds.maxY - bounds.minY || 1)) * (height - marginPx - topMarginPx);
 
-  const allLoadings = useMemo(() => {
+  const standardLoadings = useMemo(() => {
     return DNA_METRIC_COLUMNS
-      .map((col) => ({ col, ...loadings[col] }))
+      .map((col) => ({ key: col, label: DNA_METRIC_LABELS[col], col, ...loadings[col] }))
       .filter((entry) => Number.isFinite(entry.pc1) && Number.isFinite(entry.pc2));
   }, [loadings]);
+  const allLoadings = viewBy === 'Arsenal' ? arsenalPca.loadings : standardLoadings;
 
   // Draw arrows for every metric, sorted strongest-first. The weakest two
   // (by combined PC1/PC2 loading) are marked "faint" and rendered lighter --
@@ -2787,8 +3171,15 @@ function PitcherDnaPanel({
     const sorted = [...allLoadings].sort(
       (a, b) => (b.pc1 * b.pc1 + b.pc2 * b.pc2) - (a.pc1 * a.pc1 + a.pc2 * a.pc2)
     );
+    if (viewBy === 'Arsenal') return sorted.slice(0, 6).map((entry) => ({ ...entry, isFaint: false }));
     return sorted.map((entry, index) => ({ ...entry, isFaint: index >= sorted.length - FAINT_ARROW_COUNT }));
-  }, [allLoadings]);
+  }, [allLoadings, viewBy]);
+  const sidebarLoadings = useMemo(() => {
+    if (viewBy !== 'Arsenal') return allLoadings;
+    return [...allLoadings]
+      .sort((a, b) => (b.pc1 * b.pc1 + b.pc2 * b.pc2) - (a.pc1 * a.pc1 + a.pc2 * a.pc2))
+      .slice(0, 10);
+  }, [allLoadings, viewBy]);
 
   const originX = toSvgX(0);
   const originY = toSvgY(0);
@@ -2844,7 +3235,7 @@ function PitcherDnaPanel({
     const withAngle = chartArrowLoadings.map((entry) => {
       const tipX = originX + entry.pc1 * vectorScale;
       const tipY = originY - entry.pc2 * vectorScale;
-      return { col: entry.col, tipX, tipY, angle: Math.atan2(tipY - originY, tipX - originX) };
+      return { key: entry.key, tipX, tipY, angle: Math.atan2(tipY - originY, tipX - originX) };
     });
     withAngle.sort((a, b) => a.angle - b.angle);
     const minAngleGapRad = (30 * Math.PI) / 180;
@@ -2855,12 +3246,12 @@ function PitcherDnaPanel({
         curr.angle = prev.angle + minAngleGapRad;
       }
     }
-    const positions = new Map<DnaMetricColumn, { x: number; y: number; anchor: 'start' | 'end' }>();
+    const positions = new Map<string, { x: number; y: number; anchor: 'start' | 'end' }>();
     withAngle.forEach((entry) => {
       const labelRadius = Math.hypot(entry.tipX - originX, entry.tipY - originY) + 20;
       const x = originX + Math.cos(entry.angle) * labelRadius;
       const y = originY + Math.sin(entry.angle) * labelRadius;
-      positions.set(entry.col, { x, y, anchor: Math.cos(entry.angle) >= 0 ? 'start' : 'end' });
+      positions.set(entry.key, { x, y, anchor: Math.cos(entry.angle) >= 0 ? 'start' : 'end' });
     });
     return positions;
   }, [chartArrowLoadings, vectorScale, originX, originY]);
@@ -2874,12 +3265,22 @@ function PitcherDnaPanel({
   // two metrics happen to have similar loadings: they'd rank as equally
   // "driving" even if the pitcher's real values for them are very different.
   const highlightedPitcherDrivers = useMemo(() => {
-    if (!highlightedPoint) return [];
+    if (!highlightedPoint || viewBy === 'Arsenal') return [];
     return DNA_METRIC_COLUMNS
       .filter((col) => highlightedPoint.zScores[col] !== undefined)
       .map((col) => ({ col, zScore: highlightedPoint.zScores[col] as number }))
       .sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore));
-  }, [highlightedPoint]);
+  }, [highlightedPoint, viewBy]);
+  const highlightedArsenalDrivers = useMemo(() => {
+    if (!highlightedPoint || viewBy !== 'Arsenal') return [];
+    const zScores = highlightedPoint.arsenalFeatureZScores ?? {};
+    const rawValues = highlightedPoint.arsenalFeatureValues ?? {};
+    const labels = new Map(arsenalPca.loadings.map((entry) => [entry.key, entry.label]));
+    return Object.entries(zScores)
+      .map(([key, zScore]) => ({ key, label: labels.get(key) ?? key, zScore, value: rawValues[key] }))
+      .sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore))
+      .slice(0, 8);
+  }, [arsenalPca.loadings, highlightedPoint, viewBy]);
 
   const NEAREST_NEIGHBOR_COUNT = 3;
 
@@ -2892,11 +3293,150 @@ function PitcherDnaPanel({
       .filter((point) => point.key !== highlightedPoint.key)
       .map((point) => ({
         point,
-        distance: Math.hypot(point.pc1 - highlightedPoint.pc1, point.pc2 - highlightedPoint.pc2),
+        distance:
+          viewBy === 'Arsenal' && highlightedPoint.similarityVector && point.similarityVector
+            ? Math.sqrt(
+                point.similarityVector.reduce(
+                  (sum, value, index) => sum + (value - (highlightedPoint.similarityVector?.[index] ?? 0)) ** 2,
+                  0
+                ) / Math.max(1, point.similarityVector.length)
+              )
+            : Math.hypot(point.pc1 - highlightedPoint.pc1, point.pc2 - highlightedPoint.pc2),
       }))
       .sort((a, b) => a.distance - b.distance)
       .slice(0, NEAREST_NEIGHBOR_COUNT);
-  }, [highlightedPoint, points]);
+  }, [highlightedPoint, points, viewBy]);
+
+  const arsenalComparison = useMemo(() => {
+    if (viewBy !== 'Arsenal' || !highlightedPoint) return [];
+    return [highlightedPoint, ...nearestNeighbors.map(({ point }) => point)].map((point, index) => {
+      const pitcherRows = arsenalRows
+        .filter((row) => row.key === point.key)
+        .sort(
+          (a, b) =>
+            ARSENAL_PITCH_TYPES.indexOf(a.pitchType) - ARSENAL_PITCH_TYPES.indexOf(b.pitchType)
+        );
+      const totalPitches = pitcherRows.reduce((sum, row) => sum + row.pitches, 0);
+      return {
+        point,
+        rank: index,
+        rows: pitcherRows.map((row) => ({
+          ...row,
+          usage: totalPitches > 0 ? (row.pitches / totalPitches) * 100 : 0,
+        })),
+      };
+    });
+  }, [arsenalRows, highlightedPoint, nearestNeighbors, viewBy]);
+
+  const arsenalMovementBounds = useMemo<ArsenalMovementBounds>(() => {
+    let maxHorizontalMovement = 20;
+    let maxVerticalMovement = 20;
+    for (const comparison of arsenalComparison) {
+      for (const row of comparison.rows) {
+        const horizontalMovement = row.metrics.HB;
+        const verticalMovement = row.metrics.IVB;
+        if (Number.isFinite(horizontalMovement)) {
+          maxHorizontalMovement = Math.max(maxHorizontalMovement, Math.abs(horizontalMovement as number));
+        }
+        if (Number.isFinite(verticalMovement)) {
+          maxVerticalMovement = Math.max(maxVerticalMovement, Math.abs(verticalMovement as number));
+        }
+      }
+    }
+    return {
+      maxX: Math.ceil(maxHorizontalMovement / 10) * 10,
+      maxY: Math.ceil(maxVerticalMovement / 10) * 10,
+    };
+  }, [arsenalComparison]);
+
+  useEffect(() => {
+    if (!showArsenalComparison) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowArsenalComparison(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [showArsenalComparison]);
+
+  useEffect(() => {
+    if (!isArsenalView) setShowArsenalComparison(false);
+  }, [isArsenalView]);
+
+  const downloadArsenalComparisonPng = useCallback(async () => {
+    const comparisonNode = arsenalComparisonRef.current;
+    if (!comparisonNode || !highlightedPoint) return;
+    setIsExportingArsenalComparison(true);
+    const originalLogoSources: Array<{ image: HTMLImageElement; src: string }> = [];
+    try {
+      const [{ default: html2canvas }] = await Promise.all([import('html2canvas')]);
+      const pearlLockupImage = comparisonNode.querySelector<HTMLImageElement>('.portal-arsenal-brand-lockup');
+      await pearlLockupImage?.decode?.().catch(() => undefined);
+      const logoImages = Array.from(
+        comparisonNode.querySelectorAll<HTMLImageElement>('.portal-arsenal-pitcher-identity img')
+      );
+      await Promise.all(logoImages.map((image) => image.decode?.().catch(() => undefined)));
+      const rasterizedLogos = logoImages.map((image) => {
+        try {
+          const size = 128;
+          const logoCanvas = document.createElement('canvas');
+          logoCanvas.width = size;
+          logoCanvas.height = size;
+          const logoContext = logoCanvas.getContext('2d');
+          if (!logoContext || !image.naturalWidth || !image.naturalHeight) return image.currentSrc || image.src;
+          const scale = Math.min(size / image.naturalWidth, size / image.naturalHeight);
+          const drawWidth = image.naturalWidth * scale;
+          const drawHeight = image.naturalHeight * scale;
+          logoContext.drawImage(image, (size - drawWidth) / 2, (size - drawHeight) / 2, drawWidth, drawHeight);
+          return logoCanvas.toDataURL('image/png');
+        } catch {
+          return image.currentSrc || image.src;
+        }
+      });
+      logoImages.forEach((image, index) => {
+        originalLogoSources.push({ image, src: image.src });
+        if (rasterizedLogos[index]) image.src = rasterizedLogos[index];
+      });
+      await Promise.all(logoImages.map((image) => image.decode?.().catch(() => undefined)));
+      const exportWidth = comparisonNode.scrollWidth;
+      const exportHeight = comparisonNode.scrollHeight;
+      const canvas = await html2canvas(comparisonNode, {
+        backgroundColor: '#050505',
+        scale: 2,
+        useCORS: true,
+        width: exportWidth,
+        height: exportHeight,
+        windowWidth: exportWidth,
+        windowHeight: exportHeight,
+        onclone: (clonedDocument) => {
+          const clonedComparison = clonedDocument.querySelector<HTMLElement>('[data-arsenal-comparison-export]');
+          if (!clonedComparison) return;
+          clonedComparison.classList.add('portal-arsenal-export-render');
+          clonedComparison.style.width = `${exportWidth}px`;
+          clonedComparison.style.maxHeight = 'none';
+          clonedComparison.style.overflow = 'visible';
+          const clonedHeader = clonedComparison.querySelector<HTMLElement>('.portal-arsenal-compare-header');
+          if (clonedHeader) clonedHeader.style.position = 'relative';
+          const clonedLogos = Array.from(
+            clonedComparison.querySelectorAll<HTMLImageElement>('.portal-arsenal-pitcher-identity img')
+          );
+          clonedLogos.forEach((image, index) => {
+            if (rasterizedLogos[index]) image.src = rasterizedLogos[index];
+          });
+        },
+      });
+      const link = document.createElement('a');
+      const safePitcherName =
+        formatNameFirstLast(highlightedPoint.pitcher).replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'pitcher';
+      link.href = canvas.toDataURL('image/png');
+      link.download = `${safePitcherName}-arsenal-comparison.png`;
+      link.click();
+    } finally {
+      originalLogoSources.forEach(({ image, src }) => {
+        image.src = src;
+      });
+      setIsExportingArsenalComparison(false);
+    }
+  }, [highlightedPoint]);
 
   const downloadPng = useCallback(async () => {
     const svgNode = svgRef.current;
@@ -2904,6 +3444,9 @@ function PitcherDnaPanel({
     setIsExportingPng(true);
     try {
       const exportScale = 3;
+      const exportGap = 14;
+      const exportSidebarWidth = 330;
+      const exportWidth = width + exportGap + exportSidebarWidth;
       const serializer = new XMLSerializer();
       const clone = svgNode.cloneNode(true) as SVGSVGElement;
       clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
@@ -2911,19 +3454,196 @@ function PitcherDnaPanel({
       const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
       const objectUrl = URL.createObjectURL(svgBlob);
       try {
-        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const next = new Image();
-          next.onload = () => resolve(next);
-          next.onerror = () => reject(new Error('Failed to render chart for export.'));
-          next.src = objectUrl;
-        });
+        const loadImage = (source: string, rejectOnError = false) =>
+          new Promise<HTMLImageElement | null>((resolve, reject) => {
+            const next = new Image();
+            next.onload = () => resolve(next);
+            next.onerror = () => {
+              if (rejectOnError) reject(new Error('Failed to render chart for export.'));
+              else resolve(null);
+            };
+            next.src = source;
+          });
+        const exportLogoSource = (point: DnaPoint) => {
+          const loadedLogo = resolveTeamLogo(point.teamCode);
+          if (loadedLogo) return loadedLogo;
+          if (isPro) {
+            const remoteUrl = getProTeamLogoUrl(point.teamCode);
+            if (remoteUrl) return `/api/dashboard/image-proxy?url=${encodeURIComponent(remoteUrl)}`;
+          }
+          if (point.teamCode === 'PCU') {
+            return isLightTheme
+              ? '/pearl-lockup-stacked-black-transparent.png'
+              : '/pearl-clam-transparent.png';
+          }
+          return null;
+        };
+        const [img, neighborLogoImages] = await Promise.all([
+          loadImage(objectUrl, true),
+          Promise.all(
+            nearestNeighbors.map(({ point }) => {
+              const source = exportLogoSource(point);
+              return source ? loadImage(source) : Promise.resolve(null);
+            })
+          ),
+        ]);
+        if (!img) throw new Error('Failed to render chart for export.');
         const canvas = document.createElement('canvas');
-        canvas.width = width * exportScale;
+        canvas.width = exportWidth * exportScale;
         canvas.height = height * exportScale;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
         ctx.scale(exportScale, exportScale);
+        ctx.fillStyle = dnaChartColors.background;
+        ctx.fillRect(0, 0, exportWidth, height);
         ctx.drawImage(img, 0, 0, width, height);
+
+        const sidebarX = width + exportGap;
+        const sidebarPadding = 18;
+        const contentX = sidebarX + sidebarPadding;
+        const contentWidth = exportSidebarWidth - sidebarPadding * 2;
+        const panelGradient = ctx.createLinearGradient(sidebarX, 0, exportWidth, height);
+        if (isLightTheme) {
+          panelGradient.addColorStop(0, '#f8fafc');
+          panelGradient.addColorStop(1, '#edf9fb');
+        } else {
+          panelGradient.addColorStop(0, '#0b1119');
+          panelGradient.addColorStop(0.55, '#07131b');
+          panelGradient.addColorStop(1, '#08101c');
+        }
+        ctx.fillStyle = panelGradient;
+        ctx.fillRect(sidebarX, 0, exportSidebarWidth, height);
+        ctx.strokeStyle = isLightTheme ? 'rgba(100,116,139,0.25)' : 'rgba(148,163,184,0.24)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sidebarX + 0.5, 0.5, exportSidebarWidth - 1, height - 1);
+
+        const drawRoundedRect = (x: number, y: number, rectWidth: number, rectHeight: number, radius: number) => {
+          const r = Math.min(radius, rectWidth / 2, rectHeight / 2);
+          ctx.beginPath();
+          ctx.moveTo(x + r, y);
+          ctx.lineTo(x + rectWidth - r, y);
+          ctx.quadraticCurveTo(x + rectWidth, y, x + rectWidth, y + r);
+          ctx.lineTo(x + rectWidth, y + rectHeight - r);
+          ctx.quadraticCurveTo(x + rectWidth, y + rectHeight, x + rectWidth - r, y + rectHeight);
+          ctx.lineTo(x + r, y + rectHeight);
+          ctx.quadraticCurveTo(x, y + rectHeight, x, y + rectHeight - r);
+          ctx.lineTo(x, y + r);
+          ctx.quadraticCurveTo(x, y, x + r, y);
+          ctx.closePath();
+        };
+        const drawContainedImage = (image: HTMLImageElement, x: number, y: number, boxWidth: number, boxHeight: number) => {
+          const scale = Math.min(boxWidth / image.naturalWidth, boxHeight / image.naturalHeight);
+          const drawWidth = image.naturalWidth * scale;
+          const drawHeight = image.naturalHeight * scale;
+          ctx.drawImage(image, x + (boxWidth - drawWidth) / 2, y + (boxHeight - drawHeight) / 2, drawWidth, drawHeight);
+        };
+        const fitText = (value: string, maxWidth: number) => {
+          if (ctx.measureText(value).width <= maxWidth) return value;
+          let shortened = value;
+          while (shortened.length > 1 && ctx.measureText(`${shortened}…`).width > maxWidth) shortened = shortened.slice(0, -1);
+          return `${shortened}…`;
+        };
+
+        ctx.textBaseline = 'top';
+        const accentGradient = ctx.createLinearGradient(contentX, 0, contentX + contentWidth, 0);
+        accentGradient.addColorStop(0, '#22d3ee');
+        accentGradient.addColorStop(0.55, '#38bdf8');
+        accentGradient.addColorStop(1, '#a78bfa');
+        ctx.fillStyle = accentGradient;
+        ctx.fillRect(contentX, 18, contentWidth, 3);
+        ctx.font = '700 10px Manrope, Arial, sans-serif';
+        const matchesLabel = `${chartTitle.trim() || 'Pitcher DNA'} Matches`.toUpperCase();
+        ctx.fillText(fitText(matchesLabel, contentWidth), contentX, 32);
+        ctx.fillStyle = dnaChartColors.title;
+        ctx.font = '800 22px Manrope, Arial, sans-serif';
+        ctx.fillText(viewBy === 'Team' ? 'Similar Teams' : 'Similar Pitchers', contentX, 50);
+
+        if (highlightedPoint) {
+          const highlightedName =
+            viewBy === 'Team' ? highlightedPoint.pitcher : formatNameFirstLast(highlightedPoint.pitcher);
+          ctx.fillStyle = dnaChartColors.axisLabel;
+          ctx.font = '500 11px Manrope, Arial, sans-serif';
+          ctx.fillText(`Closest to ${fitText(highlightedName, contentWidth - 48)}`, contentX, 82);
+
+          nearestNeighbors.forEach(({ point }, index) => {
+            const rowY = 112 + index * 104;
+            const rowHeight = 88;
+            drawRoundedRect(contentX, rowY, contentWidth, rowHeight, 12);
+            const cardGradient = ctx.createLinearGradient(contentX, rowY, contentX + contentWidth, rowY + rowHeight);
+            if (isLightTheme) {
+              cardGradient.addColorStop(0, '#ffffff');
+              cardGradient.addColorStop(1, '#f3f8fb');
+            } else {
+              cardGradient.addColorStop(0, '#15202c');
+              cardGradient.addColorStop(1, '#101720');
+            }
+            ctx.fillStyle = cardGradient;
+            ctx.fill();
+            ctx.strokeStyle = isLightTheme ? 'rgba(14,165,233,0.2)' : 'rgba(125,211,252,0.2)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            const rankColor = index === 0 ? '#22d3ee' : index === 1 ? '#60a5fa' : '#a78bfa';
+            ctx.fillStyle = rankColor;
+            drawRoundedRect(contentX, rowY, 4, rowHeight, 2);
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(contentX + 24, rowY + rowHeight / 2, 13, 0, Math.PI * 2);
+            ctx.fillStyle = isLightTheme ? '#e0f7fa' : 'rgba(34,211,238,0.14)';
+            ctx.fill();
+            ctx.strokeStyle = rankColor;
+            ctx.stroke();
+            ctx.fillStyle = isLightTheme ? '#0f172a' : '#f8fafc';
+            ctx.font = '800 11px Manrope, Arial, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(String(index + 1), contentX + 24, rowY + 37);
+            ctx.textAlign = 'left';
+
+            const logoX = contentX + 48;
+            const logoY = rowY + 18;
+            const logoSize = 52;
+            drawRoundedRect(logoX, logoY, logoSize, logoSize, 10);
+            ctx.fillStyle = isLightTheme ? '#f1f5f9' : '#090d14';
+            ctx.fill();
+            ctx.strokeStyle = isLightTheme ? 'rgba(100,116,139,0.18)' : 'rgba(148,163,184,0.18)';
+            ctx.stroke();
+            const logoImage = neighborLogoImages[index];
+            if (logoImage) {
+              drawContainedImage(logoImage, logoX + 6, logoY + 6, logoSize - 12, logoSize - 12);
+            } else {
+              ctx.fillStyle = dnaChartColors.axisLabel;
+              ctx.font = '800 11px Manrope, Arial, sans-serif';
+              ctx.textAlign = 'center';
+              ctx.fillText(point.teamCode.slice(0, 4), logoX + logoSize / 2, logoY + 20);
+              ctx.textAlign = 'left';
+            }
+
+            const pointName = viewBy === 'Team' ? point.pitcher : formatNameFirstLast(point.pitcher);
+            const textX = contentX + 112;
+            ctx.fillStyle = dnaChartColors.title;
+            ctx.font = '800 14px Manrope, Arial, sans-serif';
+            ctx.fillText(fitText(pointName, contentWidth - 124), textX, rowY + 17);
+            ctx.fillStyle = dnaChartColors.axisLabel;
+            ctx.font = '600 10px Manrope, Arial, sans-serif';
+            const detail = viewBy === 'Team' ? point.teamCode : point.teamLabel;
+            ctx.fillText(fitText(detail, contentWidth - 124), textX, rowY + 48);
+            if (viewBy === 'Arsenal') {
+              const selectedRepertoire = new Set(highlightedPoint.repertoire ?? []);
+              const sharedPitchTypes = (point.repertoire ?? []).filter((pitchType) => selectedRepertoire.has(pitchType)).length;
+              ctx.fillStyle = rankColor;
+              ctx.font = '700 9px Manrope, Arial, sans-serif';
+              ctx.fillText(`${sharedPitchTypes} SHARED PITCH TYPE${sharedPitchTypes === 1 ? '' : 'S'}`, textX, rowY + 66);
+            }
+          });
+        } else {
+          ctx.fillStyle = dnaChartColors.axisLabel;
+          ctx.font = '500 12px Manrope, Arial, sans-serif';
+          const emptyMessage =
+            viewBy === 'Team' ? 'Select a team to show its closest matches.' : 'Select a pitcher to show his closest matches.';
+          ctx.fillText(fitText(emptyMessage, contentWidth), contentX, 54);
+        }
+
         const dataUrl = canvas.toDataURL('image/png');
         const link = document.createElement('a');
         const safeName = chartTitle.trim().replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'pitcher-dna';
@@ -2936,7 +3656,18 @@ function PitcherDnaPanel({
     } finally {
       setIsExportingPng(false);
     }
-  }, [width, height, chartTitle]);
+  }, [
+    width,
+    height,
+    chartTitle,
+    dnaChartColors,
+    highlightedPoint,
+    isPro,
+    isLightTheme,
+    nearestNeighbors,
+    resolveTeamLogo,
+    viewBy,
+  ]);
 
   return (
     <div>
@@ -2983,7 +3714,12 @@ function PitcherDnaPanel({
               type="button"
               className={viewBy === 'Player' ? 'btn btn-primary' : 'btn btn-ghost'}
               style={{ borderRadius: 0 }}
-              onClick={() => setViewBy('Player')}
+              onClick={() => {
+                setViewBy('Player');
+                setSelectedKey(null);
+                setSearchQuery('');
+                setChartTitle((current) => (current === 'Arsenal DNA' ? 'Pitcher DNA' : current));
+              }}
             >
               Player
             </button>
@@ -2991,9 +3727,27 @@ function PitcherDnaPanel({
               type="button"
               className={viewBy === 'Team' ? 'btn btn-primary' : 'btn btn-ghost'}
               style={{ borderRadius: 0 }}
-              onClick={() => setViewBy('Team')}
+              onClick={() => {
+                setViewBy('Team');
+                setSelectedKey(null);
+                setSearchQuery('');
+                setChartTitle((current) => (current === 'Arsenal DNA' ? 'Pitcher DNA' : current));
+              }}
             >
               Team
+            </button>
+            <button
+              type="button"
+              className={viewBy === 'Arsenal' ? 'btn btn-primary' : 'btn btn-ghost'}
+              style={{ borderRadius: 0 }}
+              onClick={() => {
+                setViewBy('Arsenal');
+                setSelectedKey(null);
+                setSearchQuery('');
+                setChartTitle((current) => (current === 'Pitcher DNA' ? 'Arsenal DNA' : current));
+              }}
+            >
+              Arsenal
             </button>
           </div>
           <div ref={searchRootRef} style={{ position: 'relative', flex: '1 1 180px', minWidth: 180 }}>
@@ -3031,7 +3785,7 @@ function PitcherDnaPanel({
                       ) : null}
                       <span>
                         {viewBy === 'Team' ? point.pitcher : formatNameFirstLast(point.pitcher)}
-                        {viewBy === 'Player' ? <span className="portal-option-email"> ({point.teamLabel})</span> : null}
+                        {viewBy !== 'Team' ? <span className="portal-option-email"> ({point.teamLabel})</span> : null}
                       </span>
                     </button>
                   ))}
@@ -3047,6 +3801,8 @@ function PitcherDnaPanel({
       <p className="portal-muted-text" style={{ marginTop: 0 }}>
         {viewBy === 'Team'
           ? 'Teams with similar pitching staffs sit close together (average across each team\'s qualifying pitchers).'
+          : viewBy === 'Arsenal'
+          ? 'Pitchers with similar complete arsenals sit close together. Arsenal mode uses every qualifying pitch type and ignores the Pitch Type filter.'
           : 'Pitchers with similar stuff sit close together.'} Arrows show which metric is pulling {viewBy === 'Team' ? 'teams' : 'pitchers'} in that direction.
       </p>
       {loading ? <p>Loading Pitcher DNA...</p> : null}
@@ -3055,6 +3811,8 @@ function PitcherDnaPanel({
         <p className="portal-muted-text">
           {viewBy === 'Team'
             ? `Not enough teams with at least ${MIN_PITCHERS_PER_TEAM} qualifying pitchers for the current filters (need at least 3 teams).`
+            : viewBy === 'Arsenal'
+            ? `Not enough qualifying arsenals for the current filters. Pitchers need at least ${MIN_ARSENAL_TOTAL_PITCHES} total pitches and ${MIN_ARSENAL_PITCH_TYPES} pitch types with ${MIN_ARSENAL_PITCHES_PER_TYPE}+ pitches each.`
             : 'Not enough pitchers with complete data for the current filters (need at least 3).'}
         </p>
       ) : null}
@@ -3069,7 +3827,9 @@ function PitcherDnaPanel({
               </defs>
               <rect x={0} y={0} width={width} height={height} fill={dnaChartColors.background} />
               <text x={marginPx} y={30} fontSize={18} fontWeight={700} fill={dnaChartColors.title}>{chartTitle || 'Pitcher DNA'}</text>
-              <text x={marginPx} y={48} fontSize={12} fill={dnaChartColors.axisLabel}>{points.length} pitcher{points.length === 1 ? '' : 's'}</text>
+              <text x={marginPx} y={48} fontSize={12} fill={dnaChartColors.axisLabel}>
+                {points.length} {viewBy === 'Team' ? `team${points.length === 1 ? '' : 's'}` : `pitcher${points.length === 1 ? '' : 's'}`}
+              </text>
               {logoDataUri ? (
                 <image
                   href={logoDataUri}
@@ -3090,9 +3850,9 @@ function PitcherDnaPanel({
               {chartArrowLoadings.map((entry) => {
                 const tipX = originX + entry.pc1 * vectorScale;
                 const tipY = originY - entry.pc2 * vectorScale;
-                const label = vectorLabelPositions.get(entry.col);
+                const label = vectorLabelPositions.get(entry.key);
                 return (
-                  <g key={`vector-${entry.col}`} opacity={entry.isFaint ? 0.45 : 1}>
+                  <g key={`vector-${entry.key}`} opacity={entry.isFaint ? 0.45 : 1}>
                     <line
                       x1={originX}
                       y1={originY}
@@ -3128,7 +3888,7 @@ function PitcherDnaPanel({
                           strokeWidth={entry.isFaint ? 3 : 4.5}
                           paintOrder="stroke"
                         >
-                          {DNA_METRIC_LABELS[entry.col]}
+                          {entry.label}
                         </text>
                       </>
                     ) : null}
@@ -3228,7 +3988,7 @@ function PitcherDnaPanel({
                   >
                     {viewBy === 'Team' ? highlightedPoint.pitcher : formatNameFirstLast(highlightedPoint.pitcher)}
                   </text>
-                  {viewBy === 'Player' ? (
+                  {viewBy !== 'Team' ? (
                     <text
                       x={toSvgX(highlightedPoint.pc1) + 12}
                       y={toSvgY(highlightedPoint.pc2) - 2}
@@ -3246,60 +4006,17 @@ function PitcherDnaPanel({
             </svg>
           </article>
           <article className="portal-day-card">
-            <h4 style={{ marginTop: 0 }}>Metric Loadings</h4>
-            <p className="portal-muted-text" style={{ fontSize: '0.8rem' }}>
-              How much each metric contributes to PC1 / PC2. The 2 lightest arrows on the chart explain this view the least.
-            </p>
-            <div style={{ display: 'grid', gap: 6, fontSize: '0.85rem' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 60px', fontWeight: 700 }}>
-                <span>Metric</span>
-                <span>PC1</span>
-                <span>PC2</span>
-              </div>
-              {allLoadings.map((entry) => (
-                <div key={entry.col} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 60px' }}>
-                  <span>{DNA_METRIC_LABELS[entry.col]}</span>
-                  <span>{entry.pc1.toFixed(2)}</span>
-                  <span>{entry.pc2.toFixed(2)}</span>
-                </div>
-              ))}
-            </div>
-            {highlightedPoint ? (
-              <div style={{ marginTop: 14 }}>
-                <h4 style={{ marginBottom: 0 }}>
-                  {viewBy === 'Team' ? highlightedPoint.pitcher : formatNameFirstLast(highlightedPoint.pitcher)}
-                </h4>
-                {viewBy === 'Player' ? (
-                  <p className="portal-muted-text" style={{ fontSize: '0.8rem', marginTop: 0 }}>({highlightedPoint.teamLabel})</p>
-                ) : null}
-                {highlightedPitcherDrivers.length ? (
+            <div>
+              <h4 style={{ marginTop: 0, marginBottom: 4 }}>
+                {viewBy === 'Team' ? 'Similar Teams' : 'Similar Pitchers'}
+              </h4>
+              {highlightedPoint ? (
+                <>
                   <p className="portal-muted-text" style={{ fontSize: '0.8rem', marginTop: 0 }}>
-                    Biggest driver: <strong>{DNA_METRIC_LABELS[highlightedPitcherDrivers[0].col]}</strong>
-                    {highlightedPitcherDrivers[1] ? <> (then {DNA_METRIC_LABELS[highlightedPitcherDrivers[1].col]})</> : null}
-                    {' '}— ranked by how far each raw value is from the cohort average, in standard deviations.
-                    {isSinglePitchTypeScope ? ' For HB/Rel. Side, a positive std. dev. always means more break for this pitch type.' : ''}
+                    Closest matches to{' '}
+                    <strong>{viewBy === 'Team' ? highlightedPoint.pitcher : formatNameFirstLast(highlightedPoint.pitcher)}</strong>
                   </p>
-                ) : null}
-                <div style={{ display: 'grid', gap: 3, fontSize: '0.82rem' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 70px', fontWeight: 700 }}>
-                    <span>Metric</span>
-                    <span style={{ textAlign: 'right' }}>Value</span>
-                    <span style={{ textAlign: 'right' }}>Std. Dev.</span>
-                  </div>
-                  {highlightedPitcherDrivers.map(({ col, zScore }) => {
-                    const value = highlightedPoint.metrics[col];
-                    return (
-                      <div key={col} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 70px' }}>
-                        <span className="portal-muted-text">{DNA_METRIC_LABELS[col]}</span>
-                        <span style={{ textAlign: 'right' }}>{value !== undefined ? Number(value).toFixed(1) : '-'}</span>
-                        <span style={{ textAlign: 'right' }}>{zScore >= 0 ? '+' : ''}{zScore.toFixed(2)}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                {nearestNeighbors.length ? (
-                  <div style={{ marginTop: 14 }}>
-                    <h4 style={{ marginBottom: 4, fontSize: '0.9rem' }}>Most Similar</h4>
+                  {nearestNeighbors.length ? (
                     <div style={{ display: 'grid', gap: 4 }}>
                       {nearestNeighbors.map(({ point, distance }) => (
                         <button
@@ -3322,31 +4039,273 @@ function PitcherDnaPanel({
                           <div style={{ fontSize: '0.85rem', fontWeight: 700 }}>
                             {viewBy === 'Team' ? point.pitcher : formatNameFirstLast(point.pitcher)}
                           </div>
-                          <div className="portal-muted-text" style={{ fontSize: '0.75rem', fontWeight: 400, display: 'flex', alignItems: 'center', gap: 5 }}>
-                            {viewBy === 'Player' && resolveTeamLogo(point.teamCode) ? (
+                          <div
+                            className="portal-muted-text"
+                            style={{ fontSize: '0.75rem', fontWeight: 400, display: 'flex', alignItems: 'center', gap: 5 }}
+                          >
+                            {viewBy !== 'Team' && resolveTeamLogo(point.teamCode) ? (
                               // eslint-disable-next-line @next/next/no-img-element
-                              <img src={resolveTeamLogo(point.teamCode)} alt="" width={14} height={14} style={{ objectFit: 'contain', flexShrink: 0 }} />
+                              <img
+                                src={resolveTeamLogo(point.teamCode)}
+                                alt=""
+                                width={14}
+                                height={14}
+                                style={{ objectFit: 'contain', flexShrink: 0 }}
+                              />
                             ) : null}
-                            <span>{viewBy === 'Player' ? point.teamLabel : `distance ${distance.toFixed(2)}`}</span>
+                            <span>
+                              {viewBy === 'Team'
+                                ? `distance ${distance.toFixed(2)}`
+                                : viewBy === 'Arsenal'
+                                ? `${point.teamLabel} · ${(point.repertoire ?? []).filter((pitchType) =>
+                                    (highlightedPoint.repertoire ?? []).includes(pitchType)
+                                  ).length} shared pitch types`
+                                : point.teamLabel}
+                            </span>
                           </div>
                         </button>
                       ))}
                     </div>
+                  ) : (
+                    <p className="portal-muted-text" style={{ fontSize: '0.8rem' }}>No similar matches are available.</p>
+                  )}
+                  {viewBy === 'Arsenal' && nearestNeighbors.length ? (
+                    <button
+                      type="button"
+                      className="portal-arsenal-compare-trigger"
+                      onClick={() => setShowArsenalComparison(true)}
+                    >
+                      <span>
+                        <small>FULL ARSENAL VIEW</small>
+                        Compare Movement
+                      </span>
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M5 7h11m0 0-3-3m3 3-3 3M19 17H8m0 0 3-3m-3 3 3 3" />
+                      </svg>
+                    </button>
+                  ) : null}
+                </>
+              ) : (
+                <p className="portal-muted-text" style={{ fontSize: '0.8rem', marginTop: 0 }}>
+                  {viewBy === 'Team'
+                    ? 'Select a team on the graph to see its closest matches.'
+                    : 'Select a pitcher on the graph to see his closest matches.'}
+                </p>
+              )}
+            </div>
+
+            <div style={{ borderTop: '1px solid rgba(148,163,184,0.2)', paddingTop: 14 }}>
+              <h4 style={{ marginTop: 0 }}>{viewBy === 'Arsenal' ? 'Top Arsenal Drivers' : 'Metric Loadings'}</h4>
+              <p className="portal-muted-text" style={{ fontSize: '0.8rem' }}>
+                {viewBy === 'Arsenal'
+                  ? 'The pitch-specific traits contributing most to this two-dimensional arsenal view.'
+                  : 'How much each metric contributes to PC1 / PC2. The 2 lightest arrows on the chart explain this view the least.'}
+              </p>
+              <div style={{ display: 'grid', gap: 6, fontSize: '0.85rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 60px', fontWeight: 700 }}>
+                  <span>Metric</span>
+                  <span>PC1</span>
+                  <span>PC2</span>
+                </div>
+                {sidebarLoadings.map((entry) => (
+                  <div key={entry.key} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 60px' }}>
+                    <span>{entry.label}</span>
+                    <span>{entry.pc1.toFixed(2)}</span>
+                    <span>{entry.pc2.toFixed(2)}</span>
                   </div>
-                ) : null}
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  style={{ marginTop: 10, width: '100%' }}
-                  onClick={() => handlePointClick(highlightedPoint)}
-                >
-                  {viewBy === 'Team' ? 'Filter to This Team' : 'View Summary'}
-                </button>
+                ))}
               </div>
-            ) : null}
+              {highlightedPoint ? (
+                <div style={{ marginTop: 14 }}>
+                  <h4 style={{ marginBottom: 0 }}>
+                    {viewBy === 'Team' ? highlightedPoint.pitcher : formatNameFirstLast(highlightedPoint.pitcher)}
+                  </h4>
+                  {viewBy !== 'Team' ? (
+                    <p className="portal-muted-text" style={{ fontSize: '0.8rem', marginTop: 0 }}>({highlightedPoint.teamLabel})</p>
+                  ) : null}
+                  {viewBy === 'Arsenal' && highlightedArsenalDrivers.length ? (
+                    <p className="portal-muted-text" style={{ fontSize: '0.8rem', marginTop: 0 }}>
+                      Biggest driver: <strong>{highlightedArsenalDrivers[0].label}</strong>
+                      {highlightedArsenalDrivers[1] ? <> (then {highlightedArsenalDrivers[1].label})</> : null}
+                      {' '}— ranked by how far each pitch-specific trait is from the cohort average.
+                    </p>
+                  ) : highlightedPitcherDrivers.length ? (
+                    <p className="portal-muted-text" style={{ fontSize: '0.8rem', marginTop: 0 }}>
+                      Biggest driver: <strong>{DNA_METRIC_LABELS[highlightedPitcherDrivers[0].col]}</strong>
+                      {highlightedPitcherDrivers[1] ? <> (then {DNA_METRIC_LABELS[highlightedPitcherDrivers[1].col]})</> : null}
+                      {' '}— ranked by how far each raw value is from the cohort average, in standard deviations.
+                      {isSinglePitchTypeScope ? ' For HB/Rel. Side, a positive std. dev. always means more break for this pitch type.' : ''}
+                    </p>
+                  ) : null}
+                  <div style={{ display: 'grid', gap: 3, fontSize: '0.82rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 70px', fontWeight: 700 }}>
+                      <span>Metric</span>
+                      <span style={{ textAlign: 'right' }}>Value</span>
+                      <span style={{ textAlign: 'right' }}>Std. Dev.</span>
+                    </div>
+                    {viewBy === 'Arsenal'
+                      ? highlightedArsenalDrivers.map(({ key, label, value, zScore }) => (
+                          <div key={key} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 70px' }}>
+                            <span className="portal-muted-text">{label}</span>
+                            <span style={{ textAlign: 'right' }}>{Number.isFinite(value) ? Number(value).toFixed(1) : '-'}</span>
+                            <span style={{ textAlign: 'right' }}>{zScore >= 0 ? '+' : ''}{zScore.toFixed(2)}</span>
+                          </div>
+                        ))
+                      : highlightedPitcherDrivers.map(({ col, zScore }) => {
+                          const value = highlightedPoint.metrics[col];
+                          return (
+                            <div key={col} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 70px' }}>
+                              <span className="portal-muted-text">{DNA_METRIC_LABELS[col]}</span>
+                              <span style={{ textAlign: 'right' }}>{value !== undefined ? Number(value).toFixed(1) : '-'}</span>
+                              <span style={{ textAlign: 'right' }}>{zScore >= 0 ? '+' : ''}{zScore.toFixed(2)}</span>
+                            </div>
+                          );
+                        })}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ marginTop: 10, width: '100%' }}
+                    onClick={() => handlePointClick(highlightedPoint)}
+                  >
+                    {viewBy === 'Team' ? 'Filter to This Team' : 'View Summary'}
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </article>
         </div>
       ) : null}
+      {showArsenalComparison && arsenalComparison.length && typeof document !== 'undefined'
+        ? createPortal(
+          <div
+          className="portal-arsenal-compare-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setShowArsenalComparison(false);
+          }}
+        >
+          <section
+            ref={arsenalComparisonRef}
+            className="portal-arsenal-compare-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="arsenal-comparison-title"
+            data-arsenal-comparison-export
+          >
+            <header className="portal-arsenal-compare-header">
+              <div>
+                <h2 id="arsenal-comparison-title">Arsenal DNA Comparison</h2>
+              </div>
+              <div className="portal-arsenal-compare-header-branding">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  className="portal-arsenal-brand-lockup"
+                  src="/pearl-lockup-transparent.png"
+                  alt="Pearl Player Development"
+                />
+                <div className="portal-arsenal-compare-actions" data-html2canvas-ignore="true">
+                  <button
+                    type="button"
+                    className="portal-arsenal-download-button"
+                    onClick={downloadArsenalComparisonPng}
+                    disabled={isExportingArsenalComparison}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14" />
+                    </svg>
+                    {isExportingArsenalComparison ? 'Building PNG…' : 'Download PNG'}
+                  </button>
+                  <button
+                    type="button"
+                    className="portal-arsenal-compare-close"
+                    onClick={() => setShowArsenalComparison(false)}
+                    aria-label="Close movement comparison"
+                  >
+                    <span aria-hidden="true">×</span>
+                  </button>
+                </div>
+              </div>
+            </header>
+            <div className="portal-arsenal-compare-grid">
+              {arsenalComparison.map(({ point, rank, rows: comparisonRows }) => {
+                const teamLogo = resolveTeamLogo(point.teamCode);
+                return (
+                  <article
+                    key={point.key}
+                    className={`portal-arsenal-compare-card${rank === 0 ? ' portal-arsenal-compare-card--selected' : ''}`}
+                  >
+                    <div className="portal-arsenal-compare-card-heading">
+                      <span className="portal-arsenal-rank">{rank === 0 ? 'SELECTED' : `#${rank} MATCH`}</span>
+                      <div className="portal-arsenal-pitcher-identity">
+                        {teamLogo ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={teamLogo} alt="" width={38} height={38} />
+                        ) : (
+                          <span className="portal-arsenal-team-monogram">{point.teamCode.slice(0, 3)}</span>
+                        )}
+                        <div>
+                          <h3>{formatNameFirstLast(point.pitcher)}</h3>
+                          <p>{point.teamLabel}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="portal-arsenal-movement-frame">
+                      <ArsenalMovementPlot rows={comparisonRows} bounds={arsenalMovementBounds} />
+                    </div>
+                    <div className="portal-arsenal-table-wrap">
+                      <table className="portal-arsenal-comparison-table">
+                        <colgroup>
+                          <col className="portal-arsenal-pitch-column" />
+                          {Array.from({ length: 8 }, (_, index) => (
+                            <col key={index} />
+                          ))}
+                        </colgroup>
+                        <thead>
+                          <tr>
+                            <th>Pitch</th>
+                            <th>Usage</th>
+                            <th>Velo</th>
+                            <th>IVB</th>
+                            <th>HB</th>
+                            <th>Spin</th>
+                            <th>Height</th>
+                            <th>Side</th>
+                            <th>Ext</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {comparisonRows.map((row) => (
+                            <tr key={row.pitchType}>
+                              <th scope="row">
+                                <span
+                                  className="portal-arsenal-pitch-swatch"
+                                  style={{ background: ARSENAL_PITCH_COLORS[row.pitchType] }}
+                                />
+                                {row.pitchType}
+                              </th>
+                              <td>{row.usage.toFixed(1)}%</td>
+                              <td>{row.metrics.Velo?.toFixed(1) ?? '—'}</td>
+                              <td>{row.metrics.IVB?.toFixed(1) ?? '—'}</td>
+                              <td>{row.metrics.HB?.toFixed(1) ?? '—'}</td>
+                              <td>{row.metrics.Spin?.toFixed(0) ?? '—'}</td>
+                              <td>{row.metrics.Height?.toFixed(1) ?? '—'}</td>
+                              <td>{row.metrics.Side?.toFixed(1) ?? '—'}</td>
+                              <td>{row.metrics.Ext?.toFixed(1) ?? '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+          </div>,
+          document.body
+        )
+        : null}
     </div>
   );
 }

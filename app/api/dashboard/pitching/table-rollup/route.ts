@@ -358,8 +358,9 @@ export async function GET(request: Request) {
 
   const splitBy = String(url.searchParams.get('split_by') ?? '').trim();
   const splitByNorm = splitBy || 'Pitch Types';
+  const isPitcherArsenalSplit = splitByNorm === 'Pitcher Arsenal';
   const isTeamSplit = splitByNorm === 'Team' || splitByNorm === 'Pitcher Team';
-  if (!['Pitch Types', 'Pitcher', 'Team', 'Pitcher Team', 'Pitcher Hand', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(splitByNorm)) {
+  if (!['Pitch Types', 'Pitcher', 'Pitcher Arsenal', 'Team', 'Pitcher Team', 'Pitcher Hand', 'Batter Hand', 'Count', 'After Count', 'Inning'].includes(splitByNorm)) {
     return NextResponse.json({ table_rows: [], table_columns: [] });
   }
 
@@ -560,13 +561,13 @@ export async function GET(request: Request) {
   let result: { rows: AggRow[] };
   const useProPitcherEventRollup =
     schoolCode === 'PRO' &&
-    (splitByNorm === 'Pitcher' || isTeamSplit) &&
+    (splitByNorm === 'Pitcher' || isPitcherArsenalSplit || isTeamSplit) &&
     !batterSide &&
     !teamCode &&
     !pitcherNorms.length;
   const useLeaguePitcherEventRollup =
     schoolCode !== 'PRO' &&
-    (splitByNorm === 'Pitcher' || isTeamSplit) &&
+    (splitByNorm === 'Pitcher' || isPitcherArsenalSplit || isTeamSplit) &&
     !batterSide &&
     !teamCode &&
     !pitcherNorms.length;
@@ -665,7 +666,7 @@ export async function GET(request: Request) {
         SUM(ev_n)::int AS ev_n
       FROM public.pro_pitch_events_daily_rollup
       WHERE ${eventWhere.join(' AND ')}
-      GROUP BY ${splitGroupExpr}
+      GROUP BY ${splitGroupExpr}${isPitcherArsenalSplit ? ', pitch_type' : ''}
       `,
       eventValues
     );
@@ -778,7 +779,7 @@ export async function GET(request: Request) {
         SUM(ev_n)::int AS ev_n
       FROM public.pitch_events_daily_rollup_league
       WHERE ${eventWhere.join(' AND ')}
-      GROUP BY ${splitGroupExpr}
+      GROUP BY ${splitGroupExpr}${isPitcherArsenalSplit ? ', pitch_type' : ''}
       `,
       eventValues
     );
@@ -787,7 +788,7 @@ export async function GET(request: Request) {
       `
       SELECT
         ${
-          splitByNorm === 'Pitcher'
+          splitByNorm === 'Pitcher' || isPitcherArsenalSplit
               ? "CASE WHEN pitcher_norm <> '' THEN pitcher_norm ELSE 'Unknown' END"
               : isTeamSplit
               ? "CASE WHEN pitcher_team_code <> '' THEN pitcher_team_code ELSE 'Unknown' END"
@@ -882,7 +883,7 @@ export async function GET(request: Request) {
       `
       SELECT
         ${
-          splitByNorm === 'Pitcher'
+          splitByNorm === 'Pitcher' || isPitcherArsenalSplit
               ? "CASE WHEN pitcher_norm <> '' THEN pitcher_norm ELSE 'Unknown' END"
               : isTeamSplit
               ? "CASE WHEN pitcher_team_code <> '' THEN pitcher_team_code ELSE 'Unknown' END"
@@ -974,14 +975,14 @@ export async function GET(request: Request) {
 
   const filtered = result.rows.filter((row) => {
     if (normalizePitchType(String(row.pitch_type ?? '')) === 'Undefined') return false;
-    if (splitByNorm === 'Pitcher' || isTeamSplit || splitByNorm === 'Pitcher Hand' || splitByNorm === 'Batter Hand' || splitByNorm === 'Count' || splitByNorm === 'After Count' || splitByNorm === 'Inning') return true;
+    if (splitByNorm === 'Pitcher' || isPitcherArsenalSplit || isTeamSplit || splitByNorm === 'Pitcher Hand' || splitByNorm === 'Batter Hand' || splitByNorm === 'Count' || splitByNorm === 'After Count' || splitByNorm === 'Inning') return true;
     if (!pitchTypeSet.size) return true;
     return pitchTypeSet.has(normalizePitchType(String(row.pitch_type ?? '')).toLowerCase());
   });
   if (!filtered.length) return NextResponse.json({ table_rows: [], table_columns: [] });
 
   const splitColumn =
-    splitByNorm === 'Pitcher'
+    splitByNorm === 'Pitcher' || isPitcherArsenalSplit
       ? 'Pitcher'
       : splitByNorm === 'Team'
       ? 'Team'
@@ -998,11 +999,13 @@ export async function GET(request: Request) {
         : splitByNorm === 'Inning'
           ? 'Inning'
           : 'Pitch';
-  const tableColumns = [splitColumn, ...(columns.length ? columns : defaultColumns)];
+  const metricColumns = columns.length ? columns : defaultColumns;
+  const tableColumns = [splitColumn, ...(isPitcherArsenalSplit ? ['Pitch'] : []), ...metricColumns];
   const totalPitches = filtered.reduce((sum, row) => sum + Number(row.pitch_n || 0), 0);
   const rows = filtered.map((row) => {
     const out: Record<string, string | number | null> = { [splitColumn]: row.split_value || (row.pitch_type || 'Unknown') };
-    for (const metric of tableColumns.slice(1)) {
+    if (isPitcherArsenalSplit) out.Pitch = normalizePitchType(String(row.pitch_type ?? ''));
+    for (const metric of metricColumns) {
       if (metric === 'Usage' || metric === 'Overall') {
         out[metric] = totalPitches > 0 ? Number((((Number(row.pitch_n || 0) / totalPitches) * 100)).toFixed(1)) : '-';
       } else {
@@ -1102,7 +1105,7 @@ export async function GET(request: Request) {
       allRow[metric] = toCell(metric, allAgg);
     }
   }
-  rows.push(allRow);
+  if (!isPitcherArsenalSplit) rows.push(allRow);
 
   if (schoolCode === 'PRO' && plusMetrics.length) {
     try {

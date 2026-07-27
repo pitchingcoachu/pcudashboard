@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../../../lib/portal-session';
-import { canUseProgrammingData } from '../../../../../lib/programming-scope';
+import { canUseProgrammingData, resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
+import { resolveSchoolBrand } from '../../../../../lib/school-brand';
 import { getPlayerForUser } from '../../../../../lib/training-db';
 import BullpenEntry from './bullpen-entry';
 
@@ -13,6 +14,7 @@ type BullpensPageProps = {
 export default async function PlayerBullpensPage({ searchParams }: BullpensPageProps) {
   const session = await requirePortalSession();
   if (!canUseProgrammingData(session)) redirect('/portal/player/program');
+  const schoolBrand = resolveSchoolBrand(resolveProgrammingSchoolCode(session));
   const canPreview = session.role === 'admin' || session.role === 'coach';
   const params = await searchParams;
   const previewPlayerIdRaw = typeof params.previewPlayerId === 'string' ? params.previewPlayerId : '';
@@ -72,6 +74,8 @@ export default async function PlayerBullpensPage({ searchParams }: BullpensPageP
           state={bullpenState}
           playerId={resolvedPlayerId}
           previewQuery={playerIdQuery}
+          schoolLogoSrc={schoolBrand.logoSrc}
+          schoolLogoAlt={schoolBrand.logoAlt}
         />
       </section>
     </div>

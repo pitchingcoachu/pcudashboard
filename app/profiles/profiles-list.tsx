@@ -32,7 +32,11 @@ export default function ProfilesList({ players }: ProfilesListProps) {
     setIsDownloadingPdf(true);
     try {
       const { jsPDF } = await import('jspdf');
-      const logoDataUrl = await fetch('/pearl-clam-transparent.png')
+      const isLightMode = document.body.classList.contains('theme-light');
+      const pearlLogoSrc = isLightMode
+        ? '/pearl-lockup-stacked-black-transparent.png'
+        : '/pearl-clam-transparent.png';
+      const logoDataUrl = await fetch(pearlLogoSrc)
         .then((response) => response.blob())
         .then(
           (blob) =>
@@ -49,7 +53,6 @@ export default function ProfilesList({ players }: ProfilesListProps) {
       const pageHeight = pdf.internal.pageSize.getHeight();
       const margin = 36;
       const tableWidth = pageWidth - margin * 2;
-      const isLightMode = document.body.classList.contains('theme-light');
       const colors = isLightMode
         ? {
             page: [255, 255, 255] as const,
