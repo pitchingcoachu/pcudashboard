@@ -15,6 +15,9 @@ const RESPONSE_CACHE_HEADERS = {
 const SLOW_ROUTE_MS = 5000;
 const TAGGED_PITCH_TYPE_TOKEN_SQL = "regexp_replace(lower(COALESCE(TRIM(pe.taggedpitchtype), '')), '[^a-z0-9]', '', 'g')";
 const PITCHER_NAME_NORM_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.pitcher), ''), '')), '[^a-z0-9]', '', 'g')";
+const VELO_NUMBER_SQL = "(regexp_match(COALESCE(pe.relspeed, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision";
+const IVB_NUMBER_SQL = "(regexp_match(COALESCE(pe.inducedvertbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision";
+const HB_NUMBER_SQL = "(regexp_match(COALESCE(pe.horzbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision";
 const PITCH_TYPE_SQL = `
 CASE
   WHEN ${TAGGED_PITCH_TYPE_TOKEN_SQL} IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null') THEN 'Undefined'
@@ -446,6 +449,12 @@ async function maybeReturnRawPitchingChartPoints(params: {
   pitchTypes: string;
   chartPointsLimit: string;
   level?: string;
+  veloMin?: string;
+  veloMax?: string;
+  ivbMin?: string;
+  ivbMax?: string;
+  hbMin?: string;
+  hbMax?: string;
 }): Promise<NextResponse | null> {
   const {
     schoolCode,
@@ -459,11 +468,15 @@ async function maybeReturnRawPitchingChartPoints(params: {
     pitchTypes,
     chartPointsLimit,
     level = '',
+    veloMin = '',
+    veloMax = '',
+    ivbMin = '',
+    ivbMax = '',
+    hbMin = '',
+    hbMax = '',
   } = params;
   const upperSchool = String(schoolCode ?? '').trim().toUpperCase();
   if (!upperSchool || upperSchool === 'PRO') return null;
-  // LEAGUE is allowed only when a pitcher is specified (broad scans are too slow).
-  if (upperSchool === 'LEAGUE' && !String(pitcher ?? '').trim()) return null;
   if (!isDatabaseConfigured()) return null;
 
   const pitcherNorms = Array.from(
@@ -473,6 +486,24 @@ async function maybeReturnRawPitchingChartPoints(params: {
     ].filter(Boolean))
   );
   const selectedPitchTypes = Array.from(new Set(parseCsv(pitchTypes).map(normalizePitchType)));
+  if (upperSchool === 'LEAGUE' && !String(pitcher ?? '').trim()) {
+    const start = parseIsoDate(startDate);
+    const end = parseIsoDate(endDate);
+    const daySpan = start && end ? Math.floor((end.getTime() - start.getTime()) / 86400000) + 1 : 0;
+    const handNorm = String(hand ?? '').trim().toLowerCase();
+    const batterSideNorm = String(batterSide ?? '').trim().toLowerCase();
+    const hasMetricFilter = [veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax].some(hasValue);
+    const hasScopeFilter =
+      selectedPitchTypes.length > 0 &&
+      (handNorm === 'left' ||
+        handNorm === 'right' ||
+        batterSideNorm === 'left' ||
+        batterSideNorm === 'right' ||
+        hasMetricFilter);
+    // Keep broad League scans on the rollup/upstream paths. The direct raw path
+    // is reserved for tightly scoped chart requests that can use the date index.
+    if (daySpan < 1 || daySpan > 7 || !hasScopeFilter) return null;
+  }
   const limitRaw = Number(chartPointsLimit || '0');
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.max(100, Math.min(Math.trunc(limitRaw), 6000)) : 600;
 
@@ -524,6 +555,17 @@ async function maybeReturnRawPitchingChartPoints(params: {
   if (selectedPitchTypes.length) {
     add(`${PITCH_TYPE_SQL} = ANY(?::text[])`, selectedPitchTypes);
   }
+  const addNumericFilter = (rawValue: string, expression: string, operator: '>=' | '<=') => {
+    const value = parseSortableNumber(rawValue);
+    if (value === null) return;
+    add(`${expression} ${operator} ?`, value);
+  };
+  addNumericFilter(veloMin, VELO_NUMBER_SQL, '>=');
+  addNumericFilter(veloMax, VELO_NUMBER_SQL, '<=');
+  addNumericFilter(ivbMin, IVB_NUMBER_SQL, '>=');
+  addNumericFilter(ivbMax, IVB_NUMBER_SQL, '<=');
+  addNumericFilter(hbMin, HB_NUMBER_SQL, '>=');
+  addNumericFilter(hbMax, HB_NUMBER_SQL, '<=');
   if (upperSchool !== 'LEAGUE') {
     const team = String(teamType ?? '').trim();
     if (team && team.toLowerCase() !== 'all') {
@@ -572,11 +614,11 @@ async function maybeReturnRawPitchingChartPoints(params: {
           (regexp_match(COALESCE(pe.relside, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS release_side,
           (regexp_match(COALESCE(pe.relheight, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS release_height,
           (regexp_match(COALESCE(pe.extension, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS extension,
-          (regexp_match(COALESCE(pe.horzbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS hb,
-          (regexp_match(COALESCE(pe.inducedvertbreak, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS ivb,
+          ${HB_NUMBER_SQL} AS hb,
+          ${IVB_NUMBER_SQL} AS ivb,
           (regexp_match(COALESCE(pe.platelocside, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS plate_side,
           (regexp_match(COALESCE(pe.platelocheight, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS plate_height,
-          (regexp_match(COALESCE(pe.relspeed, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS velo,
+          ${VELO_NUMBER_SQL} AS velo,
           (regexp_match(COALESCE(pe.spinrate, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS spin,
           COALESCE(NULLIF(TRIM(pe.releasetilt), ''), '') AS release_tilt,
           COALESCE(NULLIF(TRIM(pe.breaktilt), ''), '') AS break_tilt,
@@ -597,7 +639,6 @@ async function maybeReturnRawPitchingChartPoints(params: {
       `,
       [...values, limit]
     );
-    if (!result.rows.length) return null;
     const chartPoints = result.rows.map((row) => ({ ...row, rel_speed: row.velo }));
     return NextResponse.json(
       {
@@ -1013,14 +1054,37 @@ export async function GET(request: Request) {
     });
     if (directHeatmapRollup) return directHeatmapRollup;
 
-  // For LEAGUE chart_only requests with a specific pitcher, serve raw pitch points directly
-  // from the DB (fast index path) instead of going through the Python API which times out
-  // on 5+ month windows. heatmap_points come from the bins table for zone heatmap charts.
+  const hasUnsupportedLeagueDirectChartFilters =
+    hasValue(oppHitter) ||
+    hasValue(withVideo) ||
+    hasValue(breakLines) ||
+    hasValue(stuffLevel) ||
+    hasValue(stuffBase) ||
+    hasValue(venue) ||
+    hasValue(effectiveBallTypes) ||
+    hasValue(inZone) ||
+    hasValue(qpLocations) ||
+    hasValue(zoneLocations) ||
+    hasValue(pitchResults) ||
+    hasValue(countFilter) ||
+    hasValue(afterCountFilter) ||
+    hasValue(pcMin) ||
+    hasValue(pcMax) ||
+    hasValue(bfMin) ||
+    hasValue(bfMax) ||
+    hasValue(ipMin) ||
+    hasValue(ipMax) ||
+    (hasValue(teamType) && teamType.toLowerCase() !== 'all');
+  const hasDirectMetricFilters = [veloMin, veloMax, ivbMin, ivbMax, hbMin, hbMax].some(hasValue);
+
+  // Serve supported LEAGUE chart_only requests directly from Postgres. Broad
+  // no-pitcher scans remain guarded inside maybeReturnRawPitchingChartPoints;
+  // only short, narrowed windows are eligible for that path.
   if (
     isTruthy(chartOnly) &&
     isTruthy(includeChartPoints) &&
     String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE' &&
-    String(scopedPitcher || pitcher).trim()
+    !hasUnsupportedLeagueDirectChartFilters
   ) {
     const leagueChartResponse = await maybeReturnRawPitchingChartPoints({
       schoolCode,
@@ -1034,41 +1098,49 @@ export async function GET(request: Request) {
       pitchTypes,
       chartPointsLimit,
       level,
+      veloMin,
+      veloMax,
+      ivbMin,
+      ivbMax,
+      hbMin,
+      hbMax,
     });
     if (leagueChartResponse) {
       const rawPayload = (await leagueChartResponse.json().catch(() => ({}))) as Record<string, unknown>;
-      const withHeatmap = await maybeAttachPitchingHeatmapRollup({
-        request,
-        payload: rawPayload,
-        schoolCode,
-        startDate,
-        endDate,
-        sessionType,
-        hand,
-        batterSide,
-        pitcher: scopedPitcher || pitcher,
-        teamType,
-        pitchTypes,
-        includeChartPoints: '1',
-        chartOnly: '1',
-        splitBy,
-        forceRaw,
-        inZone: '',
-        qpLocations: '',
-        zoneLocations: '',
-        pitchResults: '',
-        countFilter: '',
-        afterCountFilter: '',
-        veloMin: '',
-        veloMax: '',
-        ivbMin: '',
-        ivbMax: '',
-        hbMin: '',
-        hbMax: '',
-        pcMin: '',
-        pcMax: '',
-      });
-      return NextResponse.json(withHeatmap, {
+      const payload = hasDirectMetricFilters
+        ? rawPayload
+        : await maybeAttachPitchingHeatmapRollup({
+            request,
+            payload: rawPayload,
+            schoolCode,
+            startDate,
+            endDate,
+            sessionType,
+            hand,
+            batterSide,
+            pitcher: scopedPitcher || pitcher,
+            teamType,
+            pitchTypes,
+            includeChartPoints: '1',
+            chartOnly: '1',
+            splitBy,
+            forceRaw,
+            inZone: '',
+            qpLocations: '',
+            zoneLocations: '',
+            pitchResults: '',
+            countFilter: '',
+            afterCountFilter: '',
+            veloMin: '',
+            veloMax: '',
+            ivbMin: '',
+            ivbMax: '',
+            hbMin: '',
+            hbMax: '',
+            pcMin: '',
+            pcMax: '',
+          });
+      return NextResponse.json(payload, {
         headers: { ...RESPONSE_CACHE_HEADERS, 'x-dashboard-fallback': 'pitching-league-chart-direct' },
       });
     }
@@ -1273,7 +1345,6 @@ export async function GET(request: Request) {
   const shouldForceLeaguePitchTypesRollup =
     isLeague &&
     !shouldScopePlayer &&
-    !percentileBaseline &&
     broadScope &&
     daySpan >= 14 &&
     splitBy === 'Pitch Types' &&
