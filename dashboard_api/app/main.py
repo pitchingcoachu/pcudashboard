@@ -1810,6 +1810,49 @@ def _movement_to_break_tilt_clock(ivb_value: Any, hb_value: Any) -> Optional[str
     return f"{hour}:{mins:02d}"
 
 
+PRO_APPROACH_Y0_FT = 50.0
+PRO_APPROACH_PLATE_Y_FT = 17.0 / 12.0
+
+
+def _pro_approach_angle_sql(axis: str, row_alias: str = "pe") -> str:
+    if axis == "vertical":
+        component_velocity = "vz0"
+        component_acceleration = "az"
+    elif axis == "horizontal":
+        component_velocity = "vx0"
+        component_acceleration = "ax"
+    else:
+        raise ValueError(f"Unsupported approach-angle axis: {axis}")
+
+    y_delta = f"({PRO_APPROACH_Y0_FT} - {PRO_APPROACH_PLATE_Y_FT})"
+    discriminant = (
+        f"((POWER({row_alias}.vy0, 2))"
+        f" - (2.0 * {row_alias}.ay * {y_delta}))"
+    )
+    vy_final = f"(-SQRT(GREATEST(0.0, {discriminant})))"
+    time_to_plate = (
+        f"(({vy_final} - {row_alias}.vy0)"
+        f" / NULLIF({row_alias}.ay, 0.0))"
+    )
+    component_final = (
+        f"({row_alias}.{component_velocity}"
+        f" + ({row_alias}.{component_acceleration} * {time_to_plate}))"
+    )
+    return f"""
+      CASE
+        WHEN {row_alias}.vy0 IS NOT NULL
+          AND {row_alias}.ay IS NOT NULL
+          AND ABS({row_alias}.ay) >= 1e-9
+          AND {discriminant} >= 0.0
+          AND ABS({vy_final}) >= 1e-9
+          AND {row_alias}.{component_velocity} IS NOT NULL
+          AND {row_alias}.{component_acceleration} IS NOT NULL
+        THEN -DEGREES(ATAN({component_final} / {vy_final}))
+        ELSE NULL
+      END
+    """.strip()
+
+
 def _infer_pro_vaa_haa_from_kinematics(row: Dict[str, Any]) -> tuple[Optional[float], Optional[float]]:
     vy0 = row.get("vy0")
     ay = row.get("ay")
@@ -1819,8 +1862,8 @@ def _infer_pro_vaa_haa_from_kinematics(row: Dict[str, Any]) -> tuple[Optional[fl
     ay_f = float(ay)
     if abs(ay_f) < 1e-9:
         return None, None
-    y0 = 50.0
-    yf = 17.0 / 12.0
+    y0 = PRO_APPROACH_Y0_FT
+    yf = PRO_APPROACH_PLATE_Y_FT
     disc = (vy0_f * vy0_f) - (2.0 * ay_f * (y0 - yf))
     if disc < 0:
         return None, None
@@ -10325,7 +10368,13 @@ def _try_pitching_overview_daily_rollup(
     )
 
 
-def _refresh_pro_daily_rollup(force: bool = False, raise_on_failure: bool = False) -> None:
+def _refresh_pro_daily_rollup(
+    force: bool = False,
+    raise_on_failure: bool = False,
+    refresh_start_override: Optional[date] = None,
+    refresh_end_override: Optional[date] = None,
+    refresh_dependents: bool = True,
+) -> None:
     global _PRO_DAILY_ROLLUP_LAST_AT
     now = time.monotonic()
     if (not force) and ((now - _PRO_DAILY_ROLLUP_LAST_AT) < _PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS):
@@ -10428,7 +10477,9 @@ def _refresh_pro_daily_rollup(force: bool = False, raise_on_failure: bool = Fals
                 """
             )
             max_rollup_split = (cur.fetchone() or {}).get("max_rollup_split_date")
-            if force:
+            if refresh_start_override is not None:
+                refresh_start = max(min_date, refresh_start_override)
+            elif force:
                 refresh_start = min_date
             elif not max_rollup_split:
                 refresh_start = min_date
@@ -10436,30 +10487,37 @@ def _refresh_pro_daily_rollup(force: bool = False, raise_on_failure: bool = Fals
                 refresh_start = max(min_date, max_rollup - timedelta(days=7))
             else:
                 refresh_start = min_date
+            if refresh_end_override is not None:
+                max_date = min(max_date, refresh_end_override)
+            if refresh_start > max_date:
+                return
 
             cur.execute(
                 """
                 DELETE FROM public.pro_pitch_events_daily_rollup
                 WHERE school_code = 'PRO'
                   AND session_date >= %(refresh_start)s::date
+                  AND session_date <= %(max_date)s::date
                 """,
-                {"refresh_start": refresh_start},
+                {"refresh_start": refresh_start, "max_date": max_date},
             )
             cur.execute(
                 """
                 DELETE FROM public.pro_pitch_events_daily_rollup_split
                 WHERE school_code = 'PRO'
                   AND session_date >= %(refresh_start)s::date
+                  AND session_date <= %(max_date)s::date
                 """,
-                {"refresh_start": refresh_start},
+                {"refresh_start": refresh_start, "max_date": max_date},
             )
             cur.execute(
                 """
                 DELETE FROM public.pro_pitch_events_game_rollup
                 WHERE school_code = 'PRO'
                   AND session_date >= %(refresh_start)s::date
+                  AND session_date <= %(max_date)s::date
                 """,
-                {"refresh_start": refresh_start},
+                {"refresh_start": refresh_start, "max_date": max_date},
             )
             cur.execute(
                 """
@@ -10504,8 +10562,14 @@ def _refresh_pro_daily_rollup(force: bool = False, raise_on_failure: bool = Fals
                     NULLIF((regexp_match(COALESCE(pe.relside::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS rel_side,
                     NULLIF((regexp_match(COALESCE(pe.extension::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS ext_value,
                     NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS spin_eff,
-                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'vertapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS vaa,
-                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'horzapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS haa,
+                    COALESCE(
+                      NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'vertapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision,
+                      """ + _pro_approach_angle_sql("vertical", "pe") + """
+                    ) AS vaa,
+                    COALESCE(
+                      NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'horzapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision,
+                      """ + _pro_approach_angle_sql("horizontal", "pe") + """
+                    ) AS haa,
                     COALESCE(NULLIF(TRIM(pe.releasetilt), ''), '') AS release_tilt,
                     CASE
                       WHEN COALESCE(NULLIF(TRIM(pe.releasetilt), ''), '') ~ '^[0-9]{1,2}\\s*:\\s*[0-9]{1,2}$'
@@ -10894,8 +10958,14 @@ def _refresh_pro_daily_rollup(force: bool = False, raise_on_failure: bool = Fals
                     NULLIF((regexp_match(COALESCE(pe.relside::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS rel_side,
                     NULLIF((regexp_match(COALESCE(pe.extension::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS ext_value,
                     NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS spin_eff,
-                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'vertapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS vaa,
-                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'horzapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS haa,
+                    COALESCE(
+                      NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'vertapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision,
+                      """ + _pro_approach_angle_sql("vertical", "pe") + """
+                    ) AS vaa,
+                    COALESCE(
+                      NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'horzapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision,
+                      """ + _pro_approach_angle_sql("horizontal", "pe") + """
+                    ) AS haa,
                     COALESCE(NULLIF(TRIM(pe.releasetilt), ''), '') AS release_tilt,
                     CASE
                       WHEN COALESCE(NULLIF(TRIM(pe.releasetilt), ''), '') ~ '^[0-9]{1,2}\\s*:\\s*[0-9]{1,2}$'
@@ -11365,16 +11435,18 @@ def _refresh_pro_daily_rollup(force: bool = False, raise_on_failure: bool = Fals
                 WHERE school_code = 'PRO'
                   AND split_group = 'Game'
                   AND session_date >= %(refresh_start)s::date
+                  AND session_date <= %(max_date)s::date
                 """,
-                {"refresh_start": refresh_start},
+                {"refresh_start": refresh_start, "max_date": max_date},
             )
             cur.execute(
                 """
                 DELETE FROM public.pro_pitcher_leaderboard_daily_rollup
                 WHERE school_code = 'PRO'
                   AND session_date >= %(refresh_start)s::date
+                  AND session_date <= %(max_date)s::date
                 """,
-                {"refresh_start": refresh_start},
+                {"refresh_start": refresh_start, "max_date": max_date},
             )
             cur.execute(
                 """
@@ -11425,19 +11497,21 @@ def _refresh_pro_daily_rollup(force: bool = False, raise_on_failure: bool = Fals
                 FROM public.pro_pitch_events_daily_rollup
                 WHERE school_code = 'PRO'
                   AND session_date >= %(refresh_start)s::date
+                  AND session_date <= %(max_date)s::date
                 GROUP BY
                   school_code, session_date, level_bucket, pitcher_norm,
                   pitcher_team_code, pitcherthrows_norm, batterside_norm
                 """,
-                {"refresh_start": refresh_start},
+                {"refresh_start": refresh_start, "max_date": max_date},
             )
         _PRO_DAILY_ROLLUP_LAST_AT = now
-        _overview_cache_invalidate_school("PRO")
-        _filters_cache_invalidate_school("PRO")
-        for lvl in ("All", "AAA", "MLB"):
-            _kick_filters_snapshot_refresh_background(school_code="PRO", domain="pitching", level_bucket=lvl)
-            _kick_filters_snapshot_refresh_background(school_code="PRO", domain="hitting", level_bucket=lvl)
-            _kick_filters_snapshot_refresh_background(school_code="PRO", domain="catching", level_bucket=lvl)
+        if refresh_dependents:
+            _overview_cache_invalidate_school("PRO")
+            _filters_cache_invalidate_school("PRO")
+            for lvl in ("All", "AAA", "MLB"):
+                _kick_filters_snapshot_refresh_background(school_code="PRO", domain="pitching", level_bucket=lvl)
+                _kick_filters_snapshot_refresh_background(school_code="PRO", domain="hitting", level_bucket=lvl)
+                _kick_filters_snapshot_refresh_background(school_code="PRO", domain="catching", level_bucket=lvl)
     except Exception as exc:
         logger.warning("pro rollup refresh failed: %s", exc)
         if raise_on_failure:
@@ -20339,7 +20413,7 @@ def pitching_overview(
             "include_row_pitches": include_row_pitches,
             "include_trend_rows": include_trend_rows,
             "force_raw": force_raw,
-            "metrics_version": "pro-leaderboard-rollup-v1",
+            "metrics_version": "pro-approach-angles-v2",
         },
     )
     use_pro_chart_cache = school_code == "PRO" and chart_only and include_chart_points

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import date, timedelta
 
 
 def _ensure_direct_connection() -> None:
@@ -91,7 +92,42 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Rebuild PRO rollups from the first available PRO pitch date.",
     )
+    parser.add_argument(
+        "--chunk-days",
+        type=int,
+        default=30,
+        help="Number of source-data days per transaction during a forced rebuild (default: 30).",
+    )
     return parser.parse_args()
+
+
+def _pro_date_bounds() -> tuple[date, date]:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+    from dashboard_api.app.config import get_settings
+
+    settings = get_settings()
+    with psycopg.connect(settings.database_url, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT MIN(session_date)::date AS min_date, MAX(session_date)::date AS max_date
+                FROM public.pro_pitch_events
+                WHERE school_code = 'PRO'
+                  AND session_date IS NOT NULL
+                """
+            )
+            row = cur.fetchone() or {}
+    min_date = row.get("min_date")
+    max_date = row.get("max_date")
+    if not isinstance(min_date, date) or not isinstance(max_date, date):
+        raise RuntimeError("No dated PRO pitches are available for rollup refresh.")
+    return min_date, max_date
 
 
 def main() -> int:
@@ -110,7 +146,34 @@ def main() -> int:
         _terminate_advisory_lock_holders(_PRO_ROLLUP_ADVISORY_LOCK_KEY)
 
     try:
-        _refresh_pro_daily_rollup(force=force, raise_on_failure=True)
+        if force:
+            chunk_days = max(1, min(int(args.chunk_days), 90))
+            min_date, max_date = _pro_date_bounds()
+            chunks: list[tuple[date, date]] = []
+            chunk_start = min_date
+            while chunk_start <= max_date:
+                chunk_end = min(max_date, chunk_start + timedelta(days=chunk_days - 1))
+                chunks.append((chunk_start, chunk_end))
+                chunk_start = chunk_end + timedelta(days=1)
+            print(
+                f"[refresh] Rebuilding {min_date} through {max_date} "
+                f"in {len(chunks)} chunk(s) of up to {chunk_days} days.",
+                flush=True,
+            )
+            for index, (chunk_start, chunk_end) in enumerate(chunks, start=1):
+                print(
+                    f"[refresh] Chunk {index}/{len(chunks)}: {chunk_start} through {chunk_end}",
+                    flush=True,
+                )
+                _refresh_pro_daily_rollup(
+                    force=True,
+                    raise_on_failure=True,
+                    refresh_start_override=chunk_start,
+                    refresh_end_override=chunk_end,
+                    refresh_dependents=index == len(chunks),
+                )
+        else:
+            _refresh_pro_daily_rollup(force=False, raise_on_failure=True)
     except Exception as exc:
         print(f"[refresh] ERROR: {exc}", file=sys.stderr)
         return 1
