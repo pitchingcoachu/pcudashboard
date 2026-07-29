@@ -8,7 +8,7 @@ import { canUseProgrammingData, resolveProgrammingOrganizationId } from '../../l
 import { schoolBrandCssVars } from '../../lib/school-brand';
 import { listPlayerProfilesWithPlanGoals } from '../../lib/training-db';
 import DashboardSchoolSelector from '../portal/dashboard/dashboard-school-selector';
-import LogoutButton from '../portal/logout-button';
+import PortalUserMenu from '../portal/user-menu';
 import MobileNavSelect from '../portal/mobile-nav-select';
 import PortalNotificationsBell from '../portal/notifications-bell';
 import PortalThemeToggle from '../portal/theme-toggle';
@@ -92,12 +92,8 @@ export default async function ProfilesPage() {
           />
         </div>
         <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>Logged In As</p>
-            <h1>{session.name ?? session.email}</h1>
-          </div>
+          <PortalUserMenu displayName={session.name ?? session.email} />
           <PortalNotificationsBell />
-          <LogoutButton />
           <PortalThemeToggle />
         </div>
         </header>

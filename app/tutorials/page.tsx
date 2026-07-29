@@ -3,6 +3,7 @@ import { requirePortalSession } from '../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../lib/dashboard-access';
 import { resolveSchoolBrand, schoolBrandCssVars } from '../../lib/school-brand';
 import LogoutButton from '../portal/logout-button';
+import PortalUserMenu from '../portal/user-menu';
 
 const tutorialVideos = [
   {
@@ -48,11 +49,15 @@ export default async function TutorialsPage() {
           </nav>
         </div>
         <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>Logged In As</p>
-            <h1>{session.name ?? session.email}</h1>
-          </div>
-          <LogoutButton />
+          {session.role === 'admin' || session.role === 'coach' ? (
+            <PortalUserMenu displayName={session.name ?? session.email} />
+          ) : (
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+          )}
+          {session.role === 'player' ? <LogoutButton /> : null}
         </div>
       </header>
 

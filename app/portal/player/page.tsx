@@ -18,6 +18,7 @@ import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgram
 import MobileNavSelect from '../mobile-nav-select';
 import PreviewAthleteSelect from '../preview-athlete-select';
 import LogoutButton from '../logout-button';
+import PortalUserMenu from '../user-menu';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
@@ -124,12 +125,16 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
             </nav>
           </div>
           <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>Logged In As</p>
-            <h1>{session.name ?? session.email}</h1>
-          </div>
+          {session.role === 'admin' || session.role === 'coach' ? (
+            <PortalUserMenu displayName={session.name ?? session.email} />
+          ) : (
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+          )}
           <PortalNotificationsBell />
-          <LogoutButton />
+          {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
         </div>
         </header>
@@ -278,12 +283,22 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
           />
         </div>
         <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>{session.role === 'admin' || session.role === 'coach' ? 'Previewing' : 'Logged In As'}</p>
-            <h1>{session.role === 'admin' || session.role === 'coach' ? player.fullName : session.name ?? session.email}</h1>
-          </div>
+          {session.role === 'admin' || session.role === 'coach' ? (
+            <>
+              <div className="portal-user-meta" aria-label="Previewing player">
+                <p>Previewing</p>
+                <h1>{player.fullName}</h1>
+              </div>
+              <PortalUserMenu displayName={session.name ?? session.email} />
+            </>
+          ) : (
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+          )}
           <PortalNotificationsBell />
-          <LogoutButton />
+          {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">
             <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">

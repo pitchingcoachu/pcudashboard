@@ -6,6 +6,7 @@ import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgram
 import { getPlayerForUser } from '../../../lib/training-db';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import LogoutButton from '../logout-button';
+import PortalUserMenu from '../user-menu';
 import MobileNavSelect from '../mobile-nav-select';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
@@ -69,12 +70,16 @@ export default async function MotionCapturePage() {
           />
         </div>
         <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>Logged In As</p>
-            <h1>{session.name ?? session.email}</h1>
-          </div>
+          {session.role === 'admin' || session.role === 'coach' ? (
+            <PortalUserMenu displayName={session.name ?? session.email} />
+          ) : (
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+          )}
           {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
-          <LogoutButton />
+          {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
         </div>
       </header>

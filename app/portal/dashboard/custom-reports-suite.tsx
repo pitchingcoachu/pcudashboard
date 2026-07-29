@@ -2261,7 +2261,9 @@ type CustomReportsSuiteProps = {
 export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomReportsSuiteProps) {
   const [chartHover, setChartHover] = useState<{ x: number; y: number; text: string; bg?: string; textColor?: string } | null>(null);
   const reportCanvasRef = useRef<HTMLElement | null>(null);
-  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const exportMenuRootRef = useRef<HTMLDivElement | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [isMobileView, setIsMobileView] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -4240,25 +4242,41 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     }));
     setColSpanInputs((current) => ({ ...current, [cellId]: String(normalized) }));
   };
-  const downloadReportPdf = async () => {
+  // Shared by both PNG and PDF export: renders the report DOM to a canvas
+  // (heatmap rasterization, logo inlining, chip/text-color fixups for the
+  // clone) and trims transparent edges for single-player reports. PDF export
+  // additionally paginates this canvas across letter-sized pages; PNG export
+  // just downloads it as-is, so this is the one place that work is shared.
+  const captureReportCanvas = async (): Promise<{
+    reportNode: HTMLElement;
+    canvas: HTMLCanvasElement;
+    isSinglePlayerScope: boolean;
+    isLightTheme: boolean;
+    margin: number;
+    rawW: number;
+    rawH: number;
+    captureScale: number;
+    restoreHeatmaps: (() => void) | null;
+    restoreLogos: (() => void) | null;
+    exportMarkerAttr: string;
+  } | null> => {
     const reportNode = reportCanvasRef.current;
-    if (!reportNode) return;
+    if (!reportNode) return null;
     let restoreHeatmaps: (() => void) | null = null;
     let restoreLogos: (() => void) | null = null;
     const exportMarkerAttr = 'data-custom-report-export-root';
-    try {
-      setIsExportingPdf(true);
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      restoreHeatmaps = await rasterizeHeatmapsForExport(reportNode);
-      restoreLogos = await inlineBrandLogosForExport(reportNode);
-      await waitForReportImages(reportNode);
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      const isSinglePlayerScope = reportScope === 'Single Player';
-      const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
-      reportNode.setAttribute(exportMarkerAttr, '1');
-      const captureScale = Math.min(2, Math.max(1.5, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
-      const baseCanvas = await html2canvas(reportNode, {
-        backgroundColor: isLightTheme ? '#f8fafc' : (isSinglePlayerScope ? null : '#000000'),
+    setIsExporting(true);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    restoreHeatmaps = await rasterizeHeatmapsForExport(reportNode);
+    restoreLogos = await inlineBrandLogosForExport(reportNode);
+    await waitForReportImages(reportNode);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const isSinglePlayerScope = reportScope === 'Single Player';
+    const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
+    reportNode.setAttribute(exportMarkerAttr, '1');
+    const captureScale = Math.min(2, Math.max(1.5, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
+    const baseCanvas = await html2canvas(reportNode, {
+      backgroundColor: isLightTheme ? '#f8fafc' : (isSinglePlayerScope ? null : '#000000'),
         scale: captureScale,
         useCORS: true,
         logging: false,
@@ -4396,6 +4414,58 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       const margin = isSinglePlayerScope ? 10 : 18;
       const rawW = Math.max(1, canvas.width);
       const rawH = Math.max(1, canvas.height);
+      return {
+        reportNode,
+        canvas,
+        isSinglePlayerScope,
+        isLightTheme,
+        margin,
+        rawW,
+        rawH,
+        captureScale,
+        restoreHeatmaps,
+        restoreLogos,
+        exportMarkerAttr,
+      };
+  };
+
+  const downloadReportPng = async () => {
+    const captured = await captureReportCanvas().catch((err) => {
+      setError(err instanceof Error ? err.message : 'PNG export failed.');
+      return null;
+    });
+    if (!captured) {
+      setIsExporting(false);
+      return;
+    }
+    const { reportNode, canvas, restoreHeatmaps, restoreLogos, exportMarkerAttr } = captured;
+    try {
+      const safeName = (reportHeaderTitle || 'custom-report').replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-');
+      const link = document.createElement('a');
+      link.href = canvas.toDataURL('image/png');
+      link.download = `${safeName}.png`;
+      link.click();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'PNG export failed.');
+    } finally {
+      reportNode.removeAttribute(exportMarkerAttr);
+      restoreLogos?.();
+      restoreHeatmaps?.();
+      setIsExporting(false);
+    }
+  };
+
+  const downloadReportPdf = async () => {
+    const captured = await captureReportCanvas().catch((err) => {
+      setError(err instanceof Error ? err.message : 'PDF export failed.');
+      return null;
+    });
+    if (!captured) {
+      setIsExporting(false);
+      return;
+    }
+    const { reportNode, canvas, isSinglePlayerScope, isLightTheme, margin, rawW, rawH, captureScale, restoreHeatmaps, restoreLogos, exportMarkerAttr } = captured;
+    try {
       if (isSinglePlayerScope) {
         // Match "tall one-page" style by using a custom portrait page sized to
         // the report content aspect ratio instead of forcing letter fit.
@@ -4527,7 +4597,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
       reportNode.removeAttribute(exportMarkerAttr);
       restoreLogos?.();
       restoreHeatmaps?.();
-      setIsExportingPdf(false);
+      setIsExporting(false);
     }
   };
 
@@ -4640,6 +4710,16 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
     []
   );
 
+  useEffect(() => {
+    if (!isExportMenuOpen) return;
+    const onDocClick = (event: MouseEvent) => {
+      if (!exportMenuRootRef.current) return;
+      if (!exportMenuRootRef.current.contains(event.target as Node)) setIsExportMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [isExportMenuOpen]);
+
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
       <div className="portal-custom-reports-download-row">
@@ -4648,9 +4728,35 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
             {sidebarVisible ? 'Hide Filters' : 'Show Filters'}
           </button>
         ) : null}
-        <button type="button" className="btn btn-primary" onClick={downloadReportPdf}>
-          Download as PDF
-        </button>
+        <div ref={exportMenuRootRef} className="portal-custom-reports-export-split">
+          <button type="button" className="btn btn-primary" onClick={downloadReportPdf} disabled={isExporting}>
+            {isExporting ? 'Exporting...' : 'Download as PDF'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setIsExportMenuOpen((value) => !value)}
+            disabled={isExporting}
+            aria-label="More download options"
+            aria-expanded={isExportMenuOpen}
+          >
+            ▾
+          </button>
+          {isExportMenuOpen ? (
+            <div className="portal-custom-reports-export-menu">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => {
+                  setIsExportMenuOpen(false);
+                  downloadReportPng();
+                }}
+              >
+                Download as PNG
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
       <div className={`portal-dashboard-suite-layout portal-custom-reports-layout${sidebarVisible ? '' : ' portal-custom-reports-layout--no-sidebar'}`}>
         {sidebarVisible ? (
@@ -5094,11 +5200,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
         <div className="portal-admin-stack">
             <article
               ref={reportCanvasRef}
-              className={`portal-day-card portal-custom-reports-canvas${isExportingPdf ? ' portal-custom-reports-canvas--export' : ''}`}
+              className={`portal-day-card portal-custom-reports-canvas${isExporting ? ' portal-custom-reports-canvas--export' : ''}`}
             >
               <div className="portal-custom-reports-brandbar">
                 <img
-                  src={isExportingPdf ? '/pearl-lockup-stacked-black-transparent.png' : '/pearl-clam-transparent.png'}
+                  src="/pearl-clam-transparent.png"
                   alt="Pearl Player Development"
                   className="portal-custom-reports-brand-logo portal-custom-reports-brand-logo--pcu"
                 />
@@ -5316,7 +5422,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                         </div>
                       ) : null}
                       <div className="portal-custom-reports-cell-controls">
-                        {!isExportingPdf ? (
+                        {!isExporting ? (
                           <button
                             type="button"
                             className={`btn btn-ghost ${(config.showControls ?? true) ? '' : 'portal-custom-reports-show-btn'}`.trim()}

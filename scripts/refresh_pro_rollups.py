@@ -98,6 +98,12 @@ def _parse_args() -> argparse.Namespace:
         default=30,
         help="Number of source-data days per transaction during a forced rebuild (default: 30).",
     )
+    parser.add_argument(
+        "--start-date",
+        type=date.fromisoformat,
+        default=None,
+        help="Optional first source date for a forced rebuild (YYYY-MM-DD).",
+    )
     return parser.parse_args()
 
 
@@ -149,6 +155,10 @@ def main() -> int:
         if force:
             chunk_days = max(1, min(int(args.chunk_days), 90))
             min_date, max_date = _pro_date_bounds()
+            if args.start_date is not None:
+                min_date = max(min_date, args.start_date)
+            if min_date > max_date:
+                raise RuntimeError("The requested PRO rollup start date is after the latest source pitch.")
             chunks: list[tuple[date, date]] = []
             chunk_start = min_date
             while chunk_start <= max_date:

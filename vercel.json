@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/deactivate-expired-trials",
       "schedule": "15 8 * * *"
+    },
+    {
+      "path": "/api/cron/daily-player-notes",
+      "schedule": "0 * * * *"
     }
   ]
 }

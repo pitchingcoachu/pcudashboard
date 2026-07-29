@@ -1,5 +1,6 @@
 import { createPasswordHash, ensureAuthDbReady, getDbPool, isDatabaseConfigured, verifyPasswordAgainstHash } from './auth-db';
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH } from './note-attachment-limits';
+import { resolveHomeDashboardSchoolCode } from './dashboard-home-school';
 import type { PortalActivityEventType } from './portal-activity';
 const DEFAULT_DASHBOARD_URL = 'https://pitchingcoachu.shinyapps.io/TMdata/';
 const DASHBOARD_TRIAL_ORG_PREFIX = 'Dashboard Trial - ';
@@ -523,6 +524,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await ensureAuthUsersIdSequence(pool);
     await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS phone TEXT;`);
     await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;`);
+    await pool.query(`ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS receive_player_note_emails BOOLEAN NOT NULL DEFAULT TRUE;`);
     await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS height TEXT;`);
     await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_weight_lbs DOUBLE PRECISION;`);
     await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS profile_photo_data_url TEXT;`);
@@ -1264,6 +1266,212 @@ export async function listCoachesByOrganization(organizationId: number): Promise
       }))
       .filter((row) => row.role === 'admin' || row.role === 'coach');
   });
+}
+
+export async function getUserEmailPreferences(userId: number): Promise<{ receivePlayerNoteEmails: boolean } | null> {
+  if (!isDatabaseConfigured() || !Number.isFinite(userId) || userId <= 0) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ receive_player_note_emails: boolean }>(
+    `SELECT receive_player_note_emails FROM auth_users WHERE id = $1 LIMIT 1`,
+    [userId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return { receivePlayerNoteEmails: row.receive_player_note_emails !== false };
+}
+
+export async function setUserReceivePlayerNoteEmails(input: {
+  userId: number;
+  receivePlayerNoteEmails: boolean;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'Database is not configured.' };
+  if (!Number.isFinite(input.userId) || input.userId <= 0) return { ok: false, error: 'Invalid user.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  await pool.query(
+    `UPDATE auth_users SET receive_player_note_emails = $2 WHERE id = $1`,
+    [input.userId, input.receivePlayerNoteEmails]
+  );
+  return { ok: true };
+}
+
+export type DailyPlayerNoteDigestEntry = {
+  playerName: string;
+  domain: string;
+  noteDate: string;
+  category: string;
+  noteText: string;
+  attachmentName: string | null;
+  attachmentMimeType: string | null;
+  attachmentDataUrl: string | null;
+  createdAt: string;
+  authorName: string;
+};
+
+export type DailyPlayerNoteDigestOrg = {
+  organizationId: number;
+  schoolCode: string;
+  entries: DailyPlayerNoteDigestEntry[];
+  recipients: Array<{ email: string; name: string }>;
+};
+
+// Powers the daily player-notes email cron: for every organization that has
+// at least one note created inside [startIso, endIso), returns the notes
+// (grouped, with author names resolved) and the opted-in admin/coach
+// recipients for that org. Organizations with zero notes in the window are
+// simply absent from the result, so the caller never has to special-case
+// "nothing to send" -- an empty list already means that.
+export async function listDailyPlayerNoteDigests(input: {
+  startIso: string;
+  endIso: string;
+}): Promise<DailyPlayerNoteDigestOrg[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const notesResult = await pool.query<{
+    organization_id: number;
+    player_name: string;
+    domain: string;
+    note_date: string;
+    category: string;
+    note_text: string;
+    attachment_name: string | null;
+    attachment_mime_type: string | null;
+    attachment_data_url: string | null;
+    created_at: string;
+    author_name: string | null;
+    author_email: string | null;
+  }>(
+    `
+      SELECT
+        p.organization_id,
+        p.full_name AS player_name,
+        n.domain,
+        n.note_date::text,
+        n.category,
+        n.note_text,
+        n.attachment_name,
+        n.attachment_mime_type,
+        n.attachment_data_url,
+        n.created_at::text,
+        u.name AS author_name,
+        u.email AS author_email
+      FROM player_plan_notes n
+      JOIN players p ON p.id = n.player_id
+      LEFT JOIN auth_users u ON u.id = n.created_by_user_id
+      WHERE n.created_at >= $1::timestamptz AND n.created_at < $2::timestamptz
+
+      UNION ALL
+
+      SELECT
+        n.organization_id,
+        n.dashboard_player_name AS player_name,
+        n.domain,
+        n.note_date::text,
+        n.category,
+        n.note_text,
+        n.attachment_name,
+        n.attachment_mime_type,
+        n.attachment_data_url,
+        n.created_at::text,
+        u.name AS author_name,
+        u.email AS author_email
+      FROM dashboard_player_notes n
+      LEFT JOIN auth_users u ON u.id = n.created_by_user_id
+      WHERE n.created_at >= $1::timestamptz AND n.created_at < $2::timestamptz
+
+      ORDER BY organization_id, player_name, note_date DESC, created_at DESC
+    `,
+    [input.startIso, input.endIso]
+  );
+
+  if (!notesResult.rows.length) return [];
+
+  const orgIds = Array.from(new Set(notesResult.rows.map((row) => row.organization_id)));
+
+  const recipientsResult = await pool.query<{
+    organization_id: number;
+    email: string;
+    name: string | null;
+  }>(
+    `
+      SELECT organization_id, email, name
+      FROM auth_users
+      WHERE organization_id = ANY($1::int[])
+        AND role IN ('admin', 'coach')
+        AND is_active IS NOT FALSE
+        AND receive_player_note_emails IS NOT FALSE
+    `,
+    [orgIds]
+  );
+
+  // Every admin/coach in the org (opted in or not) is used to infer the
+  // org's school code -- opting out of emails shouldn't also blank out the
+  // signal used to resolve the subject line for people who stayed opted in.
+  const allOrgUsersResult = await pool.query<{ organization_id: number; email: string }>(
+    `
+      SELECT organization_id, email
+      FROM auth_users
+      WHERE organization_id = ANY($1::int[])
+        AND role IN ('admin', 'coach')
+      ORDER BY organization_id, CASE WHEN role = 'admin' THEN 0 ELSE 1 END, id
+    `,
+    [orgIds]
+  );
+  // There's no per-user school-code column in the schema -- the same
+  // resolution the login flow uses (DASHBOARD_ORG_SCHOOL_MAP env var, or a
+  // hardcoded global-admin email list, or a default fallback) is reused here
+  // via resolveHomeDashboardSchoolCode so the subject line matches what that
+  // org's own dashboard actually resolves to.
+  const representativeEmailByOrg = new Map<number, string>();
+  for (const row of allOrgUsersResult.rows) {
+    if (!representativeEmailByOrg.has(row.organization_id)) {
+      representativeEmailByOrg.set(row.organization_id, row.email);
+    }
+  }
+  const resolveSchoolCode = (organizationId: number): string => {
+    const email = representativeEmailByOrg.get(organizationId) ?? null;
+    return (
+      resolveHomeDashboardSchoolCode({ email, organizationId }) ?? `ORG-${organizationId}`
+    );
+  };
+
+  const recipientsByOrg = new Map<number, Array<{ email: string; name: string }>>();
+  for (const row of recipientsResult.rows) {
+    const list = recipientsByOrg.get(row.organization_id) ?? [];
+    list.push({ email: row.email, name: (row.name ?? '').trim() || row.email });
+    recipientsByOrg.set(row.organization_id, list);
+  }
+
+  const entriesByOrg = new Map<number, DailyPlayerNoteDigestEntry[]>();
+  for (const row of notesResult.rows) {
+    const domain = String(row.domain ?? '').trim();
+    const list = entriesByOrg.get(row.organization_id) ?? [];
+    list.push({
+      playerName: row.player_name,
+      domain,
+      noteDate: row.note_date,
+      category: row.category,
+      noteText: row.note_text,
+      attachmentName: row.attachment_name,
+      attachmentMimeType: row.attachment_mime_type,
+      attachmentDataUrl: row.attachment_data_url,
+      createdAt: row.created_at,
+      authorName: (row.author_name ?? '').trim() || row.author_email || 'Unknown',
+    });
+    entriesByOrg.set(row.organization_id, list);
+  }
+
+  return orgIds
+    .map((organizationId) => ({
+      organizationId,
+      schoolCode: resolveSchoolCode(organizationId),
+      entries: entriesByOrg.get(organizationId) ?? [],
+      recipients: recipientsByOrg.get(organizationId) ?? [],
+    }))
+    .filter((org) => org.entries.length > 0 && org.recipients.length > 0);
 }
 
 export async function listDashboardTrialCoaches(): Promise<CoachRow[]> {

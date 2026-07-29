@@ -14,6 +14,7 @@ import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgram
 import MobileNavSelect from '../../mobile-nav-select';
 import PreviewAthleteSelect from '../../preview-athlete-select';
 import LogoutButton from '../../logout-button';
+import PortalUserMenu from '../../user-menu';
 import DashboardSchoolSelector from '../../dashboard/dashboard-school-selector';
 import PortalThemeToggle from '../../theme-toggle';
 import PortalNotificationsBell from '../../notifications-bell';
@@ -120,11 +121,15 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
             </nav>
           </div>
           <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>Logged In As</p>
-            <h1>{session.name ?? session.email}</h1>
-          </div>
-          <LogoutButton />
+          {session.role === 'admin' || session.role === 'coach' ? (
+            <PortalUserMenu displayName={session.name ?? session.email} />
+          ) : (
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+          )}
+          {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
           <PortalNotificationsBell />
         </div>
@@ -173,11 +178,15 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
             />
           </div>
           <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>Logged In As</p>
-            <h1>{session.name ?? session.email}</h1>
-          </div>
-          <LogoutButton />
+          {session.role === 'admin' || session.role === 'coach' ? (
+            <PortalUserMenu displayName={session.name ?? session.email} />
+          ) : (
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+          )}
+          {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
           <PortalNotificationsBell />
         </div>
@@ -278,11 +287,21 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           />
         </div>
         <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>{session.role === 'admin' || session.role === 'coach' ? 'Previewing' : 'Logged In As'}</p>
-            <h1>{session.role === 'admin' || session.role === 'coach' ? player.fullName : session.name ?? session.email}</h1>
-          </div>
-          <LogoutButton />
+          {session.role === 'admin' || session.role === 'coach' ? (
+            <>
+              <div className="portal-user-meta" aria-label="Previewing player">
+                <p>Previewing</p>
+                <h1>{player.fullName}</h1>
+              </div>
+              <PortalUserMenu displayName={session.name ?? session.email} />
+            </>
+          ) : (
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+          )}
+          {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
           <PortalNotificationsBell />
           <div className="portal-social-row" aria-label="PCU Social Links">

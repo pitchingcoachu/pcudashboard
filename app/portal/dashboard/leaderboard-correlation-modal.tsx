@@ -190,9 +190,26 @@ function parseCorrelationNumber(value: unknown): number | null {
   return null;
 }
 
+function parseTiltDeviationMinutes(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const raw = String(value ?? '').trim().replace(/\u2212/g, '-');
+  const match = raw.match(/^([+-])?\s*(\d{1,2})\s*:\s*(\d{1,2})$/);
+  if (!match) return parseCorrelationNumber(value);
+  const sign = match[1] === '-' ? -1 : 1;
+  return sign * ((Number(match[2]) * 60) + Number(match[3]));
+}
+
 function numericByColumnAlias(row: LeaderboardRow, column: string): number | null {
   const tokens = columnTokenCandidates(column);
   const tokenSet = new Set(tokens);
+  if (tokenSet.has('tiltdev')) {
+    const candidates = [row[column], ...rowValuesByToken(row, tokens)];
+    for (const value of candidates) {
+      const parsed = parseTiltDeviationMinutes(value);
+      if (parsed !== null) return parsed;
+    }
+    return null;
+  }
   const direct = parseCorrelationNumber(row[column]);
   if (direct !== null && !tokenSet.has('usage') && !tokenSet.has('usagepct')) return direct;
   const numericFromAliases = (aliasColumn: string): number | null => {

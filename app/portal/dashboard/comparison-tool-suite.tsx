@@ -162,6 +162,8 @@ const DOMAIN_SPLIT_BY: Record<Domain, string[]> = {
     'Pitcher Hand',
     'Batter Hand',
     'Session Type',
+    'Year',
+    'Month',
     'Count',
     'After Count',
     'Venue',
@@ -183,6 +185,8 @@ const DOMAIN_SPLIT_BY: Record<Domain, string[]> = {
     'Pitcher Hand',
     'Batter Hand',
     'Session Type',
+    'Year',
+    'Month',
     'Count',
     'After Count',
     'Venue',
@@ -198,7 +202,7 @@ const DOMAIN_SPLIT_BY: Record<Domain, string[]> = {
     'Batter',
     'Catcher',
   ],
-  Catching: ['Pitch Types', 'Pitcher Hand', 'Batter Hand', 'Count', 'After Count', 'Venue', 'Zone Location', 'Times Through Order', 'Inning', 'Pitch Count', 'Velocity', 'IVB', 'HB', 'Pitcher', 'Batter', 'Catcher'],
+  Catching: ['Pitch Types', 'Pitcher Hand', 'Batter Hand', 'Year', 'Month', 'Count', 'After Count', 'Venue', 'Zone Location', 'Times Through Order', 'Inning', 'Pitch Count', 'Velocity', 'IVB', 'HB', 'Pitcher', 'Batter', 'Catcher'],
 };
 const CHART_OPTIONS: ChartType[] = ['Heatmap', 'Pitch Chart', 'Velocity Chart', 'Movement Plot', 'Release Plot'];
 const HEAT_METRICS_BY_DOMAIN: Record<Domain, HeatMetric[]> = {
@@ -391,6 +395,32 @@ function reorderPitchCountRows<T extends Record<string, unknown>>(rows: T[], spl
     const rankB = binRank(b[splitColumn]);
     if (rankA !== rankB) return rankA - rankB;
     return String(a[splitColumn] ?? '').localeCompare(String(b[splitColumn] ?? ''));
+  });
+  return [...allRows, ...nonAllRows];
+}
+const MONTH_ABBR_RANK: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+function reorderMonthRows<T extends Record<string, unknown>>(rows: T[], splitColumn: string): T[] {
+  if (!splitColumn) return rows;
+  const allRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() === 'all');
+  const nonAllRows = rows.filter((row) => String(row[splitColumn] ?? '').trim().toLowerCase() !== 'all');
+  // "Month" values are display strings like "Jan 2026", so sort by year then
+  // by the month's calendar position instead of localeCompare (alphabetical
+  // would put "Apr" before "Jan" within the same year).
+  const monthRank = (value: unknown): [number, number] => {
+    const raw = String(value ?? '').trim();
+    const match = raw.match(/^([A-Za-z]{3})\s+(\d{4})$/);
+    if (!match) return [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER];
+    const monthIndex = MONTH_ABBR_RANK[match[1].toLowerCase()] ?? Number.MAX_SAFE_INTEGER;
+    return [Number(match[2]), monthIndex];
+  };
+  nonAllRows.sort((a, b) => {
+    const [yearA, monthA] = monthRank(a[splitColumn]);
+    const [yearB, monthB] = monthRank(b[splitColumn]);
+    if (yearA !== yearB) return yearA - yearB;
+    return monthA - monthB;
   });
   return [...allRows, ...nonAllRows];
 }
@@ -1507,7 +1537,9 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
         ? reorderInningRows(baseRows, splitColumn)
         : state.splitBy === 'Pitch Count'
           ? reorderPitchCountRows(baseRows, splitColumn)
-          : baseRows;
+          : state.splitBy === 'Month'
+            ? reorderMonthRows(baseRows, splitColumn)
+            : baseRows;
     return placeAllRowsAtBottom(orderedRows, splitColumn);
   }, [overview?.table_rows, tableColumns, state.sortColumn, state.sortDirection, state.splitBy]);
   const isProSchool = String(filters?.school_code ?? '').trim().toUpperCase() === 'PRO';

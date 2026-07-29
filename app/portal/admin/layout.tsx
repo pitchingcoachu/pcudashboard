@@ -5,7 +5,7 @@ import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { canUseClientManagement, canUseProgrammingData, getSchoolProductAccess } from '../../../lib/programming-scope';
 import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-brand';
 import MobileNavSelect from '../mobile-nav-select';
-import LogoutButton from '../logout-button';
+import PortalUserMenu from '../user-menu';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
@@ -130,12 +130,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           />
         </div>
         <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>Logged In As</p>
-            <h1>{session.name ?? session.email}</h1>
-          </div>
+          <PortalUserMenu displayName={session.name ?? session.email} />
           <PortalNotificationsBell />
-          <LogoutButton />
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">
             <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">

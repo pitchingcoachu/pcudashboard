@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import logging
-from math import atan, atan2, cos, degrees, isfinite, isnan, radians, sin, sqrt
+from math import atan, atan2, cos, degrees, exp, isfinite, isnan, pi, radians, sin, sqrt
 import os
 import re
 import time
@@ -1810,8 +1810,278 @@ def _movement_to_break_tilt_clock(ivb_value: Any, hb_value: Any) -> Optional[str
     return f"{hour}:{mins:02d}"
 
 
+EXPECTED_MOVEMENT_BALL_RADIUS_M = 0.0366
+EXPECTED_MOVEMENT_BALL_MASS_KG = 0.145
+EXPECTED_MOVEMENT_AIR_DENSITY_KG_M3 = 1.225
+EXPECTED_MOVEMENT_LIFT_A = 0.336
+EXPECTED_MOVEMENT_LIFT_B = 6.041
+EXPECTED_MOVEMENT_MPH_TO_MPS = 0.44704
+EXPECTED_MOVEMENT_FT_TO_M = 0.3048
+EXPECTED_MOVEMENT_M_TO_IN = 39.3700787402
+EXPECTED_MOVEMENT_RUBBER_TO_PLATE_FT = 60.5
+EXPECTED_MOVEMENT_PLATE_DEPTH_FT = 17.0 / 12.0
+
+
+def _tilt_degrees(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if _is_num(value):
+        return float(value) % 360.0
+    text = str(value).strip()
+    if not text:
+        return None
+    if ":" in text or "." in text:
+        separator = ":" if ":" in text else "."
+        parts = text.split(separator)
+        if len(parts) == 2:
+            try:
+                hour = int(parts[0])
+                minute = int(parts[1])
+            except ValueError:
+                return None
+            if 1 <= hour <= 12 and 0 <= minute <= 59:
+                return ((((hour % 12) * 60.0 + minute) / 2.0) - 180.0) % 360.0
+    try:
+        return float(text) % 360.0
+    except ValueError:
+        return None
+
+
+def _movement_break_tilt_degrees(ivb_value: Any, hb_value: Any) -> Optional[float]:
+    if not (_is_num(ivb_value) and _is_num(hb_value)):
+        return None
+    ivb = float(ivb_value)
+    hb = float(hb_value)
+    if abs(ivb) < 1e-9 and abs(hb) < 1e-9:
+        return None
+    return (degrees(atan2(hb, ivb)) + 180.0) % 360.0
+
+
+def _tilt_deviation_minutes(
+    release_tilt: Any,
+    break_tilt: Any,
+    ivb_value: Any = None,
+    hb_value: Any = None,
+) -> Optional[float]:
+    release_deg = _tilt_degrees(release_tilt)
+    break_deg = _tilt_degrees(break_tilt)
+    if break_deg is None:
+        break_deg = _movement_break_tilt_degrees(ivb_value, hb_value)
+    if release_deg is None or break_deg is None:
+        return None
+    delta_deg = ((break_deg - release_deg + 180.0) % 360.0) - 180.0
+    return delta_deg * 2.0
+
+
+def _format_tilt_deviation(value: Any) -> Optional[str]:
+    if not _is_num(value):
+        return None
+    total_minutes = int(round(float(value)))
+    sign = "+" if total_minutes > 0 else "-" if total_minutes < 0 else ""
+    absolute = abs(total_minutes)
+    return f"{sign}{absolute // 60}:{absolute % 60:02d}"
+
+
+def _expected_movement_values(row: Dict[str, Any]) -> Optional[tuple[float, float]]:
+    velocity = float(row.get("rel_speed")) if _is_num(row.get("rel_speed")) else None
+    total_spin = float(row.get("spin_rate")) if _is_num(row.get("spin_rate")) else None
+    extension = float(row.get("ext_value")) if _is_num(row.get("ext_value")) else None
+    tilt_deg = _tilt_degrees(row.get("release_tilt"))
+    active_spin = float(row.get("active_spin")) if _is_num(row.get("active_spin")) else None
+    spin_eff = float(row.get("spin_eff")) if _is_num(row.get("spin_eff")) else None
+    if velocity is None or velocity <= 0 or total_spin is None or total_spin <= 0:
+        return None
+    if extension is None or extension < 0 or tilt_deg is None:
+        return None
+    if active_spin is not None and not (0 <= active_spin <= total_spin * 1.05):
+        active_spin = None
+    if active_spin is None and spin_eff is not None:
+        efficiency = spin_eff / 100.0 if spin_eff > 1 else spin_eff
+        if 0 <= efficiency <= 1:
+            active_spin = total_spin * efficiency
+    if active_spin is None:
+        return None
+
+    ball_area = pi * EXPECTED_MOVEMENT_BALL_RADIUS_M * EXPECTED_MOVEMENT_BALL_RADIUS_M
+    magnus_k = (
+        0.5 * EXPECTED_MOVEMENT_AIR_DENSITY_KG_M3 * ball_area
+    ) / EXPECTED_MOVEMENT_BALL_MASS_KG
+    velocity_mps = velocity * EXPECTED_MOVEMENT_MPH_TO_MPS
+    active_spin_rad_s = active_spin * (2.0 * pi / 60.0)
+    spin_factor = EXPECTED_MOVEMENT_BALL_RADIUS_M * active_spin_rad_s / velocity_mps
+    lift_coefficient = EXPECTED_MOVEMENT_LIFT_A * (
+        1.0 - exp(-EXPECTED_MOVEMENT_LIFT_B * spin_factor)
+    )
+    flight_distance_ft = (
+        EXPECTED_MOVEMENT_RUBBER_TO_PLATE_FT
+        - EXPECTED_MOVEMENT_PLATE_DEPTH_FT
+        - extension
+    )
+    if flight_distance_ft <= 0:
+        return None
+    distance_m = flight_distance_ft * EXPECTED_MOVEMENT_FT_TO_M
+    magnitude_in = (
+        0.5
+        * magnus_k
+        * lift_coefficient
+        * distance_m
+        * distance_m
+        * EXPECTED_MOVEMENT_M_TO_IN
+    )
+    movement_angle = radians(tilt_deg - 180.0)
+    expected_hb = magnitude_in * sin(movement_angle)
+    expected_ivb = magnitude_in * cos(movement_angle)
+    if not (_is_num(expected_hb) and _is_num(expected_ivb)):
+        return None
+    return expected_ivb, expected_hb
+
+
+def _expected_movement_sql(axis: str, alias: str) -> str:
+    component = "COS" if axis.lower() == "ivb" else "SIN"
+    active_spin = (
+        f"CASE WHEN {alias}.active_spin IS NOT NULL "
+        f"AND {alias}.active_spin BETWEEN 0 AND ({alias}.spin_rate * 1.05) "
+        f"THEN {alias}.active_spin "
+        f"WHEN {alias}.spin_eff IS NOT NULL "
+        f"AND (CASE WHEN {alias}.spin_eff > 1 THEN {alias}.spin_eff / 100.0 ELSE {alias}.spin_eff END) BETWEEN 0 AND 1 "
+        f"THEN {alias}.spin_rate * (CASE WHEN {alias}.spin_eff > 1 THEN {alias}.spin_eff / 100.0 ELSE {alias}.spin_eff END) "
+        "ELSE NULL END"
+    )
+    return f"""
+      CASE
+        WHEN {alias}.rel_speed > 0
+          AND {alias}.spin_rate > 0
+          AND {alias}.ext_value >= 0
+          AND {alias}.release_tilt_deg IS NOT NULL
+          AND {alias}.ivb IS NOT NULL
+          AND {alias}.hb IS NOT NULL
+          AND ({active_spin}) IS NOT NULL
+          AND (60.5 - (17.0 / 12.0) - {alias}.ext_value) > 0
+        THEN (
+          0.5
+          * ((0.5 * 1.225 * PI() * POWER(0.0366, 2)) / 0.145)
+          * (0.336 * (
+              1.0 - EXP(
+                -6.041
+                * (
+                    0.0366
+                    * (({active_spin}) * (2.0 * PI() / 60.0))
+                    / ({alias}.rel_speed * 0.44704)
+                  )
+              )
+            ))
+          * POWER((60.5 - (17.0 / 12.0) - {alias}.ext_value) * 0.3048, 2)
+          * 39.3700787402
+          * {component}(RADIANS({alias}.release_tilt_deg - 180.0))
+        )
+        ELSE NULL
+      END
+    """
+
+
+def _tilt_deviation_sql(alias: str) -> str:
+    derived_break_degrees = f"(DEGREES(ATAN2({alias}.hb, {alias}.ivb)) + 180.0)"
+    break_degrees = f"COALESCE({alias}.break_tilt_deg, {derived_break_degrees})"
+    return f"""
+      CASE
+        WHEN {alias}.release_tilt_deg IS NOT NULL
+          AND (
+            {alias}.break_tilt_deg IS NOT NULL
+            OR (
+              {alias}.ivb IS NOT NULL
+              AND {alias}.hb IS NOT NULL
+              AND (ABS({alias}.ivb) > 1e-9 OR ABS({alias}.hb) > 1e-9)
+            )
+          )
+        THEN DEGREES(
+          ATAN2(
+            SIN(RADIANS(({break_degrees}) - {alias}.release_tilt_deg)),
+            COS(RADIANS(({break_degrees}) - {alias}.release_tilt_deg))
+          )
+        ) * 2.0
+        ELSE NULL
+      END
+    """
+
+
 PRO_APPROACH_Y0_FT = 50.0
 PRO_APPROACH_PLATE_Y_FT = 17.0 / 12.0
+NVAA_REFERENCE_HEIGHT_FT = 2.5
+
+# Pitch-type height slopes (degrees of VAA per foot of plate height), fit on
+# the full available tracking history on 2026-07-28. PRO uses VAA derived from
+# Statcast kinematics; non-PRO uses TrackMan's supplied VertApprAngle.
+PRO_NVAA_HEIGHT_SLOPES: Dict[str, float] = {
+    "Fastball": 1.069932,
+    "Sinker": 1.087719,
+    "Cutter": 1.160101,
+    "Slider": 1.093302,
+    "Sweeper": 1.118156,
+    "Curveball": 0.954621,
+    "ChangeUp": 1.066646,
+    "Splitter": 1.032672,
+}
+NONPRO_NVAA_HEIGHT_SLOPES: Dict[str, float] = {
+    "Fastball": 1.080691,
+    "Sinker": 1.099532,
+    "Cutter": 1.084449,
+    "Slider": 1.036482,
+    "Sweeper": 1.050659,
+    "Curveball": 0.989419,
+    "ChangeUp": 1.046724,
+    "Splitter": 1.038772,
+    "Knuckleball": 1.406087,
+}
+PRO_NVAA_DEFAULT_HEIGHT_SLOPE = 1.076471
+NONPRO_NVAA_DEFAULT_HEIGHT_SLOPE = 1.062770
+
+
+def _nvaa_height_slope(pitch_type: Any, is_pro: bool) -> float:
+    pitch_type_clean = str(pitch_type or "").strip()
+    slopes = PRO_NVAA_HEIGHT_SLOPES if is_pro else NONPRO_NVAA_HEIGHT_SLOPES
+    fallback = PRO_NVAA_DEFAULT_HEIGHT_SLOPE if is_pro else NONPRO_NVAA_DEFAULT_HEIGHT_SLOPE
+    return float(slopes.get(pitch_type_clean, fallback))
+
+
+def _normalized_vaa_value(
+    vaa: Any,
+    plate_height: Any,
+    pitch_type: Any,
+    *,
+    is_pro: bool,
+) -> Optional[float]:
+    if not (_is_num(vaa) and _is_num(plate_height)):
+        return None
+    result = float(vaa) + (
+        _nvaa_height_slope(pitch_type, is_pro)
+        * (NVAA_REFERENCE_HEIGHT_FT - float(plate_height))
+    )
+    return result if isfinite(result) else None
+
+
+def _nvaa_sql(
+    vaa_sql: str,
+    plate_height_sql: str,
+    pitch_type_sql: str,
+    *,
+    is_pro: bool,
+) -> str:
+    slopes = PRO_NVAA_HEIGHT_SLOPES if is_pro else NONPRO_NVAA_HEIGHT_SLOPES
+    fallback = PRO_NVAA_DEFAULT_HEIGHT_SLOPE if is_pro else NONPRO_NVAA_DEFAULT_HEIGHT_SLOPE
+    slope_cases = " ".join(
+        f"WHEN {pitch_type_sql} = '{pitch_type}' THEN {slope:.6f}"
+        for pitch_type, slope in slopes.items()
+    )
+    slope_sql = f"(CASE {slope_cases} ELSE {fallback:.6f} END)"
+    return f"""
+      CASE
+        WHEN ({vaa_sql}) IS NULL OR ({plate_height_sql}) IS NULL THEN NULL
+        ELSE ({vaa_sql}) + (
+          {slope_sql}
+          * ({NVAA_REFERENCE_HEIGHT_FT} - ({plate_height_sql}))
+        )
+      END
+    """.strip()
 
 
 def _pro_approach_angle_sql(axis: str, row_alias: str = "pe") -> str:
@@ -2313,12 +2583,53 @@ def _is_competitive_row(row: Dict[str, Any]) -> bool:
     return ("live" in st) or ("game" in st) or ("ab" in st) or ("season" in st)
 
 
+_MONTH_ABBR = {
+    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+}
+
+
+_MONTH_ABBR_RANK = {abbr: num for num, abbr in _MONTH_ABBR.items()}
+
+
+def _year_or_month_split_sort_key(split_value: str) -> tuple[int, int, str]:
+    # "Year" values are plain "2026"; "Month" values are "Jan 2026". Both need
+    # chronological ordering rather than the pitch-count-descending default
+    # used for most other splits (e.g. Pitcher Hand), since browsing multiple
+    # seasons/months only makes sense in time order.
+    raw = str(split_value or "").strip()
+    month_match = re.match(r"^([A-Za-z]{3})\s+(\d{4})$", raw)
+    if month_match:
+        month_num = _MONTH_ABBR_RANK.get(month_match.group(1), 99)
+        return (int(month_match.group(2)), month_num, raw)
+    if raw.isdigit() and len(raw) == 4:
+        return (int(raw), 0, raw)
+    return (9999, 99, raw)
+
+
 def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
     split = (split_by or "Pitch Types").strip()
     if split == "All":
         return "All"
     if split == "Pitch Types":
         return str(row.get("pitch_type") or "Unknown")
+    if split == "Year":
+        session_value = row.get("session_date")
+        if isinstance(session_value, date):
+            return str(session_value.year)
+        session_str = str(session_value or "").strip()
+        return session_str[:4] if len(session_str) >= 4 and session_str[:4].isdigit() else "Unknown"
+    if split == "Month":
+        session_value = row.get("session_date")
+        if isinstance(session_value, date):
+            return f"{_MONTH_ABBR[session_value.month]} {session_value.year:04d}"
+        session_str = str(session_value or "").strip()
+        if len(session_str) >= 7 and session_str[:4].isdigit() and session_str[5:7].isdigit():
+            year_part = session_str[:4]
+            month_part = int(session_str[5:7])
+            if 1 <= month_part <= 12:
+                return f"{_MONTH_ABBR[month_part]} {year_part}"
+        return "Unknown"
     if split == "Pitcher Hand":
         return _norm_hand(row.get("pitcherthrows"))
     if split == "Batter Hand":
@@ -2876,14 +3187,20 @@ ALL_TABLE_COLUMNS: List[str] = [
     "Max",
     "IVB",
     "HB",
+    "xIVB",
+    "xHB",
+    "dIVB",
+    "dHB",
     "Spin",
     "rTilt",
     "bTilt",
+    "TiltDev",
     "SpinEff",
     "Height",
     "Side",
     "Ext",
     "VAA",
+    "nVAA",
     "HAA",
     "Strike%",
     "Swing%",
@@ -3596,21 +3913,57 @@ def _build_dynamic_table(
         side_vals = [r.get("rel_side") for r in grp if _is_num(r.get("rel_side"))]
         ext_vals = [r.get("ext_value") for r in grp if _is_num(r.get("ext_value"))]
         vaa_vals: List[float] = []
+        nvaa_vals: List[float] = []
         haa_vals: List[float] = []
         for r in grp:
-            if _is_num(r.get("vaa")):
-                vaa_vals.append(float(r.get("vaa")))
+            row_vaa = float(r.get("vaa")) if _is_num(r.get("vaa")) else None
+            row_haa = float(r.get("haa")) if _is_num(r.get("haa")) else None
             if _is_num(r.get("haa")):
                 haa_vals.append(float(r.get("haa")))
-            if _is_num(r.get("vaa")) and _is_num(r.get("haa")):
-                continue
-            if is_pro_group:
+            if is_pro_group and (row_vaa is None or row_haa is None):
                 inferred_vaa, inferred_haa = _infer_pro_vaa_haa_from_kinematics(r)
-                if not _is_num(r.get("vaa")) and _is_num(inferred_vaa):
-                    vaa_vals.append(float(inferred_vaa))
-                if not _is_num(r.get("haa")) and _is_num(inferred_haa):
+                if row_vaa is None and _is_num(inferred_vaa):
+                    row_vaa = float(inferred_vaa)
+                if row_haa is None and _is_num(inferred_haa):
+                    row_haa = float(inferred_haa)
                     haa_vals.append(float(inferred_haa))
+            if row_vaa is not None:
+                vaa_vals.append(row_vaa)
+                row_nvaa = _normalized_vaa_value(
+                    row_vaa,
+                    r.get("plate_height"),
+                    r.get("pitch_type"),
+                    is_pro=is_pro_group,
+                )
+                if _is_num(row_nvaa):
+                    nvaa_vals.append(float(row_nvaa))
         spin_eff_vals = [r.get("spin_eff") for r in grp if _is_num(r.get("spin_eff"))]
+        expected_pairs: List[tuple[float, float, float, float]] = []
+        tilt_dev_vals: List[float] = []
+        for r in grp:
+            expected = _expected_movement_values(r)
+            if (
+                expected is not None
+                and _is_num(r.get("ivb"))
+                and _is_num(r.get("hb"))
+            ):
+                expected_ivb, expected_hb = expected
+                expected_pairs.append(
+                    (
+                        expected_ivb,
+                        expected_hb,
+                        float(r.get("ivb")) - expected_ivb,
+                        float(r.get("hb")) - expected_hb,
+                    )
+                )
+            tilt_dev = _tilt_deviation_minutes(
+                r.get("release_tilt"),
+                r.get("break_tilt"),
+                r.get("ivb"),
+                r.get("hb"),
+            )
+            if _is_num(tilt_dev):
+                tilt_dev_vals.append(float(tilt_dev))
         in_zone_n = sum(
             1
             for r in grp
@@ -4348,15 +4701,21 @@ def _build_dynamic_table(
             "Max": round(max(float(v) for v in velo_vals), 1) if velo_vals else None,
             "IVB": round(avg_ivb, 1) if _is_num(avg_ivb) else None,
             "HB": round(avg_hb, 1) if _is_num(avg_hb) else None,
+            "xIVB": round(sum(v[0] for v in expected_pairs) / len(expected_pairs), 1) if expected_pairs else None,
+            "xHB": round(sum(v[1] for v in expected_pairs) / len(expected_pairs), 1) if expected_pairs else None,
+            "dIVB": round(sum(v[2] for v in expected_pairs) / len(expected_pairs), 1) if expected_pairs else None,
+            "dHB": round(sum(v[3] for v in expected_pairs) / len(expected_pairs), 1) if expected_pairs else None,
             "Spin": round(sum(float(v) for v in spin_vals) / len(spin_vals), 0) if spin_vals else None,
             "rTilt": _tilt_values_to_clock(r_tilt_vals),
             "bTilt": b_tilt_clock,
+            "TiltDev": _format_tilt_deviation(sum(tilt_dev_vals) / len(tilt_dev_vals)) if tilt_dev_vals else None,
             "SpinEff": f"{round(100.0 * (sum(float(v) for v in spin_eff_vals) / len(spin_eff_vals)), 1)}%" if spin_eff_vals else None,
             "Height": round(sum(float(v) for v in height_vals) / len(height_vals), 1) if height_vals else None,
             "Side": round(sum(float(v) for v in side_vals) / len(side_vals), 1) if side_vals else None,
             "Ext": round(sum(float(v) for v in ext_vals) / len(ext_vals), 1) if ext_vals else None,
-            "VAA": round(sum(float(v) for v in vaa_vals) / len(vaa_vals), 1) if vaa_vals else None,
-            "HAA": round(sum(float(v) for v in haa_vals) / len(haa_vals), 1) if haa_vals else None,
+            "VAA": round(sum(float(v) for v in vaa_vals) / len(vaa_vals), 4) if vaa_vals else None,
+            "nVAA": round(sum(float(v) for v in nvaa_vals) / len(nvaa_vals), 4) if nvaa_vals else None,
+            "HAA": round(sum(float(v) for v in haa_vals) / len(haa_vals), 4) if haa_vals else None,
             "Strike%": f"{round(100.0 * strike_n / n, 1)}%" if n else None,
             "Swing%": f"{round(100.0 * swing_n / n, 1)}%" if n else None,
             "FPS%": f"{round(100.0 * fps_yes / fps_opp, 1)}%" if fps_opp else None,
@@ -4587,7 +4946,7 @@ def _build_dynamic_table(
                 row_zero[metric] = row_all.get(metric)
 
     column_map: Dict[str, List[str]] = {
-        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
+        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
         "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "<2kInZone%", "2kInZone%", "Strike%", "<2Kstrike%", "2Kstrike%", "Comp%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "HR%"],
         "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "FB%", "Barrel%", "Whiff%", "SwStrk%", "CSW%", "EV", "LA", "ERA", "FIP", "xFIP", "SIERA"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
@@ -4652,6 +5011,20 @@ def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str
     break_tilt_raw = str(row.get("break_tilt") or "").strip()
     if school_code == "PRO" and not break_tilt_raw:
         break_tilt_raw = _movement_to_break_tilt_clock(row.get("ivb"), row.get("hb")) or ""
+    action_vaa = row.get("vaa")
+    action_haa = row.get("haa")
+    if school_code == "PRO" and (not _is_num(action_vaa) or not _is_num(action_haa)):
+        inferred_vaa, inferred_haa = _infer_pro_vaa_haa_from_kinematics(row)
+        if not _is_num(action_vaa) and _is_num(inferred_vaa):
+            action_vaa = inferred_vaa
+        if not _is_num(action_haa) and _is_num(inferred_haa):
+            action_haa = inferred_haa
+    action_nvaa = _normalized_vaa_value(
+        action_vaa,
+        row.get("plate_height"),
+        row.get("pitch_type"),
+        is_pro=(school_code == "PRO"),
+    )
     return {
         "pitch_event_id": row.get("id"),
         "pitch_uid": str(row.get("pitch_uid") or ""),
@@ -4698,8 +5071,9 @@ def _pitch_action_payload(row: Dict[str, Any], avg_stuff_by_pitch_type: Dict[str
         "spin_eff": row.get("spin_eff"),
         "exit_speed": row.get("exit_speed"),
         "angle": row.get("angle"),
-        "vaa": row.get("vaa"),
-        "haa": row.get("haa"),
+        "vaa": action_vaa,
+        "nvaa": action_nvaa,
+        "haa": action_haa,
         "estimated_woba_using_speedangle": (
             float(row.get("estimated_woba_using_speedangle"))
             if _is_num(row.get("estimated_woba_using_speedangle"))
@@ -6334,6 +6708,8 @@ def _ensure_performance_indexes() -> None:
           spin_eff_n INT NOT NULL,
           vaa_sum DOUBLE PRECISION NOT NULL,
           vaa_n INT NOT NULL,
+          nvaa_sum DOUBLE PRECISION NOT NULL,
+          nvaa_n INT NOT NULL,
           haa_sum DOUBLE PRECISION NOT NULL,
           haa_n INT NOT NULL,
           r_tilt_x_sum DOUBLE PRECISION NOT NULL,
@@ -6429,6 +6805,8 @@ def _ensure_performance_indexes() -> None:
           spin_eff_n INT NOT NULL,
           vaa_sum DOUBLE PRECISION NOT NULL,
           vaa_n INT NOT NULL,
+          nvaa_sum DOUBLE PRECISION NOT NULL,
+          nvaa_n INT NOT NULL,
           haa_sum DOUBLE PRECISION NOT NULL,
           haa_n INT NOT NULL,
           r_tilt_x_sum DOUBLE PRECISION NOT NULL,
@@ -6642,6 +7020,12 @@ def _ensure_performance_indexes() -> None:
         ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS vaa_n INT NOT NULL DEFAULT 0
         """,
         """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS nvaa_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS nvaa_n INT NOT NULL DEFAULT 0
+        """,
+        """
         ALTER TABLE public.pitch_events_daily_rollup_league ADD COLUMN IF NOT EXISTS haa_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
         """,
         """
@@ -6718,6 +7102,12 @@ def _ensure_performance_indexes() -> None:
         """,
         """
         ALTER TABLE public.pitch_events_daily_rollup_league_split ADD COLUMN IF NOT EXISTS vaa_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league_split ADD COLUMN IF NOT EXISTS nvaa_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
+        """,
+        """
+        ALTER TABLE public.pitch_events_daily_rollup_league_split ADD COLUMN IF NOT EXISTS nvaa_n INT NOT NULL DEFAULT 0
         """,
         """
         ALTER TABLE public.pitch_events_daily_rollup_league_split ADD COLUMN IF NOT EXISTS haa_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
@@ -6891,6 +7281,12 @@ def _ensure_performance_indexes() -> None:
         (LIKE public.pitch_events_daily_rollup_league_split INCLUDING DEFAULTS INCLUDING GENERATED INCLUDING STORAGE INCLUDING COMMENTS)
         """,
         """
+        ALTER TABLE IF EXISTS public.pitch_events_game_rollup_league ADD COLUMN IF NOT EXISTS nvaa_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
+        """,
+        """
+        ALTER TABLE IF EXISTS public.pitch_events_game_rollup_league ADD COLUMN IF NOT EXISTS nvaa_n INT NOT NULL DEFAULT 0
+        """,
+        """
         CREATE INDEX IF NOT EXISTS idx_rollup_game_league_school_date
         ON public.pitch_events_game_rollup_league (school_code, session_date)
         """,
@@ -6983,6 +7379,8 @@ def _ensure_performance_indexes() -> None:
           spin_eff_n INT NOT NULL,
           vaa_sum DOUBLE PRECISION NOT NULL,
           vaa_n INT NOT NULL,
+          nvaa_sum DOUBLE PRECISION NOT NULL,
+          nvaa_n INT NOT NULL,
           haa_sum DOUBLE PRECISION NOT NULL,
           haa_n INT NOT NULL,
           r_tilt_x_sum DOUBLE PRECISION NOT NULL,
@@ -7042,6 +7440,12 @@ def _ensure_performance_indexes() -> None:
         """,
         """
         ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS vaa_n INT NOT NULL DEFAULT 0
+        """,
+        """
+        ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS nvaa_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
+        """,
+        """
+        ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS nvaa_n INT NOT NULL DEFAULT 0
         """,
         """
         ALTER TABLE public.pro_pitch_events_daily_rollup ADD COLUMN IF NOT EXISTS haa_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
@@ -7122,6 +7526,12 @@ def _ensure_performance_indexes() -> None:
         ALTER TABLE IF EXISTS public.pro_pitch_events_daily_rollup_split ADD COLUMN IF NOT EXISTS official_outs_w_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
         """,
         """
+        ALTER TABLE IF EXISTS public.pro_pitch_events_daily_rollup_split ADD COLUMN IF NOT EXISTS nvaa_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
+        """,
+        """
+        ALTER TABLE IF EXISTS public.pro_pitch_events_daily_rollup_split ADD COLUMN IF NOT EXISTS nvaa_n INT NOT NULL DEFAULT 0
+        """,
+        """
         ALTER TABLE IF EXISTS public.pro_pitch_events_game_rollup ADD COLUMN IF NOT EXISTS chase_num INT NOT NULL DEFAULT 0
         """,
         """
@@ -7144,6 +7554,12 @@ def _ensure_performance_indexes() -> None:
         """,
         """
         ALTER TABLE IF EXISTS public.pro_pitch_events_game_rollup ADD COLUMN IF NOT EXISTS official_outs_w_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
+        """,
+        """
+        ALTER TABLE IF EXISTS public.pro_pitch_events_game_rollup ADD COLUMN IF NOT EXISTS nvaa_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0
+        """,
+        """
+        ALTER TABLE IF EXISTS public.pro_pitch_events_game_rollup ADD COLUMN IF NOT EXISTS nvaa_n INT NOT NULL DEFAULT 0
         """,
         """
         CREATE INDEX IF NOT EXISTS idx_pro_rollup_date_level
@@ -7320,6 +7736,26 @@ def _ensure_performance_indexes() -> None:
         WHERE school_code = 'PRO'
         """,
     ]
+    rollup_metric_tables = (
+        "pitch_events_daily_rollup_league",
+        "pitch_events_daily_rollup_league_split",
+        "pitch_events_game_rollup_league",
+        "pro_pitch_events_daily_rollup",
+        "pro_pitch_events_daily_rollup_split",
+        "pro_pitch_events_game_rollup",
+    )
+    for rollup_table in rollup_metric_tables:
+        statements.extend(
+            [
+                f"ALTER TABLE IF EXISTS public.{rollup_table} ADD COLUMN IF NOT EXISTS xivb_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0",
+                f"ALTER TABLE IF EXISTS public.{rollup_table} ADD COLUMN IF NOT EXISTS xhb_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0",
+                f"ALTER TABLE IF EXISTS public.{rollup_table} ADD COLUMN IF NOT EXISTS expected_move_n INT NOT NULL DEFAULT 0",
+                f"ALTER TABLE IF EXISTS public.{rollup_table} ADD COLUMN IF NOT EXISTS divb_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0",
+                f"ALTER TABLE IF EXISTS public.{rollup_table} ADD COLUMN IF NOT EXISTS dhb_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0",
+                f"ALTER TABLE IF EXISTS public.{rollup_table} ADD COLUMN IF NOT EXISTS tilt_dev_minutes_sum DOUBLE PRECISION NOT NULL DEFAULT 0.0",
+                f"ALTER TABLE IF EXISTS public.{rollup_table} ADD COLUMN IF NOT EXISTS tilt_dev_n INT NOT NULL DEFAULT 0",
+            ]
+        )
 
     def _run_perf_index_sync() -> None:
         global _PERF_INDEX_LAST_AT, _PERF_INDEX_SYNC_RUNNING
@@ -7575,7 +8011,7 @@ def _refresh_league_daily_rollup(
                 if raise_on_failure:
                     raise RuntimeError("Could not acquire league rollup advisory lock")
                 return
-            cur.execute("SET LOCAL lock_timeout = '2s'")
+            cur.execute("SET LOCAL lock_timeout = '30s'" if force else "SET LOCAL lock_timeout = '2s'")
             # Full LEAGUE rollup backfills can exceed 5 minutes on large histories.
             cur.execute("SET LOCAL statement_timeout = '1200s'")
             cur.execute(
@@ -7744,6 +8180,7 @@ def _refresh_league_daily_rollup(
                     NULLIF((regexp_match(COALESCE(pe.relside::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS rel_side,
                     NULLIF((regexp_match(COALESCE(pe.extension::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS ext_value,
                     NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS spin_eff,
+                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'activespin', to_jsonb(pe)->>'ActiveSpin', to_jsonb(pe)->>'active_spin', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS active_spin,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'vertapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS vaa,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'horzapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS haa,
                     COALESCE(NULLIF(TRIM(pe.releasetilt), ''), '') AS release_tilt,
@@ -7762,6 +8199,14 @@ def _refresh_league_daily_rollup(
                         THEN (regexp_match(COALESCE(pe.releasetilt, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision
                       ELSE NULL
                     END AS release_tilt_deg,
+                    CASE
+                      WHEN COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', '') ~ '^[0-9]{1,2}\\s*:\\s*[0-9]{1,2}$'
+                        THEN ((((split_part(regexp_replace(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '\\s+', '', 'g'), ':', 1)::int %% 12) * 60)
+                          + LEAST(59, GREATEST(0, split_part(regexp_replace(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '\\s+', '', 'g'), ':', 2)::int)))::double precision / 2.0) - 180.0
+                      WHEN regexp_match(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '[-+]?[0-9]*\\.?[0-9]+') IS NOT NULL
+                        THEN (regexp_match(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision
+                      ELSE NULL
+                    END AS break_tilt_deg,
                     COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), '') AS tagged_hit_type,
                     COALESCE(NULLIF(TRIM(pe.pitchcall), ''), '') AS pitch_call,
                     COALESCE(NULLIF(TRIM(pe.korbb), ''), '') AS korbb,
@@ -7805,7 +8250,8 @@ def _refresh_league_daily_rollup(
                   count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
                   bf_n, k_n, bb_n, hbp_n, single_n, double_n, triple_n, hr_n, sf_n,
                   rel_height_sum, rel_height_n, rel_side_sum, rel_side_n, ext_sum, ext_n,
-                  spin_eff_sum, spin_eff_n, vaa_sum, vaa_n, haa_sum, haa_n, r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample
+                  spin_eff_sum, spin_eff_n, xivb_sum, xhb_sum, expected_move_n, divb_sum, dhb_sum, tilt_dev_minutes_sum, tilt_dev_n,
+                  vaa_sum, vaa_n, nvaa_sum, nvaa_n, haa_sum, haa_n, r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample
                 )
                 SELECT
                   %(school_code)s::text,
@@ -7953,8 +8399,17 @@ def _refresh_league_daily_rollup(
                   SUM(CASE WHEN b.ext_value IS NOT NULL THEN 1 ELSE 0 END)::int AS ext_n,
                   SUM(CASE WHEN b.spin_eff IS NOT NULL THEN b.spin_eff ELSE 0.0 END)::double precision AS spin_eff_sum,
                   SUM(CASE WHEN b.spin_eff IS NOT NULL THEN 1 ELSE 0 END)::int AS spin_eff_n,
+                  COALESCE(SUM(""" + _expected_movement_sql("ivb", "b") + """), 0.0)::double precision AS xivb_sum,
+                  COALESCE(SUM(""" + _expected_movement_sql("hb", "b") + """), 0.0)::double precision AS xhb_sum,
+                  COUNT(""" + _expected_movement_sql("ivb", "b") + """)::int AS expected_move_n,
+                  COALESCE(SUM(CASE WHEN """ + _expected_movement_sql("ivb", "b") + """ IS NOT NULL THEN b.ivb - (""" + _expected_movement_sql("ivb", "b") + """) ELSE 0.0 END), 0.0)::double precision AS divb_sum,
+                  COALESCE(SUM(CASE WHEN """ + _expected_movement_sql("hb", "b") + """ IS NOT NULL THEN b.hb - (""" + _expected_movement_sql("hb", "b") + """) ELSE 0.0 END), 0.0)::double precision AS dhb_sum,
+                  COALESCE(SUM(""" + _tilt_deviation_sql("b") + """), 0.0)::double precision AS tilt_dev_minutes_sum,
+                  COUNT(""" + _tilt_deviation_sql("b") + """)::int AS tilt_dev_n,
                   SUM(CASE WHEN b.vaa IS NOT NULL THEN b.vaa ELSE 0.0 END)::double precision AS vaa_sum,
                   SUM(CASE WHEN b.vaa IS NOT NULL THEN 1 ELSE 0 END)::int AS vaa_n,
+                  COALESCE(SUM(""" + _nvaa_sql("b.vaa", "b.plate_height", "b.pitch_type", is_pro=False) + """), 0.0)::double precision AS nvaa_sum,
+                  COUNT(""" + _nvaa_sql("b.vaa", "b.plate_height", "b.pitch_type", is_pro=False) + """)::int AS nvaa_n,
                   SUM(CASE WHEN b.haa IS NOT NULL THEN b.haa ELSE 0.0 END)::double precision AS haa_sum,
                   SUM(CASE WHEN b.haa IS NOT NULL THEN 1 ELSE 0 END)::int AS haa_n,
                   SUM(CASE WHEN b.release_tilt_deg IS NOT NULL THEN COS(RADIANS(b.release_tilt_deg)) ELSE 0.0 END)::double precision AS r_tilt_x_sum,
@@ -8022,6 +8477,7 @@ def _refresh_league_daily_rollup(
                     NULLIF((regexp_match(COALESCE(pe.relside::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS rel_side,
                     NULLIF((regexp_match(COALESCE(pe.extension::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS ext_value,
                     NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS spin_eff,
+                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'activespin', to_jsonb(pe)->>'ActiveSpin', to_jsonb(pe)->>'active_spin', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS active_spin,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'vertapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS vaa,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'horzapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS haa,
                     COALESCE(NULLIF(TRIM(pe.releasetilt), ''), '') AS release_tilt,
@@ -8040,6 +8496,14 @@ def _refresh_league_daily_rollup(
                         THEN (regexp_match(COALESCE(pe.releasetilt, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision
                       ELSE NULL
                     END AS release_tilt_deg,
+                    CASE
+                      WHEN COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', '') ~ '^[0-9]{1,2}\\s*:\\s*[0-9]{1,2}$'
+                        THEN ((((split_part(regexp_replace(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '\\s+', '', 'g'), ':', 1)::int %% 12) * 60)
+                          + LEAST(59, GREATEST(0, split_part(regexp_replace(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '\\s+', '', 'g'), ':', 2)::int)))::double precision / 2.0) - 180.0
+                      WHEN regexp_match(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '[-+]?[0-9]*\\.?[0-9]+') IS NOT NULL
+                        THEN (regexp_match(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision
+                      ELSE NULL
+                    END AS break_tilt_deg,
                     COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), '') AS tagged_hit_type,
                     COALESCE(NULLIF(TRIM(pe.pitchcall), ''), '') AS pitch_call,
                     COALESCE(NULLIF(TRIM(pe.korbb), ''), '') AS korbb,
@@ -8325,7 +8789,8 @@ def _refresh_league_daily_rollup(
                   count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
                   bf_n, k_n, bb_n, hbp_n, single_n, double_n, triple_n, hr_n, sf_n,
                   rel_height_sum, rel_height_n, rel_side_sum, rel_side_n, ext_sum, ext_n,
-                  spin_eff_sum, spin_eff_n, vaa_sum, vaa_n, haa_sum, haa_n, r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample
+                  spin_eff_sum, spin_eff_n, xivb_sum, xhb_sum, expected_move_n, divb_sum, dhb_sum, tilt_dev_minutes_sum, tilt_dev_n,
+                  vaa_sum, vaa_n, nvaa_sum, nvaa_n, haa_sum, haa_n, r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample
                 )
                 SELECT
                   %(school_code)s::text,
@@ -8464,8 +8929,17 @@ def _refresh_league_daily_rollup(
                   SUM(CASE WHEN e.ext_value IS NOT NULL THEN 1 ELSE 0 END)::int AS ext_n,
                   SUM(CASE WHEN e.spin_eff IS NOT NULL THEN e.spin_eff ELSE 0.0 END)::double precision AS spin_eff_sum,
                   SUM(CASE WHEN e.spin_eff IS NOT NULL THEN 1 ELSE 0 END)::int AS spin_eff_n,
+                  COALESCE(SUM(""" + _expected_movement_sql("ivb", "e") + """), 0.0)::double precision AS xivb_sum,
+                  COALESCE(SUM(""" + _expected_movement_sql("hb", "e") + """), 0.0)::double precision AS xhb_sum,
+                  COUNT(""" + _expected_movement_sql("ivb", "e") + """)::int AS expected_move_n,
+                  COALESCE(SUM(CASE WHEN """ + _expected_movement_sql("ivb", "e") + """ IS NOT NULL THEN e.ivb - (""" + _expected_movement_sql("ivb", "e") + """) ELSE 0.0 END), 0.0)::double precision AS divb_sum,
+                  COALESCE(SUM(CASE WHEN """ + _expected_movement_sql("hb", "e") + """ IS NOT NULL THEN e.hb - (""" + _expected_movement_sql("hb", "e") + """) ELSE 0.0 END), 0.0)::double precision AS dhb_sum,
+                  COALESCE(SUM(""" + _tilt_deviation_sql("e") + """), 0.0)::double precision AS tilt_dev_minutes_sum,
+                  COUNT(""" + _tilt_deviation_sql("e") + """)::int AS tilt_dev_n,
                   SUM(CASE WHEN e.vaa IS NOT NULL THEN e.vaa ELSE 0.0 END)::double precision AS vaa_sum,
                   SUM(CASE WHEN e.vaa IS NOT NULL THEN 1 ELSE 0 END)::int AS vaa_n,
+                  COALESCE(SUM(""" + _nvaa_sql("e.vaa", "e.plate_height", "e.pitch_type", is_pro=False) + """), 0.0)::double precision AS nvaa_sum,
+                  COUNT(""" + _nvaa_sql("e.vaa", "e.plate_height", "e.pitch_type", is_pro=False) + """)::int AS nvaa_n,
                   SUM(CASE WHEN e.haa IS NOT NULL THEN e.haa ELSE 0.0 END)::double precision AS haa_sum,
                   SUM(CASE WHEN e.haa IS NOT NULL THEN 1 ELSE 0 END)::int AS haa_n,
                   SUM(CASE WHEN e.release_tilt_deg IS NOT NULL THEN COS(RADIANS(e.release_tilt_deg)) ELSE 0.0 END)::double precision AS r_tilt_x_sum,
@@ -8503,7 +8977,8 @@ def _refresh_league_daily_rollup(
                       count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
                       bf_n, k_n, bb_n, hbp_n, single_n, double_n, triple_n, hr_n, sf_n,
                       rel_height_sum, rel_height_n, rel_side_sum, rel_side_n, ext_sum, ext_n,
-                      spin_eff_sum, spin_eff_n, vaa_sum, vaa_n, haa_sum, haa_n,
+                      spin_eff_sum, spin_eff_n, xivb_sum, xhb_sum, expected_move_n, divb_sum, dhb_sum, tilt_dev_minutes_sum, tilt_dev_n,
+                      vaa_sum, vaa_n, nvaa_sum, nvaa_n, haa_sum, haa_n,
                       r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample
                     )
                     SELECT
@@ -8536,7 +9011,11 @@ def _refresh_league_daily_rollup(
                       SUM(rel_side_sum)::double precision, SUM(rel_side_n)::int,
                       SUM(ext_sum)::double precision, SUM(ext_n)::int,
                       SUM(spin_eff_sum)::double precision, SUM(spin_eff_n)::int,
+                      SUM(xivb_sum)::double precision, SUM(xhb_sum)::double precision, SUM(expected_move_n)::int,
+                      SUM(divb_sum)::double precision, SUM(dhb_sum)::double precision,
+                      SUM(tilt_dev_minutes_sum)::double precision, SUM(tilt_dev_n)::int,
                       SUM(vaa_sum)::double precision, SUM(vaa_n)::int,
+                      SUM(nvaa_sum)::double precision, SUM(nvaa_n)::int,
                       SUM(haa_sum)::double precision, SUM(haa_n)::int,
                       SUM(r_tilt_x_sum)::double precision, SUM(r_tilt_y_sum)::double precision,
                       SUM(r_tilt_n)::int, COALESCE(MIN(NULLIF(r_tilt_sample, '')), '')
@@ -9034,6 +9513,7 @@ def _try_pitching_overview_daily_rollup(
         "Side",
         "Ext",
         "VAA",
+        "nVAA",
         "HAA",
         "Strike%",
         "Swing%",
@@ -9130,6 +9610,8 @@ def _try_pitching_overview_daily_rollup(
         "Batter Hand": ("batterside_norm", "Batter Hand"),
         "Team": ("pitcher_team_norm", "Team"),
         "Pitcher Team": ("pitcher_team_norm", "Pitcher Team"),
+        "Year": ("EXTRACT(YEAR FROM session_date)::text", "Year"),
+        "Month": ("TO_CHAR(session_date, 'Mon YYYY')", "Month"),
         "Count": ("split_value", "Count"),
         "After Count": ("split_value", "After Count"),
         "Game": ("split_value", "Game"),
@@ -9243,7 +9725,7 @@ def _try_pitching_overview_daily_rollup(
     # the durable PA-start count used by Summary/Leaderboard BF.
     bf_sum_select = "SUM(count_00_n)::int AS bf_n" if split_clean == "Game" else "SUM(bf_n)::int AS bf_n"
     mode_columns_map: Dict[str, List[str]] = {
-        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
+        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
@@ -9595,8 +10077,17 @@ def _try_pitching_overview_daily_rollup(
                   SUM(ext_n)::int AS ext_n,
                   SUM(spin_eff_sum)::double precision AS spin_eff_sum,
                   SUM(spin_eff_n)::int AS spin_eff_n,
+                  SUM(xivb_sum)::double precision AS xivb_sum,
+                  SUM(xhb_sum)::double precision AS xhb_sum,
+                  SUM(expected_move_n)::int AS expected_move_n,
+                  SUM(divb_sum)::double precision AS divb_sum,
+                  SUM(dhb_sum)::double precision AS dhb_sum,
+                  SUM(tilt_dev_minutes_sum)::double precision AS tilt_dev_minutes_sum,
+                  SUM(tilt_dev_n)::int AS tilt_dev_n,
                   SUM(vaa_sum)::double precision AS vaa_sum,
                   SUM(vaa_n)::int AS vaa_n,
+                  SUM(nvaa_sum)::double precision AS nvaa_sum,
+                  SUM(nvaa_n)::int AS nvaa_n,
                   SUM(haa_sum)::double precision AS haa_sum,
                   SUM(haa_n)::int AS haa_n,
                   SUM(r_tilt_x_sum)::double precision AS r_tilt_x_sum,
@@ -9844,6 +10335,8 @@ def _try_pitching_overview_daily_rollup(
     elif split_clean == "Times Through Order":
         tto_order = {"1": 1, "2": 2, "3": 3, "4+": 4, "Unknown": 99}
         split_items.sort(key=lambda kv: (tto_order.get(str(kv[0]), 98), str(kv[0])))
+    elif split_clean in {"Year", "Month"}:
+        split_items.sort(key=lambda kv: _year_or_month_split_sort_key(kv[0]))
     else:
         split_items.sort(key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
 
@@ -9873,11 +10366,20 @@ def _try_pitching_overview_daily_rollup(
         rel_side_n = int(sum(int(r.get("rel_side_n") or 0) for r in rows_for_split))
         ext_n = int(sum(int(r.get("ext_n") or 0) for r in rows_for_split))
         spin_eff_n = int(sum(int(r.get("spin_eff_n") or 0) for r in rows_for_split))
+        expected_move_n = int(sum(int(r.get("expected_move_n") or 0) for r in rows_for_split))
+        tilt_dev_n = int(sum(int(r.get("tilt_dev_n") or 0) for r in rows_for_split))
         vaa_n = int(sum(int(r.get("vaa_n") or 0) for r in rows_for_split))
+        nvaa_n = int(sum(int(r.get("nvaa_n") or 0) for r in rows_for_split))
         haa_n = int(sum(int(r.get("haa_n") or 0) for r in rows_for_split))
         avg_ivb_local = (sum(float(r.get("ivb_sum") or 0.0) for r in rows_for_split) / ivb_n) if ivb_n > 0 else None
         avg_hb_local = (sum(float(r.get("hb_sum") or 0.0) for r in rows_for_split) / hb_n) if hb_n > 0 else None
+        avg_xivb_local = (sum(float(r.get("xivb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
+        avg_xhb_local = (sum(float(r.get("xhb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
+        avg_divb_local = (sum(float(r.get("divb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
+        avg_dhb_local = (sum(float(r.get("dhb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
+        avg_tilt_dev_local = (sum(float(r.get("tilt_dev_minutes_sum") or 0.0) for r in rows_for_split) / tilt_dev_n) if tilt_dev_n > 0 else None
         avg_vaa_local = (sum(float(r.get("vaa_sum") or 0.0) for r in rows_for_split) / vaa_n) if vaa_n > 0 else None
+        avg_nvaa_local = (sum(float(r.get("nvaa_sum") or 0.0) for r in rows_for_split) / nvaa_n) if nvaa_n > 0 else None
         avg_haa_local = (sum(float(r.get("haa_sum") or 0.0) for r in rows_for_split) / haa_n) if haa_n > 0 else None
         r_tilt_clock = _tilt_clock_from_vector(
             sum(float(r.get("r_tilt_x_sum") or 0.0) for r in rows_for_split),
@@ -10063,16 +10565,22 @@ def _try_pitching_overview_daily_rollup(
             ),
             "Max": round(max(split_max_velo_vals), 1) if split_max_velo_vals else None,
             "IVB": round(avg_ivb_local, 1) if _is_num(avg_ivb_local) else None,
+            "xIVB": round(avg_xivb_local, 1) if _is_num(avg_xivb_local) else None,
+            "dIVB": round(avg_divb_local, 1) if _is_num(avg_divb_local) else None,
             "HB": round(avg_hb_local, 1) if _is_num(avg_hb_local) else None,
+            "xHB": round(avg_xhb_local, 1) if _is_num(avg_xhb_local) else None,
+            "dHB": round(avg_dhb_local, 1) if _is_num(avg_dhb_local) else None,
             "Spin": round(sum(float(r.get("spin_sum") or 0.0) for r in rows_for_split) / spin_n, 0) if spin_n > 0 else None,
             "rTilt": r_tilt_clock,
             "bTilt": b_tilt,
+            "TiltDev": _format_tilt_deviation(avg_tilt_dev_local),
             "SpinEff": (f"{round((100.0 * sum(float(r.get('spin_eff_sum') or 0.0) for r in rows_for_split) / spin_eff_n), 1)}%" if spin_eff_n > 0 else None),
             "Height": round(sum(float(r.get("rel_height_sum") or 0.0) for r in rows_for_split) / rel_height_n, 1) if rel_height_n > 0 else None,
             "Side": round(sum(float(r.get("rel_side_sum") or 0.0) for r in rows_for_split) / rel_side_n, 1) if rel_side_n > 0 else None,
             "Ext": round(sum(float(r.get("ext_sum") or 0.0) for r in rows_for_split) / ext_n, 1) if ext_n > 0 else None,
-            "VAA": round(avg_vaa_local, 1) if _is_num(avg_vaa_local) else None,
-            "HAA": round(avg_haa_local, 1) if _is_num(avg_haa_local) else None,
+            "VAA": round(avg_vaa_local, 4) if _is_num(avg_vaa_local) else None,
+            "nVAA": round(avg_nvaa_local, 4) if _is_num(avg_nvaa_local) else None,
+            "HAA": round(avg_haa_local, 4) if _is_num(avg_haa_local) else None,
             "Stuff+": round(float(stuff_avg_local), 1) if _is_num(stuff_avg_local) else None,
             "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
             "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
@@ -10310,7 +10818,7 @@ def _try_pitching_overview_daily_rollup(
             heatmap_points = []
 
     mode_columns_map: Dict[str, List[str]] = {
-        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
+        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
@@ -10562,6 +11070,7 @@ def _refresh_pro_daily_rollup(
                     NULLIF((regexp_match(COALESCE(pe.relside::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS rel_side,
                     NULLIF((regexp_match(COALESCE(pe.extension::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS ext_value,
                     NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS spin_eff,
+                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'activespin', to_jsonb(pe)->>'ActiveSpin', to_jsonb(pe)->>'active_spin', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS active_spin,
                     COALESCE(
                       NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'vertapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision,
                       """ + _pro_approach_angle_sql("vertical", "pe") + """
@@ -10586,6 +11095,14 @@ def _refresh_pro_daily_rollup(
                         THEN (regexp_match(COALESCE(pe.releasetilt, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision
                       ELSE NULL
                     END AS release_tilt_deg,
+                    CASE
+                      WHEN COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', '') ~ '^[0-9]{1,2}\\s*:\\s*[0-9]{1,2}$'
+                        THEN ((((split_part(regexp_replace(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '\\s+', '', 'g'), ':', 1)::int %% 12) * 60)
+                          + LEAST(59, GREATEST(0, split_part(regexp_replace(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '\\s+', '', 'g'), ':', 2)::int)))::double precision / 2.0) - 180.0
+                      WHEN regexp_match(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '[-+]?[0-9]*\\.?[0-9]+') IS NOT NULL
+                        THEN (regexp_match(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision
+                      ELSE NULL
+                    END AS break_tilt_deg,
                     regexp_replace(
                       lower(
                         COALESCE(
@@ -10709,7 +11226,8 @@ def _refresh_pro_daily_rollup(
                   in_play_n, gb_n, fb_n, pu_n, barrel_n, ev_sum, ev_n, la_sum, la_n,
                   bf_n, k_n, bb_n, hbp_n, hr_n, single_n, double_n, triple_n,
                   sf_n, rel_height_sum, rel_height_n, rel_side_sum, rel_side_n, ext_sum, ext_n,
-                  spin_eff_sum, spin_eff_n, vaa_sum, vaa_n, haa_sum, haa_n,
+                  spin_eff_sum, spin_eff_n, xivb_sum, xhb_sum, expected_move_n, divb_sum, dhb_sum, tilt_dev_minutes_sum, tilt_dev_n,
+                  vaa_sum, vaa_n, nvaa_sum, nvaa_n, haa_sum, haa_n,
                   r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample,
                   rv_sum, pv_sum,
                   count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
@@ -10850,8 +11368,17 @@ def _refresh_pro_daily_rollup(
                   COUNT(ext_value)::int AS ext_n,
                   COALESCE(SUM(spin_eff), 0.0)::double precision AS spin_eff_sum,
                   COUNT(spin_eff)::int AS spin_eff_n,
+                  COALESCE(SUM(""" + _expected_movement_sql("ivb", "staged") + """), 0.0)::double precision AS xivb_sum,
+                  COALESCE(SUM(""" + _expected_movement_sql("hb", "staged") + """), 0.0)::double precision AS xhb_sum,
+                  COUNT(""" + _expected_movement_sql("ivb", "staged") + """)::int AS expected_move_n,
+                  COALESCE(SUM(CASE WHEN """ + _expected_movement_sql("ivb", "staged") + """ IS NOT NULL THEN staged.ivb - (""" + _expected_movement_sql("ivb", "staged") + """) ELSE 0.0 END), 0.0)::double precision AS divb_sum,
+                  COALESCE(SUM(CASE WHEN """ + _expected_movement_sql("hb", "staged") + """ IS NOT NULL THEN staged.hb - (""" + _expected_movement_sql("hb", "staged") + """) ELSE 0.0 END), 0.0)::double precision AS dhb_sum,
+                  COALESCE(SUM(""" + _tilt_deviation_sql("staged") + """), 0.0)::double precision AS tilt_dev_minutes_sum,
+                  COUNT(""" + _tilt_deviation_sql("staged") + """)::int AS tilt_dev_n,
                   COALESCE(SUM(vaa), 0.0)::double precision AS vaa_sum,
                   COUNT(vaa)::int AS vaa_n,
+                  COALESCE(SUM(""" + _nvaa_sql("vaa", "plate_height", "pitch_type", is_pro=True) + """), 0.0)::double precision AS nvaa_sum,
+                  COUNT(""" + _nvaa_sql("vaa", "plate_height", "pitch_type", is_pro=True) + """)::int AS nvaa_n,
                   COALESCE(SUM(haa), 0.0)::double precision AS haa_sum,
                   COUNT(haa)::int AS haa_n,
                   SUM(CASE WHEN release_tilt_deg IS NOT NULL THEN COS(RADIANS(release_tilt_deg)) ELSE 0.0 END)::double precision AS r_tilt_x_sum,
@@ -10895,7 +11422,7 @@ def _refresh_pro_daily_rollup(
                     ),
                     0.0
                   )::double precision AS official_outs_w_sum
-                FROM staged
+                FROM staged staged
                 GROUP BY
                   school_code, session_date, sport_id, level_bucket, pitch_type,
                   pitcher_norm, batter_norm, catcher_norm, pitcher_team_code, batter_team_code,
@@ -10958,6 +11485,7 @@ def _refresh_pro_daily_rollup(
                     NULLIF((regexp_match(COALESCE(pe.relside::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS rel_side,
                     NULLIF((regexp_match(COALESCE(pe.extension::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS ext_value,
                     NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS spin_eff,
+                    NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'activespin', to_jsonb(pe)->>'ActiveSpin', to_jsonb(pe)->>'active_spin', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS active_spin,
                     COALESCE(
                       NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'vertapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision,
                       """ + _pro_approach_angle_sql("vertical", "pe") + """
@@ -10975,6 +11503,14 @@ def _refresh_pro_daily_rollup(
                         THEN (regexp_match(COALESCE(pe.releasetilt, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision
                       ELSE NULL
                     END AS release_tilt_deg,
+                    CASE
+                      WHEN COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', '') ~ '^[0-9]{1,2}\\s*:\\s*[0-9]{1,2}$'
+                        THEN ((((split_part(regexp_replace(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '\\s+', '', 'g'), ':', 1)::int %% 12) * 60)
+                          + LEAST(59, GREATEST(0, split_part(regexp_replace(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '\\s+', '', 'g'), ':', 2)::int)))::double precision / 2.0) - 180.0
+                      WHEN regexp_match(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '[-+]?[0-9]*\\.?[0-9]+') IS NOT NULL
+                        THEN (regexp_match(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision
+                      ELSE NULL
+                    END AS break_tilt_deg,
                     regexp_replace(
                       lower(
                         COALESCE(
@@ -11259,7 +11795,8 @@ def _refresh_pro_daily_rollup(
                   in_play_n, gb_n, fb_n, pu_n, barrel_n, ev_sum, ev_n, la_sum, la_n,
                   bf_n, k_n, bb_n, hbp_n, hr_n, single_n, double_n, triple_n,
                   sf_n, rel_height_sum, rel_height_n, rel_side_sum, rel_side_n, ext_sum, ext_n,
-                  spin_eff_sum, spin_eff_n, vaa_sum, vaa_n, haa_sum, haa_n,
+                  spin_eff_sum, spin_eff_n, xivb_sum, xhb_sum, expected_move_n, divb_sum, dhb_sum, tilt_dev_minutes_sum, tilt_dev_n,
+                  vaa_sum, vaa_n, nvaa_sum, nvaa_n, haa_sum, haa_n,
                   r_tilt_x_sum, r_tilt_y_sum, r_tilt_n, r_tilt_sample,
                   rv_sum, pv_sum,
                   count_00_n, count_behind_n, count_even_n, count_ahead_n, count_lt2k_n, count_2k_n,
@@ -11364,8 +11901,17 @@ def _refresh_pro_daily_rollup(
                   COUNT(ext_value)::int AS ext_n,
                   COALESCE(SUM(spin_eff), 0.0)::double precision AS spin_eff_sum,
                   COUNT(spin_eff)::int AS spin_eff_n,
+                  COALESCE(SUM(""" + _expected_movement_sql("ivb", "e") + """), 0.0)::double precision AS xivb_sum,
+                  COALESCE(SUM(""" + _expected_movement_sql("hb", "e") + """), 0.0)::double precision AS xhb_sum,
+                  COUNT(""" + _expected_movement_sql("ivb", "e") + """)::int AS expected_move_n,
+                  COALESCE(SUM(CASE WHEN """ + _expected_movement_sql("ivb", "e") + """ IS NOT NULL THEN e.ivb - (""" + _expected_movement_sql("ivb", "e") + """) ELSE 0.0 END), 0.0)::double precision AS divb_sum,
+                  COALESCE(SUM(CASE WHEN """ + _expected_movement_sql("hb", "e") + """ IS NOT NULL THEN e.hb - (""" + _expected_movement_sql("hb", "e") + """) ELSE 0.0 END), 0.0)::double precision AS dhb_sum,
+                  COALESCE(SUM(""" + _tilt_deviation_sql("e") + """), 0.0)::double precision AS tilt_dev_minutes_sum,
+                  COUNT(""" + _tilt_deviation_sql("e") + """)::int AS tilt_dev_n,
                   COALESCE(SUM(vaa), 0.0)::double precision AS vaa_sum,
                   COUNT(vaa)::int AS vaa_n,
+                  COALESCE(SUM(""" + _nvaa_sql("vaa", "plate_height", "pitch_type", is_pro=True) + """), 0.0)::double precision AS nvaa_sum,
+                  COUNT(""" + _nvaa_sql("vaa", "plate_height", "pitch_type", is_pro=True) + """)::int AS nvaa_n,
                   COALESCE(SUM(haa), 0.0)::double precision AS haa_sum,
                   COUNT(haa)::int AS haa_n,
                   SUM(CASE WHEN release_tilt_deg IS NOT NULL THEN COS(RADIANS(release_tilt_deg)) ELSE 0.0 END)::double precision AS r_tilt_x_sum,
@@ -11697,6 +12243,7 @@ def _try_pro_pitching_overview_rollup(
         "Side",
         "Ext",
         "VAA",
+        "nVAA",
         "HAA",
         "Strike%",
         "Swing%",
@@ -11794,6 +12341,8 @@ def _try_pro_pitching_overview_rollup(
         "Batter Hand": ("batterside_norm", "Batter Hand"),
         "Team": ("pitcher_team_code", "Team"),
         "Pitcher Team": ("pitcher_team_code", "Pitcher Team"),
+        "Year": ("EXTRACT(YEAR FROM session_date)::text", "Year"),
+        "Month": ("TO_CHAR(session_date, 'Mon YYYY')", "Month"),
         "Count": ("CASE WHEN balls_num >= 0 AND strikes_num >= 0 THEN (balls_num::text || '-' || strikes_num::text) ELSE 'Unknown' END", "Count"),
         "After Count": ("split_value", "After Count"),
         "Game": ("split_value", "Game"),
@@ -12103,8 +12652,17 @@ def _try_pro_pitching_overview_rollup(
                   SUM(ext_n)::int AS ext_n,
                   SUM(spin_eff_sum)::double precision AS spin_eff_sum,
                   SUM(spin_eff_n)::int AS spin_eff_n,
+                  SUM(xivb_sum)::double precision AS xivb_sum,
+                  SUM(xhb_sum)::double precision AS xhb_sum,
+                  SUM(expected_move_n)::int AS expected_move_n,
+                  SUM(divb_sum)::double precision AS divb_sum,
+                  SUM(dhb_sum)::double precision AS dhb_sum,
+                  SUM(tilt_dev_minutes_sum)::double precision AS tilt_dev_minutes_sum,
+                  SUM(tilt_dev_n)::int AS tilt_dev_n,
                   SUM(vaa_sum)::double precision AS vaa_sum,
                   SUM(vaa_n)::int AS vaa_n,
+                  SUM(nvaa_sum)::double precision AS nvaa_sum,
+                  SUM(nvaa_n)::int AS nvaa_n,
                   SUM(haa_sum)::double precision AS haa_sum,
                   SUM(haa_n)::int AS haa_n,
                   SUM(r_tilt_x_sum)::double precision AS r_tilt_x_sum,
@@ -12159,7 +12717,7 @@ def _try_pro_pitching_overview_rollup(
         )
         return None
     mode_columns_map: Dict[str, List[str]] = {
-        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "HAA", "Stuff+"],
+        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
@@ -12339,6 +12897,8 @@ def _try_pro_pitching_overview_rollup(
     split_items = list(grouped_by_split.items())
     if split_clean == "Pitch Types":
         split_items.sort(key=lambda kv: (pitch_order.get(str(kv[0]), 99), str(kv[0])))
+    elif split_clean in {"Year", "Month"}:
+        split_items.sort(key=lambda kv: _year_or_month_split_sort_key(kv[0]))
     else:
         split_items.sort(key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
     total_single_n = int(sum(int(r.get("single_n") or 0) for r in grouped_rows))
@@ -12518,10 +13078,18 @@ def _try_pro_pitching_overview_rollup(
         rel_side_n = int(sum(int(r.get("rel_side_n") or 0) for r in rows_for_split))
         ext_n = int(sum(int(r.get("ext_n") or 0) for r in rows_for_split))
         spin_eff_n = int(sum(int(r.get("spin_eff_n") or 0) for r in rows_for_split))
+        expected_move_n = int(sum(int(r.get("expected_move_n") or 0) for r in rows_for_split))
+        tilt_dev_n = int(sum(int(r.get("tilt_dev_n") or 0) for r in rows_for_split))
         vaa_n = int(sum(int(r.get("vaa_n") or 0) for r in rows_for_split))
+        nvaa_n = int(sum(int(r.get("nvaa_n") or 0) for r in rows_for_split))
         haa_n = int(sum(int(r.get("haa_n") or 0) for r in rows_for_split))
         avg_ivb_local = (sum(float(r.get("ivb_sum") or 0.0) for r in rows_for_split) / ivb_n) if ivb_n > 0 else None
         avg_hb_local = (sum(float(r.get("hb_sum") or 0.0) for r in rows_for_split) / hb_n) if hb_n > 0 else None
+        avg_xivb_local = (sum(float(r.get("xivb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
+        avg_xhb_local = (sum(float(r.get("xhb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
+        avg_divb_local = (sum(float(r.get("divb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
+        avg_dhb_local = (sum(float(r.get("dhb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
+        avg_tilt_dev_local = (sum(float(r.get("tilt_dev_minutes_sum") or 0.0) for r in rows_for_split) / tilt_dev_n) if tilt_dev_n > 0 else None
         r_tilt_clock = _tilt_clock_from_vector(
             sum(float(r.get("r_tilt_x_sum") or 0.0) for r in rows_for_split),
             sum(float(r.get("r_tilt_y_sum") or 0.0) for r in rows_for_split),
@@ -12693,16 +13261,22 @@ def _try_pro_pitching_overview_rollup(
             "Velo": round(sum(float(r.get("velo_sum") or 0.0) for r in rows_for_split) / velo_n, 1) if velo_n > 0 else None,
             "Max": round(max([float(r.get("velo_max")) for r in rows_for_split if _is_num(r.get("velo_max"))]), 1) if any(_is_num(r.get("velo_max")) for r in rows_for_split) else None,
             "IVB": round(avg_ivb_local, 1) if _is_num(avg_ivb_local) else None,
+            "xIVB": round(avg_xivb_local, 1) if _is_num(avg_xivb_local) else None,
+            "dIVB": round(avg_divb_local, 1) if _is_num(avg_divb_local) else None,
             "HB": round(avg_hb_local, 1) if _is_num(avg_hb_local) else None,
+            "xHB": round(avg_xhb_local, 1) if _is_num(avg_xhb_local) else None,
+            "dHB": round(avg_dhb_local, 1) if _is_num(avg_dhb_local) else None,
             "Spin": round(sum(float(r.get("spin_sum") or 0.0) for r in rows_for_split) / spin_n, 0) if spin_n > 0 else None,
             "rTilt": r_tilt_clock,
             "bTilt": b_tilt,
+            "TiltDev": _format_tilt_deviation(avg_tilt_dev_local),
             "SpinEff": (f"{round((100.0 * sum(float(r.get('spin_eff_sum') or 0.0) for r in rows_for_split) / spin_eff_n), 1)}%" if spin_eff_n > 0 else None),
             "Height": round(sum(float(r.get("rel_height_sum") or 0.0) for r in rows_for_split) / rel_height_n, 1) if rel_height_n > 0 else None,
             "Side": round(sum(float(r.get("rel_side_sum") or 0.0) for r in rows_for_split) / rel_side_n, 1) if rel_side_n > 0 else None,
             "Ext": round(sum(float(r.get("ext_sum") or 0.0) for r in rows_for_split) / ext_n, 1) if ext_n > 0 else None,
-            "VAA": round(sum(float(r.get("vaa_sum") or 0.0) for r in rows_for_split) / vaa_n, 1) if vaa_n > 0 else None,
-            "HAA": round(sum(float(r.get("haa_sum") or 0.0) for r in rows_for_split) / haa_n, 1) if haa_n > 0 else None,
+            "VAA": round(sum(float(r.get("vaa_sum") or 0.0) for r in rows_for_split) / vaa_n, 4) if vaa_n > 0 else None,
+            "nVAA": round(sum(float(r.get("nvaa_sum") or 0.0) for r in rows_for_split) / nvaa_n, 4) if nvaa_n > 0 else None,
+            "HAA": round(sum(float(r.get("haa_sum") or 0.0) for r in rows_for_split) / haa_n, 4) if haa_n > 0 else None,
             "Stuff+": round(float(stuff_avg_local), 1) if _is_num(stuff_avg_local) else None,
             "FPS%": _safe_pct(sum(int(r.get("fps_num") or 0) for r in rows_for_split), sum(int(r.get("fps_den") or 0) for r in rows_for_split)),
             "FPS(FB)%": _safe_pct(fps_fb_num, fps_fb_den),
@@ -12827,7 +13401,7 @@ def _try_pro_pitching_overview_rollup(
         suspicious_custom_rows = 0
         movement_columns_requested = mode_clean in {"Stuff", "Bullpen"} or (
             mode_clean == "Custom"
-            and any(col in {"Height", "Side", "Ext", "SpinEff", "VAA", "HAA", "rTilt", "bTilt"} for col in normalized_custom_columns)
+            and any(col in {"Height", "Side", "Ext", "SpinEff", "VAA", "nVAA", "HAA", "rTilt", "bTilt"} for col in normalized_custom_columns)
         )
         for row in substantial_rows:
             strike_pct = _pct_to_float(row.get("Strike%"))
@@ -13021,6 +13595,8 @@ def _try_pro_hitting_overview_rollup(
         "Pitcher Hand": ("pitcherthrows_norm", False),
         "Pitcher": ("pitcher_name", False),
         "Catcher": ("catcher_name", False),
+        "Year": ("EXTRACT(YEAR FROM session_date)::text", False),
+        "Month": ("TO_CHAR(session_date, 'Mon YYYY')", False),
         "Count": ("CASE WHEN balls_num >= 0 AND strikes_num >= 0 THEN (balls_num::text || '-' || strikes_num::text) ELSE 'Unknown' END", False),
         "Game": ("split_value", True),
     }
@@ -13173,7 +13749,12 @@ def _try_pro_hitting_overview_rollup(
         grouped_by_split.setdefault(str(row.get("split_value") or "Unknown"), []).append(row)
     total_pitches = int(sum(int(r.get("pitches") or 0) for r in grouped_rows))
     table_rows: List[Dict[str, Any]] = []
-    for split_value, rows_for_split in sorted(grouped_by_split.items(), key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0]))):
+    split_sort_key = (
+        (lambda kv: _year_or_month_split_sort_key(kv[0]))
+        if split_by in {"Year", "Month"}
+        else (lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
+    )
+    for split_value, rows_for_split in sorted(grouped_by_split.items(), key=split_sort_key):
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
         bf = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
         bb = int(sum(int(r.get("bb_n") or 0) for r in rows_for_split))
@@ -13456,6 +14037,8 @@ def _try_league_hitting_overview_rollup(
         "Pitcher Hand": ("pitcherthrows_norm", False),
         "Pitcher": ("pitcher_name", False),
         "Catcher": ("catcher_name", False),
+        "Year": ("EXTRACT(YEAR FROM session_date)::text", False),
+        "Month": ("TO_CHAR(session_date, 'Mon YYYY')", False),
         "Count": ("split_value", True),
         "Game": ("split_value", True),
     }
@@ -13622,7 +14205,12 @@ def _try_league_hitting_overview_rollup(
         grouped_by_split.setdefault(str(row.get("split_value") or "Unknown"), []).append(row)
     total_pitches = int(sum(int(r.get("pitches") or 0) for r in grouped_rows))
     table_rows: List[Dict[str, Any]] = []
-    for split_value, rows_for_split in sorted(grouped_by_split.items(), key=lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0]))):
+    split_sort_key = (
+        (lambda kv: _year_or_month_split_sort_key(kv[0]))
+        if split_by in {"Year", "Month"}
+        else (lambda kv: (-sum(int(r.get("pitches") or 0) for r in kv[1]), str(kv[0])))
+    )
+    for split_value, rows_for_split in sorted(grouped_by_split.items(), key=split_sort_key):
         pitches = int(sum(int(r.get("pitches") or 0) for r in rows_for_split))
         pa = int(sum(int(r.get("bf_n") or 0) for r in rows_for_split))
         bb = int(sum(int(r.get("bb_n") or 0) for r in rows_for_split))
@@ -16029,6 +16617,8 @@ def _pro_rollup_filters_hitting(level_norm: str) -> Optional[Dict[str, Any]]:
             "All",
             "Pitch Types",
             "Pitcher Hand",
+            "Year",
+            "Month",
             "Count",
             "After Count",
             "Venue",
@@ -16722,6 +17312,7 @@ def _pro_pitching_overview(
             needs_vaa_haa_cols = (
                 (table_mode or "").strip() == "Stuff"
                 or ("VAA" in selected_custom_columns)
+                or ("nVAA" in selected_custom_columns)
                 or ("HAA" in selected_custom_columns)
             )
             needs_kinematics_backfill = needs_vaa_haa_cols and any(
@@ -18033,6 +18624,8 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
                 "All",
                 "Pitch Types",
                 "Pitcher Hand",
+                "Year",
+                "Month",
                 "Count",
                 "After Count",
                 "Venue",
@@ -18340,6 +18933,8 @@ def _pro_hitting_filters(school_code: str, level: Optional[str] = None) -> Dict[
             "All",
             "Pitch Types",
             "Pitcher Hand",
+            "Year",
+            "Month",
             "Count",
             "After Count",
             "Venue",
@@ -18681,7 +19276,11 @@ def _pro_hitting_overview(
     if _pro_level_norm(level_filter) in {"All", "AAA", "MLB"}:
         try:
             latest_synced_date = _pro_max_session_date_in_rows(rows)
-            needs_vaa_haa_cols = ("VAA" in selected_custom_columns) or ("HAA" in selected_custom_columns)
+            needs_vaa_haa_cols = (
+                ("VAA" in selected_custom_columns)
+                or ("nVAA" in selected_custom_columns)
+                or ("HAA" in selected_custom_columns)
+            )
             needs_kinematics_backfill = needs_vaa_haa_cols and any(
                 (not _is_num(r.get("vy0"))) or (not _is_num(r.get("ay")))
                 for r in rows
@@ -20154,6 +20753,8 @@ def pitching_overview(
                 "Batter Hand",
                 "Team",
                 "Pitcher Team",
+                "Year",
+                "Month",
                 "Count",
                 "After Count",
                 "Zone Location",
@@ -20233,6 +20834,8 @@ def pitching_overview(
                 "Batter Hand",
                 "Team",
                 "Pitcher Team",
+                "Year",
+                "Month",
                 "Count",
                 "After Count",
                 "Zone Location",
@@ -20281,6 +20884,8 @@ def pitching_overview(
                 "Pitcher Hand",
                 "Batter Hand",
                 "Team",
+                "Year",
+                "Month",
                 "Pitcher Team",
                 "Count",
                 "After Count",
@@ -20413,7 +21018,7 @@ def pitching_overview(
             "include_row_pitches": include_row_pitches,
             "include_trend_rows": include_trend_rows,
             "force_raw": force_raw,
-            "metrics_version": "pro-approach-angles-v2",
+            "metrics_version": "correlation-angle-precision-v4",
         },
     )
     use_pro_chart_cache = school_code == "PRO" and chart_only and include_chart_points
@@ -23436,6 +24041,8 @@ def hitting_filters(
             "All",
             "Pitch Types",
             "Pitcher Hand",
+            "Year",
+            "Month",
             "Count",
             "After Count",
             "Venue",
@@ -23650,6 +24257,8 @@ def hitting_overview(
                 "Batter",
                 "Pitcher Hand",
                 "Batter Hand",
+                "Year",
+                "Month",
                 "Count",
                 "After Count",
                 "Venue",
@@ -25384,6 +25993,7 @@ def catching_overview(
                       COALESCE(NULLIF(TRIM(releasetilt), ''), '') AS release_tilt,
                       COALESCE(NULLIF(TRIM(breaktilt), ''), '') AS break_tilt,
                       spinefficiency AS spin_eff,
+                      NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'ActiveSpin', to_jsonb(pe)->>'activespin', to_jsonb(pe)->>'active_spin', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS active_spin,
                       relheight AS rel_height,
                       relside AS rel_side,
                       extension AS ext_value,
@@ -25517,6 +26127,7 @@ def catching_overview(
                   COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'ReleaseTilt'), ''), NULLIF(TRIM(to_jsonb(pe)->>'releasetilt'), ''), NULLIF(TRIM(to_jsonb(pe)->>'Tilt'), ''), NULLIF(TRIM(to_jsonb(pe)->>'tilt'), ''), '') AS release_tilt,
                   COALESCE(NULLIF(TRIM(to_jsonb(pe)->>'BreakTilt'), ''), NULLIF(TRIM(to_jsonb(pe)->>'breaktilt'), ''), NULLIF(TRIM(to_jsonb(pe)->>'Tilt'), ''), NULLIF(TRIM(to_jsonb(pe)->>'tilt'), ''), '') AS break_tilt,
                   (regexp_match(COALESCE(to_jsonb(pe)->>'SpinEfficiency', to_jsonb(pe)->>'spinefficiency', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS spin_eff,
+                  NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'ActiveSpin', to_jsonb(pe)->>'activespin', to_jsonb(pe)->>'active_spin', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS active_spin,
                   (regexp_match(COALESCE(to_jsonb(pe)->>'RelHeight', to_jsonb(pe)->>'relheight', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS rel_height,
                   (regexp_match(COALESCE(to_jsonb(pe)->>'RelSide', to_jsonb(pe)->>'relside', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS rel_side,
                   (regexp_match(COALESCE(to_jsonb(pe)->>'Extension', to_jsonb(pe)->>'extension', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS ext_value,

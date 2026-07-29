@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { requirePortalSession } from '../../../lib/portal-session';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
+import PortalUserMenu from '../user-menu';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { canUseDashboardData, canUseProgrammingData } from '../../../lib/programming-scope';
 import { schoolBrandCssVars } from '../../../lib/school-brand';
@@ -103,12 +104,16 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
           />
         </div>
         <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>Logged In As</p>
-            <h1>{session.name ?? session.email}</h1>
-          </div>
+          {session.role === 'admin' || session.role === 'coach' ? (
+            <PortalUserMenu displayName={session.name ?? session.email} />
+          ) : (
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+          )}
           <PortalNotificationsBell />
-          <LogoutButton />
+          {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">
             <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">

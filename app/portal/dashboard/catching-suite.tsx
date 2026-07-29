@@ -996,6 +996,8 @@ export default function CatchingSuite() {
         'Pitch Types',
         'Pitcher Hand',
         'Batter Hand',
+        'Year',
+        'Month',
         'Count',
         'After Count',
         'Venue',

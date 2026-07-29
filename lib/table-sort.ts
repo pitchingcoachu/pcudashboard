@@ -25,11 +25,18 @@ const ONE_DECIMAL_STAT_COLUMNS = new Set([
   'VELO',
   'MAX',
   'IVB',
+  'XIVB',
+  'DIVB',
   'HB',
+  'XHB',
+  'DHB',
   'HEIGHT',
   'SIDE',
   'EXT',
   'SPINEFF',
+  'VAA',
+  'NVAA',
+  'HAA',
 ]);
 
 function formatTiltClock(value: string): string {
@@ -55,6 +62,15 @@ function formatTiltClock(value: string): string {
   const h = Math.floor(totalMinutes / 60) || 12;
   const m = totalMinutes % 60;
   return `${h}:${String(m).padStart(2, '0')}`;
+}
+
+function parseTiltDeviationMinutes(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const raw = String(value ?? '').trim().replace(/\u2212/g, '-');
+  const match = raw.match(/^([+-])?\s*(\d{1,2})\s*:\s*(\d{1,2})$/);
+  if (!match) return parseSortableNumber(value);
+  const sign = match[1] === '-' ? -1 : 1;
+  return sign * ((Number(match[2]) * 60) + Number(match[3]));
 }
 
 export function parseSortableNumber(value: unknown): number | null {
@@ -94,8 +110,9 @@ export function sortTableRows<T extends SortableRow>(
     if (ISO_DATE_RE.test(as) && ISO_DATE_RE.test(bs)) {
       cmp = as.localeCompare(bs);
     } else {
-      const aNum = parseSortableNumber(av);
-      const bNum = parseSortableNumber(bv);
+      const isTiltDev = sortColumn.trim().toUpperCase() === 'TILTDEV';
+      const aNum = isTiltDev ? parseTiltDeviationMinutes(av) : parseSortableNumber(av);
+      const bNum = isTiltDev ? parseTiltDeviationMinutes(bv) : parseSortableNumber(bv);
       if (aNum !== null && bNum !== null) {
         cmp = aNum - bNum;
       } else {
@@ -129,6 +146,14 @@ export function formatTableDisplayValue(column: string, value: unknown): string 
     return `${numericValue.toFixed(1)}%`;
   }
   if (upper === 'RTILT' || upper === 'BTILT') return formatTiltClock(String(value));
+  if (upper === 'TILTDEV') {
+    const minutes = parseTiltDeviationMinutes(value);
+    if (minutes === null) return String(value);
+    const rounded = Math.round(minutes);
+    const sign = rounded > 0 ? '+' : rounded < 0 ? '-' : '';
+    const absolute = Math.abs(rounded);
+    return `${sign}${Math.floor(absolute / 60)}:${String(absolute % 60).padStart(2, '0')}`;
+  }
   if (ONE_DECIMAL_STAT_COLUMNS.has(upper)) {
     const numericValue = parseSortableNumber(value);
     if (numericValue === null) return String(value);

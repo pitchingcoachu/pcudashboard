@@ -132,6 +132,13 @@ type AggRow = {
   ivb_n: number;
   hb_sum: number;
   hb_n: number;
+  xivb_sum: number;
+  xhb_sum: number;
+  expected_move_n: number;
+  divb_sum: number;
+  dhb_sum: number;
+  tilt_dev_minutes_sum: number;
+  tilt_dev_n: number;
   spin_sum: number;
   spin_n: number;
   relheight_sum: number;
@@ -206,6 +213,8 @@ function toCell(metric: string, row: AggRow): number | string {
   const ivbN = Number(row.ivb_n || 0);
   const hbSum = Number(row.hb_sum || 0);
   const hbN = Number(row.hb_n || 0);
+  const expectedMoveN = Number(row.expected_move_n || 0);
+  const tiltDevN = Number(row.tilt_dev_n || 0);
   const spinSum = Number(row.spin_sum || 0);
   const spinN = Number(row.spin_n || 0);
   const relheightSum = Number(row.relheight_sum || 0);
@@ -241,7 +250,17 @@ function toCell(metric: string, row: AggRow): number | string {
   if (metric === 'Velo') return relspeedN > 0 ? Number((relspeedSum / relspeedN).toFixed(1)) : '-';
   if (metric === 'Max') return relspeedN > 0 ? Number(relspeedMax.toFixed(1)) : '-';
   if (metric === 'IVB') return ivbN > 0 ? Number((ivbSum / ivbN).toFixed(1)) : '-';
+  if (metric === 'xIVB') return expectedMoveN > 0 ? Number((Number(row.xivb_sum || 0) / expectedMoveN).toFixed(1)) : '-';
+  if (metric === 'dIVB') return expectedMoveN > 0 ? Number((Number(row.divb_sum || 0) / expectedMoveN).toFixed(1)) : '-';
   if (metric === 'HB') return hbN > 0 ? Number((hbSum / hbN).toFixed(1)) : '-';
+  if (metric === 'xHB') return expectedMoveN > 0 ? Number((Number(row.xhb_sum || 0) / expectedMoveN).toFixed(1)) : '-';
+  if (metric === 'dHB') return expectedMoveN > 0 ? Number((Number(row.dhb_sum || 0) / expectedMoveN).toFixed(1)) : '-';
+  if (metric === 'TiltDev' && tiltDevN > 0) {
+    const rounded = Math.round(Number(row.tilt_dev_minutes_sum || 0) / tiltDevN);
+    const sign = rounded > 0 ? '+' : rounded < 0 ? '-' : '';
+    const absolute = Math.abs(rounded);
+    return `${sign}${Math.floor(absolute / 60)}:${String(absolute % 60).padStart(2, '0')}`;
+  }
   if (metric === 'Spin') return spinN > 0 ? Number((spinSum / spinN).toFixed(0)) : '-';
   if (metric === 'Height') return relheightN > 0 ? Number((relheightSum / relheightN).toFixed(2)) : '-';
   if (metric === 'Side') return relsideN > 0 ? Number((relsideSum / relsideN).toFixed(2)) : '-';
@@ -382,7 +401,7 @@ export async function GET(request: Request) {
   const plusMetrics: PlusMetricKey[] = ['Stuff+', 'QP+', 'Ctrl+', 'Pitching+'].filter((metric) => columns.includes(metric)) as PlusMetricKey[];
   const supportedColumns = new Set([
     '#', 'P', 'PA', 'BF', 'AB', 'AVG', 'OBP', 'SLG', 'OPS', 'H', 'XBH', 'HR', 'HBP', 'BB', 'K', 'Whiffs',
-    'Velo', 'Max', 'IVB', 'HB', 'Spin', 'Height', 'Side', 'Ext', 'rTilt',
+    'Velo', 'Max', 'IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB', 'Spin', 'Height', 'Side', 'Ext', 'rTilt', 'TiltDev',
     'PA', 'Usage', 'Overall', 'InZone%', 'Comp%', 'Strike%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%',
     'FPS(FB)%', 'FPS(OS)%',
     'Swing%', 'Whiff%', 'SwStrk%', 'GB%', 'K%', 'BB%', 'K-BB%', 'CSW%', 'Called-S%', 'Take%', 'Chase%',
@@ -638,6 +657,13 @@ export async function GET(request: Request) {
         SUM(ivb_n)::int AS ivb_n,
         SUM(hb_sum)::double precision AS hb_sum,
         SUM(hb_n)::int AS hb_n,
+        SUM(xivb_sum)::double precision AS xivb_sum,
+        SUM(xhb_sum)::double precision AS xhb_sum,
+        SUM(expected_move_n)::int AS expected_move_n,
+        SUM(divb_sum)::double precision AS divb_sum,
+        SUM(dhb_sum)::double precision AS dhb_sum,
+        SUM(tilt_dev_minutes_sum)::double precision AS tilt_dev_minutes_sum,
+        SUM(tilt_dev_n)::int AS tilt_dev_n,
         SUM(spin_sum)::double precision AS spin_sum,
         SUM(spin_n)::int AS spin_n,
         SUM(rel_height_sum)::double precision AS relheight_sum,
@@ -751,6 +777,13 @@ export async function GET(request: Request) {
         SUM(ivb_n)::int AS ivb_n,
         SUM(hb_sum)::double precision AS hb_sum,
         SUM(hb_n)::int AS hb_n,
+        SUM(xivb_sum)::double precision AS xivb_sum,
+        SUM(xhb_sum)::double precision AS xhb_sum,
+        SUM(expected_move_n)::int AS expected_move_n,
+        SUM(divb_sum)::double precision AS divb_sum,
+        SUM(dhb_sum)::double precision AS dhb_sum,
+        SUM(tilt_dev_minutes_sum)::double precision AS tilt_dev_minutes_sum,
+        SUM(tilt_dev_n)::int AS tilt_dev_n,
         SUM(spin_sum)::double precision AS spin_sum,
         SUM(spin_n)::int AS spin_n,
         SUM(rel_height_sum)::double precision AS relheight_sum,
@@ -1057,6 +1090,13 @@ export async function GET(request: Request) {
       ivb_n: acc.ivb_n + Number(row.ivb_n || 0),
       hb_sum: acc.hb_sum + Number(row.hb_sum || 0),
       hb_n: acc.hb_n + Number(row.hb_n || 0),
+      xivb_sum: acc.xivb_sum + Number(row.xivb_sum || 0),
+      xhb_sum: acc.xhb_sum + Number(row.xhb_sum || 0),
+      expected_move_n: acc.expected_move_n + Number(row.expected_move_n || 0),
+      divb_sum: acc.divb_sum + Number(row.divb_sum || 0),
+      dhb_sum: acc.dhb_sum + Number(row.dhb_sum || 0),
+      tilt_dev_minutes_sum: acc.tilt_dev_minutes_sum + Number(row.tilt_dev_minutes_sum || 0),
+      tilt_dev_n: acc.tilt_dev_n + Number(row.tilt_dev_n || 0),
       spin_sum: acc.spin_sum + Number(row.spin_sum || 0),
       spin_n: acc.spin_n + Number(row.spin_n || 0),
       relheight_sum: acc.relheight_sum + Number(row.relheight_sum || 0),
@@ -1092,7 +1132,7 @@ export async function GET(request: Request) {
       chase_n: 0,
       h_n: 0, xbh_n: 0, hr_n: 0, hbp_n: 0,
       fps_fb_den: 0, fps_fb_num: 0, fps_os_den: 0, fps_os_num: 0,
-      barrel_n: 0, xiso_sum: 0, xiso_n: 0, relspeed_sum: 0, relspeed_n: 0, relspeed_max: 0, ivb_sum: 0, ivb_n: 0, hb_sum: 0, hb_n: 0, spin_sum: 0, spin_n: 0, relheight_sum: 0, relheight_n: 0, relside_sum: 0, relside_n: 0, extension_sum: 0, extension_n: 0, releasetilt_sum: 0, releasetilt_n: 0, stuff_plus_sum: 0, stuff_plus_n: 0, qp_plus_sum: 0, qp_plus_n: 0, ctrl_plus_sum: 0, ctrl_plus_n: 0, pitching_plus_sum: 0, pitching_plus_n: 0,
+      barrel_n: 0, xiso_sum: 0, xiso_n: 0, relspeed_sum: 0, relspeed_n: 0, relspeed_max: 0, ivb_sum: 0, ivb_n: 0, hb_sum: 0, hb_n: 0, xivb_sum: 0, xhb_sum: 0, expected_move_n: 0, divb_sum: 0, dhb_sum: 0, tilt_dev_minutes_sum: 0, tilt_dev_n: 0, spin_sum: 0, spin_n: 0, relheight_sum: 0, relheight_n: 0, relside_sum: 0, relside_n: 0, extension_sum: 0, extension_n: 0, releasetilt_sum: 0, releasetilt_n: 0, stuff_plus_sum: 0, stuff_plus_n: 0, qp_plus_sum: 0, qp_plus_n: 0, ctrl_plus_sum: 0, ctrl_plus_n: 0, pitching_plus_sum: 0, pitching_plus_n: 0,
       k_n: 0, bb_n: 0,
       rv_sum: 0, pv_sum: 0, xwoba_sum: 0, xwoba_n: 0, ev_sum: 0, ev_n: 0,
     }

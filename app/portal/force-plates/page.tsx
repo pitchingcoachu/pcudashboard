@@ -13,6 +13,7 @@ import type { ValdSnapshot } from '../../../lib/vald-forceplates';
 import ForcePlatesDashboard from './force-plates-dashboard';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
+import PortalUserMenu from '../user-menu';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
@@ -201,12 +202,16 @@ export default async function ForcePlatesPage({
           />
         </div>
         <div className="portal-header-right">
-          <div className="portal-user-meta" aria-label="Logged in user">
-            <p>Logged In As</p>
-            <h1>{session.name ?? session.email}</h1>
-          </div>
+          {session.role === 'admin' || session.role === 'coach' ? (
+            <PortalUserMenu displayName={session.name ?? session.email} />
+          ) : (
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+          )}
           {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
-          <LogoutButton />
+          {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
         </div>
       </header>

@@ -13,6 +13,7 @@ import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
+import { calculateExpectedMovement, measuredTiltDegrees } from '../../../lib/expected-movement';
 
 type FiltersPayload = {
   school_code: string;
@@ -42,7 +43,7 @@ type FiltersPayload = {
   opp_hitters_by_team_code?: Record<string, string[]>;
 };
 
-type OptionItem = { value: string; label: string };
+type OptionItem = { value: string; label: string; disabled?: boolean };
 
 const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-07-17-league-level-v2';
 const PRO_LEVEL_FILTER_OPTIONS = ['All', 'MLB', 'AAA'];
@@ -131,9 +132,14 @@ type OverviewPayload = {
     release_tilt: string;
     break_tilt: string;
     spin_eff: number | null;
+    active_spin?: number | null;
+    expected_hb?: number | null;
+    expected_ivb?: number | null;
+    expected_movement_model?: string | null;
     exit_speed: number | null;
     angle: number | null;
     vaa?: number | null;
+    nvaa?: number | null;
     haa?: number | null;
     estimated_woba_using_speedangle?: number | null;
     estimated_ba_using_speedangle?: number | null;
@@ -188,9 +194,14 @@ type OverviewPayload = {
     release_tilt: string;
     break_tilt: string;
     spin_eff: number | null;
+    active_spin?: number | null;
+    expected_hb?: number | null;
+    expected_ivb?: number | null;
+    expected_movement_model?: string | null;
     exit_speed: number | null;
     angle: number | null;
     vaa?: number | null;
+    nvaa?: number | null;
     haa?: number | null;
     estimated_woba_using_speedangle?: number | null;
     estimated_ba_using_speedangle?: number | null;
@@ -946,12 +957,42 @@ function pitchLogMetricValue(
   if (token === 'velo' || token === 'max') return pitch.velo ?? null;
   if (token === 'ivb') return pitch.ivb ?? null;
   if (token === 'hb') return pitch.hb ?? null;
+  if (token === 'xivb' || token === 'xhb' || token === 'divb' || token === 'dhb') {
+    const pitchRow = pitch as unknown as Record<string, unknown>;
+    const expected = calculateExpectedMovement({
+      velocityMph: pitch.velo,
+      spinRateRpm: pitch.spin,
+      measuredTilt: pitch.release_tilt,
+      extensionFeet: pitch.extension,
+      spinEfficiency: pitch.spin_eff,
+      activeSpinRpm: pitchRow.active_spin ?? pitchRow.activeSpin,
+    });
+    if (!expected || pitch.ivb === null || pitch.hb === null) return null;
+    if (token === 'xivb') return expected.expectedIvb;
+    if (token === 'xhb') return expected.expectedHb;
+    if (token === 'divb') return Number(pitch.ivb) - expected.expectedIvb;
+    return Number(pitch.hb) - expected.expectedHb;
+  }
   if (token === 'spin') return pitch.spin ?? null;
   if (token === 'height') return pitch.release_height ?? null;
   if (token === 'side') return pitch.release_side ?? null;
   if (token === 'ext') return pitch.extension ?? null;
   if (token === 'rtilt' || token === 'releasetilt') return pitch.release_tilt || null;
   if (token === 'btilt' || token === 'breaktilt') return pitch.break_tilt || null;
+  if (token === 'tiltdev') {
+    const releaseDegrees = measuredTiltDegrees(pitch.release_tilt);
+    let breakDegrees = measuredTiltDegrees(pitch.break_tilt);
+    if (
+      breakDegrees === null &&
+      typeof pitch.ivb === 'number' &&
+      typeof pitch.hb === 'number' &&
+      (Math.abs(pitch.ivb) > 1e-9 || Math.abs(pitch.hb) > 1e-9)
+    ) {
+      breakDegrees = ((Math.atan2(pitch.hb, pitch.ivb) * 180) / Math.PI + 180 + 360) % 360;
+    }
+    if (releaseDegrees === null || breakDegrees === null) return null;
+    return ((((breakDegrees - releaseDegrees + 180) % 360) + 360) % 360 - 180) * 2;
+  }
   if (token === 'spineff') {
     const value = parseSortableNumber(pitch.spin_eff);
     if (value === null) return null;
@@ -964,6 +1005,10 @@ function pitchLogMetricValue(
   if (token === 'vaa') {
     const pitchRow = pitch as unknown as Record<string, unknown>;
     return parseSortableNumber(pitchRow.vaa ?? pitchRow.VAA ?? pitchRow.vertapprangle ?? pitchRow.vert_appr_angle);
+  }
+  if (token === 'nvaa') {
+    const pitchRow = pitch as unknown as Record<string, unknown>;
+    return parseSortableNumber(pitchRow.nvaa ?? pitchRow.nVAA);
   }
   if (token === 'haa') {
     const pitchRow = pitch as unknown as Record<string, unknown>;
@@ -1399,15 +1444,21 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'FBvelo',
   'Max',
   'IVB',
+  'xIVB',
+  'dIVB',
   'HB',
+  'xHB',
+  'dHB',
   'Spin',
   'rTilt',
   'bTilt',
+  'TiltDev',
   'SpinEff',
   'Height',
   'Side',
   'Ext',
   'VAA',
+  'nVAA',
   'HAA',
   'Strike%',
   'Swing%',
@@ -1777,6 +1828,7 @@ function SearchableSingleSelect({
   theme = 'dark',
   clearQueryOnSelect = true,
   menuStyle,
+  disabled = false,
 }: {
   options: OptionItem[];
   value: string;
@@ -1785,6 +1837,7 @@ function SearchableSingleSelect({
   theme?: 'dark' | 'light';
   clearQueryOnSelect?: boolean;
   menuStyle?: React.CSSProperties;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -1816,12 +1869,16 @@ function SearchableSingleSelect({
       <button
         type="button"
         className="portal-search-select-trigger"
+        disabled={disabled}
+        title={disabled ? 'Expected movement requires measured tilt and active spin or spin efficiency.' : undefined}
         style={
           theme === 'light'
             ? { background: '#fff', color: '#374151', borderColor: '#cbd5e1', justifyContent: 'space-between' }
             : undefined
         }
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          if (!disabled) setOpen((current) => !current);
+        }}
       >
         {selected ? renderOptionLabel(selected.label) : placeholder ?? 'Select'}
       </button>
@@ -1846,8 +1903,12 @@ function SearchableSingleSelect({
                 key={option.value}
                 type="button"
                 className="portal-search-select-option"
+                disabled={option.disabled}
+                title={option.disabled ? 'Expected movement requires measured tilt and active spin or spin efficiency.' : undefined}
                 style={theme === 'light' ? { color: '#374151' } : undefined}
-                onClick={() => commitSelection(option.value)}
+                onClick={() => {
+                  if (!option.disabled) commitSelection(option.value);
+                }}
               >
                 {renderOptionLabel(option.label)}
               </button>
@@ -4671,6 +4732,7 @@ export default function PitchingSuite({
   const summaryLocationViewTouchedRef = useRef(false);
   const [releaseView, setReleaseView] = useState('Averages Only');
   const [movementView, setMovementView] = useState('Averages and Pitches');
+  const [magnusLine, setMagnusLine] = useState<'Off' | 'Fastball' | 'Sinker'>('Off');
   const [locationView, setLocationView] = useState('Pitch');
   const [heatmapChartType, setHeatmapChartType] = useState<'Heat' | 'Pitch' | 'QP+'>('Pitch');
   const [heatmapStat, setHeatmapStat] = useState('Frequency');
@@ -4891,6 +4953,17 @@ export default function PitchingSuite({
     String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
     String(filters?.school_code ?? '').toUpperCase() === 'PRO' ||
     String(filters?.school_code ?? '').toUpperCase() === 'MLB';
+  useEffect(() => {
+    if (!isPro) return;
+    if (
+      movementView === 'Expected vs Actual — Averages'
+      || movementView === 'Expected vs Actual — Individual Pitches'
+      || movementView === 'Magnus Movement — Individual Pitches'
+    ) {
+      setMovementView('Averages and Pitches');
+    }
+    setMagnusLine('Off');
+  }, [isPro, movementView]);
   const dnaSharedFilterParams = useMemo(() => {
     const params = new URLSearchParams();
     const apiTeamType = isLeague
@@ -9243,7 +9316,40 @@ export default function PitchingSuite({
     </div>
   );
 
-  const rawSummaryPoints = useMemo(() => overview?.chart_points ?? [], [overview?.chart_points]);
+  const rawSummaryPoints = useMemo(() => {
+    const points = overview?.chart_points ?? [];
+    if (isPro) return points;
+    return points.map((point) => {
+      const row = point as unknown as Record<string, unknown>;
+      const expected = calculateExpectedMovement({
+        velocityMph: point.velo,
+        spinRateRpm: point.spin,
+        measuredTilt: point.release_tilt,
+        extensionFeet: point.extension,
+        spinEfficiency: point.spin_eff,
+        activeSpinRpm:
+          row.active_spin
+          ?? row.activeSpin
+          ?? row.activespin
+          ?? row.active_spin_rpm,
+      });
+      if (!expected) {
+        return {
+          ...point,
+          expected_hb: null,
+          expected_ivb: null,
+          expected_movement_model: null,
+        };
+      }
+      return {
+        ...point,
+        active_spin: expected.activeSpinRpm,
+        expected_hb: expected.expectedHb,
+        expected_ivb: expected.expectedIvb,
+        expected_movement_model: expected.modelVersion,
+      };
+    });
+  }, [isPro, overview?.chart_points]);
   const pitchLevelSummaryPoints = useMemo(
     () =>
       rawSummaryPoints.filter((point) => {
@@ -10069,6 +10175,75 @@ export default function PitchingSuite({
       count: pts.length,
     }));
   }, [summaryPoints]);
+  const expectedMovementData = useMemo(() => {
+    const eligiblePoints: OverviewPayload['chart_points'] = [];
+    const grouped = new Map<
+      string,
+      {
+        count: number;
+        actualHb: number;
+        actualIvb: number;
+        expectedHb: number;
+        expectedIvb: number;
+        velo: number;
+        veloN: number;
+        stuff: number;
+        stuffN: number;
+      }
+    >();
+    for (const point of summaryPoints) {
+      if (
+        typeof point.hb !== 'number' ||
+        !Number.isFinite(point.hb) ||
+        typeof point.ivb !== 'number' ||
+        !Number.isFinite(point.ivb) ||
+        typeof point.expected_hb !== 'number' ||
+        !Number.isFinite(point.expected_hb) ||
+        typeof point.expected_ivb !== 'number' ||
+        !Number.isFinite(point.expected_ivb)
+      ) {
+        continue;
+      }
+      eligiblePoints.push(point);
+      const key = point.pitch_type || 'Undefined';
+      const current = grouped.get(key) ?? {
+        count: 0,
+        actualHb: 0,
+        actualIvb: 0,
+        expectedHb: 0,
+        expectedIvb: 0,
+        velo: 0,
+        veloN: 0,
+        stuff: 0,
+        stuffN: 0,
+      };
+      current.count += 1;
+      current.actualHb += Number(point.hb);
+      current.actualIvb += Number(point.ivb);
+      current.expectedHb += Number(point.expected_hb);
+      current.expectedIvb += Number(point.expected_ivb);
+      if (Number.isFinite(Number(point.velo))) {
+        current.velo += Number(point.velo);
+        current.veloN += 1;
+      }
+      if (Number.isFinite(Number(point.stuff_plus))) {
+        current.stuff += Number(point.stuff_plus);
+        current.stuffN += 1;
+      }
+      grouped.set(key, current);
+    }
+    const averages = Array.from(grouped.entries()).map(([pitch_type, aggregate]) => ({
+      pitch_type,
+      count: aggregate.count,
+      hb: aggregate.actualHb / aggregate.count,
+      ivb: aggregate.actualIvb / aggregate.count,
+      expected_hb: aggregate.expectedHb / aggregate.count,
+      expected_ivb: aggregate.expectedIvb / aggregate.count,
+      velo: aggregate.veloN ? aggregate.velo / aggregate.veloN : null,
+      stuff_plus: aggregate.stuffN ? aggregate.stuff / aggregate.stuffN : null,
+    }));
+    return { eligiblePoints, averages };
+  }, [summaryPoints]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -10718,8 +10893,15 @@ export default function PitchingSuite({
     const topPad = margin.top + (plotH - drawnH) / 2;
     const px = (x: number) => leftPad + (x - xMin) * scale;
     const py = (y: number) => topPad + (yMax - y) * scale;
-    const showPitches = movementView === 'Averages and Pitches' || movementView === 'Target Shapes and Pitches';
+    const showActualOnly = movementView === 'Actual Movement — Individual Pitches';
+    const showMagnusOnly = movementView === 'Magnus Movement — Individual Pitches';
+    const showPitches =
+      movementView === 'Averages and Pitches'
+      || movementView === 'Target Shapes and Pitches'
+      || showActualOnly;
     const showAverages = movementView === 'Averages Only' || movementView === 'Averages and Pitches';
+    const showExpectedAverages = movementView === 'Expected vs Actual — Averages';
+    const showExpectedPitches = movementView === 'Expected vs Actual — Individual Pitches';
     const showTargets = movementView === 'Target Shapes Only' || movementView === 'Target Shapes and Pitches';
     const ticks = [-20, -10, 0, 10, 20];
     const breakMapFastball: Record<string, { ivb: number; hb: number }> = {
@@ -10752,7 +10934,48 @@ export default function PitchingSuite({
             y2: Number(base.ivb) + sep.ivb,
           }))
       : [];
-    const plottedPitches = summaryPoints.filter((p) => p.hb !== null && p.ivb !== null);
+    const plottedPitches = (
+      showExpectedPitches || showMagnusOnly ? expectedMovementData.eligiblePoints : summaryPoints
+    ).filter(
+      (point) =>
+        typeof point.hb === 'number' &&
+        Number.isFinite(point.hb) &&
+        typeof point.ivb === 'number' &&
+        Number.isFinite(point.ivb)
+    );
+    const magnusLineAverage =
+      magnusLine === 'Off'
+        ? null
+        : expectedMovementData.averages.find((row) => row.pitch_type === magnusLine) ?? null;
+    const magnusLineEndpoints = (() => {
+      if (!magnusLineAverage) return null;
+      const vectorX = magnusLineAverage.expected_hb;
+      const vectorY = magnusLineAverage.expected_ivb;
+      if (!Number.isFinite(vectorX) || !Number.isFinite(vectorY)) return null;
+      const xScale = Math.abs(vectorX) > 1e-9 ? xMax / Math.abs(vectorX) : Number.POSITIVE_INFINITY;
+      const yScale = Math.abs(vectorY) > 1e-9 ? yMax / Math.abs(vectorY) : Number.POSITIVE_INFINITY;
+      const endpointScale = Math.min(xScale, yScale);
+      if (!Number.isFinite(endpointScale)) return null;
+      return {
+        x1: -vectorX * endpointScale,
+        y1: -vectorY * endpointScale,
+        x2: vectorX * endpointScale,
+        y2: vectorY * endpointScale,
+      };
+    })();
+    const expectedTooltip = (
+      point: OverviewPayload['chart_points'][number],
+      label = point.pitch_type
+    ) => {
+      const actualHb = Number(point.hb);
+      const actualIvb = Number(point.ivb);
+      const expectedHb = Number(point.expected_hb);
+      const expectedIvb = Number(point.expected_ivb);
+      const deltaHb = actualHb - expectedHb;
+      const deltaIvb = actualIvb - expectedIvb;
+      const residual = Math.hypot(deltaHb, deltaIvb);
+      return `${label}\nActual IVB: ${fmt1(actualIvb)} in | HB: ${fmt1(actualHb)} in\nMagnus IVB: ${fmt1(expectedIvb)} in | HB: ${fmt1(expectedHb)} in\nActual − Magnus: IVB ${fmt1(deltaIvb)} in | HB ${fmt1(deltaHb)} in\nResidual: ${fmt1(residual)} in`;
+    };
     const toSvgPoint = (event: { clientX: number; clientY: number; currentTarget: SVGSVGElement }) => {
       const rect = event.currentTarget.getBoundingClientRect();
       return {
@@ -10768,8 +10991,8 @@ export default function PitchingSuite({
       const maxY = Math.max(box.startY, box.endY);
       if (maxX - minX < 3 || maxY - minY < 3) return;
       const selected = plottedPitches.filter((pitch) => {
-        const hb = Number(pitch.hb);
-        const ivb = Number(pitch.ivb);
+        const hb = Number(showMagnusOnly ? pitch.expected_hb : pitch.hb);
+        const ivb = Number(showMagnusOnly ? pitch.expected_ivb : pitch.ivb);
         if (!Number.isFinite(hb) || !Number.isFinite(ivb)) return false;
         const x = px(hb);
         const y = py(ivb);
@@ -10822,6 +11045,19 @@ export default function PitchingSuite({
             {tick}
           </text>
         ))}
+        {magnusLineEndpoints && magnusLine !== 'Off' ? (
+          <line
+            x1={px(magnusLineEndpoints.x1)}
+            y1={py(magnusLineEndpoints.y1)}
+            x2={px(magnusLineEndpoints.x2)}
+            y2={py(magnusLineEndpoints.y2)}
+            stroke={pitchColors[magnusLine] ?? '#e2e8f0'}
+            strokeWidth={2}
+            strokeDasharray="7 6"
+            opacity={0.72}
+            pointerEvents="none"
+          />
+        ) : null}
         {showPitches
           ? plottedPitches
               .filter((p) => Number.isFinite(Number(p.hb)) && Number.isFinite(Number(p.ivb)))
@@ -10850,6 +11086,81 @@ export default function PitchingSuite({
                   }}
                 />
               ))
+          : null}
+        {showExpectedPitches
+          ? expectedMovementData.eligiblePoints.map((point, index) => {
+              const color = pitchColors[point.pitch_type] ?? '#9ca3af';
+              return (
+                <g
+                  key={`m-expected-pair-${point.pitch_event_id ?? point.pitch_uid ?? index}`}
+                  className="portal-movement-pair"
+                  onMouseMove={(event) =>
+                    setMovementHover({
+                      x: event.clientX,
+                      y: event.clientY,
+                      text: expectedTooltip(point),
+                      bg: color,
+                    })
+                  }
+                  onMouseLeave={() => setMovementHover(null)}
+                  onClick={() => {
+                    if (isPitchEditLassoEnabled) return;
+                    openActionModal([point]);
+                  }}
+                >
+                  <circle
+                    className="portal-movement-pair-marker portal-movement-pair-actual"
+                    cx={px(Number(point.hb))}
+                    cy={py(Number(point.ivb))}
+                    r={3.8}
+                    fill={color}
+                    stroke="rgba(0,0,0,0.58)"
+                    strokeWidth={1}
+                    opacity={0.5}
+                  />
+                  <circle
+                    className="portal-movement-pair-marker portal-movement-pair-expected"
+                    cx={px(Number(point.expected_hb))}
+                    cy={py(Number(point.expected_ivb))}
+                    r={3.4}
+                    fill="rgba(0,0,0,0.18)"
+                    stroke={color}
+                    strokeWidth={1.4}
+                    opacity={0.72}
+                  />
+                </g>
+              );
+            })
+          : null}
+        {showMagnusOnly
+          ? expectedMovementData.eligiblePoints.map((point, index) => {
+              const color = pitchColors[point.pitch_type] ?? '#9ca3af';
+              return (
+                <circle
+                  key={`m-magnus-p-${point.pitch_event_id ?? point.pitch_uid ?? index}`}
+                  cx={px(Number(point.expected_hb))}
+                  cy={py(Number(point.expected_ivb))}
+                  r={3.8}
+                  fill="rgba(0,0,0,0.18)"
+                  stroke={color}
+                  strokeWidth={1.5}
+                  opacity={0.76}
+                  onMouseMove={(event) =>
+                    setMovementHover({
+                      x: event.clientX,
+                      y: event.clientY,
+                      text: expectedTooltip(point),
+                      bg: color,
+                    })
+                  }
+                  onMouseLeave={() => setMovementHover(null)}
+                  onClick={() => {
+                    if (isPitchEditLassoEnabled) return;
+                    openActionModal([point]);
+                  }}
+                />
+              );
+            })
           : null}
         {showAverages
           ? avgByType
@@ -10880,6 +11191,63 @@ export default function PitchingSuite({
                   }}
                 />
               ))
+          : null}
+        {showExpectedAverages
+          ? expectedMovementData.averages.map((row) => {
+              const color = pitchColors[row.pitch_type] ?? '#9ca3af';
+              const deltaHb = row.hb - row.expected_hb;
+              const deltaIvb = row.ivb - row.expected_ivb;
+              const tooltip =
+                `${row.pitch_type} (${row.count} matched pitches)` +
+                `\nActual IVB: ${fmt1(row.ivb)} in | HB: ${fmt1(row.hb)} in` +
+                `\nMagnus IVB: ${fmt1(row.expected_ivb)} in | HB: ${fmt1(row.expected_hb)} in` +
+                `\nActual − Magnus: IVB ${fmt1(deltaIvb)} in | HB ${fmt1(deltaHb)} in` +
+                `\nResidual: ${fmt1(Math.hypot(deltaHb, deltaIvb))} in`;
+              const matched = expectedMovementData.eligiblePoints.filter(
+                (point) => point.pitch_type === row.pitch_type
+              );
+              return (
+                <g
+                  key={`m-expected-average-${row.pitch_type}`}
+                  className="portal-movement-pair"
+                  onMouseMove={(event) =>
+                    setMovementHover({
+                      x: event.clientX,
+                      y: event.clientY,
+                      text: tooltip,
+                      bg: color,
+                    })
+                  }
+                  onMouseLeave={() => setMovementHover(null)}
+                  onClick={() => {
+                    if (isPitchEditLassoEnabled || !matched.length) return;
+                    openActionModal(matched);
+                  }}
+                >
+                  <circle
+                    className="portal-movement-pair-marker portal-movement-pair-actual"
+                    cx={px(row.hb)}
+                    cy={py(row.ivb)}
+                    r={8.6}
+                    fill={color}
+                    stroke="rgba(0,0,0,0.68)"
+                    strokeWidth={2.2}
+                    opacity={0.98}
+                  />
+                  <circle
+                    className="portal-movement-pair-marker portal-movement-pair-expected"
+                    cx={px(row.expected_hb)}
+                    cy={py(row.expected_ivb)}
+                    r={8.6}
+                    fill="rgba(0,0,0,0.76)"
+                    stroke={color}
+                    strokeWidth={2.6}
+                    strokeDasharray="3 2"
+                    opacity={0.98}
+                  />
+                </g>
+              );
+            })
           : null}
         {breakRows.map((row) => (
           <line key={`br-${row.pitch_type}`} x1={px(row.x1)} y1={py(row.y1)} x2={px(row.x2)} y2={py(row.y2)} stroke={pitchColors[row.pitch_type] ?? '#9ca3af'} strokeWidth={3.2} />
@@ -10936,7 +11304,7 @@ export default function PitchingSuite({
         ) : null}
       </svg>
     );
-  }, [summaryPoints, avgByType, movementView, breakLines, plottedPitcherHand, targetShapes, isPitchEditLassoEnabled, movementLasso, visualOption, canUsePitchEdits]);
+  }, [summaryPoints, avgByType, expectedMovementData, movementView, magnusLine, breakLines, plottedPitcherHand, targetShapes, isPitchEditLassoEnabled, movementLasso, visualOption, canUsePitchEdits]);
 
   const locationSvg = useMemo(() => {
     const w = 520;
@@ -11513,7 +11881,7 @@ export default function PitchingSuite({
   );
 
   const colorColumnsByMode: Record<string, string[]> = {
-    Stuff: ['Velo', 'Max', 'IVB', 'HB', 'rTilt', 'bTilt', 'SpinEff', 'Spin', 'Height', 'Side', 'Ext', 'VAA', 'HAA', 'Stuff+'],
+    Stuff: ['Velo', 'Max', 'IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB', 'rTilt', 'bTilt', 'TiltDev', 'SpinEff', 'Spin', 'Height', 'Side', 'Ext', 'VAA', 'nVAA', 'HAA', 'Stuff+'],
     Process: ['InZone%', '<2kInZone%', '2kInZone%', 'Strike%', '<2Kstrike%', '2Kstrike%', 'Comp%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'HR%', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'HR%', 'Whiff%', 'SwStrk%', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Results: ['Whiff%', 'SwStrk%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'FB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP', 'SIERA'],
@@ -11523,15 +11891,21 @@ export default function PitchingSuite({
       'Velo',
       'Max',
       'IVB',
+      'xIVB',
+      'dIVB',
       'HB',
+      'xHB',
+      'dHB',
       'Spin',
       'rTilt',
       'bTilt',
+      'TiltDev',
       'SpinEff',
       'Height',
       'Side',
       'Ext',
       'VAA',
+      'nVAA',
       'HAA',
       'InZone%',
       '<2kInZone%',
@@ -11652,6 +12026,8 @@ export default function PitchingSuite({
             { value: 'Pitcher', label: 'Pitcher' },
             { value: 'Pitcher Hand', label: 'Pitcher Hand' },
             { value: 'Batter Hand', label: 'Batter Hand' },
+            { value: 'Year', label: 'Year' },
+            { value: 'Month', label: 'Month' },
             { value: 'Count', label: 'Count' },
             { value: 'After Count', label: 'After Count' },
             { value: 'Venue', label: 'Venue' },
@@ -11670,6 +12046,8 @@ export default function PitchingSuite({
             { value: 'All', label: 'All' },
             { value: 'Pitch Types', label: 'Pitch Types' },
             { value: 'Batter Hand', label: 'Batter Hand' },
+            { value: 'Year', label: 'Year' },
+            { value: 'Month', label: 'Month' },
             { value: 'Count', label: 'Count' },
             { value: 'After Count', label: 'After Count' },
             { value: 'Venue', label: 'Venue' },
@@ -12443,7 +12821,10 @@ export default function PitchingSuite({
     }
     if (
       isPitchLikeSplit &&
-      columnToken === normalizePercentileColumnToken('VAA') &&
+      (
+        columnToken === normalizePercentileColumnToken('VAA') ||
+        columnToken === normalizePercentileColumnToken('nVAA')
+      ) &&
       shouldInvertVaaForPitchTypeLabel(row[splitColumn])
     ) {
       adjusted = Math.max(0, Math.min(100, 100 - adjusted));
@@ -13230,17 +13611,64 @@ export default function PitchingSuite({
                 </article>
                 <article className="portal-day-card" style={{ alignContent: 'start', gridTemplateRows: 'auto 40px auto' }}>
                   <h4 style={{ margin: '0 0 0.45rem 0', textAlign: 'center' }}>Movement</h4>
-                  <div style={{ display: 'flex', alignItems: 'stretch', gap: 8, height: 40, marginBottom: 8 }}>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 0.72fr) auto',
+                      alignItems: 'stretch',
+                      gap: 8,
+                      height: 40,
+                      marginBottom: 8,
+                    }}
+                  >
                     <SearchableSingleSelect
                       options={[
                         { value: 'Averages Only', label: 'Averages Only' },
                         { value: 'Averages and Pitches', label: 'Averages and Pitches' },
+                        {
+                          value: 'Actual Movement — Individual Pitches',
+                          label: 'Actual Movement — Individual Pitches',
+                        },
+                        {
+                          value: 'Expected vs Actual — Averages',
+                          label: isPro ? 'Expected vs Actual — Averages (Unavailable on Pro)' : 'Expected vs Actual — Averages',
+                          disabled: isPro,
+                        },
+                        {
+                          value: 'Expected vs Actual — Individual Pitches',
+                          label: isPro
+                            ? 'Expected vs Actual — Individual Pitches (Unavailable on Pro)'
+                            : 'Expected vs Actual — Individual Pitches',
+                          disabled: isPro,
+                        },
+                        {
+                          value: 'Magnus Movement — Individual Pitches',
+                          label: isPro
+                            ? 'Magnus Movement — Individual Pitches (Unavailable on Pro)'
+                            : 'Magnus Movement — Individual Pitches',
+                          disabled: isPro,
+                        },
                         { value: 'Target Shapes Only', label: 'Target Shapes Only' },
                         { value: 'Target Shapes and Pitches', label: 'Target Shapes and Pitches' },
                       ]}
                       value={movementView}
                       onChange={setMovementView}
                       placeholder="Averages and Pitches"
+                    />
+                    <SearchableSingleSelect
+                      options={[
+                        { value: 'Off', label: 'Magnus Line: Off' },
+                        { value: 'Fastball', label: 'Magnus Line: Fastball' },
+                        { value: 'Sinker', label: 'Magnus Line: Sinker' },
+                      ]}
+                      value={magnusLine}
+                      onChange={(next) => {
+                        if (next === 'Off' || next === 'Fastball' || next === 'Sinker') {
+                          setMagnusLine(next);
+                        }
+                      }}
+                      placeholder="Magnus Line: Off"
+                      disabled={isPro}
                     />
                     <button
                       type="button"

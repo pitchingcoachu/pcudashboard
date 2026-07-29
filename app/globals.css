@@ -3229,6 +3229,71 @@ body.theme-light .portal-notification-item:focus-visible {
   font: 700 0.92rem/1.1 Manrope, sans-serif;
 }
 
+.portal-user-menu {
+  position: relative;
+}
+
+.portal-user-meta-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+
+.portal-user-meta-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.portal-user-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 40;
+  min-width: 220px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  background: rgba(10, 10, 10, 0.98);
+  padding: 0.45rem;
+  display: grid;
+  gap: 0.3rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.portal-user-menu-item {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  border-radius: 6px;
+}
+
+.portal-user-menu-settings {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.3rem;
+}
+
+.portal-user-menu-settings-title {
+  margin: 0;
+  font: 700 0.8rem/1 Manrope, sans-serif;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.portal-user-menu-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font: 500 0.85rem/1.3 Manrope, sans-serif;
+  cursor: pointer;
+}
+
+.portal-user-menu-back {
+  justify-self: start;
+  border-radius: 6px;
+}
+
 .portal-frame-wrap {
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 14px;
@@ -4072,6 +4137,12 @@ body.theme-light .portal-inline-filter input[type='date'] {
   background: rgba(10, 10, 10, 0.9);
 }
 
+.portal-search-select-trigger:disabled,
+.portal-search-select-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .portal-search-select-menu {
   position: absolute;
   z-index: 40;
@@ -4084,6 +4155,45 @@ body.theme-light .portal-inline-filter input[type='date'] {
   padding: 0.45rem;
   display: grid;
   gap: 0.45rem;
+}
+
+.portal-custom-reports-export-split {
+  position: relative;
+  display: inline-flex;
+}
+
+.portal-custom-reports-export-split > .btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.portal-custom-reports-export-split > .btn:last-of-type {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.25);
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.portal-custom-reports-export-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 20;
+  min-width: 160px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  background: rgba(10, 10, 10, 0.98);
+  padding: 0.35rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.portal-custom-reports-export-menu > .btn {
+  width: 100%;
+  border-radius: 6px;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .portal-search-select-input {
@@ -4118,6 +4228,26 @@ body.theme-light .portal-inline-filter input[type='date'] {
 
 .portal-search-select-option:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+
+.portal-search-select-option:disabled:hover {
+  background: transparent;
+}
+
+.portal-movement-pair {
+  cursor: pointer;
+}
+
+.portal-movement-pair-marker {
+  transition: opacity 120ms ease, stroke-width 120ms ease;
+}
+
+.portal-movement-pair:hover .portal-movement-pair-marker {
+  opacity: 1;
+}
+
+.portal-movement-pair:hover .portal-movement-pair-expected {
+  stroke-width: 2.2;
 }
 
 .portal-option-email {
