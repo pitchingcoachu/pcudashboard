@@ -5,7 +5,6 @@ import BiomechanicsHub from './biomechanics-hub';
 import CatchingSuite from './catching-suite';
 import ComparisonToolSuite from './comparison-tool-suite';
 import CustomReportsSuite from './custom-reports-suite';
-import DashboardChat from './dashboard-chat';
 import HittingSuite from './hitting-suite';
 import HomeSuite from './home-suite';
 import PlayerNotesSuite from './player-notes-suite';
@@ -579,7 +578,6 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
           <StuffCalculatorSuite />
         </div>
       ) : null}
-      <DashboardChat isPro={isPro} />
     </div>
   );
 }

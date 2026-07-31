@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import pearlHeroBars from '../pearl/pearl-hero-bars-transparent.png';
 import pearlLockup from '../pearl/pearl-lockup-transparent.png';
 
-const CALENDLY_URL = 'https://calendly.com/pitchingcoachu/pcu-dashboard-call';
+const CALENDLY_URL = 'https://calendly.com/pitchingcoachu/pearl-pd-call';
 
 type HomeSession = {
   name: string | null;

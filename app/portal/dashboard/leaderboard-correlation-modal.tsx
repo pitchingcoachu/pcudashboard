@@ -65,7 +65,7 @@ function decimalPlacesFromFormatted(value: string): number | null {
   const normalized = value
     .trim()
     .replace(/,/g, '')
-    .replace(/%$/g, '');
+    .replace(/[%°]$/g, '');
   const match = normalized.match(/^-?(?:(?:\d+)(?:\.(\d+))?|\.(\d+))$/);
   if (!match) return null;
   const decimals = match[1] ?? match[2] ?? '';
@@ -127,6 +127,24 @@ function isLikelyPercentColumn(
     if (numeric === null) continue;
     const formatted = formatter ? formatter(column, row[column]) : formatTableDisplayValue(column, row[column]);
     if (String(formatted).includes('%')) return true;
+  }
+  return false;
+}
+
+function isLikelyDegreeColumn(
+  column: string,
+  rows: LeaderboardRow[],
+  labelColumn: string,
+  formatter?: (column: string, value: unknown) => string
+): boolean {
+  if (normalizeColumnToken(column) === 'magangle') return true;
+  for (const row of rows) {
+    const label = String(row[labelColumn] ?? '').trim();
+    if (isAllSummaryLabel(label)) continue;
+    const numeric = numericByColumnAlias(row, column);
+    if (numeric === null) continue;
+    const formatted = formatter ? formatter(column, row[column]) : formatTableDisplayValue(column, row[column]);
+    if (String(formatted).includes('°')) return true;
   }
   return false;
 }
@@ -884,6 +902,16 @@ export default function LeaderboardCorrelationModal({
     () => (open && yColumn ? isLikelyPercentColumn(yColumn, sourceRows, labelColumn, formatValue) : false),
     [open, yColumn, sourceRows, labelColumn, formatValue]
   );
+  const xIsDegrees = useMemo(
+    () => (open && xColumn ? isLikelyDegreeColumn(xColumn, sourceRows, labelColumn, formatValue) : false),
+    [open, xColumn, sourceRows, labelColumn, formatValue]
+  );
+  const yIsDegrees = useMemo(
+    () => (open && yColumn ? isLikelyDegreeColumn(yColumn, sourceRows, labelColumn, formatValue) : false),
+    [open, yColumn, sourceRows, labelColumn, formatValue]
+  );
+  const xUnit = xIsPercent ? '%' : xIsDegrees ? '°' : '';
+  const yUnit = yIsPercent ? '%' : yIsDegrees ? '°' : '';
   const trendline = useMemo(() => {
     if (!showTrendline || stats.slope === null || stats.intercept === null || points.length < 2) return null;
     const xMin = ranges.x0;
@@ -1111,10 +1139,10 @@ export default function LeaderboardCorrelationModal({
                   return (
                     <g key={`grid-${idx}`}>
                       <text x={gx} y={SVG_HEIGHT - PAD_BOTTOM + 22} className="portal-corr-tick" textAnchor="middle" fill={tickFill} fontSize={11} fontWeight={600}>
-                        {tableLikeTickValue(xVal, xDecimals)}{xIsPercent ? '%' : ''}
+                        {tableLikeTickValue(xVal, xDecimals)}{xUnit}
                       </text>
                       <text x={PAD_LEFT - 8} y={gy + 4} className="portal-corr-tick" textAnchor="end" fill={tickFill} fontSize={11} fontWeight={600}>
-                        {tableLikeTickValue(yVal, yDecimals)}{yIsPercent ? '%' : ''}
+                        {tableLikeTickValue(yVal, yDecimals)}{yUnit}
                       </text>
                     </g>
                   );
@@ -1140,7 +1168,7 @@ export default function LeaderboardCorrelationModal({
                     fontSize={11}
                     fontWeight={700}
                   >
-                    {`Avg ${xColumn}: ${tableLikeTickValue(stats.meanX, STAT_DECIMALS)}`}
+                    {`Avg ${xColumn}: ${tableLikeTickValue(stats.meanX, STAT_DECIMALS)}${xUnit}`}
                   </text>
                 ) : null}
                 {stats.meanY !== null ? (
@@ -1152,7 +1180,7 @@ export default function LeaderboardCorrelationModal({
                     fontSize={11}
                     fontWeight={700}
                   >
-                    {`Avg ${yColumn}: ${tableLikeTickValue(stats.meanY, STAT_DECIMALS)}`}
+                    {`Avg ${yColumn}: ${tableLikeTickValue(stats.meanY, STAT_DECIMALS)}${yUnit}`}
                   </text>
                 ) : null}
                 {trendline ? (
@@ -1265,8 +1293,8 @@ export default function LeaderboardCorrelationModal({
                   }}
                 >
                   <div><strong>#{hover.point.rank}</strong> {hover.point.displayLabel}</div>
-                  <div>{xColumn}: {hover.point.x.toFixed(STAT_DECIMALS)}{xIsPercent ? '%' : ''}</div>
-                  <div>{yColumn}: {hover.point.y.toFixed(STAT_DECIMALS)}{yIsPercent ? '%' : ''}</div>
+                  <div>{xColumn}: {hover.point.x.toFixed(STAT_DECIMALS)}{xUnit}</div>
+                  <div>{yColumn}: {hover.point.y.toFixed(STAT_DECIMALS)}{yUnit}</div>
                 </div>
               ) : null}
             </div>

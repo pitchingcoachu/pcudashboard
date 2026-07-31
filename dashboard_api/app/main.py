@@ -1873,6 +1873,14 @@ def _tilt_deviation_minutes(
     return delta_deg * 2.0
 
 
+def _tilt_deviation_from_averages(release_tilt_clock: Any, break_tilt_clock: Any) -> Optional[float]:
+    """TiltDev computed from already-averaged rTilt/bTilt clock values (bTilt - rTilt),
+    so the displayed TiltDev always reconciles with the displayed rTilt/bTilt columns.
+    This intentionally differs from averaging each pitch's individual deviation, which
+    can diverge from (avg bTilt - avg rTilt) whenever there's pitch-to-pitch tilt variance."""
+    return _tilt_deviation_minutes(release_tilt_clock, break_tilt_clock)
+
+
 def _format_tilt_deviation(value: Any) -> Optional[str]:
     if not _is_num(value):
         return None
@@ -1977,6 +1985,16 @@ def _expected_movement_sql(axis: str, alias: str) -> str:
         ELSE NULL
       END
     """
+
+
+def _magnus_angle(expected_ivb: Any, expected_hb: Any) -> Optional[float]:
+    if not (_is_num(expected_ivb) and _is_num(expected_hb)):
+        return None
+    ivb = abs(float(expected_ivb))
+    hb = abs(float(expected_hb))
+    if ivb <= 1e-9 and hb <= 1e-9:
+        return None
+    return degrees(atan2(ivb, hb))
 
 
 def _tilt_deviation_sql(alias: str) -> str:
@@ -3191,6 +3209,7 @@ ALL_TABLE_COLUMNS: List[str] = [
     "xHB",
     "dIVB",
     "dHB",
+    "MagAngle",
     "Spin",
     "rTilt",
     "bTilt",
@@ -4685,6 +4704,7 @@ def _build_dynamic_table(
         row_out: Dict[str, Any] = {
             split_col_name: key,
             "#": n,
+            "P": n,
             "Usage": f"{round(100.0 * n / total, 1)}%",
             "Overall": f"{round(100.0 * n / total, 1)}%",
             "BF": bf_starts,
@@ -4703,12 +4723,33 @@ def _build_dynamic_table(
             "HB": round(avg_hb, 1) if _is_num(avg_hb) else None,
             "xIVB": round(sum(v[0] for v in expected_pairs) / len(expected_pairs), 1) if expected_pairs else None,
             "xHB": round(sum(v[1] for v in expected_pairs) / len(expected_pairs), 1) if expected_pairs else None,
-            "dIVB": round(sum(v[2] for v in expected_pairs) / len(expected_pairs), 1) if expected_pairs else None,
-            "dHB": round(sum(v[3] for v in expected_pairs) / len(expected_pairs), 1) if expected_pairs else None,
+            "dIVB": (
+                round(avg_ivb - (sum(v[0] for v in expected_pairs) / len(expected_pairs)), 1)
+                if expected_pairs and _is_num(avg_ivb)
+                else None
+            ),
+            "dHB": (
+                round(avg_hb - (sum(v[1] for v in expected_pairs) / len(expected_pairs)), 1)
+                if expected_pairs and _is_num(avg_hb)
+                else None
+            ),
+            "MagAngle": (
+                round(
+                    _magnus_angle(
+                        sum(v[0] for v in expected_pairs) / len(expected_pairs),
+                        sum(v[1] for v in expected_pairs) / len(expected_pairs),
+                    ),
+                    1,
+                )
+                if expected_pairs
+                else None
+            ),
             "Spin": round(sum(float(v) for v in spin_vals) / len(spin_vals), 0) if spin_vals else None,
             "rTilt": _tilt_values_to_clock(r_tilt_vals),
             "bTilt": b_tilt_clock,
-            "TiltDev": _format_tilt_deviation(sum(tilt_dev_vals) / len(tilt_dev_vals)) if tilt_dev_vals else None,
+            "TiltDev": _format_tilt_deviation(
+                _tilt_deviation_from_averages(_tilt_values_to_clock(r_tilt_vals), b_tilt_clock)
+            ),
             "SpinEff": f"{round(100.0 * (sum(float(v) for v in spin_eff_vals) / len(spin_eff_vals)), 1)}%" if spin_eff_vals else None,
             "Height": round(sum(float(v) for v in height_vals) / len(height_vals), 1) if height_vals else None,
             "Side": round(sum(float(v) for v in side_vals) / len(side_vals), 1) if side_vals else None,
@@ -4946,7 +4987,8 @@ def _build_dynamic_table(
                 row_zero[metric] = row_all.get(metric)
 
     column_map: Dict[str, List[str]] = {
-        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
+        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
+        "Expected Movement": [split_col_name, "P", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "MagAngle", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA"],
         "Process": [split_col_name, "#", "BF", "RV/100", "PV/100", "InZone%", "<2kInZone%", "2kInZone%", "Strike%", "<2Kstrike%", "2Kstrike%", "Comp%", "Swing%", "FPS%", "Early%", "Ahead%", "E+A%", "1-1W%", "HR%"],
         "Results": [split_col_name, "#", "BF", "K%", "BB%", "HR%", "GB%", "FB%", "Barrel%", "Whiff%", "SwStrk%", "CSW%", "EV", "LA", "ERA", "FIP", "xFIP", "SIERA"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
@@ -8083,6 +8125,41 @@ def _refresh_league_daily_rollup(
             source_has_level = bool((cur.fetchone() or {}).get("source_has_level"))
             cur.execute(
                 """
+                SELECT MIN(pe.session_date)::date AS min_expected_movement_date
+                FROM public.pitch_events pe
+                WHERE pe.school_code = %(school_code)s
+                  AND pe.session_date IS NOT NULL
+                  AND NULLIF(TRIM(pe.inducedvertbreak::text), '') IS NOT NULL
+                  AND NULLIF(TRIM(pe.horzbreak::text), '') IS NOT NULL
+                  AND NULLIF(TRIM(pe.relspeed::text), '') IS NOT NULL
+                  AND NULLIF(TRIM(pe.spinrate::text), '') IS NOT NULL
+                  AND NULLIF(TRIM(pe.extension::text), '') IS NOT NULL
+                  AND NULLIF(TRIM(pe.spinefficiency::text), '') IS NOT NULL
+                  AND NULLIF(TRIM(pe.releasetilt::text), '') IS NOT NULL
+                  AND """ + PITCH_TYPE_NORMALIZE_SQL.replace("taggedpitchtype", "pe.taggedpitchtype").replace("autopitchtype", "pe.autopitchtype") + """ <> 'Undefined'
+                """,
+                {"school_code": school_filter},
+            )
+            source_expected_min_date = (cur.fetchone() or {}).get("min_expected_movement_date")
+            cur.execute(
+                """
+                SELECT MIN(session_date)::date AS min_expected_movement_date
+                FROM public.pitch_events_daily_rollup_league
+                WHERE school_code = %(school_code)s
+                  AND expected_move_n > 0
+                """,
+                {"school_code": school_filter},
+            )
+            rollup_expected_min_date = (cur.fetchone() or {}).get("min_expected_movement_date")
+            expected_movement_backfill_needed = bool(
+                source_expected_min_date
+                and (
+                    not rollup_expected_min_date
+                    or rollup_expected_min_date > source_expected_min_date
+                )
+            )
+            cur.execute(
+                """
                 SELECT EXISTS (
                   SELECT 1
                   FROM public.pitch_events_daily_rollup_league
@@ -8094,6 +8171,8 @@ def _refresh_league_daily_rollup(
             )
             rollup_has_level = bool((cur.fetchone() or {}).get("rollup_has_level"))
             if force:
+                refresh_start = min_date
+            elif expected_movement_backfill_needed:
                 refresh_start = min_date
             elif source_has_level and not rollup_has_level:
                 refresh_start = min_date
@@ -8589,6 +8668,14 @@ def _refresh_league_daily_rollup(
                     AND pe.session_date <= %(max_date)s::date
                     AND """ + PITCH_TYPE_NORMALIZE_SQL.replace("taggedpitchtype", "pe.taggedpitchtype").replace("autopitchtype", "pe.autopitchtype") + """ <> 'Undefined'
                 ),
+                pitch_metrics AS MATERIALIZED (
+                  SELECT
+                    b.*,
+                    """ + _expected_movement_sql("ivb", "b") + """ AS expected_ivb,
+                    """ + _expected_movement_sql("hb", "b") + """ AS expected_hb,
+                    """ + _tilt_deviation_sql("b") + """ AS tilt_dev_minutes
+                  FROM base b
+                ),
                 pa_first AS (
                   SELECT
                     b.*,
@@ -8596,7 +8683,7 @@ def _refresh_league_daily_rollup(
                       PARTITION BY b.session_date, b.game_key, b.pitcher_norm, b.pa_key
                       ORDER BY b.created_at, b.id
                     ) AS pa_rn
-                  FROM base b
+                  FROM pitch_metrics b
                 ),
                 pa_ord AS (
                   SELECT
@@ -8929,13 +9016,13 @@ def _refresh_league_daily_rollup(
                   SUM(CASE WHEN e.ext_value IS NOT NULL THEN 1 ELSE 0 END)::int AS ext_n,
                   SUM(CASE WHEN e.spin_eff IS NOT NULL THEN e.spin_eff ELSE 0.0 END)::double precision AS spin_eff_sum,
                   SUM(CASE WHEN e.spin_eff IS NOT NULL THEN 1 ELSE 0 END)::int AS spin_eff_n,
-                  COALESCE(SUM(""" + _expected_movement_sql("ivb", "e") + """), 0.0)::double precision AS xivb_sum,
-                  COALESCE(SUM(""" + _expected_movement_sql("hb", "e") + """), 0.0)::double precision AS xhb_sum,
-                  COUNT(""" + _expected_movement_sql("ivb", "e") + """)::int AS expected_move_n,
-                  COALESCE(SUM(CASE WHEN """ + _expected_movement_sql("ivb", "e") + """ IS NOT NULL THEN e.ivb - (""" + _expected_movement_sql("ivb", "e") + """) ELSE 0.0 END), 0.0)::double precision AS divb_sum,
-                  COALESCE(SUM(CASE WHEN """ + _expected_movement_sql("hb", "e") + """ IS NOT NULL THEN e.hb - (""" + _expected_movement_sql("hb", "e") + """) ELSE 0.0 END), 0.0)::double precision AS dhb_sum,
-                  COALESCE(SUM(""" + _tilt_deviation_sql("e") + """), 0.0)::double precision AS tilt_dev_minutes_sum,
-                  COUNT(""" + _tilt_deviation_sql("e") + """)::int AS tilt_dev_n,
+                  COALESCE(SUM(e.expected_ivb), 0.0)::double precision AS xivb_sum,
+                  COALESCE(SUM(e.expected_hb), 0.0)::double precision AS xhb_sum,
+                  COUNT(e.expected_ivb)::int AS expected_move_n,
+                  COALESCE(SUM(CASE WHEN e.expected_ivb IS NOT NULL THEN e.ivb - e.expected_ivb ELSE 0.0 END), 0.0)::double precision AS divb_sum,
+                  COALESCE(SUM(CASE WHEN e.expected_hb IS NOT NULL THEN e.hb - e.expected_hb ELSE 0.0 END), 0.0)::double precision AS dhb_sum,
+                  COALESCE(SUM(e.tilt_dev_minutes), 0.0)::double precision AS tilt_dev_minutes_sum,
+                  COUNT(e.tilt_dev_minutes)::int AS tilt_dev_n,
                   SUM(CASE WHEN e.vaa IS NOT NULL THEN e.vaa ELSE 0.0 END)::double precision AS vaa_sum,
                   SUM(CASE WHEN e.vaa IS NOT NULL THEN 1 ELSE 0 END)::int AS vaa_n,
                   COALESCE(SUM(""" + _nvaa_sql("e.vaa", "e.plate_height", "e.pitch_type", is_pro=False) + """), 0.0)::double precision AS nvaa_sum,
@@ -9491,7 +9578,7 @@ def _try_pitching_overview_daily_rollup(
     if include_row_pitches or include_trend_rows:
         return None
     mode_clean = (table_mode or "Live").strip()
-    if mode_clean not in {"Live", "Process", "Results", "Usage", "Pitch Usage", "Stuff", "Bullpen", "Banny", "Raw Data", "Batted Ball Data", "Custom"}:
+    if mode_clean not in {"Live", "Process", "Results", "Usage", "Pitch Usage", "Stuff", "Expected Movement", "Bullpen", "Banny", "Raw Data", "Batted Ball Data", "Custom"}:
         return None
     if mode_clean == "Process":
         return None
@@ -9505,9 +9592,15 @@ def _try_pitching_overview_daily_rollup(
         "Max",
         "IVB",
         "HB",
+        "xIVB",
+        "xHB",
+        "dIVB",
+        "dHB",
+        "MagAngle",
         "Spin",
         "rTilt",
         "bTilt",
+        "TiltDev",
         "SpinEff",
         "Height",
         "Side",
@@ -9725,7 +9818,8 @@ def _try_pitching_overview_daily_rollup(
     # the durable PA-start count used by Summary/Leaderboard BF.
     bf_sum_select = "SUM(count_00_n)::int AS bf_n" if split_clean == "Game" else "SUM(bf_n)::int AS bf_n"
     mode_columns_map: Dict[str, List[str]] = {
-        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
+        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
+        "Expected Movement": [split_col_name, "P", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "MagAngle", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
@@ -10375,9 +10469,8 @@ def _try_pitching_overview_daily_rollup(
         avg_hb_local = (sum(float(r.get("hb_sum") or 0.0) for r in rows_for_split) / hb_n) if hb_n > 0 else None
         avg_xivb_local = (sum(float(r.get("xivb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
         avg_xhb_local = (sum(float(r.get("xhb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
-        avg_divb_local = (sum(float(r.get("divb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
-        avg_dhb_local = (sum(float(r.get("dhb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
-        avg_tilt_dev_local = (sum(float(r.get("tilt_dev_minutes_sum") or 0.0) for r in rows_for_split) / tilt_dev_n) if tilt_dev_n > 0 else None
+        avg_divb_local = (avg_ivb_local - avg_xivb_local) if (_is_num(avg_ivb_local) and _is_num(avg_xivb_local)) else None
+        avg_dhb_local = (avg_hb_local - avg_xhb_local) if (_is_num(avg_hb_local) and _is_num(avg_xhb_local)) else None
         avg_vaa_local = (sum(float(r.get("vaa_sum") or 0.0) for r in rows_for_split) / vaa_n) if vaa_n > 0 else None
         avg_nvaa_local = (sum(float(r.get("nvaa_sum") or 0.0) for r in rows_for_split) / nvaa_n) if nvaa_n > 0 else None
         avg_haa_local = (sum(float(r.get("haa_sum") or 0.0) for r in rows_for_split) / haa_n) if haa_n > 0 else None
@@ -10390,6 +10483,7 @@ def _try_pitching_overview_daily_rollup(
             r_tilt_vals = [r.get("r_tilt_sample") for r in rows_for_split if str(r.get("r_tilt_sample") or "").strip()]
             r_tilt_clock = _tilt_values_to_clock(r_tilt_vals) if r_tilt_vals else None
         b_tilt = _movement_to_break_tilt_clock(avg_ivb_local, avg_hb_local)
+        avg_tilt_dev_local = _tilt_deviation_from_averages(r_tilt_clock, b_tilt)
         in_zone_pct_num = (100.0 * sum(int(r.get("in_zone_n") or 0) for r in rows_for_split) / loc_n) if loc_n > 0 else None
         comp_pct_num = (100.0 * sum(int(r.get("comp_n") or 0) for r in rows_for_split) / loc_n) if loc_n > 0 else None
         strike_pct_num = (100.0 * sum(int(r.get("strike_n") or 0) for r in rows_for_split) / pitches) if pitches > 0 else None
@@ -10550,6 +10644,7 @@ def _try_pitching_overview_daily_rollup(
         return {
             split_col_name: label,
             "#": pitches,
+            "P": pitches,
             "BF": bf_n,
             "PA": bf_n,
             "AB": ab_n,
@@ -10570,6 +10665,7 @@ def _try_pitching_overview_daily_rollup(
             "HB": round(avg_hb_local, 1) if _is_num(avg_hb_local) else None,
             "xHB": round(avg_xhb_local, 1) if _is_num(avg_xhb_local) else None,
             "dHB": round(avg_dhb_local, 1) if _is_num(avg_dhb_local) else None,
+            "MagAngle": round(_magnus_angle(avg_xivb_local, avg_xhb_local), 1) if _magnus_angle(avg_xivb_local, avg_xhb_local) is not None else None,
             "Spin": round(sum(float(r.get("spin_sum") or 0.0) for r in rows_for_split) / spin_n, 0) if spin_n > 0 else None,
             "rTilt": r_tilt_clock,
             "bTilt": b_tilt,
@@ -10818,7 +10914,8 @@ def _try_pitching_overview_daily_rollup(
             heatmap_points = []
 
     mode_columns_map: Dict[str, List[str]] = {
-        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
+        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
+        "Expected Movement": [split_col_name, "P", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "MagAngle", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
@@ -11069,7 +11166,10 @@ def _refresh_pro_daily_rollup(
                     NULLIF((regexp_match(COALESCE(pe.relheight::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS rel_height,
                     NULLIF((regexp_match(COALESCE(pe.relside::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS rel_side,
                     NULLIF((regexp_match(COALESCE(pe.extension::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS ext_value,
-                    NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS spin_eff,
+                    COALESCE(
+                      NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision,
+                      pas.active_spin_pct / 100.0
+                    ) AS spin_eff,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'activespin', to_jsonb(pe)->>'ActiveSpin', to_jsonb(pe)->>'active_spin', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS active_spin,
                     COALESCE(
                       NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'vertapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision,
@@ -11193,6 +11293,9 @@ def _refresh_pro_daily_rollup(
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'official_earned_runs', ''), '[-+]?[0-9]+'))[1], '')::double precision AS official_earned_runs,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'official_outs_recorded', ''), '[-+]?[0-9]+'))[1], '')::double precision AS official_outs_recorded
                   FROM public.pro_pitch_events pe
+                  LEFT JOIN public.pro_pitcher_active_spin pas
+                    ON pas.pitcher_name_norm = regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.pitcher), ''), '')), '[^a-z0-9]', '', 'g')
+                   AND pas.pitch_type = """ + PRO_ACTIVE_SPIN_PITCH_TYPE_SQL + """
                   WHERE pe.school_code = 'PRO'
                     AND pe.session_date >= %(refresh_start)s::date
                     AND pe.session_date <= %(max_date)s::date
@@ -11484,7 +11587,10 @@ def _refresh_pro_daily_rollup(
                     NULLIF((regexp_match(COALESCE(pe.relheight::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS rel_height,
                     NULLIF((regexp_match(COALESCE(pe.relside::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS rel_side,
                     NULLIF((regexp_match(COALESCE(pe.extension::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS ext_value,
-                    NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS spin_eff,
+                    COALESCE(
+                      NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision,
+                      pas.active_spin_pct / 100.0
+                    ) AS spin_eff,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'activespin', to_jsonb(pe)->>'ActiveSpin', to_jsonb(pe)->>'active_spin', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS active_spin,
                     COALESCE(
                       NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'vertapprangle', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision,
@@ -11601,6 +11707,9 @@ def _refresh_pro_daily_rollup(
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'official_earned_runs', ''), '[-+]?[0-9]+'))[1], '')::double precision AS official_earned_runs,
                     NULLIF((regexp_match(COALESCE(to_jsonb(pe)->>'official_outs_recorded', ''), '[-+]?[0-9]+'))[1], '')::double precision AS official_outs_recorded
                   FROM public.pro_pitch_events pe
+                  LEFT JOIN public.pro_pitcher_active_spin pas
+                    ON pas.pitcher_name_norm = regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.pitcher), ''), '')), '[^a-z0-9]', '', 'g')
+                   AND pas.pitch_type = """ + PRO_ACTIVE_SPIN_PITCH_TYPE_SQL + """
                   WHERE pe.school_code = 'PRO'
                     AND pe.session_date >= %(refresh_start)s::date
                     AND pe.session_date <= %(max_date)s::date
@@ -12221,7 +12330,7 @@ def _try_pro_pitching_overview_rollup(
     if any(v is not None for v in [parsed_velo_min, parsed_velo_max, parsed_ivb_min, parsed_ivb_max, parsed_hb_min, parsed_hb_max]):
         return None
     mode_clean = (table_mode or "Live").strip()
-    if mode_clean not in {"Stuff", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
+    if mode_clean not in {"Stuff", "Expected Movement", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
         return None
     if mode_clean == "Process":
         return None
@@ -12235,9 +12344,15 @@ def _try_pro_pitching_overview_rollup(
         "Max",
         "IVB",
         "HB",
+        "xIVB",
+        "xHB",
+        "dIVB",
+        "dHB",
+        "MagAngle",
         "Spin",
         "rTilt",
         "bTilt",
+        "TiltDev",
         "SpinEff",
         "Height",
         "Side",
@@ -12717,7 +12832,8 @@ def _try_pro_pitching_overview_rollup(
         )
         return None
     mode_columns_map: Dict[str, List[str]] = {
-        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
+        "Stuff": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA", "Stuff+"],
+        "Expected Movement": [split_col_name, "P", "Velo", "Max", "IVB", "xIVB", "dIVB", "HB", "xHB", "dHB", "MagAngle", "rTilt", "bTilt", "TiltDev", "SpinEff", "Spin", "Height", "Side", "Ext", "VAA", "nVAA", "HAA"],
         "Bullpen": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "Spin", "bTilt", "Height", "Side", "Ext", "InZone%", "Comp%", "Ctrl+", "Stuff+"],
         "Live": [split_col_name, "#", "Velo", "Max", "IVB", "HB", "FPS%", "E+A%", "InZone%", "Strike%", "Whiff%", "K%", "BB%", "HR%", "QP+"],
         "Banny": [split_col_name, "#", "Usage", "Velo", "Max", "IVB", "HB", "Strike%", "Whiff%", "K%", "BB%", "QP+"],
@@ -13087,9 +13203,8 @@ def _try_pro_pitching_overview_rollup(
         avg_hb_local = (sum(float(r.get("hb_sum") or 0.0) for r in rows_for_split) / hb_n) if hb_n > 0 else None
         avg_xivb_local = (sum(float(r.get("xivb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
         avg_xhb_local = (sum(float(r.get("xhb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
-        avg_divb_local = (sum(float(r.get("divb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
-        avg_dhb_local = (sum(float(r.get("dhb_sum") or 0.0) for r in rows_for_split) / expected_move_n) if expected_move_n > 0 else None
-        avg_tilt_dev_local = (sum(float(r.get("tilt_dev_minutes_sum") or 0.0) for r in rows_for_split) / tilt_dev_n) if tilt_dev_n > 0 else None
+        avg_divb_local = (avg_ivb_local - avg_xivb_local) if (_is_num(avg_ivb_local) and _is_num(avg_xivb_local)) else None
+        avg_dhb_local = (avg_hb_local - avg_xhb_local) if (_is_num(avg_hb_local) and _is_num(avg_xhb_local)) else None
         r_tilt_clock = _tilt_clock_from_vector(
             sum(float(r.get("r_tilt_x_sum") or 0.0) for r in rows_for_split),
             sum(float(r.get("r_tilt_y_sum") or 0.0) for r in rows_for_split),
@@ -13099,6 +13214,7 @@ def _try_pro_pitching_overview_rollup(
             r_tilt_vals = [r.get("r_tilt_sample") for r in rows_for_split if str(r.get("r_tilt_sample") or "").strip()]
             r_tilt_clock = _tilt_values_to_clock(r_tilt_vals) if r_tilt_vals else None
         b_tilt = _movement_to_break_tilt_clock(avg_ivb_local, avg_hb_local)
+        avg_tilt_dev_local = _tilt_deviation_from_averages(r_tilt_clock, b_tilt)
         in_zone_pct_num = (100.0 * sum(int(r.get("in_zone_n") or 0) for r in rows_for_split) / loc_n) if loc_n > 0 else None
         strike_pct_num = (100.0 * sum(int(r.get("strike_n") or 0) for r in rows_for_split) / pitches) if pitches > 0 else None
         qp_pct_num = (100.0 * sum(int(r.get("comp_n") or 0) for r in rows_for_split) / pitches) if pitches > 0 else None
@@ -13255,6 +13371,7 @@ def _try_pro_pitching_overview_rollup(
         return {
             split_col_name: label,
             "#": pitches,
+            "P": pitches,
             "BF": bf_n,
             "PA": bf_n,
             "AB": ab_n,
@@ -13266,6 +13383,7 @@ def _try_pro_pitching_overview_rollup(
             "HB": round(avg_hb_local, 1) if _is_num(avg_hb_local) else None,
             "xHB": round(avg_xhb_local, 1) if _is_num(avg_xhb_local) else None,
             "dHB": round(avg_dhb_local, 1) if _is_num(avg_dhb_local) else None,
+            "MagAngle": round(_magnus_angle(avg_xivb_local, avg_xhb_local), 1) if _magnus_angle(avg_xivb_local, avg_xhb_local) is not None else None,
             "Spin": round(sum(float(r.get("spin_sum") or 0.0) for r in rows_for_split) / spin_n, 0) if spin_n > 0 else None,
             "rTilt": r_tilt_clock,
             "bTilt": b_tilt,
@@ -13399,7 +13517,7 @@ def _try_pro_pitching_overview_rollup(
         suspicious_rate_rows = 0
         suspicious_movement_rows = 0
         suspicious_custom_rows = 0
-        movement_columns_requested = mode_clean in {"Stuff", "Bullpen"} or (
+        movement_columns_requested = mode_clean in {"Stuff", "Expected Movement", "Bullpen"} or (
             mode_clean == "Custom"
             and any(col in {"Height", "Side", "Ext", "SpinEff", "VAA", "nVAA", "HAA", "rTilt", "bTilt"} for col in normalized_custom_columns)
         )
@@ -15869,6 +15987,28 @@ CASE lower(COALESCE(NULLIF(TRIM(taggedpitchtype), ''), 'undefined'))
 END
 """.strip()
 
+# Maps this codebase's pitch-type labels (as produced by PRO_PITCH_TYPE_SQL,
+# i.e. TaggedPitchType word labels) to Baseball Savant's two/three-letter
+# api_pitch_type codes, so pro_pitcher_active_spin (keyed on Savant's codes)
+# can be joined against pro_pitch_events by pitch type.
+PRO_ACTIVE_SPIN_PITCH_TYPE_SQL = """
+CASE (""" + PRO_PITCH_TYPE_SQL + """)
+  WHEN 'Fastball' THEN 'FF'
+  WHEN 'Sinker' THEN 'SI'
+  WHEN 'Cutter' THEN 'FC'
+  WHEN 'Slider' THEN 'SL'
+  WHEN 'Sweeper' THEN 'ST'
+  WHEN 'Curveball' THEN 'CU'
+  WHEN 'ChangeUp' THEN 'CH'
+  WHEN 'Splitter' THEN 'FS'
+  WHEN 'Forkball' THEN 'FS'
+  WHEN 'Screwball' THEN 'SC'
+  WHEN 'Knuckleball' THEN 'KN'
+  WHEN 'Eephus' THEN 'EP'
+  ELSE NULL
+END
+""".strip()
+
 
 def _pro_norm_token(value: Any) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
@@ -17070,16 +17210,19 @@ def _pro_pitching_overview(
         _pro_level_sql_clause(level_filter, "pitcherteam", "batterteam"),
         "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
         "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
+        # Normalized-only match: regexp_replace(lower(...)) already subsumes
+        # exact and lowercase-only matching (normalization strictly widens the
+        # match, and _name_filter_keys already covers "First Last" vs "Last,
+        # First" ordering), and is the only form the partial index on
+        # pro_pitch_events_part_* actually supports -- an OR across all three
+        # forms defeats the planner's ability to use that index at all,
+        # forcing a full sequential scan on single-pitcher PRO requests.
         """(
              %(pitchers_count)s::int = 0
-             OR COALESCE(NULLIF(TRIM(pitcher), ''), '') = ANY(%(pitchers_exact)s::text[])
-             OR lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')) = ANY(%(pitchers_lower)s::text[])
              OR regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(pitchers_norm)s::text[])
            )""",
         """(
              %(opp_hitters_count)s::int = 0
-             OR COALESCE(NULLIF(TRIM(batter), ''), '') = ANY(%(opp_hitters_exact)s::text[])
-             OR lower(COALESCE(NULLIF(TRIM(batter), ''), '')) = ANY(%(opp_hitters_lower)s::text[])
              OR regexp_replace(lower(COALESCE(NULLIF(TRIM(batter), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(opp_hitters_norm)s::text[])
            )""",
         "(%(pitch_types_count)s::int = 0 OR (" + PRO_PITCH_TYPE_SQL + ") = ANY(%(pitch_types)s::text[]))",
@@ -17201,7 +17344,7 @@ def _pro_pitching_overview(
         """
     SELECT
       school_code,
-      id,
+      pe.id AS id,
       game_pk,
       session_date,
       at_bat_index,
@@ -17280,7 +17423,7 @@ def _pro_pitching_overview(
       iso_value,
       babip_value,
       COALESCE(NULLIF(TRIM(breaktilt), ''), '') AS break_tilt,
-      spinefficiency AS spin_eff,
+      COALESCE(spinefficiency, pas.active_spin_pct / 100.0) AS spin_eff,
       exitspeed AS exit_speed,
       angle,
       ''::text AS video_clip_1,
@@ -17290,6 +17433,9 @@ def _pro_pitching_overview(
       NULL::int AS prev_balls,
       NULL::int AS prev_strikes
     FROM public.pro_pitch_events pe
+    LEFT JOIN public.pro_pitcher_active_spin pas
+      ON pas.pitcher_name_norm = regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.pitcher), ''), '')), '[^a-z0-9]', '', 'g')
+     AND pas.pitch_type = """ + PRO_ACTIVE_SPIN_PITCH_TYPE_SQL + """
     WHERE """
         + " AND ".join(where)
         + """
@@ -17310,7 +17456,7 @@ def _pro_pitching_overview(
         try:
             latest_synced_date = _pro_max_session_date_in_rows(rows)
             needs_vaa_haa_cols = (
-                (table_mode or "").strip() == "Stuff"
+                (table_mode or "").strip() in {"Stuff", "Expected Movement"}
                 or ("VAA" in selected_custom_columns)
                 or ("nVAA" in selected_custom_columns)
                 or ("HAA" in selected_custom_columns)
@@ -20571,6 +20717,7 @@ def pitching_overview(
     table_mode_raw = (table_mode or "").strip() or "Stuff"
     table_mode_map = {
         "stuff": "Stuff",
+        "expected movement": "Expected Movement",
         "process": "Process",
         "results": "Results",
         "hitting results": "Hitting Results",
@@ -20740,7 +20887,7 @@ def pitching_overview(
                 with_video = None
 
         if league_rollup_candidate:
-            if table_mode not in {"Stuff", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
+            if table_mode not in {"Stuff", "Expected Movement", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
                 table_mode = "Live"
             if split_by not in {
                 "All",
@@ -20795,7 +20942,7 @@ def pitching_overview(
             parsed_bf_max = None
             parsed_ip_min = None
             parsed_ip_max = None
-            if table_mode not in {"Stuff", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
+            if table_mode not in {"Stuff", "Expected Movement", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
                 table_mode = "Live"
     elif school_code != "PRO":
         span_days: Optional[int] = None
@@ -20821,7 +20968,7 @@ def pitching_overview(
             # Respect explicit with_video filters even on wide windows.
             if (with_video or "").strip().lower() not in {"yes", "no"}:
                 with_video = None
-            if table_mode not in {"Stuff", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
+            if table_mode not in {"Stuff", "Expected Movement", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
                 table_mode = "Live"
             if split_by not in {
                 "All",
@@ -20872,7 +21019,7 @@ def pitching_overview(
             # Respect explicit with_video filters even on wide windows.
             if (with_video or "").strip().lower() not in {"yes", "no"}:
                 with_video = None
-            if table_mode not in {"Stuff", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
+            if table_mode not in {"Stuff", "Expected Movement", "Bullpen", "Live", "Banny", "Process", "Results", "Usage", "Pitch Usage", "Raw Data", "Batted Ball Data", "Custom"}:
                 table_mode = "Live"
             if split_by not in {
                 "All",

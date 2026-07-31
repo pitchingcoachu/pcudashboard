@@ -22,6 +22,7 @@ const STAT_DEFINITIONS: Record<string, string> = {
   rtilt: 'Average release tilt clock.',
   btilt: 'Average break tilt clock.',
   spineff: 'Spin efficiency percent.',
+  magangle: 'Magnus line angle from horizontal. A horizontal line is 0° and a vertical line is 90°.',
   height: 'Average release height in feet.',
   side: 'Average release side in feet.',
   ext: 'Average extension in feet.',

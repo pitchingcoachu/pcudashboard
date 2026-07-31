@@ -67,8 +67,14 @@ def main() -> int:
     parser.add_argument("--window-end", default="", help="Optional refresh window end, YYYY-MM-DD")
     parser.add_argument("--batch-days", type=int, default=0, help="Refresh in date batches of this many days")
     parser.add_argument("--retries", type=int, default=2, help="Retries per batch after a transient database failure")
+    parser.add_argument(
+        "--keep-pooler",
+        action="store_true",
+        help="Keep the configured pooled database endpoint instead of switching to the direct endpoint",
+    )
     args = parser.parse_args()
-    _ensure_direct_connection()
+    if not args.keep_pooler:
+        _ensure_direct_connection()
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if repo_root not in sys.path:

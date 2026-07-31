@@ -13,6 +13,7 @@
     "ios:open": "npx cap open ios"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@aws-sdk/client-s3": "^3.1061.0",
     "@aws-sdk/s3-request-presigner": "^3.1079.0",
     "@capacitor/cli": "^8.2.0",
@@ -25,7 +26,8 @@
     "pg": "^8.18.0",
     "pptxgenjs": "^4.0.1",
     "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "react-dom": "19.2.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.10.0",

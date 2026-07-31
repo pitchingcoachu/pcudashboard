@@ -145,6 +145,20 @@ export function formatTableDisplayValue(column: string, value: unknown): string 
     if (numericValue === null) return String(value);
     return `${numericValue.toFixed(1)}%`;
   }
+  if (upper === 'SPINEFF') {
+    const numericValue = parseSortableNumber(value);
+    if (numericValue === null) return String(value);
+    const rawText = typeof value === 'string' ? value.trim() : '';
+    const normalizedSpinEff = rawText.includes('%') || Math.abs(numericValue) > 1
+      ? numericValue
+      : numericValue * 100;
+    return `${normalizedSpinEff.toFixed(1)}%`;
+  }
+  if (upper === 'MAGANGLE') {
+    const numericValue = parseSortableNumber(value);
+    if (numericValue === null) return String(value);
+    return `${numericValue.toFixed(1)}°`;
+  }
   if (upper === 'RTILT' || upper === 'BTILT') return formatTiltClock(String(value));
   if (upper === 'TILTDEV') {
     const minutes = parseTiltDeviationMinutes(value);

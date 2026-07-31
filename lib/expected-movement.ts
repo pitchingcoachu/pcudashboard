@@ -31,6 +31,16 @@ export type ExpectedMovementResult = {
   modelVersion: typeof EXPECTED_MOVEMENT_MODEL_VERSION;
 };
 
+export function magnusAngleDegrees(expectedIvb: unknown, expectedHb: unknown): number | null {
+  const ivb = finiteNumber(expectedIvb);
+  const hb = finiteNumber(expectedHb);
+  if (ivb === null || hb === null) return null;
+  const absoluteIvb = Math.abs(ivb);
+  const absoluteHb = Math.abs(hb);
+  if (absoluteIvb <= 1e-9 && absoluteHb <= 1e-9) return null;
+  return (Math.atan2(absoluteIvb, absoluteHb) * 180) / Math.PI;
+}
+
 function finiteNumber(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value !== 'string') return null;

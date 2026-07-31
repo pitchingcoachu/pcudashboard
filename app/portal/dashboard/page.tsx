@@ -16,19 +16,51 @@ type PortalDashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
+type DashboardSuiteName =
+  | 'Home'
+  | 'Pitching'
+  | 'Hitting'
+  | 'Catching'
+  | 'Custom Reports'
+  | 'Comparison Tool'
+  | 'Biomechanics'
+  | 'Player Plans'
+  | 'Player Notes'
+  | 'Stuff+ Calculator';
+
+const SUITE_SLUG_MAP: Record<string, DashboardSuiteName> = {
+  home: 'Home',
+  pitching: 'Pitching',
+  'pitching-suite': 'Pitching',
+  hitting: 'Hitting',
+  'hitting-suite': 'Hitting',
+  catching: 'Catching',
+  'catching-suite': 'Catching',
+  'custom-reports': 'Custom Reports',
+  'custom_reports': 'Custom Reports',
+  'custom reports': 'Custom Reports',
+  'comparison-tool': 'Comparison Tool',
+  'comparison_tool': 'Comparison Tool',
+  'comparison tool': 'Comparison Tool',
+  biomechanics: 'Biomechanics',
+  'player-plans': 'Player Plans',
+  player_plans: 'Player Plans',
+  'player plans': 'Player Plans',
+  'player-notes': 'Player Notes',
+  player_notes: 'Player Notes',
+  'player notes': 'Player Notes',
+  'stuff-calculator': 'Stuff+ Calculator',
+  stuff_calculator: 'Stuff+ Calculator',
+  'stuff+ calculator': 'Stuff+ Calculator',
+};
+
 function readSuiteParam(
   value: string | string[] | undefined
-): 'Player Notes' | 'Player Plans' | null {
+): DashboardSuiteName | null {
   const raw = Array.isArray(value) ? value[0] : value;
   const normalized = String(raw ?? '').trim().toLowerCase();
   if (!normalized) return null;
-  if (normalized === 'player-notes' || normalized === 'player_notes' || normalized === 'player notes') {
-    return 'Player Notes';
-  }
-  if (normalized === 'player-plans' || normalized === 'player_plans' || normalized === 'player plans') {
-    return 'Player Plans';
-  }
-  return null;
+  return SUITE_SLUG_MAP[normalized] ?? null;
 }
 
 export default async function PortalDashboardPage({ searchParams }: PortalDashboardPageProps) {

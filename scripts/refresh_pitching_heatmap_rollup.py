@@ -11,6 +11,7 @@ WITH base_non_pro AS (
   SELECT
     pe.session_date::date AS session_date,
     UPPER(COALESCE(NULLIF(TRIM(pe.school_code), ''), '')) AS school_code,
+    UPPER(COALESCE(NULLIF(TRIM(pe.level), ''), 'UNKNOWN')) AS level_bucket,
     UPPER(COALESCE(NULLIF(TRIM(pe.session_type), ''), '')) AS session_type_bucket,
     LOWER(TRIM(COALESCE(pe.pitcher, ''))) AS pitcher_norm,
     UPPER(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), '')) AS pitcher_team_code,
@@ -144,6 +145,7 @@ WITH base_non_pro AS (
   SELECT
     pe.session_date::date AS session_date,
     'PRO'::text AS school_code,
+    'ALL'::text AS level_bucket,
     UPPER(COALESCE(NULLIF(TRIM(pe.session_type), ''), '')) AS session_type_bucket,
     LOWER(TRIM(COALESCE(pe.pitcher, ''))) AS pitcher_norm,
     UPPER(COALESCE(NULLIF(TRIM(pe.pitcherteam), ''), '')) AS pitcher_team_code,
@@ -308,6 +310,7 @@ WITH base_non_pro AS (
   SELECT
     pd."Date"::date AS session_date,
     'PRO'::text AS school_code,
+    'ALL'::text AS level_bucket,
     UPPER(COALESCE(NULLIF(TRIM(pd."SessionType"), ''), '')) AS session_type_bucket,
     LOWER(TRIM(COALESCE(pd."Pitcher", ''))) AS pitcher_norm,
     UPPER(COALESCE(NULLIF(TRIM(pd."PitcherTeam"), ''), '')) AS pitcher_team_code,
@@ -363,7 +366,7 @@ WITH base_non_pro AS (
     AND REGEXP_REPLACE(LOWER(COALESCE(NULLIF(TRIM(pd."TaggedPitchType"), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')
 ), plus_agg AS (
   SELECT
-    session_date, school_code, pitcher_norm, pitcherhand_norm, batterside_norm,
+    session_date, school_code, level_bucket, pitcher_norm, pitcherhand_norm, batterside_norm,
     pitch_group, pitch_type, count_bucket, after_count_bucket, inning_bucket, plate_x_bin, plate_z_bin,
     SUM(CASE WHEN stuff_plus IS NOT NULL THEN stuff_plus ELSE 0 END)::double precision AS stuff_plus_sum,
     SUM(CASE WHEN stuff_plus IS NOT NULL THEN 1 ELSE 0 END)::int AS stuff_plus_n,
@@ -375,10 +378,10 @@ WITH base_non_pro AS (
     SUM(CASE WHEN pitching_plus IS NOT NULL THEN 1 ELSE 0 END)::int AS pitching_plus_n
   FROM plus_src
   WHERE school_code <> '' AND pitcher_norm <> ''
-  GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12
+  GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13
 ), agg AS (
   SELECT
-    session_date, school_code, session_type_bucket, pitcher_norm, pitcher_team_code, pitcherhand_norm, batterside_norm,
+    session_date, school_code, level_bucket, session_type_bucket, pitcher_norm, pitcher_team_code, pitcherhand_norm, batterside_norm,
     pitch_group, pitch_type, count_bucket, after_count_bucket, inning_bucket,
     GREATEST(0, LEAST(23, plate_x_bin)) AS plate_x_bin,
     GREATEST(0, LEAST(29, plate_z_bin)) AS plate_z_bin,
@@ -443,10 +446,10 @@ WITH base_non_pro AS (
     SUM(CASE WHEN ev IS NOT NULL THEN 1 ELSE 0 END)::int AS ev_n
   FROM src
   WHERE school_code <> '' AND pitcher_norm <> '' AND plate_x_bin IS NOT NULL AND plate_z_bin IS NOT NULL
-  GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14
+  GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
 )
 INSERT INTO public.pitching_heatmap_daily_bins (
-  session_date, school_code, session_type_bucket, pitcher_norm, pitcher_team_code, pitcherhand_norm, batterside_norm,
+  session_date, school_code, level_bucket, session_type_bucket, pitcher_norm, pitcher_team_code, pitcherhand_norm, batterside_norm,
   pitch_group, pitch_type, count_bucket, after_count_bucket, inning_bucket, plate_x_bin, plate_z_bin,
   pitch_n, swing_n, whiff_n, in_play_n, gb_n, cs_n, take_n, pa_n,
   inzone_n, comp_n, fps_den, fps_num, early_den, early_num, ahead_den, ahead_num, ea_den, ea_num, oneone_den, oneone_num, chase_n,
@@ -458,7 +461,7 @@ INSERT INTO public.pitching_heatmap_daily_bins (
   rv_sum, pv_sum, xwoba_sum, xwoba_n, ev_sum, ev_n, updated_at
 )
 SELECT
-  a.session_date, a.school_code, a.session_type_bucket, a.pitcher_norm, a.pitcher_team_code, a.pitcherhand_norm, a.batterside_norm,
+  a.session_date, a.school_code, a.level_bucket, a.session_type_bucket, a.pitcher_norm, a.pitcher_team_code, a.pitcherhand_norm, a.batterside_norm,
   a.pitch_group, a.pitch_type, a.count_bucket, a.after_count_bucket, a.inning_bucket, a.plate_x_bin, a.plate_z_bin,
   a.pitch_n, a.swing_n, a.whiff_n, a.in_play_n, a.gb_n, a.cs_n, a.take_n, a.pa_n,
   a.inzone_n, a.comp_n, a.fps_den, a.fps_num, a.early_den, a.early_num, a.ahead_den, a.ahead_num, a.ea_den, a.ea_num, a.oneone_den, a.oneone_num, a.chase_n,
@@ -472,6 +475,7 @@ FROM agg a
 LEFT JOIN plus_agg p
   ON p.session_date = a.session_date
  AND p.school_code = a.school_code
+ AND p.level_bucket = a.level_bucket
  AND p.pitcher_norm = a.pitcher_norm
  AND p.pitcherhand_norm = a.pitcherhand_norm
  AND p.batterside_norm = a.batterside_norm
@@ -483,7 +487,7 @@ LEFT JOIN plus_agg p
  AND p.plate_x_bin = a.plate_x_bin
  AND p.plate_z_bin = a.plate_z_bin
 ON CONFLICT (
-  session_date, school_code, session_type_bucket, pitcher_norm, pitcher_team_code, pitcherhand_norm, batterside_norm,
+  session_date, school_code, level_bucket, session_type_bucket, pitcher_norm, pitcher_team_code, pitcherhand_norm, batterside_norm,
   pitch_group, pitch_type, count_bucket, after_count_bucket, inning_bucket, plate_x_bin, plate_z_bin
 )
 DO UPDATE SET

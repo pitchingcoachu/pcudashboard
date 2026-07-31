@@ -4,9 +4,15 @@ import { getSessionFromCookies } from '../../../../../lib/auth';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../../../lib/league-team-name-map';
 
-function parseCsv(value: string | null): string[] {
+function parseSelectionList(value: string | null): string[] {
   return String(value ?? '')
-    .split(',')
+    .split(';')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+function parsePitchTypeList(value: string | null): string[] {
+  return String(value ?? '')
+    .split(/[;,]/)
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
@@ -104,10 +110,15 @@ export async function GET(request: Request) {
   const sessionType = normalizeSessionType(String(url.searchParams.get('session_type') ?? ''));
   const hand = normalizeHand(String(url.searchParams.get('hand') ?? ''));
   const batterSide = normalizeHand(String(url.searchParams.get('batter_side') ?? ''));
-  const pitcherList = parseCsv(url.searchParams.get('pitcher'));
+  // Dashboard multi-selects use semicolons because NCAA names are commonly
+  // stored as "Last, First". Splitting pitcher values on commas corrupts a
+  // single player's name into two non-matching filters.
+  const pitcherList = parseSelectionList(url.searchParams.get('pitcher'));
   const pitcherNorms = Array.from(new Set(pitcherList.map(normalizeRollupName).filter(Boolean)));
   const teamCode = maybeTeamCode(String(url.searchParams.get('team_type') ?? ''));
-  const pitchTypes = parseCsv(url.searchParams.get('pitch_types'));
+  // Pitch types cannot contain commas, so retain legacy comma-separated URL
+  // compatibility while supporting the dashboard's semicolon format.
+  const pitchTypes = parsePitchTypeList(url.searchParams.get('pitch_types'));
   const selectedPitchTypes = Array.from(new Set(pitchTypes.map((value) => normalizePitchType(value)).filter(Boolean)));
   const pitchTypeSet = new Set(selectedPitchTypes.map((value) => value.toLowerCase()));
   const pitchTypeAliasList = Array.from(new Set(pitchTypes.flatMap(pitchTypeAliases).filter(Boolean)));
@@ -129,7 +140,14 @@ export async function GET(request: Request) {
   } else {
     add('school_code = ?', schoolCode);
   }
-  if (schoolCode === 'PRO' && level !== 'ALL') add('level_bucket = ?', level);
+  if (schoolCode === 'PRO' && level !== 'ALL') {
+    add("UPPER(COALESCE(NULLIF(TRIM(level_bucket), ''), 'UNKNOWN')) = ?", level);
+  }
+  if (schoolCode === 'LEAGUE' && level !== 'ALL') {
+    // Match the raw NCAA overview behavior: legacy rows without a known level
+    // remain visible instead of disappearing from every level selection.
+    add("(UPPER(COALESCE(NULLIF(TRIM(level_bucket), ''), 'UNKNOWN')) = ? OR UPPER(COALESCE(NULLIF(TRIM(level_bucket), ''), 'UNKNOWN')) = 'UNKNOWN')", level);
+  }
   if (startDate) add('session_date >= ?::date', startDate);
   if (endDate) add('session_date <= ?::date', endDate);
   if (sessionType) add('session_type_bucket = ?', sessionType);

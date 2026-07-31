@@ -1,0 +1,48 @@
+name: PRO Active Spin Sync
+
+on:
+  schedule:
+    # Weekly, Monday 09:00 UTC.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      since_date:
+        description: "Only consider pitchers with pro_pitch_events rows on/after this date (YYYY-MM-DD)"
+        required: false
+        default: "2025-01-01"
+      mlb_season:
+        description: "MLB Stats API season to resolve pitcher name -> MLBAM id"
+        required: false
+        default: "2026"
+      limit:
+        description: "Optional cap on number of pitchers to process (0 = no limit)"
+        required: false
+        default: "0"
+
+concurrency:
+  group: pro-active-spin-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DASHBOARD_DATABASE_URL: ${{ secrets.DASHBOARD_DATABASE_URL }}
+      PRO_ACTIVE_SPIN_SINCE_DATE: ${{ github.event.inputs.since_date || '2025-01-01' }}
+      PRO_ACTIVE_SPIN_MLB_SEASON: ${{ github.event.inputs.mlb_season || '2026' }}
+      PRO_ACTIVE_SPIN_LIMIT: ${{ github.event.inputs.limit || '0' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r dashboard_api/requirements.txt
+
+      - name: Sync PRO active spin from Baseball Savant
+        run: python scripts/sync_pro_active_spin.py

@@ -13,7 +13,7 @@ import { resolveSchoolBrand } from '../../../lib/school-brand';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
-import { calculateExpectedMovement, measuredTiltDegrees } from '../../../lib/expected-movement';
+import { calculateExpectedMovement, magnusAngleDegrees, measuredTiltDegrees } from '../../../lib/expected-movement';
 
 type FiltersPayload = {
   school_code: string;
@@ -1449,6 +1449,7 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'HB',
   'xHB',
   'dHB',
+  'MagAngle',
   'Spin',
   'rTilt',
   'bTilt',
@@ -4618,6 +4619,9 @@ export default function PitchingSuite({
   const overviewInflightRef = useRef(new Map<string, Promise<OverviewPayload>>());
   const percentileBaselineCacheRef = useRef(new Map<string, { at: number; rows: Array<Record<string, string | number | null>> }>());
   const percentileBaselineHandedCacheRef = useRef(new Map<string, { at: number; rows: Array<Record<string, string | number | null>> }>());
+  const movementComparisonCacheRef = useRef(
+    new Map<string, { at: number; rows: Array<Record<string, string | number | null>>; splitColumn: string }>()
+  );
   const summaryPercentileDistributionCacheRef = useRef(
     new Map<string, { at: number; base: Map<string, number[]>; handed: Map<string, number[]> }>()
   );
@@ -4640,6 +4644,10 @@ export default function PitchingSuite({
   const [summaryPitchTypeHandedDistributions, setSummaryPitchTypeHandedDistributions] = useState<Map<string, number[]>>(new Map());
   const [percentileBaselineHandedRequestKey, setPercentileBaselineHandedRequestKey] = useState('');
   const [percentileBaselineHandedRows, setPercentileBaselineHandedRows] = useState<Array<Record<string, string | number | null>>>([]);
+  const [movementComparisonRequestKey, setMovementComparisonRequestKey] = useState('');
+  const [movementComparisonRows, setMovementComparisonRows] = useState<Array<Record<string, string | number | null>>>([]);
+  const [movementComparisonSplitColumn, setMovementComparisonSplitColumn] = useState('');
+  const [loadingMovementComparison, setLoadingMovementComparison] = useState(false);
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
   const [correlationOverviewBaseQuery, setCorrelationOverviewBaseQuery] = useState('');
   const [correlationAllStatColumns, setCorrelationAllStatColumns] = useState<string[]>([]);
@@ -4733,6 +4741,10 @@ export default function PitchingSuite({
   const [releaseView, setReleaseView] = useState('Averages Only');
   const [movementView, setMovementView] = useState('Averages and Pitches');
   const [magnusLine, setMagnusLine] = useState<'Off' | 'Fastball' | 'Sinker'>('Off');
+  const [showMagnusAngle, setShowMagnusAngle] = useState(true);
+  const [comparisonScope, setComparisonScope] = useState('MLB');
+  const [showComparisonDots, setShowComparisonDots] = useState(false);
+  const [showComparisonMagnusLine, setShowComparisonMagnusLine] = useState(false);
   const [locationView, setLocationView] = useState('Pitch');
   const [heatmapChartType, setHeatmapChartType] = useState<'Heat' | 'Pitch' | 'QP+'>('Pitch');
   const [heatmapStat, setHeatmapStat] = useState('Frequency');
@@ -4953,17 +4965,6 @@ export default function PitchingSuite({
     String(selectedSchoolCode ?? '').toUpperCase() === 'MLB' ||
     String(filters?.school_code ?? '').toUpperCase() === 'PRO' ||
     String(filters?.school_code ?? '').toUpperCase() === 'MLB';
-  useEffect(() => {
-    if (!isPro) return;
-    if (
-      movementView === 'Expected vs Actual — Averages'
-      || movementView === 'Expected vs Actual — Individual Pitches'
-      || movementView === 'Magnus Movement — Individual Pitches'
-    ) {
-      setMovementView('Averages and Pitches');
-    }
-    setMagnusLine('Off');
-  }, [isPro, movementView]);
   const dnaSharedFilterParams = useMemo(() => {
     const params = new URLSearchParams();
     const apiTeamType = isLeague
@@ -5079,6 +5080,10 @@ export default function PitchingSuite({
     ],
     [collegeLevelPercentileOptions, percentileTeamLabel]
   );
+  // Movement-plot comparison-population scope. PRO always compares to MLB;
+  // league sites reuse the same level/MLB/TEAM option set as percentile scope.
+  const movementComparisonScopeOptions = percentileScopeOptions;
+  const comparisonScopeLabel = isPro ? 'MLB' : (comparisonScope === 'TEAM' ? percentileTeamLabel : comparisonScope);
   const activeSchoolBrand = useMemo(
     () => resolveSchoolBrand(String(filters?.school_code ?? selectedSchoolCode ?? 'PCU')),
     [filters?.school_code, selectedSchoolCode]
@@ -5216,7 +5221,7 @@ export default function PitchingSuite({
   }, [isLeague, isPro, leaderboardViewBy]);
   useEffect(() => {
     if (!isLeague) return;
-    const allowedTableModes = new Set(['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Pitch Usage', 'Raw Data', 'Batted Ball Data', 'Custom']);
+    const allowedTableModes = new Set(['Stuff', 'Expected Movement', 'Process', 'Results', 'Bullpen', 'Live', 'Usage', 'Pitch Usage', 'Raw Data', 'Batted Ball Data', 'Custom']);
     if (!allowedTableModes.has(tableMode)) {
       setTableMode('Live');
     }
@@ -5924,6 +5929,7 @@ export default function PitchingSuite({
             heatmapParams.set('school_code', 'LEAGUE');
             if (startDate) heatmapParams.set('start_date', startDate);
             if (endDate) heatmapParams.set('end_date', endDate);
+            if (level && level !== 'All') heatmapParams.set('level', level);
             if (sessionType) heatmapParams.set('session_type', sessionType);
             if (hand && hand !== 'All') heatmapParams.set('hand', hand);
             if (batterSide && batterSide !== 'All') heatmapParams.set('batter_side', batterSide);
@@ -5975,12 +5981,15 @@ export default function PitchingSuite({
       setOverview((previous) => {
         if (!previous) return normalizedPayload;
         const incomingChartPoints = Array.isArray(normalizedPayload.chart_points) ? normalizedPayload.chart_points : [];
-        const incomingHeatmapPoints = Array.isArray(normalizedPayload.heatmap_points) ? normalizedPayload.heatmap_points : [];
+        const hasIncomingHeatmapPoints = Array.isArray(normalizedPayload.heatmap_points);
+        const incomingHeatmapPoints = hasIncomingHeatmapPoints ? normalizedPayload.heatmap_points : [];
         const incomingTrendRows = Array.isArray(normalizedPayload.trend_rows) ? normalizedPayload.trend_rows : [];
         return {
           ...normalizedPayload,
           chart_points: incomingChartPoints.length ? incomingChartPoints : (previous.chart_points ?? []),
-          heatmap_points: incomingHeatmapPoints.length ? incomingHeatmapPoints : (previous.heatmap_points ?? []),
+          // An explicit empty heatmap is a valid filtered result. Retaining the
+          // previous points here displays stale data under the new filters.
+          heatmap_points: hasIncomingHeatmapPoints ? incomingHeatmapPoints : (previous.heatmap_points ?? []),
           trend_rows: incomingTrendRows.length ? incomingTrendRows : (previous.trend_rows ?? []),
         };
       });
@@ -5989,12 +5998,13 @@ export default function PitchingSuite({
       setOverview((previous) => {
         if (!previous) return payload;
         const incomingChartPoints = Array.isArray(payload.chart_points) ? payload.chart_points : [];
-        const incomingHeatmapPoints = Array.isArray(payload.heatmap_points) ? payload.heatmap_points : [];
+        const hasIncomingHeatmapPoints = Array.isArray(payload.heatmap_points);
+        const incomingHeatmapPoints = hasIncomingHeatmapPoints ? payload.heatmap_points : [];
         const incomingTrendRows = Array.isArray(payload.trend_rows) ? payload.trend_rows : [];
         return {
           ...previous,
           chart_points: incomingChartPoints.length > 0 ? incomingChartPoints : (previous.chart_points ?? []),
-          heatmap_points: incomingHeatmapPoints.length > 0 ? incomingHeatmapPoints : (previous.heatmap_points ?? []),
+          heatmap_points: hasIncomingHeatmapPoints ? incomingHeatmapPoints : (previous.heatmap_points ?? []),
           // Chart-only companion responses intentionally omit trend rows. Keep
           // the full-dataset response instead of replacing it with an empty list.
           trend_rows: incomingTrendRows.length > 0 ? incomingTrendRows : (previous.trend_rows ?? []),
@@ -6319,6 +6329,115 @@ export default function PitchingSuite({
       controller.abort();
     };
   }, [percentileBaselineRequestKey]);
+
+  useEffect(() => {
+    const wantsComparison = Boolean(selectedSinglePitcher) && (showComparisonDots || showComparisonMagnusLine);
+    if (!wantsComparison) {
+      setMovementComparisonRequestKey('');
+      return;
+    }
+    const params = new URLSearchParams();
+    params.set('start_date', startDate);
+    params.set('end_date', endDate);
+    params.set('split_by', 'Pitch Types');
+    params.set('table_mode', 'Expected Movement');
+    params.set('include_chart_points', '0');
+    params.set('include_row_pitches', '0');
+    params.set('include_trend_rows', '0');
+    // Match the current pitcher's handedness so a lefty vs righty comparison
+    // pool doesn't wash out horizontal break in the averaged Magnus line/dots.
+    if (selectedSinglePitcherHandCode) {
+      params.set('hand', selectedSinglePitcherHandCode === 'R' ? 'Right' : 'Left');
+    }
+    const scope = isPro ? 'MLB' : comparisonScope;
+    if (scope === 'MLB') {
+      params.set('school_code', 'PRO');
+      params.set('level', 'MLB');
+      // Mirror the percentile-baseline MLB pool: widen to a full-year window so
+      // a short current-view date range doesn't starve the comparison population.
+      params.set('start_date', '2026-01-01');
+      params.set('end_date', '2026-12-31');
+    } else if (scope === 'TEAM') {
+      params.set('school_code', String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase() || 'LEAGUE');
+      const schoolTeamCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+      if (teamType && teamType !== 'All') {
+        params.set(
+          'team_type',
+          isLeague ? resolveLeagueTeamTypeForApi(teamType, [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code]) : teamType
+        );
+      } else if (schoolTeamCode && schoolTeamCode !== 'PRO' && schoolTeamCode !== 'LEAGUE') {
+        params.set('team_type', schoolTeamCode);
+      }
+    } else {
+      params.set('school_code', 'LEAGUE');
+      params.set('level', scope);
+    }
+    const key = `/api/dashboard/pitching/overview?${params.toString()}`;
+    setMovementComparisonRequestKey(key);
+  }, [
+    selectedSinglePitcher,
+    selectedSinglePitcherHandCode,
+    showComparisonDots,
+    showComparisonMagnusLine,
+    isPro,
+    isLeague,
+    comparisonScope,
+    startDate,
+    endDate,
+    teamType,
+    filters?.school_code,
+    filters?.pitchers_by_team_code,
+    filters?.opp_hitters_by_team_code,
+    selectedSchoolCode,
+  ]);
+
+  useEffect(() => {
+    if (!movementComparisonRequestKey) {
+      setMovementComparisonRows([]);
+      setMovementComparisonSplitColumn('');
+      setLoadingMovementComparison(false);
+      return;
+    }
+    const cached = movementComparisonCacheRef.current.get(movementComparisonRequestKey);
+    if (cached && Date.now() - cached.at < 90_000) {
+      setMovementComparisonRows(cached.rows);
+      setMovementComparisonSplitColumn(cached.splitColumn);
+      setLoadingMovementComparison(false);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    setLoadingMovementComparison(true);
+    fetch(movementComparisonRequestKey, { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as {
+          table_rows?: Array<Record<string, string | number | null>>;
+          table_columns?: string[];
+          error?: string;
+        };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed movement comparison request.');
+        const rows = Array.isArray(payload.table_rows) ? payload.table_rows : [];
+        const splitColumn = Array.isArray(payload.table_columns) ? String(payload.table_columns[0] ?? '') : '';
+        if (!active) return;
+        movementComparisonCacheRef.current.set(movementComparisonRequestKey, { at: Date.now(), rows, splitColumn });
+        setMovementComparisonRows(rows);
+        setMovementComparisonSplitColumn(splitColumn);
+      })
+      .catch((error) => {
+        if (!active) return;
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setMovementComparisonRows([]);
+        setMovementComparisonSplitColumn('');
+      })
+      .finally(() => {
+        if (!active) return;
+        setLoadingMovementComparison(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [movementComparisonRequestKey]);
 
   useEffect(() => {
     if (!percentileBaselineHandedRequestKey) {
@@ -9318,7 +9437,6 @@ export default function PitchingSuite({
 
   const rawSummaryPoints = useMemo(() => {
     const points = overview?.chart_points ?? [];
-    if (isPro) return points;
     return points.map((point) => {
       const row = point as unknown as Record<string, unknown>;
       const expected = calculateExpectedMovement({
@@ -9349,7 +9467,7 @@ export default function PitchingSuite({
         expected_movement_model: expected.modelVersion,
       };
     });
-  }, [isPro, overview?.chart_points]);
+  }, [overview?.chart_points]);
   const pitchLevelSummaryPoints = useMemo(
     () =>
       rawSummaryPoints.filter((point) => {
@@ -10244,6 +10362,70 @@ export default function PitchingSuite({
     }));
     return { eligiblePoints, averages };
   }, [summaryPoints]);
+  const fullMagnusAveragesByPitchType = useMemo(() => {
+    const averages = new Map<
+      string,
+      {
+        pitch_type: string;
+        expected_hb: number;
+        expected_ivb: number;
+        magnus_angle: number | null;
+      }
+    >();
+    const splitColumn = overview?.table_columns?.[0] ?? '';
+    if (!splitColumn || splitBy !== 'Pitch Types') return averages;
+    for (const row of overview?.table_rows ?? []) {
+      const pitchType = String(row[splitColumn] ?? '').trim();
+      if (!pitchType || isAllLikeRowValue(pitchType)) continue;
+      const expectedHb = parseSortableNumber(row.xHB);
+      const expectedIvb = parseSortableNumber(row.xIVB);
+      if (expectedHb === null || expectedIvb === null) continue;
+      averages.set(normalizeNameToken(pitchType), {
+        pitch_type: pitchType,
+        expected_hb: expectedHb,
+        expected_ivb: expectedIvb,
+        magnus_angle: parseSortableNumber(row.MagAngle),
+      });
+    }
+    return averages;
+  }, [overview?.table_columns, overview?.table_rows, splitBy]);
+
+  // Comparison-population (MLB / college level / team) averages for the
+  // Movement plot overlay -- same shape as fullMagnusAveragesByPitchType,
+  // but sourced from a separately-scoped request (movementComparisonRows)
+  // instead of the current view's own overview payload.
+  const movementComparisonAveragesByPitchType = useMemo(() => {
+    const averages = new Map<
+      string,
+      {
+        pitch_type: string;
+        actual_hb: number | null;
+        actual_ivb: number | null;
+        expected_hb: number | null;
+        expected_ivb: number | null;
+        magnus_angle: number | null;
+      }
+    >();
+    if (!movementComparisonSplitColumn) return averages;
+    for (const row of movementComparisonRows) {
+      const pitchType = String(row[movementComparisonSplitColumn] ?? '').trim();
+      if (!pitchType || isAllLikeRowValue(pitchType)) continue;
+      const actualHb = parseSortableNumber(row.HB);
+      const actualIvb = parseSortableNumber(row.IVB);
+      const expectedHb = parseSortableNumber(row.xHB);
+      const expectedIvb = parseSortableNumber(row.xIVB);
+      if (actualHb === null && actualIvb === null && expectedHb === null && expectedIvb === null) continue;
+      averages.set(normalizeNameToken(pitchType), {
+        pitch_type: pitchType,
+        actual_hb: actualHb,
+        actual_ivb: actualIvb,
+        expected_hb: expectedHb,
+        expected_ivb: expectedIvb,
+        magnus_angle: parseSortableNumber(row.MagAngle),
+      });
+    }
+    return averages;
+  }, [movementComparisonRows, movementComparisonSplitColumn]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -10877,7 +11059,7 @@ export default function PitchingSuite({
   const movementSvg = useMemo(() => {
     const w = 400;
     const h = 360;
-    const margin = { top: 4, right: 0, bottom: 16, left: 18 };
+    const margin = { top: 4, right: 0, bottom: 26, left: 18 };
     const xMin = -25;
     const xMax = 25;
     const yMin = -25;
@@ -10943,15 +11125,62 @@ export default function PitchingSuite({
         typeof point.ivb === 'number' &&
         Number.isFinite(point.ivb)
     );
+    const playerPitchTypeTokens = new Set(
+      avgByType
+        .filter((p) => p.pitch_type && p.pitch_type !== 'Undefined')
+        .map((p) => normalizeNameToken(p.pitch_type))
+    );
+    const fullMagnusLineAverage =
+      magnusLine === 'Off'
+        ? null
+        : fullMagnusAveragesByPitchType.get(normalizeNameToken(magnusLine)) ?? null;
     const magnusLineAverage =
       magnusLine === 'Off'
         ? null
-        : expectedMovementData.averages.find((row) => row.pitch_type === magnusLine) ?? null;
+        : fullMagnusLineAverage
+          ?? expectedMovementData.averages.find((row) => row.pitch_type === magnusLine)
+          ?? null;
+    const magnusLineAngle = magnusLineAverage
+      ? fullMagnusLineAverage?.magnus_angle
+        ?? magnusAngleDegrees(magnusLineAverage.expected_ivb, magnusLineAverage.expected_hb)
+      : null;
     const magnusLineEndpoints = (() => {
       if (!magnusLineAverage) return null;
       const vectorX = magnusLineAverage.expected_hb;
       const vectorY = magnusLineAverage.expected_ivb;
       if (!Number.isFinite(vectorX) || !Number.isFinite(vectorY)) return null;
+      const xScale = Math.abs(vectorX) > 1e-9 ? xMax / Math.abs(vectorX) : Number.POSITIVE_INFINITY;
+      const yScale = Math.abs(vectorY) > 1e-9 ? yMax / Math.abs(vectorY) : Number.POSITIVE_INFINITY;
+      const endpointScale = Math.min(xScale, yScale);
+      if (!Number.isFinite(endpointScale)) return null;
+      return {
+        x1: -vectorX * endpointScale,
+        y1: -vectorY * endpointScale,
+        x2: vectorX * endpointScale,
+        y2: vectorY * endpointScale,
+      };
+    })();
+    const comparisonMagnusLineAverage =
+      showComparisonMagnusLine && magnusLine !== 'Off'
+        ? movementComparisonAveragesByPitchType.get(normalizeNameToken(magnusLine)) ?? null
+        : null;
+    const comparisonMagnusLineAngle =
+      comparisonMagnusLineAverage
+      && Number.isFinite(comparisonMagnusLineAverage.expected_ivb)
+      && Number.isFinite(comparisonMagnusLineAverage.expected_hb)
+        ? comparisonMagnusLineAverage.magnus_angle
+          ?? magnusAngleDegrees(
+            comparisonMagnusLineAverage.expected_ivb as number,
+            comparisonMagnusLineAverage.expected_hb as number
+          )
+        : null;
+    const comparisonMagnusLineEndpoints = (() => {
+      if (!comparisonMagnusLineAverage) return null;
+      const rawX = comparisonMagnusLineAverage.expected_hb;
+      const rawY = comparisonMagnusLineAverage.expected_ivb;
+      if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) return null;
+      const vectorX: number = rawX as number;
+      const vectorY: number = rawY as number;
       const xScale = Math.abs(vectorX) > 1e-9 ? xMax / Math.abs(vectorX) : Number.POSITIVE_INFINITY;
       const yScale = Math.abs(vectorY) > 1e-9 ? yMax / Math.abs(vectorY) : Number.POSITIVE_INFINITY;
       const endpointScale = Math.min(xScale, yScale);
@@ -11045,18 +11274,57 @@ export default function PitchingSuite({
             {tick}
           </text>
         ))}
+        {showMagnusAngle && magnusLineAngle !== null ? (
+          <text
+            x={px(xMin)}
+            y={topPad + 10}
+            textAnchor="start"
+            fontSize={9.5}
+            fontStyle="italic"
+            fill={pitchColors[magnusLine] ?? 'rgba(255,255,255,0.85)'}
+          >
+            Magnus Angle: {magnusLineAngle.toFixed(1)}°
+          </text>
+        ) : null}
+        {showMagnusAngle && showComparisonMagnusLine && comparisonMagnusLineAngle !== null ? (
+          <text
+            x={px(xMin)}
+            y={topPad + 23}
+            textAnchor="start"
+            fontSize={9.5}
+            fontStyle="italic"
+            fill="#a3e635"
+          >
+            {comparisonScopeLabel} Magnus Angle: {comparisonMagnusLineAngle.toFixed(1)}°
+          </text>
+        ) : null}
         {magnusLineEndpoints && magnusLine !== 'Off' ? (
-          <line
-            x1={px(magnusLineEndpoints.x1)}
-            y1={py(magnusLineEndpoints.y1)}
-            x2={px(magnusLineEndpoints.x2)}
-            y2={py(magnusLineEndpoints.y2)}
-            stroke={pitchColors[magnusLine] ?? '#e2e8f0'}
-            strokeWidth={2}
-            strokeDasharray="7 6"
-            opacity={0.72}
-            pointerEvents="none"
-          />
+          <g pointerEvents="none">
+            <line
+              x1={px(magnusLineEndpoints.x1)}
+              y1={py(magnusLineEndpoints.y1)}
+              x2={px(magnusLineEndpoints.x2)}
+              y2={py(magnusLineEndpoints.y2)}
+              stroke={pitchColors[magnusLine] ?? '#e2e8f0'}
+              strokeWidth={2}
+              strokeDasharray="7 6"
+              opacity={0.72}
+            />
+          </g>
+        ) : null}
+        {comparisonMagnusLineEndpoints && magnusLine !== 'Off' ? (
+          <g pointerEvents="none">
+            <line
+              x1={px(comparisonMagnusLineEndpoints.x1)}
+              y1={py(comparisonMagnusLineEndpoints.y1)}
+              x2={px(comparisonMagnusLineEndpoints.x2)}
+              y2={py(comparisonMagnusLineEndpoints.y2)}
+              stroke="#a3e635"
+              strokeWidth={2}
+              strokeDasharray="2 3"
+              opacity={0.85}
+            />
+          </g>
         ) : null}
         {showPitches
           ? plottedPitches
@@ -11249,6 +11517,54 @@ export default function PitchingSuite({
               );
             })
           : null}
+        {showComparisonDots
+          ? Array.from(movementComparisonAveragesByPitchType.values())
+              .filter((row) => playerPitchTypeTokens.has(normalizeNameToken(row.pitch_type)))
+              .map((row) => {
+              const color = '#a3e635';
+              const hasActual = Number.isFinite(row.actual_hb) && Number.isFinite(row.actual_ivb);
+              const hasExpected = Number.isFinite(row.expected_hb) && Number.isFinite(row.expected_ivb);
+              if (!hasActual && !hasExpected) return null;
+              const tooltip =
+                `${row.pitch_type} — ${comparisonScopeLabel} average (not this player)` +
+                (hasActual ? `\nActual IVB: ${fmt1(row.actual_ivb)} in | HB: ${fmt1(row.actual_hb)} in` : '') +
+                (hasExpected ? `\nMagnus IVB: ${fmt1(row.expected_ivb)} in | HB: ${fmt1(row.expected_hb)} in` : '');
+              return (
+                <g
+                  key={`m-comparison-${row.pitch_type}`}
+                  className="portal-movement-comparison"
+                  onMouseMove={(event) =>
+                    setMovementHover({ x: event.clientX, y: event.clientY, text: tooltip, bg: color })
+                  }
+                  onMouseLeave={() => setMovementHover(null)}
+                >
+                  {hasActual ? (
+                    <circle
+                      cx={px(Number(row.actual_hb))}
+                      cy={py(Number(row.actual_ivb))}
+                      r={8.6}
+                      fill={color}
+                      stroke="rgba(0,0,0,0.68)"
+                      strokeWidth={2.2}
+                      opacity={0.98}
+                    />
+                  ) : null}
+                  {hasExpected ? (
+                    <circle
+                      cx={px(Number(row.expected_hb))}
+                      cy={py(Number(row.expected_ivb))}
+                      r={8.6}
+                      fill="rgba(0,0,0,0.76)"
+                      stroke={color}
+                      strokeWidth={2.6}
+                      strokeDasharray="3 2"
+                      opacity={0.98}
+                    />
+                  ) : null}
+                </g>
+              );
+            })
+          : null}
         {breakRows.map((row) => (
           <line key={`br-${row.pitch_type}`} x1={px(row.x1)} y1={py(row.y1)} x2={px(row.x2)} y2={py(row.y2)} stroke={pitchColors[row.pitch_type] ?? '#9ca3af'} strokeWidth={3.2} />
         ))}
@@ -11304,7 +11620,7 @@ export default function PitchingSuite({
         ) : null}
       </svg>
     );
-  }, [summaryPoints, avgByType, expectedMovementData, movementView, magnusLine, breakLines, plottedPitcherHand, targetShapes, isPitchEditLassoEnabled, movementLasso, visualOption, canUsePitchEdits]);
+  }, [summaryPoints, avgByType, expectedMovementData, fullMagnusAveragesByPitchType, movementComparisonAveragesByPitchType, showComparisonDots, showComparisonMagnusLine, comparisonScopeLabel, movementView, magnusLine, showMagnusAngle, breakLines, plottedPitcherHand, targetShapes, isPitchEditLassoEnabled, movementLasso, visualOption, canUsePitchEdits]);
 
   const locationSvg = useMemo(() => {
     const w = 520;
@@ -11876,12 +12192,13 @@ export default function PitchingSuite({
   }, [tableMode]);
 
   const shouldColorTable = useMemo(
-    () => enableTableColors && ['Stuff', 'Process', 'Live', 'Results', 'Bullpen', 'Banny', 'Custom'].includes(tableColorMode),
+    () => enableTableColors && ['Stuff', 'Expected Movement', 'Process', 'Live', 'Results', 'Bullpen', 'Banny', 'Custom'].includes(tableColorMode),
     [enableTableColors, tableColorMode]
   );
 
   const colorColumnsByMode: Record<string, string[]> = {
-    Stuff: ['Velo', 'Max', 'IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB', 'rTilt', 'bTilt', 'TiltDev', 'SpinEff', 'Spin', 'Height', 'Side', 'Ext', 'VAA', 'nVAA', 'HAA', 'Stuff+'],
+    Stuff: ['Velo', 'Max', 'IVB', 'HB', 'rTilt', 'bTilt', 'TiltDev', 'SpinEff', 'Spin', 'Height', 'Side', 'Ext', 'VAA', 'nVAA', 'HAA', 'Stuff+'],
+    'Expected Movement': ['Velo', 'Max', 'IVB', 'xIVB', 'dIVB', 'HB', 'xHB', 'dHB', 'MagAngle', 'rTilt', 'bTilt', 'TiltDev', 'SpinEff', 'Spin', 'Height', 'Side', 'Ext', 'VAA', 'nVAA', 'HAA'],
     Process: ['InZone%', '<2kInZone%', '2kInZone%', 'Strike%', '<2Kstrike%', '2Kstrike%', 'Comp%', 'Swing%', 'FPS%', 'Early%', 'Ahead%', 'E+A%', '1-1W%', 'HR%', 'RV/100', 'PV/100', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Live: ['InZone%', 'Strike%', 'FPS%', 'E+A%', 'QP+', 'Ctrl+', 'Pitching+', 'K%', 'BB%', 'HR%', 'Whiff%', 'SwStrk%', 'ERA', 'FIP', 'xFIP', 'SIERA'],
     Results: ['Whiff%', 'SwStrk%', 'K%', 'BB%', 'HR%', 'CSW%', 'GB%', 'FB%', 'Barrel%', 'EV', 'ERA', 'FIP', 'xFIP', 'SIERA'],
@@ -11896,6 +12213,7 @@ export default function PitchingSuite({
       'HB',
       'xHB',
       'dHB',
+      'MagAngle',
       'Spin',
       'rTilt',
       'bTilt',
@@ -11990,6 +12308,7 @@ export default function PitchingSuite({
       (isLeague
         ? [
             { value: 'Stuff', label: 'Stuff' },
+            { value: 'Expected Movement', label: 'Expected Movement' },
             { value: 'Live', label: 'Live' },
             { value: 'Process', label: 'Process' },
             { value: 'Results', label: 'Results' },
@@ -12003,6 +12322,7 @@ export default function PitchingSuite({
           ]
         : [
             { value: 'Stuff', label: 'Stuff' },
+            { value: 'Expected Movement', label: 'Expected Movement' },
             { value: 'Process', label: 'Process' },
             { value: 'Results', label: 'Results' },
             { value: 'Bullpen', label: 'Bullpen' },
@@ -13614,7 +13934,7 @@ export default function PitchingSuite({
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 0.72fr) auto',
+                      gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 0.8fr) auto',
                       alignItems: 'stretch',
                       gap: 8,
                       height: 40,
@@ -13631,22 +13951,15 @@ export default function PitchingSuite({
                         },
                         {
                           value: 'Expected vs Actual — Averages',
-                          label: isPro ? 'Expected vs Actual — Averages (Unavailable on Pro)' : 'Expected vs Actual — Averages',
-                          disabled: isPro,
+                          label: 'Expected vs Actual — Averages',
                         },
                         {
                           value: 'Expected vs Actual — Individual Pitches',
-                          label: isPro
-                            ? 'Expected vs Actual — Individual Pitches (Unavailable on Pro)'
-                            : 'Expected vs Actual — Individual Pitches',
-                          disabled: isPro,
+                          label: 'Expected vs Actual — Individual Pitches',
                         },
                         {
                           value: 'Magnus Movement — Individual Pitches',
-                          label: isPro
-                            ? 'Magnus Movement — Individual Pitches (Unavailable on Pro)'
-                            : 'Magnus Movement — Individual Pitches',
-                          disabled: isPro,
+                          label: 'Magnus Movement — Individual Pitches',
                         },
                         { value: 'Target Shapes Only', label: 'Target Shapes Only' },
                         { value: 'Target Shapes and Pitches', label: 'Target Shapes and Pitches' },
@@ -13668,15 +13981,14 @@ export default function PitchingSuite({
                         }
                       }}
                       placeholder="Magnus Line: Off"
-                      disabled={isPro}
                     />
                     <button
                       type="button"
                       className="btn btn-ghost"
-                      style={{ height: 40, flexShrink: 0 }}
+                      style={{ height: 40, paddingInline: '0.85rem', whiteSpace: 'nowrap' }}
                       onClick={() => setShowTargetSettings(true)}
                     >
-                      Target Settings
+                      Settings
                     </button>
                   </div>
                   <div style={{ position: 'relative' }}>
@@ -13706,6 +14018,61 @@ export default function PitchingSuite({
                         }}
                       >
                         {movementHover.text}
+                      </div>
+                    ) : null}
+                    {showComparisonDots || (showComparisonMagnusLine && magnusLine !== 'Off') ? (
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '0.4rem 1rem',
+                          fontSize: '0.74rem',
+                          marginTop: 6,
+                          color: 'rgba(255,255,255,0.75)',
+                        }}
+                      >
+                        {showComparisonDots ? (
+                          <>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              <span
+                                style={{
+                                  width: 10,
+                                  height: 10,
+                                  borderRadius: '50%',
+                                  background: 'rgba(255,255,255,0.55)',
+                                  display: 'inline-block',
+                                }}
+                              />
+                              Current player
+                            </span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              <span
+                                style={{
+                                  width: 10,
+                                  height: 10,
+                                  borderRadius: '50%',
+                                  background: '#a3e635',
+                                  display: 'inline-block',
+                                }}
+                              />
+                              {comparisonScopeLabel} average
+                            </span>
+                          </>
+                        ) : null}
+                        {showComparisonMagnusLine && magnusLine !== 'Off' ? (
+                          <>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ width: 16, height: 0, borderTop: `2px dashed ${pitchColors[magnusLine] ?? '#e2e8f0'}`, display: 'inline-block' }} />
+                              Current player's Magnus line
+                            </span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ width: 16, height: 0, borderTop: '2px dotted #a3e635', display: 'inline-block' }} />
+                              {comparisonScopeLabel} Magnus line
+                            </span>
+                          </>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -17522,10 +17889,104 @@ export default function PitchingSuite({
       ) : null}
       {showTargetSettings ? (
         <div className="portal-modal-backdrop" onClick={() => setShowTargetSettings(false)}>
-          <div className="portal-modal-card" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Target settings">
+          <div className="portal-modal-card" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Movement settings">
             <div className="portal-modal-header">
-              <h3>Target Settings</h3>
+              <h3>Movement Settings</h3>
             </div>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                marginBottom: 14,
+                padding: '0.65rem 0.75rem',
+                border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: 10,
+              }}
+            >
+              <div>
+                <strong>Show MagAngle</strong>
+                <div className="portal-muted-text" style={{ fontSize: '0.78rem', marginTop: 2 }}>
+                  Display the Magnus line angle below the movement plot.
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ minWidth: 76, height: 36 }}
+                aria-pressed={showMagnusAngle}
+                onClick={() => setShowMagnusAngle((current) => !current)}
+              >
+                {showMagnusAngle ? 'On' : 'Off'}
+              </button>
+            </div>
+            <h4 style={{ margin: '0 0 0.6rem' }}>Comparison Overlay</h4>
+            <div
+              style={{
+                border: '1px solid rgba(255,255,255,0.12)',
+                borderRadius: 10,
+                padding: '0.65rem 0.75rem',
+                marginBottom: 14,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+              }}
+            >
+              <div>
+                <div className="portal-muted-text" style={{ fontSize: '0.78rem', marginBottom: 6 }}>
+                  {isPro
+                    ? 'Comparison population: MLB average.'
+                    : 'Compare this player against average movement for:'}
+                </div>
+                {!isPro ? (
+                  <SearchableSingleSelect
+                    options={movementComparisonScopeOptions}
+                    value={comparisonScope}
+                    onChange={setComparisonScope}
+                    placeholder="MLB"
+                  />
+                ) : null}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div>
+                  <strong>Show Comparison Dots</strong>
+                  <div className="portal-muted-text" style={{ fontSize: '0.78rem', marginTop: 2 }}>
+                    Overlay actual and Magnus-expected average dots for the selected comparison population.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{ minWidth: 76, height: 36 }}
+                  aria-pressed={showComparisonDots}
+                  onClick={() => setShowComparisonDots((current) => !current)}
+                >
+                  {showComparisonDots ? 'On' : 'Off'}
+                </button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <div>
+                  <strong>Show Comparison Magnus Line</strong>
+                  <div className="portal-muted-text" style={{ fontSize: '0.78rem', marginTop: 2 }}>
+                    Draw the comparison population's Magnus line alongside your own (requires Magnus Line set above).
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{ minWidth: 76, height: 36 }}
+                  aria-pressed={showComparisonMagnusLine}
+                  onClick={() => setShowComparisonMagnusLine((current) => !current)}
+                >
+                  {showComparisonMagnusLine ? 'On' : 'Off'}
+                </button>
+              </div>
+              {loadingMovementComparison ? (
+                <div className="portal-muted-text" style={{ fontSize: '0.76rem' }}>Loading comparison data…</div>
+              ) : null}
+            </div>
+            <h4 style={{ margin: '0 0 0.6rem' }}>Target Shapes</h4>
             <div className="portal-form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(200px, 1fr))' }}>
               {avgByType
                 .filter((row) => row.pitch_type !== 'Undefined')

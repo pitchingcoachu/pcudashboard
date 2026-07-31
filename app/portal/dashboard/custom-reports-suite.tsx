@@ -424,7 +424,7 @@ const UNIVERSAL_SPLIT_BY = [
   'Batter',
   'Catcher',
 ];
-const PITCHING_TABLES = ['Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data'];
+const PITCHING_TABLES = ['Stuff', 'Expected Movement', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data'];
 const HITTING_TABLES = ['Results', 'Swing Decisions'];
 const CATCHING_TABLES = ['Catching Data', 'Stuff', 'Process', 'Results', 'Bullpen', 'Live', 'Banny', 'Usage', 'Raw Data', 'Batted Ball Data', 'Swing Decisions'];
 const CATCHING_SPLIT_BY = UNIVERSAL_SPLIT_BY;
@@ -2214,7 +2214,14 @@ async function imageBlobToPngDataUrl(blob: Blob, width: number, height: number):
     canvas.height = Math.max(1, Math.round(height * exportScale));
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const sourceWidth = Math.max(1, img.naturalWidth || img.width);
+    const sourceHeight = Math.max(1, img.naturalHeight || img.height);
+    const containScale = Math.min(canvas.width / sourceWidth, canvas.height / sourceHeight);
+    const drawWidth = sourceWidth * containScale;
+    const drawHeight = sourceHeight * containScale;
+    const drawX = (canvas.width - drawWidth) / 2;
+    const drawY = (canvas.height - drawHeight) / 2;
+    ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
     return canvas.toDataURL('image/png');
   } catch {
     return null;

@@ -3,6 +3,7 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS public.pitching_heatmap_daily_bins (
   session_date date NOT NULL,
   school_code text NOT NULL,
+  level_bucket text NOT NULL DEFAULT 'UNKNOWN',
   session_type_bucket text NOT NULL DEFAULT '',
   pitcher_norm text NOT NULL,
   pitcher_team_code text NOT NULL DEFAULT '',
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS public.pitching_heatmap_daily_bins (
   CONSTRAINT pitching_heatmap_daily_bins_pkey PRIMARY KEY (
     session_date,
     school_code,
+    level_bucket,
     session_type_bucket,
     pitcher_norm,
     pitcher_team_code,
@@ -99,11 +101,20 @@ CREATE TABLE IF NOT EXISTS public.pitching_heatmap_daily_bins (
   )
 );
 
+ALTER TABLE public.pitching_heatmap_daily_bins
+  ADD COLUMN IF NOT EXISTS level_bucket text NOT NULL DEFAULT 'UNKNOWN';
+
 CREATE INDEX IF NOT EXISTS idx_pitching_heatmap_daily_bins_lookup
   ON public.pitching_heatmap_daily_bins (school_code, session_date, session_type_bucket, pitcher_team_code, pitcherhand_norm, batterside_norm);
 
 CREATE INDEX IF NOT EXISTS idx_pitching_heatmap_daily_bins_pitcher
   ON public.pitching_heatmap_daily_bins (school_code, pitcher_norm, session_date);
+
+CREATE INDEX IF NOT EXISTS idx_pitching_heatmap_daily_bins_level_lookup
+  ON public.pitching_heatmap_daily_bins (school_code, level_bucket, session_date, session_type_bucket, pitcher_team_code, pitcherhand_norm, batterside_norm);
+
+CREATE INDEX IF NOT EXISTS idx_pitching_heatmap_daily_bins_level_pitcher
+  ON public.pitching_heatmap_daily_bins (school_code, level_bucket, pitcher_norm, session_date);
 
 CREATE INDEX IF NOT EXISTS idx_pitching_heatmap_daily_bins_league_heatmap
   ON public.pitching_heatmap_daily_bins (session_date, pitcherhand_norm, batterside_norm, pitch_type, plate_x_bin, plate_z_bin)
@@ -229,6 +240,7 @@ ALTER TABLE public.pitching_heatmap_daily_bins
   ADD CONSTRAINT pitching_heatmap_daily_bins_pkey PRIMARY KEY (
     session_date,
     school_code,
+    level_bucket,
     session_type_bucket,
     pitcher_norm,
     pitcher_team_code,

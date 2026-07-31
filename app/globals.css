@@ -4296,10 +4296,20 @@ body.theme-light .portal-option-email {
 
 .portal-custom-reports-sidebar {
   gap: 0.45rem;
+  width: 100%;
   height: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   align-self: stretch;
   align-content: start;
   grid-auto-rows: max-content;
+}
+
+.portal-custom-reports-sidebar > .btn {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .portal-custom-reports-sidebar h3 {
@@ -4418,8 +4428,8 @@ body.theme-light .portal-option-email {
 }
 
 .portal-custom-reports-brand-logo--pcu {
-  width: 64px;
-  height: 64px;
+  width: 84px;
+  height: 84px;
   justify-self: start;
 }
 
@@ -4742,9 +4752,20 @@ body.theme-light .portal-option-email {
 }
 
 .portal-custom-reports-sidebar .portal-form-grid label {
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   gap: 0.2rem;
   font-size: 0.82rem;
+}
+
+.portal-custom-reports-sidebar .portal-search-select,
+.portal-custom-reports-sidebar .portal-search-select-trigger,
+.portal-custom-reports-sidebar .portal-search-select-menu {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .portal-custom-reports-saved .portal-search-select-trigger {
@@ -4754,6 +4775,9 @@ body.theme-light .portal-option-email {
 }
 
 .portal-custom-reports-sidebar .portal-form-grid {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   gap: 0.45rem;
 }
 
