@@ -31,14 +31,14 @@ export const METRICS_GLOSSARY: MetricGlossaryEntry[] = [
   {
     name: 'PV/100',
     aliases: ['pv100', 'pv/100', 'pitch value', 'pitch value per 100'],
-    definition: 'Pitch Value per 100 pitches: run value contributed by a pitch, normalized per 100 thrown.',
+    definition: 'Pitch Value per 100 pitches: run value contributed by a pitch, normalized per 100 thrown. LOWER (more negative) is BETTER for the pitcher — it means the pitch prevented runs. A positive value means the pitch cost the pitcher runs.',
     domain: 'pitching',
     typicalTableMode: 'Results',
   },
   {
     name: 'RV/100',
     aliases: ['rv100', 'rv/100', 'run value', 'run value per 100'],
-    definition: 'Run Value per 100 pitches: raw run value of outcomes, normalized per 100 thrown.',
+    definition: 'Run Value per 100 pitches: raw run value of outcomes, normalized per 100 thrown. LOWER (more negative) is BETTER for the pitcher — it means fewer runs were allowed. A positive value means the pitcher gave up runs.',
     domain: 'pitching',
     typicalTableMode: 'Results',
   },
@@ -187,6 +187,13 @@ export const METRICS_GLOSSARY: MetricGlossaryEntry[] = [
     aliases: ['bf', 'batters faced'],
     definition: 'Batters Faced: total number of batters a pitcher has faced (used as a sample-size threshold for leaderboards).',
     domain: 'pitching',
+    typicalTableMode: 'Results',
+  },
+  {
+    name: '#',
+    aliases: ['#', 'pitch count', 'pitches thrown', 'total pitches', 'number of pitches', 'most pitches'],
+    definition: 'Total pitch count: the raw number of pitches thrown (or seen, for hitters) in the selected window.',
+    domain: 'both',
     typicalTableMode: 'Results',
   },
   {

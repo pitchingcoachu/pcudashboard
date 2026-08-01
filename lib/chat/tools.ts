@@ -66,6 +66,30 @@ function rosterForDomain(filters: { pitchers?: string[]; hitters?: string[] }, d
   return unique(domain === 'pitching' ? filters.pitchers ?? [] : filters.hitters ?? []);
 }
 
+/**
+ * Expands a user/model-supplied metric name into glossary hints (including the
+ * canonical column name, e.g. "pitches" -> ["pitches", "#"]) so column matching
+ * doesn't depend on the model separately calling search_metrics first.
+ */
+function metricHintsFromGlossary(requestedMetric: string): string[] {
+  const qNorm = normalizeKey(requestedMetric);
+  if (!qNorm) return [requestedMetric];
+  const hints = new Set<string>([requestedMetric]);
+  for (const entry of METRICS_GLOSSARY) {
+    const nameNorm = normalizeKey(entry.name);
+    const isMatch = nameNorm === qNorm || entry.aliases.some((alias) => normalizeKey(alias) === qNorm);
+    if (isMatch) {
+      hints.add(entry.name);
+      for (const alias of entry.aliases) hints.add(alias);
+    }
+  }
+  return Array.from(hints);
+}
+
+function resolveMetricLabelWithGlossary(columns: string[], requestedMetric: string): string {
+  return resolveMetricLabelFromColumns('', columns, metricHintsFromGlossary(requestedMetric), requestedMetric);
+}
+
 // ---------------------------------------------------------------------------
 // get_player_stat
 // ---------------------------------------------------------------------------
@@ -130,8 +154,10 @@ function buildGetPlayerStatTool(ctx: ChatSessionContext): BetaRunnableTool<z.inf
 
           const results: Record<string, string | number | null> = {};
           for (const requestedMetric of input.metrics) {
-            const label = resolveMetricLabelFromColumns('', columns, [requestedMetric], requestedMetric);
-            const found = resolveMetricFromOverview(scoped, [label, requestedMetric]);
+            const label = resolveMetricLabelWithGlossary(columns, requestedMetric);
+            const found = columns.includes(label)
+              ? resolveMetricFromOverview(scoped, [label, requestedMetric])
+              : null;
             results[requestedMetric] = found ? found.metricValue : null;
           }
           const anyFound = Object.values(results).some((v) => v !== null);
@@ -218,7 +244,8 @@ function buildGetLeaderboardTool(ctx: ChatSessionContext): BetaRunnableTool<z.in
           const columns = Array.isArray(payload.table_columns)
             ? payload.table_columns.map((v) => normalizeText(String(v))).filter(Boolean)
             : Object.keys(rows[0] ?? {});
-          const metricLabel = resolveMetricLabelFromColumns('', columns, [input.metric], input.metric);
+          const metricLabel = resolveMetricLabelWithGlossary(columns, input.metric);
+          if (!columns.includes(metricLabel)) continue;
 
           let entries = rows
             .map((row) => {
@@ -318,7 +345,8 @@ function buildCompareSplitsTool(ctx: ChatSessionContext): BetaRunnableTool<z.inf
               ...columnsOf(leftScoped ?? leftPayload),
               ...columnsOf(rightScoped ?? rightPayload),
             ]);
-            const metricLabel = resolveMetricLabelFromColumns('', mergedCols, [input.metric], input.metric);
+            const metricLabel = resolveMetricLabelWithGlossary(mergedCols, input.metric);
+            if (!mergedCols.includes(metricLabel)) continue;
             const leftMetric = leftScoped ? resolveMetricFromOverview(leftScoped, [metricLabel, input.metric]) : null;
             const rightMetric = rightScoped ? resolveMetricFromOverview(rightScoped, [metricLabel, input.metric]) : null;
             if (!leftMetric && !rightMetric) continue;
@@ -347,7 +375,8 @@ function buildCompareSplitsTool(ctx: ChatSessionContext): BetaRunnableTool<z.inf
             });
             if (!hasRows(payload)) continue;
             const columns = columnsOf(payload);
-            const metricLabel = resolveMetricLabelFromColumns('', columns, [input.metric], input.metric);
+            const metricLabel = resolveMetricLabelWithGlossary(columns, input.metric);
+            if (!columns.includes(metricLabel)) continue;
             const comparisons = counts
               .map((count) => {
                 const row = findCountRow(payload, count);
@@ -405,8 +434,10 @@ function buildCompareSplitsTool(ctx: ChatSessionContext): BetaRunnableTool<z.inf
                   const scoped = input.pitchType ? scopeToPitchType(payload, input.pitchType) : payload;
                   if (!scoped || !hasRows(scoped)) continue;
                   const columns = columnsOf(scoped);
-                  const metricLabel = resolveMetricLabelFromColumns('', columns, [input.metric], input.metric);
-                  const found = resolveMetricFromOverview(scoped, [metricLabel, input.metric]);
+                  const metricLabel = resolveMetricLabelWithGlossary(columns, input.metric);
+                  const found = columns.includes(metricLabel)
+                    ? resolveMetricFromOverview(scoped, [metricLabel, input.metric])
+                    : null;
                   if (found) {
                     comparisons.push({ label: date, value: found.metricValue });
                     usedMode = mode;
@@ -473,7 +504,8 @@ function buildGetBestPitchByMetricTool(ctx: ChatSessionContext): BetaRunnableToo
           });
           if (!hasRows(payload)) continue;
           const columns = columnsOf(payload);
-          const metricLabel = resolveMetricLabelFromColumns('', columns, [input.metric], input.metric);
+          const metricLabel = resolveMetricLabelWithGlossary(columns, input.metric);
+          if (!columns.includes(metricLabel)) continue;
           const best = resolveBestPitchByMetric(payload, metricLabel, input.direction);
           if (!best) continue;
           const usage = usageForPitch(payload, best.pitch);

@@ -16,7 +16,7 @@ type ChatResponse = {
 
 type ChatMessage =
   | { id: string; role: 'user'; text: string }
-  | { id: string; role: 'assistant'; text: string; confidence?: string; evidence?: string[]; pageLink?: PageLink | null };
+  | { id: string; role: 'assistant'; text: string; pageLink?: PageLink | null };
 
 type DashboardChatProps = {
   isPro?: boolean;
@@ -112,8 +112,6 @@ export default function DashboardChat({ isPro = false, currentSuite }: Dashboard
         id: `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         role: 'assistant',
         text: payload.answer || payload.error || 'No response returned.',
-        confidence: payload.confidence,
-        evidence: Array.isArray(payload.evidence) ? payload.evidence : [],
         pageLink: payload.page_link ?? null,
       };
       setMessages((current) => [...current, assistantMessage]);
@@ -124,8 +122,6 @@ export default function DashboardChat({ isPro = false, currentSuite }: Dashboard
           id: `a-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           role: 'assistant',
           text: error instanceof Error ? error.message : 'Chat request failed.',
-          confidence: 'low',
-          evidence: [],
         },
       ]);
     } finally {
@@ -294,14 +290,6 @@ export default function DashboardChat({ isPro = false, currentSuite }: Dashboard
                     >
                       Go to {message.pageLink.title} →
                     </Link>
-                  ) : null}
-                  {message.role === 'assistant' && message.confidence ? (
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>Confidence: {message.confidence}</div>
-                  ) : null}
-                  {message.role === 'assistant' && message.evidence && message.evidence.length > 0 ? (
-                    <div style={{ fontSize: 12, opacity: 0.85 }}>
-                      {message.evidence.join(' | ')}
-                    </div>
                   ) : null}
                 </div>
               ))

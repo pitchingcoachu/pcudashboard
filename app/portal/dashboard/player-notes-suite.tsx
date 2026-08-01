@@ -738,13 +738,16 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
     if (!mediaFiles.length) { setMediaMessage('Choose a photo or video first.'); return; }
     setMediaMessage('');
     setUploadingMedia(true);
-    try {
-      let lastMedia: PlayerMedia[] = playerMedia;
-      for (let i = 0; i < mediaFiles.length; i++) {
-        const file = mediaFiles[i]!;
-        const title = mediaFiles.length === 1
-          ? (mediaTitle.trim() || file.name.replace(/\.[^.]+$/, ''))
-          : (mediaTitle.trim() ? `${mediaTitle.trim()} ${i + 1}` : file.name.replace(/\.[^.]+$/, ''));
+    let lastMedia: PlayerMedia[] = playerMedia;
+    const failures: string[] = [];
+    let successCount = 0;
+    const remainingFiles: File[] = [];
+    for (let i = 0; i < mediaFiles.length; i++) {
+      const file = mediaFiles[i]!;
+      const title = mediaFiles.length === 1
+        ? (mediaTitle.trim() || file.name.replace(/\.[^.]+$/, ''))
+        : (mediaTitle.trim() ? `${mediaTitle.trim()} ${i + 1}` : file.name.replace(/\.[^.]+$/, ''));
+      try {
         const result = await uploadPlayerMediaFile({
           playerId: selectedLinkedPlayerId,
           file,
@@ -755,17 +758,24 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
         if (!result.ok) throw new Error(result.error);
         if (Array.isArray(result.categories)) setOrgMediaCategories(result.categories);
         lastMedia = result.media as PlayerMedia[];
+        successCount += 1;
+      } catch (error) {
+        failures.push(`${file.name}: ${error instanceof Error ? error.message : 'upload failed'}`);
+        remainingFiles.push(file);
       }
-      setPlayerMedia(lastMedia);
-      setCustomCategories((current) => uniqueNames([...current, mediaCategory]));
-      setMediaFiles([]);
-      setMediaTitle('');
-      setMediaMessage(mediaFiles.length > 1 ? `${mediaFiles.length} files uploaded.` : 'Media uploaded.');
-    } catch (error) {
-      setMediaMessage(error instanceof Error ? error.message : 'Failed to upload media.');
-    } finally {
-      setUploadingMedia(false);
     }
+    setPlayerMedia(lastMedia);
+    if (successCount > 0) setCustomCategories((current) => uniqueNames([...current, mediaCategory]));
+    setMediaFiles(remainingFiles);
+    if (successCount > 0) setMediaTitle('');
+    if (!failures.length) {
+      setMediaMessage(successCount > 1 ? `${successCount} files uploaded.` : 'Media uploaded.');
+    } else if (successCount > 0) {
+      setMediaMessage(`${successCount} uploaded, ${failures.length} failed — ${failures.join('; ')}`);
+    } else {
+      setMediaMessage(`Upload failed: ${failures.join('; ')}`);
+    }
+    setUploadingMedia(false);
   }
 
   async function deleteMedia(media: PlayerMedia) {
