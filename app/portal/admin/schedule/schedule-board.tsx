@@ -410,6 +410,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [visibleBullpenTemplateIds, setVisibleBullpenTemplateIds] = useState<string[]>([]);
   const [bullpenNotes, setBullpenNotes] = useState('');
   const [bullpenCurrentCategory, setBullpenCurrentCategory] = useState<BullpenCategory>('');
+  // Ids removed via deleteBullpenTemplate/deleteVelocityTemplate that still need to reach the
+  // server -- the backend's shared-template merge otherwise re-adds a deleted id from its own
+  // stored copy, so a delete has to be sent explicitly rather than inferred from list absence.
+  const [pendingDeletedBullpenTemplateIds, setPendingDeletedBullpenTemplateIds] = useState<string[]>([]);
+  const [pendingDeletedVelocityTemplateIds, setPendingDeletedVelocityTemplateIds] = useState<string[]>([]);
   const [velocityCurrent, setVelocityCurrent] = useState<BullpenScript>({
     title: '',
     rowCount: 20,
@@ -911,13 +916,20 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             templates: throwingTemplates,
             bullpenState: { current: bullpenCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
             bullpenTemplates,
+            deletedBullpenTemplateIds: pendingDeletedBullpenTemplateIds,
             velocityState: { current: velocityCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
             velocityTemplates,
+            deletedVelocityTemplateIds: pendingDeletedVelocityTemplateIds,
             drillsState: normalizeDrillsState(null),
             preThrowDrillTemplates,
             postThrowDrillTemplates,
           }),
-        }).catch(() => {});
+        })
+          .then(() => {
+            if (pendingDeletedBullpenTemplateIds.length > 0) setPendingDeletedBullpenTemplateIds([]);
+            if (pendingDeletedVelocityTemplateIds.length > 0) setPendingDeletedVelocityTemplateIds([]);
+          })
+          .catch(() => {});
       }, 350);
       return () => clearTimeout(handle);
     }
@@ -937,6 +949,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             notes: bullpenNotes,
           },
           bullpenTemplates,
+          deletedBullpenTemplateIds: pendingDeletedBullpenTemplateIds,
           velocityState: {
             current: velocityCurrent,
             selectedTemplateId: selectedVelocityTemplateId,
@@ -944,6 +957,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             notes: velocityNotes,
           },
           velocityTemplates,
+          deletedVelocityTemplateIds: pendingDeletedVelocityTemplateIds,
           drillsState: {
             notes: drillsNotes,
             pre: { rowCount: drillsRowCount, rows: drillsRows.slice(0, drillsRowCount), selectedTemplateId: selectedPreDrillTemplateId },
@@ -954,10 +968,15 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           catchPlayNotes: { highDay: catchPlayHighDay, mediumDay: catchPlayMediumDay, lowDay: catchPlayLowDay },
           cycleNotes,
         }),
-      }).catch(() => {});
+      })
+        .then(() => {
+          if (pendingDeletedBullpenTemplateIds.length > 0) setPendingDeletedBullpenTemplateIds([]);
+          if (pendingDeletedVelocityTemplateIds.length > 0) setPendingDeletedVelocityTemplateIds([]);
+        })
+        .catch(() => {});
     }, 350);
     return () => clearTimeout(handle);
-  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, bullpenNotes, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, velocityNotes, drillsNotes, drillsRowCount, drillsRows, postDrillsRowCount, postDrillsRows, selectedPreDrillTemplateId, selectedPostDrillTemplateId, preThrowDrillTemplates, postThrowDrillTemplates, catchPlayHighDay, catchPlayMediumDay, catchPlayLowDay, cycleNotes]);
+  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, bullpenNotes, pendingDeletedBullpenTemplateIds, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, velocityNotes, pendingDeletedVelocityTemplateIds, drillsNotes, drillsRowCount, drillsRows, postDrillsRowCount, postDrillsRows, selectedPreDrillTemplateId, selectedPostDrillTemplateId, preThrowDrillTemplates, postThrowDrillTemplates, catchPlayHighDay, catchPlayMediumDay, catchPlayLowDay, cycleNotes]);
 
   useEffect(() => {
     if (!selectedTemplateId) {
@@ -2970,11 +2989,13 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       setSelectedVelocityTemplateId('');
       setVisibleVelocityTemplateIds((prev) => prev.filter((id) => id !== templateId));
       setVelocityCurrent(resetCurrent);
+      setPendingDeletedVelocityTemplateIds((prev) => (prev.includes(templateId) ? prev : [...prev, templateId]));
     } else {
       setBullpenTemplates(nextBullpenTemplates);
       setSelectedBullpenTemplateId('');
       setVisibleBullpenTemplateIds((prev) => prev.filter((id) => id !== templateId));
       setBullpenCurrent(resetCurrent);
+      setPendingDeletedBullpenTemplateIds((prev) => (prev.includes(templateId) ? prev : [...prev, templateId]));
     }
     setError('');
 
@@ -2990,13 +3011,20 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           templates: [],
           bullpenState: { current: bullpenCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
           bullpenTemplates: nextBullpenTemplates,
+          deletedBullpenTemplateIds: isVelocityView ? [] : [...pendingDeletedBullpenTemplateIds, templateId],
           velocityState: { current: velocityCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
           velocityTemplates: nextVelocityTemplates,
+          deletedVelocityTemplateIds: isVelocityView ? [...pendingDeletedVelocityTemplateIds, templateId] : [],
           drillsState: normalizeDrillsState(null),
           preThrowDrillTemplates,
           postThrowDrillTemplates,
         }),
-      }).catch(() => {});
+      })
+        .then(() => {
+          if (isVelocityView) setPendingDeletedVelocityTemplateIds([]);
+          else setPendingDeletedBullpenTemplateIds([]);
+        })
+        .catch(() => {});
     }
   };
 

@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import {
   getRecoverableBullpenScripts,
@@ -220,9 +220,15 @@ function templateUpdatedTime(template: ScriptTemplate): number {
   return Number.isFinite(time) ? time : 0;
 }
 
-function mergeTemplateLists(existingRaw: unknown, incoming: ScriptTemplate[]): ScriptTemplate[] {
+/**
+ * Unions existing (DB) and incoming (client) template lists, newest-updatedAt wins per key.
+ * deletedKeys (id or, for id-less legacy entries, "name:<lowercased name>") are excluded from
+ * the result even though they're still present in `existing` -- without this, a client-side
+ * delete is silently reverted on the next save because the union re-seeds from the DB's copy.
+ */
+function mergeTemplateLists(existingRaw: unknown, incoming: ScriptTemplate[], deletedKeys: Set<string> = new Set()): ScriptTemplate[] {
   const existing = normalizeTemplateList(existingRaw);
-  if (existing.length === 0) return incoming;
+  if (existing.length === 0) return incoming.filter((template) => !deletedKeys.has(templateMergeKey(template)));
   const merged = new Map<string, ScriptTemplate>();
   for (const template of existing) merged.set(templateMergeKey(template), template);
   for (const template of incoming) {
@@ -240,7 +246,18 @@ function mergeTemplateLists(existingRaw: unknown, incoming: ScriptTemplate[]): S
       category: (shouldUseIncoming ? template.category : previous.category) ?? previous.category ?? template.category,
     });
   }
+  for (const key of deletedKeys) merged.delete(key);
   return Array.from(merged.values());
+}
+
+function normalizeDeletedTemplateKeys(raw: unknown): Set<string> {
+  if (!Array.isArray(raw)) return new Set();
+  const keys = new Set<string>();
+  for (const value of raw) {
+    const id = String(value ?? '').trim();
+    if (id) keys.add(`id:${id}`);
+  }
+  return keys;
 }
 
 function recoverBullpenTemplates(raw: unknown): ScriptTemplate[] {
@@ -312,7 +329,7 @@ export async function GET(request: Request) {
   };
 
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return finish(401, { error: 'Unauthorized' });
   if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
@@ -432,7 +449,7 @@ export async function POST(request: Request) {
   };
 
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return finish(401, { error: 'Unauthorized' });
   if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
@@ -452,6 +469,8 @@ export async function POST(request: Request) {
         velocityState?: unknown;
         bullpenTemplates?: unknown[];
         velocityTemplates?: unknown[];
+        deletedBullpenTemplateIds?: unknown[];
+        deletedVelocityTemplateIds?: unknown[];
         drillsState?: unknown;
         preThrowDrillTemplates?: unknown[];
         postThrowDrillTemplates?: unknown[];
@@ -493,13 +512,15 @@ export async function POST(request: Request) {
 
   const hasBullpenTemplatesInput = Array.isArray(body.bullpenTemplates);
   const hasVelocityTemplatesInput = Array.isArray(body.velocityTemplates);
+  const deletedBullpenTemplateKeys = normalizeDeletedTemplateKeys(body.deletedBullpenTemplateIds);
+  const deletedVelocityTemplateKeys = normalizeDeletedTemplateKeys(body.deletedVelocityTemplateIds);
   let nextBullpenTemplates = normalizeTemplateList(hasBullpenTemplatesInput ? body.bullpenTemplates : sharedObj.bullpenTemplates);
   let nextVelocityTemplates = normalizeTemplateList(hasVelocityTemplatesInput ? body.velocityTemplates : sharedObj.velocityTemplates);
   if (hasBullpenTemplatesInput) {
-    nextBullpenTemplates = mergeTemplateLists(sharedObj.bullpenTemplates, nextBullpenTemplates);
+    nextBullpenTemplates = mergeTemplateLists(sharedObj.bullpenTemplates, nextBullpenTemplates, deletedBullpenTemplateKeys);
   }
   if (hasVelocityTemplatesInput) {
-    nextVelocityTemplates = mergeTemplateLists(sharedObj.velocityTemplates, nextVelocityTemplates);
+    nextVelocityTemplates = mergeTemplateLists(sharedObj.velocityTemplates, nextVelocityTemplates, deletedVelocityTemplateKeys);
   }
   // Only overwrite shared drill templates if the incoming array is non-empty.
   // An empty array (sent when the drills page hasn't loaded templates) must not
