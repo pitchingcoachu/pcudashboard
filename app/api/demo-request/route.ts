@@ -60,6 +60,7 @@ export async function POST(request: Request) {
   followupPreview = buildTrialFollowupPreview({
     email,
     password: trialPassword,
+    loginUrl: trialLoginUrl,
   });
   const sheetsRequest = sheetsWebhookUrl
     ? fetchWithTimeout(
@@ -212,9 +213,9 @@ function formatTrialExpiration(value: string): string {
   });
 }
 
-function buildTrialFollowupPreview(input: { email: string; password: string }): { subject: string; html: string; text: string } {
+function buildTrialFollowupPreview(input: { email: string; password: string; loginUrl: string }): { subject: string; html: string; text: string } {
   const loomUrl = 'https://www.loom.com/share/8cd75fe607114b8797a68458aacf326e';
-  const loginUrl = 'https://pcudashboard.com/login';
+  const loginUrl = input.loginUrl;
   const subject = 'Your PCU Dashboard trial account is ready';
   const text = [
     'Thank you for your interest in the PCU Dashboard!',

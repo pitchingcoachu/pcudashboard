@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import { createWorkout, listWorkoutsByOrganization } from '../../../../lib/training-db';
 
@@ -19,7 +19,7 @@ function wantsJsonResponse(request: Request): boolean {
 export async function GET(request: Request) {
   const wantsJson = wantsJsonResponse(request);
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) {
     if (wantsJson) return NextResponse.json({ ok: false, error: 'Not authenticated.' }, { status: 401 });
     return NextResponse.redirect(new URL('/login', request.url), 303);
@@ -48,7 +48,7 @@ export async function POST(request: Request) {
   const wantsJson = wantsJsonResponse(request);
   try {
     const cookieStore = await cookies();
-    const session = getSessionFromCookies(cookieStore);
+    const session = getSessionFromRequest(request, cookieStore);
     if (!session) {
       if (wantsJson) return NextResponse.json({ ok: false, error: 'Not authenticated.' }, { status: 401 });
       return NextResponse.redirect(new URL('/login', request.url), 303);

@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../lib/auth';
 import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
 import {
@@ -28,7 +28,7 @@ function withAuthorPrefix(rawText: string, authorName: string): string {
 }
 
 async function recordNoteNotification(request: Request, input: {
-  session: NonNullable<ReturnType<typeof getSessionFromCookies>>;
+  session: NonNullable<ReturnType<typeof getSessionFromRequest>>;
   organizationId: number;
   playerId?: number | null;
   playerName?: string | null;
@@ -90,7 +90,7 @@ async function resolveAllowedPlayerId(
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   const organizationId = await resolvePlayerContentOrganizationId(session);
@@ -161,7 +161,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   const organizationId = await resolvePlayerContentOrganizationId(session);
@@ -260,7 +260,7 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   const organizationId = await resolvePlayerContentOrganizationId(session);
@@ -311,7 +311,7 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   const organizationId = await resolvePlayerContentOrganizationId(session);

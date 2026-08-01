@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../lib/auth';
 import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
 import { deleteObjectFromR2, getR2Bucket, getR2Client, isR2Configured, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
@@ -15,6 +15,8 @@ import {
   recordPortalActivityEvent,
   updatePlayerMedia,
 } from '../../../../lib/training-db';
+
+export const maxDuration = 60;
 
 const MAX_PLAYER_MEDIA_BYTES = 350 * 1024 * 1024;
 
@@ -70,9 +72,9 @@ function sanitizeBreakdownAnnotations(value: unknown): unknown[] | null {
     .filter((entry) => entry.tool && entry.points.length > 0);
 }
 
-async function requireManagedPlayer(playerId: number) {
+async function requireManagedPlayer(request: Request, playerId: number) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
   const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return { ok: false as const, status: 403, error: 'No organization found for session.' };
@@ -126,7 +128,7 @@ export async function GET(request: Request) {
   // Presigned URL request: ?presign=1&fileName=...&contentType=...&playerId=...
   if (url.searchParams.get('presign') === '1') {
     const playerId = Number(url.searchParams.get('playerId') ?? '0');
-    const allowed = await requireManagedPlayer(playerId);
+    const allowed = await requireManagedPlayer(request, playerId);
     if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
     const fileName = String(url.searchParams.get('fileName') ?? '').trim();
@@ -154,7 +156,7 @@ export async function GET(request: Request) {
   }
 
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
-  const allowed = await requireManagedPlayer(playerId);
+  const allowed = await requireManagedPlayer(request, playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
   const rawType = url.searchParams.get('mediaType');
   const mediaType = rawType === 'photo' || rawType === 'video' || rawType === 'pdf' ? rawType : undefined;
@@ -173,7 +175,7 @@ export async function POST(request: Request) {
   if (contentTypeHeader.includes('application/json')) {
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     const playerId = Number(body.playerId ?? '0');
-    const allowed = await requireManagedPlayer(playerId);
+    const allowed = await requireManagedPlayer(request, playerId);
     if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
     const r2Key = String(body.r2Key ?? '').trim();
@@ -226,7 +228,7 @@ export async function POST(request: Request) {
   // FormData = direct upload (local dev fallback, no R2)
   const form = await request.formData();
   const playerId = Number(form.get('playerId') ?? '0');
-  const allowed = await requireManagedPlayer(playerId);
+  const allowed = await requireManagedPlayer(request, playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
   const file = form.get('file');
@@ -293,7 +295,7 @@ export async function DELETE(request: Request) {
   const url = new URL(request.url);
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
   const mediaId = Number(url.searchParams.get('mediaId') ?? '0');
-  const allowed = await requireManagedPlayer(playerId);
+  const allowed = await requireManagedPlayer(request, playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
   const deleted = await deletePlayerMedia({ organizationId: allowed.organizationId, mediaId });
   if (!deleted.ok) return NextResponse.json({ error: deleted.error }, { status: 404 });
@@ -309,7 +311,7 @@ export async function DELETE(request: Request) {
 export async function PATCH(request: Request) {
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const playerId = Number(body.playerId ?? '0');
-  const allowed = await requireManagedPlayer(playerId);
+  const allowed = await requireManagedPlayer(request, playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
   const mediaId = Number(body.mediaId ?? 0);
   const breakdownAnnotations = Object.prototype.hasOwnProperty.call(body, 'breakdownAnnotations')

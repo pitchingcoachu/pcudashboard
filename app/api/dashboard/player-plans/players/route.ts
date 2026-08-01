@@ -1,18 +1,18 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { getSessionFromCookies } from '../../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../../lib/auth';
 import { getPlayerForUser, listPlayerSummariesByOrganization } from '../../../../../lib/training-db';
 import { logApiTiming } from '../../../../../lib/request-timing';
 import { resolvePlayerContentOrganizationId } from '../../../../../lib/player-content-scope';
 
-export async function GET() {
+export async function GET(request: Request) {
   const startedAtMs = Date.now();
   const finish = (status: number, payload: Record<string, unknown>, meta?: Record<string, unknown>) => {
     logApiTiming({ route: 'dashboard.player-plans.players.GET', startedAtMs, status, meta });
     return NextResponse.json(payload, { status });
   };
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return finish(401, { error: 'Unauthorized' });
   const mappedOrganizationId = await resolvePlayerContentOrganizationId(session);
   const scopedOrganizationId =

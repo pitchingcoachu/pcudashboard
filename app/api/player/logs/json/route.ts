@@ -1,11 +1,37 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../../lib/auth';
 import { readActivityRequestMeta } from '../../../../../lib/portal-activity';
 import { recordPortalActivityEvent, upsertExerciseLog } from '../../../../../lib/training-db';
 import { canManagePlayer } from '../../../../../lib/portal-access';
 
 const ASSESSMENT_NOTES_TOKEN = '[ASSESSMENT_NOTES]';
+
+type JsonLogPayload = {
+  itemId?: number | string;
+  playerId?: number | string;
+  scheduleType?: string;
+  completed?: boolean;
+  performedSets?: string;
+  performedReps?: string;
+  performedLoad?: string;
+  notes?: string;
+};
+
+// Simple field-value accessor so the same downstream logic works whether the
+// request body was multipart/form-data (web) or application/json (mobile).
+type FieldSource = { get(name: string): string | null };
+
+function fieldSourceFromJson(payload: JsonLogPayload): FieldSource {
+  return {
+    get(name: string) {
+      const value = (payload as Record<string, unknown>)[name];
+      if (value === undefined || value === null) return null;
+      if (typeof value === 'boolean') return value ? 'on' : '';
+      return String(value);
+    },
+  };
+}
 
 function parseIndexedLoadValues(form: FormData): string[] {
   const raw = form
@@ -66,34 +92,50 @@ function mergeLoadValues(performedLoadValues: string[], bodyWeightSetValues: Map
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const form = await request.formData();
-  const itemId = Number(String(form.get('itemId') ?? '0'));
-  const playerId = Number(String(form.get('playerId') ?? '0'));
-  const scheduleType = String(form.get('scheduleType') ?? 'calendar').trim().toLowerCase() === 'cycle' ? 'cycle' : 'calendar';
-  const performedLoadValuesIndexed = parseIndexedLoadValues(form);
-  const performedLoadValues =
-    performedLoadValuesIndexed.length > 0
-      ? performedLoadValuesIndexed
-      : form.getAll('performedLoadValues').map((value) => String(value).trim());
-  const assessmentScoreValues = form
-    .getAll('assessmentScoreValues')
-    .map((value) => String(value).trim())
-    .map((value) => (value === '1' || value === '2' || value === '3' ? value : ''));
-  const assessmentNoteValues = form
-    .getAll('assessmentNoteValues')
-    .map((value) => String(value).trim());
-  const bodyWeightSetValues = parseBodyWeightSetValues(form);
-  const mergedLoadValues = mergeLoadValues(performedLoadValues, bodyWeightSetValues);
-  const baseLoadValues = assessmentScoreValues.length > 0 ? assessmentScoreValues : mergedLoadValues;
-  const performedLoadCombined = baseLoadValues.join(', ');
-  const baseNotes = String(form.get('notes') ?? '').trim();
-  const hasAssessmentNotes = assessmentNoteValues.some((value) => value.length > 0);
-  const notes = hasAssessmentNotes
-    ? `${baseNotes}\n${ASSESSMENT_NOTES_TOKEN}${JSON.stringify(assessmentNoteValues)}`
-    : baseNotes;
+  const contentType = request.headers.get('content-type') ?? '';
+  const isJsonBody = contentType.includes('application/json');
+
+  let fields: FieldSource;
+  let performedLoadCombined = '';
+  let notes = '';
+
+  if (isJsonBody) {
+    const payload = (await request.json().catch(() => ({}))) as JsonLogPayload;
+    fields = fieldSourceFromJson(payload);
+    performedLoadCombined = String(payload.performedLoad ?? '').trim();
+    notes = String(payload.notes ?? '').trim();
+  } else {
+    const form = await request.formData();
+    fields = { get: (name: string) => (typeof form.get(name) === 'string' ? (form.get(name) as string) : null) };
+    const performedLoadValuesIndexed = parseIndexedLoadValues(form);
+    const performedLoadValues =
+      performedLoadValuesIndexed.length > 0
+        ? performedLoadValuesIndexed
+        : form.getAll('performedLoadValues').map((value) => String(value).trim());
+    const assessmentScoreValues = form
+      .getAll('assessmentScoreValues')
+      .map((value) => String(value).trim())
+      .map((value) => (value === '1' || value === '2' || value === '3' ? value : ''));
+    const assessmentNoteValues = form
+      .getAll('assessmentNoteValues')
+      .map((value) => String(value).trim());
+    const bodyWeightSetValues = parseBodyWeightSetValues(form);
+    const mergedLoadValues = mergeLoadValues(performedLoadValues, bodyWeightSetValues);
+    const baseLoadValues = assessmentScoreValues.length > 0 ? assessmentScoreValues : mergedLoadValues;
+    performedLoadCombined = baseLoadValues.join(', ');
+    const baseNotes = String(form.get('notes') ?? '').trim();
+    const hasAssessmentNotes = assessmentNoteValues.some((value) => value.length > 0);
+    notes = hasAssessmentNotes
+      ? `${baseNotes}\n${ASSESSMENT_NOTES_TOKEN}${JSON.stringify(assessmentNoteValues)}`
+      : baseNotes;
+  }
+
+  const itemId = Number(String(fields.get('itemId') ?? '0'));
+  const playerId = Number(String(fields.get('playerId') ?? '0'));
+  const scheduleType = String(fields.get('scheduleType') ?? 'calendar').trim().toLowerCase() === 'cycle' ? 'cycle' : 'calendar';
 
   if (!Number.isFinite(itemId) || itemId <= 0 || !Number.isFinite(playerId) || playerId <= 0) {
     return NextResponse.json({ error: 'Invalid log payload.' }, { status: 400 });
@@ -113,10 +155,10 @@ export async function POST(request: Request) {
       itemId,
       scheduleType,
       loggedByUserId: session.userId ?? 0,
-      completed: form.get('completed') === 'on',
-      performedSets: String(form.get('performedSets') ?? ''),
-      performedReps: String(form.get('performedReps') ?? ''),
-      performedLoad: performedLoadCombined || String(form.get('performedLoad') ?? ''),
+      completed: fields.get('completed') === 'on',
+      performedSets: String(fields.get('performedSets') ?? ''),
+      performedReps: String(fields.get('performedReps') ?? ''),
+      performedLoad: performedLoadCombined || String(fields.get('performedLoad') ?? ''),
       notes,
     });
     const { userAgent, ipAddress } = await readActivityRequestMeta(request);

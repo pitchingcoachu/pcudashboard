@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../../lib/auth';
 import { getR2Client, getR2Bucket } from '../../../../../lib/biomechanics-storage';
 import { resolvePlayerContentOrganizationId } from '../../../../../lib/player-content-scope';
 import { getPlayerMedia } from '../../../../../lib/training-db';
@@ -45,7 +45,7 @@ function nodeToWebStream(readable: NodeJS.ReadableStream): ReadableStream<Uint8A
 
 export async function GET(request: Request, context: { params: Promise<{ mediaId: string }> }) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   // Players can access their own media (canManagePlayer enforces ownership below)
   const organizationId = await resolvePlayerContentOrganizationId(session);

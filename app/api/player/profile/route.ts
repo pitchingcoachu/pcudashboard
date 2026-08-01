@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import { getPlayerByIdInOrganization, getPlayerForUser, setPlayerStatus, updatePlayerProfile } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
@@ -32,7 +32,7 @@ async function resolveAllowedPlayerId(session: { role?: string; organizationId?:
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
@@ -78,7 +78,7 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role !== 'admin' && session.role !== 'coach') {
     return NextResponse.json({ error: 'Only coaches and admins can update player status.' }, { status: 403 });

@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../lib/auth';
 import { resolveSchoolScopedOrganizationId } from '../../../../lib/programming-scope';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import {
@@ -104,7 +104,7 @@ async function resolveAllowedPlayerId(
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const url = new URL(request.url);
@@ -122,7 +122,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
@@ -155,7 +155,7 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
@@ -210,7 +210,7 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 

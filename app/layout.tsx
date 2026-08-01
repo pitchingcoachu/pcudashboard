@@ -11,7 +11,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://www.pcudashboard.com'),
+  metadataBase: new URL('https://www.pearlplayerdev.com'),
   title: {
     default: 'Pearl | Player Development Hub for Baseball Coaches',
     template: '%s',
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
     title: 'Pearl | Player Development Hub for Baseball Coaches',
     description:
       'Pearl Player Development helps coaches, players, and programs track development, improve decisions, and align communication through one clear performance platform.',
-    url: 'https://www.pcudashboard.com',
+    url: 'https://www.pearlplayerdev.com',
     images: [
       {
         url: '/pearl-social-preview.png',

@@ -144,7 +144,8 @@ export async function POST(request: Request) {
       return response;
     }
 
-    const response = NextResponse.json({ ok: true });
+    const isMobileClient = request.headers.get('x-client') === 'mobile';
+    const response = NextResponse.json(isMobileClient ? { ok: true, token } : { ok: true });
     response.cookies.set(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
     const domainOptions = getDomainSessionCookieOptions(hostname);
     if (domainOptions) {

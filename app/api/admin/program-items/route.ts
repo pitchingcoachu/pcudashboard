@@ -4,6 +4,7 @@ import { getSessionFromCookies } from '../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import { addProgramItem } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
+import { sendPushNotificationToUsers } from '../../../../lib/push-notifications';
 
 function redirectWithMessage(request: Request, redirectTo: string, key: 'ok' | 'error', value: string) {
   const url = new URL(redirectTo, request.url);
@@ -73,6 +74,18 @@ export async function POST(request: Request) {
 
     if (!result.ok) {
       return redirectWithMessage(request, redirectTo, 'error', result.error);
+    }
+
+    if (result.playerUserId) {
+      const dayDate = String(form.get('dayDate') ?? '');
+      void sendPushNotificationToUsers({
+        userIds: [result.playerUserId],
+        title: assignmentType === 'workout' ? 'New workout assigned' : 'New exercise assigned',
+        body: result.workoutName
+          ? `${result.workoutName} was added to your schedule for ${dayDate}.`
+          : `A new ${assignmentType} was added to your schedule for ${dayDate}.`,
+        data: { type: `${assignmentType}_assigned`, itemId: result.itemId, dayDate },
+      });
     }
 
     return redirectWithMessage(request, redirectTo, 'ok', 'Assignment added to calendar.');

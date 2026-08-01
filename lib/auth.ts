@@ -220,6 +220,32 @@ export function getSessionFromCookies(cookieStore: CookieStoreLike): SessionPayl
   return null;
 }
 
+function getBearerToken(request: Request): string | null {
+  const header = request.headers.get('authorization') ?? request.headers.get('Authorization');
+  if (!header) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  return match ? match[1].trim() : null;
+}
+
+/**
+ * Resolves a session for a Request: checks the Authorization: Bearer header
+ * first (mobile clients), then falls back to the same cookies getSessionFromCookies
+ * reads (web). Uses the same verifySessionToken as cookies, so a token issued to
+ * a mobile client is interchangeable with a session cookie.
+ */
+export function getSessionFromRequest(request: Request, cookieStore: CookieStoreLike): SessionPayload | null {
+  const bearerToken = getBearerToken(request);
+  if (bearerToken) {
+    try {
+      const parsed = verifySessionToken(bearerToken);
+      if (parsed) return parsed;
+    } catch {
+      // fall through to cookie-based lookup
+    }
+  }
+  return getSessionFromCookies(cookieStore);
+}
+
 type SessionCookieOptions = {
   httpOnly: true;
   secure: boolean;

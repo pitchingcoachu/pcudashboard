@@ -1,10 +1,11 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../../lib/auth';
 import { resolveProgrammingOrganizationId } from '../../../../../lib/programming-scope';
 import { addProgramItem, listProgramItemsForPlayerByDateRange } from '../../../../../lib/training-db';
 import { canManagePlayer, resolveManageablePlayerOrganizationId } from '../../../../../lib/portal-access';
 import { logApiTiming } from '../../../../../lib/request-timing';
+import { sendPushNotificationToUsers } from '../../../../../lib/push-notifications';
 
 function parseDate(value: string): string | null {
   const trimmed = value.trim();
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
     return NextResponse.json(payload, { status });
   };
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return finish(401, { error: 'Unauthorized' });
   if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
     return NextResponse.json(payload, { status });
   };
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return finish(401, { error: 'Unauthorized' });
   if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
@@ -82,5 +83,17 @@ export async function POST(request: Request) {
   });
 
   if (!result.ok) return finish(400, { error: result.error });
+
+  if (result.playerUserId) {
+    void sendPushNotificationToUsers({
+      userIds: [result.playerUserId],
+      title: 'New workout assigned',
+      body: result.workoutName
+        ? `${result.workoutName} was added to your schedule for ${dayDate}.`
+        : `A new workout was added to your schedule for ${dayDate}.`,
+      data: { type: 'workout_assigned', itemId: result.itemId, dayDate },
+    });
+  }
+
   return finish(200, { ok: true, itemId: result.itemId }, { playerId, dayDate, workoutId, itemId: result.itemId });
 }

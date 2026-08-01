@@ -2944,6 +2944,67 @@ export async function recordPortalActivityEvent(input: {
   );
 }
 
+async function ensureDevicePushTokensTable(): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS device_push_tokens (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      expo_push_token TEXT NOT NULL,
+      platform TEXT NOT NULL DEFAULT 'unknown',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_device_push_tokens_token ON device_push_tokens (expo_push_token);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_device_push_tokens_user ON device_push_tokens (user_id);`);
+}
+
+export async function upsertDevicePushToken(input: {
+  userId: number;
+  expoPushToken: string;
+  platform?: string | null;
+}): Promise<void> {
+  const userId = Number(input.userId ?? 0);
+  const expoPushToken = String(input.expoPushToken ?? '').trim();
+  if (!isDatabaseConfigured() || !Number.isFinite(userId) || userId <= 0 || !expoPushToken) return;
+  await ensureTrainingDbReady();
+  await ensureDevicePushTokensTable();
+  const pool = getDbPool();
+  await pool.query(
+    `
+      INSERT INTO device_push_tokens (user_id, expo_push_token, platform, last_seen_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (expo_push_token)
+      DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, last_seen_at = NOW()
+    `,
+    [userId, expoPushToken, String(input.platform ?? '').trim().toLowerCase() || 'unknown']
+  );
+}
+
+export async function deleteDevicePushToken(expoPushToken: string): Promise<void> {
+  const token = String(expoPushToken ?? '').trim();
+  if (!isDatabaseConfigured() || !token) return;
+  await ensureTrainingDbReady();
+  await ensureDevicePushTokensTable();
+  const pool = getDbPool();
+  await pool.query(`DELETE FROM device_push_tokens WHERE expo_push_token = $1`, [token]);
+}
+
+export async function listDevicePushTokensForUsers(userIds: number[]): Promise<string[]> {
+  const ids = Array.from(new Set(userIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
+  if (!isDatabaseConfigured() || ids.length === 0) return [];
+  await ensureTrainingDbReady();
+  await ensureDevicePushTokensTable();
+  const pool = getDbPool();
+  const result = await pool.query<{ expo_push_token: string }>(
+    `SELECT expo_push_token FROM device_push_tokens WHERE user_id = ANY($1::int[])`,
+    [ids]
+  );
+  return result.rows.map((row) => row.expo_push_token);
+}
+
 export async function listPortalActivityOverview(input: {
   role?: string | null;
   query?: string | null;
@@ -5002,7 +5063,10 @@ export async function addProgramItem(input: {
   prescribedLoad?: string;
   prescribedNotes?: string;
   programName?: string;
-}): Promise<{ ok: true; itemId: number } | { ok: false; error: string }> {
+}): Promise<
+  | { ok: true; itemId: number; playerUserId: number | null; playerName: string; workoutName: string | null }
+  | { ok: false; error: string }
+> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
@@ -5012,16 +5076,19 @@ export async function addProgramItem(input: {
     return { ok: false, error: 'Date must be YYYY-MM-DD.' };
   }
 
-  const playerCheck = await pool.query<{ id: number }>(
-    `SELECT id FROM players WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+  const playerCheck = await pool.query<{ id: number; user_id: number | null; full_name: string }>(
+    `SELECT id, user_id, full_name FROM players WHERE id = $1 AND organization_id = $2 LIMIT 1`,
     [input.playerId, input.organizationId]
   );
   if ((playerCheck.rowCount ?? 0) !== 1) {
     return { ok: false, error: 'Player was not found in your organization.' };
   }
+  const playerUserId = playerCheck.rows[0].user_id;
+  const playerName = playerCheck.rows[0].full_name;
 
   let exerciseId: number | null = null;
   let workoutId: number | null = null;
+  let workoutName: string | null = null;
 
   if (input.assignmentType === 'exercise') {
     const exId = input.exerciseId ?? 0;
@@ -5035,14 +5102,15 @@ export async function addProgramItem(input: {
     exerciseId = exId;
   } else {
     const wkId = input.workoutId ?? 0;
-    const workoutCheck = await pool.query<{ id: number }>(
-      `SELECT id FROM workout_library WHERE id = $1 AND organization_id = ANY(ARRAY[$2, $3]::int[]) LIMIT 1`,
+    const workoutCheck = await pool.query<{ id: number; name: string }>(
+      `SELECT id, name FROM workout_library WHERE id = $1 AND organization_id = ANY(ARRAY[$2, $3]::int[]) LIMIT 1`,
       [wkId, input.organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
     );
     if ((workoutCheck.rowCount ?? 0) !== 1) {
       return { ok: false, error: 'Workout was not found in your organization.' };
     }
     workoutId = wkId;
+    workoutName = workoutCheck.rows[0].name;
   }
 
   const programId = await getOrCreateCurrentProgram(input);
@@ -5106,7 +5174,7 @@ export async function addProgramItem(input: {
     });
   }
 
-  return { ok: true, itemId };
+  return { ok: true, itemId, playerUserId, playerName, workoutName };
 }
 
 export async function replaceProgramItemsForDates(input: {
