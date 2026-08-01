@@ -1,12 +1,12 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../lib/auth';
 import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import { getPlayerForUser, playerExistsInOrganization, getBullpenLogEntries, recordPortalActivityEvent, saveBullpenLogEntry } from '../../../../lib/training-db';
 
-async function resolvePlayerId(session: ReturnType<typeof getSessionFromCookies>, requestedPlayerId: number) {
+async function resolvePlayerId(session: ReturnType<typeof getSessionFromRequest>, requestedPlayerId: number) {
   if (!session) return null;
   const organizationId = resolveProgrammingOrganizationId(session);
   if (session.role === 'player') {
@@ -27,7 +27,7 @@ async function resolvePlayerId(session: ReturnType<typeof getSessionFromCookies>
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const organizationId = resolveProgrammingOrganizationId(session);
   const url = new URL(request.url);
@@ -41,7 +41,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const organizationId = resolveProgrammingOrganizationId(session);
   const body = (await request.json().catch(() => null)) as {
