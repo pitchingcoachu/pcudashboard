@@ -177,6 +177,7 @@ export async function POST(request: Request) {
   const attachmentName = String(body.attachmentName ?? '');
   const attachmentMimeType = String(body.attachmentMimeType ?? '');
   const attachmentDataUrl = String(body.attachmentDataUrl ?? '');
+  const playerVisible = Boolean(body.playerVisible);
   const authoredNoteText = withAuthorPrefix(noteText, String(session.name ?? session.email ?? '').trim());
 
   if (domain !== 'Pitching' && domain !== 'Hitting' && domain !== 'Catching' && domain !== 'General') {
@@ -238,6 +239,7 @@ export async function POST(request: Request) {
     attachmentName,
     attachmentMimeType,
     attachmentDataUrl,
+    playerVisible,
     createdByUserId: session.userId ?? 0,
   });
   if (!created.ok) return NextResponse.json({ error: created.error }, { status: 400 });
@@ -275,6 +277,7 @@ export async function PATCH(request: Request) {
   const attachmentName = String(body.attachmentName ?? '');
   const attachmentMimeType = String(body.attachmentMimeType ?? '');
   const attachmentDataUrl = String(body.attachmentDataUrl ?? '');
+  const playerVisible = Boolean(body.playerVisible);
   const authoredNoteText = withAuthorPrefix(noteText, String(session.name ?? session.email ?? '').trim());
 
   if (Number.isFinite(playerId) && playerId > 0) {
@@ -290,6 +293,7 @@ export async function PATCH(request: Request) {
       attachmentName,
       attachmentMimeType,
       attachmentDataUrl,
+      playerVisible,
     });
     if (!updated.ok) return NextResponse.json({ error: updated.error }, { status: 400 });
     return NextResponse.json({ ok: true });

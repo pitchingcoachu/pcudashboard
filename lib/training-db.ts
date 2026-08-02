@@ -185,6 +185,7 @@ export type PlayerPlanNoteRow = {
   attachmentName: string | null;
   attachmentMimeType: string | null;
   attachmentDataUrl: string | null;
+  playerVisible: boolean;
   createdAt: string;
   createdByUserId: number | null;
 };
@@ -610,6 +611,7 @@ export async function ensureTrainingDbReady(): Promise<void> {
   `);
     await pool.query(`ALTER TABLE player_plan_notes ADD COLUMN IF NOT EXISTS source_type TEXT;`);
     await pool.query(`ALTER TABLE player_plan_notes ADD COLUMN IF NOT EXISTS source_id TEXT;`);
+    await pool.query(`ALTER TABLE player_plan_notes ADD COLUMN IF NOT EXISTS player_visible BOOLEAN NOT NULL DEFAULT FALSE;`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_plan_notes_player_date ON player_plan_notes (player_id, note_date DESC, created_at DESC);`);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_player_plan_notes_source ON player_plan_notes (player_id, source_type, source_id);`);
     await pool.query(`
@@ -7162,6 +7164,7 @@ export async function listPlayerPlanNotesForPlayer(input: {
     attachment_name: string | null;
     attachment_mime_type: string | null;
     attachment_data_url: string | null;
+    player_visible: boolean;
     created_at: string;
     created_by_user_id: number | null;
   }>(
@@ -7176,6 +7179,7 @@ export async function listPlayerPlanNotesForPlayer(input: {
         n.attachment_name,
         n.attachment_mime_type,
         n.attachment_data_url,
+        n.player_visible,
         n.created_at::text,
         n.created_by_user_id
       FROM player_plan_notes n
@@ -7205,6 +7209,7 @@ export async function listPlayerPlanNotesForPlayer(input: {
         attachmentName: row.attachment_name,
         attachmentMimeType: row.attachment_mime_type,
         attachmentDataUrl: row.attachment_data_url,
+        playerVisible: row.player_visible,
         createdAt: row.created_at,
         createdByUserId: row.created_by_user_id,
       } satisfies PlayerPlanNoteRow;
@@ -7224,6 +7229,7 @@ export async function createPlayerPlanNote(input: {
   attachmentDataUrl?: string;
   sourceType?: string;
   sourceId?: string;
+  playerVisible?: boolean;
   createdByUserId: number;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
@@ -7262,9 +7268,10 @@ export async function createPlayerPlanNote(input: {
         attachment_data_url,
         source_type,
         source_id,
+        player_visible,
         created_by_user_id
       )
-      VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9, $10, $11)
+      VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9, $10, $11, $12)
     `,
     [
       input.playerId,
@@ -7277,6 +7284,7 @@ export async function createPlayerPlanNote(input: {
       attachmentDataUrl,
       String(input.sourceType ?? '').trim() || null,
       String(input.sourceId ?? '').trim() || null,
+      Boolean(input.playerVisible),
       input.createdByUserId,
     ]
   );
@@ -7294,6 +7302,7 @@ export async function updatePlayerPlanNote(input: {
   attachmentName?: string;
   attachmentMimeType?: string;
   attachmentDataUrl?: string;
+  playerVisible?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
@@ -7321,12 +7330,13 @@ export async function updatePlayerPlanNote(input: {
         attachment_name = $4,
         attachment_mime_type = $5,
         attachment_data_url = $6,
+        player_visible = $7,
         updated_at = NOW()
       FROM players p
-      WHERE n.id = $7
-        AND n.player_id = $8
+      WHERE n.id = $8
+        AND n.player_id = $9
         AND p.id = n.player_id
-        AND p.organization_id = $9
+        AND p.organization_id = $10
     `,
     [
       String(input.noteDate).trim(),
@@ -7335,6 +7345,7 @@ export async function updatePlayerPlanNote(input: {
       String(input.attachmentName ?? '').trim() || null,
       String(input.attachmentMimeType ?? '').trim() || null,
       attachmentDataUrl,
+      Boolean(input.playerVisible),
       input.noteId,
       input.playerId,
       input.organizationId,
