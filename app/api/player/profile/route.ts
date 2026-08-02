@@ -30,6 +30,30 @@ async function resolveAllowedPlayerId(session: { role?: string; organizationId?:
   return { ok: true as const, playerId: player.id };
 }
 
+export async function GET(request: Request) {
+  const cookieStore = await cookies();
+  const session = getSessionFromRequest(request, cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const { searchParams } = new URL(request.url);
+  const playerId = Number(searchParams.get('playerId') ?? 0);
+  if (!Number.isFinite(playerId) || playerId <= 0) {
+    return NextResponse.json({ error: 'Valid playerId is required.' }, { status: 400 });
+  }
+
+  const allowed = await resolveAllowedPlayerId(session, playerId);
+  if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+
+  const organizationId = resolveProgrammingOrganizationId(session);
+  const profile =
+    session.role === 'player'
+      ? await getPlayerForUser({ organizationId, userId: session.userId ?? 0 })
+      : await getPlayerByIdInOrganization({ organizationId, playerId: allowed.playerId });
+
+  if (!profile) return NextResponse.json({ error: 'Player not found.' }, { status: 404 });
+  return NextResponse.json({ profile });
+}
+
 export async function POST(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
