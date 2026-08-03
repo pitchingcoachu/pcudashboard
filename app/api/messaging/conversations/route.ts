@@ -54,11 +54,33 @@ export async function POST(request: Request) {
   const coachUserIds = new Set(coaches.map((c) => c.userId));
 
   if (session.role === 'player') {
-    const invalid = participantUserIds.some((id) => !coachUserIds.has(id));
-    if (invalid) return NextResponse.json({ error: 'Players can only message coaches or admins at their school.' }, { status: 403 });
+    const invalid = participantUserIds.filter((id) => !coachUserIds.has(id));
+    if (invalid.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'Players can only message coaches or admins at their school.',
+          debug: { organizationId, invalid, coachUserIds: Array.from(coachUserIds), sessionOrganizationId: session.organizationId },
+        },
+        { status: 403 }
+      );
+    }
   } else if (session.role === 'coach' || session.role === 'admin') {
-    const invalid = participantUserIds.some((id) => !messageablePlayerUserIds.has(id) && !coachUserIds.has(id));
-    if (invalid) return NextResponse.json({ error: 'Recipients must be players, coaches, or admins at your school.' }, { status: 403 });
+    const invalid = participantUserIds.filter((id) => !messageablePlayerUserIds.has(id) && !coachUserIds.has(id));
+    if (invalid.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'Recipients must be players, coaches, or admins at your school.',
+          debug: {
+            organizationId,
+            invalid,
+            coachUserIds: Array.from(coachUserIds),
+            playerUserIds: Array.from(messageablePlayerUserIds),
+            sessionOrganizationId: session.organizationId,
+          },
+        },
+        { status: 403 }
+      );
+    }
   } else {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
