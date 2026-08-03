@@ -14,9 +14,12 @@ export async function GET(request: Request) {
   }
 
   const coaches = await listCoachesByOrganization(organizationId);
+  // listCoachesByOrganization's userId can come back as a string at runtime
+  // despite being typed as number (see identical note in
+  // conversations/route.ts) -- coerce before comparing against session.userId.
   const coachOptions = coaches
-    .filter((c) => c.userId !== (session.userId ?? -1))
-    .map((c) => ({ userId: c.userId, name: c.name, role: c.role }));
+    .filter((c) => Number(c.userId) !== (session.userId ?? -1))
+    .map((c) => ({ userId: Number(c.userId), name: c.name, role: c.role }));
 
   if (session.role === 'player') {
     return NextResponse.json({ coaches: coachOptions });

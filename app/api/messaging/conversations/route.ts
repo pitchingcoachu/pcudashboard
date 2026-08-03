@@ -50,37 +50,20 @@ export async function POST(request: Request) {
     listMessageablePlayersForOrganization(organizationId),
     listCoachesByOrganization(organizationId),
   ]);
-  const messageablePlayerUserIds = new Set(players.map((p) => p.userId));
-  const coachUserIds = new Set(coaches.map((c) => c.userId));
+  // listCoachesByOrganization's userId can come back as a string at runtime
+  // (Postgres/node-pg quirk on that query's aggregate column list) despite
+  // being typed as number -- coerce both sides so Set.has() comparisons
+  // against participantUserIds (already Number()-coerced above) don't fail
+  // on a type mismatch.
+  const messageablePlayerUserIds = new Set(players.map((p) => Number(p.userId)));
+  const coachUserIds = new Set(coaches.map((c) => Number(c.userId)));
 
   if (session.role === 'player') {
-    const invalid = participantUserIds.filter((id) => !coachUserIds.has(id));
-    if (invalid.length > 0) {
-      return NextResponse.json(
-        {
-          error: 'Players can only message coaches or admins at their school.',
-          debug: { organizationId, invalid, coachUserIds: Array.from(coachUserIds), sessionOrganizationId: session.organizationId },
-        },
-        { status: 403 }
-      );
-    }
+    const invalid = participantUserIds.some((id) => !coachUserIds.has(id));
+    if (invalid) return NextResponse.json({ error: 'Players can only message coaches or admins at their school.' }, { status: 403 });
   } else if (session.role === 'coach' || session.role === 'admin') {
-    const invalid = participantUserIds.filter((id) => !messageablePlayerUserIds.has(id) && !coachUserIds.has(id));
-    if (invalid.length > 0) {
-      return NextResponse.json(
-        {
-          error: 'Recipients must be players, coaches, or admins at your school.',
-          debug: {
-            organizationId,
-            invalid,
-            coachUserIds: Array.from(coachUserIds),
-            playerUserIds: Array.from(messageablePlayerUserIds),
-            sessionOrganizationId: session.organizationId,
-          },
-        },
-        { status: 403 }
-      );
-    }
+    const invalid = participantUserIds.some((id) => !messageablePlayerUserIds.has(id) && !coachUserIds.has(id));
+    if (invalid) return NextResponse.json({ error: 'Recipients must be players, coaches, or admins at your school.' }, { status: 403 });
   } else {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
