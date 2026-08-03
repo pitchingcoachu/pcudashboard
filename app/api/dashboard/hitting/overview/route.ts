@@ -100,7 +100,7 @@ function scrubInvalidPitchTypePayload(payload: unknown): unknown {
 }
 
 async function maybeAttachHittingHeatmapRollup(params: {
-  requestOrigin: string;
+  request: Request;
   schoolCode: string;
   level: string;
   startDate: string;
@@ -115,7 +115,7 @@ async function maybeAttachHittingHeatmapRollup(params: {
   payload: unknown;
 }): Promise<unknown> {
   const {
-    requestOrigin,
+    request,
     schoolCode,
     level,
     startDate,
@@ -160,8 +160,12 @@ async function maybeAttachHittingHeatmapRollup(params: {
   ].some((key) => hasValue(inputUrl.searchParams.get(key)?.trim() ?? ''));
   if (hasUnsupportedFilters) return payload;
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12_000);
   try {
-    const rollup = new URL('/api/dashboard/hitting/heatmap-rollup', requestOrigin);
+    const requestUrl = new URL(request.url);
+    const origin = `${requestUrl.protocol}//${requestUrl.host}`;
+    const rollup = new URL('/api/dashboard/hitting/heatmap-rollup', origin);
     rollup.searchParams.set('school_code', schoolCode);
     if (level) rollup.searchParams.set('level', level);
     if (startDate) rollup.searchParams.set('start_date', startDate);
@@ -172,7 +176,11 @@ async function maybeAttachHittingHeatmapRollup(params: {
     if (teamType) rollup.searchParams.set('team_type', teamType);
     if (pitchTypes) rollup.searchParams.set('pitch_types', pitchTypes);
 
-    const response = await fetch(rollup.toString(), { cache: 'no-store' });
+    const response = await fetch(rollup.toString(), {
+      cache: 'no-store',
+      headers: { cookie: request.headers.get('cookie') ?? '' },
+      signal: controller.signal,
+    });
     if (!response.ok) return payload;
     const rollupPayload = (await response.json().catch(() => ({}))) as { chart_points?: unknown[]; heatmap_points?: unknown[] };
     const rollupPoints = Array.isArray(rollupPayload.chart_points) ? rollupPayload.chart_points : [];
@@ -184,6 +192,8 @@ async function maybeAttachHittingHeatmapRollup(params: {
     };
   } catch {
     return payload;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -255,7 +265,6 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const inputUrl = new URL(request.url);
-  const requestOrigin = inputUrl.origin;
   const requestedPercentileBaseline = isTruthy(inputUrl.searchParams.get('percentile_baseline')?.trim() ?? '');
   const percentilePool = inputUrl.searchParams.get('percentile_pool')?.trim().toLowerCase() ?? '';
   const useMlbPercentilePool = requestedPercentileBaseline && percentilePool === 'mlb';
@@ -640,7 +649,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: message }, { status: result.status });
     }
     const payloadWithRollupHeatmaps = await maybeAttachHittingHeatmapRollup({
-      requestOrigin,
+      request,
       schoolCode,
       level,
       startDate,

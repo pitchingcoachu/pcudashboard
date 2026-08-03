@@ -10894,6 +10894,8 @@ def _try_pitching_overview_daily_rollup(
                       NULLIF((regexp_match(COALESCE(pe.spinefficiency::text, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1], '')::double precision AS spin_eff,
                       (regexp_match(COALESCE(pe.exitspeed, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS exit_speed,
                       (regexp_match(COALESCE(pe.angle, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS angle,
+                      (regexp_match(COALESCE(pe.vertapprangle, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS vaa,
+                      (regexp_match(COALESCE(pe.horzapprangle, ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision AS haa,
                       COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip', '')), ''), '') AS video_clip_1,
                       COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip2', '')), ''), '') AS video_clip_2,
                       COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(pe)->>'videoclip3', '')), ''), '') AS video_clip_3
@@ -19179,25 +19181,29 @@ def _pro_hitting_overview(
 
     where = [
         "school_code = 'PRO'",
-        "(%(sport_ids_count)s::int = 0 OR sport_id = ANY(%(sport_ids)s::int[]))",
         _pro_level_sql_clause(level_filter, "batterteam", "pitcherteam"),
-        "(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)",
-        "(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)",
-        """(
-             %(hitter_count)s::int = 0
-             OR COALESCE(NULLIF(TRIM(batter), ''), '') = ANY(%(hitters_exact)s::text[])
-             OR lower(COALESCE(NULLIF(TRIM(batter), ''), '')) = ANY(%(hitters_lower)s::text[])
-             OR regexp_replace(lower(COALESCE(NULLIF(TRIM(batter), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(hitters_norm)s::text[])
-           )""",
-        """(
-             %(opp_pitcher_count)s::int = 0
-             OR COALESCE(NULLIF(TRIM(pitcher), ''), '') = ANY(%(opp_pitchers_exact)s::text[])
-             OR lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')) = ANY(%(opp_pitchers_lower)s::text[])
-             OR regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), '[^a-z0-9]', '', 'g') = ANY(%(opp_pitchers_norm)s::text[])
-           )""",
     ]
-    if not enable_recent_pa_window:
-        where.append("(%(pitch_types_count)s::int = 0 OR (" + PRO_PITCH_TYPE_SQL + ") = ANY(%(pitch_types)s::text[]))")
+    # Build only the predicates that are actually active. Parameter-guarded OR
+    # clauses forced Postgres to consider unindexed name expressions and could
+    # turn a one-hitter Summary request into a multi-million-row scan.
+    if level_sport_ids:
+        where.append("sport_id = ANY(%(sport_ids)s::int[])")
+    if effective_start_date:
+        where.append("session_date >= %(start_date)s::date")
+    if effective_end_date:
+        where.append("session_date <= %(end_date)s::date")
+    if selected_hitter_keys:
+        where.append(
+            "regexp_replace(lower(COALESCE(NULLIF(TRIM(batter), ''), '')), "
+            "'[^a-z0-9]', '', 'g') = ANY(%(hitters_norm)s::text[])"
+        )
+    if selected_opp_pitcher_keys:
+        where.append(
+            "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitcher), ''), '')), "
+            "'[^a-z0-9]', '', 'g') = ANY(%(opp_pitchers_norm)s::text[])"
+        )
+    if not enable_recent_pa_window and selected_pitch_types:
+        where.append("(" + PRO_PITCH_TYPE_SQL + ") = ANY(%(pitch_types)s::text[])")
     params: Dict[str, Any] = {
         "start_date": effective_start_date,
         "end_date": effective_end_date,
@@ -19412,6 +19418,7 @@ def _pro_hitting_overview(
     )
     try:
         with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '30s'")
             cur.execute(sql, params)
             rows = [dict(r) for r in cur.fetchall()]
     except Exception as exc:
@@ -22608,6 +22615,8 @@ def pitching_ab_report(
                     ) AS pitcher,
                     COALESCE(NULLIF(TRIM(batter), ''), '') AS batter,
                     COALESCE(NULLIF(TRIM(catcher), ''), '') AS catcher,
+                    UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) AS pitcher_team_code,
+                    UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) AS batter_team_code,
                     COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), 'Unknown') AS session_type_norm,
                     """ + PITCH_TYPE_NORMALIZE_SQL + """ AS pitch_type,
                     COALESCE(NULLIF(TRIM(pitchcall), ''), '') AS pitch_call,
@@ -22852,6 +22861,7 @@ def pitching_ab_report(
     grouped_pas = _ab_group_rows(rows_for_game)
 
     batter_sections: Dict[str, List[Dict[str, Any]]] = {}
+    batter_side_by_name: Dict[str, str] = {}
     pa_counter = 0
     for pa_rows in grouped_pas:
         pa_counter += 1
@@ -22864,9 +22874,22 @@ def pitching_ab_report(
             "pitches": [_pitch_action_payload(row, avg_stuff_by_pitch_type) for row in pa_rows],
         }
         batter_sections.setdefault(batter_name, []).append(pa_payload)
+        raw_batter_side = str(last_row.get("batterside") or "").strip().upper()
+        batter_side_code = (
+            "S" if raw_batter_side.startswith("S")
+            else "L" if raw_batter_side.startswith("L")
+            else "R" if raw_batter_side.startswith("R")
+            else ""
+        )
+        existing_side = batter_side_by_name.get(batter_name, "")
+        if batter_side_code:
+            batter_side_by_name[batter_name] = (
+                "S" if existing_side and existing_side != batter_side_code
+                else batter_side_code
+            )
 
     pa_groups = [
-        {"batter": batter, "pas": pas}
+        {"batter": batter, "batter_side": batter_side_by_name.get(batter, ""), "pas": pas}
         for batter, pas in batter_sections.items()
     ]
     pitch_type_legend = sorted({str(row.get("pitch_type") or "Undefined") for row in rows})
@@ -23098,6 +23121,8 @@ def hitting_ab_report(
                     ) AS pitcher,
                     COALESCE(NULLIF(TRIM(batter), ''), '') AS batter,
                     COALESCE(NULLIF(TRIM(catcher), ''), '') AS catcher,
+                    UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) AS pitcher_team_code,
+                    UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) AS batter_team_code,
                     COALESCE(NULLIF(TRIM(session_type), ''), NULLIF(TRIM(sessiontype), ''), 'Unknown') AS session_type_norm,
                     """ + PITCH_TYPE_NORMALIZE_SQL + """ AS pitch_type,
                     COALESCE(NULLIF(TRIM(pitchcall), ''), '') AS pitch_call,

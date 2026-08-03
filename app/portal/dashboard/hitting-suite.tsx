@@ -503,6 +503,34 @@ function resolveAbPitchResult(pitch: ChartPoint): string {
   return '-';
 }
 
+function abPitchResultShape(pitch: ChartPoint): (typeof RESULT_ORDER)[number] | '' {
+  const call = String(pitch.pitch_call ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+  const playResult = String(pitch.play_result ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+
+  if (call === 'hitbypitch' || playResult === 'hitbypitch') return 'Ball';
+  if (['strikecalled', 'calledstrike', 'automaticstrike', 'autostrike'].includes(call)) return 'Called Strike';
+  if (
+    ['ball', 'ballcalled', 'ballindirt', 'blockedball', 'pitchout', 'ballpitchout', 'intentionalball', 'ballintentional', 'automaticball', 'autoball'].includes(call)
+  ) return 'Ball';
+  if (call.startsWith('foul') || call === 'bunttip') return 'Foul';
+  if (['strikeswinging', 'swingingstrike', 'swingingstrikeblocked', 'swingingstrikepitchout', 'missedbunt'].includes(call)) return 'Whiff';
+
+  const isInPlay = call.startsWith('inplay') || call.startsWith('hitintoplay');
+  if (isInPlay || ['out', 'fielderschoice', 'sacrifice', 'single', 'double', 'triple', 'homerun', 'error'].includes(playResult)) {
+    if (['single', 'double', 'triple', 'homerun'].includes(playResult)) return 'In Play (Hit)';
+    if (playResult === 'error') return 'Error';
+    if (isInPlay && (call.includes('noout') || call.includes('run'))) return 'In Play (Hit)';
+    return 'In Play (Out)';
+  }
+  return '';
+}
+
 function normalizedThrowHand(value: string): 'L' | 'R' | 'U' {
   const v = (value || '').trim().toLowerCase();
   if (v.startsWith('l')) return 'L';
@@ -1421,20 +1449,6 @@ function AbPaChart({
   const compLeft = strikeCenterX - compRadiusFt;
   const compRight = strikeCenterX + compRadiusFt;
 
-  const resultShape = (pitch: ChartPoint): string => {
-    const call = pitch.pitch_call || '';
-    const pr = pitch.play_result || '';
-    if (call === 'HitByPitch' || pr === 'HitByPitch') return 'Ball';
-    if (call === 'StrikeCalled') return 'Called Strike';
-    if (call === 'BallCalled' || call === 'BallinDirt') return 'Ball';
-    if (call === 'FoulBall' || call === 'FoulBallFieldable' || call === 'FoulBallNotFieldable') return 'Foul';
-    if (call === 'StrikeSwinging') return 'Whiff';
-    if (call === 'InPlay' && (pr === 'Out' || pr === 'FieldersChoice' || pr === 'Sacrifice')) return 'In Play (Out)';
-    if (call === 'InPlay' && (pr === 'Single' || pr === 'Double' || pr === 'Triple' || pr === 'HomeRun')) return 'In Play (Hit)';
-    if (call === 'InPlay' && pr === 'Error') return 'Error';
-    return '';
-  };
-
   const hoverText = (pitch: ChartPoint, idx: number): string => {
     const countPart =
       pitch.balls_num !== null && pitch.balls_num !== undefined && pitch.strikes_num !== null && pitch.strikes_num !== undefined
@@ -1487,7 +1501,7 @@ function AbPaChart({
           .map((pitch, i) => {
             const x = px(Number(pitch.plate_side));
             const y = py(Number(pitch.plate_height));
-            const shape = resultShape(pitch);
+            const shape = abPitchResultShape(pitch);
             const color = pitchColors[pitch.pitch_type] ?? '#9ca3af';
             return (
               <g
@@ -1519,14 +1533,16 @@ function AbPaChart({
                   });
                 }}
               >
-                {shape === 'Ball' ? <circle cx={x} cy={y} r={7.6} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.2} /> : null}
-                {shape === 'Called Strike' ? <circle cx={x} cy={y} r={7.3} fill={color} stroke={color} strokeWidth={1.8} /> : null}
-                {shape === 'Foul' ? <polygon points={`${x},${y - 8.1} ${x - 7.1},${y + 6.2} ${x + 7.1},${y + 6.2}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.1} /> : null}
-                {shape === 'Whiff' ? <text x={x} y={y + 6.3} fontSize={20} textAnchor="middle" fill={color}>★</text> : null}
-                {shape === 'In Play (Out)' ? <polygon points={`${x},${y - 8.1} ${x - 7.1},${y + 6.2} ${x + 7.1},${y + 6.2}`} fill={color} /> : null}
-                {shape === 'In Play (Hit)' ? <rect x={x - 7.1} y={y - 7.1} width={14.2} height={14.2} fill={color} /> : null}
-                {shape === 'Error' ? <rect x={x - 7.1} y={y - 7.1} width={14.2} height={14.2} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.1} /> : null}
-                {shape === '' ? <circle cx={x} cy={y} r={7.0} fill={color} /> : null}
+                {shape ? markerForResult(shape, x, y, color, `ab-result-${pitch.pitch_event_id ?? i}-${i}`) : null}
+                {shape === '' ? (
+                  <path
+                    d={`M ${x - 5.5} ${y - 5.5} L ${x + 5.5} ${y + 5.5} M ${x + 5.5} ${y - 5.5} L ${x - 5.5} ${y + 5.5}`}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={2.2}
+                    strokeLinecap="round"
+                  />
+                ) : null}
                 <text x={x} y={y - 8} fontSize={11} textAnchor="middle" fill="white" stroke="rgba(0,0,0,0.55)" strokeWidth={0.6}>
                   {i + 1}
                 </text>
@@ -2240,9 +2256,12 @@ export default function HittingSuite({
   const [loadingFilters, setLoadingFilters] = useState(true);
   const [loadingOverview, setLoadingOverview] = useState(true);
   const [loadingAbReport, setLoadingAbReport] = useState(false);
+  const [isDownloadingAbPdf, setIsDownloadingAbPdf] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [abError, setAbError] = useState<string | null>(null);
+  const [abPdfError, setAbPdfError] = useState<string | null>(null);
   const [abGameKey, setAbGameKey] = useState('');
+  const abReportPdfRef = useRef<HTMLDivElement | null>(null);
 
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -2700,7 +2719,7 @@ export default function HittingSuite({
     const timeoutId = window.setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, isPro ? 150000 : 90000);
+    }, isPro ? 45000 : 90000);
     setLoadingOverview(true);
     setError(null);
     const isLeaderboardPage = dashboardPage === 'Leaderboard';
@@ -2877,6 +2896,11 @@ export default function HittingSuite({
       .then(async (payload) => {
         if (cancelled) return;
         overviewCacheRef.current.set(requestKey, { at: Date.now(), payload });
+        // Render the primary response immediately. Any empty-result fallback or
+        // chart enrichment below is supplemental and must not hold the Summary
+        // page in its loading state.
+        applyOverviewPayload(payload);
+        setLoadingOverview(false);
         const shouldTryLeaderboardFallback =
           isPro &&
           isLeaderboardPage &&
@@ -2995,7 +3019,6 @@ export default function HittingSuite({
             }
           }
         }
-        applyOverviewPayload(payload);
         if (!chartRequestKey) return;
         const cachedChart = overviewCacheRef.current.get(chartRequestKey);
         if (cachedChart && Date.now() - cachedChart.at < overviewTtlMs) {
@@ -4182,6 +4205,241 @@ export default function HittingSuite({
       group.pas.map((pa) => ({ pitcher: group.pitcher, pa }))
     );
   }, [abReport]);
+  const abGameStatLine = useMemo(() => {
+    if (!abCards.length) return '';
+    const token = (value: string): string => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const hitTokens = new Set(['single', 'double', 'triple', 'homerun']);
+    const nonAtBatTokens = new Set([
+      'walk',
+      'baseonballs',
+      'intentwalk',
+      'intentionalwalk',
+      'hitbypitch',
+      'hbp',
+      'sacrifice',
+      'sacrificefly',
+      'sacrificebunt',
+      'catcherinterference',
+    ]);
+    const counts = new Map<string, number>();
+    let hits = 0;
+    let atBats = 0;
+    for (const { pa } of abCards) {
+      const result = token(pa.result_label);
+      counts.set(result, (counts.get(result) ?? 0) + 1);
+      if (hitTokens.has(result)) hits += 1;
+      if (!nonAtBatTokens.has(result)) atBats += 1;
+    }
+    const countFor = (...keys: string[]): number => keys.reduce((sum, key) => sum + (counts.get(key) ?? 0), 0);
+    const extras: string[] = [];
+    const addExtra = (count: number, label: string) => {
+      if (count > 0) extras.push(count === 1 ? label : `${count} ${label}`);
+    };
+    addExtra(countFor('double'), '2B');
+    addExtra(countFor('triple'), '3B');
+    addExtra(countFor('homerun'), 'HR');
+    addExtra(countFor('walk', 'baseonballs', 'intentwalk', 'intentionalwalk'), 'BB');
+    addExtra(countFor('hitbypitch', 'hbp'), 'HBP');
+    return `${hits}-${atBats}${extras.length ? `, ${extras.join(', ')}` : ''}`;
+  }, [abCards]);
+  const abMatchup = useMemo(() => {
+    if (!abReport) return null;
+    const pitches = abReport.pa_groups.flatMap((group) => group.pas.flatMap((pa) => pa.pitches));
+    const mostCommon = (values: Array<string | null | undefined>): string => {
+      const counts = new Map<string, number>();
+      for (const raw of values) {
+        const value = String(raw ?? '').trim();
+        const normalized = value.toUpperCase();
+        if (!value || ['ALL', 'OPP', 'OPPONENT', 'OPPONENTS', 'CAMPERS', 'PRO'].includes(normalized)) continue;
+        counts.set(value, (counts.get(value) ?? 0) + 1);
+      }
+      return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+    };
+    const selectedGame = abReport.available_games.find((game) => game.game_key === abReport.selected_game_key);
+    const rawTeam = mostCommon(pitches.map((pitch) => pitch.batter_team_code)) || (teamType !== 'All' ? teamType : '');
+    const rawOpponent = mostCommon(pitches.map((pitch) => pitch.pitcher_team_code)) || selectedGame?.opponent || '';
+    const proLevel = (level === 'AAA' || level === 'MLB') ? level : 'All';
+    const nonProTeamLabel = (value: string): string => {
+      const code = value.trim().toUpperCase();
+      return leagueTeamLabelByCode[code] ?? LEAGUE_TEAM_NAME_BY_CODE[code] ?? value;
+    };
+    const schoolLabel = activeSchoolBrand.logoAlt.replace(/\s+logo$/i, '').trim() || effectiveSchoolCode;
+    const teamLabel = isPro
+      ? getProTeamDisplayName(rawTeam, proLevel)
+      : isLeague
+        ? nonProTeamLabel(rawTeam)
+        : schoolLabel;
+    const opponentLabel = isPro ? getProTeamDisplayName(rawOpponent, proLevel) : nonProTeamLabel(rawOpponent);
+    if (!opponentLabel) return null;
+
+    const knownSchoolLogo = (value: string): string => {
+      const brand = resolveSchoolBrand(value);
+      if (!brand.logoSrc || brand.logoSrc === '/pearl-clam-transparent.png') return '';
+      return brand.logoSrc;
+    };
+    const proLogo = (value: string): string => {
+      const remote = getProTeamLogoUrl(value);
+      return remote ? `/api/dashboard/image-proxy?url=${encodeURIComponent(remote)}` : '';
+    };
+    return {
+      teamLabel: teamLabel || effectiveSchoolCode || 'Team',
+      teamLogo: isPro ? proLogo(rawTeam) : (!isLeague ? (activeSchoolBrand.logoSrc ?? '') : knownSchoolLogo(rawTeam)),
+      opponentLabel,
+      opponentLogo: isPro ? proLogo(rawOpponent) : knownSchoolLogo(rawOpponent),
+    };
+  }, [abReport, activeSchoolBrand.logoAlt, activeSchoolBrand.logoSrc, effectiveSchoolCode, isLeague, isPro, leagueTeamLabelByCode, level, teamType]);
+
+  const downloadAbReportPdf = useCallback(async () => {
+    if (!abReportPdfRef.current || !abReport || isDownloadingAbPdf) return;
+    setIsDownloadingAbPdf(true);
+    setAbPdfError(null);
+    let exportRoot: HTMLDivElement | null = null;
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+      ]);
+      const isLightMode = document.body.classList.contains('theme-light');
+      const pageBg = isLightMode ? '#ffffff' : '#05070d';
+      exportRoot = abReportPdfRef.current.cloneNode(true) as HTMLDivElement;
+      exportRoot.querySelectorAll('[data-ab-pdf-ignore="true"]').forEach((node) => node.remove());
+      exportRoot.style.position = 'fixed';
+      exportRoot.style.left = '-12000px';
+      exportRoot.style.top = '0';
+      exportRoot.style.width = '1080px';
+      exportRoot.style.padding = '24px';
+      exportRoot.style.boxSizing = 'border-box';
+      exportRoot.style.background = pageBg;
+      const exportGrid = exportRoot.querySelector<HTMLElement>('.portal-ab-pa-grid');
+      if (exportGrid) exportGrid.style.alignItems = 'start';
+      exportRoot.querySelectorAll<HTMLElement>('.portal-ab-pa-card').forEach((card) => {
+        card.style.height = 'auto';
+        card.style.minHeight = '0';
+        card.style.minWidth = '0';
+        card.style.overflow = 'visible';
+      });
+      exportRoot.querySelectorAll<HTMLElement>('.portal-ab-pa-table-wrap').forEach((tableWrap) => {
+        tableWrap.style.width = '100%';
+        tableWrap.style.height = 'auto';
+        tableWrap.style.maxHeight = 'none';
+        tableWrap.style.overflow = 'hidden';
+        tableWrap.style.overflowX = 'hidden';
+        tableWrap.style.overflowY = 'visible';
+      });
+      exportRoot.querySelectorAll<HTMLTableElement>('.portal-ab-pa-table-wrap .portal-table').forEach((table) => {
+        table.style.width = '100%';
+        table.style.minWidth = '0';
+        table.style.tableLayout = 'fixed';
+        const columnWidths = ['10%', '14%', '10%', '9%', '9%', '9%', '9%', '30%'];
+        table.querySelectorAll<HTMLTableCellElement>('th, td').forEach((cell) => {
+          const columnIndex = cell.cellIndex;
+          cell.style.width = columnWidths[columnIndex] ?? 'auto';
+          cell.style.padding = '4px 3px';
+          cell.style.fontSize = '11px';
+          cell.style.lineHeight = '1.2';
+          cell.style.whiteSpace = 'normal';
+          cell.style.overflowWrap = 'anywhere';
+        });
+      });
+      document.body.appendChild(exportRoot);
+
+      const inlineLogoAsPng = async (logo: HTMLImageElement): Promise<void> => {
+        const source = String(logo.getAttribute('src') || logo.src || '').trim();
+        if (!source || source.startsWith('data:image/png')) return;
+        let objectUrl = '';
+        try {
+          const response = await fetch(source, { cache: 'force-cache' });
+          if (!response.ok) return;
+          const blob = await response.blob();
+          objectUrl = URL.createObjectURL(blob);
+          const decoded = await new Promise<HTMLImageElement>((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = () => reject(new Error('Failed to decode team logo.'));
+            image.src = objectUrl;
+          });
+          const targetWidth = Math.max(1, logo.clientWidth || 30);
+          const targetHeight = Math.max(1, logo.clientHeight || 30);
+          const exportScale = 4;
+          const logoCanvas = document.createElement('canvas');
+          logoCanvas.width = Math.round(targetWidth * exportScale);
+          logoCanvas.height = Math.round(targetHeight * exportScale);
+          const context = logoCanvas.getContext('2d');
+          if (!context) return;
+          const sourceWidth = Math.max(1, decoded.naturalWidth || decoded.width);
+          const sourceHeight = Math.max(1, decoded.naturalHeight || decoded.height);
+          const containScale = Math.min(logoCanvas.width / sourceWidth, logoCanvas.height / sourceHeight);
+          const renderedWidth = sourceWidth * containScale;
+          const renderedHeight = sourceHeight * containScale;
+          context.drawImage(
+            decoded,
+            (logoCanvas.width - renderedWidth) / 2,
+            (logoCanvas.height - renderedHeight) / 2,
+            renderedWidth,
+            renderedHeight
+          );
+          logo.removeAttribute('srcset');
+          logo.src = logoCanvas.toDataURL('image/png');
+        } catch {
+          // Keep the original source when rasterization fails.
+        } finally {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+        }
+      };
+      await Promise.all(Array.from(exportRoot.querySelectorAll('img')).map(inlineLogoAsPng));
+      await Promise.all(
+        Array.from(exportRoot.querySelectorAll('img')).map((img) =>
+          img.complete && img.naturalWidth > 0
+            ? Promise.resolve()
+            : new Promise<void>((resolve) => {
+                img.onload = () => resolve();
+                img.onerror = () => resolve();
+              })
+        )
+      );
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      const canvas = await html2canvas(exportRoot, {
+        backgroundColor: pageBg,
+        scale: 2,
+        useCORS: true,
+      });
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 18;
+      const drawWidth = pageWidth - margin * 2;
+      const drawHeight = pageHeight - margin * 2;
+      const imageScale = Math.min(drawWidth / canvas.width, drawHeight / canvas.height);
+      const renderedWidth = canvas.width * imageScale;
+      const renderedHeight = canvas.height * imageScale;
+      const imageX = (pageWidth - renderedWidth) / 2;
+      const imageY = (pageHeight - renderedHeight) / 2;
+      pdf.setFillColor(isLightMode ? 255 : 5, isLightMode ? 255 : 7, isLightMode ? 255 : 13);
+      pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+      pdf.addImage(
+        canvas.toDataURL('image/png'),
+        'PNG',
+        imageX,
+        imageY,
+        renderedWidth,
+        renderedHeight,
+        undefined,
+        'FAST'
+      );
+
+      const safeHitter = formatNameFirstLast(selectedSingleHitter || abReport.hitter || 'hitter')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
+      pdf.save(`${safeHitter || 'hitter'}-ab-report-${abReport.selected_game_date || 'game'}.pdf`);
+    } catch (pdfError) {
+      setAbPdfError(pdfError instanceof Error ? pdfError.message : 'Failed to download the AB report PDF.');
+    } finally {
+      exportRoot?.remove();
+      setIsDownloadingAbPdf(false);
+    }
+  }, [abReport, isDownloadingAbPdf, selectedSingleHitter]);
   const heatmapStatOptions = useMemo(
     () => [
       { value: 'Frequency', label: 'Frequency' },
@@ -6832,11 +7090,53 @@ export default function HittingSuite({
                 ) : null}
               </>
             ) : (
-              <>
+              <div ref={abReportPdfRef}>
                 <div className="dashboard-panel" style={{ padding: 14 }}>
-                  <h3 style={{ margin: 0 }}>
-                    {(selectedSingleHitter ? formatNameFirstLast(selectedSingleHitter) : 'AB Report')} | {abReport?.selected_game_date ? formatShortDate(abReport.selected_game_date) : '-'}
-                  </h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)', alignItems: 'start', gap: 12 }}>
+                    <span aria-hidden="true" />
+                    <div style={{ display: 'grid', justifyItems: 'center', textAlign: 'center', minWidth: 0 }}>
+                      <h3 style={{ margin: 0 }}>
+                        {selectedSingleHitter ? formatNameFirstLast(selectedSingleHitter) : 'AB Report'}
+                      </h3>
+                      <div className="portal-muted-text" style={{ marginTop: 3, fontSize: '0.82rem', fontWeight: 700 }}>
+                        {abReport?.selected_game_date ? formatShortDate(abReport.selected_game_date) : '-'}
+                      </div>
+                      {abMatchup ? (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 9, minWidth: 0 }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                            {abMatchup.teamLogo ? (
+                              <img src={abMatchup.teamLogo} alt={`${abMatchup.teamLabel} logo`} style={{ width: 30, height: 30, objectFit: 'contain', flex: '0 0 auto' }} />
+                            ) : null}
+                            <span style={{ fontWeight: 750 }}>{abMatchup.teamLabel}</span>
+                          </div>
+                          <span className="portal-muted-text" style={{ fontSize: '0.76rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em' }}>vs</span>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                            {abMatchup.opponentLogo ? (
+                              <img src={abMatchup.opponentLogo} alt={`${abMatchup.opponentLabel} logo`} style={{ width: 30, height: 30, objectFit: 'contain', flex: '0 0 auto' }} />
+                            ) : null}
+                            <span style={{ fontWeight: 750 }}>{abMatchup.opponentLabel}</span>
+                          </div>
+                        </div>
+                      ) : null}
+                      {abGameStatLine ? (
+                        <div style={{ marginTop: abMatchup ? 7 : 9, fontSize: '0.9rem', fontWeight: 800, letterSpacing: '0.015em' }}>
+                          {abGameStatLine}
+                        </div>
+                      ) : null}
+                    </div>
+                    {selectedSingleHitter && abReport ? (
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        data-ab-pdf-ignore="true"
+                        disabled={isDownloadingAbPdf || !abCards.length}
+                        onClick={() => void downloadAbReportPdf()}
+                        style={{ justifySelf: 'end' }}
+                      >
+                        {isDownloadingAbPdf ? 'Downloading PDF...' : 'Download PDF'}
+                      </button>
+                    ) : null}
+                  </div>
                   {!selectedSingleHitter ? (
                     <p className="portal-muted-text" style={{ margin: '8px 0 0 0' }}>
                       Select a single hitter in the sidebar to view AB Report.
@@ -6845,6 +7145,7 @@ export default function HittingSuite({
                 </div>
                 {selectedSingleHitter && loadingAbReport ? <p>Loading AB report...</p> : null}
                 {selectedSingleHitter && abError ? <p className="auth-error">{abError}</p> : null}
+                {selectedSingleHitter && abPdfError ? <p className="auth-error" data-ab-pdf-ignore="true">{abPdfError}</p> : null}
                 {selectedSingleHitter && abReport ? (
                   <div>
                       {abCards.length ? (
@@ -6923,7 +7224,7 @@ export default function HittingSuite({
                       )}
                   </div>
                 ) : null}
-              </>
+              </div>
             )}
             </div>
         </article>

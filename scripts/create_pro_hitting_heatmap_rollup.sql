@@ -67,6 +67,11 @@ CREATE INDEX IF NOT EXISTS idx_pro_hhm_date_level_team_hand
 CREATE INDEX IF NOT EXISTS idx_pro_hhm_date_batter
   ON public.pro_hitting_heatmap_daily_bins (session_date, batter_norm);
 
+-- Hitter-scoped reports filter on batter first and then a date range. Keeping
+-- batter_norm first avoids scanning every hitter represented in the date span.
+CREATE INDEX IF NOT EXISTS idx_pro_hhm_batter_date
+  ON public.pro_hitting_heatmap_daily_bins (batter_norm, session_date);
+
 ALTER TABLE public.pro_hitting_heatmap_daily_bins
   ADD COLUMN IF NOT EXISTS pa_n integer NOT NULL DEFAULT 0;
 ALTER TABLE public.pro_hitting_heatmap_daily_bins

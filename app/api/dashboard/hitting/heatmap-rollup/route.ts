@@ -104,25 +104,29 @@ export async function GET(request: Request) {
     ? 'public.pro_hitting_heatmap_daily_bins'
     : 'public.hitting_heatmap_daily_bins';
 
-  const result = await pool.query<{
-    plate_x_bin: number;
-    plate_z_bin: number;
-    pitch_type: string;
-    pitch_n: number;
-    swing_n: number;
-    whiff_n: number;
-    in_play_n: number;
-    gb_n: number;
-    cs_n: number;
-    take_n: number;
-    rv_sum: number;
-    pv_sum: number;
-    xwoba_sum: number;
-    xwoba_n: number;
-    ev_sum: number;
-    ev_n: number;
-  }>(
-    `
+  const result = await (async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SET LOCAL statement_timeout = '12s'");
+      const queryResult = await client.query<{
+        plate_x_bin: number;
+        plate_z_bin: number;
+        pitch_type: string;
+        pitch_n: number;
+        swing_n: number;
+        whiff_n: number;
+        in_play_n: number;
+        gb_n: number;
+        cs_n: number;
+        take_n: number;
+        rv_sum: number;
+        pv_sum: number;
+        xwoba_sum: number;
+        xwoba_n: number;
+        ev_sum: number;
+        ev_n: number;
+      }>(`
       SELECT
         plate_x_bin,
         plate_z_bin,
@@ -143,9 +147,16 @@ export async function GET(request: Request) {
       FROM ${tableRef}
       WHERE ${where.join(' AND ')}
       GROUP BY plate_x_bin, plate_z_bin, pitch_type
-    `,
-    values
-  );
+      `, values);
+      await client.query('COMMIT');
+      return queryResult;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  })();
 
   const chartPoints = result.rows
     .filter((row) => row.pitch_n > 0)

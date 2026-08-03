@@ -104,6 +104,7 @@ type OverviewPayload = {
     batter: string;
     catcher: string;
     pitcherthrows: string;
+    batterside?: string;
     pitcher_team_code: string;
     batter_team_code: string;
     pitcher_team_norm: string;
@@ -166,6 +167,7 @@ type OverviewPayload = {
     batter: string;
     catcher: string;
     pitcherthrows: string;
+    batterside?: string;
     pitcher_team_code: string;
     batter_team_code: string;
     pitcher_team_norm: string;
@@ -234,6 +236,7 @@ type AbReportPayload = {
   pitch_type_legend: string[];
   pa_groups: Array<{
     batter: string;
+    batter_side?: string;
     pas: Array<{
       pa_index: number;
       result_label: string;
@@ -859,6 +862,33 @@ function normalizeHandednessCode(value: unknown): 'R' | 'L' | '' {
   if (raw.startsWith('r')) return 'R';
   if (raw.startsWith('l')) return 'L';
   return '';
+}
+
+function normalizeBatterSideCode(value: unknown): 'R' | 'L' | 'S' | '' {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return '';
+  if (raw.startsWith('s')) return 'S';
+  if (raw.startsWith('l')) return 'L';
+  if (raw.startsWith('r')) return 'R';
+  return '';
+}
+
+function resolveAbBatterSide(group: AbReportPayload['pa_groups'][number]): 'R' | 'L' | 'S' | '' {
+  const sides = new Set<'R' | 'L'>();
+  const addSide = (value: unknown): boolean => {
+    const side = normalizeBatterSideCode(value);
+    if (side === 'S') return true;
+    if (side) sides.add(side);
+    return false;
+  };
+  if (addSide(group.batter_side)) return 'S';
+  for (const pa of group.pas) {
+    for (const pitch of pa.pitches) {
+      if (addSide(pitch.batterside)) return 'S';
+    }
+  }
+  if (sides.size > 1) return 'S';
+  return sides.values().next().value ?? '';
 }
 
 function normalizePitchCallToken(value: unknown): string {
@@ -2178,7 +2208,15 @@ function AbPaChart({
                 {shape === 'In Play (Out)' ? <polygon points={`${x},${y - 8.1} ${x - 7.1},${y + 6.2} ${x + 7.1},${y + 6.2}`} fill={color} /> : null}
                 {shape === 'In Play (Hit)' ? <rect x={x - 7.1} y={y - 7.1} width={14.2} height={14.2} fill={color} /> : null}
                 {shape === 'Error' ? <rect x={x - 7.1} y={y - 7.1} width={14.2} height={14.2} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={2.1} /> : null}
-                {shape === '' ? <circle cx={x} cy={y} r={7.0} fill={color} /> : null}
+                {shape === '' ? (
+                  <path
+                    d={`M ${x - 5.5} ${y - 5.5} L ${x + 5.5} ${y + 5.5} M ${x + 5.5} ${y - 5.5} L ${x - 5.5} ${y + 5.5}`}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={2.2}
+                    strokeLinecap="round"
+                  />
+                ) : null}
                 <text x={x} y={y - 8} fontSize={11} textAnchor="middle" fill="white" stroke="rgba(0,0,0,0.55)" strokeWidth={0.6}>
                   {i + 1}
                 </text>
@@ -4549,10 +4587,13 @@ export default function PitchingSuite({
   const [loadingFilters, setLoadingFilters] = useState(true);
   const [loadingOverview, setLoadingOverview] = useState(false);
   const [loadingAbReport, setLoadingAbReport] = useState(false);
+  const [isDownloadingAbPdf, setIsDownloadingAbPdf] = useState(false);
   const [error, setError] = useState('');
   const [abError, setAbError] = useState('');
+  const [abPdfError, setAbPdfError] = useState('');
   const [abReport, setAbReport] = useState<AbReportPayload | null>(null);
   const [abGameKey, setAbGameKey] = useState('');
+  const abReportPdfRef = useRef<HTMLDivElement | null>(null);
   const [pitchEditsAppliedCount, setPitchEditsAppliedCount] = useState<number>(0);
   const [manualEntries, setManualEntries] = useState<ManualVelocityEntry[]>([]);
   const [loadingManualEntries, setLoadingManualEntries] = useState(false);
@@ -13230,6 +13271,325 @@ export default function PitchingSuite({
     () => buildLeagueTeamLabelByCode([filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code]),
     [filters?.pitchers_by_team_code, filters?.opp_hitters_by_team_code]
   );
+  const abCards = useMemo(() => {
+    if (!abReport) return [] as Array<{ batter: string; pa: AbReportPayload['pa_groups'][number]['pas'][number] }>;
+    return abReport.pa_groups.flatMap((group) =>
+      group.pas.map((pa) => ({ batter: group.batter, pa }))
+    );
+  }, [abReport]);
+  const abGameStatLine = useMemo(() => {
+    if (!abCards.length) return '';
+    const token = (value: string): string => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const walkTokens = new Set(['walk', 'baseonballs', 'intentwalk', 'intentionalwalk']);
+    const strikeoutTokens = new Set(['strikeout', 'strikeoutdoubleplay']);
+    let pitches = 0;
+    let walks = 0;
+    let strikeouts = 0;
+    let outs = 0;
+    let fpsNumerator = 0;
+    let fpsDenominator = 0;
+    let eaNumerator = 0;
+    let eaDenominator = 0;
+    for (const { pa } of abCards) {
+      pitches += pa.pitches.length;
+      const result = token(pa.result_label);
+      if (walkTokens.has(result)) walks += 1;
+      if (strikeoutTokens.has(result)) strikeouts += 1;
+      for (const pitch of pa.pitches) {
+        if (pitch.balls_num === null || pitch.strikes_num === null) continue;
+        const balls = Number(pitch.balls_num);
+        const strikes = Number(pitch.strikes_num);
+        if (!Number.isFinite(balls) || !Number.isFinite(strikes)) continue;
+        const pitchCall = String(pitch.pitch_call ?? '');
+        const strike = isPitchStrike(pitchCall, isPro);
+        const pitchCallToken = normalizePitchCallToken(pitchCall);
+        const inPlay = pitchCallToken === 'inplay' || pitchCallToken.startsWith('in_play') || pitchCallToken.startsWith('hit_into_play');
+
+        if (balls === 0 && strikes === 0) {
+          fpsDenominator += 1;
+          if (strike) fpsNumerator += 1;
+        }
+
+        if (isPro) {
+          if (balls === 0 && strikes === 0) eaDenominator += 1;
+          const earlyContact = (
+            (balls === 0 && strikes === 0) ||
+            (balls === 1 && strikes === 0) ||
+            (balls === 0 && strikes === 1) ||
+            (balls === 1 && strikes === 1)
+          ) && inPlay;
+          const aheadStrike = (
+            (balls === 0 && strikes === 1) ||
+            (balls === 1 && strikes === 1)
+          ) && strike && !inPlay;
+          if (earlyContact || aheadStrike) eaNumerator += 1;
+        } else {
+          const isEarlyOrAheadCount = balls + strikes <= 1 || strikes > balls;
+          if (isEarlyOrAheadCount) {
+            eaDenominator += 1;
+            if (strike) eaNumerator += 1;
+          }
+        }
+      }
+      const terminalPitch = pa.pitches[pa.pitches.length - 1];
+      const recordedOuts = Number(terminalPitch?.outs_on_play_num);
+      if (Number.isFinite(recordedOuts) && recordedOuts > 0) {
+        outs += Math.round(recordedOuts);
+      } else if (result.includes('tripleplay')) {
+        outs += 3;
+      } else if (result.includes('doubleplay')) {
+        outs += 2;
+      } else if (
+        strikeoutTokens.has(result) ||
+        result.includes('out') ||
+        ['fielderschoice', 'forceout', 'sacrifice', 'sacrificefly', 'sacrificebunt'].includes(result)
+      ) {
+        outs += 1;
+      }
+    }
+    const innings = `${Math.floor(outs / 3)}.${outs % 3}`;
+    const percentage = (numerator: number, denominator: number): string =>
+      denominator > 0 ? `${(100 * numerator / denominator).toFixed(1)}%` : '-';
+    return `IP ${innings} · P ${pitches} · FPS ${percentage(fpsNumerator, fpsDenominator)} · E+A ${percentage(eaNumerator, eaDenominator)} · BB ${walks} · K ${strikeouts}`;
+  }, [abCards, isPro]);
+  const abMatchup = useMemo(() => {
+    if (!abReport) return null;
+    const pitches = abReport.pa_groups.flatMap((group) => group.pas.flatMap((pa) => pa.pitches));
+    const mostCommon = (values: Array<string | null | undefined>): string => {
+      const counts = new Map<string, number>();
+      for (const raw of values) {
+        const value = String(raw ?? '').trim();
+        const normalized = value.toUpperCase();
+        if (!value || ['ALL', 'OPP', 'OPPONENT', 'OPPONENTS', 'CAMPERS', 'PRO'].includes(normalized)) continue;
+        counts.set(value, (counts.get(value) ?? 0) + 1);
+      }
+      return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+    };
+    const selectedGame = abReport.available_games.find((game) => game.game_key === abReport.selected_game_key);
+    const rawTeam = mostCommon(pitches.map((pitch) => pitch.pitcher_team_code)) || (teamType !== 'All' ? teamType : '');
+    const rawOpponent = mostCommon(pitches.map((pitch) => pitch.batter_team_code)) || selectedGame?.opponent || '';
+    const proLevel = (level === 'AAA' || level === 'MLB') ? level : 'All';
+    const nonProTeamLabel = (value: string): string => {
+      const code = value.trim().toUpperCase();
+      return leagueTeamLabelByCode[code] ?? LEAGUE_TEAM_NAME_BY_CODE[code] ?? value;
+    };
+    const effectiveSchoolCode = String(filters?.school_code ?? selectedSchoolCode ?? '').trim().toUpperCase();
+    const schoolLabel = activeSchoolBrand.logoAlt.replace(/\s+logo$/i, '').trim() || effectiveSchoolCode;
+    const teamLabel = isPro
+      ? getProTeamDisplayName(rawTeam, proLevel)
+      : isLeague
+        ? nonProTeamLabel(rawTeam)
+        : schoolLabel;
+    const opponentLabel = isPro ? getProTeamDisplayName(rawOpponent, proLevel) : nonProTeamLabel(rawOpponent);
+    if (!opponentLabel) return null;
+
+    const knownSchoolLogo = (value: string): string => {
+      const brand = resolveSchoolBrand(value);
+      if (!brand.logoSrc || brand.logoSrc === '/pearl-clam-transparent.png') return '';
+      return brand.logoSrc;
+    };
+    const proLogo = (value: string): string => {
+      const remote = getProTeamLogoUrl(value);
+      return remote ? `/api/dashboard/image-proxy?url=${encodeURIComponent(remote)}` : '';
+    };
+    return {
+      teamLabel: teamLabel || effectiveSchoolCode || 'Team',
+      teamLogo: isPro ? proLogo(rawTeam) : (!isLeague ? (activeSchoolBrand.logoSrc ?? '') : knownSchoolLogo(rawTeam)),
+      opponentLabel,
+      opponentLogo: isPro ? proLogo(rawOpponent) : knownSchoolLogo(rawOpponent),
+    };
+  }, [abReport, activeSchoolBrand.logoAlt, activeSchoolBrand.logoSrc, filters?.school_code, isLeague, isPro, leagueTeamLabelByCode, level, selectedSchoolCode, teamType]);
+  const downloadAbReportPdf = useCallback(async () => {
+    if (!abReportPdfRef.current || !abReport || isDownloadingAbPdf) return;
+    setIsDownloadingAbPdf(true);
+    setAbPdfError('');
+    let exportRoot: HTMLDivElement | null = null;
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+      ]);
+      const isLightMode = document.body.classList.contains('theme-light');
+      const pageBg = isLightMode ? '#ffffff' : '#05070d';
+      exportRoot = abReportPdfRef.current.cloneNode(true) as HTMLDivElement;
+      exportRoot.querySelectorAll('[data-ab-pdf-ignore="true"]').forEach((node) => node.remove());
+      exportRoot.style.position = 'fixed';
+      exportRoot.style.left = '-12000px';
+      exportRoot.style.top = '0';
+      exportRoot.style.width = '1200px';
+      exportRoot.style.padding = '24px';
+      exportRoot.style.boxSizing = 'border-box';
+      exportRoot.style.background = pageBg;
+      const reportLayout = exportRoot.querySelector<HTMLElement>('.portal-pitching-ab-layout');
+      if (reportLayout) reportLayout.style.gridTemplateColumns = 'minmax(0, 1fr)';
+      exportRoot.querySelectorAll<HTMLElement>('.portal-ab-player-pa-grid').forEach((playerGrid) => {
+        const paCount = Math.max(1, playerGrid.querySelectorAll('.portal-ab-pa-card').length);
+        playerGrid.style.gridTemplateColumns = `repeat(${paCount}, minmax(0, 1fr))`;
+        playerGrid.style.alignItems = 'start';
+        playerGrid.style.gap = '10px';
+        playerGrid.style.overflow = 'visible';
+      });
+      exportRoot.querySelectorAll<HTMLElement>('.portal-ab-pa-card').forEach((card) => {
+        card.style.height = 'auto';
+        card.style.minHeight = '0';
+        card.style.minWidth = '0';
+        card.style.overflow = 'visible';
+      });
+      exportRoot.querySelectorAll<SVGElement>('.portal-ab-pa-card svg').forEach((chart) => {
+        chart.style.height = '170px';
+      });
+      exportRoot.querySelectorAll<HTMLElement>('.portal-ab-pa-table-wrap').forEach((tableWrap) => {
+        tableWrap.style.width = '100%';
+        tableWrap.style.height = 'auto';
+        tableWrap.style.maxHeight = 'none';
+        tableWrap.style.overflow = 'hidden';
+        tableWrap.style.overflowX = 'hidden';
+        tableWrap.style.overflowY = 'visible';
+      });
+      exportRoot.querySelectorAll<HTMLTableElement>('.portal-ab-pa-table-wrap .portal-table').forEach((table) => {
+        table.style.width = '100%';
+        table.style.minWidth = '0';
+        table.style.tableLayout = 'fixed';
+        const columnWidths = ['10%', '14%', '10%', '9%', '9%', '9%', '9%', '30%'];
+        table.querySelectorAll<HTMLTableCellElement>('th, td').forEach((cell) => {
+          cell.style.width = columnWidths[cell.cellIndex] ?? 'auto';
+          cell.style.padding = '3px 2px';
+          cell.style.fontSize = '10px';
+          cell.style.lineHeight = '1.16';
+          cell.style.whiteSpace = 'normal';
+          cell.style.overflowWrap = 'anywhere';
+        });
+      });
+      document.body.appendChild(exportRoot);
+
+      const inlineLogoAsPng = async (logo: HTMLImageElement): Promise<void> => {
+        const source = String(logo.getAttribute('src') || logo.src || '').trim();
+        if (!source || source.startsWith('data:image/png')) return;
+        let objectUrl = '';
+        try {
+          const response = await fetch(source, { cache: 'force-cache' });
+          if (!response.ok) return;
+          const blob = await response.blob();
+          objectUrl = URL.createObjectURL(blob);
+          const decoded = await new Promise<HTMLImageElement>((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = () => reject(new Error('Failed to decode team logo.'));
+            image.src = objectUrl;
+          });
+          const targetWidth = Math.max(1, logo.clientWidth || 30);
+          const targetHeight = Math.max(1, logo.clientHeight || 30);
+          const exportScale = 4;
+          const logoCanvas = document.createElement('canvas');
+          logoCanvas.width = Math.round(targetWidth * exportScale);
+          logoCanvas.height = Math.round(targetHeight * exportScale);
+          const context = logoCanvas.getContext('2d');
+          if (!context) return;
+          const sourceWidth = Math.max(1, decoded.naturalWidth || decoded.width);
+          const sourceHeight = Math.max(1, decoded.naturalHeight || decoded.height);
+          const containScale = Math.min(logoCanvas.width / sourceWidth, logoCanvas.height / sourceHeight);
+          const renderedWidth = sourceWidth * containScale;
+          const renderedHeight = sourceHeight * containScale;
+          context.drawImage(
+            decoded,
+            (logoCanvas.width - renderedWidth) / 2,
+            (logoCanvas.height - renderedHeight) / 2,
+            renderedWidth,
+            renderedHeight
+          );
+          logo.removeAttribute('srcset');
+          logo.src = logoCanvas.toDataURL('image/png');
+        } catch {
+          // Keep the original source when rasterization fails.
+        } finally {
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+        }
+      };
+      await Promise.all(Array.from(exportRoot.querySelectorAll('img')).map(inlineLogoAsPng));
+      await Promise.all(
+        Array.from(exportRoot.querySelectorAll('img')).map((img) =>
+          img.complete && img.naturalWidth > 0
+            ? Promise.resolve()
+            : new Promise<void>((resolve) => {
+                img.onload = () => resolve();
+                img.onerror = () => resolve();
+              })
+        )
+      );
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 18;
+      const drawWidth = pageWidth - margin * 2;
+      const pageBottom = pageHeight - margin;
+      const rowGap = 10;
+      const fillPage = () => {
+        pdf.setFillColor(isLightMode ? 255 : 5, isLightMode ? 255 : 7, isLightMode ? 255 : 13);
+        pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+      };
+      const capture = (element: HTMLElement) => html2canvas(element, {
+        backgroundColor: pageBg,
+        scale: 2,
+        useCORS: true,
+      });
+      const header = exportRoot.querySelector<HTMLElement>('.portal-ab-report-header');
+      const playerRows = Array.from(exportRoot.querySelectorAll<HTMLElement>('.portal-ab-player-row'));
+      if (!header || !playerRows.length) throw new Error('AB report export content is incomplete.');
+
+      const headerCanvas = await capture(header);
+      const headerScale = drawWidth / headerCanvas.width;
+      const headerHeight = headerCanvas.height * headerScale;
+      const headerImage = headerCanvas.toDataURL('image/png');
+      const rowStartY = margin + headerHeight + rowGap;
+      const rowSlotHeight = (pageBottom - rowStartY - rowGap) / 2;
+      const startPage = () => {
+        fillPage();
+        pdf.addImage(headerImage, 'PNG', margin, margin, drawWidth, headerHeight, undefined, 'FAST');
+      };
+      startPage();
+
+      for (let rowIndex = 0; rowIndex < playerRows.length; rowIndex += 1) {
+        if (rowIndex > 0 && rowIndex % 2 === 0) {
+          pdf.addPage('letter', 'landscape');
+          startPage();
+        }
+        const playerRow = playerRows[rowIndex];
+        const rowCanvas = await capture(playerRow);
+        const rowScale = Math.min(drawWidth / rowCanvas.width, rowSlotHeight / rowCanvas.height);
+        const rowWidth = rowCanvas.width * rowScale;
+        const rowHeight = rowCanvas.height * rowScale;
+        const slotIndex = rowIndex % 2;
+        const slotY = rowStartY + slotIndex * (rowSlotHeight + rowGap);
+        pdf.addImage(
+          rowCanvas.toDataURL('image/png'),
+          'PNG',
+          (pageWidth - rowWidth) / 2,
+          slotY + Math.max(0, (rowSlotHeight - rowHeight) / 2),
+          rowWidth,
+          rowHeight,
+          undefined,
+          'FAST'
+        );
+        rowCanvas.width = 1;
+        rowCanvas.height = 1;
+      }
+      headerCanvas.width = 1;
+      headerCanvas.height = 1;
+
+      const safePitcher = formatNameFirstLast(selectedSinglePitcher || abReport.pitcher || 'pitcher')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
+      pdf.save(`${safePitcher || 'pitcher'}-ab-report-${abReport.selected_game_date || 'game'}.pdf`);
+    } catch (pdfError) {
+      setAbPdfError(pdfError instanceof Error ? pdfError.message : 'Failed to download the AB report PDF.');
+    } finally {
+      exportRoot?.remove();
+      setIsDownloadingAbPdf(false);
+    }
+  }, [abReport, isDownloadingAbPdf, selectedSinglePitcher]);
   const proxiedProTeamLogoUrl = useCallback((teamCodeLike: string | null | undefined): string => {
     const remoteLogoUrl = getProTeamLogoUrl(teamCodeLike);
     if (!remoteLogoUrl) return '';
@@ -14065,7 +14425,7 @@ export default function PitchingSuite({
                           <>
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                               <span style={{ width: 16, height: 0, borderTop: `2px dashed ${pitchColors[magnusLine] ?? '#e2e8f0'}`, display: 'inline-block' }} />
-                              Current player's Magnus line
+                              Current player&apos;s Magnus line
                             </span>
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                               <span style={{ width: 16, height: 0, borderTop: '2px dotted #a3e635', display: 'inline-block' }} />
@@ -15507,26 +15867,67 @@ export default function PitchingSuite({
               ) : null}
             </>
           ) : dashboardPage === 'AB Report' ? (
-            <>
-              {selectedSinglePitcher ? (
-                <h3>{`${formatNameFirstLast(selectedSinglePitcher)} | ${
-                  abReport?.selected_game_date ? formatShortDate(abReport.selected_game_date) : '-'
-                }`}</h3>
-              ) : (
-                <h3>AB Report</h3>
-              )}
+            <div ref={abReportPdfRef}>
+              <div className="dashboard-panel portal-ab-report-header" style={{ padding: 14 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)', alignItems: 'start', gap: 12 }}>
+                  <span aria-hidden="true" />
+                  <div style={{ display: 'grid', justifyItems: 'center', textAlign: 'center', minWidth: 0 }}>
+                    <h3 style={{ margin: 0 }}>
+                      {selectedSinglePitcher ? formatNameFirstLast(selectedSinglePitcher) : 'AB Report'}
+                    </h3>
+                    <div className="portal-muted-text" style={{ marginTop: 3, fontSize: '0.82rem', fontWeight: 700 }}>
+                      {abReport?.selected_game_date ? formatShortDate(abReport.selected_game_date) : '-'}
+                    </div>
+                    {abMatchup ? (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 9, minWidth: 0 }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                          {abMatchup.teamLogo ? (
+                            <img src={abMatchup.teamLogo} alt={`${abMatchup.teamLabel} logo`} style={{ width: 30, height: 30, objectFit: 'contain', flex: '0 0 auto' }} />
+                          ) : null}
+                          <span style={{ fontWeight: 750 }}>{abMatchup.teamLabel}</span>
+                        </div>
+                        <span className="portal-muted-text" style={{ fontSize: '0.76rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em' }}>vs</span>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                          {abMatchup.opponentLogo ? (
+                            <img src={abMatchup.opponentLogo} alt={`${abMatchup.opponentLabel} logo`} style={{ width: 30, height: 30, objectFit: 'contain', flex: '0 0 auto' }} />
+                          ) : null}
+                          <span style={{ fontWeight: 750 }}>{abMatchup.opponentLabel}</span>
+                        </div>
+                      </div>
+                    ) : null}
+                    {abGameStatLine ? (
+                      <div style={{ marginTop: abMatchup ? 7 : 9, fontSize: '0.9rem', fontWeight: 800, letterSpacing: '0.015em' }}>
+                        {abGameStatLine}
+                      </div>
+                    ) : null}
+                  </div>
+                  {selectedSinglePitcher && abReport ? (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      data-ab-pdf-ignore="true"
+                      disabled={isDownloadingAbPdf || !abCards.length}
+                      onClick={() => void downloadAbReportPdf()}
+                      style={{ justifySelf: 'end' }}
+                    >
+                      {isDownloadingAbPdf ? 'Downloading PDF...' : 'Download PDF'}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
               {!selectedSinglePitcher ? (
-                <p className="portal-muted-text">Select a single pitcher in the sidebar to view AB Report.</p>
+                <p className="portal-muted-text" style={{ margin: '8px 0 0 0' }}>Select a single pitcher in the sidebar to view AB Report.</p>
               ) : null}
               {loadingAbReport ? <p>Loading AB report...</p> : null}
               {selectedSinglePitcher && abError ? <p className="auth-error">{abError}</p> : null}
+              {selectedSinglePitcher && abPdfError ? <p className="auth-error" data-ab-pdf-ignore="true">{abPdfError}</p> : null}
               {selectedSinglePitcher && abReport ? (
-                <div style={{ display: 'grid', gridTemplateColumns: '280px minmax(0,1fr)', gap: 14 }}>
-                  <aside className="portal-day-card portal-ab-sidebar">
+                <div className="portal-pitching-ab-layout" style={{ display: 'grid', gridTemplateColumns: '280px minmax(0,1fr)', gap: 14 }}>
+                  <aside className="portal-day-card portal-ab-sidebar" data-ab-pdf-ignore="true">
                     <label>
                       Select Game
-                    <SearchableSingleSelect
-                      options={abReport.available_games.map((game) => ({
+                      <SearchableSingleSelect
+                        options={abReport.available_games.map((game) => ({
                           value: game.game_key,
                           label: game.label
                             ? game.label
@@ -15604,94 +16005,105 @@ export default function PitchingSuite({
                   </aside>
                   <div>
                     {abReport.pa_groups.length ? (
-                      abReport.pa_groups.map((group) => (
-                        <section key={`ab-batter-${group.batter}`} style={{ marginBottom: 16 }}>
-                          <h4 style={{ marginBottom: 8 }}>{formatNameFirstLast(group.batter)}</h4>
-                          <div className="portal-admin-grid portal-ab-pa-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(300px, 1fr))' }}>
-                            {group.pas.map((pa) => (
-                              <article key={`ab-pa-${group.batter}-${pa.pa_index}`} className="portal-day-card portal-ab-pa-card">
-                                <div style={{ textAlign: 'center', marginBottom: 4, fontWeight: 700 }}>{`PA #${pa.pa_index}`}</div>
-                                <AbPaChart
-                                  pitches={pa.pitches}
-                                  resultLabel={pa.result_label}
-                                  onPitchClick={(pitch) => openActionModal([pitch])}
-                                  pitchColors={pitchColors}
-                                  flipX={isPro}
-                                  isProSchool={isPro}
-                                />
-                                <div className="portal-table-wrap portal-ab-pa-table-wrap" style={{ marginTop: 8 }}>
-                                  <table className="portal-table">
-                                    <thead>
-                                      <tr>
-                                        {['Pitch #', 'Pitch', 'Velo', 'IVB', 'HB', 'EV', 'LA', 'Result'].map((column) => {
-                                          const activeSort = abSortColumn === column;
-                                          return (
-                                            <th
-                                              key={column}
-                                              style={{
-                                                textAlign: 'center',
-                                                cursor: 'pointer',
-                                                background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
-                                                color: activeSort ? '#fff' : undefined,
-                                              }}
-                                              onClick={() => {
-                                                if (abSortColumn === column) {
-                                                  setAbSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
-                                                } else {
-                                                  setAbSortColumn(column);
-                                                  setAbSortDirection(column === 'Pitch #' ? 'asc' : 'desc');
-                                                }
-                                              }}
-                                            >
-                                              {column}
-                                              {activeSort ? ` ${abSortDirection === 'asc' ? '↑' : '↓'}` : ''}
-                                            </th>
-                                          );
-                                        })}
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {sortTableRows(
-                                        pa.pitches.map((pitch, idx) => ({
-                                          ...pitch,
-                                          'Pitch #': idx + 1,
-                                          Pitch: pitch.pitch_type || '-',
-                                          Velo: pitch.velo,
-                                          IVB: pitch.ivb,
-                                          HB: pitch.hb,
-                                          EV: pitch.exit_speed,
-                                          LA: pitch.angle,
-                                          Result: resolveAbPitchResult(pitch),
-                                        })),
-                                        abSortColumn,
-                                        abSortDirection
-                                      ).map((pitch, idx) => (
-                                        <tr key={`ab-row-${idx}-${pitch.pitch_event_id ?? idx}`}>
-                                          <td style={{ textAlign: 'center' }}>{String(pitch['Pitch #'] ?? idx + 1)}</td>
-                                          <td style={{ textAlign: 'center' }}>{pitch.pitch_type || '-'}</td>
-                                          <td style={{ textAlign: 'center' }}>{fmtNum(pitch.velo, 1)}</td>
-                                          <td style={{ textAlign: 'center' }}>{fmtNum(pitch.ivb, 1)}</td>
-                                          <td style={{ textAlign: 'center' }}>{fmtNum(pitch.hb, 1)}</td>
-                                          <td style={{ textAlign: 'center' }}>{fmtNum(pitch.exit_speed, 1)}</td>
-                                          <td style={{ textAlign: 'center' }}>{fmtNum(pitch.angle, 1)}</td>
-                                          <td style={{ textAlign: 'center' }}>{resolveAbPitchResult(pitch)}</td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </article>
-                            ))}
-                          </div>
-                        </section>
-                      ))
+                      <div className="portal-ab-player-rows" style={{ display: 'grid', gap: 14 }}>
+                        {abReport.pa_groups.map((group) => {
+                          const batterSide = resolveAbBatterSide(group);
+                          const batterNameColor = batterSide === 'L' ? '#dc2626' : batterSide === 'S' ? '#2563eb' : undefined;
+                          return (
+                          <section key={`ab-player-row-${group.batter}`} className="portal-ab-player-row" style={{ minWidth: 0 }}>
+                            <h4 style={{ margin: '0 0 8px', textAlign: 'left', color: batterNameColor }}>
+                              {formatNameFirstLast(group.batter)}{batterSide ? ` (${batterSide})` : ''}
+                            </h4>
+                            <div
+                              className="portal-admin-grid portal-ab-pa-grid portal-ab-player-pa-grid"
+                              style={{ gridTemplateColumns: `repeat(${group.pas.length}, minmax(300px, 1fr))`, overflowX: 'auto' }}
+                            >
+                              {group.pas.map((pa) => (
+                          <article key={`ab-pa-${group.batter}-${pa.pa_index}`} className="portal-day-card portal-ab-pa-card">
+                            <div style={{ textAlign: 'center', marginBottom: 2, fontWeight: 700 }}>{`PA #${pa.pa_index}`}</div>
+                            <AbPaChart
+                              pitches={pa.pitches}
+                              resultLabel={pa.result_label}
+                              onPitchClick={(pitch) => openActionModal([pitch])}
+                              pitchColors={pitchColors}
+                              flipX={isPro}
+                              isProSchool={isPro}
+                            />
+                            <div className="portal-table-wrap portal-ab-pa-table-wrap" style={{ marginTop: 8 }}>
+                              <table className="portal-table">
+                                <thead>
+                                  <tr>
+                                    {['Pitch #', 'Pitch', 'Velo', 'IVB', 'HB', 'EV', 'LA', 'Result'].map((column) => {
+                                      const activeSort = abSortColumn === column;
+                                      return (
+                                        <th
+                                          key={column}
+                                          style={{
+                                            textAlign: 'center',
+                                            cursor: 'pointer',
+                                            background: activeSort ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
+                                            color: activeSort ? '#fff' : undefined,
+                                          }}
+                                          onClick={() => {
+                                            if (abSortColumn === column) {
+                                              setAbSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+                                            } else {
+                                              setAbSortColumn(column);
+                                              setAbSortDirection(column === 'Pitch #' ? 'asc' : 'desc');
+                                            }
+                                          }}
+                                        >
+                                          {column}
+                                          {activeSort ? ` ${abSortDirection === 'asc' ? '↑' : '↓'}` : ''}
+                                        </th>
+                                      );
+                                    })}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {sortTableRows(
+                                    pa.pitches.map((pitch, idx) => ({
+                                      ...pitch,
+                                      'Pitch #': idx + 1,
+                                      Pitch: pitch.pitch_type || '-',
+                                      Velo: pitch.velo,
+                                      IVB: pitch.ivb,
+                                      HB: pitch.hb,
+                                      EV: pitch.exit_speed,
+                                      LA: pitch.angle,
+                                      Result: resolveAbPitchResult(pitch),
+                                    })),
+                                    abSortColumn,
+                                    abSortDirection
+                                  ).map((pitch, idx) => (
+                                    <tr key={`ab-row-${idx}-${pitch.pitch_event_id ?? idx}`}>
+                                      <td style={{ textAlign: 'center' }}>{String(pitch['Pitch #'] ?? idx + 1)}</td>
+                                      <td style={{ textAlign: 'center' }}>{pitch.pitch_type || '-'}</td>
+                                      <td style={{ textAlign: 'center' }}>{fmtNum(pitch.velo, 1)}</td>
+                                      <td style={{ textAlign: 'center' }}>{fmtNum(pitch.ivb, 1)}</td>
+                                      <td style={{ textAlign: 'center' }}>{fmtNum(pitch.hb, 1)}</td>
+                                      <td style={{ textAlign: 'center' }}>{fmtNum(pitch.exit_speed, 1)}</td>
+                                      <td style={{ textAlign: 'center' }}>{fmtNum(pitch.angle, 1)}</td>
+                                      <td style={{ textAlign: 'center' }}>{resolveAbPitchResult(pitch)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </article>
+                              ))}
+                            </div>
+                          </section>
+                          );
+                        })}
+                      </div>
                     ) : (
                       <p className="portal-muted-text">No completed plate appearances for the selected game.</p>
                     )}
                   </div>
                 </div>
               ) : null}
-            </>
+            </div>
           ) : dashboardPage === 'Trend' ? (
             <>
               <h3>{overviewHeaderLabel}</h3>
@@ -17969,7 +18381,7 @@ export default function PitchingSuite({
                 <div>
                   <strong>Show Comparison Magnus Line</strong>
                   <div className="portal-muted-text" style={{ fontSize: '0.78rem', marginTop: 2 }}>
-                    Draw the comparison population's Magnus line alongside your own (requires Magnus Line set above).
+                    Draw the comparison population&apos;s Magnus line alongside your own (requires Magnus Line set above).
                   </div>
                 </div>
                 <button
