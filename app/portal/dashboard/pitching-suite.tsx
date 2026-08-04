@@ -6321,6 +6321,7 @@ export default function PitchingSuite({
     withVideo,
     selectedSinglePitcher,
     selectedSinglePitcherHandCode,
+    leaderboardStatView,
     leaderboardPercentileScope,
     summaryPercentileScope,
     collegePercentileDefault,
