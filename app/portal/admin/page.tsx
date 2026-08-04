@@ -41,7 +41,7 @@ export default async function AdminHomePage() {
   const schoolAccess = await withTimeout(
     getSchoolProductAccess(programmingSchoolCode),
     3_000,
-    { dashboard: true, programming: false, clientManagement: true }
+    { dashboard: true, programming: false, clientManagement: true, mobileSchedule: true, mobileWorkouts: true }
   );
   const canAccessClientManagement =
     session.role === 'admin' ? schoolAccess.clientManagement : canUseClientManagement(session);

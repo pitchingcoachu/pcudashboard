@@ -112,12 +112,16 @@ type SchoolProductAccess = {
   dashboard?: boolean;
   programming?: boolean;
   clientManagement?: boolean;
+  mobileSchedule?: boolean;
+  mobileWorkouts?: boolean;
 };
 
 type SchoolProductAccessRecord = {
   dashboard: boolean;
   programming: boolean;
   clientManagement: boolean;
+  mobileSchedule: boolean;
+  mobileWorkouts: boolean;
 };
 
 declare global {
@@ -138,6 +142,8 @@ function parseSchoolProductAccessMap(raw: string): Record<string, SchoolProductA
         dashboard: typeof record.dashboard === 'boolean' ? record.dashboard : undefined,
         programming: typeof record.programming === 'boolean' ? record.programming : undefined,
         clientManagement: typeof record.clientManagement === 'boolean' ? record.clientManagement : undefined,
+        mobileSchedule: typeof record.mobileSchedule === 'boolean' ? record.mobileSchedule : undefined,
+        mobileWorkouts: typeof record.mobileWorkouts === 'boolean' ? record.mobileWorkouts : undefined,
       };
     }
     return out;
@@ -151,6 +157,8 @@ function normalizeAccess(value: SchoolProductAccess): SchoolProductAccessRecord 
     dashboard: value.dashboard !== false,
     programming: value.programming === true,
     clientManagement: value.clientManagement !== false,
+    mobileSchedule: value.mobileSchedule !== false,
+    mobileWorkouts: value.mobileWorkouts !== false,
   };
 }
 
@@ -169,7 +177,7 @@ function getCachedSchoolAccessMap(): Record<string, SchoolProductAccessRecord> {
   return global.__pcuSchoolAccessCache;
 }
 
-function mergeWithEnvDefaults(rows: Array<{ school_code: string; dashboard: boolean; programming: boolean; client_management: boolean }>) {
+function mergeWithEnvDefaults(rows: Array<{ school_code: string; dashboard: boolean; programming: boolean; client_management: boolean; mobile_schedule: boolean; mobile_workouts: boolean }>) {
   const map: Record<string, SchoolProductAccessRecord> = parseEnvSchoolProductAccessMap();
   for (const row of rows) {
     const schoolCode = normalizeSchoolCode(row.school_code);
@@ -178,6 +186,8 @@ function mergeWithEnvDefaults(rows: Array<{ school_code: string; dashboard: bool
       dashboard: Boolean(row.dashboard),
       programming: Boolean(row.programming),
       clientManagement: Boolean(row.client_management),
+      mobileSchedule: Boolean(row.mobile_schedule),
+      mobileWorkouts: Boolean(row.mobile_workouts),
     };
   }
   return map;
@@ -196,6 +206,10 @@ async function ensureSchoolProductAccessTable(): Promise<void> {
       updated_by_user_id BIGINT
     );
   `);
+  // mobile_* columns are a separate, mobile-only gate -- deliberately not
+  // reusing `programming`, which continues to control web independently.
+  await pool.query(`ALTER TABLE school_product_access ADD COLUMN IF NOT EXISTS mobile_schedule BOOLEAN NOT NULL DEFAULT TRUE;`);
+  await pool.query(`ALTER TABLE school_product_access ADD COLUMN IF NOT EXISTS mobile_workouts BOOLEAN NOT NULL DEFAULT TRUE;`);
 }
 
 export async function refreshSchoolProductAccessCache(force = false): Promise<void> {
@@ -214,8 +228,15 @@ export async function refreshSchoolProductAccessCache(force = false): Promise<vo
     }
     await ensureSchoolProductAccessTable();
     const pool = getDbPool();
-    const rows = await pool.query<{ school_code: string; dashboard: boolean; programming: boolean; client_management: boolean }>(
-      `SELECT school_code, dashboard, programming, client_management FROM school_product_access`
+    const rows = await pool.query<{
+      school_code: string;
+      dashboard: boolean;
+      programming: boolean;
+      client_management: boolean;
+      mobile_schedule: boolean;
+      mobile_workouts: boolean;
+    }>(
+      `SELECT school_code, dashboard, programming, client_management, mobile_schedule, mobile_workouts FROM school_product_access`
     );
     global.__pcuSchoolAccessCache = mergeWithEnvDefaults(rows.rows);
     global.__pcuSchoolAccessCacheAt = Date.now();
@@ -240,6 +261,8 @@ export async function getSchoolProductAccess(schoolCode: string): Promise<School
     dashboard: true,
     programming: parseProgrammingDataSchoolCodes().includes(normalized),
     clientManagement: true,
+    mobileSchedule: true,
+    mobileWorkouts: true,
   });
   return fallback;
 }
@@ -284,9 +307,58 @@ export async function setSchoolProductAccess(
   }
   const map = getCachedSchoolAccessMap();
   map[schoolCode] = {
+    ...normalizeAccess(map[schoolCode] ?? {}),
     dashboard: input.dashboard,
     programming: input.programming,
     clientManagement: input.clientManagement,
+  };
+  global.__pcuSchoolAccessCache = { ...map };
+  global.__pcuSchoolAccessCacheAt = Date.now();
+}
+
+// Mobile-only Schedule/Workouts lock -- deliberately separate from
+// setSchoolProductAccess's `programming` flag, which continues to gate web
+// independently per product decision.
+export async function setSchoolMobileAccess(
+  input: {
+    schoolCode: string;
+    mobileSchedule: boolean;
+    mobileWorkouts: boolean;
+    updatedByUserId?: number | null;
+  }
+): Promise<void> {
+  const schoolCode = normalizeSchoolCode(input.schoolCode);
+  if (!schoolCode) return;
+  if (isDatabaseConfigured()) {
+    await ensureSchoolProductAccessTable();
+    const pool = getDbPool();
+    const params = [schoolCode, input.mobileSchedule, input.mobileWorkouts, input.updatedByUserId ?? null];
+    const upsertSql = `
+      INSERT INTO school_product_access (school_code, mobile_schedule, mobile_workouts, updated_at, updated_by_user_id)
+      VALUES ($1, $2, $3, NOW(), $4)
+      ON CONFLICT (school_code)
+      DO UPDATE SET
+        mobile_schedule = EXCLUDED.mobile_schedule,
+        mobile_workouts = EXCLUDED.mobile_workouts,
+        updated_at = NOW(),
+        updated_by_user_id = EXCLUDED.updated_by_user_id
+    `;
+    try {
+      await pool.query(upsertSql, params);
+    } catch (error) {
+      const typed = error as { code?: string } | null;
+      if (typed?.code === '23503') {
+        await pool.query(upsertSql, [schoolCode, input.mobileSchedule, input.mobileWorkouts, null]);
+      } else {
+        throw error;
+      }
+    }
+  }
+  const map = getCachedSchoolAccessMap();
+  map[schoolCode] = {
+    ...normalizeAccess(map[schoolCode] ?? {}),
+    mobileSchedule: input.mobileSchedule,
+    mobileWorkouts: input.mobileWorkouts,
   };
   global.__pcuSchoolAccessCache = { ...map };
   global.__pcuSchoolAccessCacheAt = Date.now();
@@ -331,6 +403,18 @@ export function canUseProgrammingData(session: SessionLike): boolean {
   const schoolCode = resolveProgrammingSchoolCode(session);
   const allowed = parseProgrammingDataSchoolCodes();
   return schoolCode === 'TRIAL' || allowed.includes(schoolCode);
+}
+
+export function canUseMobileSchedule(session: SessionLike): boolean {
+  const access = resolveSchoolProductAccess(session);
+  if (typeof access.mobileSchedule === 'boolean') return access.mobileSchedule;
+  return true;
+}
+
+export function canUseMobileWorkouts(session: SessionLike): boolean {
+  const access = resolveSchoolProductAccess(session);
+  if (typeof access.mobileWorkouts === 'boolean') return access.mobileWorkouts;
+  return true;
 }
 
 export function canUseClientManagement(session: SessionLike): boolean {

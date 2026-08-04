@@ -35,7 +35,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       ? await withTimeout(
           getSchoolProductAccess(selectedSchool),
           3_000,
-          { dashboard: true, programming: canUseProgrammingData(session), clientManagement: canUseClientManagement(session) }
+          { dashboard: true, programming: canUseProgrammingData(session), clientManagement: canUseClientManagement(session), mobileSchedule: true, mobileWorkouts: true }
         )
       : null;
   const canAccessProgramming = session.role === 'admin' ? schoolAccess?.programming === true : canUseProgrammingData(session);

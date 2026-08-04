@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { getSessionFromRequest } from '../../../../lib/auth';
 import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
+import { canUseMobileSchedule, canUseMobileWorkouts, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
@@ -24,6 +25,10 @@ export async function GET(request: Request) {
     apps: session.apps,
   });
 
+  const schoolCode = resolveProgrammingSchoolCode(session);
+  const mobileScheduleEnabled = canUseMobileSchedule({ ...session, dashboardSchoolCode: schoolCode });
+  const mobileWorkoutsEnabled = canUseMobileWorkouts({ ...session, dashboardSchoolCode: schoolCode });
+
   return NextResponse.json({
     authenticated: true,
     userId: session.userId ?? null,
@@ -34,5 +39,7 @@ export async function GET(request: Request) {
     playerId: session.playerId ?? null,
     dashboardSchoolCode: session.dashboardSchoolCode ?? null,
     allowedDashboardSchoolCodes,
+    mobileScheduleEnabled,
+    mobileWorkoutsEnabled,
   });
 }

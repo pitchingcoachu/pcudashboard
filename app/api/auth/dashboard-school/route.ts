@@ -5,14 +5,15 @@ import {
   DOMAIN_SESSION_COOKIE_NAME,
   getDomainSessionCookieOptions,
   getSessionCookieOptions,
-  getSessionFromCookies,
+  getSessionFromRequest,
   SESSION_COOKIE_NAME,
 } from '../../../../lib/auth';
 import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
+import { resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const body = (await request.json().catch(() => ({}))) as { schoolCode?: string | null };
@@ -32,6 +33,23 @@ export async function POST(request: Request) {
   });
   const nextSchoolCode = requested && allowed.includes(requested) ? requested : null;
 
+  const isMobileClient = request.headers.get('x-client') === 'mobile';
+
+  // Mobile has no separate "selected school" concept layered on top of the
+  // login org the way web does (dashboardSchoolCode alone) -- switching
+  // schools on mobile re-scopes the ENTIRE session by changing
+  // organizationId itself, since every mobile-facing route already reads
+  // session.organizationId directly. Web's cookie-based flow is unchanged:
+  // it never touches organizationId, only dashboardSchoolCode.
+  let nextOrganizationId = session.organizationId;
+  if (isMobileClient && nextSchoolCode) {
+    const resolved = await resolveOrganizationIdForSchool({
+      schoolCode: nextSchoolCode,
+      fallbackOrganizationId: session.organizationId,
+    });
+    if (resolved > 0) nextOrganizationId = resolved;
+  }
+
   const token = createSessionToken({
     userId: session.userId,
     email: session.email,
@@ -39,10 +57,14 @@ export async function POST(request: Request) {
     apps: session.apps,
     name: session.name,
     role: session.role,
-    organizationId: session.organizationId,
+    organizationId: nextOrganizationId,
     playerId: session.playerId ?? null,
     dashboardSchoolCode: nextSchoolCode,
   });
+
+  if (isMobileClient) {
+    return NextResponse.json({ ok: true, token, schoolCode: nextSchoolCode, organizationId: nextOrganizationId });
+  }
 
   const requestUrl = new URL(request.url);
   const hostname = requestUrl.hostname;
