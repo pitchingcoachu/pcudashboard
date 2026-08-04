@@ -9,7 +9,7 @@ import {
   SESSION_COOKIE_NAME,
 } from '../../../../lib/auth';
 import { resolveSessionDashboardSchoolOptions } from '../../../../lib/dashboard-school-options';
-import { resolveOrganizationIdForSchool } from '../../../../lib/training-db';
+import { getLoginOrganizationIdForUser, resolveOrganizationIdForSchool } from '../../../../lib/training-db';
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
@@ -43,11 +43,18 @@ export async function POST(request: Request) {
   // it never touches organizationId, only dashboardSchoolCode.
   let nextOrganizationId = session.organizationId;
   if (isMobileClient && nextSchoolCode) {
-    const resolved = await resolveOrganizationIdForSchool({
-      schoolCode: nextSchoolCode,
-      fallbackOrganizationId: session.organizationId,
-    });
+    // No fallbackOrganizationId here on purpose: passing the caller's own org
+    // lets resolveOrganizationIdForSchool short-circuit onto it whenever its
+    // name loosely contains the school code (e.g. a personal org named "LSU
+    // Organization" would hijack a switch to the real "LSU" org). Omitting it
+    // forces an exact-name match against the real school org.
+    const resolved = await resolveOrganizationIdForSchool({ schoolCode: nextSchoolCode });
     if (resolved > 0) nextOrganizationId = resolved;
+  } else if (isMobileClient && !nextSchoolCode) {
+    // Switching back to "My Organization" -- restore the real login org, not
+    // whatever org a previous school switch left in session.organizationId.
+    const loginOrganizationId = await getLoginOrganizationIdForUser(session.userId ?? 0);
+    if (loginOrganizationId > 0) nextOrganizationId = loginOrganizationId;
   }
 
   const token = createSessionToken({

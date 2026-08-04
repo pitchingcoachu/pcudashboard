@@ -1978,6 +1978,17 @@ function orgNameLikelyMatchesSchoolCode(orgName: string, schoolCode: string): bo
   return false;
 }
 
+export async function getLoginOrganizationIdForUser(userId: number): Promise<number> {
+  if (!isDatabaseConfigured() || !Number.isFinite(userId) || userId <= 0) return 0;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ organization_id: number | null }>(
+    `SELECT organization_id FROM auth_users WHERE id = $1 LIMIT 1`,
+    [userId]
+  );
+  return Number(result.rows[0]?.organization_id ?? 0) || 0;
+}
+
 export async function resolveOrganizationIdForSchool(input: {
   schoolCode: string;
   fallbackOrganizationId?: number;
