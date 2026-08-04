@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../../lib/auth';
 import { resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveSchoolScopedOrganizationId } from '../../../../../lib/programming-scope';
 import { ensureTrainingDbReady } from '../../../../../lib/training-db';
@@ -73,9 +73,9 @@ declare global {
   var __dashboardCustomTablesSchemaReady: boolean | undefined;
 }
 
-async function getSession(): Promise<PortalSession | null> {
+async function getSession(request: Request): Promise<PortalSession | null> {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return null;
   const role: PortalSession['role'] =
     session.role === 'player' ? 'player' : session.role === 'coach' ? 'coach' : 'admin';
@@ -248,8 +248,8 @@ async function ensureDashboardCustomTableSchemaBestEffort(pool: Pool): Promise<v
   }
 }
 
-export async function GET() {
-  const session = await getSession();
+export async function GET(request: Request) {
+  const session = await getSession(request);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
@@ -363,7 +363,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const session = await getSession();
+  const session = await getSession(request);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);
@@ -524,7 +524,7 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const session = await getSession();
+  const session = await getSession(request);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   await ensureTrainingDbReady();
   const schoolCode = resolveDashboardSchoolCode(session);

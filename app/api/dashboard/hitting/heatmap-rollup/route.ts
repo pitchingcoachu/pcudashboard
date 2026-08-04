@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../../lib/auth';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
 
 export const maxDuration = 120;
@@ -50,7 +50,7 @@ function isValidPitchType(value: unknown): boolean {
 const VALID_PITCH_TYPE_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_type), ''), 'undefined')), '[^a-z0-9]', '', 'g') NOT IN ('', 'unknown', 'undefined', 'other', 'untagged', 'na', 'none', 'null')";
 
 export async function GET(request: Request) {
-  const session = getSessionFromCookies(await cookies());
+  const session = getSessionFromRequest(request, await cookies());
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!isDatabaseConfigured()) return NextResponse.json({ error: 'DATABASE_URL is not configured.' }, { status: 500 });
   await ensureAuthDbReady();

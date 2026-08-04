@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
-import { getSessionFromCookies } from '../../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../../lib/auth';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../../../lib/league-team-name-map';
 
@@ -94,7 +94,7 @@ function maybeTeamCode(value: string): string {
 }
 
 export async function GET(request: Request) {
-  const session = getSessionFromCookies(await cookies());
+  const session = getSessionFromRequest(request, await cookies());
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!isDatabaseConfigured()) return NextResponse.json({ error: 'DATABASE_URL is not configured.' }, { status: 500 });
   await ensureAuthDbReady();
