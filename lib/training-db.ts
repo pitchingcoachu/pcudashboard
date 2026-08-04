@@ -641,6 +641,16 @@ export async function ensureTrainingDbReady(): Promise<void> {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_player_created ON player_media (player_id, created_at DESC);`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_player_media_org_player_category ON player_media (organization_id, player_id, lower(category));`);
     await pool.query(`
+    CREATE TABLE IF NOT EXISTS note_media (
+      id BIGSERIAL PRIMARY KEY,
+      note_id BIGINT NOT NULL REFERENCES player_plan_notes(id) ON DELETE CASCADE,
+      media_id BIGINT NOT NULL REFERENCES player_media(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_note_media_unique ON note_media (note_id, media_id);`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_note_media_note ON note_media (note_id);`);
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS dashboard_player_notes (
       id BIGSERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -7231,7 +7241,7 @@ export async function createPlayerPlanNote(input: {
   sourceId?: string;
   playerVisible?: boolean;
   createdByUserId: number;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true; id: number } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
@@ -7255,7 +7265,7 @@ export async function createPlayerPlanNote(input: {
     return { ok: false, error: 'Attachments are too large. Please keep uploads under about 45 MB total.' };
   }
 
-  await pool.query(
+  const result = await pool.query<{ id: number }>(
     `
       INSERT INTO player_plan_notes (
         player_id,
@@ -7272,6 +7282,7 @@ export async function createPlayerPlanNote(input: {
         created_by_user_id
       )
       VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING id
     `,
     [
       input.playerId,
@@ -7289,7 +7300,85 @@ export async function createPlayerPlanNote(input: {
     ]
   );
 
-  return { ok: true };
+  return { ok: true, id: result.rows[0]?.id ?? 0 };
+}
+
+export async function linkMediaToNote(input: { noteId: number; mediaIds: number[] }): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const mediaIds = Array.from(new Set(input.mediaIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
+  if (mediaIds.length === 0) return;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const values = mediaIds.map((_, index) => `($1, $${index + 2})`).join(', ');
+  await pool.query(
+    `INSERT INTO note_media (note_id, media_id) VALUES ${values} ON CONFLICT DO NOTHING`,
+    [input.noteId, ...mediaIds]
+  );
+}
+
+export async function listMediaForNotes(noteIds: number[]): Promise<Map<number, PlayerMediaRow[]>> {
+  const ids = Array.from(new Set(noteIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
+  const byNote = new Map<number, PlayerMediaRow[]>();
+  if (!isDatabaseConfigured() || ids.length === 0) return byNote;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    note_id: number;
+    id: number;
+    organization_id: number;
+    player_id: number;
+    media_type: string;
+    title: string;
+    category: string;
+    file_name: string;
+    content_type: string;
+    size_bytes: string;
+    r2_key: string;
+    source_type: string | null;
+    source_label: string | null;
+    breakdown_annotations_json: unknown;
+    created_at: string;
+    updated_at: string;
+    created_by_user_id: number | null;
+  }>(
+    `
+      SELECT
+        nm.note_id,
+        m.id, m.organization_id, m.player_id, m.media_type, m.title, m.category,
+        m.file_name, m.content_type, m.size_bytes, m.r2_key, m.source_type, m.source_label,
+        m.breakdown_annotations_json, m.created_at::text, m.updated_at::text, m.created_by_user_id
+      FROM note_media nm
+      JOIN player_media m ON m.id = nm.media_id
+      WHERE nm.note_id = ANY($1::bigint[])
+      ORDER BY m.created_at ASC
+    `,
+    [ids]
+  );
+  for (const row of result.rows) {
+    const mediaType = row.media_type === 'photo' || row.media_type === 'video' || row.media_type === 'pdf' ? row.media_type : 'photo';
+    const media: PlayerMediaRow = {
+      id: row.id,
+      organizationId: row.organization_id,
+      playerId: row.player_id,
+      mediaType,
+      title: row.title,
+      category: row.category,
+      fileName: row.file_name,
+      contentType: row.content_type,
+      sizeBytes: Number(row.size_bytes ?? '0') || 0,
+      r2Key: row.r2_key,
+      sourceType: row.source_type,
+      sourceLabel: row.source_label,
+      breakdownAnnotations: Array.isArray(row.breakdown_annotations_json) ? row.breakdown_annotations_json : [],
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      createdByUserId: row.created_by_user_id,
+    };
+    const list = byNote.get(row.note_id) ?? [];
+    list.push(media);
+    byNote.set(row.note_id, list);
+  }
+  return byNote;
 }
 
 export async function updatePlayerPlanNote(input: {

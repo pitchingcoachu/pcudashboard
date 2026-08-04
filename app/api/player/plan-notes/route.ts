@@ -10,6 +10,8 @@ import {
   createPlayerPlanNote,
   getPlayerByIdInOrganization,
   getPlayerForUser,
+  linkMediaToNote,
+  listMediaForNotes,
   listPlayerPlanNoteCategoriesByOrganization,
   listDashboardPlayerNotes,
   listDashboardPlayerNotesByOrganization,
@@ -18,7 +20,13 @@ import {
   recordPortalActivityEvent,
   updateDashboardPlayerNote,
   updatePlayerPlanNote,
+  type PlayerPlanNoteRow,
 } from '../../../../lib/training-db';
+
+async function withNoteAttachments(notes: PlayerPlanNoteRow[]) {
+  const mediaByNote = await listMediaForNotes(notes.map((note) => note.id));
+  return notes.map((note) => ({ ...note, attachments: mediaByNote.get(note.id) ?? [] }));
+}
 
 function withAuthorPrefix(rawText: string, authorName: string): string {
   const body = String(rawText ?? '').trim();
@@ -152,10 +160,11 @@ export async function GET(request: Request) {
 
   const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
-  const [notes, categories] = await Promise.all([
+  const [rawNotes, categories] = await Promise.all([
     listPlayerPlanNotesForPlayer({ organizationId, playerId: allowed.playerId, domain: normalizedDomain }),
     listPlayerPlanNoteCategoriesByOrganization({ organizationId, domain: normalizedDomain }),
   ]);
+  const notes = await withNoteAttachments(rawNotes);
   return NextResponse.json({ notes, categories });
 }
 
@@ -178,6 +187,9 @@ export async function POST(request: Request) {
   const attachmentMimeType = String(body.attachmentMimeType ?? '');
   const attachmentDataUrl = String(body.attachmentDataUrl ?? '');
   const playerVisible = Boolean(body.playerVisible);
+  const mediaIds = Array.isArray(body.mediaIds)
+    ? body.mediaIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+    : [];
   const authoredNoteText = withAuthorPrefix(noteText, String(session.name ?? session.email ?? '').trim());
 
   if (domain !== 'Pitching' && domain !== 'Hitting' && domain !== 'Catching' && domain !== 'General') {
@@ -243,6 +255,7 @@ export async function POST(request: Request) {
     createdByUserId: session.userId ?? 0,
   });
   if (!created.ok) return NextResponse.json({ error: created.error }, { status: 400 });
+  if (mediaIds.length > 0) await linkMediaToNote({ noteId: created.id, mediaIds });
   const player = await getPlayerByIdInOrganization({ organizationId, playerId: allowed.playerId });
   await recordNoteNotification(request, {
     session,
@@ -253,10 +266,11 @@ export async function POST(request: Request) {
     category,
   });
 
-  const [notes, categories] = await Promise.all([
+  const [rawNotes, categories] = await Promise.all([
     listPlayerPlanNotesForPlayer({ organizationId, playerId: allowed.playerId, domain }),
     listPlayerPlanNoteCategoriesByOrganization({ organizationId, domain }),
   ]);
+  const notes = await withNoteAttachments(rawNotes);
   return NextResponse.json({ ok: true, notes, categories });
 }
 
