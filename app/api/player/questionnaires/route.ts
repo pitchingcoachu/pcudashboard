@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
-import { getSessionFromCookies } from '../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../lib/auth';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolveProgrammingOrganizationId } from '../../../../lib/programming-scope';
@@ -11,7 +11,7 @@ import {
   saveQuestionnaireResponse,
 } from '../../../../lib/training-db';
 
-async function resolvePlayerId(session: NonNullable<ReturnType<typeof getSessionFromCookies>>, requestedPlayerId: number | null) {
+async function resolvePlayerId(session: NonNullable<ReturnType<typeof getSessionFromRequest>>, requestedPlayerId: number | null) {
   const organizationId = resolveProgrammingOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) return 0;
   if (session.role === 'player') {
@@ -29,7 +29,7 @@ async function resolvePlayerId(session: NonNullable<ReturnType<typeof getSession
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const organizationId = resolveProgrammingOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) return NextResponse.json({ pending: [] });
@@ -45,7 +45,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const cookieStore = await cookies();
-  const session = getSessionFromCookies(cookieStore);
+  const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const organizationId = resolveProgrammingOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
