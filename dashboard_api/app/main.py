@@ -16189,7 +16189,7 @@ PRO_MLB_ONLY_TEAM_CODES: List[str] = sorted(set(PRO_MLB_TEAM_CODES) - set(PRO_TE
 PRO_AAA_ONLY_TEAM_CODES: List[str] = sorted(set(PRO_AAA_TEAM_CODES) - set(PRO_TEAM_CODE_OVERLAP))
 PRO_LEVEL_OPTIONS = ["All", "MLB", "AAA"]
 COLLEGE_DEFAULT_LEVEL_OPTIONS = ["All", "D1", "D2", "D3", "NAIA", "JUCO"]
-LEAGUE_FILTERS_LEVEL_OPTIONS_VERSION = "league-level-options-v2"
+LEAGUE_FILTERS_LEVEL_OPTIONS_VERSION = "league-level-options-v3"
 
 
 def _league_filters_snapshot_level(level_bucket: str) -> str:
@@ -20104,7 +20104,7 @@ def pitching_filters(
         f"pitching_filters:{level_norm}"
         if school_code == "PRO"
         else (
-            f"pitching_filters:league_level_v2:{level_norm}"
+            f"pitching_filters:league_level_v3:{level_norm}"
             if school_code == "LEAGUE"
             else "pitching_filters:league_v2_ball_types_v1"
         ),
@@ -20188,6 +20188,23 @@ def pitching_filters(
                     if school_code == "LEAGUE"
                     else "school_code = %(school_code)s"
                 )
+                rollup_level_where = (
+                    "(%(level_bucket_filter)s::text = 'All' "
+                    "OR UPPER(COALESCE(NULLIF(TRIM(level_bucket), ''), 'UNKNOWN')) = %(level_bucket_filter)s::text)"
+                    if school_code == "LEAGUE"
+                    else "TRUE"
+                )
+                raw_level_where = (
+                    _college_level_where_sql("pe")
+                    if school_code == "LEAGUE"
+                    else "TRUE"
+                )
+                rollup_filtered_where = f"{rollup_school_where} AND {rollup_level_where}"
+                filter_query_params = {
+                    "school_code": school_code,
+                    "level_bucket_filter": level_norm,
+                    "college_level_filter": level_norm,
+                }
                 if school_code == "LEAGUE":
                     cur.execute(
                         (
@@ -20208,10 +20225,10 @@ def pitching_filters(
                       MIN(session_date)::text AS min_date,
                       MAX(session_date)::text AS max_date
                     FROM public.pitch_events_daily_rollup_league
-                    WHERE """ + rollup_school_where + """
+                    WHERE """ + rollup_filtered_where + """
                     """
                     ),
-                    {"school_code": school_code},
+                    filter_query_params,
                 )
                 date_row = cur.fetchone() or {}
                 # Rollup snapshots can lag live ingest; keep date bounds current from raw rows.
@@ -20222,11 +20239,12 @@ def pitching_filters(
                     SELECT
                       MIN(session_date)::text AS raw_min_date,
                       MAX(session_date)::text AS raw_max_date
-                    FROM public.pitch_events
+                    FROM public.pitch_events pe
                     WHERE """ + raw_school_where + """
+                      AND """ + raw_level_where + """
                     """
                     ),
-                    {"school_code": school_code},
+                    filter_query_params,
                 )
                 raw_date_row = cur.fetchone() or {}
                 rollup_min = str(date_row.get("min_date") or "")
@@ -20244,12 +20262,12 @@ def pitching_filters(
                     """
                     SELECT DISTINCT NULLIF(TRIM(pitcher_name), '') AS pitcher
                     FROM public.pitch_events_daily_rollup_league
-                    WHERE """ + rollup_school_where + """
+                    WHERE """ + rollup_filtered_where + """
                       AND NULLIF(TRIM(pitcher_name), '') IS NOT NULL
                     ORDER BY pitcher ASC
                     """
                     ),
-                    {"school_code": school_code},
+                    filter_query_params,
                 )
                 pitchers = [str(row["pitcher"]) for row in cur.fetchall()]
 
@@ -20258,12 +20276,12 @@ def pitching_filters(
                     """
                     SELECT DISTINCT NULLIF(TRIM(batter_name), '') AS opp_hitter
                     FROM public.pitch_events_daily_rollup_league
-                    WHERE """ + rollup_school_where + """
+                    WHERE """ + rollup_filtered_where + """
                       AND NULLIF(TRIM(batter_name), '') IS NOT NULL
                     ORDER BY opp_hitter ASC
                     """
                     ),
-                    {"school_code": school_code},
+                    filter_query_params,
                 )
                 opp_hitters = [str(row["opp_hitter"]) for row in cur.fetchall()]
 
@@ -20288,12 +20306,12 @@ def pitching_filters(
                           ELSE 99
                         END AS pitch_sort
                       FROM public.pitch_events_daily_rollup_league
-                      WHERE """ + rollup_school_where + """
+                      WHERE """ + rollup_filtered_where + """
                     ) t
                     ORDER BY t.pitch_sort ASC, t.pitch_type ASC
                     """
                     ),
-                    {"school_code": school_code},
+                    filter_query_params,
                 )
                 pitch_types = [str(row["pitch_type"]) for row in cur.fetchall() if str(row["pitch_type"]) != "Undefined"]
                 if school_code not in {"LEAGUE", "PRO"}:
@@ -20331,19 +20349,19 @@ def pitching_filters(
                         CASE WHEN UPPER(NULLIF(TRIM(level_bucket), '')) = 'USA BASEBALL' THEN 'USABASEBALL'
                              ELSE NULLIF(TRIM(pitcher_team_norm), '') END AS team_code
                       FROM public.pitch_events_daily_rollup_league
-                      WHERE """ + rollup_school_where + """
+                      WHERE """ + rollup_filtered_where + """
                       UNION
                       SELECT DISTINCT
                         CASE WHEN UPPER(NULLIF(TRIM(level_bucket), '')) = 'USA BASEBALL' THEN 'USABASEBALL'
                              ELSE NULLIF(TRIM(batter_team_norm_eff), '') END AS team_code
                       FROM public.pitch_events_daily_rollup_league
-                      WHERE """ + rollup_school_where + """
+                      WHERE """ + rollup_filtered_where + """
                     ) t
                     WHERE team_code IS NOT NULL
                     ORDER BY team_code
                     """
                     ),
-                    {"school_code": school_code},
+                    filter_query_params,
                 )
                 team_codes = [str(row["team_code"]) for row in cur.fetchall() if str(row.get("team_code") or "").strip()]
                 if school_code == "LEAGUE":
@@ -20371,14 +20389,14 @@ def pitching_filters(
                         """ + usa_baseball_case_sql + """ AS team_code,
                         NULLIF(TRIM(pitcher_name), '') AS name
                       FROM public.pitch_events_daily_rollup_league
-                      WHERE """ + rollup_school_where + """
+                      WHERE """ + rollup_filtered_where + """
                     ) t
                     WHERE team_code IS NOT NULL AND name IS NOT NULL
                     GROUP BY team_code
                     ORDER BY team_code
                     """
                     ),
-                    {"school_code": school_code},
+                    filter_query_params,
                 )
                 pitchers_by_team_code = {
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]
@@ -20396,14 +20414,14 @@ def pitching_filters(
                         """ + usa_baseball_case_sql + """ AS team_code,
                         NULLIF(TRIM(batter_name), '') AS name
                       FROM public.pitch_events_daily_rollup_league
-                      WHERE """ + rollup_school_where + """
+                      WHERE """ + rollup_filtered_where + """
                     ) t
                     WHERE team_code IS NOT NULL AND name IS NOT NULL
                     GROUP BY team_code
                     ORDER BY team_code
                     """
                     ),
-                    {"school_code": school_code},
+                    filter_query_params,
                 )
                 opp_hitters_by_team_code = {
                     str(row["team_code"]): [str(name) for name in (row.get("names") or []) if str(name).strip()]

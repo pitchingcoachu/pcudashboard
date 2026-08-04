@@ -11,7 +11,7 @@ const RESPONSE_CACHE_HEADERS = {
   vary: 'Cookie',
 } as const;
 const SLOW_ROUTE_MS = 2500;
-const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'pcu-roster-2026-07-20-bates-v1';
+const PITCHING_FILTERS_ROSTER_CACHE_VERSION = 'league-level-filtering-2026-08-03-v1';
 
 function resolveFiltersTimeoutMs(schoolCode: string): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();

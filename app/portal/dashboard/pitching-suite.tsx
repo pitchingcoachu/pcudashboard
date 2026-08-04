@@ -45,7 +45,7 @@ type FiltersPayload = {
 
 type OptionItem = { value: string; label: string; disabled?: boolean };
 
-const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'pcu-roster-2026-07-17-league-level-v2';
+const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'league-level-filtering-2026-08-03-v1';
 const PRO_LEVEL_FILTER_OPTIONS = ['All', 'MLB', 'AAA'];
 const NCAA_LEVEL_FILTER_OPTIONS = ['All', 'D1', 'D2', 'D3', 'NAIA', 'JUCO'];
 const DEFAULT_COLLEGE_PERCENTILE_SCOPE = 'D1';
