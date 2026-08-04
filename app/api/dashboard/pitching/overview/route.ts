@@ -1196,6 +1196,7 @@ export async function GET(request: Request) {
   const isTeamSplit = splitBy === 'Team' || splitBy === 'Pitcher Team';
   const isLeaderboardLikeSplit = splitBy === 'Pitcher' || isTeamSplit;
   const normalizedTableMode = tableMode.toLowerCase();
+  const leaguePitchTypesShortcutSupportsSelectedMode = !normalizedTableMode || normalizedTableMode === 'live';
   const proLeaderboardDefaultModeRequested = !normalizedTableMode || normalizedTableMode === 'live';
   const leagueLeaderboardDefaultModeRequested = !normalizedTableMode || normalizedTableMode === 'live';
   const customModeRequested = tableMode.toLowerCase() === 'custom' || customColumns.length > 0;
@@ -1348,6 +1349,10 @@ export async function GET(request: Request) {
     broadScope &&
     daySpan >= 14 &&
     splitBy === 'Pitch Types' &&
+    // The local pitch-type shortcut has a fixed Live table shape. Other table
+    // modes must continue to the mode-aware league daily rollup so the selected
+    // columns are preserved for broad/full-season requests.
+    leaguePitchTypesShortcutSupportsSelectedMode &&
     !includeChartsRequested &&
     !isTruthy(chartOnly) &&
     !hasValue(withVideo) &&
