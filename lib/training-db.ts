@@ -7640,7 +7640,7 @@ export async function createPlayerMedia(input: {
   sourceType?: string;
   sourceLabel?: string;
   createdByUserId: number;
-}): Promise<{ ok: true; id: number } | { ok: false; error: string }> {
+}): Promise<{ ok: true; id: number; media: PlayerMediaRow } | { ok: false; error: string }> {
   if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
   await ensureTrainingDbReady();
   const pool = getDbPool();
@@ -7651,7 +7651,24 @@ export async function createPlayerMedia(input: {
     input.organizationId,
   ]);
   if ((playerCheck.rowCount ?? 0) !== 1) return { ok: false, error: 'Player not found in your organization.' };
-  const result = await pool.query<{ id: number }>(
+  const result = await pool.query<{
+    id: number;
+    organization_id: number;
+    player_id: number;
+    media_type: string;
+    title: string;
+    category: string;
+    file_name: string;
+    content_type: string;
+    size_bytes: string | number;
+    r2_key: string;
+    source_type: string | null;
+    source_label: string | null;
+    breakdown_annotations_json: unknown;
+    created_at: string;
+    updated_at: string;
+    created_by_user_id: number | null;
+  }>(
     `
       INSERT INTO player_media (
         organization_id,
@@ -7668,7 +7685,10 @@ export async function createPlayerMedia(input: {
         created_by_user_id
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING id
+      RETURNING
+        id, organization_id, player_id, media_type, title, category,
+        file_name, content_type, size_bytes, r2_key, source_type, source_label,
+        breakdown_annotations_json, created_at::text, updated_at::text, created_by_user_id
     `,
     [
       input.organizationId,
@@ -7685,7 +7705,27 @@ export async function createPlayerMedia(input: {
       input.createdByUserId,
     ]
   );
-  return { ok: true, id: result.rows[0]?.id ?? 0 };
+  const row = result.rows[0];
+  if (!row) return { ok: false, error: 'Insert did not return the created row.' };
+  const media: PlayerMediaRow = {
+    id: Number(row.id),
+    organizationId: Number(row.organization_id),
+    playerId: Number(row.player_id),
+    mediaType,
+    title: row.title,
+    category: row.category,
+    fileName: row.file_name,
+    contentType: row.content_type,
+    sizeBytes: Number(row.size_bytes ?? 0) || 0,
+    r2Key: row.r2_key,
+    sourceType: row.source_type,
+    sourceLabel: row.source_label,
+    breakdownAnnotations: Array.isArray(row.breakdown_annotations_json) ? row.breakdown_annotations_json : [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdByUserId: row.created_by_user_id,
+  };
+  return { ok: true, id: media.id, media };
 }
 
 export async function updatePlayerMedia(input: {

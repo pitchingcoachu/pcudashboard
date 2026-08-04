@@ -221,8 +221,10 @@ export async function POST(request: Request) {
       listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId }),
       listPlayerMediaCategoriesByOrganization({ organizationId: allowed.organizationId }),
     ]);
-    const createdMedia = media.find((item) => item.id === created.id) ?? null;
-    return NextResponse.json({ ok: true, media, categories, createdMedia });
+    // Build createdMedia directly from the INSERT ... RETURNING row instead
+    // of re-listing and matching by id -- avoids any dependency on this
+    // re-fetch seeing the just-inserted row.
+    return NextResponse.json({ ok: true, media, categories, createdMedia: created.media });
   }
 
   // FormData = direct upload (local dev fallback, no R2)
@@ -286,8 +288,7 @@ export async function POST(request: Request) {
     listPlayerMedia({ organizationId: allowed.organizationId, playerId: allowed.playerId }),
     listPlayerMediaCategoriesByOrganization({ organizationId: allowed.organizationId }),
   ]);
-  const createdMedia = media.find((item) => item.id === created.id) ?? null;
-  return NextResponse.json({ ok: true, media, categories, createdMedia });
+  return NextResponse.json({ ok: true, media, categories, createdMedia: created.media });
 }
 
 // ── DELETE ───────────────────────────────────────────────────────────────────
