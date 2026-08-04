@@ -24,7 +24,7 @@ export async function POST(request: Request) {
 
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/clients');
-    const organizationId = resolveClientManagementOrganizationId(session);
+    const organizationId = await resolveClientManagementOrganizationId(session);
     if (organizationId <= 0) {
       return redirectWithMessage(request, redirectTo, 'error', 'Player management is not enabled for this school.');
     }

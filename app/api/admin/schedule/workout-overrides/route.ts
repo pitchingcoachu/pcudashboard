@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     | null;
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const playerId = Number(body.playerId ?? 0);
   const itemId = Number(body.itemId ?? 0);
   const dayDate = String(body.dayDate ?? '').trim();

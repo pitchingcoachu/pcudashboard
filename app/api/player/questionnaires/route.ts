@@ -12,7 +12,7 @@ import {
 } from '../../../../lib/training-db';
 
 async function resolvePlayerId(session: NonNullable<ReturnType<typeof getSessionFromRequest>>, requestedPlayerId: number | null) {
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) return 0;
   if (session.role === 'player') {
     const ownPlayer = await getPlayerForUser({
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) return NextResponse.json({ pending: [] });
 
   const url = new URL(request.url);
@@ -47,7 +47,7 @@ export async function POST(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
     return NextResponse.json({ error: 'Programming data is not available.' }, { status: 403 });
   }

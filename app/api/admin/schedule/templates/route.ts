@@ -29,7 +29,7 @@ export async function GET() {
   if (!session) return finish(401, { error: 'Unauthorized' });
   if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) {
     return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
     | null;
   if (!body) return finish(400, { error: 'Invalid JSON body.' });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const userId = Number(session.userId ?? 0);
   if (organizationId <= 0 || userId <= 0) {
     return finish(400, { error: 'Session context missing. Please log out and log in again.' });
@@ -98,7 +98,7 @@ export async function DELETE(request: Request) {
     return finish(400, { error: 'templateId is required.' });
   }
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) {
     return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }

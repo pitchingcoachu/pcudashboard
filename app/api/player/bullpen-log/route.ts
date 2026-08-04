@@ -8,7 +8,7 @@ import { getPlayerForUser, playerExistsInOrganization, getBullpenLogEntries, rec
 
 async function resolvePlayerId(session: ReturnType<typeof getSessionFromRequest>, requestedPlayerId: number) {
   if (!session) return null;
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (session.role === 'player') {
     const userId = Number(session.userId ?? 0);
     const ownPlayer = userId > 0 ? await getPlayerForUser({ organizationId, userId }) : null;
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const url = new URL(request.url);
   const requestedPlayerId = Number(url.searchParams.get('playerId') ?? '0');
   const templateId = url.searchParams.get('templateId') ?? undefined;
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const body = (await request.json().catch(() => null)) as {
     playerId?: number;
     templateId?: string;

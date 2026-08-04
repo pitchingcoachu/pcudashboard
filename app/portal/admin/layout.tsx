@@ -30,16 +30,20 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const selectedSchool = resolveDashboardSchoolCode(session);
   const schoolOptions = await withTimeout(resolveSessionDashboardSchoolOptions(session), 3_000, [selectedSchool, 'LEAGUE', 'PRO']);
   const brand = resolveSchoolBrand(selectedSchool);
+  const [programmingDataAllowed, clientManagementAllowed] = await Promise.all([
+    canUseProgrammingData(session),
+    canUseClientManagement(session),
+  ]);
   const schoolAccess =
     session.role === 'admin'
       ? await withTimeout(
           getSchoolProductAccess(selectedSchool),
           3_000,
-          { dashboard: true, programming: canUseProgrammingData(session), clientManagement: canUseClientManagement(session), mobileSchedule: true, mobileWorkouts: true }
+          { dashboard: true, programming: programmingDataAllowed, clientManagement: clientManagementAllowed, mobileSchedule: true, mobileWorkouts: true }
         )
       : null;
-  const canAccessProgramming = session.role === 'admin' ? schoolAccess?.programming === true : canUseProgrammingData(session);
-  const canAccessClientManagement = session.role === 'admin' ? schoolAccess?.clientManagement !== false : canUseClientManagement(session);
+  const canAccessProgramming = session.role === 'admin' ? schoolAccess?.programming === true : programmingDataAllowed;
+  const canAccessClientManagement = session.role === 'admin' ? schoolAccess?.clientManagement !== false : clientManagementAllowed;
   const isProSchool = String(selectedSchool).trim().toUpperCase() === 'PRO';
   const showCoachClientTabs = canAccessClientManagement && !(session.role === 'coach' && isProSchool);
   const useCompactProgrammingNav = canAccessProgramming;

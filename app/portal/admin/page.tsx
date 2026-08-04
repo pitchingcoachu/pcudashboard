@@ -43,27 +43,34 @@ export default async function AdminHomePage() {
     3_000,
     { dashboard: true, programming: false, clientManagement: true, mobileSchedule: true, mobileWorkouts: true }
   );
+  const [clientManagementAllowed, programmingDataAllowed, clientManagementFallbackOrgId, programmingFallbackOrgId] =
+    await Promise.all([
+      canUseClientManagement(session),
+      canUseProgrammingData(session),
+      resolveClientManagementOrganizationId(session),
+      resolveProgrammingOrganizationId(session),
+    ]);
   const canAccessClientManagement =
-    session.role === 'admin' ? schoolAccess.clientManagement : canUseClientManagement(session);
-  const canAccessProgramming = session.role === 'admin' ? schoolAccess.programming : canUseProgrammingData(session);
+    session.role === 'admin' ? schoolAccess.clientManagement : clientManagementAllowed;
+  const canAccessProgramming = session.role === 'admin' ? schoolAccess.programming : programmingDataAllowed;
   const [resolvedClientManagementOrganizationId, resolvedProgrammingOrganizationId] = await Promise.all([
     withTimeout(
       resolveOrganizationIdForSchool({
         schoolCode: programmingSchoolCode,
-        fallbackOrganizationId: resolveClientManagementOrganizationId(session),
+        fallbackOrganizationId: clientManagementFallbackOrgId,
         createIfMissing: false,
       }),
       3_000,
-      resolveClientManagementOrganizationId(session)
+      clientManagementFallbackOrgId
     ),
     withTimeout(
       resolveOrganizationIdForSchool({
         schoolCode: programmingSchoolCode,
-        fallbackOrganizationId: resolveProgrammingOrganizationId(session),
+        fallbackOrganizationId: programmingFallbackOrgId,
         createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
       }),
       3_000,
-      resolveProgrammingOrganizationId(session)
+      programmingFallbackOrgId
     ),
   ]);
   const clientManagementOrganizationId = canAccessClientManagement ? resolvedClientManagementOrganizationId : 0;

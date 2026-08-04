@@ -36,8 +36,8 @@ export default async function ProfilesPage() {
   const [schoolOptions] = await Promise.all([
     withTimeout(resolveSessionDashboardSchoolOptions(session), 3_000, [selectedSchool]),
   ]);
-  const canAccessProgramming = canUseProgrammingData(session);
-  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const canAccessProgramming = await canUseProgrammingData(session);
+  const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
   const assignedCoachUserId = session.role === 'coach' ? session.userId : null;
   const players =
     canAccessProgramming && programmingOrganizationId > 0

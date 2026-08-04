@@ -26,7 +26,7 @@ export async function POST(request: Request) {
 
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/clients');
-    const organizationId = resolveProgrammingOrganizationId(session);
+    const organizationId = await resolveProgrammingOrganizationId(session);
     const userId = session.userId ?? 0;
     if (organizationId <= 0 || userId <= 0) {
       return redirectWithMessage(request, redirectTo, 'error', 'Session context missing. Please log out and log in again.');

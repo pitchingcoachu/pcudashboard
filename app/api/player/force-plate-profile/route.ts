@@ -84,7 +84,7 @@ export async function GET(request: Request) {
   const allowed = await canManagePlayer(session, playerId);
   if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
-  if (!canUseProgrammingData(session) || resolveProgrammingSchoolCode(session) !== 'PCU') {
+  if (!(await canUseProgrammingData(session)) || resolveProgrammingSchoolCode(session) !== 'PCU') {
     return NextResponse.json({
       options: [],
       trendByMetric: {},
@@ -93,7 +93,7 @@ export async function GET(request: Request) {
     });
   }
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
     return NextResponse.json({ error: 'Invalid programming organization.' }, { status: 400 });
   }

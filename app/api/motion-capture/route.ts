@@ -44,7 +44,7 @@ async function resolveAllowedPlayer(
   session: NonNullable<ReturnType<typeof getSessionFromCookies>>,
   requestedPlayerId: number
 ) {
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) return { ok: false as const, status: 403, error: 'No organization is available.' };
 
   if (session.role === 'player') {
@@ -78,9 +78,9 @@ export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!canUseProgrammingData(session)) return NextResponse.json({ error: 'Programming access is required.' }, { status: 403 });
+  if (!(await canUseProgrammingData(session))) return NextResponse.json({ error: 'Programming access is required.' }, { status: 403 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const selectedSchool = resolveApiSchoolCode(session);
   const url = new URL(request.url);
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
@@ -131,7 +131,7 @@ export async function POST(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!canUseProgrammingData(session)) return NextResponse.json({ error: 'Programming access is required.' }, { status: 403 });
+  if (!(await canUseProgrammingData(session))) return NextResponse.json({ error: 'Programming access is required.' }, { status: 403 });
   if (!isMotionCaptureVideoStorageConfigured()) return NextResponse.json({ error: 'Video storage is not configured for uploads.' }, { status: 500 });
 
   const form = await request.formData();
@@ -228,13 +228,13 @@ export async function DELETE(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!canUseProgrammingData(session)) return NextResponse.json({ error: 'Programming access is required.' }, { status: 403 });
+  if (!(await canUseProgrammingData(session))) return NextResponse.json({ error: 'Programming access is required.' }, { status: 403 });
 
   const url = new URL(request.url);
   const throwId = Number(url.searchParams.get('throwId') ?? '0');
   if (!Number.isFinite(throwId) || throwId <= 0) return NextResponse.json({ error: 'Valid throwId is required.' }, { status: 400 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const target = await getMotionCaptureThrowForAccess({ organizationId, throwId });
   if (!target) return NextResponse.json({ error: 'Motion capture throw was not found.' }, { status: 404 });
   const allowed = await canManagePlayer(session, target.playerId);
@@ -248,13 +248,13 @@ export async function PATCH(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!canUseProgrammingData(session)) return NextResponse.json({ error: 'Programming access is required.' }, { status: 403 });
+  if (!(await canUseProgrammingData(session))) return NextResponse.json({ error: 'Programming access is required.' }, { status: 403 });
 
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const throwId = Number(body.throwId ?? 0);
   if (!Number.isFinite(throwId) || throwId <= 0) return NextResponse.json({ error: 'Valid throwId is required.' }, { status: 400 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const target = await getMotionCaptureThrowForAccess({ organizationId, throwId });
   if (!target) return NextResponse.json({ error: 'Motion capture throw was not found.' }, { status: 404 });
   const allowed = await canManagePlayer(session, target.playerId);

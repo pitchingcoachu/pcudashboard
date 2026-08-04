@@ -123,12 +123,12 @@ export async function POST(request: Request) {
     if (isWebMode) {
       const destination =
         normalizedRole === 'player'
-          ? canUseProgrammingData({
+          ? (await canUseProgrammingData({
               role: normalizedRole,
               organizationId: user.organizationId ?? 0,
               email: user.email,
               dashboardSchoolCode: resolvedDashboardSchoolCode,
-            })
+            }))
             ? '/portal/player'
             : '/portal/dashboard?home=1'
           : '/portal/admin';

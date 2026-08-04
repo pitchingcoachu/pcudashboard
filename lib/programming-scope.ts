@@ -259,7 +259,7 @@ export async function getSchoolProductAccess(schoolCode: string): Promise<School
   if (map[normalized]) return map[normalized];
   const fallback = normalizeAccess({
     dashboard: true,
-    programming: parseProgrammingDataSchoolCodes().includes(normalized),
+    programming: normalized === 'TRIAL' || parseProgrammingDataSchoolCodes().includes(normalized),
     clientManagement: true,
     mobileSchedule: true,
     mobileWorkouts: true,
@@ -383,52 +383,49 @@ export function resolveProgrammingSchoolCode(session: SessionLike): string {
   });
 }
 
-function resolveSchoolProductAccess(session: SessionLike): SchoolProductAccess {
+// Always goes through getSchoolProductAccess (which self-warms the cache via
+// refreshSchoolProductAccessCache) rather than reading the raw in-memory
+// cache directly. Reading the raw cache let a cold serverless instance that
+// hadn't yet had *any* async DB-backed read for a given school silently fall
+// back to defaults -- e.g. programming defaulting to PCU-only -- which is
+// why switching to a real school (LSU/OSU/Harvard) could 400 with "Session
+// context missing" while the primary PCU org kept working.
+async function resolveSchoolProductAccess(session: SessionLike): Promise<SchoolProductAccessRecord> {
   const schoolCode = resolveProgrammingSchoolCode(session);
-  const map = getCachedSchoolAccessMap();
-  const fromCache = map[schoolCode];
-  if (fromCache) return fromCache;
-  return {};
+  return getSchoolProductAccess(schoolCode);
 }
 
-export function canUseDashboardData(session: SessionLike): boolean {
-  const access = resolveSchoolProductAccess(session);
-  if (typeof access.dashboard === 'boolean') return access.dashboard;
-  return true;
+export async function canUseDashboardData(session: SessionLike): Promise<boolean> {
+  const access = await resolveSchoolProductAccess(session);
+  return access.dashboard;
 }
 
-export function canUseProgrammingData(session: SessionLike): boolean {
-  const access = resolveSchoolProductAccess(session);
-  if (typeof access.programming === 'boolean') return access.programming;
-  const schoolCode = resolveProgrammingSchoolCode(session);
-  const allowed = parseProgrammingDataSchoolCodes();
-  return schoolCode === 'TRIAL' || allowed.includes(schoolCode);
+export async function canUseProgrammingData(session: SessionLike): Promise<boolean> {
+  const access = await resolveSchoolProductAccess(session);
+  return access.programming;
 }
 
-export function canUseMobileSchedule(session: SessionLike): boolean {
-  const access = resolveSchoolProductAccess(session);
-  if (typeof access.mobileSchedule === 'boolean') return access.mobileSchedule;
-  return true;
+export async function canUseMobileSchedule(session: SessionLike): Promise<boolean> {
+  const access = await resolveSchoolProductAccess(session);
+  return access.mobileSchedule;
 }
 
-export function canUseMobileWorkouts(session: SessionLike): boolean {
-  const access = resolveSchoolProductAccess(session);
-  if (typeof access.mobileWorkouts === 'boolean') return access.mobileWorkouts;
-  return true;
+export async function canUseMobileWorkouts(session: SessionLike): Promise<boolean> {
+  const access = await resolveSchoolProductAccess(session);
+  return access.mobileWorkouts;
 }
 
-export function canUseClientManagement(session: SessionLike): boolean {
+export async function canUseClientManagement(session: SessionLike): Promise<boolean> {
   const schoolCode = resolveProgrammingSchoolCode(session);
   if (schoolCode === 'PRO') return isGlobalAdminSession(session);
-  const access = resolveSchoolProductAccess(session);
-  if (typeof access.clientManagement === 'boolean') return access.clientManagement;
-  return true;
+  const access = await resolveSchoolProductAccess(session);
+  return access.clientManagement;
 }
 
-export function resolveClientManagementOrganizationId(session: SessionLike): number {
-  return canUseClientManagement(session) ? resolveScopedOrganizationIdBySelectedSchool(session) : 0;
+export async function resolveClientManagementOrganizationId(session: SessionLike): Promise<number> {
+  return (await canUseClientManagement(session)) ? resolveScopedOrganizationIdBySelectedSchool(session) : 0;
 }
 
-export function resolveProgrammingOrganizationId(session: SessionLike): number {
-  return canUseProgrammingData(session) ? resolveScopedOrganizationIdBySelectedSchool(session) : 0;
+export async function resolveProgrammingOrganizationId(session: SessionLike): Promise<number> {
+  return (await canUseProgrammingData(session)) ? resolveScopedOrganizationIdBySelectedSchool(session) : 0;
 }

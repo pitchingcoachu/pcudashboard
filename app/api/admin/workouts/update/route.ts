@@ -30,7 +30,7 @@ export async function POST(request: Request) {
       return NextResponse.redirect(new URL('/portal/player', request.url), 303);
     }
 
-    const organizationId = resolveProgrammingOrganizationId(session);
+    const organizationId = await resolveProgrammingOrganizationId(session);
     const userId = session.userId ?? 0;
     if (organizationId <= 0 || userId <= 0) {
       const message = 'Session context missing. Please log out and log in again.';

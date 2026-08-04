@@ -155,11 +155,11 @@ export async function POST(request: Request) {
     scopedHitterName: shouldScopePlayer ? scopedPlayerQueryName(playerIdentity!, 'Hitting') : undefined,
   };
 
-  const programmingEnabled = canUseProgrammingData(session);
+  const programmingEnabled = await canUseProgrammingData(session);
   let programmingContext: ProgrammingSessionContext | null = null;
   let scopedProgrammingPlayerUnresolved = false;
   if (programmingEnabled) {
-    const organizationId = resolveProgrammingOrganizationId(session);
+    const organizationId = await resolveProgrammingOrganizationId(session);
     if (organizationId > 0) {
       let scopedPlayerId: number | undefined;
       if (role === 'player') {

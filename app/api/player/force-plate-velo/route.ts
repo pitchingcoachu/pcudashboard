@@ -68,7 +68,7 @@ export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!canUseProgrammingData(session)) {
+  if (!(await canUseProgrammingData(session))) {
     return NextResponse.json({ error: 'Programming access required.' }, { status: 403 });
   }
   const schoolCode = resolveProgrammingSchoolCode(session);
@@ -87,7 +87,7 @@ export async function GET(request: Request) {
   const selectedSchoolCode = schoolCode;
   let scopedPitcher = '';
   if (session.role === 'player') {
-    const organizationId = resolveProgrammingOrganizationId(session);
+    const organizationId = await resolveProgrammingOrganizationId(session);
     const ownPlayer = await getPlayerForUser({ organizationId, userId: session.userId ?? 0 });
     scopedPitcher = String(ownPlayer?.fullName ?? '').trim();
   }

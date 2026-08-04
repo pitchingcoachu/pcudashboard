@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   const playerId = Number(body.playerId ?? 0);
   const templateId = Number(body.templateId ?? 0);
   const startDate = parseDate(String(body.startDate ?? ''));
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const userId = Number(session.userId ?? 0);
 
   if (organizationId <= 0 || userId <= 0) {

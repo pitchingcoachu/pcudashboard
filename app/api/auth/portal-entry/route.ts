@@ -78,12 +78,12 @@ export async function GET(request: Request) {
   const isPcuSchool = selectedSchoolCode === 'PCU';
   const destination = isPcuSchool
     ? session.role === 'player'
-      ? canUseProgrammingData({
+      ? (await canUseProgrammingData({
           role: session.role,
           organizationId: session.organizationId ?? 0,
           email: session.email,
           dashboardSchoolCode: normalizedHome || session.dashboardSchoolCode || null,
-        })
+        }))
         ? '/portal/player'
         : '/portal/dashboard?home=1'
       : '/portal/admin'

@@ -73,8 +73,8 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
   const session = await requirePortalSession();
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
-  const canAccessDashboard = canUseDashboardData(session);
-  const canAccessProgramming = canUseProgrammingData(session);
+  const canAccessDashboard = await canUseDashboardData(session);
+  const canAccessProgramming = await canUseProgrammingData(session);
 
   const isProSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'PRO';
 

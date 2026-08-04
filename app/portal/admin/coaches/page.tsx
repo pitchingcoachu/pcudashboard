@@ -29,7 +29,7 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 export default async function AdminCoachesPage({ searchParams }: CoachPageProps) {
   const session = await requirePortalSession();
   if (session.role !== 'admin') notFound();
-  const canAccessClientManagement = canUseClientManagement(session);
+  const canAccessClientManagement = await canUseClientManagement(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const isTrialSchool = programmingSchoolCode === 'TRIAL';
   const clientManagementOrganizationId = isTrialSchool

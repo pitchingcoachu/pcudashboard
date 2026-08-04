@@ -12,7 +12,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const coaches = await listCoachesByOrganization(organizationId);
   return NextResponse.json({
     coaches: coaches.map((coach) => ({ userId: coach.userId, name: coach.name, role: coach.role })),

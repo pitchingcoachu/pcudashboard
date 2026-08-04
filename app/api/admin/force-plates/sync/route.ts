@@ -9,7 +9,7 @@ export async function POST(request: Request) {
   const session = getSessionFromCookies(cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  if (!canUseProgrammingData(session)) {
+  if (!(await canUseProgrammingData(session))) {
     return NextResponse.json({ error: 'Programming access required.' }, { status: 403 });
   }
   const schoolCode = resolveProgrammingSchoolCode(session);
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Force Plate Sync is enabled only for PCU.' }, { status: 400 });
   }
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) {
     return NextResponse.json({ error: 'Invalid programming organization.' }, { status: 400 });
   }

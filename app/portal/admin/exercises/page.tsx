@@ -16,7 +16,7 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 
 export default async function AdminExercisesPage({ searchParams }: ExercisePageProps) {
   const session = await requirePortalSession();
-  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const [exercises, categories] = await Promise.all([
     programmingOrganizationId > 0 ? listExercisesByOrganization(programmingOrganizationId) : Promise.resolve([]),

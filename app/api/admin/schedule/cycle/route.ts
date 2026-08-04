@@ -33,7 +33,7 @@ export async function GET(request: Request) {
   const allowed = await canManagePlayer(session, playerId);
   if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) {
     return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });
   }
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
     | null;
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const userId = session.userId ?? 0;
   const playerId = Number(body.playerId ?? 0);
   const workoutId = Number(body.workoutId ?? 0);
@@ -94,7 +94,7 @@ export async function PATCH(request: Request) {
     | null;
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const playerId = Number(body.playerId ?? 0);
   const itemId = Number(body.itemId ?? 0);
   const cycleSlot = parseCycleSlot(String(body.cycleSlot ?? ''));
@@ -126,7 +126,7 @@ export async function DELETE(request: Request) {
     | null;
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const playerId = Number(body.playerId ?? 0);
   const itemId = Number(body.itemId ?? 0);
   if (organizationId <= 0 || !Number.isFinite(playerId) || playerId <= 0 || !Number.isFinite(itemId) || itemId <= 0) {

@@ -65,11 +65,11 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
   const session = await requirePortalSession();
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const selectedSchool = resolveDashboardSchoolCode(session);
-  const canAccessProgramming = canUseProgrammingData(session);
+  const canAccessProgramming = await canUseProgrammingData(session);
   if (session.role === 'player' && !canAccessProgramming) {
     redirect('/portal/dashboard');
   }
-  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const params = await searchParams;
 

@@ -333,7 +333,7 @@ export async function GET(request: Request) {
   if (!session) return finish(401, { error: 'Unauthorized' });
   if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) return finish(400, { error: 'Session context missing. Please log out and log in again.' });
 
   const url = new URL(request.url);
@@ -453,7 +453,7 @@ export async function POST(request: Request) {
   if (!session) return finish(401, { error: 'Unauthorized' });
   if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const userId = Number(session.userId ?? 0);
   if (organizationId <= 0 || userId <= 0) {
     return finish(400, { error: 'Session context missing. Please log out and log in again.' });

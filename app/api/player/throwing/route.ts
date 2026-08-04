@@ -167,7 +167,7 @@ export async function GET(request: Request) {
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ error: 'Session context missing.' }, { status: 400 });
 
   const url = new URL(request.url);

@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       return redirectWithMessage(request, redirectTo, 'error', 'Exercise ID is required.');
     }
 
-    const organizationId = resolveProgrammingOrganizationId(session);
+    const organizationId = await resolveProgrammingOrganizationId(session);
     if (organizationId <= 0) {
       if (wantsJson) {
         return NextResponse.json(

@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   const playerId = Number(body.playerId ?? 0);
   const dayDate = parseDate(String(body.dayDate ?? ''));
   const orderedItemIds = Array.isArray(body.orderedItemIds) ? body.orderedItemIds.map((value) => Number(value)) : [];
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
 
   if (organizationId <= 0) {
     return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });

@@ -20,7 +20,7 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 export default async function EditExercisePage({ params, searchParams }: EditExercisePageProps) {
   const session = await requirePortalSession();
   if (session.role === 'player') notFound();
-  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   if (programmingOrganizationId <= 0) {
     return (

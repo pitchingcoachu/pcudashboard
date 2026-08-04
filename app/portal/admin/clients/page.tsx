@@ -29,12 +29,12 @@ function parsePositiveInt(value: string | string[] | undefined, fallback: number
 export default async function AdminClientsPage({ searchParams }: ClientPageProps) {
   const session = await requirePortalSession();
   if (session.role === 'player') notFound();
-  const canAccessClientManagement = canUseClientManagement(session);
-  const canAccessProgramming = canUseProgrammingData(session);
+  const canAccessClientManagement = await canUseClientManagement(session);
+  const canAccessProgramming = await canUseProgrammingData(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const clientManagementOrganizationId = await resolveOrganizationIdForSchool({
     schoolCode: programmingSchoolCode,
-    fallbackOrganizationId: resolveClientManagementOrganizationId(session),
+    fallbackOrganizationId: await resolveClientManagementOrganizationId(session),
     createIfMissing: false,
   });
 

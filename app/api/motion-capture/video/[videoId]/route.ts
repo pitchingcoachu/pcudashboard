@@ -35,7 +35,7 @@ export async function GET(
   const videoId = Number(rawVideoId ?? '0');
   if (!Number.isFinite(videoId) || videoId <= 0) return NextResponse.json({ error: 'Invalid video id.' }, { status: 400 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const video = await getMotionCaptureVideoForAccess({ organizationId, videoId });
   if (!video) return NextResponse.json({ error: 'Video not found.' }, { status: 404 });
   const allowed = await canManagePlayer(session, video.playerId);

@@ -9,7 +9,7 @@ async function resolveAllowedPlayerId(session: { role?: string; organizationId?:
   if (!session) return { ok: false as const, status: 401, error: 'Unauthorized' };
 
   if (session.role === 'player') {
-    const organizationId = resolveProgrammingOrganizationId(session);
+    const organizationId = await resolveProgrammingOrganizationId(session);
     const ownPlayer = await getPlayerForUser({
       organizationId,
       userId: session.userId ?? 0,
@@ -21,7 +21,7 @@ async function resolveAllowedPlayerId(session: { role?: string; organizationId?:
 
   const allowed = await canManagePlayer(session as { role?: 'admin' | 'coach' | 'player'; organizationId?: number; userId?: number; playerId?: number | null }, requestedPlayerId);
   if (!allowed) return { ok: false as const, status: 403, error: 'Forbidden' };
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const player = await getPlayerByIdInOrganization({
     organizationId,
     playerId: requestedPlayerId,
@@ -44,7 +44,7 @@ export async function GET(request: Request) {
   const allowed = await resolveAllowedPlayerId(session, playerId);
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const profile =
     session.role === 'player'
       ? await getPlayerForUser({ organizationId, userId: session.userId ?? 0 })
@@ -78,7 +78,7 @@ export async function POST(request: Request) {
     Number.isFinite(parsedProfileWeight) && parsedProfileWeight > 0 ? parsedProfileWeight : null;
 
   const result = await updatePlayerProfile({
-    organizationId: resolveProgrammingOrganizationId(session),
+    organizationId: await resolveProgrammingOrganizationId(session),
     playerId: allowed.playerId,
     fullName: String(body.fullName ?? ''),
     email: String(body.email ?? ''),
@@ -123,7 +123,7 @@ export async function PATCH(request: Request) {
   if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
 
   const result = await setPlayerStatus({
-    organizationId: resolveProgrammingOrganizationId(session),
+    organizationId: await resolveProgrammingOrganizationId(session),
     playerId: allowed.playerId,
     status,
   });

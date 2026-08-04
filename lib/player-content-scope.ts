@@ -15,7 +15,7 @@ type PlayerContentSession = {
  */
 export async function resolvePlayerContentOrganizationId(session: PlayerContentSession): Promise<number> {
   const schoolCode = resolveProgrammingSchoolCode(session);
-  const fallbackOrganizationId = resolveProgrammingOrganizationId(session);
+  const fallbackOrganizationId = await resolveProgrammingOrganizationId(session);
   return resolveOrganizationIdForSchool({
     schoolCode,
     fallbackOrganizationId,

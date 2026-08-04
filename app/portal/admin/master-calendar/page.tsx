@@ -52,12 +52,13 @@ function labelDate(value: string): string {
 export default async function MasterCalendarPage({ searchParams }: MasterCalendarPageProps) {
   const session = await requirePortalSession();
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
+  const programmingDataAllowed = await canUseProgrammingData(session);
   const schoolAccess =
     session.role === 'admin'
       ? await getSchoolProductAccess(programmingSchoolCode)
-      : { dashboard: true, programming: canUseProgrammingData(session), clientManagement: true };
-  const canAccessProgramming = session.role === 'admin' ? schoolAccess.programming : canUseProgrammingData(session);
-  const fallbackOrganizationId = resolveProgrammingOrganizationId(session);
+      : { dashboard: true, programming: programmingDataAllowed, clientManagement: true };
+  const canAccessProgramming = session.role === 'admin' ? schoolAccess.programming : programmingDataAllowed;
+  const fallbackOrganizationId = await resolveProgrammingOrganizationId(session);
   const programmingOrganizationId = canAccessProgramming
     ? await resolveOrganizationIdForSchool({
         schoolCode: programmingSchoolCode,

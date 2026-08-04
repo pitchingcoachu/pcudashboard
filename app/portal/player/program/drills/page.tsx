@@ -13,7 +13,7 @@ type DrillsPageProps = {
 
 export default async function PlayerDrillsPage({ searchParams }: DrillsPageProps) {
   const session = await requirePortalSession();
-  if (!canUseProgrammingData(session)) redirect('/portal/player/program');
+  if (!(await canUseProgrammingData(session))) redirect('/portal/player/program');
   const params = await searchParams;
   const canPreview = session.role === 'admin' || session.role === 'coach';
   const previewPlayerId = Number(typeof params.previewPlayerId === 'string' ? params.previewPlayerId : '0');
@@ -35,7 +35,7 @@ export default async function PlayerDrillsPage({ searchParams }: DrillsPageProps
   }).catch(() => null);
   const payload = response ? await response.json().catch(() => ({})) : {};
   const drillsState = normalizeDrillsState((payload as { drillsState?: unknown }).drillsState);
-  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
   const drillVideos = programmingOrganizationId > 0
     ? (await listExercisesByOrganization(programmingOrganizationId))
         .map((exercise) => ({

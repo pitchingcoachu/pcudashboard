@@ -16,9 +16,9 @@ export default async function MotionCapturePage() {
   const session = await requirePortalSession();
   const selectedSchool = resolveDashboardSchoolCode(session);
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
-  const canAccessProgramming = canUseProgrammingData(session);
+  const canAccessProgramming = await canUseProgrammingData(session);
   const selectedSchoolCode = resolveProgrammingSchoolCode(session);
-  const orgId = resolveProgrammingOrganizationId(session);
+  const orgId = await resolveProgrammingOrganizationId(session);
   const isPcu = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'PCU';
   const ownPlayer = session.role === 'player' && orgId > 0 ? await getPlayerForUser({ organizationId: orgId, userId: session.userId ?? 0 }) : null;
   const error = !isPcu

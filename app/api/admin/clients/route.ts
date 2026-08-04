@@ -17,7 +17,7 @@ export async function GET(request: Request) {
   if (session.role === 'player') return NextResponse.json({ players: [] });
 
   const selectedSchoolCode = resolveProgrammingSchoolCode(session);
-  const fallbackOrgId = resolveClientManagementOrganizationId(session);
+  const fallbackOrgId = await resolveClientManagementOrganizationId(session);
   const organizationId = await resolveOrganizationIdForSchool({
     schoolCode: selectedSchoolCode,
     fallbackOrganizationId: fallbackOrgId,
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
 
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/clients');
-    const scopedOrganizationId = resolveClientManagementOrganizationId(session);
+    const scopedOrganizationId = await resolveClientManagementOrganizationId(session);
     const selectedSchoolCode = resolveProgrammingSchoolCode(session);
     const organizationId = await resolveOrganizationIdForSchool({
       schoolCode: selectedSchoolCode,

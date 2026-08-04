@@ -6,7 +6,7 @@ import TestingBuilder from './testing-builder';
 
 export default async function AdminTestingPage() {
   const session = await requirePortalSession();
-  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const brand = resolveSchoolBrand(programmingSchoolCode);
   const playersRaw =

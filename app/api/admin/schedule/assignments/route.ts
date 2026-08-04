@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   if (!Number.isFinite(playerId) || playerId <= 0 || !startDate || !endDate) {
     return finish(400, { error: 'playerId, startDate, and endDate are required.' });
   }
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) {
     return finish(400, { error: 'Session context missing. Please log out and log in again.' });
   }

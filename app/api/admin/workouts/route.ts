@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL('/portal/player', request.url), 303);
   }
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) {
     if (wantsJson) {
       return NextResponse.json(
@@ -60,7 +60,7 @@ export async function POST(request: Request) {
 
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/workouts');
-    const organizationId = resolveProgrammingOrganizationId(session);
+    const organizationId = await resolveProgrammingOrganizationId(session);
     const userId = session.userId ?? 0;
     if (organizationId <= 0 || userId <= 0) {
       if (wantsJson) {

@@ -22,7 +22,7 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const categories = await listExerciseCategoriesByOrganization(organizationId);
   return NextResponse.json({ categories });
 }
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
       name = String(form.get('name') ?? '');
     }
 
-    const organizationId = resolveProgrammingOrganizationId(session);
+    const organizationId = await resolveProgrammingOrganizationId(session);
     const userId = session.userId ?? 0;
     if (organizationId <= 0 || userId <= 0) {
       const message = 'Session context missing. Please log out and log in again.';

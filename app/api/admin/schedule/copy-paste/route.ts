@@ -38,7 +38,7 @@ export async function POST(request: Request) {
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
   const playerId = Number(body.playerId ?? 0);
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const userId = session.userId ?? 0;
   if (organizationId <= 0 || userId <= 0) {
     return NextResponse.json({ error: 'Session context missing. Please log out and log in again.' }, { status: 400 });

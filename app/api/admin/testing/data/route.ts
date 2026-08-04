@@ -74,7 +74,7 @@ export async function GET(request: Request) {
   if (!session) return finish(401, { error: 'Unauthorized' });
   if (session.role === 'player') return finish(403, { error: 'Forbidden' });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (!Number.isFinite(organizationId) || organizationId <= 0) {
     return finish(200, { metrics: [], seriesByKey: {} });
   }

@@ -71,8 +71,8 @@ export default async function ForcePlatesPage({
   const params = await searchParams;
   const selectedSchoolCode = resolveProgrammingSchoolCode(session);
   if (String(selectedSchoolCode ?? '').trim().toUpperCase() === 'TRIAL') notFound();
-  const canAccessProgramming = canUseProgrammingData(session);
-  const orgId = resolveProgrammingOrganizationId(session);
+  const canAccessProgramming = await canUseProgrammingData(session);
+  const orgId = await resolveProgrammingOrganizationId(session);
   const isPcu = String(selectedSchoolCode ?? '').trim().toUpperCase() === 'PCU';
 
   const playerQueryRaw = Array.isArray(params.player) ? params.player[0] : params.player;

@@ -16,7 +16,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Valid workoutId is required.' }, { status: 400 });
   }
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   const workout = await getWorkoutByIdInOrganization({ organizationId, workoutId });
   if (!workout) return NextResponse.json({ error: 'Workout not found.' }, { status: 404 });
 

@@ -22,7 +22,7 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ ok: false, error: 'Not authenticated.' }, { status: 401 });
   if (session.role === 'player') return NextResponse.json({ ok: false, error: 'Forbidden.' }, { status: 403 });
 
-  const organizationId = resolveProgrammingOrganizationId(session);
+  const organizationId = await resolveProgrammingOrganizationId(session);
   if (organizationId <= 0) {
     return NextResponse.json(
       { ok: false, error: 'Session context missing. Please log out and log in again.' },
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
 
     const form = await request.formData();
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/exercises');
-    const organizationId = resolveProgrammingOrganizationId(session);
+    const organizationId = await resolveProgrammingOrganizationId(session);
     const userId = session.userId ?? 0;
     if (organizationId <= 0 || userId <= 0) {
       if (wantsJson) {

@@ -28,7 +28,7 @@ function readDuplicateWorkoutId(params: Record<string, string | string[] | undef
 
 export default async function AdminWorkoutsPage({ searchParams }: WorkoutPageProps) {
   const session = await requirePortalSession();
-  const programmingOrganizationId = resolveProgrammingOrganizationId(session);
+  const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const params = await searchParams;
   const { ok, error } = readMessage(params);
