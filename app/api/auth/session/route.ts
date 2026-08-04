@@ -26,8 +26,10 @@ export async function GET(request: Request) {
   });
 
   const schoolCode = resolveProgrammingSchoolCode(session);
-  const mobileScheduleEnabled = canUseMobileSchedule({ ...session, dashboardSchoolCode: schoolCode });
-  const mobileWorkoutsEnabled = canUseMobileWorkouts({ ...session, dashboardSchoolCode: schoolCode });
+  const [mobileScheduleEnabled, mobileWorkoutsEnabled] = await Promise.all([
+    canUseMobileSchedule({ ...session, dashboardSchoolCode: schoolCode }),
+    canUseMobileWorkouts({ ...session, dashboardSchoolCode: schoolCode }),
+  ]);
 
   return NextResponse.json({
     authenticated: true,

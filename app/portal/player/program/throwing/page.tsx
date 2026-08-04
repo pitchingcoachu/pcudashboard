@@ -11,7 +11,7 @@ type ThrowingPageProps = {
 
 export default async function PlayerThrowingPage({ searchParams }: ThrowingPageProps) {
   const session = await requirePortalSession();
-  if (!canUseProgrammingData(session)) redirect('/portal/player/program');
+  if (!(await canUseProgrammingData(session))) redirect('/portal/player/program');
   const canPreview = session.role === 'admin' || session.role === 'coach';
   const params = await searchParams;
   const previewPlayerIdRaw = typeof params.previewPlayerId === 'string' ? params.previewPlayerId : '';

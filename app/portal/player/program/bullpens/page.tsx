@@ -13,7 +13,7 @@ type BullpensPageProps = {
 
 export default async function PlayerBullpensPage({ searchParams }: BullpensPageProps) {
   const session = await requirePortalSession();
-  if (!canUseProgrammingData(session)) redirect('/portal/player/program');
+  if (!(await canUseProgrammingData(session))) redirect('/portal/player/program');
   const schoolBrand = resolveSchoolBrand(resolveProgrammingSchoolCode(session));
   const canPreview = session.role === 'admin' || session.role === 'coach';
   const params = await searchParams;

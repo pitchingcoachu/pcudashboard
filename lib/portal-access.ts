@@ -15,7 +15,7 @@ export async function canManagePlayer(session: SessionLike, playerId: number): P
 
 export async function resolveManageablePlayerOrganizationId(session: SessionLike, playerId: number): Promise<number> {
   if (!session) return 0;
-  const mappedOrganizationId = resolveProgrammingOrganizationId(session);
+  const mappedOrganizationId = await resolveProgrammingOrganizationId(session);
   const sessionOrganizationId = Number(session.organizationId ?? 0);
   const candidateOrganizationIds = Array.from(
     new Set(
