@@ -40,6 +40,7 @@ export async function GET(request: Request) {
     organizationId: session.organizationId ?? null,
     playerId: session.playerId ?? null,
     dashboardSchoolCode: session.dashboardSchoolCode ?? null,
+    resolvedSchoolCode: schoolCode,
     allowedDashboardSchoolCodes,
     mobileScheduleEnabled,
     mobileWorkoutsEnabled,
