@@ -6,7 +6,7 @@ import { resolveSchoolBrand } from '../../../../lib/school-brand';
 // Schools mobile currently renders with distinct branding. Any other school
 // code falls back to default Pearl branding client-side -- same fallback
 // behavior as resolveSchoolBrand() already has on web.
-const MOBILE_BRANDED_SCHOOL_CODES = ['OSU', 'LSU', 'HARVARD'];
+const MOBILE_BRANDED_SCHOOL_CODES = ['OSU', 'LSU', 'HARVARD', 'LEAGUE', 'PRO'];
 
 export async function GET(request: Request) {
   const cookieStore = await cookies();
