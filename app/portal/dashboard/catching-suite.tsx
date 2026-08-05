@@ -1677,11 +1677,11 @@ export default function CatchingSuite() {
                             <clipPath id="catching-heat-clip">
                               <rect x={0} y={0} width={w} height={h} />
                             </clipPath>
-                            <filter id="catching-heat-blur" x="-20%" y="-20%" width="140%" height="140%">
-                              <feGaussianBlur stdDeviation="2.1" />
+                            <filter id="catching-heat-blur" x="-60%" y="-60%" width="220%" height="220%">
+                              <feGaussianBlur stdDeviation="5.4" />
                             </filter>
-                            <filter id="catching-heat-blur-rv" x="-20%" y="-20%" width="140%" height="140%">
-                              <feGaussianBlur stdDeviation="1.25" />
+                            <filter id="catching-heat-blur-rv" x="-60%" y="-60%" width="220%" height="220%">
+                              <feGaussianBlur stdDeviation="3.2" />
                             </filter>
                           </defs>
                           <g transform={zoomTransform} clipPath="url(#catching-heat-clip)">
@@ -1691,7 +1691,7 @@ export default function CatchingSuite() {
                                   {heatCells.map((c) => {
                                     const cx = px(c.x + c.w / 2);
                                     const cy = py(c.y + c.h / 2);
-                                    const radius = Math.max(2.8, c.w * scale * 2.05);
+                                    const radius = Math.max(7.0, c.w * scale * 5.1);
                                     const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                                     let fill = 'rgba(255,255,255,0.12)';
                                     if (heatmapDisplayView === 'Frequency') fill = sequentialColor(c.value, minVal, maxVal);

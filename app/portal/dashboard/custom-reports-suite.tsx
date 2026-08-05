@@ -6344,8 +6344,8 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                     <clipPath id={`custom-heat-clip-${cellId}`}>
                                       <rect x={0} y={0} width={w} height={h} />
                                     </clipPath>
-                                    <filter id={`custom-heat-blur-${cellId}`} x="-20%" y="-20%" width="140%" height="140%">
-                                      <feGaussianBlur stdDeviation={isProSchool ? 1.2 : 2.1} />
+                                    <filter id={`custom-heat-blur-${cellId}`} x="-60%" y="-60%" width="220%" height="220%">
+                                      <feGaussianBlur stdDeviation={isProSchool ? 3.2 : 5.4} />
                                     </filter>
                                   </defs>
                                   <g transform={zoomTransform} clipPath={`url(#custom-heat-clip-${cellId})`}>
@@ -6354,7 +6354,7 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                         const safeValue = Number.isFinite(c.value) ? c.value : 0;
                                         const cx = px(c.x + c.w / 2);
                                         const cy = py(c.y + c.h / 2);
-                                        const radius = Math.max(2.0, c.w * scale * 1.45);
+                                        const radius = Math.max(4.5, c.w * scale * 3.6);
                                         const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                                         let fill = 'rgba(255,255,255,0.12)';
                                         if (valueLabel === 'Frequency') {

@@ -11747,11 +11747,11 @@ export default function PitchingSuite({
           <clipPath id="location-zoom-clip">
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
-          <filter id="location-heat-blur" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+          <filter id="location-heat-blur" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="5.4" />
           </filter>
-          <filter id="location-heat-blur-rv" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+          <filter id="location-heat-blur-rv" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="5.4" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath="url(#location-zoom-clip)">
@@ -11763,7 +11763,7 @@ export default function PitchingSuite({
                   if (!Number.isFinite(c.value)) return null;
                   const cx = px(c.x + c.w / 2);
                   const cy = py(c.y + c.h / 2);
-                  const radius = Math.max(2.0, c.w * scale * 1.45);
+                  const radius = Math.max(4.5, c.w * scale * 3.6);
                   const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                   let fill = 'rgba(255,255,255,0.12)';
                   if (locationView === 'Frequency') {
@@ -12069,11 +12069,11 @@ export default function PitchingSuite({
           <clipPath id="location-zoom-clip-heatmaps-page">
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
-          <filter id="location-heat-blur-heatmaps-page" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+          <filter id="location-heat-blur-heatmaps-page" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="5.4" />
           </filter>
-          <filter id="location-heat-blur-rv-heatmaps-page" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+          <filter id="location-heat-blur-rv-heatmaps-page" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="5.4" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath="url(#location-zoom-clip-heatmaps-page)">
@@ -12084,7 +12084,7 @@ export default function PitchingSuite({
                   if (!Number.isFinite(c.value)) return null;
                   const cx = px(c.x + c.w / 2);
                   const cy = py(c.y + c.h / 2);
-                  const radius = Math.max(2.0, c.w * scale * 1.45);
+                  const radius = Math.max(4.5, c.w * scale * 3.6);
                   const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                   let fill = 'rgba(255,255,255,0.12)';
                   if (heatmapDisplayView === 'Frequency') {

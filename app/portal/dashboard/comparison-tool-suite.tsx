@@ -1691,11 +1691,11 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
             <clipPath id={`cmp-heat-clip-${paneId}`}>
               <rect x={0} y={0} width={w} height={h} />
             </clipPath>
-            <filter id={`cmp-heat-blur-${paneId}`} x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation={isProSchool ? 1.2 : 2.1} />
+            <filter id={`cmp-heat-blur-${paneId}`} x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur stdDeviation={isProSchool ? 3.2 : 5.4} />
             </filter>
-            <filter id={`cmp-heat-blur-rv-${paneId}`} x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation={isProSchool ? 1.2 : 2.1} />
+            <filter id={`cmp-heat-blur-rv-${paneId}`} x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur stdDeviation={isProSchool ? 3.2 : 5.4} />
             </filter>
           </defs>
           <g transform={zoomTransform} clipPath={`url(#cmp-heat-clip-${paneId})`}>
@@ -1703,7 +1703,7 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
               {cells.map((cell) => {
                 const cx = px(cell.x + cell.w / 2);
                 const cy = py(cell.y + cell.h / 2);
-                const radius = isProSchool ? Math.max(2.0, cell.w * scale * 1.45) : Math.max(2.8, cell.w * scale * 2.05);
+                const radius = isProSchool ? Math.max(4.5, cell.w * scale * 3.6) : Math.max(7.0, cell.w * scale * 5.1);
                 const densityNorm = Math.max(0, Math.min(1, cell.density / densityMax));
                 let fill = 'rgba(255,255,255,0.12)';
                 if (heatMetricView === 'Frequency') fill = sequentialColor(cell.value, minVal, maxVal);

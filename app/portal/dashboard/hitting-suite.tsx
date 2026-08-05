@@ -1248,11 +1248,11 @@ function LocationChart({
           <clipPath id={`hitting-loc-zoom-clip-${idBase}`}>
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
-          <filter id={`hitting-loc-heat-blur-${idBase}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+          <filter id={`hitting-loc-heat-blur-${idBase}`} x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="5.4" />
           </filter>
-          <filter id={`hitting-loc-heat-blur-rv-${idBase}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+          <filter id={`hitting-loc-heat-blur-rv-${idBase}`} x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="5.4" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath={`url(#hitting-loc-zoom-clip-${idBase})`}>
@@ -1263,7 +1263,7 @@ function LocationChart({
                 if (!Number.isFinite(cell.value)) return null;
                 const cx = xScale(cell.x + cell.w / 2);
                 const cy = yScale(cell.y + cell.h / 2);
-                const radius = Math.max(2.0, cell.w * ((w - pad * 2) / (xMax - xMin)) * 1.45);
+                const radius = Math.max(4.5, cell.w * ((w - pad * 2) / (xMax - xMin)) * 3.6);
                 const densityNorm = Math.max(0, Math.min(1, cell.density / densityMax));
                 let fill = 'rgba(255,255,255,0.12)';
                 if (displayView === 'Frequency') fill = sequentialColor(cell.value, minVal, maxVal);
@@ -4527,11 +4527,11 @@ export default function HittingSuite({
           <clipPath id="hitting-heatmap-zoom-clip">
             <rect x={0} y={0} width={w} height={h} />
           </clipPath>
-          <filter id="hitting-heatmap-blur" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+          <filter id="hitting-heatmap-blur" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="5.4" />
           </filter>
-          <filter id="hitting-heatmap-blur-rv" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.1" />
+          <filter id="hitting-heatmap-blur-rv" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="5.4" />
           </filter>
         </defs>
         <g transform={zoomTransform} clipPath="url(#hitting-heatmap-zoom-clip)">
@@ -4541,7 +4541,7 @@ export default function HittingSuite({
                 {cells.map((c) => {
                   const cx = px(c.x + c.w / 2);
                   const cy = py(c.y + c.h / 2);
-                  const radius = Math.max(2.0, c.w * scale * 1.45);
+                  const radius = Math.max(4.5, c.w * scale * 3.6);
                   const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                   let fill = 'rgba(255,255,255,0.12)';
                   if (heatmapDisplayView === 'Frequency') fill = sequentialColor(c.value, minVal, maxVal);

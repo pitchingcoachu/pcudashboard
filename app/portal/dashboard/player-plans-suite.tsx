@@ -4120,8 +4120,8 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
             <clipPath id={`location-zoom-clip-goal-${goal.slotIndex}`}>
               <rect x={0} y={0} width={w} height={h} />
             </clipPath>
-            <filter id={`location-heat-blur-goal-${goal.slotIndex}`} x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="2.1" />
+            <filter id={`location-heat-blur-goal-${goal.slotIndex}`} x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur stdDeviation="5.4" />
             </filter>
           </defs>
           <g clipPath={`url(#location-zoom-clip-goal-${goal.slotIndex})`}>
@@ -4131,7 +4131,7 @@ export default function PlayerPlansSuite(props: { selectedSchoolCode?: string })
                   {cells.map((c, i) => {
                     const cx = px(c.x + c.w / 2);
                     const cy = py(c.y + c.h / 2);
-                    const radius = Math.max(2.8, c.w * scale * 2.05);
+                    const radius = Math.max(7.0, c.w * scale * 5.1);
                     const densityNorm = Math.max(0, Math.min(1, c.density / densityMax));
                     const normalized =
                       selectedHeatmapView === 'Run Values'
