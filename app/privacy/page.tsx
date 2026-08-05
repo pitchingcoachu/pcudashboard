@@ -71,7 +71,7 @@ export default function PrivacyPolicyPage() {
         <p>
           For privacy questions, contact:
           <br />
-          support@pcudashboard.com
+          info@pitchingcoachu.com
         </p>
 
         <h2>Changes to This Policy</h2>
