@@ -289,6 +289,29 @@
   margin: 0 clamp(0px, 3vw, 42px);
 }
 
+.collegePricingGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.collegePricingGrid .addOnCard {
+  grid-column: 1 / -1;
+}
+
+.collegePricingGrid .addOnList {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+
+.collegePricingGrid .addOn {
+  padding: 0 24px 0 0;
+  border-right: 1px solid rgba(255, 255, 255, .12);
+  border-bottom: 0;
+}
+
+.collegePricingGrid .addOn:last-child {
+  border-right: 0;
+}
+
 .planCard {
   position: relative;
   display: flex;
@@ -347,6 +370,11 @@
 .cardHeader { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
 .cardHeader h2 { margin: 9px 0 0; font: 400 clamp(42px, 4vw, 58px)/.88 'Bebas Neue', sans-serif; letter-spacing: .02em; text-transform: uppercase; }
 .price { color: white; font: 400 clamp(30px, 2.8vw, 42px)/1 'Bebas Neue', sans-serif; text-align: right; white-space: nowrap; }
+.collegePricingGrid .cardHeader { flex-direction: column; }
+.collegePricingGrid .cardHeader h2 { margin-top: 0; font-size: clamp(34px, 3vw, 46px); line-height: .9; }
+.collegePricingGrid .price { font-size: clamp(28px, 2.4vw, 38px); text-align: left; }
+.collegePricingGrid .price,
+.collegePricingGrid .addOnHeading strong { color: #dcc1a1; }
 .featuredCard .price { color: #dcc1a1; }
 .price small, .addOnHeading small { display: block; margin-top: 4px; color: #9196a0; font: 800 8px/1 Manrope, sans-serif; letter-spacing: .1em; text-transform: uppercase; }
 
@@ -449,6 +477,7 @@
   .addOnList { grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
   .addOn { padding: 0 24px 0 0; border-right: 1px solid rgba(255,255,255,.12); border-bottom: 0; }
   .addOn:last-child { border-right: 0; }
+  .collegePricingGrid .addOnList { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 700px) {
@@ -471,6 +500,8 @@
   .addOnList { grid-template-columns: 1fr; gap: 0; }
   .addOn { padding: 20px 0; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.12); }
   .addOn:first-child { padding-top: 0; }
+  .collegePricingGrid .addOnList { grid-template-columns: 1fr; gap: 0; }
+  .collegePricingGrid .addOn { padding: 20px 0; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.12); }
   .contact { align-items: flex-start; flex-direction: column; margin-top: 14px; }
   .contact a { width: 100%; text-align: center; }
   .footer { align-items: flex-start; flex-direction: column; }

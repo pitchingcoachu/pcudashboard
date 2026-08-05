@@ -32,10 +32,30 @@ const platformFeatures = [
       'Access to MLB and AAA data',
     ],
   },
+];
+
+const programmingItems = [
+  'Throwing calendar',
+  'Workout builder and tracker',
+  'Custom bullpen and drill scripts',
+  'Profile for each player',
+  'Player notes and performance tracking',
+  'Video, photo, and PDF uploads',
+  'Video breakdown editor',
+  'PCU exercise and drill library',
+  'Access to MLB and college data',
+];
+
+const programmingFeatures = [
   {
-    title: 'Limited Support',
-    items: [],
+    title: 'Program and Schedule Builder',
+    items: programmingItems,
   },
+];
+
+const programmingPlatformFeatures = [
+  ...platformFeatures.slice(0, 1),
+  ...programmingFeatures,
 ];
 
 const platformDevelopmentFeatures = [
@@ -52,11 +72,7 @@ const platformDevelopmentFeatures = [
   },
   {
     title: 'Program and Schedule Builder',
-    items: [
-      'Throwing calendar',
-      'Workout builder and tracker',
-      'Custom bullpen and drill scripts',
-    ],
+    items: programmingItems,
   },
   {
     title: 'Player Development Consulting',
@@ -81,17 +97,7 @@ const addOns = [
     ],
   },
   {
-    title: 'Program and Schedule Builder',
-    subtitle: 'Only necessary for teams on the Platform plan',
-    price: '$3,000',
-    items: [
-      'Throwing calendar',
-      'Workout builder and tracker',
-      'Custom bullpen and drill scripts',
-    ],
-  },
-  {
-    title: 'Extra Zoom Calls',
+    title: 'Pitching Development Zoom Calls',
     price: '$300',
     suffix: '/ hour',
     items: [],
@@ -164,13 +170,13 @@ export default function CollegePricingPage() {
         <section className={styles.intro}>
           <p>College program pricing</p>
           <h1>Choose the level of support your program needs.</h1>
-          <span>Two annual dashboard plans, plus optional services that can be added separately.</span>
+          <span>Four annual options, plus specialized services available à la carte.</span>
         </section>
 
         <section className={styles.shared} aria-labelledby="shared-title">
           <div className={styles.sharedHeading}>
-            <span>Included with both plans</span>
-            <h2 id="shared-title">Every dashboard plan includes</h2>
+            <span>Included with dashboard plans</span>
+            <h2 id="shared-title">Every Dashboard plan includes</h2>
           </div>
           <ul>
             {sharedFeatures.map((feature) => (
@@ -179,12 +185,36 @@ export default function CollegePricingPage() {
           </ul>
         </section>
 
-        <section className={styles.pricingGrid} aria-label="College pricing options">
+        <section className={`${styles.pricingGrid} ${styles.collegePricingGrid}`} aria-label="College pricing options">
           <article className={styles.planCard}>
             <div className={styles.cardHeader}>
               <div>
-                <span className={styles.planLabel}>Dashboard plan</span>
-                <h2>Platform</h2>
+                <h2>Programming</h2>
+              </div>
+              <div className={styles.price}>$3,000<small>/ year</small></div>
+            </div>
+            <p className={styles.planDescription}>
+              Standalone programming and scheduling tools for teams that do not need the dashboard platform.
+            </p>
+            <div className={styles.featureGroups}>
+              {programmingFeatures.map((group) => (
+                <div className={styles.featureGroup} key={group.title}>
+                  <h3>{group.title}</h3>
+                  <ul>
+                    {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+            <div className={styles.buttonSlot}>
+              <a href={contactHref} className={styles.secondaryButton}>Ask about Programming</a>
+            </div>
+          </article>
+
+          <article className={styles.planCard}>
+            <div className={styles.cardHeader}>
+              <div>
+                <h2>Dashboard</h2>
               </div>
               <div className={styles.price}>$7,500<small>/ year</small></div>
             </div>
@@ -204,18 +234,42 @@ export default function CollegePricingPage() {
               ))}
             </div>
             <div className={styles.buttonSlot}>
-              <a href={contactHref} className={styles.secondaryButton}>Ask about Platform</a>
+              <a href={contactHref} className={styles.secondaryButton}>Ask about Dashboard</a>
             </div>
           </article>
 
           <article className={`${styles.planCard} ${styles.featuredCard}`}>
-            <span className={styles.recommended}>Most comprehensive</span>
+            <span className={styles.recommended}>Recommended</span>
             <div className={styles.cardHeader}>
               <div>
-                <span className={styles.planLabel}>Dashboard + consulting</span>
-                <h2>Platform + Development</h2>
+                <h2>Programming and Dashboard</h2>
               </div>
-              <div className={styles.price}>$12,000<small>/ year</small></div>
+              <div className={styles.price}>$9,500<small>/ year</small></div>
+            </div>
+            <p className={styles.planDescription}>
+              The full dashboard platform combined with programming and schedule-building tools.
+            </p>
+            <div className={styles.featureGroups}>
+              {programmingPlatformFeatures.map((group) => (
+                <div className={styles.featureGroup} key={group.title}>
+                  <h3>{group.title}</h3>
+                  <ul>
+                    {group.items.map((item) => <li key={item}><CheckIcon />{item}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+            <div className={styles.buttonSlot}>
+              <a href={contactHref} className={styles.primaryButton}>Ask about Programming and Dashboard</a>
+            </div>
+          </article>
+
+          <article className={styles.planCard}>
+            <div className={styles.cardHeader}>
+              <div>
+                <h2>Programming and Dashboard + Consulting</h2>
+              </div>
+              <div className={styles.price}>$15,000<small>/ year</small></div>
             </div>
             <p className={styles.planDescription}>
               Dashboard access plus programming and ongoing pitching and hitting development support.
@@ -232,14 +286,13 @@ export default function CollegePricingPage() {
               ))}
             </div>
             <div className={styles.buttonSlot}>
-              <a href={contactHref} className={styles.primaryButton}>Ask about Platform + Development</a>
+              <a href={contactHref} className={styles.secondaryButton}>Ask about Programming and Dashboard + Consulting</a>
             </div>
           </article>
 
           <article className={`${styles.planCard} ${styles.addOnCard}`}>
             <div className={styles.cardHeader}>
               <div>
-                <span className={styles.planLabel}>Optional services</span>
                 <h2>À La Carte</h2>
               </div>
             </div>
@@ -252,7 +305,6 @@ export default function CollegePricingPage() {
                   <div className={styles.addOnHeading}>
                     <div>
                       <h3>{addOn.title}</h3>
-                      {'subtitle' in addOn && addOn.subtitle ? <p>{addOn.subtitle}</p> : null}
                     </div>
                     <strong>{addOn.price}<small>{addOn.suffix}</small></strong>
                   </div>
