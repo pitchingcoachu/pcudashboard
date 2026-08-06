@@ -23,11 +23,14 @@ async function createMessagingTables(): Promise<void> {
       conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       user_id BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
       joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      last_read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      pinned_at TIMESTAMPTZ
     );
   `);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_participants_unique ON conversation_participants (conversation_id, user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_conversation_participants_user ON conversation_participants (user_id);`);
+  // pinned_at predates this column on existing tables -- add it if missing.
+  await pool.query(`ALTER TABLE conversation_participants ADD COLUMN IF NOT EXISTS pinned_at TIMESTAMPTZ;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -87,6 +90,7 @@ export type ConversationListRow = {
   } | null;
   unreadCount: number;
   updatedAt: string;
+  pinnedAt: string | null;
 };
 
 export type MessageAttachmentRow = {
@@ -202,6 +206,7 @@ export async function listConversationsForUser(input: {
     is_group: boolean;
     updated_at: string;
     last_read_at: string;
+    pinned_at: string | null;
     unread_count: string;
     last_message_id: number | null;
     last_message_body: string | null;
@@ -218,6 +223,7 @@ export async function listConversationsForUser(input: {
         c.is_group,
         c.updated_at,
         my_cp.last_read_at,
+        my_cp.pinned_at,
         COUNT(m.id) FILTER (WHERE m.created_at > my_cp.last_read_at AND m.sender_user_id IS DISTINCT FROM $2)::text AS unread_count,
         lm.id AS last_message_id,
         lm.body AS last_message_body,
@@ -239,7 +245,7 @@ export async function listConversationsForUser(input: {
       ) lm ON TRUE
       LEFT JOIN auth_users lm_sender ON lm_sender.id = lm.sender_user_id
       WHERE c.organization_id = $1
-      GROUP BY c.id, c.name, c.is_group, c.updated_at, my_cp.last_read_at, lm.id, lm.body, lm.sender_user_id, lm_sender.name, lm.created_at
+      GROUP BY c.id, c.name, c.is_group, c.updated_at, my_cp.last_read_at, my_cp.pinned_at, lm.id, lm.body, lm.sender_user_id, lm_sender.name, lm.created_at
       ORDER BY c.updated_at DESC
     `,
     [input.organizationId, input.userId]
@@ -266,6 +272,7 @@ export async function listConversationsForUser(input: {
       : null,
     unreadCount: Number(row.unread_count ?? '0') || 0,
     updatedAt: row.updated_at,
+    pinnedAt: row.pinned_at,
   }));
 }
 
@@ -481,6 +488,15 @@ export async function markConversationRead(input: { conversationId: number; user
   await pool.query(
     `UPDATE conversation_participants SET last_read_at = NOW() WHERE conversation_id = $1 AND user_id = $2`,
     [input.conversationId, input.userId]
+  );
+}
+
+export async function setConversationPinned(input: { conversationId: number; userId: number; pinned: boolean }): Promise<void> {
+  await ensureMessagingTablesReady();
+  const pool = getDbPool();
+  await pool.query(
+    `UPDATE conversation_participants SET pinned_at = CASE WHEN $3 THEN NOW() ELSE NULL END WHERE conversation_id = $1 AND user_id = $2`,
+    [input.conversationId, input.userId, input.pinned]
   );
 }
 
