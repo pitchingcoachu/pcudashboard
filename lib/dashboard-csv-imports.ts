@@ -516,7 +516,7 @@ async function insertPitchRows(
       'pitcherthrows', 'taggedpitchtype', 'inducedvertbreak', 'horzbreak', 'relspeed', 'releasetilt', 'breaktilt',
       'spinefficiency', 'spinrate', 'relheight', 'relside', 'extension', 'vertapprangle', 'horzapprangle',
       'platelocside', 'platelocheight', 'pitchcall', 'sessiontype', 'pitchuid', 'pitchid', 'pitcherteam', 'time',
-      'customlabel', 'pitcherid', 'relspeed_num', 'ivb_num', 'hb_num',
+      'customlabel', 'pitcherid',
     ];
     const values: unknown[] = [];
     const placeholders = pending.map((row, rowIndex) => {
@@ -527,7 +527,6 @@ async function insertPitchRows(
         toDbText(row.releaseHeight), toDbText(row.releaseSide), toDbText(row.extension), toDbText(row.vaa),
         toDbText(row.haa), toDbText(row.plateSide), toDbText(row.plateHeight), row.pitchCall || null, 'Bullpen',
         row.pitchKey, row.pitchId || null, input.schoolCode, row.time, 'Baseball', row.pitcherId || null,
-        row.velocity, row.ivb, row.hb,
       ];
       values.push(...rowValues);
       return `(${rowValues.map((_, columnIndex) => `$${rowIndex * columns.length + columnIndex + 1}`).join(',')})`;
