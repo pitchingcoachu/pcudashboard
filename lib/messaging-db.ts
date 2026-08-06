@@ -400,6 +400,58 @@ export async function listMessages(input: {
   return { messages, hasMore };
 }
 
+export type ConversationAttachmentRow = MessageAttachmentRow & {
+  messageId: number;
+  createdAt: string;
+  senderUserId: number | null;
+  senderName: string | null;
+};
+
+/** Every attachment in a conversation, newest first -- for the "shared
+ * media" gallery. Unlike listMessages, this isn't paginated by message page;
+ * a conversation's total attachment count is small enough in practice that
+ * fetching them all in one query is simpler and cheaper than paging through
+ * every message just to collect their attachments client-side. */
+export async function listAttachmentsForConversation(conversationId: number): Promise<ConversationAttachmentRow[]> {
+  await ensureMessagingTablesReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: number;
+    message_id: number;
+    kind: string;
+    file_name: string;
+    content_type: string;
+    size_bytes: string;
+    created_at: string;
+    sender_user_id: number | null;
+    sender_name: string | null;
+  }>(
+    `
+      SELECT
+        ma.id, ma.message_id, ma.kind, ma.file_name, ma.content_type, ma.size_bytes, ma.created_at,
+        m.sender_user_id,
+        COALESCE(NULLIF(u.name, ''), u.email) AS sender_name
+      FROM message_attachments ma
+      JOIN messages m ON m.id = ma.message_id
+      LEFT JOIN auth_users u ON u.id = m.sender_user_id
+      WHERE m.conversation_id = $1
+      ORDER BY ma.created_at DESC, ma.id DESC
+    `,
+    [conversationId]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    messageId: row.message_id,
+    kind: row.kind === 'video' || row.kind === 'pdf' ? row.kind : 'photo',
+    fileName: row.file_name,
+    contentType: row.content_type,
+    sizeBytes: Number(row.size_bytes ?? '0') || 0,
+    createdAt: row.created_at,
+    senderUserId: row.sender_user_id,
+    senderName: row.sender_name,
+  }));
+}
+
 export async function getMessageById(messageId: number): Promise<MessageRow | null> {
   await ensureMessagingTablesReady();
   const pool = getDbPool();
