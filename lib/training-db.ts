@@ -6870,6 +6870,28 @@ export async function getPlayerProLink(input: { organizationId: number; playerId
   };
 }
 
+/** "Last, First" <-> "First Last" for the same name -- the dashboard's
+ * pitcher/hitter selector always shows "Last, First" (matching TrackMan
+ * school data), but a players.full_name isn't guaranteed to be stored in
+ * that order (e.g. a manually-added placeholder roster entry may just be
+ * "First Last"). Returns both orderings so a lookup can match either. */
+function nameOrderingVariants(value: string): string[] {
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  const variants = new Set<string>([trimmed]);
+  if (trimmed.includes(',')) {
+    const [last, ...rest] = trimmed.split(',');
+    const first = rest.join(' ').trim();
+    if (first && last.trim()) variants.add(`${first} ${last.trim()}`.replace(/\s+/g, ' ').trim());
+  } else {
+    const parts = trimmed.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      variants.add(`${parts[parts.length - 1]}, ${parts.slice(0, -1).join(' ')}`.trim());
+    }
+  }
+  return Array.from(variants);
+}
+
 /** Resolves a school player's PRO link by their display name (as it appears
  * in the pitcher/hitter overview selector) rather than by playerId -- the
  * overview routes only ever see a name string, never the players.id it
@@ -6880,8 +6902,8 @@ export async function getPlayerProLinkByPlayerName(input: {
   playerName: string;
 }): Promise<PlayerProLink | null> {
   if (!isDatabaseConfigured()) return null;
-  const trimmedName = input.playerName.trim();
-  if (!trimmedName) return null;
+  const nameVariants = nameOrderingVariants(input.playerName);
+  if (!nameVariants.length) return null;
   await ensureTrainingDbReady();
   const pool = getDbPool();
   const result = await pool.query<{ player_id: number; pro_player_name: string; created_at: string }>(
@@ -6889,10 +6911,10 @@ export async function getPlayerProLinkByPlayerName(input: {
       SELECT ppl.player_id, ppl.pro_player_name, ppl.created_at::text
       FROM player_pro_links ppl
       JOIN players p ON p.id = ppl.player_id
-      WHERE p.organization_id = $1 AND p.full_name = $2
+      WHERE p.organization_id = $1 AND p.full_name = ANY($2::text[])
       LIMIT 1
     `,
-    [input.organizationId, trimmedName]
+    [input.organizationId, nameVariants]
   );
   if ((result.rowCount ?? 0) !== 1) return null;
   return {
