@@ -11205,7 +11205,7 @@ def _refresh_pro_daily_rollup(
                         THEN (regexp_match(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision
                       ELSE NULL
                     END AS break_tilt_deg,
-                    regexp_replace(
+                    trim(both '_' from regexp_replace(
                       lower(
                         COALESCE(
                           NULLIF(TRIM(pe.pitchcall), ''),
@@ -11228,7 +11228,7 @@ def _refresh_pro_daily_rollup(
                       '[^a-z0-9]+',
                       '_',
                       'g'
-                    ) AS pitch_call_norm,
+                    )) AS pitch_call_norm,
                     regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.playresult), ''), '')), '[^a-z0-9]+', '_', 'g') AS play_result_norm,
                     regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.korbb), ''), '')), '[^a-z0-9]+', '_', 'g') AS korbb_norm,
                     regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), '')), '[^a-z0-9]+', '_', 'g') AS tagged_hit_type_norm,
@@ -11359,23 +11359,23 @@ def _refresh_pro_daily_rollup(
                         ELSE 0
                       END)::int AS in_zone_n,
                   SUM(CASE WHEN plate_side IS NOT NULL AND plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
-                  SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
+                  SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
                              OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%'
                            THEN 1 ELSE 0 END)::int AS strike_n,
-                  SUM(CASE WHEN pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
+                  SUM(CASE WHEN pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
                              OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%'
                            THEN 1 ELSE 0 END)::int AS swing_n,
-                  SUM(CASE WHEN pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout') THEN 1 ELSE 0 END)::int AS whiff_n,
-                  SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout') THEN 1 ELSE 0 END)::int AS csw_n,
+                  SUM(CASE WHEN pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foul_tip','foultip') THEN 1 ELSE 0 END)::int AS whiff_n,
+                  SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foul_tip','foultip') THEN 1 ELSE 0 END)::int AS csw_n,
                   SUM(CASE WHEN plate_side BETWEEN -1.5::double precision AND 1.5::double precision
                              AND plate_height BETWEEN 1.17::double precision AND 3.93::double precision
                            THEN 1 ELSE 0 END)::int AS comp_n,
                   SUM(CASE WHEN balls_num = 0 AND strikes_num = 0
-                             AND (pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay')
+                             AND (pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay')
                                   OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
                            THEN 1 ELSE 0 END)::int AS fps_num,
                   SUM(CASE WHEN balls_num = 0 AND strikes_num = 0
-                             AND (pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay')
+                             AND (pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay')
                                   OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%')
                            THEN 1 ELSE 0 END)::int AS fps_swing_num,
                   SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS fps_den,
@@ -11384,7 +11384,7 @@ def _refresh_pro_daily_rollup(
                              AND NOT (plate_side BETWEEN -0.71::double precision AND 0.71::double precision
                                       AND plate_height BETWEEN 1.53::double precision AND 3.37::double precision)
                              AND (
-                               pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
+                               pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
                                OR pitch_call_norm LIKE 'in_play%%'
                                OR pitch_call_norm LIKE 'hit_into_play%%'
                              )
@@ -11619,7 +11619,7 @@ def _refresh_pro_daily_rollup(
                         THEN (regexp_match(COALESCE(to_jsonb(pe)->>'BreakTilt', to_jsonb(pe)->>'breaktilt', ''), '[-+]?[0-9]*\\.?[0-9]+'))[1]::double precision
                       ELSE NULL
                     END AS break_tilt_deg,
-                    regexp_replace(
+                    trim(both '_' from regexp_replace(
                       lower(
                         COALESCE(
                           NULLIF(TRIM(pe.pitchcall), ''),
@@ -11642,7 +11642,7 @@ def _refresh_pro_daily_rollup(
                       '[^a-z0-9]+',
                       '_',
                       'g'
-                    ) AS pitch_call_norm,
+                    )) AS pitch_call_norm,
                     regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.playresult), ''), '')), '[^a-z0-9]+', '_', 'g') AS play_result_norm,
                     regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.korbb), ''), '')), '[^a-z0-9]+', '_', 'g') AS korbb_norm,
                     regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.taggedhittype), ''), '')), '[^a-z0-9]+', '_', 'g') AS tagged_hit_type_norm,
@@ -11934,19 +11934,19 @@ def _refresh_pro_daily_rollup(
                   SUM(CASE WHEN zone_num BETWEEN 1 AND 9 THEN 1
                            ELSE 0 END)::int AS in_zone_n,
                   SUM(CASE WHEN plate_side IS NOT NULL AND plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
-                  SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
+                  SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
                              OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%' THEN 1 ELSE 0 END)::int AS strike_n,
-                  SUM(CASE WHEN pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
+                  SUM(CASE WHEN pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
                              OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%' THEN 1 ELSE 0 END)::int AS swing_n,
-                  SUM(CASE WHEN pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout') THEN 1 ELSE 0 END)::int AS whiff_n,
-                  SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout') THEN 1 ELSE 0 END)::int AS csw_n,
+                  SUM(CASE WHEN pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foul_tip','foultip') THEN 1 ELSE 0 END)::int AS whiff_n,
+                  SUM(CASE WHEN pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foul_tip','foultip') THEN 1 ELSE 0 END)::int AS csw_n,
                   SUM(CASE WHEN plate_side BETWEEN -1.5::double precision AND 1.5::double precision
                              AND plate_height BETWEEN 1.17::double precision AND 3.93::double precision THEN 1 ELSE 0 END)::int AS comp_n,
                   SUM(CASE WHEN balls_num = 0 AND strikes_num = 0
-                             AND (pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay')
+                             AND (pitch_call_norm IN ('strikecalled','strike_called','called_strike','strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay')
                                   OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') THEN 1 ELSE 0 END)::int AS fps_num,
                   SUM(CASE WHEN balls_num = 0 AND strikes_num = 0
-                             AND (pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay')
+                             AND (pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay')
                                   OR pitch_call_norm LIKE 'in_play%%' OR pitch_call_norm LIKE 'hit_into_play%%') THEN 1 ELSE 0 END)::int AS fps_swing_num,
                   SUM(CASE WHEN balls_num = 0 AND strikes_num = 0 THEN 1 ELSE 0 END)::int AS fps_den,
                   SUM(CASE
@@ -11954,7 +11954,7 @@ def _refresh_pro_daily_rollup(
                              AND NOT (plate_side BETWEEN -0.71::double precision AND 0.71::double precision
                                       AND plate_height BETWEEN 1.53::double precision AND 3.37::double precision)
                              AND (
-                               pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
+                               pitch_call_norm IN ('strikeswinging','strike_swinging','swinging_strike','swinging_strike_blocked','swinging_strike_pitchout','swinging_pitchout','missed_bunt','foulball','foul_ball','foul','foul_tip','foulballfieldable','foul_ball_fieldable','foulballnotfieldable','foul_ball_not_fieldable','inplay','in_play')
                                OR pitch_call_norm LIKE 'in_play%%'
                                OR pitch_call_norm LIKE 'hit_into_play%%'
                              )
@@ -18098,7 +18098,7 @@ def _pro_pitching_overview(
         }
         hbp_tokens = {"hit_by_pitch", "hitbypitch"}
         called_strike_tokens = {"called_strike", "automatic_strike", "auto_strike", "strikecalled"}
-        whiff_tokens = {"swinging_strike", "swinging_strike_pitchout", "missed_bunt", "strikeswinging"}
+        whiff_tokens = {"swinging_strike", "swinging_strike_pitchout", "swinging_pitchout", "missed_bunt", "strikeswinging"}
         foul_tokens = {
             "foul",
             "foul_tip",
