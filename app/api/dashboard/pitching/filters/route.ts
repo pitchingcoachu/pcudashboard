@@ -4,6 +4,7 @@ import { getSessionFromRequest } from '../../../../../lib/auth';
 import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, selectScopedPlayerName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { schoolRosterAdditions } from '../../../../../lib/dashboard-roster-additions';
+import { listDashboardCsvPitcherNames } from '../../../../../lib/dashboard-csv-imports';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 
 const RESPONSE_CACHE_HEADERS = {
@@ -22,6 +23,24 @@ function resolveFiltersTimeoutMs(schoolCode: string): number {
 
 function uniqueNames(values: string[]): string[] {
   return Array.from(new Set(values.map((entry) => String(entry ?? '').trim()).filter(Boolean)));
+}
+
+function normalizePlayerName(value: string): string {
+  const raw = String(value ?? '').trim();
+  const firstLast = raw.includes(',')
+    ? `${raw.split(',').slice(1).join(' ').trim()} ${raw.split(',')[0].trim()}`.trim()
+    : raw;
+  return firstLast.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function mergePlayerNames(values: string[]): string[] {
+  const names = new Map<string, string>();
+  for (const value of values) {
+    const name = String(value ?? '').trim();
+    const key = normalizePlayerName(name);
+    if (key && !names.has(key)) names.set(key, name);
+  }
+  return Array.from(names.values()).sort((a, b) => a.localeCompare(b));
 }
 
 function pickLatestGameDate(payload: Record<string, unknown>): string | null {
@@ -87,6 +106,23 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: String(result.payload.detail ?? result.payload.error ?? 'Dashboard API request failed.') }, { status: result.status });
     }
     const payload = result.payload as Record<string, unknown>;
+    const csvPitchers = schoolCode === 'PRO' || schoolCode === 'LEAGUE'
+      ? []
+      : await listDashboardCsvPitcherNames(schoolCode).catch(() => []);
+    if (csvPitchers.length > 0) {
+      payload.pitchers = mergePlayerNames([
+        ...(Array.isArray(payload.pitchers) ? payload.pitchers.map((value) => String(value ?? '').trim()) : []),
+        ...csvPitchers,
+      ]);
+      const teamMap = payload.pitchers_by_team_code && typeof payload.pitchers_by_team_code === 'object'
+        ? { ...(payload.pitchers_by_team_code as Record<string, unknown>) }
+        : {};
+      const schoolPitchers = Array.isArray(teamMap[schoolCode])
+        ? (teamMap[schoolCode] as unknown[]).map((value) => String(value ?? '').trim())
+        : [];
+      teamMap[schoolCode] = mergePlayerNames([...schoolPitchers, ...csvPitchers]);
+      payload.pitchers_by_team_code = teamMap;
+    }
     const additions = schoolRosterAdditions(schoolCode);
     if (Array.isArray(payload.pitchers) && additions.pitchers.length > 0) {
       payload.pitchers = uniqueNames([

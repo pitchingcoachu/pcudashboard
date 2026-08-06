@@ -244,6 +244,15 @@ export default async function AdminHomePage() {
           </Link>
         </article>
       ) : null}
+      {!isTrialSchool && session.role === 'admin' ? (
+        <article className="portal-admin-card">
+          <h2>CSV Uploads</h2>
+          <p>Import Rapsodo pitching exports directly into this school&apos;s dashboard.</p>
+          <Link href="/portal/admin/csv-uploads" className="btn btn-primary as-link">
+            Open CSV Uploads
+          </Link>
+        </article>
+      ) : null}
       <article className="portal-admin-card">
         <h2>Dashboard</h2>
         <p>Open the main dashboard view.</p>
