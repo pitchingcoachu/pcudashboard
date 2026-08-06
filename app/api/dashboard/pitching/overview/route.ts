@@ -5,6 +5,7 @@ import { resolveDashboardApiBaseUrl, resolveDashboardSchoolCode } from '../../..
 import { resolveDashboardPlayerIdentity, scopedPlayerQueryName, shouldScopeDashboardPlayer } from '../../../../../lib/dashboard-player-scope';
 import { fetchDashboardJsonWithCache } from '../../../../../lib/dashboard-route-cache';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
+import { getPlayerProLinkByPlayerName } from '../../../../../lib/training-db';
 
 export const maxDuration = 300;
 const PITCHING_OVERVIEW_CACHE_VERSION = 'adv-metrics-v9';
@@ -176,10 +177,15 @@ function applyOverviewBackfills(payload: unknown): unknown {
   return payload;
 }
 
-function resolveOverviewTimeoutMs(schoolCode: string): number {
+function resolveOverviewTimeoutMs(schoolCode: string, hasProLinkMerge = false): number {
   const upper = String(schoolCode ?? '').trim().toUpperCase();
   if (upper === 'LEAGUE') return 30000;
   if (upper === 'PRO') return 60000;
+  // A PRO-linked player triggers a second query (dashboard_api's
+  // _fetch_pro_rows_for_link) alongside the normal school query -- give it
+  // the same headroom PRO's own page gets, only when that second query
+  // actually fires.
+  if (hasProLinkMerge) return 60000;
   return 30000;
 }
 
@@ -227,6 +233,20 @@ function normalizeBallTypesParam(value: string): string {
     .filter((part) => part.toLowerCase() !== 'all');
   if (selected.length === 1 && selected[0].toLowerCase() === 'baseball') return '';
   return selected.join(';');
+}
+
+/** Mirrors _parse_name_list in dashboard_api/app/main.py -- names can contain
+ * commas ("Last, First"), so semicolon is the multi-select delimiter. */
+function parseNameList(value: string): string[] {
+  const text = (value ?? '').trim();
+  if (!text) return [];
+  if (text.includes(';')) {
+    return text
+      .split(';')
+      .map((part) => part.trim())
+      .filter((part) => part && part.toLowerCase() !== 'all');
+  }
+  return text.toLowerCase() === 'all' ? [] : [text];
 }
 
 function parseCsv(value: string): string[] {
@@ -1193,6 +1213,33 @@ export async function GET(request: Request) {
   if (ipMax) url.searchParams.set('ip_max', ipMax);
   const isLeague = String(schoolCode ?? '').trim().toUpperCase() === 'LEAGUE';
   const isPro = String(schoolCode ?? '').trim().toUpperCase() === 'PRO';
+
+  // Merge a manually-linked PRO player's data in for this specific player
+  // (see PlayerProLinkPanel / player_pro_links) -- only when exactly one
+  // school-context pitcher is selected, matching the same single-player gate
+  // the Python side enforces, so this never fires on a broad/multi-pitcher
+  // query. Resolved here (not in dashboard_api) because that service has no
+  // access to the players table this link lives against.
+  let hasProLinkMerge = false;
+  if (!isLeague && !isPro) {
+    const effectivePitcherRaw = scopedPitcher || pitcher;
+    const selectedPitcherNames = parseNameList(effectivePitcherRaw);
+    if (selectedPitcherNames.length === 1) {
+      try {
+        const link = await getPlayerProLinkByPlayerName({
+          organizationId: session.organizationId ?? 0,
+          playerName: selectedPitcherNames[0],
+        });
+        if (link) {
+          url.searchParams.set('pro_link_name', link.proPlayerName);
+          hasProLinkMerge = true;
+        }
+      } catch {
+        // Best-effort -- a lookup failure should degrade to no merge, not break the report.
+      }
+    }
+  }
+
   const isTeamSplit = splitBy === 'Team' || splitBy === 'Pitcher Team';
   const isLeaderboardLikeSplit = splitBy === 'Pitcher' || isTeamSplit;
   const normalizedTableMode = tableMode.toLowerCase();
@@ -1598,7 +1645,7 @@ export async function GET(request: Request) {
       cacheKey: `pitching:overview:${PITCHING_OVERVIEW_CACHE_VERSION}:${url.toString()}${gameSplitCacheBuster}${customShapeCacheBuster}${editCacheBuster}`,
       ttlMs: cachePolicy.ttlMs,
       staleTtlMs: cachePolicy.staleTtlMs,
-      timeoutMs: resolveOverviewTimeoutMs(schoolCode),
+      timeoutMs: resolveOverviewTimeoutMs(schoolCode, hasProLinkMerge),
       retries: resolveOverviewRetries(schoolCode),
       fetcher: (signal) => fetch(url.toString(), { cache: 'no-store', signal }),
     });

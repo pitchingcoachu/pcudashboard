@@ -136,6 +136,16 @@ class PitchEditCountResponse(BaseModel):
     edit_count: int
 
 
+class CsvUploadRefreshToken(BaseModel):
+    upload_id: int = Field(gt=0)
+    refresh_token: str = Field(min_length=32, max_length=256)
+
+
+class CsvUploadRefreshRequest(BaseModel):
+    school_code: str = Field(min_length=2, max_length=32)
+    uploads: List[CsvUploadRefreshToken] = Field(min_length=1, max_length=10)
+
+
 class ManualVelocityEntry(BaseModel):
     id: str
     school_code: str

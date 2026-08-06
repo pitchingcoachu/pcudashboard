@@ -6826,6 +6826,126 @@ export async function getPlayerForUser(input: {
   };
 }
 
+export type PlayerProLink = {
+  playerId: number;
+  proPlayerName: string;
+  createdAt: string;
+};
+
+function normalizeProName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/** Confirms `playerId` belongs to `organizationId` before any link read/write
+ * -- the same ownership check used throughout this file (see getPlayerForUser
+ * above) -- so a coach at one school can never touch another school's player. */
+async function assertPlayerInOrganization(organizationId: number, playerId: number): Promise<boolean> {
+  const pool = getDbPool();
+  const result = await pool.query(`SELECT 1 FROM players WHERE id = $1 AND organization_id = $2 LIMIT 1`, [
+    playerId,
+    organizationId,
+  ]);
+  return (result.rowCount ?? 0) === 1;
+}
+
+export async function getPlayerProLink(input: { organizationId: number; playerId: number }): Promise<PlayerProLink | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureTrainingDbReady();
+  const owned = await assertPlayerInOrganization(input.organizationId, input.playerId);
+  if (!owned) return null;
+
+  const pool = getDbPool();
+  const result = await pool.query<{ player_id: number; pro_player_name: string; created_at: string }>(
+    `SELECT player_id, pro_player_name, created_at::text FROM player_pro_links WHERE player_id = $1 LIMIT 1`,
+    [input.playerId]
+  );
+  if ((result.rowCount ?? 0) !== 1) return null;
+  return {
+    playerId: result.rows[0].player_id,
+    proPlayerName: result.rows[0].pro_player_name,
+    createdAt: result.rows[0].created_at,
+  };
+}
+
+/** Resolves a school player's PRO link by their display name (as it appears
+ * in the pitcher/hitter overview selector) rather than by playerId -- the
+ * overview routes only ever see a name string, never the players.id it
+ * belongs to. Matches on full_name within the caller's own organization
+ * only, so a coach at one school can never pick up another school's link. */
+export async function getPlayerProLinkByPlayerName(input: {
+  organizationId: number;
+  playerName: string;
+}): Promise<PlayerProLink | null> {
+  if (!isDatabaseConfigured()) return null;
+  const trimmedName = input.playerName.trim();
+  if (!trimmedName) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ player_id: number; pro_player_name: string; created_at: string }>(
+    `
+      SELECT ppl.player_id, ppl.pro_player_name, ppl.created_at::text
+      FROM player_pro_links ppl
+      JOIN players p ON p.id = ppl.player_id
+      WHERE p.organization_id = $1 AND p.full_name = $2
+      LIMIT 1
+    `,
+    [input.organizationId, trimmedName]
+  );
+  if ((result.rowCount ?? 0) !== 1) return null;
+  return {
+    playerId: result.rows[0].player_id,
+    proPlayerName: result.rows[0].pro_player_name,
+    createdAt: result.rows[0].created_at,
+  };
+}
+
+export async function setPlayerProLink(input: {
+  organizationId: number;
+  playerId: number;
+  proPlayerName: string;
+  createdByUserId: number | null;
+}): Promise<PlayerProLink | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureTrainingDbReady();
+  const owned = await assertPlayerInOrganization(input.organizationId, input.playerId);
+  if (!owned) return null;
+
+  const pool = getDbPool();
+  const proNameNorm = normalizeProName(input.proPlayerName);
+  const result = await pool.query<{ player_id: number; pro_player_name: string; created_at: string }>(
+    `
+      INSERT INTO player_pro_links (player_id, pro_player_name, pro_name_norm, created_by_user_id)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (player_id) DO UPDATE SET
+        pro_player_name = EXCLUDED.pro_player_name,
+        pro_name_norm = EXCLUDED.pro_name_norm,
+        created_by_user_id = EXCLUDED.created_by_user_id,
+        created_at = NOW()
+      RETURNING player_id, pro_player_name, created_at::text
+    `,
+    [input.playerId, input.proPlayerName.trim(), proNameNorm, input.createdByUserId]
+  );
+  return {
+    playerId: result.rows[0].player_id,
+    proPlayerName: result.rows[0].pro_player_name,
+    createdAt: result.rows[0].created_at,
+  };
+}
+
+export async function deletePlayerProLink(input: { organizationId: number; playerId: number }): Promise<boolean> {
+  if (!isDatabaseConfigured()) return false;
+  await ensureTrainingDbReady();
+  const owned = await assertPlayerInOrganization(input.organizationId, input.playerId);
+  if (!owned) return false;
+
+  const pool = getDbPool();
+  await pool.query(`DELETE FROM player_pro_links WHERE player_id = $1`, [input.playerId]);
+  return true;
+}
+
 export async function updatePlayerProfile(input: {
   organizationId: number;
   playerId: number;

@@ -12422,6 +12422,7 @@ export default function PitchingSuite({
             { value: 'HB', label: 'HB' },
             { value: 'Batter', label: 'Batter' },
             { value: 'Catcher', label: 'Catcher' },
+            { value: 'Source', label: 'Source' },
           ],
     [isLeague]
   );

@@ -13,6 +13,7 @@ import type {
 import WorkoutLogModal from '../components/workout-log-modal';
 import PlayerNotesSuite from '../dashboard/player-notes-suite';
 import ProfilePlanGoalsPanel from './profile-plan-goals-panel';
+import PlayerProLinkPanel from './player-pro-link-panel';
 import PlayerMediaSection from './player-media-section';
 
 type TrackedExercise = {
@@ -1266,6 +1267,12 @@ export default function ProfileDashboard({
         ) : null}
         </article>
       )}
+
+      <PlayerProLinkPanel
+        playerId={playerId}
+        playerName={profile.fullName}
+        canEdit={sessionRole === 'admin' || sessionRole === 'coach'}
+      />
 
       {sessionRole === 'admin' || sessionRole === 'coach' ? (
         <article className="portal-admin-card">

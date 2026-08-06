@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 import hashlib
+import hmac
 import json
 import logging
 from math import atan, atan2, cos, degrees, exp, isfinite, isnan, pi, radians, sin, sqrt
@@ -26,6 +27,7 @@ from .schemas import (
     PitchEditCountResponse,
     PitchEditRequest,
     PitchEditResponse,
+    CsvUploadRefreshRequest,
     PitchTypeSummaryRow,
     PitchingFiltersResponse,
     PitchingOverviewResponse,
@@ -914,6 +916,11 @@ def _compute_home_trends_payload(
     if school not in {"PRO", "LEAGUE"}:
         roster_pitchers = {str(key).strip() for key in roster.get("team_only_norm", []) if str(key).strip()}
         roster_hitters = {str(key).strip() for key in roster.get("hitter_norm", []) if str(key).strip()}
+        roster_pitchers.update(
+            _normalize_name_key(name)
+            for name in _load_dashboard_csv_pitchers(school)
+            if _normalize_name_key(name)
+        )
         allowed_pitcher_keys = roster_pitchers if roster_pitchers else None
         allowed_hitter_keys = roster_hitters if roster_hitters else None
     pitching_defaults = {
@@ -2699,6 +2706,12 @@ def _split_key_from_row(row: Dict[str, Any], split_by: str) -> str:
         return _bucket_metric(row.get("hb"), 5.0, "")
     if split == "Pitcher":
         return str(row.get("pitcher") or "Unknown")
+    if split == "Source":
+        # Only meaningful once PRO rows can be merged into a school request
+        # (see player_pro_links / pro_link_name) -- rows projected from
+        # pro_pitch_events are tagged school_code="PRO" so they group
+        # separately from the player's own school-tagged rows here.
+        return "PRO" if str(row.get("school_code") or "").strip().upper() == "PRO" else "School"
     if split in {"Team", "Pitcher Team"}:
         norm = str(row.get("pitcher_team_norm") or "").strip()
         if norm:
@@ -3618,6 +3631,7 @@ def _build_dynamic_table(
         "IVB": "InducedVert",
         "HB": "HorzBreak",
         "Pitcher": "Pitcher",
+        "Source": "Source",
         "Team": "Team",
         "Pitcher Team": "Pitcher Team",
         "Batter": "Batter",
@@ -3891,7 +3905,7 @@ def _build_dynamic_table(
 
     def _row_for_group(key: str, grp: List[Dict[str, Any]]) -> Dict[str, Any]:
         n = len(grp)
-        strike_calls = {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
+        strike_calls = {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay", "RapsodoStrike"}
         swing_calls = {"StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
         ahead_strike_calls = {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable"}
         ea_strike_calls = {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
@@ -4641,7 +4655,11 @@ def _build_dynamic_table(
         official_outs = 0
         # PRO-only: use official pitcher game line totals when available.
         # (earned runs + outs recorded from StatsAPI boxscore)
-        if str((grp[0].get("school_code") if grp else "") or "").strip().upper() == "PRO":
+        # is_pro_group (any-row check, not grp[0]) so a merged group containing
+        # both school and linked-PRO rows still picks up official stats from
+        # its PRO rows instead of silently skipping them because the first
+        # row in the group happened to be a school row.
+        if is_pro_group:
             # Collect per-game official totals robustly (some rows may have null
             # official_* while other rows for the same game/pitcher have values).
             per_game_official: dict[tuple[str, str], tuple[Optional[float], Optional[int]]] = {}
@@ -6577,6 +6595,63 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
     }
 
 
+def _load_dashboard_csv_pitchers(school_code: str) -> List[str]:
+    school = (school_code or "").strip().upper()
+    if not school or school in {"PRO", "LEAGUE"}:
+        return []
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.dashboard_csv_uploads')::text AS table_name")
+            if not (cur.fetchone() or {}).get("table_name"):
+                return []
+            cur.execute(
+                """
+                SELECT DISTINCT NULLIF(TRIM(pitcher_name), '') AS pitcher_name
+                FROM public.dashboard_csv_uploads
+                WHERE school_code = %(school_code)s
+                  AND status = 'complete'
+                  AND NULLIF(TRIM(pitcher_name), '') IS NOT NULL
+                ORDER BY pitcher_name
+                """,
+                {"school_code": school},
+            )
+            return [str(row.get("pitcher_name") or "").strip() for row in cur.fetchall() if str(row.get("pitcher_name") or "").strip()]
+    except Exception:
+        return []
+
+
+def _merge_dashboard_csv_pitchers_into_filters_payload(
+    payload: Dict[str, Any],
+    school_code: str,
+) -> Dict[str, Any]:
+    csv_pitchers = _load_dashboard_csv_pitchers(school_code)
+    if not csv_pitchers:
+        return payload
+
+    merged_payload = dict(payload)
+    existing_pitchers = [str(name).strip() for name in (payload.get("pitchers") or []) if str(name).strip()]
+    pitchers_by_key = {_normalize_name_key(name): name for name in existing_pitchers if _normalize_name_key(name)}
+    for name in csv_pitchers:
+        key = _normalize_name_key(name)
+        if key and key not in pitchers_by_key:
+            pitchers_by_key[key] = name
+    merged_pitchers = sorted(pitchers_by_key.values(), key=lambda name: _display_name_first_last(name).lower())
+    merged_payload["pitchers"] = merged_pitchers
+
+    school = (school_code or "").strip().upper()
+    team_map_raw = payload.get("pitchers_by_team_code")
+    team_map = dict(team_map_raw) if isinstance(team_map_raw, dict) else {}
+    school_names = [str(name).strip() for name in (team_map.get(school) or []) if str(name).strip()]
+    school_names_by_key = {_normalize_name_key(name): name for name in school_names if _normalize_name_key(name)}
+    for name in csv_pitchers:
+        key = _normalize_name_key(name)
+        if key and key not in school_names_by_key:
+            school_names_by_key[key] = name
+    team_map[school] = sorted(school_names_by_key.values(), key=lambda name: _display_name_first_last(name).lower())
+    merged_payload["pitchers_by_team_code"] = team_map
+    return merged_payload
+
+
 _MOD_SYNC_INTERVAL_SECONDS = 90.0
 _MOD_SYNC_LAST_AT: Dict[str, float] = {}
 _MOD_SYNC_REFRESH_LOCK = threading.Lock()
@@ -8365,7 +8440,7 @@ def _refresh_league_daily_rollup(
                   )::int AS in_zone_n,
                   SUM(CASE WHEN b.plate_side IS NOT NULL AND b.plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
                   SUM(
-                    CASE WHEN b.pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay') THEN 1 ELSE 0 END
+                    CASE WHEN b.pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay','RapsodoStrike') THEN 1 ELSE 0 END
                   )::int AS strike_n,
                   SUM(
                     CASE WHEN b.pitch_call IN ('StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay') THEN 1 ELSE 0 END
@@ -8913,7 +8988,7 @@ def _refresh_league_daily_rollup(
                       THEN 1 ELSE 0 END
                   )::int AS in_zone_n,
                   SUM(CASE WHEN e.plate_side IS NOT NULL AND e.plate_height IS NOT NULL THEN 1 ELSE 0 END)::int AS loc_n,
-                  SUM(CASE WHEN e.pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay') THEN 1 ELSE 0 END)::int AS strike_n,
+                  SUM(CASE WHEN e.pitch_call IN ('StrikeCalled','StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay','RapsodoStrike') THEN 1 ELSE 0 END)::int AS strike_n,
                   SUM(CASE WHEN e.pitch_call IN ('StrikeSwinging','FoulBall','FoulBallFieldable','FoulBallNotFieldable','InPlay') THEN 1 ELSE 0 END)::int AS swing_n,
                   SUM(CASE WHEN e.pitch_call = 'StrikeSwinging' THEN 1 ELSE 0 END)::int AS whiff_n,
                   SUM(CASE WHEN e.pitch_call = 'StrikeCalled' OR e.pitch_call = 'StrikeSwinging' THEN 1 ELSE 0 END)::int AS csw_n,
@@ -9188,6 +9263,79 @@ def _kick_school_rollup_refresh_background(school_code: str, reset_timer: bool =
     except Exception:
         with _SCHOOL_ROLLUP_REFRESH_LOCK:
             _SCHOOL_ROLLUP_REFRESH_RUNNING.discard(school)
+
+
+def _kick_school_rollup_window_refresh_background(
+    school_code: str,
+    window_start: date,
+    window_end: date,
+    upload_ids: Optional[List[int]] = None,
+) -> bool:
+    school = _validate_school_code(school_code)
+    if school in {"PRO", "LEAGUE"}:
+        return False
+
+    with _SCHOOL_ROLLUP_REFRESH_LOCK:
+        if school in _SCHOOL_ROLLUP_REFRESH_RUNNING:
+            return False
+        _SCHOOL_ROLLUP_REFRESH_RUNNING.add(school)
+
+    def _worker() -> None:
+        try:
+            _refresh_league_daily_rollup(
+                force=True,
+                school_code=school,
+                raise_on_failure=True,
+                window_start=window_start,
+                window_end=window_end,
+            )
+            _refresh_league_daily_rollup(
+                force=True,
+                school_code="LEAGUE",
+                raise_on_failure=True,
+                window_start=window_start,
+                window_end=window_end,
+            )
+            if upload_ids:
+                try:
+                    with get_conn() as conn, conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            UPDATE public.dashboard_csv_uploads
+                            SET refresh_completed_at = NOW()
+                            WHERE school_code = %(school_code)s
+                              AND id = ANY(%(upload_ids)s::bigint[])
+                            """,
+                            {"school_code": school, "upload_ids": upload_ids},
+                        )
+                except Exception:
+                    logger.warning("CSV refresh completion update failed for %s", school)
+        finally:
+            _overview_cache_invalidate_school(school)
+            _filters_cache_invalidate_school(school)
+            _overview_cache_invalidate_school("LEAGUE")
+            _filters_cache_invalidate_school("LEAGUE")
+            _kick_filters_snapshot_refresh_background(
+                school_code=school,
+                domain="pitching",
+                level_bucket="All",
+            )
+            _kick_filters_snapshot_refresh_background(
+                school_code="LEAGUE",
+                domain="pitching",
+                level_bucket="All",
+            )
+            with _SCHOOL_ROLLUP_REFRESH_LOCK:
+                _SCHOOL_ROLLUP_REFRESH_RUNNING.discard(school)
+
+    try:
+        thread = threading.Thread(target=_worker, name=f"csv-rollup-refresh-{school.lower()}", daemon=True)
+        thread.start()
+        return True
+    except Exception:
+        with _SCHOOL_ROLLUP_REFRESH_LOCK:
+            _SCHOOL_ROLLUP_REFRESH_RUNNING.discard(school)
+        return False
 
 
 def _warm_filters_snapshots(force: bool = False) -> None:
@@ -16029,6 +16177,8 @@ def _pro_pitch_call_from_description(description_norm: str) -> str:
         return "BallCalled"
     if d in {"called_strike", "strikecalled"}:
         return "StrikeCalled"
+    if d in {"rapsodo_strike", "rapsodostrike"}:
+        return "RapsodoStrike"
     if d in {"hit_by_pitch", "hitbypitch"}:
         return "HitByPitch"
     if d.startswith("foul") or d in {"foultip", "foul_tip", "foulball", "foulballfieldable", "foulballnotfieldable", "bunt_foul_tip"}:
@@ -17113,6 +17263,112 @@ def _pro_pitching_filters(school_code: str, level: Optional[str] = None) -> Pitc
     )
 
 
+def _fetch_pro_rows_for_link(
+    *,
+    pro_name_norm: str,
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> List[Dict[str, Any]]:
+    """Raw per-pitch rows for a single PRO-linked pitcher, projected into the
+    same field names the school-side overview query produces (school_code,
+    session_date, pitcher, pitch_type, pitch_call, ...), so they can be
+    concatenated directly into table_source_rows before aggregation. Deliberately
+    minimal -- no filter set beyond name + date range, since this exists only to
+    merge one specific linked player's PRO data into their school report, not to
+    reproduce the full PRO page's filter surface."""
+    source_table = _pro_pitch_source_table()
+    if not source_table or not pro_name_norm:
+        return []
+
+    sql = (
+        """
+    SELECT
+      'PRO'::text AS school_code,
+      pe.id AS id,
+      game_pk,
+      at_bat_index,
+      event_index,
+      session_date,
+      COALESCE(NULLIF(TRIM(pitchuid), ''), '') AS pitch_uid,
+      COALESCE(NULLIF(TRIM(play_id), ''), '') AS play_id,
+      COALESCE(NULLIF(TRIM(gameid), ''), '') AS game_id,
+      ''::text AS game_uid,
+      ''::text AS game_foreign_id,
+      COALESCE(NULLIF(TRIM(inning::text), ''), '') AS inning,
+      ''::text AS source_file_name,
+      ''::text AS inning_topbot,
+      ''::text AS home_team_code,
+      ''::text AS away_team_code,
+      pitchid AS pitch_number,
+      pitchid AS pitch_no,
+      COALESCE(NULLIF(TRIM(pitcher), ''), 'Unknown Pitcher') AS pitcher,
+      """ + PRO_PITCH_TYPE_SQL + """ AS pitch_type,
+      ''::text AS video_clip_1,
+      ''::text AS video_clip_2,
+      ''::text AS video_clip_3,
+      relspeed AS rel_speed,
+      inducedvertbreak AS ivb,
+      horzbreak AS hb,
+      COALESCE(NULLIF(TRIM(releasetilt), ''), '') AS release_tilt,
+      COALESCE(NULLIF(TRIM(breaktilt), ''), '') AS break_tilt,
+      COALESCE(spinefficiency, pas.active_spin_pct / 100.0) AS spin_eff,
+      spinrate AS spin_rate,
+      exitspeed AS exit_speed,
+      angle,
+      relheight AS rel_height,
+      relside AS rel_side,
+      NULL::double precision AS vaa,
+      NULL::double precision AS haa,
+      extension AS ext_value,
+      COALESCE(NULLIF(TRIM(pitchcall), ''), '') AS pitch_call,
+      COALESCE(NULLIF(TRIM(korbb), ''), '') AS korbb,
+      COALESCE(NULLIF(TRIM(playresult), ''), '') AS play_result,
+      COALESCE(NULLIF(TRIM(taggedhittype), ''), '') AS tagged_hit_type,
+      outsonplay AS outs_on_play_num,
+      outs AS outs_num,
+      platelocside AS plate_side,
+      platelocheight AS plate_height,
+      CASE WHEN UPPER(LEFT(COALESCE(NULLIF(TRIM(pitcherthrows), ''), ''), 1)) = 'L' THEN TRUE ELSE FALSE END AS is_lefty,
+      balls AS balls_num,
+      strikes AS strikes_num,
+      NULL::int AS prev_balls,
+      NULL::int AS prev_strikes,
+      COALESCE(NULLIF(TRIM(batterside), ''), '') AS batterside,
+      COALESCE(NULLIF(TRIM(pitcherthrows), ''), '') AS pitcherthrows,
+      COALESCE(NULLIF(TRIM(batter), ''), '') AS batter,
+      COALESCE(NULLIF(TRIM(catcher), ''), '') AS catcher,
+      UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) AS pitcher_team_code,
+      UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) AS batter_team_code,
+      UPPER(COALESCE(NULLIF(TRIM(pitcherteam), ''), '')) AS pitcher_team_norm,
+      UPPER(COALESCE(NULLIF(TRIM(batterteam), ''), '')) AS batter_team_norm_eff,
+      COALESCE(NULLIF(TRIM(session_type), ''), 'Season') AS session_type_norm
+    FROM public.pro_pitch_events pe
+    LEFT JOIN public.pro_pitcher_active_spin pas
+      ON pas.pitcher_name_norm = regexp_replace(lower(COALESCE(NULLIF(TRIM(pe.pitcher), ''), '')), '[^a-z0-9]', '', 'g')
+     AND pas.pitch_type = """ + PRO_ACTIVE_SPIN_PITCH_TYPE_SQL + """
+    WHERE """ + PITCHER_NAME_NORM_SQL + """ = %(pro_name_norm)s
+      AND (%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)
+      AND (%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)
+    ORDER BY session_date, id
+    """
+    )
+    params = {
+        "pro_name_norm": pro_name_norm,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = [dict(r) for r in cur.fetchall()]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"pro link overview query failed: {exc}") from exc
+    for row in rows:
+        row["_inning_split_use_game_inning"] = False
+        row["_venue_context"] = "pitching"
+    return rows
+
+
 def _pro_pitching_overview(
     *,
     school_code: str,
@@ -17765,7 +18021,7 @@ def _pro_pitching_overview(
 
     loc_rows = [r for r in rows if _is_num(r.get("plate_side")) and _is_num(r.get("plate_height"))]
     in_zone_n = sum(1 for r in rows if _pro_in_zone_yes(r))
-    strike_calls = {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
+    strike_calls = {"StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay", "RapsodoStrike"}
     strike_n = sum(1 for r in rows if str(r.get("pitch_call") or "") in strike_calls)
     swing_calls = {"StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"}
     swing_n = sum(1 for r in rows if str(r.get("pitch_call") or "") in swing_calls)
@@ -20126,6 +20382,7 @@ def pitching_filters(
         )
         if isinstance(snapshot_payload, dict):
             try:
+                snapshot_payload = _merge_dashboard_csv_pitchers_into_filters_payload(snapshot_payload, school_code)
                 if school_code not in {"LEAGUE", "PRO"} and "ball_types" not in snapshot_payload:
                     raise ValueError("pitching filters snapshot missing ball_types")
                 if school_code == "LEAGUE" and "level_options" not in snapshot_payload:
@@ -20531,7 +20788,13 @@ def pitching_filters(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"filters query failed: {exc}") from exc
 
+    csv_pitcher_names = _load_dashboard_csv_pitchers(school_code)
     allowed_pitcher_keys = set(team_norm | campers_norm)
+    allowed_pitcher_keys.update(
+        _normalize_name_key(name)
+        for name in csv_pitcher_names
+        if _normalize_name_key(name)
+    )
     if allowed_pitcher_keys:
         pitchers = [name for name in pitchers if _normalize_name_key(name) in allowed_pitcher_keys]
     known_hitter_keys = set(hitter_norm | campers_norm)
@@ -20549,31 +20812,37 @@ def pitching_filters(
             team_markers_norm=set(team_markers_norm or []),
         )
 
+    response_payload = _merge_dashboard_csv_pitchers_into_filters_payload(
+        {
+            "school_code": school_code,
+            "min_date": date_row.get("min_date"),
+            "max_date": date_row.get("max_date"),
+            "pitchers": pitchers,
+            "team_types": team_types,
+            "opp_hitters": opp_hitters,
+            "with_video_options": ["All", "Yes", "No"],
+            "break_lines_options": ["None", "Fastball", "Sinker"],
+            "stuff_level_options": ["Pro", "College", "High School"],
+            "stuff_base_options": ["Fastball", "Sinker"],
+            "hands": ["All", "Left", "Right"],
+            "batter_sides": ["All", "Left", "Right"],
+            "session_types": session_types,
+            "pitch_types": pitch_types,
+            "ball_types": ball_types,
+            "zone_locations": ZONE_LOCATION_CHOICES,
+            "in_zone_options": ["All", "Yes", "No", "Competitive"],
+            "qp_location_options": ["All", "Yes", "No"],
+            "pitch_results": PITCH_RESULT_CHOICES,
+            "count_options": COUNT_CHOICES,
+            "after_count_options": COUNT_CHOICES,
+            "level_options": level_options if school_code == "LEAGUE" else None,
+            "pitchers_by_team_code": pitchers_by_team_code or None,
+            "opp_hitters_by_team_code": opp_hitters_by_team_code or None,
+        },
+        school_code,
+    )
     response = PitchingFiltersResponse(
-        school_code=school_code,
-        min_date=date_row.get("min_date"),
-        max_date=date_row.get("max_date"),
-        pitchers=pitchers,
-        team_types=team_types,
-        opp_hitters=opp_hitters,
-        with_video_options=["All", "Yes", "No"],
-        break_lines_options=["None", "Fastball", "Sinker"],
-        stuff_level_options=["Pro", "College", "High School"],
-        stuff_base_options=["Fastball", "Sinker"],
-        hands=["All", "Left", "Right"],
-        batter_sides=["All", "Left", "Right"],
-        session_types=session_types,
-        pitch_types=pitch_types,
-        ball_types=ball_types,
-        zone_locations=ZONE_LOCATION_CHOICES,
-        in_zone_options=["All", "Yes", "No", "Competitive"],
-        qp_location_options=["All", "Yes", "No"],
-        pitch_results=PITCH_RESULT_CHOICES,
-        count_options=COUNT_CHOICES,
-        after_count_options=COUNT_CHOICES,
-        level_options=level_options if school_code == "LEAGUE" else None,
-        pitchers_by_team_code=pitchers_by_team_code or None,
-        opp_hitters_by_team_code=opp_hitters_by_team_code or None,
+        **response_payload,
     )
     _filters_cache_set(filters_cache_key, response)
     _save_filters_snapshot(
@@ -20702,6 +20971,7 @@ def pitching_overview(
     include_row_pitches: bool = Query(default=True),
     include_trend_rows: bool = Query(default=True),
     force_raw: bool = Query(default=False),
+    pro_link_name: Optional[str] = Query(default=None),
 ) -> PitchingOverviewResponse:
     _perf_started = time.perf_counter()
     school_code = _validate_school_code(school_code)
@@ -21150,6 +21420,7 @@ def pitching_overview(
             "end_date": end_date,
             "level": level_filter,
             "pitcher": selected_pitchers,
+            "pro_link_name": pro_link_name,
             "team_type": team_type,
             "opp_hitter": selected_opp_hitters,
             "with_video": with_video,
@@ -21534,6 +21805,7 @@ def pitching_overview(
       base_raw AS (
         SELECT
           id,
+          school_code,
           session_date,
           date,
           (regexp_match(COALESCE(to_jsonb(pe)->>'pitchid', to_jsonb(pe)->>'pitchno', ''), '[-+]?[0-9]+'))[1]::int AS pitch_no,
@@ -22035,6 +22307,7 @@ def pitching_overview(
                 + """
                 SELECT
                   id,
+                  school_code,
                   session_date,
                   pitch_no,
                   pitch_uid,
@@ -22121,6 +22394,21 @@ def pitching_overview(
             )
             if venue_filter:
                 table_source_rows = [row for row in table_source_rows if _venue_filter_match(row, venue_filter)]
+
+            # Merge in a manually-linked PRO player's pitches (see player_pro_links /
+            # PlayerProLinkPanel) -- only for a single specifically-selected pitcher,
+            # never a broad/multi-pitcher query, so this can't accidentally trigger a
+            # second query on unrelated requests. The gateway resolves the link
+            # server-side (it owns the players table, which this service can't see)
+            # and forwards the linked PRO name here.
+            if pro_link_name and len(selected_pitcher_keys) == 1:
+                pro_name_norm = _normalize_name_key(pro_link_name)
+                pro_rows = _fetch_pro_rows_for_link(
+                    pro_name_norm=pro_name_norm,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+                table_source_rows = list(table_source_rows) + pro_rows
 
             # Recompute aggregate/summary metrics from the post-filtered rows so team_type behavior
             # is always exact, even if SQL team bucketing and route params diverge.
@@ -24245,7 +24533,8 @@ def hitting_filters(
             "HB",
             "Pitcher",
             "Catcher",
-        ],
+        ]
+        + (["Source"] if school_code not in {"LEAGUE", "PRO"} else []),
         "level_options": level_options if school_code == "LEAGUE" else None,
     }
     _filters_cache_set(filters_cache_key, response)
@@ -26893,6 +27182,72 @@ def pitching_pitch_edit(payload: PitchEditRequest) -> PitchEditResponse:
     _filters_cache_invalidate_school(school_code)
     _kick_school_rollup_refresh_background(school_code, reset_timer=True)
     return PitchEditResponse(ok=True, updated_count=len(pitch_ids))
+
+
+@app.post("/v1/admin/csv-uploads/refresh")
+def refresh_csv_upload_rollups(payload: CsvUploadRefreshRequest) -> Dict[str, Any]:
+    school_code = _validate_school_code(payload.school_code)
+    if school_code in {"PRO", "LEAGUE"}:
+        raise HTTPException(status_code=400, detail="CSV uploads must target a specific college dashboard.")
+    upload_ids = sorted({int(item.upload_id) for item in payload.uploads})
+    if len(upload_ids) != len(payload.uploads):
+        raise HTTPException(status_code=400, detail="Duplicate upload IDs are not allowed.")
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.dashboard_csv_uploads')::text AS table_name")
+            if not (cur.fetchone() or {}).get("table_name"):
+                raise HTTPException(status_code=404, detail="CSV upload records were not found.")
+            cur.execute(
+                """
+                SELECT id, refresh_token_sha256, min_session_date, max_session_date
+                FROM public.dashboard_csv_uploads
+                WHERE school_code = %(school_code)s
+                  AND status = 'complete'
+                  AND id = ANY(%(upload_ids)s::bigint[])
+                FOR UPDATE
+                """,
+                {"school_code": school_code, "upload_ids": upload_ids},
+            )
+            rows_by_id = {int(row["id"]): dict(row) for row in cur.fetchall()}
+            if len(rows_by_id) != len(upload_ids):
+                raise HTTPException(status_code=403, detail="CSV refresh authorization failed.")
+            for item in payload.uploads:
+                row = rows_by_id.get(int(item.upload_id)) or {}
+                expected = str(row.get("refresh_token_sha256") or "")
+                supplied = hashlib.sha256(item.refresh_token.encode("utf-8")).hexdigest()
+                if not expected or not hmac.compare_digest(expected, supplied):
+                    raise HTTPException(status_code=403, detail="CSV refresh authorization failed.")
+            min_dates = [row.get("min_session_date") for row in rows_by_id.values() if isinstance(row.get("min_session_date"), date)]
+            max_dates = [row.get("max_session_date") for row in rows_by_id.values() if isinstance(row.get("max_session_date"), date)]
+            if not min_dates or not max_dates:
+                raise HTTPException(status_code=400, detail="CSV upload date range is unavailable.")
+            window_start = min(min_dates)
+            window_end = max(max_dates)
+            cur.execute(
+                """
+                UPDATE public.dashboard_csv_uploads
+                SET refresh_requested_at = NOW(), refresh_token_sha256 = NULL
+                WHERE school_code = %(school_code)s
+                  AND id = ANY(%(upload_ids)s::bigint[])
+                """,
+                {"school_code": school_code, "upload_ids": upload_ids},
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"CSV rollup refresh request failed: {exc}") from exc
+
+    _overview_cache_invalidate_school(school_code)
+    _filters_cache_invalidate_school(school_code)
+    queued = _kick_school_rollup_window_refresh_background(school_code, window_start, window_end, upload_ids)
+    return {
+        "ok": True,
+        "queued": queued,
+        "school_code": school_code,
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
+    }
 
 
 @app.get("/v1/pitching/pitch-edit-count", response_model=PitchEditCountResponse)
