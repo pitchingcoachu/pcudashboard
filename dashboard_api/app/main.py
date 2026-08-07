@@ -6680,6 +6680,7 @@ _LEAGUE_DAILY_ROLLUP_REFRESH_LOCK = threading.Lock()
 _LEAGUE_DAILY_ROLLUP_REFRESH_RUNNING = False
 _SCHOOL_ROLLUP_REFRESH_LOCK = threading.Lock()
 _SCHOOL_ROLLUP_REFRESH_RUNNING: set[str] = set()
+_CSV_ROLLUP_PENDING_WINDOWS: Dict[str, tuple[date, date, set[int]]] = {}
 _PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS = max(
     60.0, float(os.getenv("DASHBOARD_PRO_DAILY_ROLLUP_SYNC_INTERVAL_SECONDS", "180"))
 )
@@ -9254,8 +9255,17 @@ def _kick_school_rollup_refresh_background(school_code: str, reset_timer: bool =
         try:
             _refresh_league_daily_rollup(force=False, school_code=school)
         finally:
+            pending: Optional[tuple[date, date, set[int]]] = None
             with _SCHOOL_ROLLUP_REFRESH_LOCK:
                 _SCHOOL_ROLLUP_REFRESH_RUNNING.discard(school)
+                pending = _CSV_ROLLUP_PENDING_WINDOWS.pop(school, None)
+            if pending:
+                _kick_school_rollup_window_refresh_background(
+                    school,
+                    pending[0],
+                    pending[1],
+                    sorted(pending[2]),
+                )
 
     try:
         thread = threading.Thread(target=_worker, name=f"school-rollup-refresh-{school.lower()}", daemon=True)
@@ -9277,7 +9287,17 @@ def _kick_school_rollup_window_refresh_background(
 
     with _SCHOOL_ROLLUP_REFRESH_LOCK:
         if school in _SCHOOL_ROLLUP_REFRESH_RUNNING:
-            return False
+            pending = _CSV_ROLLUP_PENDING_WINDOWS.get(school)
+            pending_ids = {int(upload_id) for upload_id in (upload_ids or []) if int(upload_id) > 0}
+            if pending:
+                _CSV_ROLLUP_PENDING_WINDOWS[school] = (
+                    min(pending[0], window_start),
+                    max(pending[1], window_end),
+                    set(pending[2]) | pending_ids,
+                )
+            else:
+                _CSV_ROLLUP_PENDING_WINDOWS[school] = (window_start, window_end, pending_ids)
+            return True
         _SCHOOL_ROLLUP_REFRESH_RUNNING.add(school)
 
     def _worker() -> None:
@@ -9310,6 +9330,8 @@ def _kick_school_rollup_window_refresh_background(
                         )
                 except Exception:
                     logger.warning("CSV refresh completion update failed for %s", school)
+        except Exception as exc:
+            logger.warning("CSV upload rollup refresh failed for %s: %s", school, exc)
         finally:
             _overview_cache_invalidate_school(school)
             _filters_cache_invalidate_school(school)
@@ -9325,8 +9347,17 @@ def _kick_school_rollup_window_refresh_background(
                 domain="pitching",
                 level_bucket="All",
             )
+            pending: Optional[tuple[date, date, set[int]]] = None
             with _SCHOOL_ROLLUP_REFRESH_LOCK:
                 _SCHOOL_ROLLUP_REFRESH_RUNNING.discard(school)
+                pending = _CSV_ROLLUP_PENDING_WINDOWS.pop(school, None)
+            if pending:
+                _kick_school_rollup_window_refresh_background(
+                    school,
+                    pending[0],
+                    pending[1],
+                    sorted(pending[2]),
+                )
 
     try:
         thread = threading.Thread(target=_worker, name=f"csv-rollup-refresh-{school.lower()}", daemon=True)
