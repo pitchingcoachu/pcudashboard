@@ -1795,8 +1795,6 @@ export async function GET(request: Request) {
         'x-dashboard-cache-source': result.source,
         'x-dashboard-upstream-ms': String(result.durationMs),
         'x-dashboard-route-ms': String(Date.now() - routeStartedAt),
-        'x-debug-pro-link-merge': String(hasProLinkMerge),
-        'x-debug-upstream-url': url.toString(),
       },
     });
   } catch (error) {
