@@ -22432,7 +22432,11 @@ def pitching_overview(
             # second query on unrelated requests. The gateway resolves the link
             # server-side (it owns the players table, which this service can't see)
             # and forwards the linked PRO name here.
-            if pro_link_name and len(selected_pitcher_keys) == 1:
+            # NOTE: selected_pitcher_keys can hold multiple normalized lookup
+            # keys per name (both name orderings, see _name_filter_keys), so
+            # its length is NOT the number of selected pitchers -- gate on
+            # selected_pitchers (the actual name list) instead.
+            if pro_link_name and len(selected_pitchers) == 1:
                 pro_name_norm = _normalize_name_key(pro_link_name)
                 pro_rows = _fetch_pro_rows_for_link(
                     pro_name_norm=pro_name_norm,
