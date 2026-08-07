@@ -23997,6 +23997,32 @@ def pitching_manual_velocity_delete(
         raise HTTPException(status_code=500, detail=f"manual velocity delete failed: {exc}") from exc
 
 
+@app.get("/v1/pitching/debug-pro-link")
+def pitching_debug_pro_link(
+    pro_link_name: str = Query(..., min_length=1),
+    start_date: Optional[date] = Query(default=None),
+    end_date: Optional[date] = Query(default=None),
+) -> Dict[str, Any]:
+    """Temporary diagnostic for the PRO-link merge (see player_pro_links /
+    _fetch_pro_rows_for_link) -- calls the exact same lookup the pitching
+    overview endpoint uses, and reports what it found, without needing log
+    access. Remove once the merge is confirmed working end-to-end."""
+    pro_name_norm = _normalize_name_key(pro_link_name)
+    source_table = _pro_pitch_source_table()
+    rows = _fetch_pro_rows_for_link(
+        pro_name_norm=pro_name_norm,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return {
+        "pro_link_name": pro_link_name,
+        "pro_name_norm": pro_name_norm,
+        "pro_pitch_source_table": source_table,
+        "rows_found": len(rows),
+        "sample_row": rows[0] if rows else None,
+    }
+
+
 @app.get("/v1/pitching/debug-team-codes")
 def pitching_debug_team_codes(
     school_code: str = Query(..., min_length=1),
