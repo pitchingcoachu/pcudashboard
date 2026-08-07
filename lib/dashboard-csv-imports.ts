@@ -169,6 +169,16 @@ function boundedNumber(value: unknown, min: number, max: number): number | null 
   return parsed !== null && parsed >= min && parsed <= max ? parsed : null;
 }
 
+function normalizeClockTilt(value: unknown): string {
+  const raw = normalizeCell(value).replace(/\s+/g, '');
+  const match = raw.match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!match) return '';
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return '';
+  return `${hour}:${String(minute).padStart(2, '0')}`;
+}
+
 const MONTHS = new Map([
   ['jan', '01'], ['feb', '02'], ['mar', '03'], ['apr', '04'], ['may', '05'], ['jun', '06'],
   ['jul', '07'], ['aug', '08'], ['sep', '09'], ['oct', '10'], ['nov', '11'], ['dec', '12'],
@@ -330,7 +340,7 @@ export function analyzeDashboardCsv(fileName: string, fileBytes: Uint8Array): Pa
       velocity,
       spinRate: boundedNumber(valueByHeader(sourceRow, indexes, 'Total Spin'), 0, 5000),
       spinEfficiency: boundedNumber(valueByHeader(sourceRow, indexes, 'Spin Efficiency (release)'), 0, 100),
-      releaseTilt: valueByHeader(sourceRow, indexes, 'Spin Direction'),
+      releaseTilt: normalizeClockTilt(valueByHeader(sourceRow, indexes, 'Spin Direction')),
       ivb: rawIvbSpin ?? rawIvbTrajectory,
       hb: rawHbSpin ?? rawHbTrajectory,
       releaseHeight: boundedNumber(valueByHeader(sourceRow, indexes, 'Release Height'), 2, 9),
@@ -353,6 +363,7 @@ export function analyzeDashboardCsv(fileName: string, fileBytes: Uint8Array): Pa
     ['spinRate', 'spin', 'Spin'],
     ['ivb', 'ivb', 'IVB'],
     ['hb', 'hb', 'HB'],
+    ['releaseTilt', 'rtilt', 'rTilt'],
     ['releaseHeight', 'release', 'Release'],
     ['plateSide', 'location', 'Location'],
     ['vaa', 'approach', 'Approach angles'],
@@ -523,7 +534,7 @@ async function insertPitchRows(
       const rowValues = [
         input.schoolCode, input.fileId, row.sessionDate, 'Bullpen', input.sourcePath, row.pitchKey, row.sessionDate,
         row.pitcher, input.throwingHand, row.pitchType, toDbText(row.ivb), toDbText(row.hb), toDbText(row.velocity),
-        row.releaseTilt || null, row.releaseTilt || null, toDbText(row.spinEfficiency), toDbText(row.spinRate),
+        row.releaseTilt || null, null, toDbText(row.spinEfficiency), toDbText(row.spinRate),
         toDbText(row.releaseHeight), toDbText(row.releaseSide), toDbText(row.extension), toDbText(row.vaa),
         toDbText(row.haa), toDbText(row.plateSide), toDbText(row.plateHeight), row.pitchCall || null, 'Bullpen',
         row.pitchKey, row.pitchId || null, input.schoolCode, row.time, 'Baseball', row.pitcherId || null,
