@@ -17,6 +17,7 @@ import PortalUserMenu from '../user-menu';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
+import PortalMessagesNavButton from '../messages-nav-button';
 
 function normalizeName(value: string): string {
   return String(value ?? '')
@@ -210,6 +211,7 @@ export default async function ForcePlatesPage({
               <h1>{session.name ?? session.email}</h1>
             </div>
           )}
+          <PortalMessagesNavButton />
           {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />

@@ -87,6 +87,7 @@ export async function POST(request: Request) {
 
     const result = await createClientWithLogin({
       organizationId,
+      schoolCode: selectedSchoolCode,
       fullName,
       email,
       password,

@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../lib/auth';
+import { resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
 import { createClientWithLogin } from '../../../../lib/training-db';
 
 export async function POST(request: Request) {
@@ -31,8 +32,11 @@ export async function POST(request: Request) {
         ? assignedCoachUserIdFromBody
         : undefined;
 
+  const schoolCode = resolveProgrammingSchoolCode(session);
+
   const result = await createClientWithLogin({
     organizationId,
+    schoolCode,
     fullName,
     email,
     password,

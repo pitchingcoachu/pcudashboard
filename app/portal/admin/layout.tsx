@@ -9,6 +9,7 @@ import PortalUserMenu from '../user-menu';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
+import PortalMessagesNavButton from '../messages-nav-button';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
@@ -135,6 +136,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         </div>
         <div className="portal-header-right">
           <PortalUserMenu displayName={session.name ?? session.email} />
+          <PortalMessagesNavButton />
           <PortalNotificationsBell />
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">

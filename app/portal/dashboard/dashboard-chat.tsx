@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { resolveSchoolBrand } from '../../../lib/school-brand';
 
 type PageLink = { title: string; href: string };
 
@@ -19,7 +20,7 @@ type ChatMessage =
   | { id: string; role: 'assistant'; text: string; pageLink?: PageLink | null };
 
 type DashboardChatProps = {
-  isPro?: boolean;
+  schoolCode?: string | null;
   currentSuite?: string;
 };
 
@@ -36,7 +37,7 @@ function toApiMessages(messages: ChatMessage[]): Array<{ role: 'user' | 'assista
   return messages.map((message) => ({ role: message.role, content: message.text }));
 }
 
-export default function DashboardChat({ isPro = false, currentSuite }: DashboardChatProps) {
+export default function DashboardChat({ schoolCode, currentSuite }: DashboardChatProps) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
@@ -45,10 +46,9 @@ export default function DashboardChat({ isPro = false, currentSuite }: Dashboard
   const [hidden, setHidden] = useState(false);
   const [hiddenStateReady, setHiddenStateReady] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const accent = isPro ? 'rgba(109, 153, 220, 0.9)' : 'rgba(var(--portal-accent-rgb, 200, 16, 46), 0.75)';
-  const panelBackground = isPro
-    ? 'linear-gradient(165deg, rgba(5, 16, 34, 0.97), rgba(10, 24, 52, 0.95))'
-    : 'linear-gradient(165deg, rgba(6, 6, 7, 0.97), rgba(14, 6, 9, 0.96))';
+  const brand = resolveSchoolBrand(schoolCode);
+  const accent = `rgba(${brand.accentRgb}, 0.85)`;
+  const panelBackground = `linear-gradient(165deg, rgba(6, 6, 7, 0.97), rgba(${brand.accentRgb}, 0.12))`;
 
   useEffect(() => {
     try {
@@ -179,6 +179,8 @@ export default function DashboardChat({ isPro = false, currentSuite }: Dashboard
           onClick={() => setOpen((current) => !current)}
           style={{
             borderColor: accent,
+            background: `linear-gradient(135deg, ${brand.accent} 0%, ${brand.accentSoft} 100%)`,
+            boxShadow: `0 10px 30px rgba(${brand.accentRgb}, 0.35)`,
             minWidth: 96,
           }}
         >
@@ -320,7 +322,16 @@ export default function DashboardChat({ isPro = false, currentSuite }: Dashboard
                 }
               }}
             />
-            <button type="button" className="btn btn-primary" onClick={() => void sendQuestion()} disabled={!canSubmit}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void sendQuestion()}
+              disabled={!canSubmit}
+              style={{
+                background: `linear-gradient(135deg, ${brand.accent} 0%, ${brand.accentSoft} 100%)`,
+                borderColor: accent,
+              }}
+            >
               {loading ? 'Working...' : 'Ask'}
             </button>
           </div>

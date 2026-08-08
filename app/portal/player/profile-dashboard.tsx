@@ -15,6 +15,7 @@ import PlayerNotesSuite from '../dashboard/player-notes-suite';
 import ProfilePlanGoalsPanel from './profile-plan-goals-panel';
 import PlayerProLinkPanel from './player-pro-link-panel';
 import PlayerMediaSection from './player-media-section';
+import PlayerOwnNotes from './player-own-notes';
 
 type TrackedExercise = {
   exerciseId: number;
@@ -64,6 +65,7 @@ type PhotoCropState = {
 type ProfileDashboardProps = {
   playerId: number;
   sessionRole: 'admin' | 'coach' | 'player';
+  sessionUserId: number | null;
   isAdminPreview: boolean;
   fullProgramHref: string;
   initialProfile: {
@@ -416,6 +418,7 @@ function LineChart({
 export default function ProfileDashboard({
   playerId,
   sessionRole,
+  sessionUserId,
   isAdminPreview,
   fullProgramHref,
   initialProfile,
@@ -1297,7 +1300,9 @@ export default function ProfileDashboard({
             />
           ) : null}
         </article>
-      ) : null}
+      ) : (
+        <PlayerOwnNotes playerId={playerId} currentUserId={sessionUserId} />
+      )}
 
       <ProfilePlanGoalsPanel
         playerId={playerId}

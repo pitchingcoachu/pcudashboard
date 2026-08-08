@@ -1,12 +1,14 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../../lib/auth';
+import { deleteObjectFromR2 } from '../../../../../../lib/biomechanics-storage';
 import {
   createMessage,
   getConversationMeta,
   getConversationParticipantIds,
   getMessageById,
   isConversationParticipant,
+  unsendMessage,
 } from '../../../../../../lib/messaging-db';
 import { sendPushNotificationToUsers } from '../../../../../../lib/push-notifications';
 
@@ -90,4 +92,38 @@ export async function POST(request: Request, { params }: { params: Promise<{ con
 
   const message = await getMessageById(created.id);
   return NextResponse.json({ ok: true, message });
+}
+
+// DELETE ?messageId=X -- unsends a message for everyone. Only the original
+// sender may do this.
+export async function DELETE(request: Request, { params }: { params: Promise<{ conversationId: string }> }) {
+  const { conversationId: conversationIdParam } = await params;
+  const conversationId = Number(conversationIdParam);
+  if (!Number.isFinite(conversationId) || conversationId <= 0) {
+    return NextResponse.json({ error: 'Valid conversationId is required.' }, { status: 400 });
+  }
+
+  const cookieStore = await cookies();
+  const session = getSessionFromRequest(request, cookieStore);
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const isParticipant = await isConversationParticipant({ conversationId, userId: session.userId ?? 0 });
+  if (!isParticipant) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
+  const url = new URL(request.url);
+  const messageId = Number(url.searchParams.get('messageId') ?? '0');
+  if (!Number.isFinite(messageId) || messageId <= 0) {
+    return NextResponse.json({ error: 'Valid messageId is required.' }, { status: 400 });
+  }
+
+  const message = await getMessageById(messageId);
+  if (!message) return NextResponse.json({ error: 'Message not found.' }, { status: 404 });
+  if (message.senderUserId !== (session.userId ?? -1)) {
+    return NextResponse.json({ error: 'You can only delete your own messages.' }, { status: 403 });
+  }
+
+  const result = await unsendMessage({ messageId });
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+  await Promise.all(result.r2Keys.map((key) => deleteObjectFromR2(key).catch(() => {})));
+  return NextResponse.json({ ok: true });
 }

@@ -1243,7 +1243,7 @@ const divergingColor = (value: number, min: number, mid: number, max: number): s
     return rgb(lerp(32, 246, t), lerp(74, 248, t), lerp(135, 248, t));
   }
   const t = Math.max(0, Math.min(1, (value - mid) / Math.max(1e-9, max - mid)));
-  return rgb(lerp(248, 176, t), lerp(248, 11, t), lerp(248, 52, t));
+  return rgb(lerp(248, 220, t), lerp(248, 20, t), lerp(248, 20, t));
 };
 const normalizePercentileColumnToken = (value: string): string =>
   String(value ?? '')
@@ -1512,6 +1512,12 @@ const heatmapScaleFromMetricAndPitchTypes = (
     return { min: 55, mid: 67.5, max: 80 };
   }
   return null;
+};
+const formatHeatmapLegendValue = (metric: string, value: number): string => {
+  if (metric === 'xWOBA' || metric === 'xISO') return value.toFixed(3);
+  if (metric === 'PV/100' || metric === 'RV/100') return value.toFixed(1);
+  if (metric === 'Exit Velocity') return `${Math.round(value)}`;
+  return `${Math.round(value)}%`;
 };
 const resultShape = (pitchCall: string, playResult: string, isProSchool = false): string => {
   if (isProSchool) {
@@ -5381,6 +5387,11 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                   const availableHeatStats = heatmapStatsForReportType(reportType);
                   const selectedHeatStat = normalizeHeatmapStatValue(config.heatStat, reportType);
                   const heatCells = isHeatMap ? buildHeatCells(heatmapPoints, selectedHeatStat, isProSchool) : [];
+                  const heatCellValuesForLegend = isHeatMap ? heatCells.map((c) => c.value).sort((a, b) => a - b) : [];
+                  const heatLegendSelectedPitchTypes = (config.pitchTypes ?? []).filter((value) => value && value !== 'All');
+                  const heatLegendFixedScale = isHeatMap ? heatmapScaleFromMetricAndPitchTypes(selectedHeatStat, heatLegendSelectedPitchTypes) : null;
+                  const heatLegendMinVal = heatLegendFixedScale?.min ?? (heatCellValuesForLegend.length ? heatCellValuesForLegend[0] : 0);
+                  const heatLegendMaxVal = heatLegendFixedScale?.max ?? (heatCellValuesForLegend.length ? heatCellValuesForLegend[heatCellValuesForLegend.length - 1] : 1);
                   const gridColumnStart = hasRowLabels ? colNumber + 1 : colNumber;
                   const useCompactSummaryTable =
                     isSummaryTable &&
@@ -6278,12 +6289,12 @@ export default function CustomReportsSuite({ initialSchoolCode = '' }: CustomRep
                                 width: '72%',
                                 justifySelf: 'center',
                                 border: '1px solid rgba(255,255,255,0.25)',
-                                background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(176,11,52) 100%)',
+                                background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(220,20,20) 100%)',
                               }}
                             />
                             <div style={{ display: 'flex', justifyContent: 'space-between', width: '72%', justifySelf: 'center', fontSize: '0.78rem', color: 'rgba(255,255,255,0.9)' }}>
-                              <span>Least</span>
-                              <span>Most</span>
+                              <span>Least{heatLegendFixedScale ? ` (${formatHeatmapLegendValue(selectedHeatStat, heatLegendMinVal)})` : ''}</span>
+                              <span>Most{heatLegendFixedScale ? ` (${formatHeatmapLegendValue(selectedHeatStat, heatLegendMaxVal)})` : ''}</span>
                             </div>
                             <div style={{ fontSize: '0.9rem', fontWeight: 600, textAlign: 'center' }}>{selectedHeatStat || 'Heatmap'}</div>
                           </div>

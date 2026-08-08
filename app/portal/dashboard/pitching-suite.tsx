@@ -105,6 +105,7 @@ type OverviewPayload = {
     catcher: string;
     pitcherthrows: string;
     batterside?: string;
+    school_code?: string;
     pitcher_team_code: string;
     batter_team_code: string;
     pitcher_team_norm: string;
@@ -168,6 +169,7 @@ type OverviewPayload = {
     catcher: string;
     pitcherthrows: string;
     batterside?: string;
+    school_code?: string;
     pitcher_team_code: string;
     batter_team_code: string;
     pitcher_team_norm: string;
@@ -920,9 +922,11 @@ function isPitchStrike(pitchCall: string, isPro: boolean): boolean {
   const token = normalizePitchCallToken(pitchCall);
   return (
     token === 'called_strike' ||
+    token === 'strikecalled' ||
     token === 'swinging_strike' ||
     token === 'swinging_strike_blocked' ||
     token === 'swinging_strike_pitchout' ||
+    token === 'strikeswinging' ||
     token === 'foul' ||
     token === 'foul_tip' ||
     token === 'foul_bunt' ||
@@ -930,7 +934,8 @@ function isPitchStrike(pitchCall: string, isPro: boolean): boolean {
     token === 'missed_bunt' ||
     token.startsWith('foul') ||
     token.startsWith('in_play') ||
-    token.startsWith('hit_into_play')
+    token.startsWith('hit_into_play') ||
+    token === 'inplay'
   );
 }
 
@@ -949,6 +954,7 @@ function isPitchSwing(pitchCall: string, isPro: boolean): boolean {
     token === 'swinging_strike' ||
     token === 'swinging_strike_blocked' ||
     token === 'swinging_strike_pitchout' ||
+    token === 'strikeswinging' ||
     token === 'foul' ||
     token === 'foul_tip' ||
     token === 'foul_bunt' ||
@@ -956,14 +962,23 @@ function isPitchSwing(pitchCall: string, isPro: boolean): boolean {
     token === 'missed_bunt' ||
     token.startsWith('foul') ||
     token.startsWith('in_play') ||
-    token.startsWith('hit_into_play')
+    token.startsWith('hit_into_play') ||
+    token === 'inplay'
   );
 }
 
 function isPitchWhiff(pitchCall: string, isPro: boolean): boolean {
   if (!isPro) return pitchCall === 'StrikeSwinging';
   const token = normalizePitchCallToken(pitchCall);
-  return token === 'swinging_strike' || token === 'swinging_strike_blocked' || token === 'foul_tip';
+  return (
+    token === 'swinging_strike' ||
+    token === 'swinging_strike_blocked' ||
+    token === 'strikeswinging' ||
+    token === 'foul_tip' ||
+    token === 'foultip' ||
+    token === 'bunt_foul_tip' ||
+    token === 'buntfoultip'
+  );
 }
 
 function pitchLogMetricValue(
@@ -1822,6 +1837,13 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
   return null;
 }
 
+function formatHeatmapLegendValue(metric: string, value: number): string {
+  if (metric === 'xWOBA' || metric === 'xISO') return value.toFixed(3);
+  if (metric === 'PV/100' || metric === 'RV/100') return value.toFixed(1);
+  if (metric === 'Exit Velocity') return `${Math.round(value)}`;
+  return `${Math.round(value)}%`;
+}
+
 function getCellColorScale(
   value: string | number | null | undefined,
   columnName: string,
@@ -2078,7 +2100,11 @@ function AbPaChart({
   const resultShape = (pitch: PitchActionPoint): string => {
     const call = pitch.pitch_call || '';
     const pr = pitch.play_result || '';
-    if (isProSchool) {
+    const pitchIsPro =
+      pitch.school_code != null && pitch.school_code !== ''
+        ? String(pitch.school_code).trim().toUpperCase() === 'PRO'
+        : isProSchool;
+    if (pitchIsPro) {
       const norm = (value: string): string => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
       const callN = norm(call);
       const prN = norm(pr);
@@ -2102,10 +2128,10 @@ function AbPaChart({
         return 'Ball';
       }
       if (callN.includes('foul')) return 'Foul';
-      if (callN === 'swinging_strike' || callN === 'swinging_strike_blocked' || callN === 'swinging_strike_pitchout' || callN === 'missed_bunt') return 'Whiff';
+      if (callN === 'swinging_strike' || callN === 'swinging_strike_blocked' || callN === 'swinging_strike_pitchout' || callN === 'missed_bunt' || callN === 'strikeswinging') return 'Whiff';
       if (prN === 'single' || prN === 'double' || prN === 'triple' || prN === 'home_run' || prN === 'homerun') return 'In Play (Hit)';
       if (prN === 'field_error' || prN === 'error') return 'Error';
-      if (callN.startsWith('in_play') || callN.startsWith('hit_into_play')) return 'In Play (Out)';
+      if (callN.startsWith('in_play') || callN.startsWith('hit_into_play') || callN === 'inplay') return 'In Play (Out)';
       if (prN && !['walk', 'intent_walk', 'intentional_walk', 'strikeout', 'strikeout_double_play', 'hit_by_pitch', 'hitbypitch'].includes(prN)) return 'In Play (Out)';
       return '';
     }
@@ -2165,7 +2191,11 @@ function AbPaChart({
         {pitches
           .filter((pitch) => typeof pitch.plate_side === 'number' && typeof pitch.plate_height === 'number')
           .map((pitch, i) => {
-            const x = px(flipX ? -Number(pitch.plate_side) : Number(pitch.plate_side));
+            const pitchFlipX =
+              pitch.school_code != null && pitch.school_code !== ''
+                ? String(pitch.school_code).trim().toUpperCase() === 'PRO'
+                : flipX;
+            const x = px(pitchFlipX ? -Number(pitch.plate_side) : Number(pitch.plate_side));
             const y = py(Number(pitch.plate_height));
             const shape = resultShape(pitch);
             const color = pitchColors[pitch.pitch_type] ?? '#9ca3af';
@@ -2269,6 +2299,8 @@ const DNA_METRIC_LABELS: Record<DnaMetricColumn, string> = {
   Side: 'Rel. Side',
 };
 
+type DnaPoolSource = 'MLB' | 'D1';
+
 type DnaPitcherRow = {
   key: string;
   pitcher: string;
@@ -2277,10 +2309,11 @@ type DnaPitcherRow = {
   metrics: Partial<Record<DnaMetricColumn, number>>;
   pitches: number;
   throwsHand: 'R' | 'L';
-  // Tags rows pulled from the MLB comparison pool (school_code=PRO) so the
-  // nearest-neighbor search can be restricted to only match against MLB
-  // pitchers when "Compare to MLB" mode is on, instead of the pitcher's own team.
-  isMlbSource?: boolean;
+  // Tags rows pulled from a comparison pool (school_code=PRO for MLB,
+  // school_code=LEAGUE&level=D1 for D1) so the nearest-neighbor search can be
+  // restricted to only match against that pool when a "Compare to X" mode is
+  // on, instead of the pitcher's own team. Undefined means "own school".
+  poolSource?: DnaPoolSource;
 };
 
 type ArsenalPitchRow = DnaPitcherRow & {
@@ -2430,15 +2463,22 @@ const MIN_PITCHERS_PER_TEAM = 3;
 // before averaging -- otherwise a team with a 50/50 L/R mix would average
 // HB/Side toward zero and hide real staff-wide movement tendencies, since raw
 // lefty and righty values have opposite sign conventions.
+//
+// Grouping key is namespaced by poolSource (not bare teamCode) so an own-team
+// code that happens to collide with an MLB/D1 team code (e.g. a school whose
+// own code overlaps a LEAGUE code) never gets blended into one row -- own and
+// pool teams are always aggregated as distinct rows even if their raw
+// teamCode strings match.
 function aggregateRowsByTeam(rows: DnaPitcherRow[]): DnaPitcherRow[] {
   const byTeam = new Map<string, DnaPitcherRow[]>();
   for (const row of rows) {
-    const list = byTeam.get(row.teamCode) ?? [];
+    const groupKey = `${row.poolSource ?? 'own'}::${row.teamCode}`;
+    const list = byTeam.get(groupKey) ?? [];
     list.push(row);
-    byTeam.set(row.teamCode, list);
+    byTeam.set(groupKey, list);
   }
   const teamRows: DnaPitcherRow[] = [];
-  for (const [teamCode, teamPitchers] of byTeam.entries()) {
+  for (const [groupKey, teamPitchers] of byTeam.entries()) {
     if (teamPitchers.length < MIN_PITCHERS_PER_TEAM) continue;
     const metrics: Partial<Record<DnaMetricColumn, number>> = {};
     for (const col of DNA_METRIC_COLUMNS) {
@@ -2447,16 +2487,18 @@ function aggregateRowsByTeam(rows: DnaPitcherRow[]): DnaPitcherRow[] {
         .filter((value): value is number => value !== undefined);
       if (values.length) metrics[col] = values.reduce((sum, value) => sum + value, 0) / values.length;
     }
+    const poolSource = teamPitchers[0].poolSource;
     teamRows.push({
-      key: teamCode,
+      key: groupKey,
       pitcher: teamPitchers[0].teamLabel,
-      teamCode,
+      teamCode: teamPitchers[0].teamCode,
       teamLabel: teamPitchers[0].teamLabel,
       metrics,
       pitches: teamPitchers.reduce((sum, pitcherRow) => sum + pitcherRow.pitches, 0),
       // Already handedness-normalized above; mark as Right so
       // computePitcherDnaPca's per-row normalization is a no-op here.
       throwsHand: 'R',
+      poolSource,
     });
   }
   return teamRows;
@@ -2481,7 +2523,7 @@ type DnaPoint = {
   arsenalFeatureZScores?: Record<string, number>;
   similarityVector?: number[];
   repertoire?: ArsenalPitchType[];
-  isMlbSource?: boolean;
+  poolSource?: DnaPoolSource;
 };
 
 type ArsenalFeatureLoading = {
@@ -2647,6 +2689,7 @@ function computePitcherDnaPca(
       pc2: z[k].reduce((sum, value, ci) => sum + value * pc2Vec[ci], 0),
       metrics: entry.row.metrics,
       zScores,
+      poolSource: entry.row.poolSource,
     };
   });
 
@@ -2794,7 +2837,7 @@ function computeArsenalDnaPca(rows: ArsenalPitchRow[]): {
         .slice()
         .sort((a, b) => b.pitches - a.pitches)
         .map((row) => row.pitchType),
-      isMlbSource: firstRow.isMlbSource,
+      poolSource: firstRow.poolSource,
     };
   });
   const loadings = featureDefs.map((feature, featureIndex) => ({
@@ -2853,17 +2896,37 @@ function PitcherDnaPanel({
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState(false);
   const searchRootRef = useRef<HTMLDivElement | null>(null);
+  // Displayed to the user as "Pitch" -- the underlying literal stays 'Player'
+  // since it's branched on throughout this component (and elsewhere in this
+  // file 'Player' is coincidentally also a distinct value of the unrelated
+  // leaderboardViewBy state), so only the button label changes.
   const [viewBy, setViewBy] = useState<'Player' | 'Team' | 'Arsenal'>('Player');
   const isArsenalView = viewBy === 'Arsenal';
-  // "Team" keeps the original same-roster comparison; "MLB" pulls in a second
-  // pool of school_code=PRO pitchers (same date/hand filters) so nearest-neighbor
-  // matching can be restricted to MLB arms instead of teammates.
-  const [arsenalCompareMode, setArsenalCompareMode] = useState<'Team' | 'MLB'>('Team');
-  const isMlbArsenalCompare = isArsenalView && arsenalCompareMode === 'MLB';
+  // "Team" compares within the same roster (teammates, or other teams for the
+  // Team tab); "MLB" pulls in a second pool of school_code=PRO pitchers, "D1"
+  // pulls in school_code=LEAGUE&level=D1 (same date/hand filters) so
+  // nearest-neighbor matching can be restricted to that pool instead of
+  // teammates. Comparing a pool against itself is meaningless, so MLB is
+  // hidden while viewing the PRO site and D1 is hidden while viewing LEAGUE.
+  const [compareMode, setCompareMode] = useState<'Team' | 'MLB' | 'D1'>('Team');
+  const canCompareMlb = !isPro;
+  const canCompareD1 = !isLeague;
+  const isMlbArsenalCompare = isArsenalView && compareMode === 'MLB';
+  const isD1ArsenalCompare = isArsenalView && compareMode === 'D1';
+  // Snap back to Team if the active mode becomes unavailable (e.g. the user
+  // switches to the PRO or LEAGUE site while MLB/D1 compare was active).
+  useEffect(() => {
+    if (compareMode === 'MLB' && !canCompareMlb) setCompareMode('Team');
+    if (compareMode === 'D1' && !canCompareD1) setCompareMode('Team');
+  }, [compareMode, canCompareMlb, canCompareD1]);
   // Real MLB pitcher -> team lookup for the MLB comparison pool (fetched
   // separately since /v1/pitching/filters?school_code=PRO returns team-scoped
   // rosters, and the arsenal table-rollup rows carry no per-pitcher team code).
   const [mlbPitcherTeamByName, setMlbPitcherTeamByName] = useState<Map<string, { teamCode: string; teamLabel: string }>>(
+    new Map()
+  );
+  // Same idea for the D1 comparison pool, via /v1/pitching/filters?school_code=LEAGUE&level=D1.
+  const [d1PitcherTeamByName, setD1PitcherTeamByName] = useState<Map<string, { teamCode: string; teamLabel: string }>>(
     new Map()
   );
   const [showArsenalComparison, setShowArsenalComparison] = useState(false);
@@ -3060,8 +3123,122 @@ function PitcherDnaPanel({
     };
   }, [filters, startDate, endDate, sharedFilterParamsKey, resolvePitcherTeam, isArsenalView]);
 
+  // Comparison pool for the Pitch and Team tabs (Arsenal has its own separate
+  // fetch below, since it uses a different split_by and row shape). Fetches
+  // school_code=PRO for MLB mode or school_code=LEAGUE&level=D1 for D1 mode --
+  // structurally only one pool is ever in flight, since compareMode is a
+  // single value and this effect no-ops entirely in Team mode.
+  const [comparePoolRows, setComparePoolRows] = useState<DnaPitcherRow[]>([]);
+  const [poolLoading, setPoolLoading] = useState(false);
   useEffect(() => {
-    if (!isMlbArsenalCompare || mlbPitcherTeamByName.size > 0) return;
+    if (isArsenalView || compareMode === 'Team' || !filters || !startDate || !endDate) {
+      setComparePoolRows([]);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    const poolSchoolCode = compareMode === 'MLB' ? 'PRO' : 'LEAGUE';
+    const poolLevel = compareMode === 'MLB' ? 'MLB' : 'D1';
+
+    const buildPoolParams = (handValue: 'R' | 'L') => {
+      const params = new URLSearchParams(sharedFilterParamsKey);
+      params.set('school_code', poolSchoolCode);
+      params.set('start_date', startDate);
+      params.set('end_date', endDate);
+      params.set('split_by', 'Pitcher');
+      params.set('custom_columns', ['#', ...DNA_METRIC_COLUMNS].join(','));
+      params.set('hand', handValue === 'R' ? 'Right' : 'Left');
+      params.set('level', poolLevel);
+      // Keep pitch_types so the pool is scoped to the same pitch type(s) as
+      // the own-school rows, not the pool's whole arsenal. Always drop
+      // team_type: the site's own team code isn't a real PRO/LEAGUE team and
+      // passing it through makes the backend 500 instead of ignoring it (same
+      // hazard the Arsenal fetch below already works around).
+      params.delete('team_type');
+      // MLB's rollup has no bullpen/season distinction at all (pro data has
+      // no such column) -- forwarding session_type there would silently be
+      // ignored by the backend, misleadingly implying it's respected. D1's
+      // rollup genuinely has Season/Bullpen data and the backend applies this
+      // filter correctly, so it's kept for D1.
+      if (poolSchoolCode === 'PRO') params.delete('session_type');
+      return params;
+    };
+
+    // The D1/NCAA rollup includes this same site's own roster (a college site
+    // is itself part of the D1 universe), so a pitcher can appear in BOTH the
+    // own-school pool and the D1 comparison pool as two rows for the same
+    // real person -- without this exclusion, "most similar D1 pitcher" could
+    // literally be yourself. Own-roster names come from filters.pitchers
+    // (the same trusted roster list used elsewhere in this file).
+    const ownRosterNames = new Set((filters.pitchers ?? []).map((name) => normalizePitcherKey(name)));
+
+    const parsePoolRows = (payload: { table_rows?: Array<Record<string, string | number | null>> } | null, throwsHand: 'R' | 'L'): DnaPitcherRow[] => {
+      const tableRows = Array.isArray(payload?.table_rows) ? payload.table_rows : [];
+      return tableRows
+        .map((row): DnaPitcherRow | null => {
+          const pitcherName = String(row.Pitcher ?? '').trim();
+          if (!pitcherName || pitcherName.toLowerCase() === 'all') return null;
+          if (compareMode === 'D1' && ownRosterNames.has(normalizePitcherKey(pitcherName))) return null;
+          const pitches = parseSortableNumber(row['#']) ?? 0;
+          const metrics: Partial<Record<DnaMetricColumn, number>> = {};
+          for (const metric of DNA_METRIC_COLUMNS) {
+            const value = parseSortableNumber(row[metric]);
+            if (value !== null) metrics[metric] = value;
+          }
+          // split_by=Pitcher returns no team column, so MLB/D1 names resolve
+          // via the same name -> team lookups Arsenal already uses.
+          const { teamCode, teamLabel } =
+            compareMode === 'MLB'
+              ? mlbPitcherTeamByName.get(normalizePitcherKey(pitcherName)) ?? { teamCode: 'MLB', teamLabel: 'MLB' }
+              : d1PitcherTeamByName.get(normalizePitcherKey(pitcherName)) ?? { teamCode: 'D1', teamLabel: 'NCAA D1' };
+          return {
+            key: `${normalizePitcherKey(pitcherName)}::${teamCode}::${compareMode.toLowerCase()}`,
+            pitcher: pitcherName,
+            teamCode,
+            teamLabel,
+            metrics,
+            pitches,
+            throwsHand,
+            poolSource: compareMode as DnaPoolSource,
+          };
+        })
+        .filter((row): row is DnaPitcherRow => row !== null);
+    };
+
+    const requestedHandRaw = new URLSearchParams(sharedFilterParamsKey).get('hand');
+    const requestedHand: 'R' | 'L' | null =
+      requestedHandRaw === 'Right' ? 'R' : requestedHandRaw === 'Left' ? 'L' : null;
+    const handsToFetch: Array<'R' | 'L'> = requestedHand ? [requestedHand] : ['R', 'L'];
+
+    setPoolLoading(true);
+    Promise.all(
+      handsToFetch.map((handValue) =>
+        fetch(`/api/dashboard/pitching/table-rollup?${buildPoolParams(handValue).toString()}`, {
+          signal: controller.signal,
+          cache: 'no-store',
+        }).then((response) => (response.ok ? response.json() : null))
+      )
+    )
+      .then((payloads) => {
+        if (!active) return;
+        setComparePoolRows(handsToFetch.flatMap((handValue, index) => parsePoolRows(payloads[index], handValue)));
+      })
+      .catch((error) => {
+        if (!active || (error && error.name === 'AbortError')) return;
+        setComparePoolRows([]);
+      })
+      .finally(() => {
+        if (active) setPoolLoading(false);
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [isArsenalView, compareMode, filters, startDate, endDate, sharedFilterParamsKey, mlbPitcherTeamByName, d1PitcherTeamByName]);
+
+  useEffect(() => {
+    if (compareMode !== 'MLB' || mlbPitcherTeamByName.size > 0) return;
     let active = true;
     fetch('/api/dashboard/pitching/mlb-team-map', { cache: 'no-store' })
       .then((response) => (response.ok ? response.json() : null))
@@ -3081,7 +3258,35 @@ function PitcherDnaPanel({
     return () => {
       active = false;
     };
-  }, [isMlbArsenalCompare, mlbPitcherTeamByName.size]);
+  }, [compareMode, mlbPitcherTeamByName.size]);
+
+  useEffect(() => {
+    if (compareMode !== 'D1' || d1PitcherTeamByName.size > 0) return;
+    let active = true;
+    fetch('/api/dashboard/pitching/d1-team-map', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { pitchers_by_team_code?: Record<string, string[]> } | null) => {
+        if (!active || !payload?.pitchers_by_team_code) return;
+        const lookup = new Map<string, { teamCode: string; teamLabel: string }>();
+        for (const [teamCode, names] of Object.entries(payload.pitchers_by_team_code)) {
+          // "Use their school name and if we don't have a school name, use
+          // their team code" -- schoolNameFromTeamCodeFallback resolves the
+          // real display name via LEAGUE_TEAM_NAME_BY_CODE (with a couple of
+          // fallback strategies of its own); an empty result falls through to
+          // the raw team code itself, never the generic "NCAA D1" label.
+          const teamLabel = schoolNameFromTeamCodeFallback(teamCode) || teamCode;
+          for (const name of names ?? []) {
+            const key = normalizePitcherKey(name);
+            if (key) lookup.set(key, { teamCode, teamLabel });
+          }
+        }
+        if (lookup.size > 0) setD1PitcherTeamByName(lookup);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [compareMode, d1PitcherTeamByName.size]);
 
   useEffect(() => {
     if (!isArsenalView || !filters || !startDate || !endDate) return;
@@ -3106,6 +3311,9 @@ function PitcherDnaPanel({
       currentTeamType && currentTeamType.toLowerCase() !== 'all'
         ? new Set((filters.pitchers_by_team_code?.[currentTeamType] ?? []).map((name) => normalizePitcherKey(name)))
         : null;
+    // Full own-site roster (not just the currently-filtered team) for
+    // excluding self-matches from the D1 pool -- see the D1 branch below.
+    const ownRosterNamesForArsenal = new Set((filters.pitchers ?? []).map((name) => normalizePitcherKey(name)));
 
     const buildParams = (handValue: 'R' | 'L', schoolCodeOverride?: string) => {
       const params = new URLSearchParams(sharedFilterParamsKey);
@@ -3115,22 +3323,27 @@ function PitcherDnaPanel({
       params.set('split_by', 'Pitcher Arsenal');
       params.set('custom_columns', ['P', ...DNA_METRIC_COLUMNS].join(','));
       params.set('hand', handValue === 'R' ? 'Right' : 'Left');
-      // MLB comparison pool always means MLB (not AAA) regardless of the
-      // college site's own level filter, which doesn't apply to PRO data.
+      // Comparison pools always mean the pool's own level (MLB, D1) regardless
+      // of the college site's own level filter, which doesn't apply to that pool.
       if (schoolCodeOverride === 'PRO') params.set('level', 'MLB');
+      else if (schoolCodeOverride === 'LEAGUE') params.set('level', 'D1');
       else if (level) params.set('level', level);
       params.delete('pitch_types');
       // Always drop team_type: for the own-team pool it's filtered client-side
-      // instead (see rosterNamesForCurrentTeam above); for the MLB pool, the
-      // site's own team code (e.g. "PCU") isn't a real MLB team and passing it
-      // through made the backend 500 instead of just ignoring it.
+      // instead (see rosterNamesForCurrentTeam above); for the MLB/D1 pool, the
+      // site's own team code (e.g. "PCU") isn't a real MLB/LEAGUE team and
+      // passing it through made the backend 500 instead of just ignoring it.
       params.delete('team_type');
+      // MLB's rollup has no bullpen/season distinction (pro data has no such
+      // column) -- drop it rather than silently forwarding a filter the
+      // backend can't apply. D1's rollup genuinely supports it, so it's kept.
+      if (schoolCodeOverride === 'PRO') params.delete('session_type');
       return params;
     };
     const parseArsenalRows = (
       payload: { table_rows?: Array<Record<string, string | number | null>> } | null,
       throwsHand: 'R' | 'L',
-      isMlbSource: boolean
+      poolSource: DnaPoolSource | undefined
     ): ArsenalPitchRow[] => {
       const tableRows = Array.isArray(payload?.table_rows) ? payload.table_rows : [];
       return tableRows
@@ -3141,9 +3354,13 @@ function PitcherDnaPanel({
             (candidate) => candidate.toLowerCase() === rawPitchType.toLowerCase()
           );
           if (!pitcherName || pitcherName.toLowerCase() === 'all' || !pitchType) return null;
-          if (!isMlbSource && rosterNamesForCurrentTeam && !rosterNamesForCurrentTeam.has(normalizePitcherKey(pitcherName))) {
+          if (!poolSource && rosterNamesForCurrentTeam && !rosterNamesForCurrentTeam.has(normalizePitcherKey(pitcherName))) {
             return null;
           }
+          // The D1/NCAA rollup includes this site's own roster (a college site
+          // is itself part of the D1 universe), so without this exclusion a
+          // pitcher's own arsenal could be suggested as its own closest D1 match.
+          if (poolSource === 'D1' && ownRosterNamesForArsenal.has(normalizePitcherKey(pitcherName))) return null;
           const pitches = parseSortableNumber(row.P) ?? 0;
           const metrics: Partial<Record<DnaMetricColumn, number>> = {};
           for (const metric of DNA_METRIC_COLUMNS) {
@@ -3152,15 +3369,17 @@ function PitcherDnaPanel({
           }
           // The Pitcher Arsenal split doesn't return a team code per pitcher
           // (only Team/Pitcher Team splits do, and those are aggregated by
-          // team, not per-pitcher), so the real team comes from a separate
-          // name -> team lookup (mlbPitcherTeamByName) fetched once when MLB
-          // compare mode turns on. Falls back to a plain "MLB" label only if
-          // that lookup hasn't resolved this name (e.g. still loading).
-          const { teamCode, teamLabel } = isMlbSource
-            ? mlbPitcherTeamByName.get(normalizePitcherKey(pitcherName)) ?? { teamCode: 'MLB', teamLabel: 'MLB' }
-            : resolvePitcherTeam(pitcherName);
+          // team, not per-pitcher), so the real MLB/D1 team comes from a
+          // separate name -> team lookup fetched once when that compare mode
+          // turns on (mlbPitcherTeamByName / d1PitcherTeamByName).
+          const { teamCode, teamLabel } =
+            poolSource === 'MLB'
+              ? mlbPitcherTeamByName.get(normalizePitcherKey(pitcherName)) ?? { teamCode: 'MLB', teamLabel: 'MLB' }
+              : poolSource === 'D1'
+                ? d1PitcherTeamByName.get(normalizePitcherKey(pitcherName)) ?? { teamCode: 'D1', teamLabel: 'NCAA D1' }
+                : resolvePitcherTeam(pitcherName);
           return {
-            key: `${normalizePitcherKey(pitcherName)}::${teamCode}${isMlbSource ? '::mlb' : ''}`,
+            key: `${normalizePitcherKey(pitcherName)}::${teamCode}${poolSource ? `::${poolSource.toLowerCase()}` : ''}`,
             pitcher: pitcherName,
             teamCode,
             teamLabel,
@@ -3168,7 +3387,7 @@ function PitcherDnaPanel({
             pitches,
             throwsHand,
             pitchType,
-            isMlbSource,
+            poolSource,
           };
         })
         .filter((row): row is ArsenalPitchRow => row !== null);
@@ -3176,7 +3395,7 @@ function PitcherDnaPanel({
 
     setLoading(true);
     setErrorMessage('');
-    const fetchPool = (schoolCodeOverride: string | undefined, isMlbSource: boolean) =>
+    const fetchPool = (schoolCodeOverride: string | undefined, poolSource: DnaPoolSource | undefined) =>
       Promise.all(
         handsToFetch.map((handValue) =>
           fetch(`/api/dashboard/pitching/table-rollup?${buildParams(handValue, schoolCodeOverride).toString()}`, {
@@ -3184,15 +3403,17 @@ function PitcherDnaPanel({
             cache: 'no-store',
           }).then((response) => (response.ok ? response.json() : null))
         )
-      ).then((payloads) => handsToFetch.flatMap((handValue, index) => parseArsenalRows(payloads[index], handValue, isMlbSource)));
+      ).then((payloads) => handsToFetch.flatMap((handValue, index) => parseArsenalRows(payloads[index], handValue, poolSource)));
+
+    const poolSchool = compareMode === 'MLB' ? 'PRO' : compareMode === 'D1' ? 'LEAGUE' : undefined;
 
     Promise.all([
-      fetchPool(undefined, false),
-      isMlbArsenalCompare ? fetchPool('PRO', true) : Promise.resolve([]),
+      fetchPool(undefined, undefined),
+      poolSchool ? fetchPool(poolSchool, compareMode as DnaPoolSource) : Promise.resolve([]),
     ])
-      .then(([ownRows, mlbRows]) => {
+      .then(([ownRows, poolRows]) => {
         if (!active) return;
-        const merged = [...ownRows, ...mlbRows];
+        const merged = [...ownRows, ...poolRows];
         const byPitcherAndType = new Map<string, ArsenalPitchRow>();
         for (const row of merged) {
           const key = `${row.key}::${row.pitchType}`;
@@ -3212,26 +3433,128 @@ function PitcherDnaPanel({
       active = false;
       controller.abort();
     };
-  }, [endDate, filters, isArsenalView, isMlbArsenalCompare, level, mlbPitcherTeamByName, resolvePitcherTeam, selectedSchoolCode, sharedFilterParamsKey, startDate]);
-
-  const pcaInputRows = useMemo(() => (viewBy === 'Team' ? aggregateRowsByTeam(rows) : rows), [rows, viewBy]);
+  }, [endDate, filters, isArsenalView, compareMode, level, mlbPitcherTeamByName, d1PitcherTeamByName, resolvePitcherTeam, selectedSchoolCode, sharedFilterParamsKey, startDate]);
 
   const isSinglePitchTypeScope = useMemo(
     () => selectedPitchTypes.filter((value) => value.trim() && value.trim().toLowerCase() !== 'all').length === 1,
     [selectedPitchTypes]
   );
 
+  // On-demand "Compare Movement" data for the Pitch tab -- unlike Arsenal
+  // (which always fetches every pitch type for every pitcher up front), the
+  // Pitch tab only fetches arsenal-shaped rows for the 4 pitchers actually
+  // being compared (the highlighted point + its 3 nearest matches), scoped to
+  // the single pitch type currently filtered (isSinglePitchTypeScope) -- this
+  // is what the user asked for: "the same button... but only show the
+  // filtered pitch type." Fetched only when the button is clicked, not
+  // eagerly, so viewing the Pitch tab never doubles the data fetched.
+  const [pitchComparisonRows, setPitchComparisonRows] = useState<ArsenalPitchRow[]>([]);
+  const [pitchComparisonLoading, setPitchComparisonLoading] = useState(false);
+  const fetchPitchComparisonRows = useCallback(
+    async (targets: DnaPoint[]) => {
+      if (!filters || !startDate || !endDate || !isSinglePitchTypeScope) return;
+      const pitchTypeRaw = selectedPitchTypes.find((value) => value.trim() && value.trim().toLowerCase() !== 'all') ?? '';
+      setPitchComparisonLoading(true);
+      try {
+        // Group targets by pool source so each group can be fetched with the
+        // right school_code/level (own school, MLB, or D1) in one request.
+        const bySource = new Map<'own' | DnaPoolSource, DnaPoint[]>();
+        for (const target of targets) {
+          const sourceKey = target.poolSource ?? 'own';
+          const list = bySource.get(sourceKey) ?? [];
+          list.push(target);
+          bySource.set(sourceKey, list);
+        }
+
+        const requestedHandRaw = new URLSearchParams(sharedFilterParamsKey).get('hand');
+        const requestedHand: 'R' | 'L' | null =
+          requestedHandRaw === 'Right' ? 'R' : requestedHandRaw === 'Left' ? 'L' : null;
+        const handsToFetch: Array<'R' | 'L'> = requestedHand ? [requestedHand] : ['R', 'L'];
+
+        const allRows: ArsenalPitchRow[] = [];
+        for (const [sourceKey, sourceTargets] of bySource.entries()) {
+          const schoolCodeOverride = sourceKey === 'MLB' ? 'PRO' : sourceKey === 'D1' ? 'LEAGUE' : undefined;
+          const params = handsToFetch.map((handValue) => {
+            const p = new URLSearchParams(sharedFilterParamsKey);
+            p.set('school_code', (schoolCodeOverride ?? String(filters.school_code ?? selectedSchoolCode)).trim().toUpperCase());
+            p.set('start_date', startDate);
+            p.set('end_date', endDate);
+            p.set('split_by', 'Pitcher Arsenal');
+            p.set('custom_columns', ['P', ...DNA_METRIC_COLUMNS].join(','));
+            p.set('hand', handValue === 'R' ? 'Right' : 'Left');
+            p.set('pitch_types', pitchTypeRaw);
+            if (schoolCodeOverride === 'PRO') p.set('level', 'MLB');
+            else if (schoolCodeOverride === 'LEAGUE') p.set('level', 'D1');
+            else if (level) p.set('level', level);
+            p.delete('team_type');
+            if (schoolCodeOverride === 'PRO') p.delete('session_type');
+            return p;
+          });
+          const payloads = await Promise.all(
+            params.map((p) => fetch(`/api/dashboard/pitching/table-rollup?${p.toString()}`, { cache: 'no-store' }).then((res) => (res.ok ? res.json() : null)))
+          );
+          const targetNames = new Set(sourceTargets.map((t) => normalizePitcherKey(t.pitcher)));
+          for (const payload of payloads) {
+            const tableRows = Array.isArray(payload?.table_rows) ? (payload.table_rows as Array<Record<string, string | number | null>>) : [];
+            for (const row of tableRows) {
+              const pitcherName = String(row.Pitcher ?? '').trim();
+              const rawPitchType = String(row.Pitch ?? '').trim();
+              const pitchType = ARSENAL_PITCH_TYPES.find((candidate) => candidate.toLowerCase() === rawPitchType.toLowerCase());
+              if (!pitcherName || !pitchType || !targetNames.has(normalizePitcherKey(pitcherName))) continue;
+              const pitches = parseSortableNumber(row.P) ?? 0;
+              const metrics: Partial<Record<DnaMetricColumn, number>> = {};
+              for (const metric of DNA_METRIC_COLUMNS) {
+                const value = parseSortableNumber(row[metric]);
+                if (value !== null) metrics[metric] = value;
+              }
+              const match = sourceTargets.find((t) => normalizePitcherKey(t.pitcher) === normalizePitcherKey(pitcherName));
+              allRows.push({
+                key: match?.key ?? `${normalizePitcherKey(pitcherName)}::${match?.teamCode ?? ''}`,
+                pitcher: pitcherName,
+                teamCode: match?.teamCode ?? '',
+                teamLabel: match?.teamLabel ?? '',
+                metrics,
+                pitches,
+                throwsHand: requestedHand ?? 'R',
+                pitchType,
+                poolSource: sourceKey === 'own' ? undefined : sourceKey,
+              });
+            }
+          }
+        }
+        setPitchComparisonRows(allRows);
+      } catch {
+        setPitchComparisonRows([]);
+      } finally {
+        setPitchComparisonLoading(false);
+      }
+    },
+    [filters, startDate, endDate, isSinglePitchTypeScope, selectedPitchTypes, sharedFilterParamsKey, level, selectedSchoolCode]
+  );
+
+  const pcaInputRows = useMemo(() => {
+    if (viewBy === 'Team') {
+      // Aggregated separately per source (not merged first) so a shared team
+      // code between own-school and pool rows can never blend into one row --
+      // aggregateRowsByTeam's own poolSource-namespaced key would prevent a
+      // collision either way, but this keeps the own-team result identical to
+      // calling it alone, and makes the two aggregations easy to reason about.
+      return [...aggregateRowsByTeam(rows), ...aggregateRowsByTeam(comparePoolRows)];
+    }
+    return [...rows, ...comparePoolRows];
+  }, [rows, comparePoolRows, viewBy]);
+
   const standardPca = useMemo(
     () => computePitcherDnaPca(pcaInputRows, [...DNA_METRIC_COLUMNS], isSinglePitchTypeScope),
     [pcaInputRows, isSinglePitchTypeScope]
   );
   const arsenalPca = useMemo(() => computeArsenalDnaPca(arsenalRows), [arsenalRows]);
-  // Includes MLB comparison-pool points when that pool was fetched -- needed so
-  // nearest-neighbor matching can resolve them, even though they're excluded
-  // from the plotted scatter below (visiblePoints) to keep the chart showing
-  // just this team's own roster.
+  // Includes comparison-pool (MLB/D1) points when a pool was fetched -- needed
+  // so nearest-neighbor matching can resolve them, even though they're
+  // excluded from the plotted scatter below (visiblePoints) to keep the chart
+  // showing just this team's own roster.
   const points = viewBy === 'Arsenal' ? arsenalPca.points : standardPca.points;
-  const visiblePoints = useMemo(() => points.filter((point) => !point.isMlbSource), [points]);
+  const visiblePoints = useMemo(() => points.filter((point) => !point.poolSource), [points]);
   const loadings = standardPca.loadings;
   const varianceExplainedPct = viewBy === 'Arsenal' ? arsenalPca.varianceExplainedPct : standardPca.varianceExplainedPct;
 
@@ -3246,7 +3569,7 @@ function PitcherDnaPanel({
     // comparison-pool matches (excluded from visiblePoints, so pulled from the
     // full points array) get real team codes once mlbPitcherTeamByName resolves.
     if (!isPro && !isMlbArsenalCompare) return;
-    const logoSourcePoints = isPro ? visiblePoints : points.filter((point) => point.isMlbSource);
+    const logoSourcePoints = isPro ? visiblePoints : points.filter((point) => point.poolSource === 'MLB');
     if (!logoSourcePoints.length) return;
     let active = true;
     const teamCodes = Array.from(
@@ -3316,17 +3639,24 @@ function PitcherDnaPanel({
   // fall back to a text search match.
   const highlightedKey = hoveredPitcher ?? selectedKey ?? matchedPitcher?.key ?? null;
 
-  const handlePointClick = (point: DnaPoint) => {
-    if (viewBy === 'Team') onNavigateToTeam(point.teamCode);
-    else onNavigateToPitcher(point.pitcher);
-  };
-
   // Pins the side panel to a pitcher/team without leaving the DNA page --
   // used when clicking a dot's label area or a "Most Similar" entry, so you
   // can browse between related pitchers before deciding to navigate away.
   const selectPoint = (point: DnaPoint) => {
     setSelectedKey(point.key);
     setSearchQuery('');
+  };
+
+  const handlePointClick = (point: DnaPoint) => {
+    // A comparison-pool point (MLB/D1) isn't a real team/pitcher in this
+    // dashboard's own filters -- navigating to it would set a nonsense
+    // team/pitcher filter. Just pin the side panel to it instead.
+    if (point.poolSource) {
+      selectPoint(point);
+      return;
+    }
+    if (viewBy === 'Team') onNavigateToTeam(point.teamCode);
+    else onNavigateToPitcher(point.pitcher);
   };
 
   const bounds = useMemo(() => {
@@ -3487,10 +3817,10 @@ function PitcherDnaPanel({
     if (!highlightedPoint) return [];
     return points
       .filter((point) => point.key !== highlightedPoint.key)
-      // In MLB compare mode, only match the selected pitcher against the MLB
-      // pool (never another college teammate); in Team mode, only match
-      // within the pitcher's own pool (never a stray MLB row).
-      .filter((point) => (isMlbArsenalCompare ? point.isMlbSource === true : !point.isMlbSource))
+      // In MLB/D1 compare mode, only match the selected pitcher/team against
+      // that pool (never a teammate); in Team mode, only match within the
+      // pitcher's/team's own pool (never a stray pool row).
+      .filter((point) => (compareMode === 'Team' ? !point.poolSource : point.poolSource === compareMode))
       .map((point) => ({
         point,
         distance:
@@ -3505,13 +3835,14 @@ function PitcherDnaPanel({
       }))
       .sort((a, b) => a.distance - b.distance)
       .slice(0, NEAREST_NEIGHBOR_COUNT);
-  }, [highlightedPoint, isMlbArsenalCompare, points, viewBy]);
+  }, [highlightedPoint, compareMode, points, viewBy]);
 
   const arsenalComparison = useMemo(() => {
-    if (viewBy !== 'Arsenal' || !highlightedPoint) return [];
+    if ((viewBy !== 'Arsenal' && viewBy !== 'Player') || !highlightedPoint) return [];
+    const sourceRows = viewBy === 'Arsenal' ? arsenalRows : pitchComparisonRows;
     return [highlightedPoint, ...nearestNeighbors.map(({ point }) => point)].map((point, index) => {
-      const pitcherRows = arsenalRows
-        .filter((row) => row.key === point.key)
+      const pitcherRows = sourceRows
+        .filter((row) => row.key === point.key || normalizePitcherKey(row.pitcher) === normalizePitcherKey(point.pitcher))
         .sort(
           (a, b) =>
             ARSENAL_PITCH_TYPES.indexOf(a.pitchType) - ARSENAL_PITCH_TYPES.indexOf(b.pitchType)
@@ -3526,7 +3857,7 @@ function PitcherDnaPanel({
         })),
       };
     });
-  }, [arsenalRows, highlightedPoint, nearestNeighbors, viewBy]);
+  }, [arsenalRows, pitchComparisonRows, highlightedPoint, nearestNeighbors, viewBy]);
 
   const arsenalMovementBounds = useMemo<ArsenalMovementBounds>(() => {
     let maxHorizontalMovement = 20;
@@ -3559,8 +3890,15 @@ function PitcherDnaPanel({
   }, [showArsenalComparison]);
 
   useEffect(() => {
-    if (!isArsenalView) setShowArsenalComparison(false);
-  }, [isArsenalView]);
+    if (viewBy !== 'Arsenal' && viewBy !== 'Player') setShowArsenalComparison(false);
+  }, [viewBy]);
+
+  // Clear the on-demand Pitch-tab comparison fetch whenever the selection
+  // changes so a stale previous pitcher's rows can never leak into a new
+  // comparison while the fresh fetch is in flight.
+  useEffect(() => {
+    setPitchComparisonRows([]);
+  }, [highlightedPoint?.key]);
 
   const downloadArsenalComparisonPng = useCallback(async () => {
     const comparisonNode = arsenalComparisonRef.current;
@@ -3921,7 +4259,7 @@ function PitcherDnaPanel({
                 setChartTitle((current) => (current === 'Arsenal DNA' ? 'Pitcher DNA' : current));
               }}
             >
-              Player
+              Pitch
             </button>
             <button
               type="button"
@@ -3950,35 +4288,28 @@ function PitcherDnaPanel({
               Arsenal
             </button>
           </div>
-          {isArsenalView && !isPro ? (
+          {canCompareMlb || canCompareD1 ? (
             <div
               style={{ display: 'inline-flex', borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(148,163,184,0.4)', flexShrink: 0 }}
-              title="Choose whether 'Similar Pitchers' matches within your own roster or against MLB arms"
+              title={`Choose whether "Similar ${viewBy === 'Team' ? 'Teams' : 'Pitchers'}" matches within your own roster or against an MLB/D1 pool`}
             >
-              <button
-                type="button"
-                className={arsenalCompareMode === 'Team' ? 'btn btn-primary' : 'btn btn-ghost'}
-                style={{ borderRadius: 0 }}
-                onClick={() => {
-                  setArsenalCompareMode('Team');
-                  setSelectedKey(null);
-                  setSearchQuery('');
-                }}
-              >
-                Compare: Team
-              </button>
-              <button
-                type="button"
-                className={arsenalCompareMode === 'MLB' ? 'btn btn-primary' : 'btn btn-ghost'}
-                style={{ borderRadius: 0 }}
-                onClick={() => {
-                  setArsenalCompareMode('MLB');
-                  setSelectedKey(null);
-                  setSearchQuery('');
-                }}
-              >
-                Compare: MLB
-              </button>
+              {(['Team', ...(canCompareMlb ? (['MLB'] as const) : []), ...(canCompareD1 ? (['D1'] as const) : [])] as const).map(
+                (option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    className={compareMode === option ? 'btn btn-primary' : 'btn btn-ghost'}
+                    style={{ borderRadius: 0 }}
+                    onClick={() => {
+                      setCompareMode(option);
+                      setSelectedKey(null);
+                      setSearchQuery('');
+                    }}
+                  >
+                    Compare: {option}
+                  </button>
+                )
+              )}
             </div>
           ) : null}
           <div ref={searchRootRef} style={{ position: 'relative', flex: '1 1 180px', minWidth: 180 }}>
@@ -4035,8 +4366,12 @@ function PitcherDnaPanel({
           : viewBy === 'Arsenal'
           ? 'Pitchers with similar complete arsenals sit close together. Arsenal mode uses every qualifying pitch type and ignores the Pitch Type filter.'
           : 'Pitchers with similar stuff sit close together.'} Arrows show which metric is pulling {viewBy === 'Team' ? 'teams' : 'pitchers'} in that direction.
-        {isMlbArsenalCompare
-          ? ' "Compare: MLB" is on -- select a pitcher below to see his 3 closest MLB arsenal matches (filtered by your current date range and other sidebar filters).'
+        {compareMode !== 'Team' && !isArsenalView
+          ? ` "Compare: ${compareMode}" is on -- select a ${viewBy === 'Team' ? 'team' : 'pitcher'} below to see its 3 closest ${compareMode} matches (filtered by your current date range and other sidebar filters).${
+              poolLoading ? ' Loading comparison pool...' : comparePoolRows.length === 0 ? ' No comparison data returned for the current filters.' : ''
+            }`
+          : compareMode !== 'Team'
+          ? ` "Compare: ${compareMode}" is on -- select a pitcher below to see his 3 closest ${compareMode} arsenal matches (filtered by your current date range and other sidebar filters).`
           : ''}
       </p>
       {loading ? <p>Loading Pitcher DNA...</p> : null}
@@ -4180,9 +4515,9 @@ function PitcherDnaPanel({
                     const highlightedLogoUri =
                       viewBy === 'Team'
                         ? resolveTeamLogo(highlightedPoint.teamCode)
-                        : isMlbArsenalCompare && highlightedPoint.isMlbSource
+                        : isMlbArsenalCompare && highlightedPoint.poolSource === 'MLB'
                         ? resolveTeamLogo(highlightedPoint.teamCode)
-                        : isMlbArsenalCompare && !highlightedPoint.isMlbSource
+                        : isMlbArsenalCompare && !highlightedPoint.poolSource
                         ? resolveSchoolBrand(highlightedPoint.teamCode).logoSrc ?? undefined
                         : undefined;
                     if (highlightedLogoUri) {
@@ -4323,6 +4658,25 @@ function PitcherDnaPanel({
                       <span>
                         <small>FULL ARSENAL VIEW</small>
                         Compare Movement
+                      </span>
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M5 7h11m0 0-3-3m3 3-3 3M19 17H8m0 0 3-3m-3 3 3 3" />
+                      </svg>
+                    </button>
+                  ) : null}
+                  {viewBy === 'Player' && nearestNeighbors.length && isSinglePitchTypeScope && highlightedPoint ? (
+                    <button
+                      type="button"
+                      className="portal-arsenal-compare-trigger"
+                      disabled={pitchComparisonLoading}
+                      onClick={async () => {
+                        await fetchPitchComparisonRows([highlightedPoint, ...nearestNeighbors.map(({ point }) => point)]);
+                        setShowArsenalComparison(true);
+                      }}
+                    >
+                      <span>
+                        <small>{selectedPitchTypes.find((v) => v.trim() && v.trim().toLowerCase() !== 'all')} MOVEMENT</small>
+                        {pitchComparisonLoading ? 'Loading...' : 'Compare Movement'}
                       </span>
                       <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M5 7h11m0 0-3-3m3 3-3 3M19 17H8m0 0 3-3m-3 3 3 3" />
@@ -4474,7 +4828,7 @@ function PitcherDnaPanel({
             </header>
             <div className="portal-arsenal-compare-grid">
               {arsenalComparison.map(({ point, rank, rows: comparisonRows }) => {
-                const teamLogo = point.isMlbSource
+                const teamLogo = point.poolSource
                   ? resolveTeamLogo(point.teamCode)
                   : resolveTeamLogo(point.teamCode) ?? resolveSchoolBrand(point.teamCode).logoSrc ?? undefined;
                 return (
@@ -4628,7 +4982,9 @@ export default function PitchingSuite({
   const [batterSide, setBatterSide] = useState('All');
   const [venue, setVenue] = useState('All');
   const [sessionType, setSessionType] = useState('');
-  const [level, setLevel] = useState(initialSchoolCode === 'LEAGUE' ? 'D1' : 'MLB');
+  const [level, setLevel] = useState(
+    initialSchoolCode === 'LEAGUE' ? 'D1' : initialSchoolCode === 'PRO' ? 'MLB' : 'All'
+  );
   const [qpLocations, setQpLocations] = useState('All');
   const [tableMode, setTableMode] = useState(shouldUsePcuDefaults ? 'Bullpen' : 'Live');
   const [splitBy, setSplitBy] = useState('Pitch Types');
@@ -5013,6 +5369,7 @@ export default function PitchingSuite({
       : teamType;
     if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
     if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
+    else if (!isPro && !isLeague && PRO_LEVEL_FILTER_OPTIONS.includes(level) && level !== 'All') params.set('level', level);
     if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
     if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
     if (hand && hand !== 'All') params.set('hand', hand);
@@ -5160,7 +5517,13 @@ export default function PitchingSuite({
     String(filters?.school_code ?? '').toUpperCase() === 'PCU';
   const isPitchEditDisplay = canUsePitchEdits && visualOption === 'Pitch Edit';
   const isPitchEditLassoEnabled = isPitchEditDisplay && pitchEditSelectMode === 'lasso';
-  const orientX = (x: number): number => (isPro ? -x : x);
+  const orientX = (x: number, pointSchoolCode?: string | null): number => {
+    const shouldFlip =
+      pointSchoolCode != null && pointSchoolCode !== ''
+        ? String(pointSchoolCode).toUpperCase() === 'PRO'
+        : isPro;
+    return shouldFlip ? -x : x;
+  };
   const canShowLeagueHeavyPages = !isLeague;
   const canShowVeloManualEntry = !isLeague && !isPro;
   const allPitchersSelected = selectedPitchers.length === 0 || selectedPitchers.every((value) => value === 'All');
@@ -5483,12 +5846,12 @@ export default function PitchingSuite({
   }, [isPro, level]);
 
   useEffect(() => {
-    if (isPro) return;
+    if (isPro || !isLeague) return;
     const options = collegeLevelPercentileOptions.length ? collegeLevelPercentileOptions : NCAA_LEVEL_FILTER_OPTIONS;
     const nextDefault = options.includes('D1') ? 'D1' : (options[0] ?? 'All');
     const isProOnlyLevel = level === 'MLB' || level === 'AAA';
     if (!level || isProOnlyLevel || !options.includes(level)) setLevel(nextDefault);
-  }, [collegeLevelPercentileOptions, isPro, level]);
+  }, [collegeLevelPercentileOptions, isPro, isLeague, level]);
 
   useEffect(() => {
     if (isPro) return;
@@ -5741,6 +6104,8 @@ export default function PitchingSuite({
       : teamType;
     if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
     if ((isPro || isLeague) && level && level !== 'All') {
+      params.set('level', level);
+    } else if (!isPro && !isLeague && PRO_LEVEL_FILTER_OPTIONS.includes(level) && level !== 'All') {
       params.set('level', level);
     }
     if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
@@ -6804,6 +7169,7 @@ export default function PitchingSuite({
       if (endDate) params.set('end_date', endDate);
       if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
       if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
+      else if (!isPro && !isLeague && PRO_LEVEL_FILTER_OPTIONS.includes(level) && level !== 'All') params.set('level', level);
       if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
       if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
       if (stuffLevel) params.set('stuff_level', stuffLevel);
@@ -7113,6 +7479,7 @@ export default function PitchingSuite({
       if (endDate) params.set('end_date', endDate);
       if (teamType && teamType !== 'All') params.set('team_type', apiTeamType);
       if ((isPro || isLeague) && level && level !== 'All') params.set('level', level);
+      else if (!isPro && !isLeague && PRO_LEVEL_FILTER_OPTIONS.includes(level) && level !== 'All') params.set('level', level);
       if (withVideo && withVideo !== 'All') params.set('with_video', withVideo);
       if (breakLines && breakLines !== 'None') params.set('break_lines', breakLines);
       if (stuffLevel) params.set('stuff_level', stuffLevel);
@@ -7977,15 +8344,19 @@ export default function PitchingSuite({
       return rgb(lerp(32, 246, t), lerp(74, 248, t), lerp(135, 248, t));
     }
     const t = Math.max(0, Math.min(1, (value - mid) / Math.max(1e-9, max - mid)));
-    return rgb(lerp(248, 176, t), lerp(248, 11, t), lerp(248, 52, t));
+    return rgb(lerp(248, 220, t), lerp(248, 20, t), lerp(248, 20, t));
   };
   const sequentialColor = (value: number, min: number, max: number): string => {
     if (!Number.isFinite(value)) return 'rgba(255,255,255,0.08)';
     const mid = min + (max - min) * 0.5;
     return divergingColor(value, min, mid, max);
   };
-  const resultShape = (pitchCall: string, playResult: string): string => {
-    if (String(selectedSchoolCode || '').trim().toUpperCase() === 'PRO') {
+  const resultShape = (pitchCall: string, playResult: string, pointSchoolCode?: string | null): string => {
+    const effectiveSchoolCode =
+      pointSchoolCode != null && pointSchoolCode !== ''
+        ? String(pointSchoolCode).trim().toUpperCase()
+        : String(selectedSchoolCode || '').trim().toUpperCase();
+    if (effectiveSchoolCode === 'PRO') {
       const norm = (value: string): string => String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
       const callN = norm(pitchCall);
       const prN = norm(playResult);
@@ -8009,10 +8380,10 @@ export default function PitchingSuite({
         return 'Ball';
       }
       if (callN.includes('foul')) return 'Foul';
-      if (callN === 'swinging_strike' || callN === 'swinging_strike_blocked' || callN === 'swinging_strike_pitchout' || callN === 'missed_bunt') return 'Whiff';
+      if (callN === 'swinging_strike' || callN === 'swinging_strike_blocked' || callN === 'swinging_strike_pitchout' || callN === 'missed_bunt' || callN === 'strikeswinging') return 'Whiff';
       if (prN === 'single' || prN === 'double' || prN === 'triple' || prN === 'home_run' || prN === 'homerun') return 'In Play (Hit)';
       if (prN === 'field_error' || prN === 'error') return 'Error';
-      if (callN.startsWith('in_play') || callN.startsWith('hit_into_play')) return 'In Play (Out)';
+      if (callN.startsWith('in_play') || callN.startsWith('hit_into_play') || callN === 'inplay') return 'In Play (Out)';
       if (prN && !['walk', 'intent_walk', 'intentional_walk', 'strikeout', 'strikeout_double_play', 'hit_by_pitch', 'hitbypitch'].includes(prN)) return 'In Play (Out)';
       return '';
     }
@@ -8048,7 +8419,7 @@ export default function PitchingSuite({
     return `Pitcher: ${formatNameFirstLast(String(point.pitcher || '')) || '-'}\nBatter: ${formatNameFirstLast(String(point.batter || '')) || '-'}\nSession: ${point.session_type || '-'}\nResult: ${resolvePitchResultLabel(point.pitch_call, point.play_result)}\nVelo: ${fmt1(point.velo)} mph\nIVB: ${fmt1(point.ivb)} in\nHB: ${fmt1(point.hb)} in\nEV: ${fmt1(point.exit_speed)} mph\nLA: ${fmt1(point.angle)}°\nStuff+: ${fmt1(point.stuff_plus)}\nIn Zone: ${inZoneLabel(point.plate_side, point.plate_height)}`;
   };
   const releaseTooltipHtml = (point: OverviewPayload['chart_points'][number]): string =>
-    `Session: ${point.session_type || '-'}\nHeight: ${fmt2(point.release_height)} ft\nSide: ${fmt2(Number.isFinite(Number(point.release_side)) ? orientX(Number(point.release_side)) : null)} ft\nExtension: ${fmt2(point.extension)} ft`;
+    `Session: ${point.session_type || '-'}\nHeight: ${fmt2(point.release_height)} ft\nSide: ${fmt2(Number.isFinite(Number(point.release_side)) ? orientX(Number(point.release_side), point.school_code) : null)} ft\nExtension: ${fmt2(point.extension)} ft`;
   const parseTiltToDegrees = (tilt: string): number | null => {
     const raw = (tilt ?? '').trim();
     if (!raw) return null;
@@ -8445,7 +8816,7 @@ export default function PitchingSuite({
   const actionCompRight = actionStrikeCenterX + actionCompRadiusFt;
   const actionPlateX =
     typeof currentActionPitch?.plate_side === 'number' && Number.isFinite(currentActionPitch.plate_side)
-      ? actionZonePx(orientX(currentActionPitch.plate_side))
+      ? actionZonePx(orientX(currentActionPitch.plate_side, currentActionPitch.school_code))
       : null;
   const actionPlateY =
     typeof currentActionPitch?.plate_height === 'number' && Number.isFinite(currentActionPitch.plate_height)
@@ -9436,7 +9807,7 @@ export default function PitchingSuite({
           {fmtNum(pitch.velo, 1)} mph | IVB: {fmtNum(pitch.ivb, 1)} | HB: {fmtNum(pitch.hb, 1)} | {fmtNum(pitch.spin, 0)} rpm
         </div>
         <div style={{ color: 'rgba(248,250,252,0.78)', fontSize: '0.76rem' }}>
-          SpinEff: {pitch.spin_eff !== null ? `${fmtNum(pitch.spin_eff > 1 ? pitch.spin_eff : pitch.spin_eff * 100, 1)}%` : '-'} | bTilt: {formatTiltClock(pitch.break_tilt)} | Height: {fmtNum(pitch.release_height, 1)} | Side: {typeof pitch.release_side === 'number' ? fmtNum(orientX(pitch.release_side), 1) : '-'}
+          SpinEff: {pitch.spin_eff !== null ? `${fmtNum(pitch.spin_eff > 1 ? pitch.spin_eff : pitch.spin_eff * 100, 1)}%` : '-'} | bTilt: {formatTiltClock(pitch.break_tilt)} | Height: {fmtNum(pitch.release_height, 1)} | Side: {typeof pitch.release_side === 'number' ? fmtNum(orientX(pitch.release_side, pitch.school_code), 1) : '-'}
         </div>
       </div>
     );
@@ -9473,7 +9844,7 @@ export default function PitchingSuite({
       <div>rTilt: {formatTiltClock(pitch.release_tilt)}</div>
       <div>bTilt: {formatTiltClock(pitch.break_tilt)}</div>
       <div>Height: {fmtNum(pitch.release_height, 1)}</div>
-      <div>Side: {typeof pitch.release_side === 'number' ? fmtNum(orientX(pitch.release_side), 1) : '-'}</div>
+      <div>Side: {typeof pitch.release_side === 'number' ? fmtNum(orientX(pitch.release_side, pitch.school_code), 1) : '-'}</div>
     </div>
   );
 
@@ -10325,7 +10696,7 @@ export default function PitchingSuite({
     };
     return Array.from(grouped.entries()).map(([pitchType, pts]) => ({
       pitch_type: pitchType,
-      release_side: safeMean(pts.map((p) => p.release_side)),
+      release_side: safeMean(pts.map((p) => (typeof p.release_side === 'number' ? orientX(p.release_side, p.school_code) : p.release_side))),
       release_height: safeMean(pts.map((p) => p.release_height)),
       extension: safeMean(pts.map((p) => p.extension)),
       hb: safeMean(pts.map((p) => p.hb)),
@@ -10507,7 +10878,7 @@ export default function PitchingSuite({
         const rawY = point[yKey];
         const xNum = toFiniteNumber(rawX);
         const yNum = toFiniteNumber(rawY);
-        const x = xNum !== null ? orientX(xNum) : null;
+        const x = xNum !== null ? orientX(xNum, point.school_code) : null;
         const y = yNum;
         return {
           plate_side: x,
@@ -10560,6 +10931,7 @@ export default function PitchingSuite({
         d === 'swinging_strike' ||
         d === 'swinging_strike_blocked' ||
         d === 'swinging_strike_pitchout' ||
+        d === 'strikeswinging' ||
         d === 'foul' ||
         d === 'foul_tip' ||
         d === 'foul_bunt' ||
@@ -10572,7 +10944,15 @@ export default function PitchingSuite({
       const raw = String(pitch.pitch_call ?? '');
       if (!isPro) return raw === 'StrikeSwinging';
       const d = normDesc(raw);
-      return d === 'swinging_strike' || d === 'swinging_strike_blocked' || d === 'foul_tip';
+      return (
+        d === 'swinging_strike' ||
+        d === 'swinging_strike_blocked' ||
+        d === 'strikeswinging' ||
+        d === 'foul_tip' ||
+        d === 'foultip' ||
+        d === 'bunt_foul_tip' ||
+        d === 'buntfoultip'
+      );
     };
     const isGroundBall = (pitch: OverviewPayload['chart_points'][number]): boolean => {
       const tagged = normDesc(pitch.tagged_hit_type ?? '');
@@ -10604,7 +10984,7 @@ export default function PitchingSuite({
       .map((p) => {
         const rawX = p[xKey];
         const rawY = p[yKey];
-        const adjustedX = typeof rawX === 'number' ? orientX(rawX) : rawX;
+        const adjustedX = typeof rawX === 'number' ? orientX(rawX, p.school_code) : rawX;
         return { p, x: adjustedX, y: rawY };
       })
       .filter(
@@ -10737,7 +11117,16 @@ export default function PitchingSuite({
     const globalSwStrkRate = globalPitchCount > 0 ? globalWhiffCount / globalPitchCount : 0;
     const globalGbRate = globalInPlayCount > 0 ? globalGbCount / globalInPlayCount : 0;
     const globalContactRate = globalSwingCount > 0 ? (globalSwingCount - globalWhiffCount) / globalSwingCount : 0;
-    const shrinkStrength = 8;
+    // Applies to Whiff Rate, SwStrk%, GB Rate, Contact Rate, Swing Rate, Exit
+    // Velocity, and QP+ -- at the old default of 8, most grid cells (whose
+    // real kernel-weighted counts aren't much larger than that) got pulled so
+    // hard toward the team-wide average that these heatmaps looked almost
+    // entirely white/faded instead of showing real hot/cold zones. RV/100 and
+    // PV/100 intentionally keep their own separate, higher shrink strength
+    // below (they're rate-of-run-value stats, noisier per-pitch than a simple
+    // make/miss count, so they still benefit from stronger smoothing).
+    const shrinkStrength = 1;
+    const whiffShrinkStrength = 1;
     const runValueShrinkStrength = 0.5;
     const xMetricShrinkStrength = 0;
 
@@ -10802,8 +11191,8 @@ export default function PitchingSuite({
         }
 
         let value = sumW;
-        if (metric === 'Whiff Rate') value = 100 * ((whiffW + shrinkStrength * globalWhiffRate) / Math.max(eps, swingW + shrinkStrength));
-        if (metric === 'SwStrk%') value = 100 * ((whiffW + shrinkStrength * globalSwStrkRate) / Math.max(eps, sumW + shrinkStrength));
+        if (metric === 'Whiff Rate') value = 100 * ((whiffW + whiffShrinkStrength * globalWhiffRate) / Math.max(eps, swingW + whiffShrinkStrength));
+        if (metric === 'SwStrk%') value = 100 * ((whiffW + whiffShrinkStrength * globalSwStrkRate) / Math.max(eps, sumW + whiffShrinkStrength));
         if (metric === 'GB Rate') value = 100 * ((gbW + shrinkStrength * globalGbRate) / Math.max(eps, inPlayW + shrinkStrength));
         if (metric === 'Contact Rate') value = 100 * (((swingW - whiffW) + shrinkStrength * globalContactRate) / Math.max(eps, swingW + shrinkStrength));
         if (metric === 'Swing Rate') value = 100 * ((swingW + shrinkStrength * globalSwingRate) / Math.max(eps, sumW + shrinkStrength));
@@ -10961,7 +11350,7 @@ export default function PitchingSuite({
       const maxY = Math.max(box.startY, box.endY);
       if (maxX - minX < 3 || maxY - minY < 3) return;
       const selected = plottedPitches.filter((pitch) => {
-        const x = px(orientX(Number(pitch.release_side)));
+        const x = px(orientX(Number(pitch.release_side), pitch.school_code));
         const y = py(Number(pitch.release_height));
         return x >= minX && x <= maxX && y >= minY && y <= maxY;
       });
@@ -11029,7 +11418,7 @@ export default function PitchingSuite({
               .map((p, i) => (
                 <circle
                   key={`r-p-${i}`}
-                  cx={px(orientX(Number(p.release_side)))}
+                  cx={px(orientX(Number(p.release_side), p.school_code))}
                   cy={py(Number(p.release_height))}
                   r={3.2}
                   fill={pitchColors[p.pitch_type] ?? '#9ca3af'}
@@ -11058,7 +11447,7 @@ export default function PitchingSuite({
               .map((p) => (
                 <circle
                   key={`r-a-${p.pitch_type}`}
-                  cx={px(orientX(Number(p.release_side)))}
+                  cx={px(Number(p.release_side))}
                   cy={py(Number(p.release_height))}
                   r={8.6}
                   fill={pitchColors[p.pitch_type] ?? '#9ca3af'}
@@ -11069,7 +11458,7 @@ export default function PitchingSuite({
                     setReleaseHover({
                       x: event.clientX,
                       y: event.clientY,
-                      text: `${p.pitch_type}\nHeight: ${fmt1(p.release_height)} ft\nSide: ${fmt1(Number.isFinite(Number(p.release_side)) ? orientX(Number(p.release_side)) : null)} ft\nExtension: ${fmt1(p.extension)} ft`,
+                      text: `${p.pitch_type}\nHeight: ${fmt1(p.release_height)} ft\nSide: ${fmt1(Number.isFinite(Number(p.release_side)) ? Number(p.release_side) : null)} ft\nExtension: ${fmt1(p.extension)} ft`,
                       bg: pitchColors[p.pitch_type] ?? '#0f172a',
                     })
                   }
@@ -11879,10 +12268,10 @@ export default function PitchingSuite({
           ? summaryPoints
               .filter((p) => Number.isFinite(Number(p.plate_side)) && Number.isFinite(Number(p.plate_height)))
               .map((p, i) => {
-                const x = px(orientX(Number(p.plate_side)));
+                const x = px(orientX(Number(p.plate_side), p.school_code));
                 const y = py(Number(p.plate_height));
                 const color = pitchColors[p.pitch_type] ?? '#9ca3af';
-                const result = resultShape(p.pitch_call, p.play_result);
+                const result = resultShape(p.pitch_call, p.play_result, p.school_code);
                 return glyph(result, x, y, color, `loc-${i}`, tooltipHtml(p), p);
               })
           : null}
@@ -11890,6 +12279,16 @@ export default function PitchingSuite({
       </svg>
     );
   }, [summaryPoints, summaryHeatmapPoints, locationView, isPro, selectedPitchTypes, visualOption, canUsePitchEdits]);
+
+  const locationLegendRange = useMemo(() => {
+    if (locationView === 'Pitch') return null;
+    const cells = buildHeatCells(summaryHeatmapPoints, 'plate_side', 'plate_height', locationView);
+    const values = cells.map((c) => c.value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+    const dynamicMinVal = values.length ? values[0] : 0;
+    const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
+    const fixedScale = getHeatmapFixedScale(locationView, selectedPitchTypes);
+    return { min: fixedScale?.min ?? dynamicMinVal, max: fixedScale?.max ?? dynamicMaxVal, isFixed: !!fixedScale };
+  }, [summaryHeatmapPoints, locationView, selectedPitchTypes]);
 
   const heatmapStatOptions = useMemo(
     () => [
@@ -12207,10 +12606,10 @@ export default function PitchingSuite({
             ? summaryPoints
                 .filter((p) => Number.isFinite(Number(p.plate_side)) && Number.isFinite(Number(p.plate_height)))
                 .map((p, i) => {
-                  const x = px(orientX(Number(p.plate_side)));
+                  const x = px(orientX(Number(p.plate_side), p.school_code));
                   const y = py(Number(p.plate_height));
                   const color = pitchColors[p.pitch_type] ?? '#9ca3af';
-                  const result = resultShape(p.pitch_call, p.play_result);
+                  const result = resultShape(p.pitch_call, p.play_result, p.school_code);
                   const hoverText =
                     heatmapDisplayView === 'QP+'
                       ? `${tooltipHtml(p)}\nQP+: ${fmtNum(p.qp_plus, 1)}`
@@ -12226,6 +12625,21 @@ export default function PitchingSuite({
       </svg>
     );
   }, [summaryPoints, summaryHeatmapPoints, heatmapDisplayView, canRenderQpHeatmap, qpSelectedPitchType, qpSelectedCountBucket, qpSelectedHand, isPro, selectedPitchTypes, visualOption, canUsePitchEdits]);
+
+  const heatmapsPageLegendRange = useMemo(() => {
+    if (heatmapDisplayView === 'Pitch') return null;
+    const allowHeatCells = heatmapDisplayView !== 'QP+' || canRenderQpHeatmap;
+    const cells = !allowHeatCells
+      ? []
+      : heatmapDisplayView === 'QP+'
+        ? buildQpPresetCells(qpSelectedPitchType, qpSelectedHand, qpSelectedCountBucket)
+        : buildHeatCells(summaryHeatmapPoints, 'plate_side', 'plate_height', heatmapDisplayView);
+    const values = cells.map((c) => c.value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+    const dynamicMinVal = values.length ? values[0] : 0;
+    const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
+    const fixedScale = getHeatmapFixedScale(heatmapDisplayView, selectedPitchTypes);
+    return { min: fixedScale?.min ?? dynamicMinVal, max: fixedScale?.max ?? dynamicMaxVal, isFixed: !!fixedScale };
+  }, [summaryHeatmapPoints, heatmapDisplayView, canRenderQpHeatmap, qpSelectedPitchType, qpSelectedHand, qpSelectedCountBucket, selectedPitchTypes]);
 
   const tableColorMode = useMemo(() => {
     if (!tableMode) return '';
@@ -12644,46 +13058,208 @@ export default function PitchingSuite({
         import('jspdf'),
       ]);
       const captureScale = Math.min(2, Math.max(1.4, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
-      const canvas = await html2canvas(tableNode, {
-        backgroundColor: isLightTheme ? '#f8fafc' : '#000000',
-        scale: captureScale,
-        useCORS: true,
-        logging: false,
-      });
-      const rawW = Math.max(1, canvas.width);
-      const rawH = Math.max(1, canvas.height);
-      const orientation: 'portrait' | 'landscape' = rawW >= rawH ? 'landscape' : 'portrait';
+      // Most browsers silently blank out (or corrupt) canvas content beyond
+      // ~16,384px in either dimension -- a single html2canvas(tableNode, ...)
+      // call captures the WHOLE table at once, so a large table (LEAGUE's
+      // leaderboard can be hundreds of rows) times captureScale routinely
+      // exceeds that ceiling and produces a canvas that reports a huge
+      // height but renders blank past the limit -- every downstream PDF
+      // page slice from that region is then blank too. Capturing the table
+      // header once and the body in row-count batches that each stay well
+      // under the limit avoids ever asking the browser for an oversized
+      // canvas in the first place.
+      const MAX_CAPTURE_SOURCE_HEIGHT = 8000;
+      const theadNode = tableNode.querySelector('thead') as HTMLElement | null;
+      const tbodyNode = tableNode.querySelector('tbody') as HTMLElement | null;
+      const bodyRows = tbodyNode ? (Array.from(tbodyNode.children) as HTMLElement[]) : [];
+      const captureBatches: HTMLCanvasElement[] = [];
+      const captureNode = async (node: HTMLElement): Promise<HTMLCanvasElement> =>
+        html2canvas(node, {
+          backgroundColor: isLightTheme ? '#f8fafc' : '#000000',
+          scale: captureScale,
+          useCORS: true,
+          logging: false,
+        });
+      // The real table has no fixed layout -- column widths come from auto
+      // layout across ALL rows at once. A batch containing only a subset of
+      // body rows in its own standalone <table> would auto-size its columns
+      // independently, misaligning it against the header capture and every
+      // other batch. Measuring the live header cells' actual pixel widths
+      // and pinning every batch table to those same widths via <colgroup>
+      // keeps every batch's columns identical to the real table's.
+      const headerCellWidths = theadNode
+        ? (Array.from(theadNode.querySelectorAll('tr:last-child > *')) as HTMLElement[]).map(
+            (cell) => cell.getBoundingClientRect().width
+          )
+        : [];
+      const tableWidthPx = tableNode.getBoundingClientRect().width;
+      const buildColgroup = (): HTMLTableColElement[] =>
+        headerCellWidths.map((w) => {
+          const col = document.createElement('col');
+          col.style.width = `${w}px`;
+          return col;
+        });
+      if (theadNode) captureBatches.push(await captureNode(theadNode));
+      if (bodyRows.length > 0) {
+        let batchStart = 0;
+        while (batchStart < bodyRows.length) {
+          let batchEnd = batchStart;
+          let batchHeight = 0;
+          while (batchEnd < bodyRows.length) {
+            const rowHeight = bodyRows[batchEnd].getBoundingClientRect().height || 0;
+            if (batchEnd > batchStart && batchHeight + rowHeight > MAX_CAPTURE_SOURCE_HEIGHT) break;
+            batchHeight += rowHeight;
+            batchEnd += 1;
+          }
+          const batchWrap = document.createElement('table');
+          batchWrap.className = tableNode.className;
+          if (headerCellWidths.length) {
+            const colgroup = document.createElement('colgroup');
+            for (const col of buildColgroup()) colgroup.appendChild(col);
+            batchWrap.appendChild(colgroup);
+            batchWrap.style.tableLayout = 'fixed';
+          }
+          const batchTbody = document.createElement('tbody');
+          for (const row of bodyRows.slice(batchStart, batchEnd)) batchTbody.appendChild(row.cloneNode(true) as HTMLElement);
+          batchWrap.appendChild(batchTbody);
+          batchWrap.style.position = 'fixed';
+          batchWrap.style.top = '-100000px';
+          batchWrap.style.left = '0';
+          batchWrap.style.width = `${tableWidthPx}px`;
+          document.body.appendChild(batchWrap);
+          try {
+            captureBatches.push(await captureNode(batchWrap));
+          } finally {
+            document.body.removeChild(batchWrap);
+          }
+          batchStart = batchEnd;
+        }
+      } else if (!theadNode) {
+        captureBatches.push(await captureNode(tableNode));
+      }
+      const rawW = Math.max(1, ...captureBatches.map((c) => c.width));
+      const totalRawH = captureBatches.reduce((sum, c) => sum + c.height, 0);
+      const orientation: 'portrait' | 'landscape' = rawW >= totalRawH ? 'landscape' : 'portrait';
       const pdf = new jsPDF({
         orientation,
         unit: 'pt',
         format: 'letter',
       });
+      // Pearl lockup, top-right of every page. Loaded once as a data URL
+      // (jsPDF's addImage needs actual image data, not a URL) and reused
+      // across pages -- a fetch failure just means no logo, not a broken PDF.
+      const pearlLogoDataUrl = await (async () => {
+        try {
+          const response = await fetch('/pearl-lockup-transparent.png', { cache: 'force-cache' });
+          if (!response.ok) return null;
+          const blob = await response.blob();
+          return await new Promise<string | null>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          });
+        } catch {
+          return null;
+        }
+      })();
+      const PEARL_LOGO_ASPECT = 1554 / 402;
       const margin = 18;
+      const logoHeight = pearlLogoDataUrl ? 22 : 0;
+      const logoWidth = logoHeight * PEARL_LOGO_ASPECT;
+      // Same "Player · Date Range" subtitle convention as the mobile report
+      // exports (see pearl-player-development's bullpen-summary.tsx) --
+      // player label falls back to "All Players" when nothing/`All` is
+      // selected, matching how the sidebar's own pitcher filter reads.
+      const playerLabel = allPitchersSelected
+        ? 'All Players'
+        : selectedPitchers.length === 1
+        ? formatNameFirstLast(selectedPitchers[0])
+        : `${selectedPitchers.length} Players`;
+      const dateRangeLabel =
+        startDate && endDate
+          ? `${new Date(`${startDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(`${endDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+          : '';
+      const titleText = 'Pitching Leaderboard';
+      const subtitleText = [playerLabel, dateRangeLabel].filter(Boolean).join('  ·  ');
+      const titleBandHeight = 34;
+      const headerBandHeight = Math.max(logoHeight, titleBandHeight) + 12;
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const contentWidth = Math.max(1, pageWidth - margin * 2);
-      const contentHeight = Math.max(1, pageHeight - margin * 2);
-      const scale = contentWidth / rawW;
+      const contentTop = margin + headerBandHeight;
+      const maxContentWidth = Math.max(1, pageWidth - margin * 2);
+      const contentHeight = Math.max(1, pageHeight - contentTop - margin);
+      // Filling the full page width unconditionally stretches a narrower
+      // table's columns wider than they render on web -- cap the scale
+      // factor at 1:1 (CSS px per pt) so a table that doesn't naturally need
+      // the whole page width isn't blown up just because the page is wide.
+      const scale = Math.min(maxContentWidth / rawW, 1 / captureScale);
+      const contentWidth = Math.max(1, rawW * scale);
       const pageSourceHeight = Math.max(1, Math.floor(contentHeight / Math.max(scale, 1e-6)));
-      const pageSlices: Array<{ start: number; end: number }> = [];
-      for (let sourceY = 0; sourceY < rawH; sourceY += pageSourceHeight) {
-        pageSlices.push({ start: sourceY, end: Math.min(rawH, sourceY + pageSourceHeight) });
-      }
-      for (let pageIndex = 0; pageIndex < pageSlices.length; pageIndex += 1) {
-        if (pageIndex > 0) pdf.addPage('letter', orientation);
+      const drawPageChrome = (isFirst: boolean) => {
         if (isLightTheme) pdf.setFillColor(248, 250, 252);
         else pdf.setFillColor(4, 5, 7);
         pdf.rect(0, 0, pageWidth, pageHeight, 'F');
-        const slice = pageSlices[pageIndex];
-        const sourceHeight = Math.max(1, slice.end - slice.start);
-        const sliceCanvas = document.createElement('canvas');
-        sliceCanvas.width = rawW;
-        sliceCanvas.height = sourceHeight;
-        const sliceCtx = sliceCanvas.getContext('2d');
-        if (!sliceCtx) continue;
-        sliceCtx.drawImage(canvas, 0, slice.start, rawW, sourceHeight, 0, 0, rawW, sourceHeight);
-        const drawHeight = sourceHeight * scale;
-        pdf.addImage(sliceCanvas.toDataURL('image/jpeg', 0.82), 'JPEG', margin, margin, contentWidth, drawHeight, undefined, 'FAST');
+        if (pearlLogoDataUrl) {
+          pdf.addImage(pearlLogoDataUrl, 'PNG', pageWidth - margin - logoWidth, margin, logoWidth, logoHeight, undefined, 'FAST');
+        }
+        if (isFirst) {
+          pdf.setTextColor(isLightTheme ? '#0f172a' : '#f8fafc');
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(16);
+          pdf.text(titleText, margin, margin + 16);
+          if (subtitleText) {
+            pdf.setFont('helvetica', 'normal');
+            pdf.setFontSize(10);
+            pdf.setTextColor(isLightTheme ? '#475569' : '#94a3b8');
+            pdf.text(subtitleText, margin, margin + 30);
+          }
+        }
+      };
+      // Batches exist purely to keep each individual html2canvas capture
+      // under the browser's canvas-height ceiling -- they are NOT page
+      // breaks. Treating each batch as its own page (the previous version)
+      // stretched the short header batch to fill an entire page by itself,
+      // pushing all body rows onto page 2. Instead, walk every batch's rows
+      // as one continuous source-height timeline sliced into fixed-height
+      // page windows, so a page break only happens when a page's worth of
+      // content (pageSourceHeight) has actually been filled -- the header
+      // and the first chunk of body rows land on the same page together,
+      // same as the single-canvas version did before batching was added.
+      type PageState = { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D | null; used: number };
+      const pages: PageState[] = [];
+      const newPageState = (): PageState => {
+        const canvas = document.createElement('canvas');
+        canvas.width = rawW;
+        canvas.height = pageSourceHeight;
+        return { canvas, ctx: canvas.getContext('2d'), used: 0 };
+      };
+      let current = newPageState();
+      pages.push(current);
+      for (const batchCanvas of captureBatches) {
+        const batchW = Math.max(1, batchCanvas.width);
+        const batchH = Math.max(1, batchCanvas.height);
+        let sourceY = 0;
+        while (sourceY < batchH) {
+          if (pageSourceHeight - current.used <= 0) {
+            current = newPageState();
+            pages.push(current);
+            continue;
+          }
+          const chunkHeight = Math.min(pageSourceHeight - current.used, batchH - sourceY);
+          current.ctx?.drawImage(batchCanvas, 0, sourceY, batchW, chunkHeight, 0, current.used, batchW, chunkHeight);
+          current.used += chunkHeight;
+          sourceY += chunkHeight;
+        }
+      }
+      let isFirstPage = true;
+      for (const page of pages) {
+        if (!page.used) continue;
+        if (!isFirstPage) pdf.addPage('letter', orientation);
+        drawPageChrome(isFirstPage);
+        isFirstPage = false;
+        const drawHeight = page.used * scale;
+        pdf.addImage(page.canvas.toDataURL('image/jpeg', 0.82), 'JPEG', margin, contentTop, contentWidth, drawHeight, undefined, 'FAST');
       }
       const safeMode = String(tableMode || 'leaderboard').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
       const safeViewBy = String(leaderboardViewBy || 'player').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
@@ -12712,7 +13288,7 @@ export default function PitchingSuite({
       wrapNode.style.overflowY = originalWrapOverflowY;
       setIsExportingLeaderboardPdf(false);
     }
-  }, [leaderboardViewBy, tableMode]);
+  }, [leaderboardViewBy, tableMode, selectedPitchers, allPitchersSelected, startDate, endDate]);
   const displayedTableColumns = useMemo(() => {
     const splitColumn = overview?.table_columns?.[0] ?? 'Pitch';
     const isJaredDashboardSelection =
@@ -13848,7 +14424,17 @@ export default function PitchingSuite({
                       placeholder={isPro ? 'MLB' : 'D1'}
                     />
                   </label>
-                ) : null}
+                ) : (
+                  <label>
+                    Level
+                    <SearchableSingleSelect
+                      options={toOptions(PRO_LEVEL_FILTER_OPTIONS)}
+                      value={PRO_LEVEL_FILTER_OPTIONS.includes(level) ? level : 'All'}
+                      onChange={setLevel}
+                      placeholder="All"
+                    />
+                  </label>
+                )}
                 {!isPro && !isLeague ? (
                   <label>
                     Session Type
@@ -14464,12 +15050,12 @@ export default function PitchingSuite({
                             width: 220,
                             height: 20,
                             border: '1px solid rgba(255,255,255,0.25)',
-                            background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(176,11,52) 100%)',
+                            background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(220,20,20) 100%)',
                           }}
                         />
                         <div style={{ width: 220, display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: 'rgba(255,255,255,0.92)' }}>
-                          <span>Least</span>
-                          <span>Most</span>
+                          <span>Least{locationLegendRange?.isFixed ? ` (${formatHeatmapLegendValue(locationView, locationLegendRange.min)})` : ''}</span>
+                          <span>Most{locationLegendRange?.isFixed ? ` (${formatHeatmapLegendValue(locationView, locationLegendRange.max)})` : ''}</span>
                         </div>
                         <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>{locationView === 'Frequency' ? 'Pitch Frequency' : locationView}</div>
                       </div>
@@ -16360,12 +16946,12 @@ export default function PitchingSuite({
                             width: 260,
                             height: 20,
                             border: '1px solid rgba(255,255,255,0.25)',
-                            background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(176,11,52) 100%)',
+                            background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(220,20,20) 100%)',
                           }}
                         />
                         <div style={{ width: 260, display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'rgba(255,255,255,0.92)' }}>
-                          <span>Least</span>
-                          <span>Most</span>
+                          <span>Least{heatmapsPageLegendRange?.isFixed ? ` (${formatHeatmapLegendValue(heatmapDisplayView, heatmapsPageLegendRange.min)})` : ''}</span>
+                          <span>Most{heatmapsPageLegendRange?.isFixed ? ` (${formatHeatmapLegendValue(heatmapDisplayView, heatmapsPageLegendRange.max)})` : ''}</span>
                         </div>
                         <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{heatmapDisplayView === 'Frequency' ? 'Pitch Frequency' : heatmapDisplayView}</div>
                       </div>
@@ -17084,10 +17670,10 @@ export default function PitchingSuite({
                                   <line x1={px(-0.88)} y1={py(1.5 + ((3.6 - 1.5) / 3))} x2={px(0.88)} y2={py(1.5 + ((3.6 - 1.5) / 3))} stroke="rgba(255,255,255,0.45)" />
                                   <line x1={px(-0.88)} y1={py(1.5 + (((3.6 - 1.5) * 2) / 3))} x2={px(0.88)} y2={py(1.5 + (((3.6 - 1.5) * 2) / 3))} stroke="rgba(255,255,255,0.45)" />
                                   {points.map((point, idx) => {
-                                    const x = px(orientX(Number(point.plate_side)));
+                                    const x = px(orientX(Number(point.plate_side), point.school_code));
                                     const y = py(Number(point.plate_height));
                                     const color = pitchColors[point.pitch_type] ?? '#9ca3af';
-                                    const result = resultShape(point.pitch_call, point.play_result);
+                                    const result = resultShape(point.pitch_call, point.play_result, point.school_code);
                                     const hoverText = `${tooltipHtml(point)}\nQP+: ${fmtNum(point.qp_plus, 1)}`;
                                     const hoverProps = {
                                       onMouseMove: (event: { clientX: number; clientY: number }) =>
@@ -18216,7 +18802,7 @@ export default function PitchingSuite({
                     <div>rTilt: {formatTiltClock(currentActionPitch.release_tilt)}</div>
                     <div>bTilt: {formatTiltClock(currentActionPitch.break_tilt)}</div>
                     <div>Height: {fmtNum(currentActionPitch.release_height, 1)}</div>
-                    <div>Side: {typeof currentActionPitch.release_side === 'number' ? fmtNum(orientX(currentActionPitch.release_side), 1) : '-'}</div>
+                    <div>Side: {typeof currentActionPitch.release_side === 'number' ? fmtNum(orientX(currentActionPitch.release_side, currentActionPitch.school_code), 1) : '-'}</div>
                     <div style={{ display: 'grid', justifyContent: 'center', marginTop: 10 }}>
                       <svg viewBox={`0 0 ${actionZoneW} ${actionZoneH}`} style={{ width: 172, height: 186 }}>
                         <polygon

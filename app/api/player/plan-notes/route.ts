@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../lib/auth';
 import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
+import { sendPushNotificationToUsers } from '../../../../lib/push-notifications';
 import {
   deleteDashboardPlayerNote,
   deletePlayerPlanNote,
@@ -10,6 +11,8 @@ import {
   createPlayerPlanNote,
   getPlayerByIdInOrganization,
   getPlayerForUser,
+  getPlayerNotificationContext,
+  getPlayerPlanNoteById,
   linkMediaToNote,
   listMediaForNotes,
   listPlayerPlanNoteCategoriesByOrganization,
@@ -17,6 +20,8 @@ import {
   listDashboardPlayerNotesByOrganization,
   listPlayerSummariesByOrganization,
   listPlayerPlanNotesForPlayer,
+  notifyPlayerForStaffActivity,
+  notifyStaffForPlayerActivity,
   recordPortalActivityEvent,
   updateDashboardPlayerNote,
   updatePlayerPlanNote,
@@ -68,6 +73,77 @@ async function recordNoteNotification(request: Request, input: {
   }).catch(() => {});
 }
 
+/** A player added a note about themselves -- notify every coach/admin at their school. */
+async function notifyStaffForPlayerNote(request: Request, input: {
+  session: NonNullable<ReturnType<typeof getSessionFromRequest>>;
+  organizationId: number;
+  playerId: number;
+  playerName: string | null;
+  domain: string;
+  category: string;
+}) {
+  await recordNoteNotification(request, input);
+  const context = await getPlayerNotificationContext({ organizationId: input.organizationId, playerId: input.playerId });
+  const actorName = String(input.session.name ?? input.session.email ?? '').trim() || 'A player';
+  const recipients = await notifyStaffForPlayerActivity({
+    schoolCode: context?.schoolCode ?? null,
+    excludeUserId: input.session.userId ?? null,
+    eventType: 'note_added',
+    title: 'Player note added',
+    detail: `${actorName} added a note${input.category ? ` (${input.category})` : ''}`,
+    path: `/portal/player?previewPlayerId=${input.playerId}`,
+    actorUserId: input.session.userId ?? null,
+    actorName,
+    actorRole: 'player',
+    playerId: input.playerId,
+    playerName: input.playerName,
+  }).catch(() => []);
+  if (recipients.length > 0) {
+    await sendPushNotificationToUsers({
+      userIds: recipients,
+      title: 'Player note added',
+      body: `${actorName} added a note${input.playerName ? ` for ${input.playerName}` : ''}`,
+      data: { path: `/portal/player?previewPlayerId=${input.playerId}` },
+    });
+  }
+}
+
+/** Staff added/edited a note about a player -- notify the player themselves if it's marked visible to them. */
+async function notifyPlayerForStaffNote(request: Request, input: {
+  session: NonNullable<ReturnType<typeof getSessionFromRequest>>;
+  organizationId: number;
+  playerId: number;
+  playerName: string | null;
+  domain: string;
+  category: string;
+  playerVisible: boolean;
+}) {
+  await recordNoteNotification(request, input);
+  if (!input.playerVisible) return;
+  const context = await getPlayerNotificationContext({ organizationId: input.organizationId, playerId: input.playerId });
+  const actorName = String(input.session.name ?? input.session.email ?? '').trim() || 'Your coach';
+  const recipients = await notifyPlayerForStaffActivity({
+    playerUserId: context?.userId ?? null,
+    eventType: 'note_added',
+    title: 'New note from your coach',
+    detail: `${actorName} added a note${input.category ? ` (${input.category})` : ''}`,
+    path: `/portal/player?previewPlayerId=${input.playerId}`,
+    actorUserId: input.session.userId ?? null,
+    actorName,
+    actorRole: input.session.role ?? 'coach',
+    playerId: input.playerId,
+    playerName: input.playerName,
+  }).catch(() => []);
+  if (recipients.length > 0) {
+    await sendPushNotificationToUsers({
+      userIds: recipients,
+      title: 'New note from your coach',
+      body: `${actorName} added a note`,
+      data: { path: `/portal/player?previewPlayerId=${input.playerId}` },
+    });
+  }
+}
+
 async function resolveAllowedPlayerId(
   session: { role?: string; organizationId?: number; userId?: number; playerId?: number | null } | null,
   requestedPlayerId: number,
@@ -100,7 +176,6 @@ export async function GET(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ notes: [] });
 
@@ -109,6 +184,17 @@ export async function GET(request: Request) {
   const dashboardPlayerName = String(url.searchParams.get('dashboardPlayerName') ?? '').trim();
   const domain = String(url.searchParams.get('domain') ?? '');
   const normalizedDomain = domain === 'Pitching' || domain === 'Hitting' || domain === 'Catching' || domain === 'General' ? domain : undefined;
+
+  if (session.role === 'player') {
+    if (!Number.isFinite(playerId) || playerId <= 0) return NextResponse.json({ error: 'Valid playerId is required.' }, { status: 400 });
+    const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
+    if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+    const rawNotes = await listPlayerPlanNotesForPlayer({ organizationId, playerId: allowed.playerId, domain: normalizedDomain });
+    // Players only ever see their own notes plus staff notes explicitly marked visible to them.
+    const visibleNotes = rawNotes.filter((note) => note.playerVisible || note.createdByUserId === (session.userId ?? -1));
+    const notes = await withNoteAttachments(visibleNotes);
+    return NextResponse.json({ notes, categories: [] });
+  }
 
   if (dashboardPlayerName) {
     try {
@@ -172,7 +258,6 @@ export async function POST(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ error: 'Programming data is not available for this school.' }, { status: 403 });
 
@@ -197,6 +282,45 @@ export async function POST(request: Request) {
   }
   if (!category) return NextResponse.json({ error: 'Category is required.' }, { status: 400 });
   if (category.length > 80) return NextResponse.json({ error: 'Category must be 80 characters or fewer.' }, { status: 400 });
+
+  if (session.role === 'player') {
+    if (!Number.isFinite(playerId) || playerId <= 0) return NextResponse.json({ error: 'Valid playerId is required.' }, { status: 400 });
+    const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
+    if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+
+    const created = await createPlayerPlanNote({
+      organizationId,
+      playerId: allowed.playerId,
+      domain,
+      noteDate,
+      category,
+      // Matches coach/admin-authored notes: prefixed with "Created By: {name}"
+      // so authorship is visible wherever the raw note text is displayed.
+      noteText: authoredNoteText,
+      attachmentName,
+      attachmentMimeType,
+      attachmentDataUrl,
+      // Players can never hide their own notes from staff.
+      playerVisible: true,
+      createdByUserId: session.userId ?? 0,
+    });
+    if (!created.ok) return NextResponse.json({ error: created.error }, { status: 400 });
+    if (mediaIds.length > 0) await linkMediaToNote({ noteId: created.id, mediaIds });
+    const player = await getPlayerByIdInOrganization({ organizationId, playerId: allowed.playerId });
+    await notifyStaffForPlayerNote(request, {
+      session,
+      organizationId,
+      playerId: allowed.playerId,
+      playerName: player?.fullName ?? null,
+      domain,
+      category,
+    });
+
+    const rawNotes = await listPlayerPlanNotesForPlayer({ organizationId, playerId: allowed.playerId, domain });
+    const visibleNotes = rawNotes.filter((note) => note.playerVisible || note.createdByUserId === (session.userId ?? -1));
+    const notes = await withNoteAttachments(visibleNotes);
+    return NextResponse.json({ ok: true, notes, categories: [] });
+  }
 
   if (dashboardPlayerName) {
     try {
@@ -257,13 +381,14 @@ export async function POST(request: Request) {
   if (!created.ok) return NextResponse.json({ error: created.error }, { status: 400 });
   if (mediaIds.length > 0) await linkMediaToNote({ noteId: created.id, mediaIds });
   const player = await getPlayerByIdInOrganization({ organizationId, playerId: allowed.playerId });
-  await recordNoteNotification(request, {
+  await notifyPlayerForStaffNote(request, {
     session,
     organizationId,
     playerId: allowed.playerId,
     playerName: player?.fullName ?? null,
     domain,
     category,
+    playerVisible,
   });
 
   const [rawNotes, categories] = await Promise.all([
@@ -278,7 +403,6 @@ export async function PATCH(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ error: 'Programming data is not available for this school.' }, { status: 403 });
 
@@ -291,8 +415,33 @@ export async function PATCH(request: Request) {
   const attachmentName = String(body.attachmentName ?? '');
   const attachmentMimeType = String(body.attachmentMimeType ?? '');
   const attachmentDataUrl = String(body.attachmentDataUrl ?? '');
-  const playerVisible = Boolean(body.playerVisible);
+  const playerVisible = typeof body.playerVisible === 'boolean' ? body.playerVisible : undefined;
   const authoredNoteText = withAuthorPrefix(noteText, String(session.name ?? session.email ?? '').trim());
+
+  if (session.role === 'player') {
+    // Players may only edit their own notes, and can never hide a note from staff.
+    if (!Number.isFinite(playerId) || playerId <= 0) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
+    if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+    const existing = await getPlayerPlanNoteById({ organizationId, playerId: allowed.playerId, noteId });
+    if (!existing || existing.createdByUserId !== (session.userId ?? -1)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    const updated = await updatePlayerPlanNote({
+      organizationId,
+      playerId: allowed.playerId,
+      noteId,
+      noteDate,
+      category,
+      noteText: authoredNoteText,
+      attachmentName,
+      attachmentMimeType,
+      attachmentDataUrl,
+      playerVisible: true,
+    });
+    if (!updated.ok) return NextResponse.json({ error: updated.error }, { status: 400 });
+    return NextResponse.json({ ok: true });
+  }
 
   if (Number.isFinite(playerId) && playerId > 0) {
     const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
@@ -331,13 +480,26 @@ export async function DELETE(request: Request) {
   const cookieStore = await cookies();
   const session = getSessionFromRequest(request, cookieStore);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (session.role === 'player') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   const organizationId = await resolvePlayerContentOrganizationId(session);
   if (organizationId <= 0) return NextResponse.json({ error: 'Programming data is not available for this school.' }, { status: 403 });
 
   const url = new URL(request.url);
   const noteId = Number(url.searchParams.get('noteId') ?? '0');
   const playerId = Number(url.searchParams.get('playerId') ?? '0');
+
+  if (session.role === 'player') {
+    if (!Number.isFinite(playerId) || playerId <= 0) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
+    if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+    const existing = await getPlayerPlanNoteById({ organizationId, playerId: allowed.playerId, noteId });
+    if (!existing || existing.createdByUserId !== (session.userId ?? -1)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    const deleted = await deletePlayerPlanNote({ organizationId, playerId: allowed.playerId, noteId });
+    if (!deleted.ok) return NextResponse.json({ error: deleted.error }, { status: 400 });
+    return NextResponse.json({ ok: true });
+  }
+
   if (Number.isFinite(playerId) && playerId > 0) {
     const allowed = await resolveAllowedPlayerId(session, playerId, organizationId);
     if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });

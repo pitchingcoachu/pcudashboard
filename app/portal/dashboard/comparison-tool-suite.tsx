@@ -773,7 +773,7 @@ function divergingColor(value: number, min: number, mid: number, max: number): s
     return rgb(lerp(32, 246, t), lerp(74, 248, t), lerp(135, 248, t));
   }
   const t = Math.max(0, Math.min(1, (value - mid) / Math.max(1e-9, max - mid)));
-  return rgb(lerp(248, 176, t), lerp(248, 11, t), lerp(248, 52, t));
+  return rgb(lerp(248, 220, t), lerp(248, 20, t), lerp(248, 20, t));
 }
 function sequentialColor(value: number, min: number, max: number): string {
   if (!Number.isFinite(value)) return 'rgba(255,255,255,0.08)';
@@ -811,6 +811,13 @@ function getHeatmapFixedScale(metricRaw: HeatMetric, selectedPitchTypesRaw: stri
     return { min: 55, mid: 67.5, max: 80 };
   }
   return null;
+}
+
+function formatHeatmapLegendValue(metric: HeatMetric, value: number): string {
+  if (metric === 'xWOBA' || metric === 'xBA' || metric === 'xISO') return value.toFixed(3);
+  if (metric === 'PV/100') return value.toFixed(1);
+  if (metric === 'Exit Velocity') return `${Math.round(value)}`;
+  return `${Math.round(value)}%`;
 }
 
 function buildHeatCells(points: ChartPoint[], metric: HeatMetric, isProSchool = false): HeatCell[] {
@@ -1769,9 +1776,9 @@ function ComparisonPane({ title, compact = false }: { title: string; compact?: b
           </g>
         </svg>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: '0.82rem', opacity: 0.9 }}>Least</span>
-          <div style={{ height: 8, width: 180, borderRadius: 999, background: 'linear-gradient(90deg, rgb(32,74,135), rgb(246,248,248), rgb(176,11,52))' }} />
-          <span style={{ fontSize: '0.82rem', opacity: 0.9 }}>Most</span>
+          <span style={{ fontSize: '0.82rem', opacity: 0.9 }}>Least{fixedScale ? ` (${formatHeatmapLegendValue(heatMetricView, minVal)})` : ''}</span>
+          <div style={{ height: 8, width: 180, borderRadius: 999, background: 'linear-gradient(90deg, rgb(32,74,135), rgb(246,248,248), rgb(220,20,20))' }} />
+          <span style={{ fontSize: '0.82rem', opacity: 0.9 }}>Most{fixedScale ? ` (${formatHeatmapLegendValue(heatMetricView, maxVal)})` : ''}</span>
         </div>
       </div>
     );

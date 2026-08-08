@@ -918,7 +918,7 @@ function divergingColor(value: number, min: number, mid: number, max: number): s
     return rgb(lerp(32, 246, t), lerp(74, 248, t), lerp(135, 248, t));
   }
   const t = Math.max(0, Math.min(1, (value - mid) / Math.max(1e-9, max - mid)));
-  return rgb(lerp(248, 176, t), lerp(248, 11, t), lerp(248, 52, t));
+  return rgb(lerp(248, 220, t), lerp(248, 20, t), lerp(248, 20, t));
 }
 
 function sequentialColor(value: number, min: number, max: number): string {
@@ -1001,6 +1001,13 @@ function getHeatmapFixedScale(metricRaw: string, selectedPitchTypesRaw: string[]
     return { min: 55, mid: 67.5, max: 80 };
   }
   return null;
+}
+
+function formatHeatmapLegendValue(metric: string, value: number): string {
+  if (metric === 'xWOBA' || metric === 'xISO') return value.toFixed(3);
+  if (metric === 'PV/100' || metric === 'RV/100') return value.toFixed(1);
+  if (metric === 'Exit Velocity') return `${Math.round(value)}`;
+  return `${Math.round(value)}%`;
 }
 
 function SearchableSingleSelect({
@@ -4654,6 +4661,18 @@ export default function HittingSuite({
       </svg>
     );
   }, [heatmapDisplayView, heatmapStat, points, heatmapPoints, pitchTypes, isPro]);
+
+  const heatmapsPageLegendRange = useMemo(() => {
+    if (heatmapDisplayView === 'Pitch') return null;
+    const cells = buildHeatCells(heatmapPoints, heatmapDisplayView, isPro);
+    const values = cells.map((c) => c.value).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+    const dynamicMinVal = values.length ? values[0] : 0;
+    const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
+    const selectedHeatPitchTypes = (pitchTypes || []).filter((entry) => entry && entry !== 'All');
+    const fixedScale = getHeatmapFixedScale(heatmapDisplayView, selectedHeatPitchTypes);
+    return { min: fixedScale?.min ?? dynamicMinVal, max: fixedScale?.max ?? dynamicMaxVal, isFixed: !!fixedScale };
+  }, [heatmapDisplayView, heatmapPoints, pitchTypes, isPro]);
+
   const swingContactPoints = useMemo(
     () =>
       points.filter(
@@ -6199,10 +6218,10 @@ export default function HittingSuite({
                   <div className="dashboard-panel" style={{ paddingTop: 12 }}>
                     {heatmapDisplayView !== 'Pitch' ? (
                       <div style={{ display: 'grid', gap: 4, justifyItems: 'center', marginBottom: 8 }}>
-                        <div style={{ width: 440, maxWidth: '85%', height: 26, background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(176,11,52) 100%)', border: '1px solid rgba(255,255,255,0.22)' }} />
+                        <div style={{ width: 440, maxWidth: '85%', height: 26, background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(220,20,20) 100%)', border: '1px solid rgba(255,255,255,0.22)' }} />
                         <div style={{ width: 440, maxWidth: '85%', display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', fontWeight: 600 }}>
-                          <span>Least</span>
-                          <span>Most</span>
+                          <span>Least{heatmapsPageLegendRange?.isFixed ? ` (${formatHeatmapLegendValue(heatmapDisplayView, heatmapsPageLegendRange.min)})` : ''}</span>
+                          <span>Most{heatmapsPageLegendRange?.isFixed ? ` (${formatHeatmapLegendValue(heatmapDisplayView, heatmapsPageLegendRange.max)})` : ''}</span>
                         </div>
                         <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{heatmapDisplayView === 'Frequency' ? 'Pitch Frequency' : heatmapDisplayView}</div>
                       </div>

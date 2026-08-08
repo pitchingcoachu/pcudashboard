@@ -19,6 +19,7 @@ type PlayerPlanNote = {
   attachmentName: string | null;
   attachmentMimeType: string | null;
   attachmentDataUrl: string | null;
+  playerVisible?: boolean;
   createdAt: string;
 };
 
@@ -318,6 +319,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   const [noteDate, setNoteDate] = useState(todayIsoDate());
   const [noteCategory, setNoteCategory] = useState('Player Plan');
   const [noteText, setNoteText] = useState('');
+  const [noteVisibleToPlayer, setNoteVisibleToPlayer] = useState(false);
   const [noteFiles, setNoteFiles] = useState<File[]>([]);
   const [filterCategory, setFilterCategory] = useState('All');
   const [customCategories, setCustomCategories] = useState<string[]>([]);
@@ -342,6 +344,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
   const [editingMediaCategory, setEditingMediaCategory] = useState('');
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
   const [editingText, setEditingText] = useState('');
+  const [editingPlayerVisible, setEditingPlayerVisible] = useState(false);
   const categoryOptions = useMemo(
     () => uniqueNames([...DEFAULT_NOTE_CATEGORIES, ...orgNoteCategories, ...customCategories, ...notes.map((note) => note.category)]),
     [customCategories, notes, orgNoteCategories]
@@ -583,6 +586,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
           attachmentName: encoded.attachmentName,
           attachmentMimeType: encoded.attachmentMimeType,
           attachmentDataUrl: encoded.attachmentDataUrl,
+          playerVisible: noteVisibleToPlayer,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string; notes?: PlayerPlanNote[]; categories?: string[] };
@@ -593,6 +597,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
       if (latestMedia) setPlayerMedia(latestMedia);
       setNoteText('');
       setNoteFiles([]);
+      setNoteVisibleToPlayer(false);
       setMessage('Note saved.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to save note.');
@@ -618,6 +623,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
           attachmentName: note.attachmentName ?? '',
           attachmentMimeType: note.attachmentMimeType ?? '',
           attachmentDataUrl: note.attachmentDataUrl ?? '',
+          playerVisible: editingPlayerVisible,
         }),
       });
       const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -629,6 +635,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
             ? {
                 ...item,
                 noteText: editingText.trim(),
+                playerVisible: editingPlayerVisible,
               }
             : item
         )
@@ -860,6 +867,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
         attachmentName: encoded.attachmentName,
         attachmentMimeType: encoded.attachmentMimeType,
         attachmentDataUrl: encoded.attachmentDataUrl,
+        playerVisible: note.playerVisible,
       }),
     });
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -1198,6 +1206,14 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
               Note
               <textarea rows={8} value={noteText} onChange={(event) => setNoteText(event.target.value)} placeholder="Write note..." />
             </label>
+            <label className="portal-inline-filter" style={{ marginTop: 8 }}>
+              <input
+                type="checkbox"
+                checked={noteVisibleToPlayer}
+                onChange={(event) => setNoteVisibleToPlayer(event.target.checked)}
+              />
+              Visible to player
+            </label>
             <div className="portal-choice-line-actions">
               <button
                 type="button"
@@ -1325,6 +1341,31 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                           ) : (
                             <p style={{ margin: '12px 0 18px 0', whiteSpace: 'pre-wrap', color: '#ffffff' }}>{note.noteText}</p>
                           )}
+                          {editingNoteId === note.id ? (
+                            <label className="portal-inline-filter" style={{ marginTop: 4 }}>
+                              <input
+                                type="checkbox"
+                                checked={editingPlayerVisible}
+                                onChange={(event) => setEditingPlayerVisible(event.target.checked)}
+                              />
+                              Visible to player
+                            </label>
+                          ) : note.playerVisible ? (
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                marginTop: 4,
+                                padding: '2px 8px',
+                                borderRadius: 999,
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                color: 'var(--accent, #dcc1a1)',
+                                border: '1px solid var(--accent, #dcc1a1)',
+                              }}
+                            >
+                              Visible to player
+                            </span>
+                          ) : null}
                           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                             {editingNoteId === note.id ? (
                               <>
@@ -1342,6 +1383,7 @@ export default function PlayerNotesSuite({ fixedPlayer = null, embedded = false 
                                 onClick={() => {
                                   setEditingNoteId(note.id);
                                   setEditingText(note.noteText);
+                                  setEditingPlayerVisible(Boolean(note.playerVisible));
                                 }}
                               >
                                 Edit

@@ -870,7 +870,7 @@ function divergingColor(value: number, min: number, mid: number, max: number): s
     return rgb(lerp(32, 246, t), lerp(74, 248, t), lerp(135, 248, t));
   }
   const t = Math.max(0, Math.min(1, (value - mid) / Math.max(1e-9, max - mid)));
-  return rgb(lerp(248, 176, t), lerp(248, 11, t), lerp(248, 52, t));
+  return rgb(lerp(248, 220, t), lerp(248, 20, t), lerp(248, 20, t));
 }
 
 function formatMdyy(isoDate: string): string {

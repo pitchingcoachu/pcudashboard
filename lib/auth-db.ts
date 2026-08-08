@@ -764,6 +764,23 @@ export async function ensureAuthDbReady(): Promise<void> {
     ON password_reset_tokens(user_email);
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_school_access (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+      school_code TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_school_access_user_school
+    ON user_school_access (user_id, school_code);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_user_school_access_school
+    ON user_school_access (school_code);
+  `);
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -1057,4 +1074,70 @@ export async function resetPasswordWithToken(token: string, newPassword: string)
   } finally {
     client.release();
   }
+}
+
+export interface StaffSchoolContact {
+  userId: number;
+  email: string;
+  name: string | null;
+  role: string;
+}
+
+export async function listSchoolCodesForUser(userId: number): Promise<string[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureAuthDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ school_code: string }>(
+    `SELECT school_code FROM user_school_access WHERE user_id = $1 ORDER BY school_code`,
+    [userId]
+  );
+  return result.rows.map((row) => row.school_code);
+}
+
+export async function setSchoolCodesForUser(userId: number, schoolCodes: string[]): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  await ensureAuthDbReady();
+  const pool = getDbPool();
+  const normalized = Array.from(
+    new Set(schoolCodes.map((code) => String(code ?? '').trim().toUpperCase()).filter(Boolean))
+  );
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM user_school_access WHERE user_id = $1`, [userId]);
+    for (const schoolCode of normalized) {
+      await client.query(
+        `INSERT INTO user_school_access (user_id, school_code) VALUES ($1, $2)
+         ON CONFLICT (user_id, school_code) DO NOTHING`,
+        [userId, schoolCode]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function listStaffForSchool(schoolCode: string): Promise<StaffSchoolContact[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureAuthDbReady();
+  const normalized = String(schoolCode ?? '').trim().toUpperCase();
+  if (!normalized) return [];
+  const pool = getDbPool();
+  const result = await pool.query<{ id: number; email: string; name: string | null; role: string }>(
+    `
+      SELECT DISTINCT a.id, a.email, a.name, a.role
+      FROM auth_users a
+      JOIN user_school_access usa ON usa.user_id = a.id
+      WHERE usa.school_code = $1
+        AND a.is_active = TRUE
+        AND a.role IN ('admin', 'coach')
+    `,
+    [normalized]
+  );
+  return result.rows.map((row) => ({ userId: row.id, email: row.email, name: row.name, role: row.role }));
 }

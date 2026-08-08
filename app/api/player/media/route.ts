@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../lib/auth';
 import { readActivityRequestMeta } from '../../../../lib/portal-activity';
 import { resolvePlayerContentOrganizationId } from '../../../../lib/player-content-scope';
+import { sendPushNotificationToUsers } from '../../../../lib/push-notifications';
 import { deleteObjectFromR2, getR2Bucket, getR2Client, isR2Configured, uploadPlayerMediaToR2 } from '../../../../lib/biomechanics-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
@@ -10,8 +11,11 @@ import {
   createPlayerMedia,
   deletePlayerMedia,
   getPlayerByIdInOrganization,
+  getPlayerNotificationContext,
   listPlayerMediaCategoriesByOrganization,
   listPlayerMedia,
+  notifyPlayerForStaffActivity,
+  notifyStaffForPlayerActivity,
   recordPortalActivityEvent,
   updatePlayerMedia,
 } from '../../../../lib/training-db';
@@ -119,6 +123,63 @@ async function recordMediaNotification(request: Request, input: {
     userAgent,
     ipAddress,
   }).catch(() => {});
+
+  const actorName = String(input.allowed.session.name ?? input.allowed.session.email ?? '').trim() || 'Someone';
+  const mediaLabel = `${input.mediaType[0]?.toUpperCase() ?? ''}${input.mediaType.slice(1)}`;
+
+  if (input.allowed.session.role === 'player') {
+    const context = await getPlayerNotificationContext({
+      organizationId: input.allowed.organizationId,
+      playerId: input.allowed.playerId,
+    });
+    const recipients = await notifyStaffForPlayerActivity({
+      schoolCode: context?.schoolCode ?? null,
+      excludeUserId: input.allowed.session.userId ?? null,
+      eventType: 'media_uploaded',
+      title: `${mediaLabel} uploaded`,
+      detail: `${actorName} uploaded ${input.mediaTitle}`,
+      path: profilePath,
+      actorUserId: input.allowed.session.userId ?? null,
+      actorName,
+      actorRole: 'player',
+      playerId: input.allowed.playerId,
+      playerName: input.allowed.playerName,
+    }).catch(() => []);
+    if (recipients.length > 0) {
+      await sendPushNotificationToUsers({
+        userIds: recipients,
+        title: `${mediaLabel} uploaded`,
+        body: `${actorName} uploaded ${input.mediaTitle}${input.allowed.playerName ? ` for ${input.allowed.playerName}` : ''}`,
+        data: { path: profilePath },
+      });
+    }
+    return;
+  }
+
+  const context = await getPlayerNotificationContext({
+    organizationId: input.allowed.organizationId,
+    playerId: input.allowed.playerId,
+  });
+  const recipients = await notifyPlayerForStaffActivity({
+    playerUserId: context?.userId ?? null,
+    eventType: 'media_uploaded',
+    title: `${mediaLabel} uploaded`,
+    detail: `${actorName} uploaded ${input.mediaTitle}`,
+    path: profilePath,
+    actorUserId: input.allowed.session.userId ?? null,
+    actorName,
+    actorRole: input.allowed.session.role ?? 'coach',
+    playerId: input.allowed.playerId,
+    playerName: input.allowed.playerName,
+  }).catch(() => []);
+  if (recipients.length > 0) {
+    await sendPushNotificationToUsers({
+      userIds: recipients,
+      title: `${mediaLabel} uploaded`,
+      body: `${actorName} uploaded ${input.mediaTitle}`,
+      data: { path: profilePath },
+    });
+  }
 }
 
 // ── GET: list media ──────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import DashboardShell from './dashboard-shell';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
 import PortalThemeToggle from '../theme-toggle';
 import PortalNotificationsBell from '../notifications-bell';
+import PortalMessagesNavButton from '../messages-nav-button';
 
 type PortalDashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -144,6 +145,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
               <h1>{session.name ?? session.email}</h1>
             </div>
           )}
+          <PortalMessagesNavButton />
           <PortalNotificationsBell />
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />

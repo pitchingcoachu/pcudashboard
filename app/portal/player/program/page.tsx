@@ -18,6 +18,7 @@ import PortalUserMenu from '../../user-menu';
 import DashboardSchoolSelector from '../../dashboard/dashboard-school-selector';
 import PortalThemeToggle from '../../theme-toggle';
 import PortalNotificationsBell from '../../notifications-bell';
+import PortalMessagesNavButton from '../../messages-nav-button';
 import PlayerCalendar from '../player-calendar';
 
 type PlayerProgramPageProps = {
@@ -131,6 +132,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           )}
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
+          <PortalMessagesNavButton />
           <PortalNotificationsBell />
         </div>
         </header>
@@ -188,6 +190,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           )}
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
+          <PortalMessagesNavButton />
           <PortalNotificationsBell />
         </div>
         </header>
@@ -303,6 +306,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           )}
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
+          <PortalMessagesNavButton />
           <PortalNotificationsBell />
           <div className="portal-social-row" aria-label="PCU Social Links">
             <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">

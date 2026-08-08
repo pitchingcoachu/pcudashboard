@@ -22,6 +22,7 @@ import PortalUserMenu from '../user-menu';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
+import PortalMessagesNavButton from '../messages-nav-button';
 import ProfileDashboard from './profile-dashboard';
 import PlayerQuestionnaireGate from './player-questionnaire-gate';
 
@@ -133,6 +134,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
               <h1>{session.name ?? session.email}</h1>
             </div>
           )}
+          <PortalMessagesNavButton />
           <PortalNotificationsBell />
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
@@ -201,9 +203,20 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
           []
         )
       : Promise.resolve([]),
+    // player_plan_goals is a tiny, indexed (WHERE player_id = $1) lookup --
+    // it should never legitimately take anywhere near 3.5s. When it did
+    // time out here, the fallback (three goals with a null description) was
+    // indistinguishable from "this player genuinely has no goals set" by
+    // the time it reached profile-plan-goals-panel.tsx's parseGoal (which
+    // drops any row with a blank description), so the whole Player Plan
+    // Goals card silently vanished instead of showing real data that just
+    // needed a bit more time under connection-pool contention from this
+    // page's ~7 concurrent queries. A longer timeout gives the real query
+    // room to win the race in the vast majority of "slow" cases instead of
+    // masking them as empty.
     withTimeout(
       listPlayerPlanGoalsForPlayer({ playerId: effectivePlayerId }),
-      3500,
+      12000,
       {
         activeGoals: [
           { slotIndex: 1 as const, category: null, goalDescription: null, createdAt: null },
@@ -297,6 +310,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
               <h1>{session.name ?? session.email}</h1>
             </div>
           )}
+          <PortalMessagesNavButton />
           <PortalNotificationsBell />
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
@@ -355,6 +369,7 @@ export default async function PlayerPortalPage({ searchParams }: PlayerPageProps
           initialExerciseId={null}
           initialTrend={[]}
           sessionRole={session.role}
+          sessionUserId={session.userId ?? null}
           initialPlanGoals={planGoals.activeGoals}
         />
       </section>

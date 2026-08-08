@@ -385,6 +385,12 @@ function fmtNum(v: number | null | undefined, d = 1): string {
   return v.toFixed(d);
 }
 
+function formatHeatmapLegendValue(metric: string, value: number): string {
+  if (metric === 'Run Values') return value.toFixed(1);
+  if (metric === 'Exit Velocity') return `${Math.round(value)}`;
+  return `${Math.round(value)}%`;
+}
+
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const rgb = (r: number, g: number, b: number) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
 const sequentialColor = (value: number, min: number, max: number): string => {
@@ -400,7 +406,7 @@ const divergingColor = (value: number, min: number, mid: number, max: number): s
     return rgb(lerp(32, 246, t), lerp(74, 248, t), lerp(135, 248, t));
   }
   const t = Math.max(0, Math.min(1, (value - mid) / Math.max(1e-9, max - mid)));
-  return rgb(lerp(248, 176, t), lerp(248, 11, t), lerp(248, 52, t));
+  return rgb(lerp(248, 220, t), lerp(248, 20, t), lerp(248, 20, t));
 };
 
 const pitchHoverTextColor = (bg?: string): string => {
@@ -937,6 +943,16 @@ export default function CatchingSuite() {
     if (hmChartType !== 'Heat') return [];
     return buildHeatCells(heatPoints, heatmapDisplayView);
   }, [page, hmChartType, heatPoints, heatmapDisplayView]);
+
+  const heatmapLegendRange = useMemo(() => {
+    const values = heatCells.map((c) => c.value).sort((a, b) => a - b);
+    const dynamicMinVal = values.length ? values[0] : 0;
+    const dynamicMaxVal = values.length ? values[values.length - 1] : 1;
+    const isFixed = heatmapDisplayView === 'Whiff Rate';
+    const minVal = isFixed ? 0 : dynamicMinVal;
+    const maxVal = isFixed ? 50 : dynamicMaxVal;
+    return { min: minVal, max: maxVal, isFixed };
+  }, [heatCells, heatmapDisplayView]);
 
   const catcherOptions = useMemo(() => {
     const values = teamType === 'All' ? (filters?.catchers ?? []) : (filters?.catchers_by_team_code?.[teamType] ?? filters?.catchers ?? []);
@@ -1618,12 +1634,12 @@ export default function CatchingSuite() {
                           width: 260,
                           height: 20,
                           border: '1px solid rgba(255,255,255,0.25)',
-                          background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(176,11,52) 100%)',
+                          background: 'linear-gradient(90deg, rgb(32,74,135) 0%, rgb(246,248,248) 50%, rgb(220,20,20) 100%)',
                         }}
                       />
                       <div style={{ width: 260, display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'rgba(255,255,255,0.92)' }}>
-                        <span>Least</span>
-                        <span>Most</span>
+                        <span>Least{heatmapLegendRange.isFixed ? ` (${formatHeatmapLegendValue(heatmapDisplayView, heatmapLegendRange.min)})` : ''}</span>
+                        <span>Most{heatmapLegendRange.isFixed ? ` (${formatHeatmapLegendValue(heatmapDisplayView, heatmapLegendRange.max)})` : ''}</span>
                       </div>
                       <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{heatmapDisplayView === 'Frequency' ? 'Pitch Frequency' : heatmapDisplayView}</div>
                     </div>

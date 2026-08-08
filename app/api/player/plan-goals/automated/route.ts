@@ -41,6 +41,7 @@ function parseOrgSchoolMap(raw: string): Record<number, string> {
 
 async function resolveAutomationPlayer(input: {
   organizationId: number;
+  schoolCode?: string;
   playerId: number;
   dashboardPlayerName: string;
 }): Promise<{ id: number; fullName: string } | null> {
@@ -60,8 +61,8 @@ async function resolveAutomationPlayer(input: {
   const emailSlug = dashboardName.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.|\.$/g, '').slice(0, 48) || 'player';
   const syntheticEmail = `${emailSlug}.${Date.now()}@autolink.local`;
   const inserted = await pool.query<{ id: number; full_name: string }>(
-    `INSERT INTO players (organization_id, user_id, full_name, email, status) VALUES ($1, NULL, $2, $3, 'active') RETURNING id, full_name`,
-    [input.organizationId, dashboardName, syntheticEmail]
+    `INSERT INTO players (organization_id, school_code, user_id, full_name, email, status) VALUES ($1, $2, NULL, $3, $4, 'active') RETURNING id, full_name`,
+    [input.organizationId, (input.schoolCode ?? '').trim().toUpperCase() || null, dashboardName, syntheticEmail]
   );
   return inserted.rows[0] ? { id: inserted.rows[0].id, fullName: inserted.rows[0].full_name } : null;
 }
@@ -120,13 +121,6 @@ export async function POST(request: Request) {
   const organizationId = Number(mappedOrganizationId) > 0 ? Number(mappedOrganizationId) : 0;
   if (!organizationId) return NextResponse.json({ error: 'No organization is available for the current site/session.' }, { status: 400 });
 
-  const player = await resolveAutomationPlayer({
-    organizationId,
-    playerId,
-    dashboardPlayerName: String(body.dashboardPlayerName ?? '').trim(),
-  });
-  if (!player) return NextResponse.json({ error: 'Select a player first.' }, { status: 400 });
-
   const schoolCode = resolveDashboardSchoolCode({
     userId: session.userId ?? 0,
     email: session.email,
@@ -138,6 +132,14 @@ export async function POST(request: Request) {
     appUrl: session.appUrl,
     apps: session.apps,
   });
+
+  const player = await resolveAutomationPlayer({
+    organizationId,
+    schoolCode,
+    playerId,
+    dashboardPlayerName: String(body.dashboardPlayerName ?? '').trim(),
+  });
+  if (!player) return NextResponse.json({ error: 'Select a player first.' }, { status: 400 });
   const mappedSchoolCode = parseOrgSchoolMap(process.env.DASHBOARD_ORG_SCHOOL_MAP ?? '{}')[organizationId] ?? '';
   if (mappedSchoolCode && schoolCode && mappedSchoolCode !== schoolCode) {
     return NextResponse.json(

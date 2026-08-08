@@ -1,7 +1,14 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromRequest } from '../../../../../lib/auth';
-import { getConversationMeta, isConversationParticipant, listMessages } from '../../../../../lib/messaging-db';
+import { deleteObjectFromR2 } from '../../../../../lib/biomechanics-storage';
+import {
+  deleteGroupConversation,
+  getConversationMeta,
+  hideConversationForUser,
+  isConversationParticipant,
+  listMessages,
+} from '../../../../../lib/messaging-db';
 
 async function requireParticipant(request: Request, conversationId: number) {
   const cookieStore = await cookies();
@@ -34,4 +41,39 @@ export async function GET(request: Request, { params }: { params: Promise<{ conv
   });
 
   return NextResponse.json({ conversation, messages, hasMore });
+}
+
+// DELETE ?mode=hide (default) removes this conversation from just the
+// caller's own list -- other participants are unaffected, and it reappears
+// automatically if a new message arrives later.
+// DELETE ?mode=group removes a group conversation for everyone, restricted
+// to the group's creator or an admin in the same organization.
+export async function DELETE(request: Request, { params }: { params: Promise<{ conversationId: string }> }) {
+  const { conversationId: conversationIdParam } = await params;
+  const conversationId = Number(conversationIdParam);
+  const allowed = await requireParticipant(request, conversationId);
+  if (!allowed.ok) return NextResponse.json({ error: allowed.error }, { status: allowed.status });
+
+  const url = new URL(request.url);
+  const mode = url.searchParams.get('mode') === 'group' ? 'group' : 'hide';
+
+  if (mode === 'hide') {
+    await hideConversationForUser({ conversationId, userId: allowed.session.userId ?? 0 });
+    return NextResponse.json({ ok: true });
+  }
+
+  const conversation = await getConversationMeta(conversationId);
+  if (!conversation) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
+  if (!conversation.isGroup) {
+    return NextResponse.json({ error: 'Only group conversations can be deleted for everyone.' }, { status: 400 });
+  }
+  const isCreator = conversation.createdByUserId !== null && conversation.createdByUserId === allowed.session.userId;
+  const isOrgAdmin = allowed.session.role === 'admin' && allowed.session.organizationId === conversation.organizationId;
+  if (!isCreator && !isOrgAdmin) {
+    return NextResponse.json({ error: 'Only the group creator or an admin can delete this group.' }, { status: 403 });
+  }
+
+  const r2Keys = await deleteGroupConversation(conversationId);
+  await Promise.all(r2Keys.map((key) => deleteObjectFromR2(key).catch(() => {})));
+  return NextResponse.json({ ok: true });
 }

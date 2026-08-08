@@ -1,4 +1,4 @@
-import { createPasswordHash, ensureAuthDbReady, getDbPool, isDatabaseConfigured, verifyPasswordAgainstHash } from './auth-db';
+import { createPasswordHash, ensureAuthDbReady, getDbPool, isDatabaseConfigured, listStaffForSchool, verifyPasswordAgainstHash } from './auth-db';
 import { NOTE_ATTACHMENT_DATA_URL_MAX_LENGTH } from './note-attachment-limits';
 import { resolveHomeDashboardSchoolCode } from './dashboard-home-school';
 import type { PortalActivityEventType } from './portal-activity';
@@ -138,6 +138,7 @@ export type PlayerProfileRow = {
   status: string;
   dateOfBirth: string | null;
   schoolTeam: string | null;
+  schoolCode: string | null;
   phone: string | null;
   collegeCommitment: string | null;
   gradYear: string | null;
@@ -2234,12 +2235,12 @@ export async function seedDashboardTrialOrganizationFromPcu(input: {
       await client.query(
         `
           INSERT INTO players (
-            organization_id, user_id, full_name, email, status, school_team, phone,
+            organization_id, school_code, user_id, full_name, email, status, school_team, phone,
             college_commitment, grad_year, position, height, profile_weight_lbs,
             bats_hand, throws_hand, assigned_coach_user_id, created_at, updated_at
           )
           SELECT
-            $1, NULL, $2, $3, COALESCE($4, 'active'), 'Dashboard Trial', NULL,
+            $1, 'TRIAL', NULL, $2, $3, COALESCE($4, 'active'), 'Dashboard Trial', NULL,
             $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW()
           WHERE NOT EXISTS (
             SELECT 1 FROM players WHERE organization_id = $1 AND LOWER(TRIM(email)) = LOWER(TRIM($3))
@@ -2411,6 +2412,7 @@ export async function playerExistsInOrganization(input: {
 
 export async function createClientWithLogin(input: {
   organizationId: number;
+  schoolCode?: string;
   fullName: string;
   email: string;
   password: string;
@@ -2540,6 +2542,7 @@ export async function createClientWithLogin(input: {
       `
         INSERT INTO players (
           organization_id,
+          school_code,
           user_id,
           full_name,
           email,
@@ -2556,10 +2559,11 @@ export async function createClientWithLogin(input: {
           assigned_coach_user_id,
           status
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'active')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'active')
       `,
       [
         input.organizationId,
+        (input.schoolCode ?? '').trim().toUpperCase() || null,
         insertedUser.rows[0].id,
         fullName,
         normalizedEmail,
@@ -2911,6 +2915,230 @@ async function ensurePortalActivityEventsTable(): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_activity_events_created ON portal_activity_events (created_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_activity_events_email_created ON portal_activity_events (LOWER(email), created_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_portal_activity_events_type_created ON portal_activity_events (event_type, created_at DESC);`);
+}
+
+let notificationsTableReady = false;
+async function ensureNotificationsTable(): Promise<void> {
+  if (notificationsTableReady) return;
+  const pool = getDbPool();
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id BIGSERIAL PRIMARY KEY,
+      recipient_user_id INTEGER NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      detail TEXT,
+      path TEXT,
+      actor_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+      actor_name TEXT,
+      actor_role TEXT,
+      player_id INTEGER,
+      player_name TEXT,
+      read_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_recipient_created ON notifications (recipient_user_id, created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_recipient_unread ON notifications (recipient_user_id) WHERE read_at IS NULL;`);
+  notificationsTableReady = true;
+}
+
+export type NotificationRow = {
+  id: number;
+  eventType: string;
+  title: string;
+  detail: string | null;
+  path: string | null;
+  actorName: string | null;
+  actorRole: string | null;
+  playerId: number | null;
+  playerName: string | null;
+  read: boolean;
+  createdAt: string;
+};
+
+export async function createNotificationsForUsers(input: {
+  recipientUserIds: number[];
+  eventType: string;
+  title: string;
+  detail?: string | null;
+  path?: string | null;
+  actorUserId?: number | null;
+  actorName?: string | null;
+  actorRole?: string | null;
+  playerId?: number | null;
+  playerName?: string | null;
+}): Promise<void> {
+  const recipients = Array.from(
+    new Set(input.recipientUserIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
+  );
+  if (recipients.length === 0 || !isDatabaseConfigured()) return;
+  await ensureTrainingDbReady();
+  await ensureNotificationsTable();
+  const pool = getDbPool();
+  await pool.query(
+    `
+      INSERT INTO notifications (
+        recipient_user_id, event_type, title, detail, path,
+        actor_user_id, actor_name, actor_role, player_id, player_name
+      )
+      SELECT recipient_id, $2, $3, $4, $5, $6, $7, $8, $9, $10
+      FROM UNNEST($1::int[]) AS recipient_id
+    `,
+    [
+      recipients,
+      input.eventType,
+      input.title,
+      input.detail ?? null,
+      input.path ?? null,
+      Number.isFinite(Number(input.actorUserId)) && Number(input.actorUserId) > 0 ? Number(input.actorUserId) : null,
+      input.actorName ?? null,
+      input.actorRole ?? null,
+      Number.isFinite(Number(input.playerId)) && Number(input.playerId) > 0 ? Number(input.playerId) : null,
+      input.playerName ?? null,
+    ]
+  );
+}
+
+export async function listNotificationsForUser(input: {
+  userId: number;
+  limit?: number;
+}): Promise<{ notifications: NotificationRow[]; unreadCount: number }> {
+  const userId = Number(input.userId ?? 0);
+  if (!isDatabaseConfigured() || !Number.isFinite(userId) || userId <= 0) return { notifications: [], unreadCount: 0 };
+  await ensureTrainingDbReady();
+  await ensureNotificationsTable();
+  const pool = getDbPool();
+  const limit = Math.max(5, Math.min(50, Number(input.limit ?? 20) || 20));
+
+  const [rowsResult, unreadResult] = await Promise.all([
+    pool.query<{
+      id: string; event_type: string; title: string; detail: string | null; path: string | null;
+      actor_name: string | null; actor_role: string | null; player_id: number | null; player_name: string | null;
+      read_at: string | null; created_at: string;
+    }>(
+      `
+        SELECT id::text, event_type, title, detail, path, actor_name, actor_role, player_id, player_name, read_at::text, created_at::text
+        FROM notifications
+        WHERE recipient_user_id = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT $2
+      `,
+      [userId, limit]
+    ),
+    pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM notifications WHERE recipient_user_id = $1 AND read_at IS NULL`,
+      [userId]
+    ),
+  ]);
+
+  const notifications = rowsResult.rows.map((row) => ({
+    id: Number(row.id),
+    eventType: row.event_type,
+    title: row.title,
+    detail: row.detail,
+    path: row.path,
+    actorName: row.actor_name,
+    actorRole: row.actor_role,
+    playerId: row.player_id,
+    playerName: row.player_name,
+    read: Boolean(row.read_at),
+    createdAt: row.created_at,
+  } satisfies NotificationRow));
+
+  return { notifications, unreadCount: Number(unreadResult.rows[0]?.count ?? '0') || 0 };
+}
+
+/**
+ * Notify every coach/admin at a player's school about new note/media activity,
+ * using the explicit user_school_access grant table -- never organization_id,
+ * which is not a reliable school boundary (see DASHBOARD_ORG_SCHOOL_MAP /
+ * players.school_code migration notes). Returns the recipient user ids so the
+ * caller can also fan out a push notification.
+ */
+export async function notifyStaffForPlayerActivity(input: {
+  schoolCode: string | null;
+  excludeUserId?: number | null;
+  eventType: string;
+  title: string;
+  detail?: string | null;
+  path?: string | null;
+  actorUserId?: number | null;
+  actorName?: string | null;
+  actorRole?: string | null;
+  playerId: number;
+  playerName: string | null;
+}): Promise<number[]> {
+  const schoolCode = String(input.schoolCode ?? '').trim().toUpperCase();
+  if (!schoolCode) return [];
+  const staff = await listStaffForSchool(schoolCode);
+  const recipients = staff.map((s) => s.userId).filter((id) => id !== (input.excludeUserId ?? -1));
+  if (recipients.length === 0) return [];
+  await createNotificationsForUsers({
+    recipientUserIds: recipients,
+    eventType: input.eventType,
+    title: input.title,
+    detail: input.detail,
+    path: input.path,
+    actorUserId: input.actorUserId,
+    actorName: input.actorName,
+    actorRole: input.actorRole,
+    playerId: input.playerId,
+    playerName: input.playerName,
+  });
+  return recipients;
+}
+
+/** Notify a player (their own user_id) about new staff activity on their profile. */
+export async function notifyPlayerForStaffActivity(input: {
+  playerUserId: number | null;
+  eventType: string;
+  title: string;
+  detail?: string | null;
+  path?: string | null;
+  actorUserId?: number | null;
+  actorName?: string | null;
+  actorRole?: string | null;
+  playerId: number;
+  playerName: string | null;
+}): Promise<number[]> {
+  const userId = Number(input.playerUserId ?? 0);
+  if (!Number.isFinite(userId) || userId <= 0) return [];
+  await createNotificationsForUsers({
+    recipientUserIds: [userId],
+    eventType: input.eventType,
+    title: input.title,
+    detail: input.detail,
+    path: input.path,
+    actorUserId: input.actorUserId,
+    actorName: input.actorName,
+    actorRole: input.actorRole,
+    playerId: input.playerId,
+    playerName: input.playerName,
+  });
+  return [userId];
+}
+
+export async function markNotificationsReadForUser(input: { userId: number; notificationIds?: number[] }): Promise<void> {
+  const userId = Number(input.userId ?? 0);
+  if (!isDatabaseConfigured() || !Number.isFinite(userId) || userId <= 0) return;
+  await ensureTrainingDbReady();
+  await ensureNotificationsTable();
+  const pool = getDbPool();
+  const ids = Array.isArray(input.notificationIds)
+    ? input.notificationIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+    : [];
+  if (ids.length > 0) {
+    await pool.query(
+      `UPDATE notifications SET read_at = NOW() WHERE recipient_user_id = $1 AND id = ANY($2::bigint[]) AND read_at IS NULL`,
+      [userId, ids]
+    );
+  } else {
+    await pool.query(
+      `UPDATE notifications SET read_at = NOW() WHERE recipient_user_id = $1 AND read_at IS NULL`,
+      [userId]
+    );
+  }
 }
 
 export async function recordPortalActivityEvent(input: {
@@ -6662,6 +6890,22 @@ export async function upsertExerciseLog(input: {
   _invalidateTrainingReadCacheForPlayer(input.playerId);
 }
 
+export async function getPlayerNotificationContext(input: {
+  organizationId: number;
+  playerId: number;
+}): Promise<{ userId: number | null; schoolCode: string | null; fullName: string } | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ user_id: number | null; school_code: string | null; full_name: string }>(
+    `SELECT user_id, school_code, full_name FROM players WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+    [input.playerId, input.organizationId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return { userId: row.user_id, schoolCode: row.school_code, fullName: row.full_name };
+}
+
 export async function getPlayerByIdInOrganization(input: {
   organizationId: number;
   playerId: number;
@@ -6677,6 +6921,7 @@ export async function getPlayerByIdInOrganization(input: {
     status: string | null;
     date_of_birth: string | null;
     school_team: string | null;
+    school_code: string | null;
     phone: string | null;
     college_commitment: string | null;
     grad_year: string | null;
@@ -6698,6 +6943,7 @@ export async function getPlayerByIdInOrganization(input: {
         p.status,
         p.date_of_birth::text,
         p.school_team,
+        p.school_code,
         p.phone,
         p.college_commitment,
         p.grad_year,
@@ -6729,6 +6975,7 @@ export async function getPlayerByIdInOrganization(input: {
     status: result.rows[0].status || 'active',
     dateOfBirth: result.rows[0].date_of_birth,
     schoolTeam: result.rows[0].school_team,
+    schoolCode: result.rows[0].school_code,
     phone: result.rows[0].phone,
     collegeCommitment: result.rows[0].college_commitment,
     gradYear: result.rows[0].grad_year,
@@ -6759,6 +7006,7 @@ export async function getPlayerForUser(input: {
     status: string | null;
     date_of_birth: string | null;
     school_team: string | null;
+    school_code: string | null;
     phone: string | null;
     college_commitment: string | null;
     grad_year: string | null;
@@ -6780,6 +7028,7 @@ export async function getPlayerForUser(input: {
         p.status,
         p.date_of_birth::text,
         p.school_team,
+        p.school_code,
         p.phone,
         p.college_commitment,
         p.grad_year,
@@ -6811,6 +7060,7 @@ export async function getPlayerForUser(input: {
     status: result.rows[0].status || 'active',
     dateOfBirth: result.rows[0].date_of_birth,
     schoolTeam: result.rows[0].school_team,
+    schoolCode: result.rows[0].school_code,
     phone: result.rows[0].phone,
     collegeCommitment: result.rows[0].college_commitment,
     gradYear: result.rows[0].grad_year,
@@ -7380,6 +7630,61 @@ export async function listPlayerPlanNotesForPlayer(input: {
     .filter((row): row is PlayerPlanNoteRow => Boolean(row));
 }
 
+export async function getPlayerPlanNoteById(input: {
+  organizationId: number;
+  playerId: number;
+  noteId: number;
+}): Promise<PlayerPlanNoteRow | null> {
+  if (!isDatabaseConfigured()) return null;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{
+    id: number;
+    player_id: number;
+    domain: string;
+    note_date: string;
+    category: string;
+    note_text: string;
+    attachment_name: string | null;
+    attachment_mime_type: string | null;
+    attachment_data_url: string | null;
+    player_visible: boolean;
+    created_at: string;
+    created_by_user_id: number | null;
+  }>(
+    `
+      SELECT
+        n.id, n.player_id, n.domain, n.note_date::text, n.category, n.note_text,
+        n.attachment_name, n.attachment_mime_type, n.attachment_data_url,
+        n.player_visible, n.created_at::text, n.created_by_user_id
+      FROM player_plan_notes n
+      JOIN players p ON p.id = n.player_id
+      WHERE n.id = $1 AND n.player_id = $2 AND p.organization_id = $3
+      LIMIT 1
+    `,
+    [input.noteId, input.playerId, input.organizationId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const domainValue =
+    row.domain === 'Pitching' || row.domain === 'Hitting' || row.domain === 'Catching' || row.domain === 'General' ? row.domain : null;
+  if (!domainValue) return null;
+  return {
+    id: row.id,
+    playerId: row.player_id,
+    domain: domainValue,
+    noteDate: row.note_date,
+    category: String(row.category ?? '').trim(),
+    noteText: row.note_text,
+    attachmentName: row.attachment_name,
+    attachmentMimeType: row.attachment_mime_type,
+    attachmentDataUrl: row.attachment_data_url,
+    playerVisible: row.player_visible,
+    createdAt: row.created_at,
+    createdByUserId: row.created_by_user_id,
+  };
+}
+
 export async function createPlayerPlanNote(input: {
   organizationId: number;
   playerId: number;
@@ -7572,7 +7877,7 @@ export async function updatePlayerPlanNote(input: {
         attachment_name = $4,
         attachment_mime_type = $5,
         attachment_data_url = $6,
-        player_visible = $7,
+        player_visible = COALESCE($7, n.player_visible),
         updated_at = NOW()
       FROM players p
       WHERE n.id = $8
@@ -7587,7 +7892,7 @@ export async function updatePlayerPlanNote(input: {
       String(input.attachmentName ?? '').trim() || null,
       String(input.attachmentMimeType ?? '').trim() || null,
       attachmentDataUrl,
-      Boolean(input.playerVisible),
+      typeof input.playerVisible === 'boolean' ? input.playerVisible : null,
       input.noteId,
       input.playerId,
       input.organizationId,
@@ -9323,13 +9628,7 @@ function formatQuestionnaireResponseNote(input: {
   questions: QuestionnaireQuestion[];
   answers: Record<string, string>;
 }): string {
-  const lines: string[] = [
-    `Questionnaire: ${input.questionnaireName}`,
-    `Submitted: ${input.submittedAt}`,
-    `Due Date: ${input.dueDate}`,
-  ];
-  if (input.groupName.trim()) lines.push(`Group: ${input.groupName.trim()}`);
-  lines.push('');
+  const lines: string[] = [`Questionnaire: ${input.questionnaireName}`, ''];
   for (const question of input.questions) {
     const answer = String(input.answers[question.id] ?? '').trim();
     lines.push(question.prompt);

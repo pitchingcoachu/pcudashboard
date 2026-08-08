@@ -10,6 +10,7 @@ import PortalUserMenu from '../user-menu';
 import MobileNavSelect from '../mobile-nav-select';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
+import PortalMessagesNavButton from '../messages-nav-button';
 import MotionCaptureDashboard from './motion-capture-dashboard';
 
 export default async function MotionCapturePage() {
@@ -78,6 +79,7 @@ export default async function MotionCapturePage() {
               <h1>{session.name ?? session.email}</h1>
             </div>
           )}
+          <PortalMessagesNavButton />
           {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
