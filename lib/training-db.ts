@@ -389,11 +389,16 @@ export type WorkoutExerciseOverrideInput = {
   notes: string | null;
 };
 
+export type ProgramPlanSection = 'daily_prep' | 'throwing' | 'post_throw_arm_care' | 's_and_c' | 'movement_mobility';
+
 export type ProgramItemRow = {
   itemId: number;
   dayDate: string;
-  scheduleType: 'calendar' | 'cycle';
+  scheduleType: 'calendar' | 'cycle' | 'plan';
   cycleSlot: 'medium' | 'high' | 'low' | 'mobility' | 's_and_c' | null;
+  planSection: ProgramPlanSection | null;
+  targetCount: number | null;
+  completedCount: number | null;
   itemType: 'exercise' | 'workout';
   itemName: string;
   workoutDescription: string | null;
@@ -868,6 +873,22 @@ function normalizeCycleSlot(value: string): 'medium' | 'high' | 'low' | 'mobilit
   if (normalized === 's&c' || normalized === 's_and_c' || normalized === 's-c' || normalized === 'sc') return 's_and_c';
   return null;
 }
+
+const PLAN_SECTIONS = ['daily_prep', 'throwing', 'post_throw_arm_care', 's_and_c', 'movement_mobility'] as const;
+
+export function normalizePlanSection(value: string): ProgramPlanSection | null {
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const match = PLAN_SECTIONS.find((section) => section === normalized);
+  return match ?? null;
+}
+
+const TRAINING_PROGRAM_SECTION_LABELS: Record<ProgramPlanSection, string> = {
+  daily_prep: 'Daily Prep',
+  throwing: 'Throwing',
+  post_throw_arm_care: 'Post-Throw Arm Care',
+  s_and_c: 'S&C',
+  movement_mobility: 'Movement and Mobility',
+};
 
 function deriveUsernameFromEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -5945,6 +5966,9 @@ export async function listProgramItemsForPlayerByDateRange(input: {
     dayDate: row.day_date,
     scheduleType: 'calendar',
     cycleSlot: null,
+    planSection: null,
+    targetCount: null,
+    completedCount: null,
     itemType: row.item_type === 'workout' ? 'workout' : 'exercise',
     itemName: row.item_name,
     workoutDescription: row.workout_description,
@@ -6100,6 +6124,9 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
     dayDate,
     scheduleType: 'cycle',
     cycleSlot: row.cycle_slot,
+    planSection: null,
+    targetCount: null,
+    completedCount: null,
     itemType: 'workout',
     itemName: row.workout_name,
     workoutDescription: row.workout_description,
@@ -6126,6 +6153,537 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
     logNotes: row.log_notes,
     programName: '3-Day Cycle',
   }));
+}
+
+// Coach-only fields (targetCount, completedCount, and every plan section
+// note) are computed here unconditionally -- the API route is what strips
+// them for a player-role session, not this function. Keeping the
+// computation here and the access decision in the route keeps the
+// role-check in exactly one place per caller, matching how canManagePlayer
+// gating already works for the rest of this file.
+export async function listPlanProgramItemsForPlayer(input: { playerId: number }): Promise<ProgramItemRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const result = await pool.query<{
+    item_id: number;
+    plan_section: ProgramPlanSection;
+    target_count: number | null;
+    workout_id: number;
+    workout_name: string;
+    workout_category: string | null;
+    workout_description: string | null;
+    calendar_link_target: string | null;
+    workout_exercise_names: string | null;
+    workout_exercise_json: unknown;
+    completed: boolean | null;
+    performed_sets: string | null;
+    performed_reps: string | null;
+    performed_load: string | null;
+    log_notes: string | null;
+    completed_count: string;
+  }>(
+    `
+      WITH selected_workout_ids AS (
+        SELECT DISTINCT pi.workout_id
+        FROM program_plan_items pi
+        WHERE pi.player_id = $1
+      ),
+      workout_summaries AS (
+        SELECT
+          sw.workout_id,
+          STRING_AGG(
+            CASE
+              WHEN we2.exercise_prefix IS NOT NULL AND LENGTH(TRIM(we2.exercise_prefix)) > 0
+                THEN CONCAT(TRIM(we2.exercise_prefix), ': ', e2.name)
+              ELSE e2.name
+            END,
+            ', '
+            ORDER BY we2.sort_order, e2.name
+          ) AS exercise_names,
+          COALESCE(
+            JSON_AGG(
+              JSON_BUILD_OBJECT(
+                'exerciseId', e2.id,
+                'prefix', we2.exercise_prefix,
+                'name', e2.name,
+                'category', e2.category,
+                'repMeasure', e2.rep_measure,
+                'trackingType', e2.tracking_type,
+                'repsPerSide', e2.reps_per_side,
+                'prescribedSets', we2.prescribed_sets,
+                'prescribedReps', we2.prescribed_reps,
+                'prescribedLoad', we2.prescribed_load,
+                'notes', we2.notes,
+                'instructionVideoUrl', e2.instruction_video_url,
+                'description', e2.description,
+                'coachingCues', e2.coaching_cues
+              )
+              ORDER BY we2.sort_order, e2.name
+            ) FILTER (WHERE e2.id IS NOT NULL),
+            '[]'::json
+          ) AS exercise_json
+        FROM selected_workout_ids sw
+        LEFT JOIN workout_exercises we2 ON we2.workout_id = sw.workout_id
+        LEFT JOIN exercise_library e2 ON e2.id = we2.exercise_id
+        GROUP BY sw.workout_id
+      )
+      SELECT
+        pi.id AS item_id,
+        pi.plan_section,
+        pi.target_count,
+        w.id AS workout_id,
+        w.name AS workout_name,
+        w.category AS workout_category,
+        w.description AS workout_description,
+        w.calendar_link_target,
+        ws.exercise_names AS workout_exercise_names,
+        ws.exercise_json AS workout_exercise_json,
+        latest.completed,
+        latest.performed_sets,
+        latest.performed_reps,
+        latest.performed_load,
+        latest.notes AS log_notes,
+        COALESCE(counts.completed_count, 0) AS completed_count
+      FROM program_plan_items pi
+      JOIN workout_library w ON w.id = pi.workout_id
+      LEFT JOIN workout_summaries ws ON ws.workout_id = pi.workout_id
+      LEFT JOIN LATERAL (
+        SELECT
+          eh.completed,
+          eh.performed_sets,
+          eh.performed_reps,
+          eh.performed_load,
+          eh.notes
+        FROM exercise_log_history eh
+        WHERE eh.player_id = pi.player_id
+          AND eh.schedule_type = 'plan'
+          AND eh.plan_item_id = pi.id
+        ORDER BY eh.logged_at DESC, eh.id DESC
+        LIMIT 1
+      ) latest ON TRUE
+      LEFT JOIN LATERAL (
+        -- Counts distinct calendar days with a completed log, not raw log
+        -- rows -- opening/closing and re-saving the same workout multiple
+        -- times in one day (or on a re-visit later that day) must only add
+        -- 1 toward the tally, never more.
+        SELECT COUNT(DISTINCT eh.logged_at::date) AS completed_count
+        FROM exercise_log_history eh
+        WHERE eh.player_id = pi.player_id
+          AND eh.schedule_type = 'plan'
+          AND eh.plan_item_id = pi.id
+          AND eh.completed = TRUE
+      ) counts ON TRUE
+      WHERE pi.player_id = $1
+      ORDER BY
+        CASE pi.plan_section
+          WHEN 'daily_prep' THEN 1
+          WHEN 'throwing' THEN 2
+          WHEN 'post_throw_arm_care' THEN 3
+          WHEN 's_and_c' THEN 4
+          WHEN 'movement_mobility' THEN 5
+          ELSE 6
+        END ASC,
+        pi.sort_order ASC,
+        pi.id ASC
+    `,
+    [input.playerId]
+  );
+
+  const today = new Date();
+  const dayDate = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}-${String(
+    today.getUTCDate()
+  ).padStart(2, '0')}`;
+
+  return result.rows.map((row) => ({
+    workoutExercises: Array.isArray(row.workout_exercise_json)
+      ? (row.workout_exercise_json as WorkoutExerciseAssignment[])
+      : [],
+    itemId: row.item_id,
+    dayDate,
+    scheduleType: 'plan',
+    cycleSlot: null,
+    planSection: row.plan_section,
+    targetCount: row.target_count,
+    completedCount: Number(row.completed_count) || 0,
+    itemType: 'workout',
+    itemName: row.workout_name,
+    workoutDescription: row.workout_description,
+    exerciseId: null,
+    workoutId: row.workout_id,
+    workoutCategory: row.workout_category,
+    calendarLinkTarget: normalizeCalendarLinkTarget(row.calendar_link_target),
+    exerciseCategory: 'workout',
+    repMeasure: 'reps',
+    trackingType: 'lbs',
+    repsPerSide: false,
+    exerciseDescription: null,
+    exerciseCoachingCues: null,
+    instructionVideoUrl: null,
+    workoutExerciseNames: row.workout_exercise_names ? row.workout_exercise_names.split(', ').filter(Boolean) : [],
+    prescribedSets: null,
+    prescribedReps: null,
+    prescribedLoad: null,
+    prescribedNotes: null,
+    completed: Boolean(row.completed),
+    performedSets: row.performed_sets,
+    performedReps: row.performed_reps,
+    performedLoad: row.performed_load,
+    logNotes: row.log_notes,
+    programName: 'Plan',
+  }));
+}
+
+export async function addPlanWorkoutAssignment(input: {
+  organizationId: number;
+  userId: number;
+  playerId: number;
+  workoutId: number;
+  planSection: string;
+  targetCount?: number | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const section = normalizePlanSection(input.planSection);
+  if (!section) return { ok: false, error: 'Plan section must be daily_prep, throwing, post_throw_arm_care, s_and_c, or movement_mobility.' };
+  const targetCount = input.targetCount != null && Number.isFinite(input.targetCount) && input.targetCount > 0 ? Math.trunc(input.targetCount) : null;
+
+  const workout = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM workout_library
+      WHERE id = $1 AND organization_id = $2
+      LIMIT 1
+    `,
+    [input.workoutId, input.organizationId]
+  );
+  if ((workout.rowCount ?? 0) !== 1) return { ok: false, error: 'Workout was not found.' };
+
+  const nextOrder = await pool.query<{ next_order: number }>(
+    `
+      SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order
+      FROM program_plan_items
+      WHERE player_id = $1 AND plan_section = $2
+    `,
+    [input.playerId, section]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO program_plan_items (
+        organization_id, player_id, plan_section, workout_id, sort_order, target_count, created_by
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `,
+    [input.organizationId, input.playerId, section, input.workoutId, Number(nextOrder.rows[0]?.next_order ?? 1), targetCount, input.userId]
+  );
+
+  return { ok: true };
+}
+
+export async function updatePlanItemTargetCount(input: {
+  organizationId: number;
+  playerId: number;
+  itemId: number;
+  targetCount: number | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const targetCount = input.targetCount != null && Number.isFinite(input.targetCount) && input.targetCount > 0 ? Math.trunc(input.targetCount) : null;
+
+  const result = await pool.query(
+    `
+      UPDATE program_plan_items
+      SET target_count = $1, updated_at = NOW()
+      WHERE id = $2 AND organization_id = $3 AND player_id = $4
+    `,
+    [targetCount, input.itemId, input.organizationId, input.playerId]
+  );
+  if ((result.rowCount ?? 0) !== 1) return { ok: false, error: 'Plan item not found.' };
+  return { ok: true };
+}
+
+export async function movePlanProgramItem(input: {
+  organizationId: number;
+  playerId: number;
+  itemId: number;
+  targetSection: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const section = normalizePlanSection(input.targetSection);
+  if (!section) return { ok: false, error: 'Plan section must be daily_prep, throwing, post_throw_arm_care, s_and_c, or movement_mobility.' };
+  if (!Number.isFinite(input.itemId) || input.itemId <= 0) return { ok: false, error: 'Valid itemId is required.' };
+
+  const existing = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM program_plan_items
+      WHERE id = $1 AND organization_id = $2 AND player_id = $3
+      LIMIT 1
+    `,
+    [input.itemId, input.organizationId, input.playerId]
+  );
+  if ((existing.rowCount ?? 0) !== 1) return { ok: false, error: 'Plan item not found.' };
+
+  const nextOrder = await pool.query<{ next_order: number }>(
+    `
+      SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order
+      FROM program_plan_items
+      WHERE player_id = $1 AND plan_section = $2
+    `,
+    [input.playerId, section]
+  );
+
+  await pool.query(
+    `
+      UPDATE program_plan_items
+      SET plan_section = $1, sort_order = $2, updated_at = NOW()
+      WHERE id = $3
+    `,
+    [section, Number(nextOrder.rows[0]?.next_order ?? 1), input.itemId]
+  );
+
+  return { ok: true };
+}
+
+export async function deletePlanProgramItem(input: {
+  organizationId: number;
+  playerId: number;
+  itemId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const result = await pool.query(
+    `
+      DELETE FROM program_plan_items
+      WHERE id = $1 AND organization_id = $2 AND player_id = $3
+    `,
+    [input.itemId, input.organizationId, input.playerId]
+  );
+  if ((result.rowCount ?? 0) !== 1) return { ok: false, error: 'Plan item not found.' };
+  return { ok: true };
+}
+
+function emptyPlanSectionNotes(): Record<ProgramPlanSection, string> {
+  return {
+    daily_prep: '',
+    throwing: '',
+    post_throw_arm_care: '',
+    s_and_c: '',
+    movement_mobility: '',
+  };
+}
+
+// Notifies every admin/coach in the org when a player's completion count
+// for a Training Program item is at or past its target -- fires on every
+// qualifying completion (not just the first time target is reached), per
+// product decision. Callers should fire-and-forget this (it already
+// swallows its own errors) since a missed notification shouldn't fail the
+// underlying workout-log write.
+async function notifyStaffOnPlanTargetReached(input: {
+  organizationId: number;
+  playerId: number;
+  planItemId: number;
+  targetCount: number;
+}): Promise<void> {
+  if (!isDatabaseConfigured()) return;
+  const pool = getDbPool();
+
+  const countResult = await pool.query<{ completed_count: string }>(
+    `
+      SELECT COUNT(DISTINCT logged_at::date) AS completed_count
+      FROM exercise_log_history
+      WHERE player_id = $1
+        AND schedule_type = 'plan'
+        AND plan_item_id = $2
+        AND completed = TRUE
+    `,
+    [input.playerId, input.planItemId]
+  );
+  const completedCount = Number(countResult.rows[0]?.completed_count ?? 0);
+  if (completedCount < input.targetCount) return;
+
+  const contextResult = await pool.query<{ player_name: string; workout_name: string; plan_section: ProgramPlanSection }>(
+    `
+      SELECT p.full_name AS player_name, w.name AS workout_name, pi.plan_section
+      FROM program_plan_items pi
+      JOIN players p ON p.id = pi.player_id
+      JOIN workout_library w ON w.id = pi.workout_id
+      WHERE pi.id = $1
+      LIMIT 1
+    `,
+    [input.planItemId]
+  );
+  const context = contextResult.rows[0];
+  if (!context) return;
+
+  const recipientsResult = await pool.query<{ id: number }>(
+    `
+      SELECT id
+      FROM auth_users
+      WHERE organization_id = $1
+        AND role IN ('admin', 'coach')
+        AND is_active IS NOT FALSE
+    `,
+    [input.organizationId]
+  );
+  const recipientUserIds = recipientsResult.rows.map((row) => row.id);
+  if (recipientUserIds.length === 0) return;
+
+  const sectionLabel = TRAINING_PROGRAM_SECTION_LABELS[context.plan_section] ?? context.plan_section;
+  const title = `${context.player_name} completed a Training Program goal`;
+  const detail = `${context.workout_name} (${sectionLabel}): ${completedCount}/${input.targetCount} times completed.`;
+
+  await createNotificationsForUsers({
+    recipientUserIds,
+    eventType: 'plan_target_reached',
+    title,
+    detail,
+    path: '/portal/player/program',
+    playerId: input.playerId,
+    playerName: context.player_name,
+  });
+
+  const { sendPushNotificationToUsers } = await import('./push-notifications');
+  await sendPushNotificationToUsers({
+    userIds: recipientUserIds,
+    title,
+    body: detail,
+    data: { type: 'plan_target_reached', playerId: input.playerId, planItemId: input.planItemId },
+  }).catch(() => {});
+}
+
+// Player-specific note wins when non-empty; otherwise falls back to the
+// org-wide standard note for that section. A player-specific row that's
+// present but blank (coach cleared it) is treated the same as "no row at
+// all" -- it still falls back to the standard note, per product decision.
+export async function getPlanSectionNotes(input: { organizationId: number; playerId: number }): Promise<Record<ProgramPlanSection, string>> {
+  const empty = emptyPlanSectionNotes();
+  if (!isDatabaseConfigured()) return empty;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const [playerResult, defaultResult] = await Promise.all([
+    pool.query<{ plan_section: ProgramPlanSection; note_text: string }>(
+      `SELECT plan_section, note_text FROM program_plan_section_notes WHERE player_id = $1`,
+      [input.playerId]
+    ),
+    pool.query<{ plan_section: ProgramPlanSection; note_text: string }>(
+      `SELECT plan_section, note_text FROM program_plan_section_default_notes WHERE organization_id = $1`,
+      [input.organizationId]
+    ),
+  ]);
+
+  const notes = { ...empty };
+  for (const row of defaultResult.rows) {
+    notes[row.plan_section] = row.note_text;
+  }
+  for (const row of playerResult.rows) {
+    if (row.note_text.trim()) notes[row.plan_section] = row.note_text;
+  }
+  return notes;
+}
+
+// The raw per-player override only (no fallback to the org default) -- used
+// by the coach builder's editable note field, where an empty box must mean
+// "no override set" rather than showing the merged/effective text (which
+// would make saving silently write the default text back as a real
+// per-player override the first time the field loses focus).
+export async function getRawPlanSectionNotes(input: { playerId: number }): Promise<Record<ProgramPlanSection, string>> {
+  const empty = emptyPlanSectionNotes();
+  if (!isDatabaseConfigured()) return empty;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const result = await pool.query<{ plan_section: ProgramPlanSection; note_text: string }>(
+    `SELECT plan_section, note_text FROM program_plan_section_notes WHERE player_id = $1`,
+    [input.playerId]
+  );
+  const notes = { ...empty };
+  for (const row of result.rows) {
+    notes[row.plan_section] = row.note_text;
+  }
+  return notes;
+}
+
+export async function setPlanSectionNote(input: {
+  organizationId: number;
+  playerId: number;
+  planSection: string;
+  noteText: string;
+  updatedByUserId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const section = normalizePlanSection(input.planSection);
+  if (!section) return { ok: false, error: 'Plan section must be daily_prep, throwing, post_throw_arm_care, s_and_c, or movement_mobility.' };
+
+  await pool.query(
+    `
+      INSERT INTO program_plan_section_notes (organization_id, player_id, plan_section, note_text, updated_by, updated_at)
+      VALUES ($1, $2, $3, $4, $5, NOW())
+      ON CONFLICT (player_id, plan_section)
+      DO UPDATE SET note_text = EXCLUDED.note_text, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+    `,
+    [input.organizationId, input.playerId, section, input.noteText.trim(), input.updatedByUserId]
+  );
+  return { ok: true };
+}
+
+// The org-wide standard note shown for every player without their own
+// non-empty override -- see getPlanSectionNotes.
+export async function getPlanSectionDefaultNotes(input: { organizationId: number }): Promise<Record<ProgramPlanSection, string>> {
+  const empty = emptyPlanSectionNotes();
+  if (!isDatabaseConfigured()) return empty;
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const result = await pool.query<{ plan_section: ProgramPlanSection; note_text: string }>(
+    `SELECT plan_section, note_text FROM program_plan_section_default_notes WHERE organization_id = $1`,
+    [input.organizationId]
+  );
+  const notes = { ...empty };
+  for (const row of result.rows) {
+    notes[row.plan_section] = row.note_text;
+  }
+  return notes;
+}
+
+export async function setPlanSectionDefaultNote(input: {
+  organizationId: number;
+  planSection: string;
+  noteText: string;
+  updatedByUserId: number;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+
+  const section = normalizePlanSection(input.planSection);
+  if (!section) return { ok: false, error: 'Plan section must be daily_prep, throwing, post_throw_arm_care, s_and_c, or movement_mobility.' };
+
+  await pool.query(
+    `
+      INSERT INTO program_plan_section_default_notes (organization_id, plan_section, note_text, updated_by, updated_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (organization_id, plan_section)
+      DO UPDATE SET note_text = EXCLUDED.note_text, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+    `,
+    [input.organizationId, section, input.noteText.trim(), input.updatedByUserId]
+  );
+  return { ok: true };
 }
 
 export async function addCycleWorkoutAssignment(input: {
@@ -6776,7 +7334,7 @@ export async function clearProgramItemsForDate(input: {
 export async function upsertExerciseLog(input: {
   playerId: number;
   itemId: number;
-  scheduleType?: 'calendar' | 'cycle';
+  scheduleType?: 'calendar' | 'cycle' | 'plan';
   loggedByUserId: number;
   completed: boolean;
   performedSets?: string;
@@ -6787,7 +7345,7 @@ export async function upsertExerciseLog(input: {
   if (!isDatabaseConfigured()) throw new Error('DATABASE_URL is not configured.');
   await ensureTrainingDbReady();
   const pool = getDbPool();
-  const scheduleType = input.scheduleType === 'cycle' ? 'cycle' : 'calendar';
+  const scheduleType = input.scheduleType === 'cycle' ? 'cycle' : input.scheduleType === 'plan' ? 'plan' : 'calendar';
   const performedSets = (input.performedSets ?? '').trim() || null;
   const performedReps = (input.performedReps ?? '').trim() || null;
   const performedLoad = (input.performedLoad ?? '').trim() || null;
@@ -6824,6 +7382,50 @@ export async function upsertExerciseLog(input: {
       [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
     );
     _invalidateTrainingReadCacheForPlayer(input.playerId);
+    return;
+  }
+
+  if (scheduleType === 'plan') {
+    const allowedItem = await pool.query<{ id: number; organization_id: number; target_count: number | null }>(
+      `
+        SELECT id, organization_id, target_count
+        FROM program_plan_items
+        WHERE id = $1 AND player_id = $2
+        LIMIT 1
+      `,
+      [input.itemId, input.playerId]
+    );
+    if ((allowedItem.rowCount ?? 0) !== 1) throw new Error('Plan item not assigned to player.');
+    const planItem = allowedItem.rows[0];
+
+    await pool.query(
+      `
+        INSERT INTO exercise_log_history (
+          player_id,
+          schedule_type,
+          plan_item_id,
+          performed_sets,
+          performed_reps,
+          performed_load,
+          completed,
+          notes,
+          logged_by_user_id,
+          logged_at
+        )
+        VALUES ($1, 'plan', $2, $3, $4, $5, $6, $7, $8, NOW())
+      `,
+      [input.playerId, input.itemId, performedSets, performedReps, performedLoad, input.completed, notes, input.loggedByUserId]
+    );
+    _invalidateTrainingReadCacheForPlayer(input.playerId);
+
+    if (input.completed && planItem.target_count) {
+      void notifyStaffOnPlanTargetReached({
+        organizationId: planItem.organization_id,
+        playerId: input.playerId,
+        planItemId: input.itemId,
+        targetCount: planItem.target_count,
+      }).catch(() => {});
+    }
     return;
   }
 

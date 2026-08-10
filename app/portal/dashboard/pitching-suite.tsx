@@ -9,7 +9,7 @@ import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import NativeDateInput from '../components/native-date-input';
-import { resolveSchoolBrand } from '../../../lib/school-brand';
+import { isKnownSchoolBrand, resolveSchoolBrand } from '../../../lib/school-brand';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
 import { pitchLocationLabel as inZoneLabel } from '../../../lib/pitch-location';
 import { dashboardActivityPath, dispatchPortalActivity } from './activity-events';
@@ -1233,12 +1233,33 @@ function toBallTypesParamValue(values: string[]): string {
 function schoolNameFromCodeIfKnown(value: string): string {
   const code = String(value ?? '').trim().toUpperCase();
   if (!code) return '';
+  // resolveSchoolBrand always returns SOMETHING (falling back to the default
+  // Pearl Player Development brand for any code it doesn't recognize) -- that
+  // default is correct for a school-switcher logo, but wrong here, where an
+  // unrecognized code needs to mean "unknown" so the next fallback strategy
+  // in schoolNameFromTeamCodeFallback gets a chance instead of silently
+  // returning "Pearl Player Development" as if it were a real school name.
+  if (!isKnownSchoolBrand(code)) return '';
   const brand = resolveSchoolBrand(code);
   const logoAlt = String(brand.logoAlt ?? '').trim();
   const cleaned = logoAlt.replace(/\s+logo$/i, '').trim();
   if (!cleaned) return '';
   if (cleaned.toLowerCase() === 'school') return '';
   return cleaned;
+}
+
+// SCHOOL_BRANDS is keyed by bare school codes ("LSU"), but a player's own
+// teamCode is often the site's raw Trackman team code ("LSU_TIG"), which
+// doesn't match directly -- try the bare code first, then the prefix before
+// the first underscore, before giving up (returning undefined rather than
+// the default Pearl Player Development logo, which would be misleading here).
+function resolveSchoolLogoByCodeOrPrefix(value: string): string | undefined {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (!raw) return undefined;
+  if (isKnownSchoolBrand(raw)) return resolveSchoolBrand(raw).logoSrc ?? undefined;
+  const prefix = raw.split('_')[0];
+  if (prefix && isKnownSchoolBrand(prefix)) return resolveSchoolBrand(prefix).logoSrc ?? undefined;
+  return undefined;
 }
 
 function schoolNameFromTeamCodeFallback(value: string): string {
@@ -2911,8 +2932,10 @@ function PitcherDnaPanel({
   const [compareMode, setCompareMode] = useState<'Team' | 'MLB' | 'D1'>('Team');
   const canCompareMlb = !isPro;
   const canCompareD1 = !isLeague;
-  const isMlbArsenalCompare = isArsenalView && compareMode === 'MLB';
-  const isD1ArsenalCompare = isArsenalView && compareMode === 'D1';
+  // Covers MLB comparison on ANY tab (Pitch/Team/Arsenal) -- needed anywhere
+  // MLB team logos should resolve regardless of which tab the comparison was
+  // opened from, not just Arsenal.
+  const isMlbCompareActive = compareMode === 'MLB';
   // Snap back to Team if the active mode becomes unavailable (e.g. the user
   // switches to the PRO or LEAGUE site while MLB/D1 compare was active).
   useEffect(() => {
@@ -2981,11 +3004,11 @@ function PitcherDnaPanel({
   // via resolvePitcherTeam's fallback).
   const resolveTeamLogo = useCallback(
     (teamCode: string): string | undefined => {
-      if (isPro || isMlbArsenalCompare) return teamLogoDataUris.get(teamCode);
+      if (isPro || isMlbCompareActive) return teamLogoDataUris.get(teamCode);
       if (teamCode === 'PCU') return logoDataUri ?? undefined;
       return undefined;
     },
-    [isPro, isMlbArsenalCompare, teamLogoDataUris, logoDataUri]
+    [isPro, isMlbCompareActive, teamLogoDataUris, logoDataUri]
   );
 
   // Inline the logo as a data URI (rather than an <image href="/...">) so it's
@@ -3155,12 +3178,13 @@ function PitcherDnaPanel({
       // passing it through makes the backend 500 instead of ignoring it (same
       // hazard the Arsenal fetch below already works around).
       params.delete('team_type');
-      // MLB's rollup has no bullpen/season distinction at all (pro data has
-      // no such column) -- forwarding session_type there would silently be
-      // ignored by the backend, misleadingly implying it's respected. D1's
-      // rollup genuinely has Season/Bullpen data and the backend applies this
-      // filter correctly, so it's kept for D1.
-      if (poolSchoolCode === 'PRO') params.delete('session_type');
+      // Comparison pools (MLB and D1) are always the pool's own full data,
+      // never scoped by the site's own Session Type filter -- comparing an
+      // LSU pitcher's Season-only data should compare against all of D1/MLB,
+      // not just their own Season-tagged sessions. MLB's rollup also has no
+      // bullpen/season distinction at all (pro data has no such column), so
+      // this param would be silently ignored there anyway.
+      params.delete('session_type');
       return params;
     };
 
@@ -3334,10 +3358,10 @@ function PitcherDnaPanel({
       // site's own team code (e.g. "PCU") isn't a real MLB/LEAGUE team and
       // passing it through made the backend 500 instead of just ignoring it.
       params.delete('team_type');
-      // MLB's rollup has no bullpen/season distinction (pro data has no such
-      // column) -- drop it rather than silently forwarding a filter the
-      // backend can't apply. D1's rollup genuinely supports it, so it's kept.
-      if (schoolCodeOverride === 'PRO') params.delete('session_type');
+      // Comparison pools (MLB and D1) are always the pool's own full data,
+      // never scoped by the site's own Session Type filter -- the own-school
+      // fetch (schoolCodeOverride unset) keeps session_type as normal.
+      if (schoolCodeOverride) params.delete('session_type');
       return params;
     };
     const parseArsenalRows = (
@@ -3487,7 +3511,9 @@ function PitcherDnaPanel({
             else if (schoolCodeOverride === 'LEAGUE') p.set('level', 'D1');
             else if (level) p.set('level', level);
             p.delete('team_type');
-            if (schoolCodeOverride === 'PRO') p.delete('session_type');
+            // Comparison pools (MLB and D1) are always the pool's own full
+            // data, never scoped by the site's own Session Type filter.
+            if (schoolCodeOverride) p.delete('session_type');
             return p;
           });
           const payloads = await Promise.all(
@@ -3567,8 +3593,9 @@ function PitcherDnaPanel({
   useEffect(() => {
     // On Pro sites every plotted point needs a logo. On college sites, MLB
     // comparison-pool matches (excluded from visiblePoints, so pulled from the
-    // full points array) get real team codes once mlbPitcherTeamByName resolves.
-    if (!isPro && !isMlbArsenalCompare) return;
+    // full points array) get real team codes once mlbPitcherTeamByName
+    // resolves -- on ANY tab (Pitch/Team/Arsenal), not just Arsenal.
+    if (!isPro && !isMlbCompareActive) return;
     const logoSourcePoints = isPro ? visiblePoints : points.filter((point) => point.poolSource === 'MLB');
     if (!logoSourcePoints.length) return;
     let active = true;
@@ -3608,7 +3635,7 @@ function PitcherDnaPanel({
     return () => {
       active = false;
     };
-  }, [isPro, isMlbArsenalCompare, viewBy, points, visiblePoints, teamLogoDataUris]);
+  }, [isPro, isMlbCompareActive, viewBy, points, visiblePoints, teamLogoDataUris]);
 
   const matchedPitcher = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -4508,17 +4535,18 @@ function PitcherDnaPanel({
                   {(() => {
                     const hx = toSvgX(highlightedPoint.pc1);
                     const hy = toSvgY(highlightedPoint.pc2);
-                    // In MLB compare mode, the selected college pitcher's own dot
-                    // shows their school's logo (a real per-school asset, e.g.
-                    // gcu-logo.png); an MLB match instead shows its real MLB team
-                    // logo (resolved via mlbPitcherTeamByName / resolveTeamLogo).
+                    // In MLB compare mode (any tab), the selected college
+                    // pitcher's own dot shows their school's logo (a real
+                    // per-school asset, e.g. gcu-logo.png); an MLB match
+                    // instead shows its real MLB team logo (resolved via
+                    // mlbPitcherTeamByName / resolveTeamLogo).
                     const highlightedLogoUri =
                       viewBy === 'Team'
                         ? resolveTeamLogo(highlightedPoint.teamCode)
-                        : isMlbArsenalCompare && highlightedPoint.poolSource === 'MLB'
+                        : isMlbCompareActive && highlightedPoint.poolSource === 'MLB'
                         ? resolveTeamLogo(highlightedPoint.teamCode)
-                        : isMlbArsenalCompare && !highlightedPoint.poolSource
-                        ? resolveSchoolBrand(highlightedPoint.teamCode).logoSrc ?? undefined
+                        : isMlbCompareActive && !highlightedPoint.poolSource
+                        ? resolveSchoolLogoByCodeOrPrefix(highlightedPoint.teamCode)
                         : undefined;
                     if (highlightedLogoUri) {
                       const size = 40;
@@ -4830,7 +4858,7 @@ function PitcherDnaPanel({
               {arsenalComparison.map(({ point, rank, rows: comparisonRows }) => {
                 const teamLogo = point.poolSource
                   ? resolveTeamLogo(point.teamCode)
-                  : resolveTeamLogo(point.teamCode) ?? resolveSchoolBrand(point.teamCode).logoSrc ?? undefined;
+                  : resolveTeamLogo(point.teamCode) ?? resolveSchoolLogoByCodeOrPrefix(point.teamCode);
                 return (
                   <article
                     key={point.key}
@@ -5525,7 +5553,10 @@ export default function PitchingSuite({
     return shouldFlip ? -x : x;
   };
   const canShowLeagueHeavyPages = !isLeague;
-  const canShowVeloManualEntry = !isLeague && !isPro;
+  // Hidden on all sites for everyone per product decision -- kept in the
+  // code (not deleted) in case these tabs come back in the future.
+  const canShowQpLocationsTab = false;
+  const canShowVeloManualEntry = false && !isLeague && !isPro;
   const allPitchersSelected = selectedPitchers.length === 0 || selectedPitchers.every((value) => value === 'All');
   const allHittersSelected = selectedHitters.length === 0 || selectedHitters.every((value) => value === 'All');
   const isLeagueAllSelection = isLeague && teamType === 'All' && allPitchersSelected && allHittersSelected;
@@ -5602,7 +5633,12 @@ export default function PitchingSuite({
     }
   }, [canShowVeloManualEntry, dashboardPage]);
   useEffect(() => {
-    if (!canShowLeagueHeavyPages && (dashboardPage === 'Velocity' || dashboardPage === 'Trend' || dashboardPage === 'QP Locations')) {
+    if (!canShowQpLocationsTab && dashboardPage === 'QP Locations') {
+      setDashboardPage('Summary');
+    }
+  }, [canShowQpLocationsTab, dashboardPage]);
+  useEffect(() => {
+    if (!canShowLeagueHeavyPages && (dashboardPage === 'Velocity' || dashboardPage === 'Trend')) {
       setDashboardPage('Summary');
     }
   }, [canShowLeagueHeavyPages, dashboardPage]);
@@ -14693,7 +14729,7 @@ export default function PitchingSuite({
                   {canShowLeagueHeavyPages ? <option value="Velocity">Velocity</option> : null}
                   {canShowLeagueHeavyPages ? <option value="Trend">Trend</option> : null}
                   <option value="HeatMaps">HeatMaps</option>
-                  {canShowLeagueHeavyPages ? <option value="QP Locations">QP Locations</option> : null}
+                  {canShowQpLocationsTab ? <option value="QP Locations">QP Locations</option> : null}
                   {canShowVeloManualEntry ? <option value="Velo Manual Entry">Velo Manual Entry</option> : null}
                   <option value="Pitcher DNA">Pitcher DNA</option>
                 </select>
@@ -14760,7 +14796,7 @@ export default function PitchingSuite({
                 >
                   HeatMaps
                 </button>
-                {canShowLeagueHeavyPages ? (
+                {canShowQpLocationsTab ? (
                   <button
                     type="button"
                     className={dashboardPage === 'QP Locations' ? 'btn btn-primary' : 'btn btn-ghost'}

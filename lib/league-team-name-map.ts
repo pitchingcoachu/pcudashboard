@@ -305,7 +305,7 @@ export const LEAGUE_TEAM_NAME_BY_CODE: Record<string, string> = {
     "UMA_AMH": "University of Massachusetts Amherst",
     "UMBC_RET": "University of Maryland, Baltimore County",
     "UNO_MAV": "University of Nebraska Omaha",
-    "USC_BEA": "University of California, Berkeley",
+    "USC_BEA": "University of South Carolina Beaufort",
     "USC_PAC": "University of South Carolina Aiken",
     "USC_UPS": "University of South Carolina Upstate",
     "USF_BUL": "University of South Florida",

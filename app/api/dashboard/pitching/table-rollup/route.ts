@@ -71,6 +71,21 @@ function normalizeSessionType(value: string): string {
   const raw = String(value ?? '').trim().toUpperCase();
   return raw && raw !== 'ALL' ? raw : '';
 }
+// Precomputed rollup bucket columns (session_bucket / session_type_bucket)
+// only ever distinguish 'BULLPEN' from everything else -- neither one has a
+// real 'LIVE BP' concept, and most schools' raw data never carries a literal
+// 'SEASON' tag (only 'Live'/'Bullpen'). So "Season" here has to mean "not
+// Bullpen" (matches Live, Season, or anything else non-bullpen) to line up
+// with what "Season" means everywhere else in this app; an exact-string
+// match against 'SEASON' would silently return zero rows for every real
+// school. 'LIVE BP' has no signal in these tables (no opponent/team info
+// retained at this aggregation level) so it intentionally matches nothing.
+function sessionBucketWhereSql(column: string, sessionType: string, paramIndex: number): string | null {
+  if (!sessionType) return null;
+  if (sessionType === 'BULLPEN') return `UPPER(${column}) = $${paramIndex}`;
+  if (sessionType === 'SEASON') return `UPPER(${column}) <> $${paramIndex}`;
+  return '1=0';
+}
 function normalizeLevel(value: string): string {
   const raw = String(value ?? '').trim().toUpperCase();
   return raw || 'ALL';
@@ -439,7 +454,8 @@ export async function GET(request: Request) {
       }
       if (sessionType) {
         values.push(sessionType);
-        where.push(`session_bucket = $${values.length}`);
+        const clause = sessionBucketWhereSql('session_bucket', sessionType, values.length);
+        if (clause) where.push(clause);
       }
       if (hand) {
         values.push(hand);
@@ -565,7 +581,11 @@ export async function GET(request: Request) {
   if (schoolCode === 'PRO' && level !== 'ALL') add('level_bucket = ?', level);
   if (startDate) add('session_date >= ?::date', startDate);
   if (endDate) add('session_date <= ?::date', endDate);
-  if (sessionType) add('session_type_bucket = ?', sessionType);
+  if (sessionType) {
+    values.push(sessionType);
+    const clause = sessionBucketWhereSql('session_type_bucket', sessionType, values.length);
+    if (clause) where.push(clause);
+  }
   if (hand) add('pitcherhand_norm = ?', hand);
   if (batterSide) add('batterside_norm = ?', batterSide);
   if (teamCode) add('pitcher_team_code = ?', teamCode);
@@ -723,7 +743,11 @@ export async function GET(request: Request) {
         level
       );
     }
-    if (sessionType) addEvent('session_bucket = ?', sessionType);
+    if (sessionType) {
+      eventValues.push(sessionType);
+      const clause = sessionBucketWhereSql('session_bucket', sessionType, eventValues.length);
+      if (clause) eventWhere.push(clause);
+    }
     if (hand) addEvent('pitcherthrows_norm = ?', hand);
     if (pitchTypeSet.size) addEvent('LOWER(pitch_type) = ANY(?::text[])', Array.from(pitchTypeSet));
     addEvent(VALID_PITCH_TYPE_SQL);

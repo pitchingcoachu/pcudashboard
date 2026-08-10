@@ -74,7 +74,7 @@ export default async function AdminSchedulePage({ searchParams }: AdminScheduleP
       <div className="portal-admin-headline">
         <h2>Schedule Builder</h2>
         <p>Select a player, then use Workout Folder or Template Folder to drag onto the schedule.</p>
-        <div>
+        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
           <Link href="/portal/admin/master-calendar" className="btn btn-ghost as-link">
             Open Master Calendar
           </Link>

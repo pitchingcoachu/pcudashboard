@@ -6,7 +6,15 @@ import { useRouter } from 'next/navigation';
 import type { ProgramItemRow } from '../../../lib/training-db';
 import WorkoutLogModal from '../components/workout-log-modal';
 
-type ViewMode = 'day' | 'week' | 'month' | 'cycle';
+type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'plan';
+const CALENDAR_SUB_MODES: ViewMode[] = ['day', 'week', 'month'];
+const PLAN_SECTIONS: Array<{ key: 'daily_prep' | 'throwing' | 'post_throw_arm_care' | 's_and_c' | 'movement_mobility'; label: string }> = [
+  { key: 'daily_prep', label: 'Daily Prep' },
+  { key: 'throwing', label: 'Throwing' },
+  { key: 'post_throw_arm_care', label: 'Post-Throw Arm Care' },
+  { key: 's_and_c', label: 'S&C' },
+  { key: 'movement_mobility', label: 'Movement and Mobility' },
+];
 
 type PlayerCalendarProps = {
   playerId: number;
@@ -159,6 +167,11 @@ export default function PlayerCalendar({
   const router = useRouter();
   const query = previewPlayerId && Number.isFinite(previewPlayerId) && previewPlayerId > 0 ? `?previewPlayerId=${previewPlayerId}` : '';
   const [view, setView] = useState<ViewMode>(initialView);
+  // Remembers which day/week/month sub-mode "Calendar" should return to when
+  // the top-level switch is Calendar/Cycle/Plan -- day/week/month remain
+  // real ViewMode values throughout this file, this only affects what the
+  // top button row shows as selected.
+  const [calendarSubMode, setCalendarSubMode] = useState<ViewMode>(CALENDAR_SUB_MODES.includes(initialView) ? initialView : 'day');
   const [anchorDate, setAnchorDate] = useState<string>(initialAnchorDate ?? toIsoDate(new Date()));
   const [items, setItems] = useState<ProgramItemRow[]>(initialItems);
   const [loading, setLoading] = useState(false);
@@ -166,6 +179,7 @@ export default function PlayerCalendar({
   const [selectedItem, setSelectedItem] = useState<ProgramItemRow | null>(null);
   const [catchPlayNotes, setCatchPlayNotes] = useState<{ highDay: string; mediumDay: string; lowDay: string }>({ highDay: '', mediumDay: '', lowDay: '' });
   const [cycleNotes, setCycleNotes] = useState('');
+  const [planSectionNotes, setPlanSectionNotes] = useState<Record<string, string> | null>(null);
   const consumedInitialRef = useRef(false);
   const loadedThrowingNotesRef = useRef(false);
 
@@ -173,10 +187,11 @@ export default function PlayerCalendar({
     loadedThrowingNotesRef.current = false;
     setCatchPlayNotes({ highDay: '', mediumDay: '', lowDay: '' });
     setCycleNotes('');
+    setPlanSectionNotes(null);
   }, [playerId, previewPlayerId]);
 
   const visibleRange = useMemo(() => {
-    if (view === 'cycle') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
+    if (view === 'cycle' || view === 'plan') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
     if (view === 'day') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
     if (view === 'week') return { startDate: startOfWeek(anchorDate), endDate: endOfWeekExclusive(anchorDate) };
     const monthStart = startOfMonth(anchorDate);
@@ -202,6 +217,21 @@ export default function PlayerCalendar({
         const payload = (await response.json().catch(() => ({}))) as { items?: ProgramItemRow[]; error?: string };
         if (!response.ok) throw new Error(payload.error ?? 'Failed to load 3-Day Cycle.');
         setItems(Array.isArray(payload.items) ? payload.items : []);
+        return;
+      }
+      if (view === 'plan') {
+        const params = new URLSearchParams({
+          playerId: String(playerId),
+        });
+        const response = await fetch(`/api/player/plan-items?${params.toString()}`, { cache: 'no-store' });
+        const payload = (await response.json().catch(() => ({}))) as {
+          items?: ProgramItemRow[];
+          sectionNotes?: Record<string, string>;
+          error?: string;
+        };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load Training Program.');
+        setItems(Array.isArray(payload.items) ? payload.items : []);
+        setPlanSectionNotes(payload.sectionNotes ?? null);
         return;
       }
       const params = new URLSearchParams({
@@ -264,6 +294,7 @@ export default function PlayerCalendar({
 
   const periodLabel = useMemo(() => {
     if (view === 'cycle') return '3-Day Cycle';
+    if (view === 'plan') return 'Training Program';
     const anchor = fromIsoDate(anchorDate);
     if (view === 'month') {
       return anchor.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -290,7 +321,7 @@ export default function PlayerCalendar({
   }, [anchorDate, view]);
 
   const movePeriod = (direction: -1 | 1) => {
-    if (view === 'cycle') return;
+    if (view === 'cycle' || view === 'plan') return;
     if (view === 'day') {
       setAnchorDate((prev) => addDays(prev, direction));
       return;
@@ -395,22 +426,45 @@ export default function PlayerCalendar({
     />
   );
 
+  const isCalendarActive = CALENDAR_SUB_MODES.includes(view);
+
   return (
     <div className="portal-admin-stack">
       <div className="portal-schedule-toolbar">
         <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
-          {(['day', 'week', 'month', 'cycle'] as ViewMode[]).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={`btn ${view === mode ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setView(mode)}
-            >
-              {mode === 'cycle' ? '3-Day Cycle' : `${mode[0].toUpperCase()}${mode.slice(1)}`}
-            </button>
-          ))}
+          <button
+            type="button"
+            className={`btn ${isCalendarActive ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setView(calendarSubMode)}
+          >
+            Calendar
+          </button>
+          <button
+            type="button"
+            className={`btn ${view === 'plan' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setView('plan')}
+          >
+            Training Program
+          </button>
         </div>
-        {view !== 'cycle' && (
+        {isCalendarActive && (
+          <div className="portal-schedule-view-switch" role="group" aria-label="Calendar sub-view">
+            {(['day', 'week', 'month'] as ViewMode[]).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={`btn ${view === mode ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => {
+                  setView(mode);
+                  setCalendarSubMode(mode);
+                }}
+              >
+                {`${mode[0].toUpperCase()}${mode.slice(1)}`}
+              </button>
+            ))}
+          </div>
+        )}
+        {view !== 'cycle' && view !== 'plan' && (
           <div className="portal-schedule-nav">
             <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)}>
               Prev
@@ -424,7 +478,7 @@ export default function PlayerCalendar({
 
       <section className="portal-schedule-calendar" aria-busy={loading}>
         <h3 className="portal-schedule-period">{periodLabel}</h3>
-        {view !== 'day' && view !== 'cycle' && (
+        {view !== 'day' && view !== 'cycle' && view !== 'plan' && (
           <div
             className={`portal-schedule-weekdays${view === 'week' ? ' is-week' : ''}`}
             style={{
@@ -473,27 +527,27 @@ export default function PlayerCalendar({
         )}
 
         {view === 'day' && <div className="portal-schedule-day-grid">{dayCells.map((date) => renderDayCell(date, false, undefined, true))}</div>}
-        {view === 'cycle' && (
+        {view === 'plan' && (
           <div style={{ display: 'grid', gap: '0.75rem' }}>
-            {cycleNotes.trim() ? (
-              <section className="portal-cycle-notes-panel">
-                <strong>Notes</strong>
-                <p className="portal-muted-text" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{cycleNotes.trim()}</p>
-              </section>
-            ) : null}
-            <div
-              className="portal-cycle-grid"
-              style={{
-                gap: '0.75rem',
-              }}
-            >
-              {CYCLE_COLUMNS.map((column) => {
-                const slotItems = items.filter((item) => item.scheduleType === 'cycle' && item.cycleSlot === column.key);
-                return (
-                  <article key={column.key} className="portal-panel" style={{ minHeight: '300px' }}>
-                    <h4 style={{ marginTop: 0 }}>{column.label}</h4>
-                    <div style={{ display: 'grid', gap: '0.45rem' }}>
-                      {slotItems.map((item) => (
+            {PLAN_SECTIONS.map((section) => {
+              const sectionItems = items.filter((item) => item.scheduleType === 'plan' && item.planSection === section.key);
+              const note = planSectionNotes?.[section.key]?.trim() ?? '';
+              return (
+                <article key={section.key} className="portal-panel">
+                  <h4 style={{ marginTop: 0 }}>{section.label}</h4>
+                  {note ? (
+                    <section className="portal-cycle-notes-panel" style={{ marginBottom: '0.6rem' }}>
+                      <strong>Notes</strong>
+                      <p className="portal-muted-text" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{note}</p>
+                    </section>
+                  ) : null}
+                  <div style={{ display: 'grid', gap: '0.45rem' }}>
+                    {sectionItems.map((item) => {
+                      // completedCount is stripped server-side for player
+                      // sessions -- its presence here IS the "am I a coach
+                      // viewing this" signal, no separate role prop needed.
+                      const showTally = item.completedCount !== null;
+                      return (
                         <button
                           key={item.itemId}
                           type="button"
@@ -502,11 +556,15 @@ export default function PlayerCalendar({
                           style={{
                             minWidth: 0,
                             width: '100%',
-                            textAlign: 'center',
+                            textAlign: 'left',
                             color: 'var(--text-main)',
                             border: '1px solid rgba(255,255,255,0.2)',
                             borderRadius: '6px',
-                            padding: '0.28rem 0.42rem',
+                            padding: '0.4rem 0.6rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '0.5rem',
                             ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
                           }}
                           onClick={() => {
@@ -532,18 +590,25 @@ export default function PlayerCalendar({
                           }}
                         >
                           <strong>{item.itemName}</strong>
+                          {showTally ? (
+                            <span className="portal-muted-text" style={{ fontSize: '0.82rem', whiteSpace: 'nowrap' }}>
+                              {item.targetCount
+                                ? `Completed ${item.completedCount}/${item.targetCount}`
+                                : `Completed ${item.completedCount} time${item.completedCount === 1 ? '' : 's'}`}
+                            </span>
+                          ) : null}
                         </button>
-                      ))}
-                      {slotItems.length === 0 && (
-                        <p className="portal-muted-text" style={{ margin: 0 }}>
-                          No workouts assigned
-                        </p>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
+                      );
+                    })}
+                    {sectionItems.length === 0 && (
+                      <p className="portal-muted-text" style={{ margin: 0 }}>
+                        No workouts assigned
+                      </p>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
       </section>

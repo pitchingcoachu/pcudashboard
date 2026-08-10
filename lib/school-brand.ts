@@ -144,6 +144,18 @@ export function resolveSchoolBrand(schoolCode: string | null | undefined): Schoo
   return SCHOOL_BRANDS[normalized] ?? { ...DEFAULT_BRAND, schoolCode: normalized || 'PCU' };
 }
 
+// Unlike resolveSchoolBrand (which always returns something, falling back to
+// the default Pearl Player Development brand for any unrecognized code),
+// this tells callers whether a code is a REAL known brand -- needed anywhere
+// "no brand match" must mean "unknown" rather than silently substituting the
+// default brand's name/logo as if it were a real answer.
+export function isKnownSchoolBrand(schoolCode: string | null | undefined): boolean {
+  const normalized = String(schoolCode ?? '')
+    .trim()
+    .toUpperCase();
+  return normalized in SCHOOL_BRANDS;
+}
+
 export function schoolBrandCssVars(schoolCode: string | null | undefined): Record<string, string> {
   const brand = resolveSchoolBrand(schoolCode);
   return {

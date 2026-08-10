@@ -22080,6 +22080,17 @@ def pitching_overview(
         # PRO-link merge would apply so the request falls through to the
         # raw path below, where the merge actually happens.
         and not (pro_link_name and len(selected_pitchers) == 1)
+        # The rollup's precomputed session_bucket column only distinguishes
+        # 'Bullpen' (regex-detected practice/bullpen text) vs 'Season' (every-
+        # thing else) -- it has no concept of 'Live' games at all, unlike the
+        # raw-query path below, which correctly separates Season from Live
+        # using team-marker logic. That makes the rollup's "Season" bucket
+        # over-inclusive (it still contains Live games) and its "Live"/"Live
+        # BP" filter match nothing. Skip the fast path whenever a specific
+        # session type is selected so the request always uses the raw path's
+        # correct classification instead of the rollup's cruder one; an
+        # unfiltered "All" request still gets the fast path.
+        and not (session_type_filter and session_type_filter != "All")
     )
     rollup_fast_response: Optional[PitchingOverviewResponse] = None
     if should_try_league_rollup_fast:

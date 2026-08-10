@@ -135,7 +135,8 @@ export async function POST(request: Request) {
 
   const itemId = Number(String(fields.get('itemId') ?? '0'));
   const playerId = Number(String(fields.get('playerId') ?? '0'));
-  const scheduleType = String(fields.get('scheduleType') ?? 'calendar').trim().toLowerCase() === 'cycle' ? 'cycle' : 'calendar';
+  const scheduleTypeRaw = String(fields.get('scheduleType') ?? 'calendar').trim().toLowerCase();
+  const scheduleType = scheduleTypeRaw === 'cycle' ? 'cycle' : scheduleTypeRaw === 'plan' ? 'plan' : 'calendar';
 
   if (!Number.isFinite(itemId) || itemId <= 0 || !Number.isFinite(playerId) || playerId <= 0) {
     return NextResponse.json({ error: 'Invalid log payload.' }, { status: 400 });

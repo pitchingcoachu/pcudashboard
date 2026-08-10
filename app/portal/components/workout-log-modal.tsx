@@ -274,7 +274,12 @@ export default function WorkoutLogModal({
   const [exerciseDrafts, setExerciseDrafts] = useState<WorkoutExerciseDraft[]>(() => buildWorkoutExerciseDrafts(item));
   const formRef = useRef<HTMLFormElement | null>(null);
 
-  const isCycleItem = item.scheduleType === 'cycle';
+  // Cycle and Plan items are both fixed-section (not date-scoped) alternatives
+  // to the calendar, so they share the same "not calendar" behavior here:
+  // exercise history isn't bounded by a specific dayDate, and workout
+  // customization (which rewrites a single calendar day's prescription)
+  // doesn't apply to either.
+  const isCycleItem = item.scheduleType === 'cycle' || item.scheduleType === 'plan';
   const loadValues = useMemo(() => parseLoadValues(item.performedLoad), [item.performedLoad]);
   const isAssessmentWorkout = (item.workoutCategory ?? '').trim().toLowerCase() === 'assessment';
   const notesPayload = useMemo(() => parseAssessmentNotesPayload(item.logNotes ?? ''), [item.logNotes]);
@@ -511,7 +516,13 @@ export default function WorkoutLogModal({
           }}
         >
           <input type="hidden" name="scheduleType" value={item.scheduleType} />
-          <input type="hidden" name="completed" value={item.completed ? 'on' : ''} />
+          {/* "Mark as Complete" is the only submit action this form has
+              (unlike the mobile app's separate Close-vs-Mark-Complete
+              buttons), so submitting always marks the item complete --
+              previously this echoed item.completed's pre-open snapshot,
+              which meant a save only recorded a completion if the item was
+              already complete, silently no-opping on every first-time save. */}
+          <input type="hidden" name="completed" value="on" />
           {allowWorkoutCustomization && item.itemType === 'workout' && item.scheduleType === 'calendar' && item.workoutExercises.length > 0 ? (
             <div className="portal-workout-customize-panel">
               <div className="portal-choice-line-actions">
@@ -864,7 +875,7 @@ export default function WorkoutLogModal({
           <div className="portal-choice-line-actions">
             {!(catchPlayNote && item.itemType === 'workout' && item.workoutExercises.length === 0) && (
               <button type="submit" className="btn btn-primary" disabled={saving}>
-                {saving ? 'Saving...' : 'Save Log'}
+                {saving ? 'Saving...' : 'Mark as Complete'}
               </button>
             )}
             {onDelete && (

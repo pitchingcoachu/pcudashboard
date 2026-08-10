@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent, ChangeEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type {
   AssessmentWorkoutScoreRow,
@@ -179,6 +179,14 @@ function formatScheduleHeading(dateIso: string, todayIso: string): string {
     timeZone: 'UTC',
   })} Schedule`;
 }
+
+const PROFILE_PLAN_SECTIONS: Array<{ key: 'daily_prep' | 'throwing' | 'post_throw_arm_care' | 's_and_c' | 'movement_mobility'; label: string }> = [
+  { key: 'daily_prep', label: 'Daily Prep' },
+  { key: 'throwing', label: 'Throwing' },
+  { key: 'post_throw_arm_care', label: 'Post-Throw Arm Care' },
+  { key: 's_and_c', label: 'S&C' },
+  { key: 'movement_mobility', label: 'Movement and Mobility' },
+];
 
 function hashString(value: string): number {
   let hash = 0;
@@ -484,6 +492,12 @@ export default function ProfileDashboard({
   const [scheduleItems, setScheduleItems] = useState<ProgramItemRow[]>(todayItems);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleMessage, setScheduleMessage] = useState('');
+  const [scheduleWidgetView, setScheduleWidgetView] = useState<'day' | 'plan'>('day');
+  const [planItems, setPlanItems] = useState<ProgramItemRow[]>([]);
+  const [planSectionNotes, setPlanSectionNotes] = useState<Record<string, string> | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planMessage, setPlanMessage] = useState('');
+  const planLoadedRef = useRef(false);
   const [weightDate, setWeightDate] = useState(todayIsoDate());
   const [weightValue, setWeightValue] = useState('');
   const [weightNotes, setWeightNotes] = useState('');
@@ -541,6 +555,30 @@ export default function ProfileDashboard({
     router.prefetch(fullProgramHref);
   }, [fullProgramHref, router]);
 
+  const loadScheduleItems = useCallback(
+    async (signal?: AbortSignal) => {
+      setScheduleLoading(true);
+      setScheduleMessage('');
+      const endDate = addDays(selectedScheduleDate, 1);
+      try {
+        const response = await fetch(`/api/player/program-items?playerId=${playerId}&startDate=${selectedScheduleDate}&endDate=${endDate}`, {
+          cache: 'no-store',
+          signal,
+        });
+        const payload = (await response.json().catch(() => ({}))) as { items?: ProgramItemRow[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load schedule.');
+        setScheduleItems(Array.isArray(payload.items) ? payload.items : []);
+      } catch (error) {
+        if (signal?.aborted) return;
+        setScheduleItems([]);
+        setScheduleMessage(error instanceof Error ? error.message : 'Failed to load schedule.');
+      } finally {
+        if (!signal?.aborted) setScheduleLoading(false);
+      }
+    },
+    [playerId, selectedScheduleDate]
+  );
+
   useEffect(() => {
     if (selectedScheduleDate === todayDateIso) {
       setScheduleItems(todayItems);
@@ -548,32 +586,44 @@ export default function ProfileDashboard({
       setScheduleLoading(false);
       return;
     }
-
     const controller = new AbortController();
-    setScheduleLoading(true);
-    setScheduleMessage('');
-
-    const endDate = addDays(selectedScheduleDate, 1);
-    fetch(`/api/player/program-items?playerId=${playerId}&startDate=${selectedScheduleDate}&endDate=${endDate}`, {
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        const payload = (await response.json().catch(() => ({}))) as { items?: ProgramItemRow[]; error?: string };
-        if (!response.ok) throw new Error(payload.error ?? 'Failed to load schedule.');
-        setScheduleItems(Array.isArray(payload.items) ? payload.items : []);
-      })
-      .catch((error) => {
-        if (controller.signal.aborted) return;
-        setScheduleItems([]);
-        setScheduleMessage(error instanceof Error ? error.message : 'Failed to load schedule.');
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setScheduleLoading(false);
-      });
-
+    void loadScheduleItems(controller.signal);
     return () => controller.abort();
-  }, [playerId, selectedScheduleDate, todayDateIso, todayItems]);
+  }, [selectedScheduleDate, todayDateIso, todayItems, loadScheduleItems]);
+
+  const loadPlanItems = useCallback(
+    async (signal?: AbortSignal) => {
+      setPlanLoading(true);
+      setPlanMessage('');
+      try {
+        const response = await fetch(`/api/player/plan-items?playerId=${playerId}`, { cache: 'no-store', signal });
+        const payload = (await response.json().catch(() => ({}))) as {
+          items?: ProgramItemRow[];
+          sectionNotes?: Record<string, string>;
+          error?: string;
+        };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to load Training Program.');
+        setPlanItems(Array.isArray(payload.items) ? payload.items : []);
+        setPlanSectionNotes(payload.sectionNotes ?? null);
+      } catch (error) {
+        if (signal?.aborted) return;
+        planLoadedRef.current = false;
+        setPlanItems([]);
+        setPlanMessage(error instanceof Error ? error.message : 'Failed to load Training Program.');
+      } finally {
+        if (!signal?.aborted) setPlanLoading(false);
+      }
+    },
+    [playerId]
+  );
+
+  useEffect(() => {
+    if (scheduleWidgetView !== 'plan' || planLoadedRef.current) return;
+    planLoadedRef.current = true;
+    const controller = new AbortController();
+    void loadPlanItems(controller.signal);
+    return () => controller.abort();
+  }, [scheduleWidgetView, loadPlanItems]);
 
   const sortedWeightLogs = useMemo(() => {
     const merged = new Map<string, BodyWeightLogRow>();
@@ -1402,26 +1452,48 @@ export default function ProfileDashboard({
         <article className="portal-admin-card">
           <div className="portal-row-between portal-profile-schedule-head">
             <div className="portal-profile-schedule-title-row">
-              <button
-                type="button"
-                className="btn btn-ghost portal-profile-schedule-arrow"
-                aria-label="Show previous day's schedule"
-                onClick={() => setSelectedScheduleDate((current) => addDays(current, -1))}
-              >
-                &lt;
-              </button>
-              <h3>{formatScheduleHeading(selectedScheduleDate, todayDateIso)}</h3>
-              <button
-                type="button"
-                className="btn btn-ghost portal-profile-schedule-arrow"
-                aria-label="Show next day's schedule"
-                onClick={() => setSelectedScheduleDate((current) => addDays(current, 1))}
-              >
-                &gt;
-              </button>
+              {scheduleWidgetView === 'day' ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-ghost portal-profile-schedule-arrow"
+                    aria-label="Show previous day's schedule"
+                    onClick={() => setSelectedScheduleDate((current) => addDays(current, -1))}
+                  >
+                    &lt;
+                  </button>
+                  <h3>{formatScheduleHeading(selectedScheduleDate, todayDateIso)}</h3>
+                  <button
+                    type="button"
+                    className="btn btn-ghost portal-profile-schedule-arrow"
+                    aria-label="Show next day's schedule"
+                    onClick={() => setSelectedScheduleDate((current) => addDays(current, 1))}
+                  >
+                    &gt;
+                  </button>
+                </>
+              ) : (
+                <h3>Training Program</h3>
+              )}
             </div>
             <div className="portal-choice-line-actions">
-              {selectedScheduleDate !== todayDateIso ? (
+              <div className="portal-schedule-view-switch" role="group" aria-label="Schedule widget view">
+                <button
+                  type="button"
+                  className={`btn ${scheduleWidgetView === 'day' ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => setScheduleWidgetView('day')}
+                >
+                  Day
+                </button>
+                <button
+                  type="button"
+                  className={`btn ${scheduleWidgetView === 'plan' ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => setScheduleWidgetView('plan')}
+                >
+                  Training Program
+                </button>
+              </div>
+              {scheduleWidgetView === 'day' && selectedScheduleDate !== todayDateIso ? (
                 <button type="button" className="btn btn-ghost" onClick={() => setSelectedScheduleDate(todayDateIso)}>
                   Today
                 </button>
@@ -1431,46 +1503,115 @@ export default function ProfileDashboard({
               </Link>
             </div>
           </div>
-          {scheduleLoading ? (
-            <p className="portal-muted-text">Loading schedule...</p>
-          ) : scheduleMessage ? (
-            <p className="auth-error">{scheduleMessage}</p>
-          ) : scheduleItems.length === 0 ? (
-            <p className="portal-muted-text">No workouts assigned for {selectedScheduleDate === todayDateIso ? 'today' : formatDate(selectedScheduleDate)}.</p>
+          {scheduleWidgetView === 'day' ? (
+            scheduleLoading ? (
+              <p className="portal-muted-text">Loading schedule...</p>
+            ) : scheduleMessage ? (
+              <p className="auth-error">{scheduleMessage}</p>
+            ) : scheduleItems.length === 0 ? (
+              <p className="portal-muted-text">No workouts assigned for {selectedScheduleDate === todayDateIso ? 'today' : formatDate(selectedScheduleDate)}.</p>
+            ) : (
+              <div className="portal-player-items">
+                {scheduleItems.map((item) => (
+                  <button
+                    key={item.itemId}
+                    type="button"
+                    className="portal-schedule-item"
+                    title={item.itemName}
+                    style={categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout')}
+                    onClick={() => {
+                      const linkTarget = getCalendarLinkTarget(item);
+                      if (linkTarget === 'throwing') {
+                        const sep = programPreviewQuery ? '&' : '?';
+                        router.push(`/portal/player/program/throwing${programPreviewQuery}${sep}date=${item.dayDate}`);
+                        return;
+                      }
+                      if (linkTarget === 'bullpens') {
+                        router.push(`/portal/player/program/bullpens${programPreviewQuery}`);
+                        return;
+                      }
+                      if (linkTarget === 'velocity') {
+                        router.push(`/portal/player/program/velocity${programPreviewQuery}`);
+                        return;
+                      }
+                      if (linkTarget === 'drills') {
+                        router.push(`/portal/player/program/drills${programPreviewQuery}`);
+                        return;
+                      }
+                      setSelectedItem(item);
+                    }}
+                  >
+                    <strong>{item.itemName}</strong>
+                  </button>
+                ))}
+              </div>
+            )
+          ) : planLoading ? (
+            <p className="portal-muted-text">Loading Training Program...</p>
+          ) : planMessage ? (
+            <p className="auth-error">{planMessage}</p>
           ) : (
-            <div className="portal-player-items">
-              {scheduleItems.map((item) => (
-                <button
-                  key={item.itemId}
-                  type="button"
-                  className="portal-schedule-item"
-                  title={item.itemName}
-                  style={categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout')}
-                  onClick={() => {
-                    const linkTarget = getCalendarLinkTarget(item);
-                    if (linkTarget === 'throwing') {
-                      const sep = programPreviewQuery ? '&' : '?';
-                      router.push(`/portal/player/program/throwing${programPreviewQuery}${sep}date=${item.dayDate}`);
-                      return;
-                    }
-                    if (linkTarget === 'bullpens') {
-                      router.push(`/portal/player/program/bullpens${programPreviewQuery}`);
-                      return;
-                    }
-                    if (linkTarget === 'velocity') {
-                      router.push(`/portal/player/program/velocity${programPreviewQuery}`);
-                      return;
-                    }
-                    if (linkTarget === 'drills') {
-                      router.push(`/portal/player/program/drills${programPreviewQuery}`);
-                      return;
-                    }
-                    setSelectedItem(item);
-                  }}
-                >
-                  <strong>{item.itemName}</strong>
-                </button>
-              ))}
+            <div style={{ display: 'grid', gap: '0.6rem' }}>
+              {PROFILE_PLAN_SECTIONS.map((section) => {
+                const sectionItems = planItems.filter((item) => item.scheduleType === 'plan' && item.planSection === section.key);
+                const note = planSectionNotes?.[section.key]?.trim() ?? '';
+                return (
+                  <div key={section.key}>
+                    <div className="portal-row-between" style={{ marginBottom: '0.3rem' }}>
+                      <strong style={{ fontSize: '0.88rem' }}>{section.label}</strong>
+                    </div>
+                    {note ? (
+                      <p className="portal-muted-text" style={{ margin: '0 0 0.35rem', whiteSpace: 'pre-wrap', fontSize: '0.82rem' }}>
+                        {note}
+                      </p>
+                    ) : null}
+                    {sectionItems.length === 0 ? (
+                      <p className="portal-muted-text" style={{ margin: 0, fontSize: '0.85rem' }}>No workouts assigned</p>
+                    ) : (
+                      <div className="portal-player-items">
+                        {sectionItems.map((item) => (
+                          <button
+                            key={item.itemId}
+                            type="button"
+                            className="portal-schedule-item"
+                            title={item.itemName}
+                            style={{ ...categoryBubbleStyle(item.workoutCategory ?? item.exerciseCategory ?? 'Workout'), display: 'grid', gap: 2 }}
+                            onClick={() => {
+                              const linkTarget = getCalendarLinkTarget(item);
+                              if (linkTarget === 'throwing') {
+                                const sep = programPreviewQuery ? '&' : '?';
+                                router.push(`/portal/player/program/throwing${programPreviewQuery}${sep}date=${item.dayDate}`);
+                                return;
+                              }
+                              if (linkTarget === 'bullpens') {
+                                router.push(`/portal/player/program/bullpens${programPreviewQuery}`);
+                                return;
+                              }
+                              if (linkTarget === 'velocity') {
+                                router.push(`/portal/player/program/velocity${programPreviewQuery}`);
+                                return;
+                              }
+                              if (linkTarget === 'drills') {
+                                router.push(`/portal/player/program/drills${programPreviewQuery}`);
+                                return;
+                              }
+                              setSelectedItem(item);
+                            }}
+                          >
+                            <strong>{item.itemName}</strong>
+                            {item.completedCount !== null ? (
+                              <span style={{ fontSize: '0.72rem', opacity: 0.85 }}>
+                                Completed {item.completedCount ?? 0}
+                                {item.targetCount ? `/${item.targetCount}` : ''} time{(item.completedCount ?? 0) === 1 && !item.targetCount ? '' : 's'}
+                              </span>
+                            ) : null}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </article>
@@ -1639,8 +1780,12 @@ export default function ProfileDashboard({
           item={selectedItem}
           playerId={playerId}
           onClose={() => setSelectedItem(null)}
-          onSaved={() => {
-            window.location.reload();
+          onSaved={async () => {
+            if (selectedItem.scheduleType === 'plan') {
+              await loadPlanItems();
+            } else {
+              await loadScheduleItems();
+            }
           }}
         />
       )}

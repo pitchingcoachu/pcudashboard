@@ -653,6 +653,59 @@ export async function ensureAuthDbReady(): Promise<void> {
     );
   `);
 
+  // "Plan" view -- a second, independent fixed-section alternative to the
+  // calendar, separate from program_cycle_items (medium/high/low/mobility/
+  // s_and_c) above. Sections are always rendered in this fixed order:
+  // daily_prep, throwing, post_throw_arm_care, s_and_c, movement_mobility.
+  // target_count NULL means "just tally completions, no goal"; a set value
+  // means the UI should show "N/target". Actual completion counts are read
+  // off exercise_log_history (schedule_type='plan', plan_item_id=...) at
+  // query time rather than duplicated into a counter column here.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS program_plan_items (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      plan_section TEXT NOT NULL CHECK (plan_section IN ('daily_prep', 'throwing', 'post_throw_arm_care', 's_and_c', 'movement_mobility')),
+      workout_id INTEGER NOT NULL REFERENCES workout_library(id) ON DELETE CASCADE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      target_count INTEGER CHECK (target_count IS NULL OR target_count > 0),
+      created_by INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  // One note per player per section, player-visible; persists until changed.
+  // An empty/absent row here means "no player-specific override" -- the read
+  // path falls back to program_plan_section_default_notes below.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS program_plan_section_notes (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      plan_section TEXT NOT NULL CHECK (plan_section IN ('daily_prep', 'throwing', 'post_throw_arm_care', 's_and_c', 'movement_mobility')),
+      note_text TEXT NOT NULL DEFAULT '',
+      updated_by INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (player_id, plan_section)
+    );
+  `);
+
+  // Org-wide standard note per section -- shown for every player in the org
+  // who doesn't have their own non-empty override in program_plan_section_notes.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS program_plan_section_default_notes (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      plan_section TEXT NOT NULL CHECK (plan_section IN ('daily_prep', 'throwing', 'post_throw_arm_care', 's_and_c', 'movement_mobility')),
+      note_text TEXT NOT NULL DEFAULT '',
+      updated_by INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, plan_section)
+    );
+  `);
+
   await pool.query(`
     DO $$
     DECLARE
@@ -686,9 +739,10 @@ export async function ensureAuthDbReady(): Promise<void> {
     CREATE TABLE IF NOT EXISTS exercise_log_history (
       id SERIAL PRIMARY KEY,
       player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-      schedule_type TEXT NOT NULL CHECK (schedule_type IN ('calendar', 'cycle')),
+      schedule_type TEXT NOT NULL CHECK (schedule_type IN ('calendar', 'cycle', 'plan')),
       program_day_item_id INTEGER REFERENCES program_day_items(id) ON DELETE CASCADE,
       cycle_item_id INTEGER REFERENCES program_cycle_items(id) ON DELETE CASCADE,
+      plan_item_id INTEGER REFERENCES program_plan_items(id) ON DELETE CASCADE,
       performed_sets TEXT,
       performed_reps TEXT,
       performed_load TEXT,
@@ -697,6 +751,40 @@ export async function ensureAuthDbReady(): Promise<void> {
       logged_by_user_id INTEGER REFERENCES auth_users(id) ON DELETE SET NULL,
       logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  // exercise_log_history already existed in production with schedule_type
+  // CHECK'd to ('calendar','cycle') and no plan_item_id column -- the
+  // CREATE TABLE IF NOT EXISTS above only takes effect for brand-new
+  // databases, so both need an idempotent migration for existing ones.
+  await pool.query(`ALTER TABLE public.exercise_log_history ADD COLUMN IF NOT EXISTS plan_item_id INTEGER REFERENCES program_plan_items(id) ON DELETE CASCADE;`);
+  await pool.query(`
+    DO $$
+    DECLARE
+      constraint_name text;
+    BEGIN
+      SELECT con.conname
+      INTO constraint_name
+      FROM pg_constraint con
+      JOIN pg_class rel ON rel.oid = con.conrelid
+      JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+      WHERE nsp.nspname = 'public'
+        AND rel.relname = 'exercise_log_history'
+        AND con.contype = 'c'
+        AND pg_get_constraintdef(con.oid) LIKE '%schedule_type%'
+      LIMIT 1;
+
+      IF constraint_name IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE public.exercise_log_history DROP CONSTRAINT %I', constraint_name);
+      END IF;
+
+      ALTER TABLE public.exercise_log_history
+      ADD CONSTRAINT exercise_log_history_schedule_type_check
+      CHECK (schedule_type IN ('calendar', 'cycle', 'plan'));
+    EXCEPTION
+      WHEN duplicate_object THEN
+        NULL;
+    END $$;
   `);
 
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_auth_users_email ON auth_users (LOWER(email));`);

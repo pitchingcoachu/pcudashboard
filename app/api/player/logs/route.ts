@@ -82,7 +82,8 @@ export async function POST(request: Request) {
   const form = await request.formData();
   const itemId = Number(String(form.get('itemId') ?? '0'));
   const playerId = Number(String(form.get('playerId') ?? '0'));
-  const scheduleType = String(form.get('scheduleType') ?? 'calendar').trim().toLowerCase() === 'cycle' ? 'cycle' : 'calendar';
+  const scheduleTypeRaw = String(form.get('scheduleType') ?? 'calendar').trim().toLowerCase();
+  const scheduleType = scheduleTypeRaw === 'cycle' ? 'cycle' : scheduleTypeRaw === 'plan' ? 'plan' : 'calendar';
   const month = String(form.get('month') ?? '');
   const previewPlayerId = String(form.get('previewPlayerId') ?? '');
   const performedLoadValuesIndexed = parseIndexedLoadValues(form);

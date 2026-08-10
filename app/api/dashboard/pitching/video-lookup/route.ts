@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import type { PoolClient } from 'pg';
-import { getSessionFromCookies } from '../../../../../lib/auth';
+import { getSessionFromRequest } from '../../../../../lib/auth';
 import { ensureAuthDbReady, getDbPool, isDatabaseConfigured } from '../../../../../lib/auth-db';
 import { resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
 
@@ -94,7 +94,7 @@ async function resolveVideoMapMeta(
 }
 
 export async function GET(request: Request) {
-  const session = getSessionFromCookies(await cookies());
+  const session = getSessionFromRequest(request, await cookies());
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!isDatabaseConfigured()) return NextResponse.json({ error: 'DATABASE_URL is not configured.' }, { status: 500 });
 

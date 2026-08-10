@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { ProgramItemRow } from '../../../../lib/training-db';
+import type { ProgramItemRow, ProgramPlanSection } from '../../../../lib/training-db';
 import {
   DEFAULT_DRILL_ROW_COUNT,
   emptyDrillRow,
@@ -20,7 +20,7 @@ import BullpenEntry from '../../player/program/bullpens/bullpen-entry';
 type PlayerChoice = { id: number; name: string };
 type CalendarLinkTarget = 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
 type WorkoutChoice = { id: number; name: string; exerciseCount: number; category: string; calendarLinkTarget: CalendarLinkTarget };
-type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
+type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'plan' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
 type ThrowingBuilderMode = 'month' | 'weeks';
 type ThrowingCalendarView = 'day' | 'week' | 'month';
 type BuilderMode = 'schedule' | 'template';
@@ -129,6 +129,11 @@ type CopiedCycleBuffer = {
   items: Array<{ workoutId: number }>;
 };
 
+type CopiedTrainingProgramBuffer = {
+  sourceSection: ProgramPlanSection;
+  items: Array<{ workoutId: number; targetCount: number | null }>;
+};
+
 type ThrowingCopiedBuffer = {
   mode: 'day' | 'week';
   days: Array<{ offset: number; entry: ThrowingDayEntry }>;
@@ -153,6 +158,13 @@ const CYCLE_COLUMNS: Array<{ key: 'medium' | 'high' | 'low' | 'mobility' | 's_an
   { key: 'low', label: 'Low' },
   { key: 'mobility', label: 'Mobility' },
   { key: 's_and_c', label: 'S&C' },
+];
+const TRAINING_PROGRAM_SECTIONS: Array<{ key: ProgramPlanSection; label: string }> = [
+  { key: 'daily_prep', label: 'Daily Prep' },
+  { key: 'throwing', label: 'Throwing' },
+  { key: 'post_throw_arm_care', label: 'Post-Throw Arm Care' },
+  { key: 's_and_c', label: 'S&C' },
+  { key: 'movement_mobility', label: 'Movement and Mobility' },
 ];
 const SCHEDULE_REQUEST_TIMEOUT_MS = 20000;
 
@@ -383,9 +395,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [bulkReplaceQuery, setBulkReplaceQuery] = useState('');
   const [copiedPlan, setCopiedPlan] = useState<CopiedPlanBuffer | null>(null);
   const [copiedCycle, setCopiedCycle] = useState<CopiedCycleBuffer | null>(null);
+  const [copiedTrainingProgram, setCopiedTrainingProgram] = useState<CopiedTrainingProgramBuffer | null>(null);
   const [copiedThrowing, setCopiedThrowing] = useState<ThrowingCopiedBuffer | null>(null);
   const [menu, setMenu] = useState<{ dayDate: string; x: number; y: number } | null>(null);
   const [cycleMenu, setCycleMenu] = useState<{ cycleSlot: CycleSlotKey; x: number; y: number } | null>(null);
+  const [trainingProgramMenu, setTrainingProgramMenu] = useState<{ planSection: ProgramPlanSection; x: number; y: number } | null>(null);
+  const [trainingProgramPlayerNotes, setTrainingProgramPlayerNotes] = useState<Record<string, string>>({});
+  const [trainingProgramDefaultNotes, setTrainingProgramDefaultNotes] = useState<Record<string, string>>({});
+  const [trainingProgramTargetDrafts, setTrainingProgramTargetDrafts] = useState<Record<number, string>>({});
   const [throwingMenu, setThrowingMenu] = useState<ThrowingMenuState | null>(null);
   const [throwingByDate, setThrowingByDate] = useState<Record<string, ThrowingDayEntry>>({});
   const [throwingWeekNotes, setThrowingWeekNotes] = useState<Record<string, string>>({});
@@ -548,7 +565,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   }, [playerId, playerQuery, players]);
 
   const visibleRange = useMemo(() => {
-    if (view === 'cycle') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
+    if (view === 'cycle' || view === 'plan') return { startDate: anchorDate, endDate: addDays(anchorDate, 1) };
     if (view === 'throwing') {
       const monthStart = startOfMonth(anchorDate);
       const monthEnd = endOfMonthExclusive(anchorDate);
@@ -581,6 +598,19 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setItems(Array.isArray(payload.items) ? payload.items : []);
         return;
       }
+      if (view === 'plan') {
+        const params = new URLSearchParams({ playerId: String(playerId) });
+        const [itemsResponse, notesResponse] = await Promise.all([
+          fetchWithTimeout(`/api/admin/schedule/plan?${params.toString()}`, { cache: 'no-store' }),
+          fetchWithTimeout(`/api/admin/schedule/plan-notes?${params.toString()}`, { cache: 'no-store' }),
+        ]);
+        const payload = (await itemsResponse.json().catch(() => ({}))) as { items?: ProgramItemRow[]; error?: string };
+        if (!itemsResponse.ok) throw new Error(payload.error ?? 'Failed to load Training Program.');
+        setItems(Array.isArray(payload.items) ? payload.items : []);
+        const notesPayload = (await notesResponse.json().catch(() => ({}))) as { sectionNotes?: Record<string, string>; error?: string };
+        if (notesResponse.ok) setTrainingProgramPlayerNotes(notesPayload.sectionNotes ?? {});
+        return;
+      }
       const params = new URLSearchParams({
         playerId: String(playerId),
         startDate: visibleRange.startDate,
@@ -600,6 +630,40 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   useEffect(() => {
     void loadItems();
   }, [loadItems]);
+
+  // Org-wide standard notes, independent of which player is selected --
+  // loaded whenever Training Program is opened, not gated on playerId like
+  // loadItems (a coach should be able to edit the standard note with no
+  // player selected yet).
+  useEffect(() => {
+    if (view !== 'plan') return;
+    let cancelled = false;
+    fetchWithTimeout('/api/admin/schedule/plan-default-notes', { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => ({}))) as { sectionNotes?: Record<string, string>; error?: string };
+        if (!cancelled && response.ok) setTrainingProgramDefaultNotes(payload.sectionNotes ?? {});
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
+
+  const saveTrainingProgramDefaultNote = async (planSection: ProgramPlanSection, noteText: string) => {
+    setError('');
+    try {
+      const response = await fetchWithTimeout('/api/admin/schedule/plan-default-notes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ planSection, noteText }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to save standard note.');
+      setTrainingProgramDefaultNotes((prev) => ({ ...prev, [planSection]: noteText }));
+    } catch (noteError) {
+      setError(noteError instanceof Error ? noteError.message : 'Failed to save standard note.');
+    }
+  };
 
   const loadTemplates = useCallback(async () => {
     setTemplatesLoading(true);
@@ -1061,6 +1125,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const dayCells = useMemo(() => (view === 'day' ? [anchorDate] : []), [anchorDate, view]);
   const periodLabel = useMemo(() => {
     if (view === 'cycle') return '3-Day Cycle';
+    if (view === 'plan') return 'Training Program';
     if (view === 'bullpens') return 'Bullpens';
     if (view === 'velocity') return 'Velocity';
     if (view === 'drills') return 'Drills';
@@ -1253,7 +1318,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   };
 
   const movePeriod = (direction: -1 | 1) => {
-    if (view === 'cycle') return;
+    if (view === 'cycle' || view === 'plan') return;
     if (view === 'day') setAnchorDate((prev) => addDays(prev, direction));
     else if (view === 'throwing') {
       if (throwingBuilderMode === 'weeks') return;
@@ -1278,7 +1343,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   };
 
   const jumpToCurrentForView = (mode: ViewMode) => {
-    if (mode === 'day' || mode === 'week' || mode === 'cycle' || mode === 'throwing' || mode === 'bullpens' || mode === 'velocity') {
+    if (mode === 'day' || mode === 'week' || mode === 'cycle' || mode === 'plan' || mode === 'throwing' || mode === 'bullpens' || mode === 'velocity') {
       setAnchorDate(toIsoDate(new Date()));
     }
   };
@@ -1536,6 +1601,74 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     }
   };
 
+  const assignTrainingProgramWorkout = async (planSection: ProgramPlanSection, workoutId: number) => {
+    if (!playerId) return;
+    setError('');
+    try {
+      const response = await fetchWithTimeout('/api/admin/schedule/plan', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, workoutId, planSection }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to assign workout.');
+      await loadItems();
+    } catch (assignError) {
+      setError(assignError instanceof Error ? assignError.message : 'Failed to assign workout.');
+    }
+  };
+
+  const moveTrainingProgramItem = async (itemId: number, planSection: ProgramPlanSection) => {
+    if (!playerId) return;
+    setError('');
+    try {
+      const response = await fetchWithTimeout('/api/admin/schedule/plan', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, itemId, planSection }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to move workout.');
+      await loadItems();
+    } catch (moveError) {
+      setError(moveError instanceof Error ? moveError.message : 'Failed to move workout.');
+    }
+  };
+
+  const updateTrainingProgramTargetCount = async (itemId: number, targetCount: number | null) => {
+    if (!playerId) return;
+    setError('');
+    try {
+      const response = await fetchWithTimeout('/api/admin/schedule/plan', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, itemId, targetCount }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to update target count.');
+      await loadItems();
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : 'Failed to update target count.');
+    }
+  };
+
+  const saveTrainingProgramSectionNote = async (planSection: ProgramPlanSection, noteText: string) => {
+    if (!playerId) return;
+    setError('');
+    try {
+      const response = await fetchWithTimeout('/api/admin/schedule/plan-notes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, planSection, noteText }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to save note.');
+      setTrainingProgramPlayerNotes((prev) => ({ ...prev, [planSection]: noteText }));
+    } catch (noteError) {
+      setError(noteError instanceof Error ? noteError.message : 'Failed to save note.');
+    }
+  };
+
   const reorderDayItems = async (dayDate: string, orderedItemIds: number[]) => {
     setItems((prev) => {
       const dayMap = new Map<number, ProgramItemRow>();
@@ -1745,6 +1878,97 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     } catch (pasteError) {
       setError(pasteError instanceof Error ? pasteError.message : 'Failed to paste cycle workouts.');
     }
+  };
+
+  const deleteTrainingProgramItem = async (itemId: number) => {
+    if (!playerId) return;
+    setError('');
+    const response = await fetchWithTimeout('/api/admin/schedule/plan', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ playerId, itemId }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? 'Failed to remove workout.');
+    await loadItems();
+  };
+
+  const serializeTrainingProgramSection = (planSection: ProgramPlanSection): Array<{ workoutId: number; targetCount: number | null }> => {
+    return trainingProgramItemsBySection[planSection]
+      .filter((item) => Number.isFinite(Number(item.workoutId)) && Number(item.workoutId) > 0)
+      .map((item) => ({ workoutId: Number(item.workoutId), targetCount: item.targetCount }));
+  };
+
+  const copyTrainingProgramSection = (planSection: ProgramPlanSection) => {
+    setCopiedTrainingProgram({
+      sourceSection: planSection,
+      items: serializeTrainingProgramSection(planSection),
+    });
+    setTrainingProgramMenu(null);
+  };
+
+  const deleteTrainingProgramSectionItems = async (planSection: ProgramPlanSection) => {
+    if (!playerId) return;
+    const sectionItems = trainingProgramItemsBySection[planSection];
+    for (const item of sectionItems) {
+      const response = await fetchWithTimeout('/api/admin/schedule/plan', {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ playerId, itemId: item.itemId }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Failed to remove workout.');
+    }
+  };
+
+  const clearTrainingProgramSection = async (planSection: ProgramPlanSection) => {
+    if (!playerId) return;
+    setError('');
+    try {
+      await deleteTrainingProgramSectionItems(planSection);
+      await loadItems();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Failed to remove workouts.');
+    }
+  };
+
+  const pasteTrainingProgramSection = async (targetSection: ProgramPlanSection) => {
+    if (!playerId || !copiedTrainingProgram) return;
+    setTrainingProgramMenu(null);
+    setError('');
+    try {
+      await deleteTrainingProgramSectionItems(targetSection);
+      for (const item of copiedTrainingProgram.items) {
+        const response = await fetchWithTimeout('/api/admin/schedule/plan', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ playerId, planSection: targetSection, workoutId: item.workoutId, targetCount: item.targetCount }),
+        });
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Failed to paste workout.');
+      }
+      await loadItems();
+    } catch (pasteError) {
+      setError(pasteError instanceof Error ? pasteError.message : 'Failed to paste workouts.');
+    }
+  };
+
+  const onTrainingProgramDrop = async (
+    event: React.DragEvent<HTMLElement>,
+    planSection: ProgramPlanSection
+  ) => {
+    event.preventDefault();
+    const trainingProgramItemId = Number(event.dataTransfer.getData('trainingProgramItemId'));
+    if (Number.isFinite(trainingProgramItemId) && trainingProgramItemId > 0) {
+      const sourceSection = event.dataTransfer.getData('trainingProgramItemSection');
+      if (sourceSection === planSection) return;
+      await moveTrainingProgramItem(trainingProgramItemId, planSection);
+      return;
+    }
+
+    const workoutId = Number(event.dataTransfer.getData('workoutId'));
+    if (!Number.isFinite(workoutId) || workoutId <= 0) return;
+    await assignTrainingProgramWorkout(planSection, workoutId);
   };
 
   const copyThrowingDayMonth = (date: string) => {
@@ -1994,16 +2218,21 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     setError('');
     try {
       const selectedItems = items.filter((item) => selectedItemIds.has(item.itemId));
-      await Promise.all(selectedItems.map((item) =>
-        fetchWithTimeout(item.scheduleType === 'cycle' ? '/api/admin/schedule/cycle' : '/api/admin/schedule/delete', {
-          method: item.scheduleType === 'cycle' ? 'DELETE' : 'POST',
+      await Promise.all(selectedItems.map((item) => {
+        const endpoint =
+          item.scheduleType === 'cycle' ? '/api/admin/schedule/cycle'
+            : item.scheduleType === 'plan' ? '/api/admin/schedule/plan'
+              : '/api/admin/schedule/delete';
+        const method = item.scheduleType === 'cycle' || item.scheduleType === 'plan' ? 'DELETE' : 'POST';
+        return fetchWithTimeout(endpoint, {
+          method,
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ playerId, itemId: item.itemId, mode: 'item' }),
         }).then(async (response) => {
           const payload = (await response.json().catch(() => ({}))) as { error?: string };
           if (!response.ok) throw new Error(payload.error ?? 'Failed to delete item.');
-        })
-      ));
+        });
+      }));
       setSelectedItemIds(new Set());
       await loadItems();
     } catch (e) {
@@ -2118,19 +2347,22 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   };
 
   useEffect(() => {
-    if (!menu && !throwingMenu && !cycleMenu) return;
+    if (!menu && !throwingMenu && !cycleMenu && !trainingProgramMenu) return;
     const onPointerDown = () => setMenu(null);
     const onThrowingPointerDown = () => setThrowingMenu(null);
     const onCyclePointerDown = () => setCycleMenu(null);
+    const onTrainingProgramPointerDown = () => setTrainingProgramMenu(null);
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointerdown', onThrowingPointerDown);
     window.addEventListener('pointerdown', onCyclePointerDown);
+    window.addEventListener('pointerdown', onTrainingProgramPointerDown);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointerdown', onThrowingPointerDown);
       window.removeEventListener('pointerdown', onCyclePointerDown);
+      window.removeEventListener('pointerdown', onTrainingProgramPointerDown);
     };
-  }, [menu, throwingMenu, cycleMenu]);
+  }, [menu, throwingMenu, cycleMenu, trainingProgramMenu]);
 
   const onItemDrop = async (event: React.DragEvent<HTMLElement>, dayDate: string, targetItemId: number) => {
     event.preventDefault();
@@ -2167,6 +2399,23 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       const slot = item.cycleSlot;
       if (!slot) continue;
       map[slot].push(item);
+    }
+    return map;
+  }, [items]);
+
+  const trainingProgramItemsBySection = useMemo(() => {
+    const map: Record<ProgramPlanSection, ProgramItemRow[]> = {
+      daily_prep: [],
+      throwing: [],
+      post_throw_arm_care: [],
+      s_and_c: [],
+      movement_mobility: [],
+    };
+    for (const item of items) {
+      if (item.scheduleType !== 'plan') continue;
+      const section = item.planSection;
+      if (!section) continue;
+      map[section].push(item);
     }
     return map;
   }, [items]);
@@ -3447,7 +3696,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               </Link>
             ) : null}
             <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
-              {(['day', 'week', 'month', 'cycle', 'throwing', 'bullpens', 'drills'] as ViewMode[]).map((mode) => (
+              {(['day', 'week', 'month', 'plan', 'throwing', 'bullpens', 'drills'] as ViewMode[]).map((mode) => (
                 <button
                   key={mode}
                   type="button"
@@ -3457,8 +3706,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     setView(mode);
                   }}
                 >
-                  {mode === 'cycle'
-                    ? '3-Day Cycle'
+                  {mode === 'plan'
+                    ? 'Training Program'
                     : mode === 'throwing'
                       ? 'Throwing Calendar'
                       : mode === 'bullpens'
@@ -4290,7 +4539,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           {builderMode === 'schedule' && view !== 'drills' ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '0.45rem' }}>
               <h3 className="portal-schedule-period">{periodLabel}</h3>
-              {view !== 'cycle' && view !== 'bullpens' && view !== 'velocity' && !(view === 'throwing' && throwingBuilderMode === 'weeks') && (
+              {view !== 'cycle' && view !== 'plan' && view !== 'bullpens' && view !== 'velocity' && !(view === 'throwing' && throwingBuilderMode === 'weeks') && (
                 <div className="portal-schedule-nav">
                   <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)} aria-label="Previous period">
                     ←
@@ -4304,7 +4553,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           ) : builderMode !== 'schedule' ? (
             <h3 className="portal-schedule-period">Template Calendar</h3>
           ) : null}
-          {builderMode === 'schedule' && view !== 'day' && view !== 'cycle' && view !== 'throwing' && view !== 'bullpens' && view !== 'velocity' && view !== 'drills' && (
+          {builderMode === 'schedule' && view !== 'day' && view !== 'cycle' && view !== 'plan' && view !== 'throwing' && view !== 'bullpens' && view !== 'velocity' && view !== 'drills' && (
             <div
               data-schedule-weekdays="true"
               className={`portal-schedule-weekdays${view === 'week' ? ' is-week' : ''}`}
@@ -4965,6 +5214,170 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               </div>
             </div>
           )}
+          {builderMode === 'schedule' && view === 'plan' && (
+            <div
+              className="portal-cycle-grid"
+              style={{
+                gap: '0.75rem',
+              }}
+            >
+              {TRAINING_PROGRAM_SECTIONS.map((section) => (
+                <article
+                  key={section.key}
+                  className="portal-panel"
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => void onTrainingProgramDrop(event, section.key)}
+                  onDoubleClick={(event) => {
+                    if ((event.target as HTMLElement).closest('.portal-schedule-item')) return;
+                    if ((event.target as HTMLElement).closest('textarea, input')) return;
+                    setTrainingProgramMenu({ planSection: section.key, x: event.clientX, y: event.clientY });
+                  }}
+                  style={{ minHeight: '320px' }}
+                >
+                  <h4 style={{ marginTop: 0 }}>{section.label}</h4>
+                  <label className="portal-cycle-notes-panel" style={{ display: 'block', marginBottom: '0.4rem' }}>
+                    <span>Standard Note (all players, unless overridden below)</span>
+                    <textarea
+                      className="portal-schedule-control"
+                      rows={2}
+                      value={trainingProgramDefaultNotes[section.key] ?? ''}
+                      onChange={(event) =>
+                        setTrainingProgramDefaultNotes((prev) => ({ ...prev, [section.key]: event.target.value }))
+                      }
+                      onBlur={(event) => void saveTrainingProgramDefaultNote(section.key, event.target.value)}
+                      placeholder="Standard note shown to every player for this section..."
+                    />
+                  </label>
+                  {playerId ? (
+                    <label className="portal-cycle-notes-panel" style={{ display: 'block', marginBottom: '0.5rem' }}>
+                      <span>Note for This Player (overrides the standard note above)</span>
+                      <textarea
+                        className="portal-schedule-control"
+                        rows={2}
+                        value={trainingProgramPlayerNotes[section.key] ?? ''}
+                        onChange={(event) =>
+                          setTrainingProgramPlayerNotes((prev) => ({ ...prev, [section.key]: event.target.value }))
+                        }
+                        onBlur={(event) => void saveTrainingProgramSectionNote(section.key, event.target.value)}
+                        placeholder="Leave blank to use the standard note..."
+                      />
+                    </label>
+                  ) : null}
+                  <div style={{ display: 'grid', gap: '0.45rem' }}>
+                    {trainingProgramItemsBySection[section.key].map((item) => {
+                      const targetDraft = trainingProgramTargetDrafts[item.itemId] ?? String(item.targetCount ?? '');
+                      return (
+                        <div key={item.itemId} style={{ display: 'grid', gap: 3, minWidth: 0, maxWidth: '100%' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                            <input
+                              type="checkbox"
+                              checked={selectedItemIds.has(item.itemId)}
+                              onChange={(event) => {
+                                event.stopPropagation();
+                                setSelectedItemIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (event.target.checked) next.add(item.itemId);
+                                  else next.delete(item.itemId);
+                                  return next;
+                                });
+                              }}
+                              style={{ flexShrink: 0, accentColor: '#c8102e', cursor: 'pointer' }}
+                            />
+                            <button
+                              type="button"
+                              className="portal-schedule-item"
+                              title={item.itemName}
+                              style={{
+                                minWidth: 0,
+                                width: '100%',
+                                textAlign: 'center',
+                                color: 'var(--text-main)',
+                                borderWidth: '1px',
+                                borderStyle: 'solid',
+                                borderColor: 'var(--calendar-grid-border, var(--border))',
+                                borderRadius: '6px',
+                                padding: '0.28rem 0.42rem',
+                                ...categoryBubbleStyle(item.workoutCategory ?? 'Workout'),
+                                ...(selectedItemIds.has(item.itemId) ? { borderColor: '#c8102e' } : {}),
+                              }}
+                              draggable={!selectedItemIds.has(item.itemId)}
+                              onDragStart={(event) => {
+                                event.dataTransfer.setData('trainingProgramItemId', String(item.itemId));
+                                event.dataTransfer.setData('trainingProgramItemSection', item.planSection ?? '');
+                              }}
+                              onClick={() => {
+                                if (selectedItemIds.size > 0) {
+                                  setSelectedItemIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(item.itemId)) next.delete(item.itemId);
+                                    else next.add(item.itemId);
+                                    return next;
+                                  });
+                                  return;
+                                }
+                                const linkTarget = getCalendarLinkTarget(item);
+                                if (linkTarget === 'throwing') {
+                                  setView('throwing');
+                                  setThrowingBuilderMode('month');
+                                  setThrowingCalendarView('day');
+                                  return;
+                                }
+                                if (linkTarget === 'bullpens') {
+                                  setView('bullpens');
+                                  return;
+                                }
+                                if (linkTarget === 'velocity') {
+                                  setView('velocity');
+                                  return;
+                                }
+                                if (linkTarget === 'drills') {
+                                  setView('drills');
+                                  return;
+                                }
+                                setSelectedItem(item);
+                              }}
+                            >
+                              <strong>{item.itemName}</strong>
+                            </button>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, paddingLeft: 20, fontSize: '0.78rem' }}>
+                            <span className="portal-muted-text">
+                              Completed {item.completedCount ?? 0}
+                              {item.targetCount ? `/${item.targetCount}` : ''} time{(item.completedCount ?? 0) === 1 && !item.targetCount ? '' : 's'}
+                            </span>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                              Target:
+                              <input
+                                type="number"
+                                min={1}
+                                className="portal-schedule-control"
+                                style={{ width: 56, padding: '0.15rem 0.3rem' }}
+                                value={targetDraft}
+                                placeholder="None"
+                                onChange={(event) =>
+                                  setTrainingProgramTargetDrafts((prev) => ({ ...prev, [item.itemId]: event.target.value }))
+                                }
+                                onBlur={(event) => {
+                                  const trimmed = event.target.value.trim();
+                                  if (trimmed === String(item.targetCount ?? '')) return;
+                                  void updateTrainingProgramTargetCount(item.itemId, trimmed ? Number(trimmed) : null);
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {trainingProgramItemsBySection[section.key].length === 0 && (
+                      <p className="portal-muted-text" style={{ margin: 0 }}>
+                        Drag workouts here
+                      </p>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
           {builderMode === 'template' ? (
             <div>
               <div className="portal-schedule-weekdays is-week">
@@ -5213,6 +5626,46 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           </button>
           {copiedCycle && (
             <button type="button" className="btn btn-primary" onClick={() => void pasteCycleSlot(cycleMenu.cycleSlot)}>
+              Paste Column
+            </button>
+          )}
+        </div>
+      )}
+
+      {trainingProgramMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: trainingProgramMenu.x,
+            top: trainingProgramMenu.y,
+            zIndex: 80,
+            border: '1px solid rgba(255,255,255,0.22)',
+            borderRadius: '10px',
+            background: 'rgba(0,0,0,0.95)',
+            padding: '0.35rem',
+            display: 'grid',
+            gap: '0.25rem',
+            minWidth: '180px',
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button type="button" className="btn btn-ghost" onClick={() => copyTrainingProgramSection(trainingProgramMenu.planSection)}>
+            Copy Column
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => {
+              const ok = window.confirm('Remove all workouts in this section?');
+              if (!ok) return;
+              void clearTrainingProgramSection(trainingProgramMenu.planSection);
+              setTrainingProgramMenu(null);
+            }}
+          >
+            Delete Column
+          </button>
+          {copiedTrainingProgram && (
+            <button type="button" className="btn btn-primary" onClick={() => void pasteTrainingProgramSection(trainingProgramMenu.planSection)}>
               Paste Column
             </button>
           )}
