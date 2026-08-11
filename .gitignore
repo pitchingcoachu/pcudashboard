@@ -11,3 +11,4 @@ __pycache__/
 *.pyc
 .vercel
 .motion-capture-uploads/
+/Axioforce/
