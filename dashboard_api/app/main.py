@@ -6607,6 +6607,7 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
         "LSU": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "LSU", "school_config.R"),
         "TRIAL": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "TRIAL", "school_config.R"),
         "UNM": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "UNM", "school_config.R"),
+        "UNOH": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "UNOH", "school_config.R"),
         "SEMO": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "SEMO", "school_config.R"),
         "CREIGHTON": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CREIGHTON", "school_config.R"),
         "HARVARD": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "HARVARD", "school_config.R"),
@@ -14860,6 +14861,7 @@ def _mod_namespaces_for_school(school_code: str) -> List[str]:
         "LSU": ["lsubaseball", "lsu"],
         "TRIAL": ["dashboardtrial", "trial"],
         "UNM": ["unmbaseball", "unm", "newmexico"],
+        "UNOH": ["unohbaseball", "unoh"],
         "SEMO": ["semobaseball", "semo"],
         "PCU": ["tmdata", "pcu", "pcubaseball"],
     }

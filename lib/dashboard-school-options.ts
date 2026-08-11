@@ -76,6 +76,7 @@ function schoolFromOrganizationName(name: string | null | undefined): string | n
   const upper = value.toUpperCase();
   if (upper.includes('DASHBOARD TRIAL')) return 'TRIAL';
   if (upper.includes('PITCHINGCOACHU')) return 'PCU';
+  if (upper.includes('UNIVERSITY OF NORTHWESTERN OHIO')) return 'UNOH';
   const compact = upper.replace(/[^A-Z0-9]/g, '');
   const allowed = resolveAllowedDashboardSchoolCodes();
   for (const school of allowed) {
@@ -94,6 +95,7 @@ const SCHOOL_DOMAIN_HINTS: Array<{ schoolCode: string; fragments: string[] }> = 
   { schoolCode: 'GMU', fragments: ['gmu.edu'] },
   { schoolCode: 'LSU', fragments: ['lsu.edu'] },
   { schoolCode: 'UNM', fragments: ['unm.edu'] },
+  { schoolCode: 'UNOH', fragments: ['unoh.edu'] },
   { schoolCode: 'SEMO', fragments: ['semo.edu'] },
   { schoolCode: 'CREIGHTON', fragments: ['creighton.edu'] },
   { schoolCode: 'HARVARD', fragments: ['harvard.edu'] },

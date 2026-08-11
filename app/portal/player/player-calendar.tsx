@@ -109,6 +109,15 @@ function isToday(value: string): boolean {
   return value === toIsoDate(new Date());
 }
 
+// Formats a full timestamp (e.g. program_plan_items.created_at) as a short
+// local date -- distinct from the ISO-date-only helpers above, which assume
+// a plain YYYY-MM-DD string with no time component.
+function formatShortDate(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 function hashString(value: string): number {
   let hash = 0;
   for (let i = 0; i < value.length; i += 1) hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
@@ -590,13 +599,20 @@ export default function PlayerCalendar({
                           }}
                         >
                           <strong>{item.itemName}</strong>
-                          {showTally ? (
-                            <span className="portal-muted-text" style={{ fontSize: '0.82rem', whiteSpace: 'nowrap' }}>
-                              {item.targetCount
-                                ? `Completed ${item.completedCount}/${item.targetCount}`
-                                : `Completed ${item.completedCount} time${item.completedCount === 1 ? '' : 's'}`}
-                            </span>
-                          ) : null}
+                          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                            {showTally ? (
+                              <span className="portal-muted-text" style={{ fontSize: '0.82rem', whiteSpace: 'nowrap' }}>
+                                {item.targetCount
+                                  ? `Completed ${item.completedCount}/${item.targetCount}`
+                                  : `Completed ${item.completedCount} time${item.completedCount === 1 ? '' : 's'}`}
+                              </span>
+                            ) : null}
+                            {item.planItemAddedAt ? (
+                              <span className="portal-muted-text" style={{ fontSize: '0.74rem', whiteSpace: 'nowrap' }}>
+                                Added {formatShortDate(item.planItemAddedAt)}
+                              </span>
+                            ) : null}
+                          </span>
                         </button>
                       );
                     })}

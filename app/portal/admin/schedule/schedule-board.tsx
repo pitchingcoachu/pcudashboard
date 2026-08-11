@@ -5365,6 +5365,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                               />
                             </label>
                           </div>
+                          {item.planItemAddedAt ? (
+                            <span className="portal-muted-text" style={{ paddingLeft: 20, fontSize: '0.72rem' }}>
+                              Added {new Date(item.planItemAddedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </span>
+                          ) : null}
                         </div>
                       );
                     })}

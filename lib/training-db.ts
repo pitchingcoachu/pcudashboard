@@ -399,6 +399,8 @@ export type ProgramItemRow = {
   planSection: ProgramPlanSection | null;
   targetCount: number | null;
   completedCount: number | null;
+  /** When this Plan item was assigned to the player -- coach/admin-only, stripped for player sessions same as targetCount/completedCount. */
+  planItemAddedAt: string | null;
   itemType: 'exercise' | 'workout';
   itemName: string;
   workoutDescription: string | null;
@@ -5969,6 +5971,7 @@ export async function listProgramItemsForPlayerByDateRange(input: {
     planSection: null,
     targetCount: null,
     completedCount: null,
+    planItemAddedAt: null,
     itemType: row.item_type === 'workout' ? 'workout' : 'exercise',
     itemName: row.item_name,
     workoutDescription: row.workout_description,
@@ -6127,6 +6130,7 @@ export async function listCycleProgramItemsForPlayer(input: { playerId: number }
     planSection: null,
     targetCount: null,
     completedCount: null,
+    planItemAddedAt: null,
     itemType: 'workout',
     itemName: row.workout_name,
     workoutDescription: row.workout_description,
@@ -6183,6 +6187,7 @@ export async function listPlanProgramItemsForPlayer(input: { playerId: number })
     performed_load: string | null;
     log_notes: string | null;
     completed_count: string;
+    added_at: string;
   }>(
     `
       WITH selected_workout_ids AS (
@@ -6233,6 +6238,7 @@ export async function listPlanProgramItemsForPlayer(input: { playerId: number })
         pi.id AS item_id,
         pi.plan_section,
         pi.target_count,
+        pi.created_at::text AS added_at,
         w.id AS workout_id,
         w.name AS workout_name,
         w.category AS workout_category,
@@ -6307,6 +6313,7 @@ export async function listPlanProgramItemsForPlayer(input: { playerId: number })
     planSection: row.plan_section,
     targetCount: row.target_count,
     completedCount: Number(row.completed_count) || 0,
+    planItemAddedAt: row.added_at,
     itemType: 'workout',
     itemName: row.workout_name,
     workoutDescription: row.workout_description,

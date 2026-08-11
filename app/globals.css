@@ -3561,14 +3561,24 @@ body.theme-light .portal-notification-item:focus-visible {
 .portal-school-switcher-trigger-logo--CREIGHTON,
 .portal-school-switcher-trigger-logo--HARVARD,
 .portal-school-switcher-trigger-logo--UNM,
+.portal-school-switcher-trigger-logo--UNOH,
 .portal-school-switcher-option-logo--OSU,
 .portal-school-switcher-option-logo--GCU,
 .portal-school-switcher-option-logo--GMU,
 .portal-school-switcher-option-logo--CREIGHTON,
 .portal-school-switcher-option-logo--HARVARD,
-.portal-school-switcher-option-logo--UNM {
+.portal-school-switcher-option-logo--UNM,
+.portal-school-switcher-option-logo--UNOH {
   transform: scale(1.2);
   transform-origin: center;
+}
+
+.portal-school-switcher-trigger-logo--UNOH,
+.portal-school-switcher-option-logo--UNOH {
+  box-sizing: border-box;
+  padding: 0.16rem;
+  border-radius: 0.45rem;
+  background: #fff;
 }
 
 .portal-school-switcher-trigger-logo--HARVARD,
@@ -11503,12 +11513,14 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
   .portal-school-switcher-trigger-logo--CREIGHTON,
   .portal-school-switcher-trigger-logo--HARVARD,
   .portal-school-switcher-trigger-logo--UNM,
+  .portal-school-switcher-trigger-logo--UNOH,
   .portal-school-switcher-option-logo--OSU,
   .portal-school-switcher-option-logo--GCU,
   .portal-school-switcher-option-logo--GMU,
   .portal-school-switcher-option-logo--CREIGHTON,
   .portal-school-switcher-option-logo--HARVARD,
-  .portal-school-switcher-option-logo--UNM {
+  .portal-school-switcher-option-logo--UNM,
+  .portal-school-switcher-option-logo--UNOH {
     transform: none;
   }
 

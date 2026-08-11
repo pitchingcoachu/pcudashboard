@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
+import { downloadLeaderboardTablePdf } from '../../../lib/leaderboard-pdf-export';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
@@ -435,6 +436,23 @@ function toYmdNow(): string {
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function csvEscape(value: string): string {
+  if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function downloadTextFile(content: string, fileName: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function clampYmdToToday(value: string): string {
@@ -2320,6 +2338,9 @@ export default function HittingSuite({
   const [summaryPercentileScope, setSummaryPercentileScope] = useState<'NCAA' | 'TEAM' | 'MLB'>('NCAA');
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
+  const leaderboardTableExportRef = useRef<HTMLDivElement | null>(null);
+  const [isExportingLeaderboardPdf, setIsExportingLeaderboardPdf] = useState(false);
+  const [leaderboardExportFormat, setLeaderboardExportFormat] = useState<'PDF' | 'CSV'>('PDF');
   const [gameLogRows, setGameLogRows] = useState<Array<Record<string, unknown>>>([]);
   const [gameLogColumns, setGameLogColumns] = useState<string[]>([]);
   const [loadingGameLog, setLoadingGameLog] = useState(false);
@@ -4893,6 +4914,78 @@ export default function HittingSuite({
     };
   }, [swingTab, contact3dMode, contact3dColorBy, swingContact3dPoints, swingColorFor]);
 
+  const downloadLeaderboardPdf = useCallback(async () => {
+    const wrapNode = leaderboardTableExportRef.current;
+    if (!wrapNode) return;
+    try {
+      setError('');
+      setIsExportingLeaderboardPdf(true);
+      const playerLabel = hitter && hitter !== 'All' ? formatNameFirstLast(hitter) : 'All Players';
+      const dateRangeLabel =
+        startDate && endDate
+          ? `${new Date(`${startDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(`${endDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+          : '';
+      const safeMode = String(tableMode || 'leaderboard').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+      const safeViewBy = String(leaderboardViewBy || 'player').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+      await downloadLeaderboardTablePdf({
+        wrapNode,
+        titleText: 'Hitting Leaderboard',
+        subtitleText: [playerLabel, dateRangeLabel].filter(Boolean).join('  ·  '),
+        fileName: `hitting-leaderboard-${safeViewBy}-${safeMode}.pdf`,
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : 'Failed to export leaderboard PDF.');
+    } finally {
+      setIsExportingLeaderboardPdf(false);
+    }
+  }, [hitter, tableMode, leaderboardViewBy, startDate, endDate]);
+
+  const downloadLeaderboardCsv = useCallback(() => {
+    if (!leaderboardRowsWithPins.length || !displayedTableColumns.length) return;
+    const headers = ['Rank', ...displayedTableColumns];
+    const lines: string[] = [headers.map(csvEscape).join(',')];
+    let rankCounter = 0;
+    for (const row of leaderboardRowsWithPins) {
+      const rowKey = String(row[displayedTableColumns[0] ?? ''] ?? '').trim();
+      const isAllRow = rowKey.toLowerCase() === 'all';
+      const isPinnedAllRow = rowKey.toLowerCase() === 'all (pinned)';
+      const rank = isAllRow || isPinnedAllRow ? '' : String(++rankCounter);
+      const cells = displayedTableColumns.map((column, colIndex) => {
+        const rawValue = row[column] ?? '-';
+        if (colIndex === 0) {
+          const formatted = typeof rawValue === 'string' ? formatNameFirstLast(rawValue) : String(rawValue);
+          if (leaderboardViewBy !== 'Player') {
+            const rawTeam = String(rawValue ?? '').trim();
+            if (!rawTeam || rawTeam.toLowerCase() === 'all') return rawTeam || formatted;
+            if (isLeague) {
+              const mappedLabel = leagueTeamLabelByCode[rawTeam.toUpperCase()];
+              if (mappedLabel) return mappedLabel;
+            }
+            return isPro ? getProTeamDisplayName(rawTeam, (level as 'MLB' | 'AAA' | 'All') || 'All') : rawTeam;
+          }
+          return formatted;
+        }
+        if (leaderboardStatView === 'Percentile' && !isAllRow && !isPinnedAllRow) {
+          const percentile = getCellPercentile(row as Record<string, string | number | null>, column, rawValue);
+          if (percentile !== null) return `${percentile.toFixed(1)}%`;
+        }
+        return formatTableDisplayValue(column, rawValue);
+      });
+      lines.push([rank, ...cells].map(csvEscape).join(','));
+    }
+    downloadTextFile(lines.join('\n'), `leaderboard-${toYmdNow()}.csv`, 'text/csv;charset=utf-8');
+  }, [
+    leaderboardRowsWithPins,
+    displayedTableColumns,
+    leaderboardViewBy,
+    leaderboardStatView,
+    isLeague,
+    isPro,
+    level,
+    leagueTeamLabelByCode,
+    getCellPercentile,
+  ]);
+
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
       <div
@@ -5363,6 +5456,38 @@ export default function HittingSuite({
                 >
                   View Chart
                 </button>
+                <select
+                  value={leaderboardExportFormat}
+                  onChange={(event) => setLeaderboardExportFormat(event.target.value as 'PDF' | 'CSV')}
+                  style={{ minHeight: '2.22rem', borderRadius: 8, padding: '0 0.5rem', alignSelf: 'end' }}
+                  aria-label="Export format"
+                >
+                  <option value="PDF">PDF</option>
+                  <option value="CSV">CSV</option>
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  style={{
+                    whiteSpace: 'nowrap',
+                    height: '2.22rem',
+                    minHeight: '2.22rem',
+                    padding: '0 1.05rem',
+                    alignSelf: 'end',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                  }}
+                  onClick={() => {
+                    if (leaderboardExportFormat === 'CSV') {
+                      downloadLeaderboardCsv();
+                    } else {
+                      void downloadLeaderboardPdf();
+                    }
+                  }}
+                  disabled={isExportingLeaderboardPdf || loadingOverview || !leaderboardRowsWithPins.length}
+                >
+                  {isExportingLeaderboardPdf ? 'Downloading...' : `Download ${leaderboardExportFormat}`}
+                </button>
               </div>
             ) : null}
             {!isLeaderboardPage ? (
@@ -5590,8 +5715,12 @@ export default function HittingSuite({
           ) : null}
           {loadingOverview ? <p className="portal-muted-text">Loading summary table...</p> : null}
           {!loadingOverview && overview?.table_rows?.length ? (
-            <div className="portal-table-wrap" style={isLeaderboardPage ? { maxHeight: '68vh', overflowY: 'auto' } : undefined}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+            <div
+              className="portal-table-wrap"
+              style={isLeaderboardPage ? { maxHeight: '68vh', overflowY: 'auto' } : undefined}
+              ref={isLeaderboardPage ? leaderboardTableExportRef : undefined}
+            >
+            <table className={isLeaderboardPage ? 'portal-table' : undefined} style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
               <thead>
                 <tr>
                   {isLeaderboardPage ? (

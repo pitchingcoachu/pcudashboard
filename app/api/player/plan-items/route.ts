@@ -4,12 +4,23 @@ import { getSessionFromRequest } from '../../../../lib/auth';
 import { getPlanSectionNotes, listPlanProgramItemsForPlayer, type ProgramItemRow } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
 
-// Completion tally (targetCount, completedCount) is coach/admin-only --
-// computed unconditionally in training-db.ts, stripped here for player
-// sessions so it never reaches the response body at all. Section notes are
-// visible to everyone (player-facing, unlike the tally).
+// Completion tally (targetCount, completedCount) is coach/admin-only for
+// most sections -- computed unconditionally in training-db.ts, stripped
+// here for player sessions so it never reaches the response body at all.
+// S&C and Post-Throw Arm Care are the exception: players are allowed to see
+// their own tally there, per product decision. The "added" date is
+// coach/admin-only in every section, no exceptions. Section notes are
+// visible to everyone regardless of section (player-facing, unlike these).
+const PLAYER_VISIBLE_TALLY_SECTIONS = new Set(['s_and_c', 'post_throw_arm_care']);
+
 function stripCoachOnlyFields(item: ProgramItemRow): ProgramItemRow {
-  return { ...item, targetCount: null, completedCount: null };
+  const tallyVisible = Boolean(item.planSection && PLAYER_VISIBLE_TALLY_SECTIONS.has(item.planSection));
+  return {
+    ...item,
+    targetCount: tallyVisible ? item.targetCount : null,
+    completedCount: tallyVisible ? item.completedCount : null,
+    planItemAddedAt: null,
+  };
 }
 
 export async function GET(request: Request) {

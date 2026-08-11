@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTableDisplayValue, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
+import { downloadLeaderboardTablePdf } from '../../../lib/leaderboard-pdf-export';
 import { getProTeamLogoUrl } from './pro-team-logos';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import NativeDateInput from '../components/native-date-input';
@@ -141,6 +142,23 @@ function toYmdNow(): string {
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function csvEscape(value: string): string {
+  if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function downloadTextFile(content: string, fileName: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function isAllLikeRowValue(value: unknown): boolean {
@@ -467,6 +485,9 @@ export default function CatchingSuite() {
   const [leaderboardViewBy, setLeaderboardViewBy] = useState<'Player' | 'Team'>('Player');
   const [pinnedLeaderboardKeys, setPinnedLeaderboardKeys] = useState<Set<string>>(new Set());
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState(false);
+  const leaderboardTableExportRef = useRef<HTMLDivElement | null>(null);
+  const [isExportingLeaderboardPdf, setIsExportingLeaderboardPdf] = useState(false);
+  const [leaderboardExportFormat, setLeaderboardExportFormat] = useState<'PDF' | 'CSV'>('PDF');
 
   const [hmChartType, setHmChartType] = useState<'Heat' | 'Pitch'>('Heat');
   const [hmStat, setHmStat] = useState('Frequency');
@@ -1121,6 +1142,51 @@ export default function CatchingSuite() {
     return out;
   }, [filters?.catchers_by_team_code]);
 
+  const downloadLeaderboardPdf = useCallback(async () => {
+    const wrapNode = leaderboardTableExportRef.current;
+    if (!wrapNode) return;
+    try {
+      setError('');
+      setIsExportingLeaderboardPdf(true);
+      const playerLabel = catcher && catcher !== 'All' ? formatNameFirstLast(catcher) : 'All Catchers';
+      const safeMode = String(tableMode || 'leaderboard').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+      const safeViewBy = String(leaderboardViewBy || 'player').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+      await downloadLeaderboardTablePdf({
+        wrapNode,
+        titleText: 'Catching Leaderboard',
+        subtitleText: playerLabel,
+        fileName: `catching-leaderboard-${safeViewBy}-${safeMode}.pdf`,
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : 'Failed to export leaderboard PDF.');
+    } finally {
+      setIsExportingLeaderboardPdf(false);
+    }
+  }, [catcher, tableMode, leaderboardViewBy]);
+
+  const downloadLeaderboardCsv = useCallback(() => {
+    const columns = overview?.table_columns ?? [];
+    if (!leaderboardRowsWithPins.length || !columns.length) return;
+    const headers = ['Rank', ...columns];
+    const lines: string[] = [headers.map(csvEscape).join(',')];
+    let rankCounter = 0;
+    for (const row of leaderboardRowsWithPins) {
+      const rowKey = String(row[columns[0] ?? ''] ?? '').trim();
+      const isAllRow = rowKey.toLowerCase() === 'all';
+      const isPinnedAllRow = rowKey.toLowerCase() === 'all (pinned)';
+      const rank = isAllRow || isPinnedAllRow ? '' : String(++rankCounter);
+      const cells = columns.map((column, colIndex) => {
+        const rawValue = row[column] ?? '-';
+        if (colIndex === 0) {
+          return typeof rawValue === 'string' ? formatNameFirstLast(rawValue) : String(rawValue);
+        }
+        return formatTableDisplayValue(column, rawValue);
+      });
+      lines.push([rank, ...cells].map(csvEscape).join(','));
+    }
+    downloadTextFile(lines.join('\n'), `leaderboard-${toYmdNow()}.csv`, 'text/csv;charset=utf-8');
+  }, [leaderboardRowsWithPins, overview?.table_columns]);
+
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
       <div className="portal-dashboard-suite-layout">
@@ -1325,9 +1391,32 @@ export default function CatchingSuite() {
                     </label>
                   ) : null}
                   {page === 'Leaderboard' ? (
-                    <div style={{ display: 'grid', alignContent: 'end', justifySelf: 'end' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'nowrap', justifySelf: 'end' }}>
                       <button type="button" className="btn btn-ghost" onClick={() => setShowLeaderboardCorrelation(true)}>
                         View Chart
+                      </button>
+                      <select
+                        value={leaderboardExportFormat}
+                        onChange={(event) => setLeaderboardExportFormat(event.target.value as 'PDF' | 'CSV')}
+                        style={{ minHeight: 38, borderRadius: 8, padding: '0 0.5rem' }}
+                        aria-label="Export format"
+                      >
+                        <option value="PDF">PDF</option>
+                        <option value="CSV">CSV</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => {
+                          if (leaderboardExportFormat === 'CSV') {
+                            downloadLeaderboardCsv();
+                          } else {
+                            void downloadLeaderboardPdf();
+                          }
+                        }}
+                        disabled={isExportingLeaderboardPdf || loadingOverview || !leaderboardRowsWithPins.length}
+                      >
+                        {isExportingLeaderboardPdf ? 'Downloading...' : `Download ${leaderboardExportFormat}`}
                       </button>
                     </div>
                   ) : null}
@@ -1420,7 +1509,11 @@ export default function CatchingSuite() {
                   </div>
                 ) : null}
 
-                <div className="portal-table-wrap" style={page === 'Leaderboard' ? { maxHeight: '68vh', overflowY: 'auto' } : undefined}>
+                <div
+                  className="portal-table-wrap"
+                  style={page === 'Leaderboard' ? { maxHeight: '68vh', overflowY: 'auto' } : undefined}
+                  ref={page === 'Leaderboard' ? leaderboardTableExportRef : undefined}
+                >
                   <table className="portal-table">
                     <thead>
                       <tr>

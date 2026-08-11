@@ -43,6 +43,7 @@ export default function PlayerOwnNotes({ playerId, currentUserId }: { playerId: 
   const [noteText, setNoteText] = useState('');
   const [noteFiles, setNoteFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   async function loadNotes() {
     setLoading(true);
@@ -128,74 +129,88 @@ export default function PlayerOwnNotes({ playerId, currentUserId }: { playerId: 
 
   return (
     <article className="portal-admin-card">
-      <h3 style={{ marginTop: 0 }}>Notes</h3>
-      <p className="portal-muted-text" style={{ marginTop: 0 }}>
-        Notes you write here are visible to your coaches. Notes from your coaches marked visible to you also show up here.
-      </p>
-
-      <div className="portal-form-grid" style={{ gridTemplateColumns: '1fr' }}>
-        <label>
-          Date <NativeDateInput value={noteDate} onChange={setNoteDate} ariaLabel="Date" />
-        </label>
-      </div>
-      <label className="portal-inline-filter" style={{ marginTop: 8 }}>
-        Attachments (Photos/Videos/PDFs)
-        <input
-          type="file"
-          accept="image/*,video/*,application/pdf,.pdf"
-          multiple
-          onChange={(event) => setNoteFiles(event.target.files ? Array.from(event.target.files) : [])}
-        />
-      </label>
-      <label className="portal-inline-filter" style={{ marginTop: 8 }}>
-        Note
-        <textarea rows={5} value={noteText} onChange={(event) => setNoteText(event.target.value)} placeholder="Write a note..." />
-      </label>
-      <div className="portal-choice-line-actions">
-        <button type="button" className="btn btn-primary" onClick={() => void saveNote()} disabled={saving || !noteText.trim()}>
-          {saving ? 'Saving...' : 'Save Note'}
+      <div className="portal-row-between">
+        <h3 style={{ marginTop: 0 }}>Notes</h3>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => setExpanded((current) => !current)}
+          aria-expanded={expanded}
+        >
+          {expanded ? 'Collapse' : 'Expand'}
         </button>
       </div>
-      {message ? <p className="portal-muted-text" style={{ margin: 0 }}>{message}</p> : null}
+      {expanded ? (
+        <>
+          <p className="portal-muted-text" style={{ marginTop: 0 }}>
+            Notes you write here are visible to your coaches. Notes from your coaches marked visible to you also show up here.
+          </p>
 
-      <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {loading ? <p className="portal-muted-text">Loading notes...</p> : null}
-        {!loading && sortedNotes.length === 0 ? <p className="portal-muted-text">No notes yet.</p> : null}
-        {sortedNotes.map((note) => {
-          const isOwn = note.createdByUserId !== null && note.createdByUserId === currentUserId;
-          return (
-            <article key={note.id} className="portal-admin-card" style={{ padding: 12 }}>
-              <div className="portal-row-between">
-                <small className="portal-muted-text">{note.noteDate}</small>
-                <small className="portal-muted-text">{isOwn ? 'You' : 'Coach'}</small>
-              </div>
-              <p style={{ margin: '8px 0', whiteSpace: 'pre-wrap' }}>{note.noteText}</p>
-              {note.attachments && note.attachments.length > 0 ? (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {note.attachments.map((attachment) => (
-                    <a
-                      key={attachment.id}
-                      href={`/api/player/media/${attachment.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn btn-ghost"
-                    >
-                      {attachmentIcon(attachment.mediaType)} {attachment.title}
-                    </a>
-                  ))}
-                </div>
-              ) : null}
-              {isOwn ? (
-                <div style={{ marginTop: 8 }}>
-                  <button type="button" className="btn btn-ghost" onClick={() => void deleteOwnNote(note)}>
-                    Delete
-                  </button>
-                </div>
-              ) : null}
-            </article>
-          );
-        })}
-      </div>
+          <div className="portal-form-grid" style={{ gridTemplateColumns: '1fr' }}>
+            <label>
+              Date <NativeDateInput value={noteDate} onChange={setNoteDate} ariaLabel="Date" />
+            </label>
+          </div>
+          <label className="portal-inline-filter" style={{ marginTop: 8 }}>
+            Attachments (Photos/Videos/PDFs)
+            <input
+              type="file"
+              accept="image/*,video/*,application/pdf,.pdf"
+              multiple
+              onChange={(event) => setNoteFiles(event.target.files ? Array.from(event.target.files) : [])}
+            />
+          </label>
+          <label className="portal-inline-filter" style={{ marginTop: 8 }}>
+            Note
+            <textarea rows={5} value={noteText} onChange={(event) => setNoteText(event.target.value)} placeholder="Write a note..." />
+          </label>
+          <div className="portal-choice-line-actions">
+            <button type="button" className="btn btn-primary" onClick={() => void saveNote()} disabled={saving || !noteText.trim()}>
+              {saving ? 'Saving...' : 'Save Note'}
+            </button>
+          </div>
+          {message ? <p className="portal-muted-text" style={{ margin: 0 }}>{message}</p> : null}
+
+          <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {loading ? <p className="portal-muted-text">Loading notes...</p> : null}
+            {!loading && sortedNotes.length === 0 ? <p className="portal-muted-text">No notes yet.</p> : null}
+            {sortedNotes.map((note) => {
+              const isOwn = note.createdByUserId !== null && note.createdByUserId === currentUserId;
+              return (
+                <article key={note.id} className="portal-admin-card" style={{ padding: 12 }}>
+                  <div className="portal-row-between">
+                    <small className="portal-muted-text">{note.noteDate}</small>
+                    <small className="portal-muted-text">{isOwn ? 'You' : 'Coach'}</small>
+                  </div>
+                  <p style={{ margin: '8px 0', whiteSpace: 'pre-wrap' }}>{note.noteText}</p>
+                  {note.attachments && note.attachments.length > 0 ? (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {note.attachments.map((attachment) => (
+                        <a
+                          key={attachment.id}
+                          href={`/api/player/media/${attachment.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn btn-ghost"
+                        >
+                          {attachmentIcon(attachment.mediaType)} {attachment.title}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
+                  {isOwn ? (
+                    <div style={{ marginTop: 8 }}>
+                      <button type="button" className="btn btn-ghost" onClick={() => void deleteOwnNote(note)}>
+                        Delete
+                      </button>
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
     </article>
   );
 }

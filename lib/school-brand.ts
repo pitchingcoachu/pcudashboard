@@ -117,6 +117,15 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentSoft: '#8b0923',
     accentRgb: '186, 12, 47',
   },
+  UNOH: {
+    schoolCode: 'UNOH',
+    logoSrc: '/unoh-logo.png',
+    logoAlt: 'University of Northwestern Ohio logo',
+    accent: '#891f1a',
+    accentSoft: '#641713',
+    accentRgb: '137, 31, 26',
+    accentRgbSecondary: '255, 255, 255',
+  },
   LEAGUE: {
     schoolCode: 'LEAGUE',
     logoSrc: '/ncaa-logo.png',

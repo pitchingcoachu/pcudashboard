@@ -1605,6 +1605,9 @@ export default function ProfileDashboard({
                                 {item.targetCount ? `/${item.targetCount}` : ''} time{(item.completedCount ?? 0) === 1 && !item.targetCount ? '' : 's'}
                               </span>
                             ) : null}
+                            {item.planItemAddedAt ? (
+                              <span style={{ fontSize: '0.68rem', opacity: 0.7 }}>Added {formatTimestampDate(item.planItemAddedAt)}</span>
+                            ) : null}
                           </button>
                         ))}
                       </div>

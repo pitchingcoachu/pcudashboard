@@ -30,6 +30,7 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
     GMU: `${bundledRoot}/dashboard_api/config/schools/GMU/school_config.R`,
     LSU: `${bundledRoot}/dashboard_api/config/schools/LSU/school_config.R`,
     UNM: `${bundledRoot}/dashboard_api/config/schools/UNM/school_config.R`,
+    UNOH: `${bundledRoot}/dashboard_api/config/schools/UNOH/school_config.R`,
     SEMO: `${bundledRoot}/dashboard_api/config/schools/SEMO/school_config.R`,
     CREIGHTON: `${bundledRoot}/dashboard_api/config/schools/CREIGHTON/school_config.R`,
     HARVARD: `${bundledRoot}/dashboard_api/config/schools/HARVARD/school_config.R`,

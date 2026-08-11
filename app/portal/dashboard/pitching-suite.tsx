@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { createPortal } from 'react-dom';
 import { formatTableDisplayValue, parseSortableNumber, sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import { buildPinnedAllRow, pinKeyFromRow, sortRowsWithPins } from '../../../lib/leaderboard-pins';
+import { downloadLeaderboardTablePdf } from '../../../lib/leaderboard-pdf-export';
 import { getProTeamDisplayName, getProTeamLogoUrl, inferProTeamCode } from './pro-team-logos';
 import { buildSharedXMetricHeatCells } from './shared-xmetrics-heatmap';
 import { calcPitchValue } from './pitch-value';
@@ -443,6 +444,7 @@ const TEAM_CODE_PREFIX_LABELS: Record<string, string> = {
   CBU: 'CBU',
   GMU: 'GMU',
   UNM: 'UNM',
+  UNOH: 'University of Northwestern Ohio',
   SEMO: 'SEMO',
   CRE: 'Creighton',
   PCU: 'Pitching Coach U',
@@ -503,6 +505,23 @@ function toYmdNow(): string {
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function csvEscape(value: string): string {
+  if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function downloadTextFile(content: string, fileName: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function clampYmdToToday(value: string): string {
@@ -5078,6 +5097,7 @@ export default function PitchingSuite({
   const [correlationAllStatColumns, setCorrelationAllStatColumns] = useState<string[]>([]);
   const [correlationAllStatRows, setCorrelationAllStatRows] = useState<Array<Record<string, string | number | null>>>([]);
   const [isExportingLeaderboardPdf, setIsExportingLeaderboardPdf] = useState(false);
+  const [leaderboardExportFormat, setLeaderboardExportFormat] = useState<'PDF' | 'CSV'>('PDF');
   const [customTables, setCustomTables] = useState<CustomTableConfig[]>([]);
   const [loadingCustomTables, setLoadingCustomTables] = useState(false);
   const [customTablesLoaded, setCustomTablesLoaded] = useState(false);
@@ -5295,6 +5315,31 @@ export default function PitchingSuite({
   const [actionVideoLoop, setActionVideoLoop] = useState(false);
   const [actionVideoRefreshNonce, setActionVideoRefreshNonce] = useState(0);
   const [actionVideoLookupLoading, setActionVideoLookupLoading] = useState(false);
+  // Trackman can upload more than one Edgertronic camera angle per pitch
+  // (video_clip_1/2/3). One shared index drives whichever clip array is
+  // currently on screen -- single view, or both sides of Compare (so
+  // "Camera 2" means the same physical angle on both sides when the two
+  // pitches have matching camera counts, the common case). Reset whenever
+  // the active pitch(es) change so a stale index from a different pitch's
+  // camera set never carries over.
+  const [actionCameraIndex, setActionCameraIndex] = useState(0);
+  // Manual click-and-drag pan + zoom for the single-view video, mainly so a
+  // portrait/oddly-framed camera angle can be recentered/zoomed by hand
+  // regardless of how the browser happens to be sizing the element -- a
+  // direct escape hatch that doesn't depend on getting object-fit/aspect
+  // CSS exactly right for every camera. Reset whenever the pitch or camera
+  // selection changes so a stale pan/zoom never carries over.
+  const [actionVideoZoom, setActionVideoZoom] = useState(1);
+  const [actionVideoPan, setActionVideoPan] = useState({ x: 0, y: 0 });
+  const actionVideoPanDragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
+  // Bulk video export: pick current pitch vs. every pitch in the modal, and
+  // which camera angle(s) to include, then stream the concatenated result
+  // back from /api/dashboard/pitching/video-export as a file download.
+  const [actionExportMenuOpen, setActionExportMenuOpen] = useState(false);
+  const [actionExportScope, setActionExportScope] = useState<'current' | 'all'>('current');
+  const [actionExportCameras, setActionExportCameras] = useState<Array<'edger' | '1' | '2' | '3'>>(['edger']);
+  const [actionExportState, setActionExportState] = useState<'idle' | 'exporting' | 'error'>('idle');
+  const [actionExportMessage, setActionExportMessage] = useState('');
   const [breakdownMode, setBreakdownMode] = useState(false);
   const [breakdownToolbarVisible, setBreakdownToolbarVisible] = useState(true);
   const [breakdownTool, setBreakdownTool] = useState<BreakdownTool>('line');
@@ -5348,6 +5393,12 @@ export default function PitchingSuite({
   const actionVideoRetryKeysRef = useRef(new Set<string>());
   const actionCompareVideoLookupKeysRef = useRef(new Set<string>());
   const actionVideoLookupCacheRef = useRef(new Map<number, Pick<PitchActionPoint, 'video_clip_1' | 'video_clip_2' | 'video_clip_3'>>());
+  // video-lookup's response includes which camera slot (if any) is actually
+  // Edgertronic footage per pitch -- kept in a side map rather than on
+  // PitchActionPoint itself, since that type is shared with the overview
+  // payload which doesn't carry this field. Keyed by pitch_event_id, value
+  // is [cam1IsEdger, cam2IsEdger, cam3IsEdger].
+  const actionVideoEdgerFlagsRef = useRef(new Map<number, [boolean, boolean, boolean]>());
 
   useEffect(() => {
     breakdownAnnotationsRef.current = {
@@ -8129,7 +8180,16 @@ export default function PitchingSuite({
       req.searchParams.set('ids', missingIds.join(','));
       req.searchParams.set('_video_refresh', String(Date.now()));
       const response = await fetch(req.toString(), { cache: 'no-store' });
-      const payload = (await response.json().catch(() => ({}))) as { pitches?: PitchActionPoint[]; error?: string };
+      const payload = (await response.json().catch(() => ({}))) as {
+        pitches?: Array<
+          PitchActionPoint & {
+            video_clip_1_is_edger?: boolean;
+            video_clip_2_is_edger?: boolean;
+            video_clip_3_is_edger?: boolean;
+          }
+        >;
+        error?: string;
+      };
       if (!response.ok || payload.error) return nextPitches;
       const freshPoints = Array.isArray(payload.pitches) ? payload.pitches : [];
       if (!freshPoints.length) return nextPitches;
@@ -8144,6 +8204,11 @@ export default function PitchingSuite({
             video_clip_2: point.video_clip_2 ?? '',
             video_clip_3: point.video_clip_3 ?? '',
           });
+          actionVideoEdgerFlagsRef.current.set(normalizedId, [
+            Boolean(point.video_clip_1_is_edger),
+            Boolean(point.video_clip_2_is_edger),
+            Boolean(point.video_clip_3_is_edger),
+          ]);
         }
       }
       nextPitches = nextPitches.map((pitch) => {
@@ -8163,17 +8228,24 @@ export default function PitchingSuite({
     }
   };
 
-  const openActionModal = async (pitches: PitchActionPoint[]) => {
+  const openActionModal = async (pitches: PitchActionPoint[], startingPitch?: PitchActionPoint) => {
     const deduped = Array.from(new Map(pitches.map((pitch) => [pitchIdentityKey(pitch), pitch])).values());
     if (!deduped.length) return;
+    const startIndex = startingPitch
+      ? Math.max(
+          0,
+          deduped.findIndex((pitch) => pitchIdentityKey(pitch) === pitchIdentityKey(startingPitch))
+        )
+      : 0;
     const nextMode: 'video' | 'edit' | 'spin' =
       visualOption === 'Pitch Edit' && canUsePitchEdits ? 'edit' : visualOption === 'Spin Visual' ? 'spin' : 'video';
-    const firstPitchHasVideo = Boolean(deduped[0]?.video_clip_1 || deduped[0]?.video_clip_2 || deduped[0]?.video_clip_3);
+    const startPitch = deduped[startIndex];
+    const firstPitchHasVideo = Boolean(startPitch?.video_clip_1 || startPitch?.video_clip_2 || startPitch?.video_clip_3);
     setActionPitches(deduped);
-    setActionIndex(0);
+    setActionIndex(startIndex);
     setActionMode(nextMode);
-    setEditPitchType(deduped[0]?.pitch_type ?? '');
-    setEditPitcher(resolvePitcherName(deduped[0], selectedPitchers));
+    setEditPitchType(startPitch?.pitch_type ?? '');
+    setEditPitcher(resolvePitcherName(startPitch, selectedPitchers));
     setEditBallType('');
     setActionSaveState('idle');
     setActionSaveMessage('');
@@ -8942,6 +9014,104 @@ export default function PitchingSuite({
     : [];
 
   useEffect(() => {
+    setActionCameraIndex(0);
+  }, [currentPitchKey, actionLeftPitchKey, actionRightPitchKey, actionSideBySide]);
+
+  useEffect(() => {
+    setActionExportMenuOpen(false);
+    setActionExportState('idle');
+    setActionExportMessage('');
+    // Deliberately keyed only on actionMode, not actionPitches -- actionPitches
+    // gets a new array identity on nearly every render (video-url refreshes,
+    // edits, etc.), which was closing this menu the instant it opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actionMode]);
+
+  useEffect(() => {
+    setActionVideoZoom(1);
+    setActionVideoPan({ x: 0, y: 0 });
+  }, [currentPitchKey, actionCameraIndex, actionSideBySide]);
+
+  const handleActionVideoPanStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (breakdownMode) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    actionVideoPanDragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: actionVideoPan.x,
+      originY: actionVideoPan.y,
+    };
+  };
+  const handleActionVideoPanMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = actionVideoPanDragRef.current;
+    if (!drag) return;
+    setActionVideoPan({
+      x: drag.originX + (event.clientX - drag.startX),
+      y: drag.originY + (event.clientY - drag.startY),
+    });
+  };
+  const handleActionVideoPanEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (actionVideoPanDragRef.current) event.currentTarget.releasePointerCapture(event.pointerId);
+    actionVideoPanDragRef.current = null;
+  };
+
+  // Clamped so a shorter clip array (e.g. the compare-mode right pitch has
+  // fewer camera angles than the left one) never indexes out of range.
+  const pickCamera = (urls: string[]): string =>
+    urls.length ? urls[Math.min(actionCameraIndex, urls.length - 1)] : '';
+  const activeCameraCount = Math.max(
+    actionSideBySide ? selectedLeftUrls.length : actionVideoUrls.length,
+    actionSideBySide ? selectedRightUrls.length : 0
+  );
+  // "Camera 1" isn't a stable device -- it's Edgertronic footage the large
+  // majority of the time but occasionally a phone, per-pitch. Only relabel
+  // the tab to "Edger" when this specific pitch's clip in that slot is
+  // actually confirmed Edgertronic; otherwise keep the generic "Camera N".
+  const cameraTabLabel = (camIdx: number): string => {
+    const referencePitch = actionSideBySide ? selectedLeftPitch : currentActionPitch;
+    const id = Number(referencePitch?.pitch_event_id);
+    const flags = Number.isFinite(id) && id > 0 ? actionVideoEdgerFlagsRef.current.get(Math.trunc(id)) : undefined;
+    return flags?.[camIdx] ? 'Edger' : `Camera ${camIdx + 1}`;
+  };
+
+  // Export options are meaning-based, not slot-based: "Edger" always means
+  // "whichever camera slot is actually Edgertronic for this pitch" (resolved
+  // per pitch server-side, since that slot isn't fixed -- almost always 1,
+  // but not guaranteed), plus one generic option per *non*-Edger slot that's
+  // actually in use across the scoped pitches. A slot pitch A has as Edger
+  // and pitch B has as non-Edger contributes to both groups; exporting
+  // "Edger" then correctly pulls pitch A's clip from that slot and skips
+  // pitch B (per pitch, not per fixed slot), matching what "Edger" should
+  // mean when the same slot number isn't a stable device across pitches.
+  const actionExportScopedPitches = actionExportScope === 'all' ? actionPitches : currentActionPitch ? [currentActionPitch] : [];
+  const edgerFlagsFor = (pitch: PitchActionPoint): [boolean, boolean, boolean] => {
+    const id = Number(pitch.pitch_event_id);
+    return (Number.isFinite(id) && id > 0 && actionVideoEdgerFlagsRef.current.get(Math.trunc(id))) || [false, false, false];
+  };
+  const hasAnyEdgerClip = actionExportScopedPitches.some((pitch) => edgerFlagsFor(pitch).some(Boolean));
+  const nonEdgerCameraSlots = (['1', '2', '3'] as const).filter((cam) => {
+    const camIdx = Number(cam) - 1;
+    const key = cam === '1' ? 'video_clip_1' : cam === '2' ? 'video_clip_2' : 'video_clip_3';
+    return actionExportScopedPitches.some((pitch) => Boolean(String(pitch[key] ?? '').trim()) && !edgerFlagsFor(pitch)[camIdx]);
+  });
+  const actionExportAvailableCameras: Array<'edger' | '1' | '2' | '3'> = [
+    ...(hasAnyEdgerClip ? (['edger'] as const) : []),
+    ...nonEdgerCameraSlots,
+  ];
+  const actionExportAvailableCamerasKey = actionExportAvailableCameras.join(',');
+
+  // Default the camera multi-select to "everything available" whenever the
+  // available set changes (e.g. This Pitch vs All scope toggled) -- keyed on
+  // a joined string, not the array itself, since actionExportAvailableCameras
+  // is a new array identity on nearly every render.
+  useEffect(() => {
+    setActionExportCameras([...actionExportAvailableCameras]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actionExportAvailableCamerasKey]);
+
+  const actionExportCameraLabel = (cam: 'edger' | '1' | '2' | '3'): string => (cam === 'edger' ? 'Edger' : `Cam ${cam}`);
+
+  useEffect(() => {
     if (!actionSideBySide) return;
     if (!comparePitchOptions.length) return;
     if (!actionLeftPitchKey || !comparePitchOptions.some((option) => option.value === actionLeftPitchKey)) {
@@ -9135,6 +9305,56 @@ export default function PitchingSuite({
     document.body.appendChild(a);
     a.click();
     a.remove();
+  };
+
+  const downloadBlob = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    downloadUrl(url, fileName);
+    URL.revokeObjectURL(url);
+  };
+
+  const runActionVideoExport = async () => {
+    const scopedPitches = actionExportScope === 'all' ? actionPitches : currentActionPitch ? [currentActionPitch] : [];
+    const pitchEventIds = Array.from(
+      new Set(
+        scopedPitches
+          .map((pitch) => Number(pitch.pitch_event_id ?? -1))
+          .filter((id) => Number.isFinite(id) && id > 0)
+      )
+    );
+    if (!pitchEventIds.length) {
+      setActionExportState('error');
+      setActionExportMessage('No pitch video found to export.');
+      return;
+    }
+
+    const camerasToSend = actionExportCameras.filter((cam) => actionExportAvailableCameras.includes(cam));
+    if (!camerasToSend.length) {
+      setActionExportState('error');
+      setActionExportMessage('Pick at least one camera to export.');
+      return;
+    }
+
+    setActionExportState('exporting');
+    setActionExportMessage('');
+    try {
+      const response = await fetch('/api/dashboard/pitching/video-export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pitchEventIds, camera: camerasToSend }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error || 'Failed to export video.');
+      }
+      const blob = await response.blob();
+      downloadBlob(blob, `pitch-export-${pitchEventIds.length}-clip${pitchEventIds.length === 1 ? '' : 's'}.mp4`);
+      setActionExportState('idle');
+      setActionExportMenuOpen(false);
+    } catch (error) {
+      setActionExportState('error');
+      setActionExportMessage(error instanceof Error ? error.message : 'Failed to export video.');
+    }
   };
 
   const blobToDataUrl = (blob: Blob): Promise<string> =>
@@ -11472,7 +11692,10 @@ export default function PitchingSuite({
                   onMouseLeave={() => setReleaseHover(null)}
                   onClick={() => {
                     if (isPitchEditLassoEnabled) return;
-                    openActionModal([p]);
+                    openActionModal(
+                      plottedPitches.filter((pt) => Number.isFinite(Number(pt.release_side)) && Number.isFinite(Number(pt.release_height))),
+                      p
+                    );
                   }}
                 />
               ))
@@ -11817,7 +12040,10 @@ export default function PitchingSuite({
                   onMouseLeave={() => setMovementHover(null)}
                   onClick={() => {
                     if (isPitchEditLassoEnabled) return;
-                    openActionModal([p]);
+                    openActionModal(
+                      plottedPitches.filter((pt) => Number.isFinite(Number(pt.hb)) && Number.isFinite(Number(pt.ivb))),
+                      p
+                    );
                   }}
                 />
               ))
@@ -11840,7 +12066,7 @@ export default function PitchingSuite({
                   onMouseLeave={() => setMovementHover(null)}
                   onClick={() => {
                     if (isPitchEditLassoEnabled) return;
-                    openActionModal([point]);
+                    openActionModal(expectedMovementData.eligiblePoints, point);
                   }}
                 >
                   <circle
@@ -11891,7 +12117,7 @@ export default function PitchingSuite({
                   onMouseLeave={() => setMovementHover(null)}
                   onClick={() => {
                     if (isPitchEditLassoEnabled) return;
-                    openActionModal([point]);
+                    openActionModal(expectedMovementData.eligiblePoints, point);
                   }}
                 />
               );
@@ -12139,6 +12365,9 @@ export default function PitchingSuite({
     const maxAbs = Math.max(1e-9, ...cells.map((c) => (Number.isFinite(c.value) ? Math.abs(c.value) : 0)));
     const rvMin = isPvMetric ? -2 : -5;
     const rvMax = isPvMetric ? 2 : 5;
+    const locationVisiblePitches = summaryPoints.filter(
+      (p) => Number.isFinite(Number(p.plate_side)) && Number.isFinite(Number(p.plate_height))
+    );
     const glyph = (
       result: string,
       x: number,
@@ -12152,7 +12381,7 @@ export default function PitchingSuite({
         onMouseMove: (event: { clientX: number; clientY: number }) =>
           setLocationHover({ x: event.clientX, y: event.clientY, text: title, bg: fill }),
         onMouseLeave: () => setLocationHover(null),
-        onClick: () => (point ? openActionModal([point]) : undefined),
+        onClick: () => (point ? openActionModal(locationVisiblePitches, point) : undefined),
       };
       if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={8.4} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
       if (result === 'Foul') return <polygon key={key} points={`${x},${y-8.1} ${x-7.3},${y+6.2} ${x+7.3},${y+6.2}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
@@ -12301,15 +12530,13 @@ export default function PitchingSuite({
         <line x1={px(strikeLeft)} y1={py(strikeBottom + ((strikeTop - strikeBottom) / 3))} x2={px(strikeRight)} y2={py(strikeBottom + ((strikeTop - strikeBottom) / 3))} stroke="rgba(255,255,255,0.45)" />
         <line x1={px(strikeLeft)} y1={py(strikeBottom + (((strikeTop - strikeBottom) * 2) / 3))} x2={px(strikeRight)} y2={py(strikeBottom + (((strikeTop - strikeBottom) * 2) / 3))} stroke="rgba(255,255,255,0.45)" />
         {locationView === 'Pitch'
-          ? summaryPoints
-              .filter((p) => Number.isFinite(Number(p.plate_side)) && Number.isFinite(Number(p.plate_height)))
-              .map((p, i) => {
-                const x = px(orientX(Number(p.plate_side), p.school_code));
-                const y = py(Number(p.plate_height));
-                const color = pitchColors[p.pitch_type] ?? '#9ca3af';
-                const result = resultShape(p.pitch_call, p.play_result, p.school_code);
-                return glyph(result, x, y, color, `loc-${i}`, tooltipHtml(p), p);
-              })
+          ? locationVisiblePitches.map((p, i) => {
+              const x = px(orientX(Number(p.plate_side), p.school_code));
+              const y = py(Number(p.plate_height));
+              const color = pitchColors[p.pitch_type] ?? '#9ca3af';
+              const result = resultShape(p.pitch_call, p.play_result, p.school_code);
+              return glyph(result, x, y, color, `loc-${i}`, tooltipHtml(p), p);
+            })
           : null}
         </g>
       </svg>
@@ -12475,6 +12702,9 @@ export default function PitchingSuite({
     const maxAbs = Math.max(1e-9, ...cells.map((c) => (Number.isFinite(c.value) ? Math.abs(c.value) : 0)));
     const rvMin = isPvMetric ? -2 : -5;
     const rvMax = isPvMetric ? 2 : 5;
+    const locationVisiblePitches = summaryPoints.filter(
+      (p) => Number.isFinite(Number(p.plate_side)) && Number.isFinite(Number(p.plate_height))
+    );
     const glyph = (
       result: string,
       x: number,
@@ -12488,7 +12718,7 @@ export default function PitchingSuite({
         onMouseMove: (event: { clientX: number; clientY: number }) =>
           setLocationHover({ x: event.clientX, y: event.clientY, text: title, bg: fill }),
         onMouseLeave: () => setLocationHover(null),
-        onClick: () => (point ? openActionModal([point]) : undefined),
+        onClick: () => (point ? openActionModal(locationVisiblePitches, point) : undefined),
       };
       if (result === 'Ball') return <circle key={key} cx={x} cy={y} r={8.6} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
       if (result === 'Foul') return <polygon key={key} points={`${x},${y - 8.1} ${x - 7.3},${y + 6.2} ${x + 7.3},${y + 6.2}`} fill="rgba(0,0,0,0.001)" stroke={fill} strokeWidth={2.1} {...hoverProps} />;
@@ -12639,23 +12869,21 @@ export default function PitchingSuite({
           <line x1={px(strikeLeft)} y1={py(strikeBottom + ((strikeTop - strikeBottom) / 3))} x2={px(strikeRight)} y2={py(strikeBottom + ((strikeTop - strikeBottom) / 3))} stroke="rgba(255,255,255,0.45)" />
           <line x1={px(strikeLeft)} y1={py(strikeBottom + (((strikeTop - strikeBottom) * 2) / 3))} x2={px(strikeRight)} y2={py(strikeBottom + (((strikeTop - strikeBottom) * 2) / 3))} stroke="rgba(255,255,255,0.45)" />
           {(heatmapDisplayView === 'Pitch' || heatmapDisplayView === 'QP+')
-            ? summaryPoints
-                .filter((p) => Number.isFinite(Number(p.plate_side)) && Number.isFinite(Number(p.plate_height)))
-                .map((p, i) => {
-                  const x = px(orientX(Number(p.plate_side), p.school_code));
-                  const y = py(Number(p.plate_height));
-                  const color = pitchColors[p.pitch_type] ?? '#9ca3af';
-                  const result = resultShape(p.pitch_call, p.play_result, p.school_code);
-                  const hoverText =
-                    heatmapDisplayView === 'QP+'
-                      ? `${tooltipHtml(p)}\nQP+: ${fmtNum(p.qp_plus, 1)}`
-                      : tooltipHtml(p);
-                  return (
-                    <g key={`hp-loc-wrap-${i}`} opacity={heatmapDisplayView === 'Pitch' ? 1 : 0.9}>
-                      {glyph(result, x, y, color, `hp-loc-${i}`, hoverText, p)}
-                    </g>
-                  );
-                })
+            ? locationVisiblePitches.map((p, i) => {
+                const x = px(orientX(Number(p.plate_side), p.school_code));
+                const y = py(Number(p.plate_height));
+                const color = pitchColors[p.pitch_type] ?? '#9ca3af';
+                const result = resultShape(p.pitch_call, p.play_result, p.school_code);
+                const hoverText =
+                  heatmapDisplayView === 'QP+'
+                    ? `${tooltipHtml(p)}\nQP+: ${fmtNum(p.qp_plus, 1)}`
+                    : tooltipHtml(p);
+                return (
+                  <g key={`hp-loc-wrap-${i}`} opacity={heatmapDisplayView === 'Pitch' ? 1 : 0.9}>
+                    {glyph(result, x, y, color, `hp-loc-${i}`, hoverText, p)}
+                  </g>
+                );
+              })
             : null}
         </g>
       </svg>
@@ -12951,258 +13179,9 @@ export default function PitchingSuite({
   const downloadLeaderboardPdf = useCallback(async () => {
     const wrapNode = leaderboardTableExportRef.current;
     if (!wrapNode) return;
-    const tableNode = wrapNode.querySelector('table.portal-table') as HTMLTableElement | null;
-    if (!tableNode) return;
-    const headerCells = Array.from(tableNode.querySelectorAll('thead th')) as HTMLElement[];
-    const originalWrapMaxHeight = wrapNode.style.maxHeight;
-    const originalWrapOverflowY = wrapNode.style.overflowY;
-    const originalHeaderStyles = headerCells.map((cell) => ({
-      node: cell,
-      position: cell.style.position,
-      top: cell.style.top,
-      zIndex: cell.style.zIndex,
-      background: cell.style.background,
-      color: cell.style.color,
-    }));
-    const originalColoredCellStyles: Array<{ node: HTMLElement; color: string; textShadow: string }> = [];
-    const originalLogoAttrs: Array<{ node: HTMLImageElement; src: string | null; srcset: string | null }> = [];
-    const imageBlobToPngDataUrl = async (blob: Blob, width: number, height: number): Promise<string | null> => {
-      const objectUrl = URL.createObjectURL(blob);
-      try {
-        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const next = new Image();
-          next.onload = () => resolve(next);
-          next.onerror = () => reject(new Error('Failed to decode image blob for export.'));
-          next.src = objectUrl;
-        });
-        const exportScale = 4;
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(width * exportScale));
-        canvas.height = Math.max(1, Math.round(height * exportScale));
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return null;
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL('image/png');
-      } catch {
-        return null;
-      } finally {
-        URL.revokeObjectURL(objectUrl);
-      }
-    };
     try {
       setError('');
       setIsExportingLeaderboardPdf(true);
-      const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
-      wrapNode.style.maxHeight = 'none';
-      wrapNode.style.overflowY = 'visible';
-      for (const entry of originalHeaderStyles) {
-        entry.node.style.position = 'static';
-        entry.node.style.top = 'auto';
-        entry.node.style.zIndex = 'auto';
-        if (isLightTheme) {
-          entry.node.style.background = 'rgba(248,250,252,0.98)';
-          entry.node.style.color = '#0f172a';
-        }
-      }
-      if (isLightTheme) {
-        const allCells = Array.from(tableNode.querySelectorAll('td, th')) as HTMLElement[];
-        for (const cell of allCells) {
-          const style = window.getComputedStyle(cell);
-          const bg = String(style.backgroundColor || '').trim();
-          const match = bg.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([0-9.]+))?\s*\)/i);
-          if (!match) continue;
-          const alpha = match[4] === undefined ? 1 : Number(match[4]);
-          if (!Number.isFinite(alpha) || alpha <= 0.03) continue;
-          const r = Number(match[1]);
-          const g = Number(match[2]);
-          const b = Number(match[3]);
-          if (![r, g, b].every(Number.isFinite)) continue;
-          const luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
-          const nextColor = luminance >= 170 ? '#0f172a' : '#f8fafc';
-          originalColoredCellStyles.push({ node: cell, color: cell.style.color, textShadow: cell.style.textShadow });
-          cell.style.color = nextColor;
-          cell.style.textShadow = 'none';
-        }
-      }
-      const logoNodes = Array.from(tableNode.querySelectorAll('img')) as HTMLImageElement[];
-      for (const logoNode of logoNodes) {
-        const srcRaw = (logoNode.getAttribute('src') || logoNode.src || '').trim();
-        if (!srcRaw) continue;
-        let parsed: URL | null = null;
-        try {
-          parsed = new URL(srcRaw, window.location.origin);
-        } catch {
-          parsed = null;
-        }
-        const parsedUrl = parsed ? parsed.toString() : '';
-        const isMlbStaticLogo = !!parsed && ['www.mlbstatic.com', 'mlbstatic.com'].includes(parsed.hostname.toLowerCase());
-        const isProxyLogo = parsedUrl.includes('/api/dashboard/image-proxy?url=');
-        if (!isMlbStaticLogo && !isProxyLogo) continue;
-        const captureSrc = isMlbStaticLogo
-          ? `/api/dashboard/image-proxy?url=${encodeURIComponent(parsedUrl)}`
-          : parsedUrl;
-        originalLogoAttrs.push({
-          node: logoNode,
-          src: logoNode.getAttribute('src'),
-          srcset: logoNode.getAttribute('srcset'),
-        });
-        logoNode.setAttribute('src', captureSrc);
-        logoNode.removeAttribute('srcset');
-        await new Promise<void>((resolve) => {
-          if (logoNode.complete && logoNode.naturalWidth > 0) {
-            resolve();
-            return;
-          }
-          const onDone = () => {
-            logoNode.onload = null;
-            logoNode.onerror = null;
-            resolve();
-          };
-          logoNode.onload = onDone;
-          logoNode.onerror = onDone;
-        });
-        try {
-          const rect = logoNode.getBoundingClientRect();
-          const width = Math.max(1, rect.width || logoNode.naturalWidth || 16);
-          const height = Math.max(1, rect.height || logoNode.naturalHeight || 16);
-          const response = await fetch(captureSrc, { cache: 'force-cache' });
-          if (!response.ok) continue;
-          const blob = await response.blob();
-          const pngDataUrl = await imageBlobToPngDataUrl(blob, width, height);
-          if (!pngDataUrl) continue;
-          logoNode.setAttribute('src', pngDataUrl);
-          await new Promise<void>((resolve) => {
-            if (logoNode.complete && logoNode.naturalWidth > 0) {
-              resolve();
-              return;
-            }
-            const onDone = () => {
-              logoNode.onload = null;
-              logoNode.onerror = null;
-              resolve();
-            };
-            logoNode.onload = onDone;
-            logoNode.onerror = onDone;
-          });
-        } catch {
-          // Keep proxied src if PNG inlining fails.
-        }
-      }
-      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-        import('html2canvas'),
-        import('jspdf'),
-      ]);
-      const captureScale = Math.min(2, Math.max(1.4, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1));
-      // Most browsers silently blank out (or corrupt) canvas content beyond
-      // ~16,384px in either dimension -- a single html2canvas(tableNode, ...)
-      // call captures the WHOLE table at once, so a large table (LEAGUE's
-      // leaderboard can be hundreds of rows) times captureScale routinely
-      // exceeds that ceiling and produces a canvas that reports a huge
-      // height but renders blank past the limit -- every downstream PDF
-      // page slice from that region is then blank too. Capturing the table
-      // header once and the body in row-count batches that each stay well
-      // under the limit avoids ever asking the browser for an oversized
-      // canvas in the first place.
-      const MAX_CAPTURE_SOURCE_HEIGHT = 8000;
-      const theadNode = tableNode.querySelector('thead') as HTMLElement | null;
-      const tbodyNode = tableNode.querySelector('tbody') as HTMLElement | null;
-      const bodyRows = tbodyNode ? (Array.from(tbodyNode.children) as HTMLElement[]) : [];
-      const captureBatches: HTMLCanvasElement[] = [];
-      const captureNode = async (node: HTMLElement): Promise<HTMLCanvasElement> =>
-        html2canvas(node, {
-          backgroundColor: isLightTheme ? '#f8fafc' : '#000000',
-          scale: captureScale,
-          useCORS: true,
-          logging: false,
-        });
-      // The real table has no fixed layout -- column widths come from auto
-      // layout across ALL rows at once. A batch containing only a subset of
-      // body rows in its own standalone <table> would auto-size its columns
-      // independently, misaligning it against the header capture and every
-      // other batch. Measuring the live header cells' actual pixel widths
-      // and pinning every batch table to those same widths via <colgroup>
-      // keeps every batch's columns identical to the real table's.
-      const headerCellWidths = theadNode
-        ? (Array.from(theadNode.querySelectorAll('tr:last-child > *')) as HTMLElement[]).map(
-            (cell) => cell.getBoundingClientRect().width
-          )
-        : [];
-      const tableWidthPx = tableNode.getBoundingClientRect().width;
-      const buildColgroup = (): HTMLTableColElement[] =>
-        headerCellWidths.map((w) => {
-          const col = document.createElement('col');
-          col.style.width = `${w}px`;
-          return col;
-        });
-      if (theadNode) captureBatches.push(await captureNode(theadNode));
-      if (bodyRows.length > 0) {
-        let batchStart = 0;
-        while (batchStart < bodyRows.length) {
-          let batchEnd = batchStart;
-          let batchHeight = 0;
-          while (batchEnd < bodyRows.length) {
-            const rowHeight = bodyRows[batchEnd].getBoundingClientRect().height || 0;
-            if (batchEnd > batchStart && batchHeight + rowHeight > MAX_CAPTURE_SOURCE_HEIGHT) break;
-            batchHeight += rowHeight;
-            batchEnd += 1;
-          }
-          const batchWrap = document.createElement('table');
-          batchWrap.className = tableNode.className;
-          if (headerCellWidths.length) {
-            const colgroup = document.createElement('colgroup');
-            for (const col of buildColgroup()) colgroup.appendChild(col);
-            batchWrap.appendChild(colgroup);
-            batchWrap.style.tableLayout = 'fixed';
-          }
-          const batchTbody = document.createElement('tbody');
-          for (const row of bodyRows.slice(batchStart, batchEnd)) batchTbody.appendChild(row.cloneNode(true) as HTMLElement);
-          batchWrap.appendChild(batchTbody);
-          batchWrap.style.position = 'fixed';
-          batchWrap.style.top = '-100000px';
-          batchWrap.style.left = '0';
-          batchWrap.style.width = `${tableWidthPx}px`;
-          document.body.appendChild(batchWrap);
-          try {
-            captureBatches.push(await captureNode(batchWrap));
-          } finally {
-            document.body.removeChild(batchWrap);
-          }
-          batchStart = batchEnd;
-        }
-      } else if (!theadNode) {
-        captureBatches.push(await captureNode(tableNode));
-      }
-      const rawW = Math.max(1, ...captureBatches.map((c) => c.width));
-      const totalRawH = captureBatches.reduce((sum, c) => sum + c.height, 0);
-      const orientation: 'portrait' | 'landscape' = rawW >= totalRawH ? 'landscape' : 'portrait';
-      const pdf = new jsPDF({
-        orientation,
-        unit: 'pt',
-        format: 'letter',
-      });
-      // Pearl lockup, top-right of every page. Loaded once as a data URL
-      // (jsPDF's addImage needs actual image data, not a URL) and reused
-      // across pages -- a fetch failure just means no logo, not a broken PDF.
-      const pearlLogoDataUrl = await (async () => {
-        try {
-          const response = await fetch('/pearl-lockup-transparent.png', { cache: 'force-cache' });
-          if (!response.ok) return null;
-          const blob = await response.blob();
-          return await new Promise<string | null>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
-            reader.onerror = () => resolve(null);
-            reader.readAsDataURL(blob);
-          });
-        } catch {
-          return null;
-        }
-      })();
-      const PEARL_LOGO_ASPECT = 1554 / 402;
-      const margin = 18;
-      const logoHeight = pearlLogoDataUrl ? 22 : 0;
-      const logoWidth = logoHeight * PEARL_LOGO_ASPECT;
       // Same "Player · Date Range" subtitle convention as the mobile report
       // exports (see pearl-player-development's bullpen-summary.tsx) --
       // player label falls back to "All Players" when nothing/`All` is
@@ -13216,112 +13195,17 @@ export default function PitchingSuite({
         startDate && endDate
           ? `${new Date(`${startDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} – ${new Date(`${endDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
           : '';
-      const titleText = 'Pitching Leaderboard';
-      const subtitleText = [playerLabel, dateRangeLabel].filter(Boolean).join('  ·  ');
-      const titleBandHeight = 34;
-      const headerBandHeight = Math.max(logoHeight, titleBandHeight) + 12;
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const contentTop = margin + headerBandHeight;
-      const maxContentWidth = Math.max(1, pageWidth - margin * 2);
-      const contentHeight = Math.max(1, pageHeight - contentTop - margin);
-      // Filling the full page width unconditionally stretches a narrower
-      // table's columns wider than they render on web -- cap the scale
-      // factor at 1:1 (CSS px per pt) so a table that doesn't naturally need
-      // the whole page width isn't blown up just because the page is wide.
-      const scale = Math.min(maxContentWidth / rawW, 1 / captureScale);
-      const contentWidth = Math.max(1, rawW * scale);
-      const pageSourceHeight = Math.max(1, Math.floor(contentHeight / Math.max(scale, 1e-6)));
-      const drawPageChrome = (isFirst: boolean) => {
-        if (isLightTheme) pdf.setFillColor(248, 250, 252);
-        else pdf.setFillColor(4, 5, 7);
-        pdf.rect(0, 0, pageWidth, pageHeight, 'F');
-        if (pearlLogoDataUrl) {
-          pdf.addImage(pearlLogoDataUrl, 'PNG', pageWidth - margin - logoWidth, margin, logoWidth, logoHeight, undefined, 'FAST');
-        }
-        if (isFirst) {
-          pdf.setTextColor(isLightTheme ? '#0f172a' : '#f8fafc');
-          pdf.setFont('helvetica', 'bold');
-          pdf.setFontSize(16);
-          pdf.text(titleText, margin, margin + 16);
-          if (subtitleText) {
-            pdf.setFont('helvetica', 'normal');
-            pdf.setFontSize(10);
-            pdf.setTextColor(isLightTheme ? '#475569' : '#94a3b8');
-            pdf.text(subtitleText, margin, margin + 30);
-          }
-        }
-      };
-      // Batches exist purely to keep each individual html2canvas capture
-      // under the browser's canvas-height ceiling -- they are NOT page
-      // breaks. Treating each batch as its own page (the previous version)
-      // stretched the short header batch to fill an entire page by itself,
-      // pushing all body rows onto page 2. Instead, walk every batch's rows
-      // as one continuous source-height timeline sliced into fixed-height
-      // page windows, so a page break only happens when a page's worth of
-      // content (pageSourceHeight) has actually been filled -- the header
-      // and the first chunk of body rows land on the same page together,
-      // same as the single-canvas version did before batching was added.
-      type PageState = { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D | null; used: number };
-      const pages: PageState[] = [];
-      const newPageState = (): PageState => {
-        const canvas = document.createElement('canvas');
-        canvas.width = rawW;
-        canvas.height = pageSourceHeight;
-        return { canvas, ctx: canvas.getContext('2d'), used: 0 };
-      };
-      let current = newPageState();
-      pages.push(current);
-      for (const batchCanvas of captureBatches) {
-        const batchW = Math.max(1, batchCanvas.width);
-        const batchH = Math.max(1, batchCanvas.height);
-        let sourceY = 0;
-        while (sourceY < batchH) {
-          if (pageSourceHeight - current.used <= 0) {
-            current = newPageState();
-            pages.push(current);
-            continue;
-          }
-          const chunkHeight = Math.min(pageSourceHeight - current.used, batchH - sourceY);
-          current.ctx?.drawImage(batchCanvas, 0, sourceY, batchW, chunkHeight, 0, current.used, batchW, chunkHeight);
-          current.used += chunkHeight;
-          sourceY += chunkHeight;
-        }
-      }
-      let isFirstPage = true;
-      for (const page of pages) {
-        if (!page.used) continue;
-        if (!isFirstPage) pdf.addPage('letter', orientation);
-        drawPageChrome(isFirstPage);
-        isFirstPage = false;
-        const drawHeight = page.used * scale;
-        pdf.addImage(page.canvas.toDataURL('image/jpeg', 0.82), 'JPEG', margin, contentTop, contentWidth, drawHeight, undefined, 'FAST');
-      }
       const safeMode = String(tableMode || 'leaderboard').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
       const safeViewBy = String(leaderboardViewBy || 'player').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
-      pdf.save(`pitching-leaderboard-${safeViewBy}-${safeMode}.pdf`);
+      await downloadLeaderboardTablePdf({
+        wrapNode,
+        titleText: 'Pitching Leaderboard',
+        subtitleText: [playerLabel, dateRangeLabel].filter(Boolean).join('  ·  '),
+        fileName: `pitching-leaderboard-${safeViewBy}-${safeMode}.pdf`,
+      });
     } catch (exportError) {
       setError(exportError instanceof Error ? exportError.message : 'Failed to export leaderboard PDF.');
     } finally {
-      for (const entry of originalLogoAttrs) {
-        if (entry.src === null) entry.node.removeAttribute('src');
-        else entry.node.setAttribute('src', entry.src);
-        if (entry.srcset === null) entry.node.removeAttribute('srcset');
-        else entry.node.setAttribute('srcset', entry.srcset);
-      }
-      for (const entry of originalHeaderStyles) {
-        entry.node.style.position = entry.position;
-        entry.node.style.top = entry.top;
-        entry.node.style.zIndex = entry.zIndex;
-        entry.node.style.background = entry.background;
-        entry.node.style.color = entry.color;
-      }
-      for (const entry of originalColoredCellStyles) {
-        entry.node.style.color = entry.color;
-        entry.node.style.textShadow = entry.textShadow;
-      }
-      wrapNode.style.maxHeight = originalWrapMaxHeight;
-      wrapNode.style.overflowY = originalWrapOverflowY;
       setIsExportingLeaderboardPdf(false);
     }
   }, [leaderboardViewBy, tableMode, selectedPitchers, allPitchersSelected, startDate, endDate]);
@@ -14406,6 +14290,42 @@ export default function PitchingSuite({
     return { backgroundColor: colors.bg, color: colors.text };
   };
 
+  const downloadLeaderboardCsv = useCallback(() => {
+    if (!leaderboardRowsWithPins.length || !displayedTableColumns.length) return;
+    const headers = ['Rank', ...displayedTableColumns];
+    const lines: string[] = [headers.map(csvEscape).join(',')];
+    let rankCounter = 0;
+    for (const row of leaderboardRowsWithPins) {
+      const rowKey = String(row[displayedTableColumns[0] ?? ''] ?? '').trim();
+      const isAllRow = rowKey.toLowerCase() === 'all';
+      const isPinnedAllRow = rowKey.toLowerCase() === 'all (pinned)';
+      const rank = isAllRow || isPinnedAllRow ? '' : String(++rankCounter);
+      const cells = displayedTableColumns.map((column, colIndex) => {
+        const rawValue = row[column] ?? '-';
+        if (colIndex === 0) {
+          const formatted = typeof rawValue === 'string' ? formatNameFirstLast(rawValue) : String(rawValue);
+          if (leaderboardViewBy !== 'Player') return formatTeamLabel(rawValue) || formatted;
+          return formatted;
+        }
+        if (leaderboardStatView === 'Percentile' && !isAllRow && !isPinnedAllRow) {
+          const percentile = getCellPercentile(row, column, rawValue);
+          if (percentile !== null) return `${percentile.toFixed(1)}%`;
+        }
+        return formatPitchingTableDisplayValue(column, rawValue);
+      });
+      lines.push([rank, ...cells].map(csvEscape).join(','));
+    }
+    downloadTextFile(lines.join('\n'), `leaderboard-${toYmdNow()}.csv`, 'text/csv;charset=utf-8');
+  }, [
+    leaderboardRowsWithPins,
+    displayedTableColumns,
+    leaderboardViewBy,
+    leaderboardStatView,
+    formatTeamLabel,
+    formatPitchingTableDisplayValue,
+    getCellPercentile,
+  ]);
+
   return (
     <section className="portal-panel portal-admin-panel" style={{ padding: '1rem' }}>
       <div
@@ -14825,16 +14745,31 @@ export default function PitchingSuite({
             )}
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
               {!isMobileView && isLeaderboardPage ? (
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => {
-                    void downloadLeaderboardPdf();
-                  }}
-                  disabled={isExportingLeaderboardPdf || loadingOverview || !leaderboardRowsWithPins.length}
-                >
-                  {isExportingLeaderboardPdf ? 'Downloading...' : 'Download PDF'}
-                </button>
+                <>
+                  <select
+                    value={leaderboardExportFormat}
+                    onChange={(event) => setLeaderboardExportFormat(event.target.value as 'PDF' | 'CSV')}
+                    style={{ minHeight: 38, borderRadius: 8, padding: '0 0.5rem' }}
+                    aria-label="Export format"
+                  >
+                    <option value="PDF">PDF</option>
+                    <option value="CSV">CSV</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      if (leaderboardExportFormat === 'CSV') {
+                        downloadLeaderboardCsv();
+                      } else {
+                        void downloadLeaderboardPdf();
+                      }
+                    }}
+                    disabled={isExportingLeaderboardPdf || loadingOverview || !leaderboardRowsWithPins.length}
+                  >
+                    {isExportingLeaderboardPdf ? 'Downloading...' : `Download ${leaderboardExportFormat}`}
+                  </button>
+                </>
               ) : null}
               {isMobileView ? (
                 <button type="button" className="btn btn-ghost" onClick={() => setIsSidebarHidden((value) => !value)}>
@@ -16648,7 +16583,7 @@ export default function PitchingSuite({
                             <AbPaChart
                               pitches={pa.pitches}
                               resultLabel={pa.result_label}
-                              onPitchClick={(pitch) => openActionModal([pitch])}
+                              onPitchClick={(pitch) => openActionModal(pa.pitches, pitch)}
                               pitchColors={pitchColors}
                               flipX={isPro}
                               isProSchool={isPro}
@@ -17715,7 +17650,7 @@ export default function PitchingSuite({
                                       onMouseMove: (event: { clientX: number; clientY: number }) =>
                                         setQpLocationsHover({ x: event.clientX, y: event.clientY, text: hoverText, bg: color }),
                                       onMouseLeave: () => setQpLocationsHover(null),
-                                      onClick: () => openActionModal([point]),
+                                      onClick: () => openActionModal(points, point),
                                     };
                                     if (result === 'Ball') return <circle key={`qpl-pt-${idx}`} cx={x} cy={y} r={7.4} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={1.9} {...hoverProps} />;
                                     if (result === 'Foul') return <polygon key={`qpl-pt-${idx}`} points={`${x},${y - 6.7} ${x - 6.0},${y + 5.1} ${x + 6.0},${y + 5.1}`} fill="rgba(0,0,0,0.001)" stroke={color} strokeWidth={1.9} {...hoverProps} />;
@@ -17879,7 +17814,7 @@ export default function PitchingSuite({
                                       ].join('\n'),
                                     })
                                   }
-                                  onClick={() => openActionModal([p])}
+                                  onClick={() => openActionModal(pts, p)}
                                   style={{ cursor: 'pointer' }}
                                 />
                               );
@@ -18213,7 +18148,7 @@ export default function PitchingSuite({
                 </div>
 
                 {actionMode === 'video' ? (
-                  <div className="portal-edger-video-picker" style={{ display: 'grid', justifyItems: 'center', gap: 6, minHeight: 0, overflow: actionSideBySide ? 'visible' : 'hidden', position: 'relative', zIndex: 40 }}>
+                  <div className="portal-edger-video-picker" style={{ display: 'grid', justifyItems: 'center', gap: 6, minHeight: 0, overflow: actionSideBySide || actionExportMenuOpen ? 'visible' : 'hidden', position: 'relative', zIndex: 40 }}>
                     {actionSideBySide ? (
                       <div style={{ width: 'min(1080px, 100%)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, position: 'relative', zIndex: 50, overflow: 'visible' }}>
                         <div style={{ minWidth: 0, position: 'relative', zIndex: 52 }}>
@@ -18286,7 +18221,7 @@ export default function PitchingSuite({
                         style={actionModalButtonStyle}
                         onClick={() =>
                           downloadUrl(
-                            (actionSideBySide ? selectedLeftUrls[0] : actionVideoUrls[0]) || '',
+                            (actionSideBySide ? pickCamera(selectedLeftUrls) : pickCamera(actionVideoUrls)) || '',
                             `pitch-${
                               (actionSideBySide ? selectedLeftPitch?.pitch_event_id : currentActionPitch.pitch_event_id) ??
                               (actionSideBySide ? selectedLeftPitch?.pitch_no : currentActionPitch.pitch_no) ??
@@ -18298,6 +18233,128 @@ export default function PitchingSuite({
                       >
                         Download Pitch
                       </button>
+                      <div style={{ position: 'relative' }}>
+                        <button
+                          type="button"
+                          className={actionExportMenuOpen ? 'btn btn-primary' : 'btn btn-ghost'}
+                          style={actionExportMenuOpen ? { padding: '0.42rem 0.75rem' } : actionModalButtonStyle}
+                          onClick={() => setActionExportMenuOpen((v) => !v)}
+                          disabled={actionSideBySide}
+                          title={actionSideBySide ? 'Exit Compare to export' : undefined}
+                        >
+                          Export
+                        </button>
+                        {actionExportMenuOpen ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: 'calc(100% + 6px)',
+                              left: '50%',
+                              transform: 'translateX(-50%)',
+                              zIndex: 60,
+                              display: 'grid',
+                              gap: 10,
+                              width: 260,
+                              padding: '0.75rem',
+                              borderRadius: 12,
+                              background: actionModalTheme.controlBg,
+                              border: `1px solid ${actionModalTheme.border}`,
+                              boxShadow: isLightTheme ? '0 18px 44px rgba(15,23,42,0.22)' : '0 18px 44px rgba(0,0,0,0.55)',
+                            }}
+                          >
+                            <div style={{ display: 'grid', gap: 6 }}>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: actionModalTheme.muted, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                Pitches
+                              </div>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <button
+                                  type="button"
+                                  className={actionExportScope === 'current' ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  style={actionExportScope === 'current' ? { flex: 1, padding: '0.4rem 0.5rem' } : { ...actionModalButtonStyle, flex: 1, padding: '0.4rem 0.5rem' }}
+                                  onClick={() => setActionExportScope('current')}
+                                >
+                                  This Pitch
+                                </button>
+                                <button
+                                  type="button"
+                                  className={actionExportScope === 'all' ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  style={actionExportScope === 'all' ? { flex: 1, padding: '0.4rem 0.5rem' } : { ...actionModalButtonStyle, flex: 1, padding: '0.4rem 0.5rem' }}
+                                  onClick={() => setActionExportScope('all')}
+                                  disabled={actionPitchCount <= 1}
+                                >
+                                  All {actionPitchCount}
+                                </button>
+                              </div>
+                            </div>
+                            <div style={{ display: 'grid', gap: 6 }}>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: actionModalTheme.muted, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                Camera
+                              </div>
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                {actionExportAvailableCameras.map((cam) => {
+                                  const selected = actionExportCameras.includes(cam);
+                                  return (
+                                    <button
+                                      key={cam}
+                                      type="button"
+                                      className={selected ? 'btn btn-primary' : 'btn btn-ghost'}
+                                      style={selected ? { padding: '0.4rem 0.6rem' } : { ...actionModalButtonStyle, padding: '0.4rem 0.6rem' }}
+                                      onClick={() =>
+                                        setActionExportCameras((current) =>
+                                          current.includes(cam) ? current.filter((c) => c !== cam) : [...current, cam]
+                                        )
+                                      }
+                                    >
+                                      {actionExportCameraLabel(cam)}
+                                    </button>
+                                  );
+                                })}
+                                {actionExportAvailableCameras.length > 1 ? (
+                                  <button
+                                    type="button"
+                                    className={
+                                      actionExportAvailableCameras.every((cam) => actionExportCameras.includes(cam))
+                                        ? 'btn btn-primary'
+                                        : 'btn btn-ghost'
+                                    }
+                                    style={
+                                      actionExportAvailableCameras.every((cam) => actionExportCameras.includes(cam))
+                                        ? { padding: '0.4rem 0.6rem' }
+                                        : { ...actionModalButtonStyle, padding: '0.4rem 0.6rem' }
+                                    }
+                                    onClick={() =>
+                                      setActionExportCameras(
+                                        actionExportAvailableCameras.every((cam) => actionExportCameras.includes(cam))
+                                          ? []
+                                          : [...actionExportAvailableCameras]
+                                      )
+                                    }
+                                  >
+                                    All
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-primary"
+                              style={{ padding: '0.5rem 0.75rem', fontWeight: 700 }}
+                              onClick={() => void runActionVideoExport()}
+                              disabled={actionExportState === 'exporting' || !actionExportAvailableCameras.length || !actionExportCameras.length}
+                            >
+                              {actionExportState === 'exporting' ? 'Exporting…' : 'Download Export'}
+                            </button>
+                            {actionExportState === 'error' && actionExportMessage ? (
+                              <div style={{ color: '#b91c1c', fontWeight: 600, fontSize: '0.8rem' }}>{actionExportMessage}</div>
+                            ) : null}
+                            {!actionExportAvailableCameras.length ? (
+                              <div style={{ color: actionModalTheme.muted, fontWeight: 600, fontSize: '0.8rem' }}>
+                                No video found for this selection.
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 ) : null}
@@ -18331,6 +18388,100 @@ export default function PitchingSuite({
                           overflow: 'hidden',
                         }}
                       >
+                        {activeCameraCount >= 1 ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: 10,
+                              right: 10,
+                              zIndex: 20,
+                              display: 'flex',
+                              gap: 6,
+                              background: 'rgba(2,6,23,0.72)',
+                              borderRadius: 10,
+                              padding: 4,
+                              backdropFilter: 'blur(8px)',
+                            }}
+                            onPointerDown={(event) => event.stopPropagation()}
+                          >
+                            {Array.from({ length: activeCameraCount }, (_, camIdx) =>
+                              activeCameraCount > 1 ? (
+                                <button
+                                  key={camIdx}
+                                  type="button"
+                                  className={camIdx === actionCameraIndex ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem' }}
+                                  onClick={() => setActionCameraIndex(camIdx)}
+                                >
+                                  {cameraTabLabel(camIdx)}
+                                </button>
+                              ) : (
+                                // Single camera: show the label as a plain badge, not a
+                                // clickable tab -- there's nothing else to switch to, but
+                                // this is the only place the actual detected camera type
+                                // is visible, and that visibility is the whole point.
+                                <div
+                                  key={camIdx}
+                                  style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem', color: '#e2e8f0', fontWeight: 600 }}
+                                >
+                                  {cameraTabLabel(camIdx)}
+                                </div>
+                              )
+                            )}
+                          </div>
+                        ) : null}
+                        {actionMode === 'video' && !actionSideBySide && hasActionVideo ? (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              bottom: 10,
+                              left: 10,
+                              zIndex: 20,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              background: 'rgba(2,6,23,0.72)',
+                              borderRadius: 10,
+                              padding: 4,
+                              backdropFilter: 'blur(8px)',
+                            }}
+                            onPointerDown={(event) => event.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              className="btn btn-ghost"
+                              style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
+                              onClick={() => setActionVideoZoom((z) => Math.max(1, Math.round((z - 0.25) * 100) / 100))}
+                              disabled={actionVideoZoom <= 1}
+                            >
+                              −
+                            </button>
+                            <span style={{ color: '#f8fafc', fontSize: '0.78rem', fontWeight: 700, minWidth: 38, textAlign: 'center' }}>
+                              {Math.round(actionVideoZoom * 100)}%
+                            </span>
+                            <button
+                              type="button"
+                              className="btn btn-ghost"
+                              style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
+                              onClick={() => setActionVideoZoom((z) => Math.min(4, Math.round((z + 0.25) * 100) / 100))}
+                            >
+                              +
+                            </button>
+                            {actionVideoZoom > 1 || actionVideoPan.x !== 0 || actionVideoPan.y !== 0 ? (
+                              <button
+                                type="button"
+                                className="btn btn-ghost"
+                                style={{ padding: '0.3rem 0.6rem', fontSize: '0.78rem' }}
+                                onClick={() => {
+                                  setActionVideoZoom(1);
+                                  setActionVideoPan({ x: 0, y: 0 });
+                                }}
+                              >
+                                Reset
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
                         {actionVideoLookupLoading ? (
                           <div style={{ color: '#f8fafc', fontSize: '2.35rem', fontWeight: 900, textAlign: 'center', letterSpacing: '0.01em' }}>
                             Loading video...
@@ -18364,7 +18515,7 @@ export default function PitchingSuite({
                                 >
                                   {actionCompareLayout !== 'overlay' ? renderCompactVideoMetrics(selectedLeftPitch, 'left') : null}
                                   <video
-                                    key={`left-${actionLeftPitchKey}-${selectedLeftUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
+                                    key={`left-${actionLeftPitchKey}-${pickCamera(selectedLeftUrls) || 'none'}-${actionVideoRefreshNonce}`}
                                     ref={leftCompareVideoRef}
                                     crossOrigin="anonymous"
                                     loop={actionVideoLoop}
@@ -18376,7 +18527,7 @@ export default function PitchingSuite({
                                       void handleActionVideoLoadError(selectedLeftPitch ?? null);
                                     }}
                                   >
-                                    <source src={selectedLeftUrls[0]} />
+                                    <source src={pickCamera(selectedLeftUrls)} />
                                   </video>
                                 </div>
                                 {selectedRightPitch ? (
@@ -18397,7 +18548,7 @@ export default function PitchingSuite({
                                     >
                                       {actionCompareLayout !== 'overlay' ? renderCompactVideoMetrics(selectedRightPitch, 'right') : null}
                                       <video
-                                        key={`right-${actionRightPitchKey}-${selectedRightUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
+                                        key={`right-${actionRightPitchKey}-${pickCamera(selectedRightUrls) || 'none'}-${actionVideoRefreshNonce}`}
                                         ref={rightCompareVideoRef}
                                         crossOrigin="anonymous"
                                         loop={actionVideoLoop}
@@ -18409,7 +18560,7 @@ export default function PitchingSuite({
                                           void handleActionVideoLoadError(selectedRightPitch ?? null);
                                         }}
                                       >
-                                        <source src={selectedRightUrls[0]} />
+                                        <source src={pickCamera(selectedRightUrls)} />
                                       </video>
                                     </div>
                                   ) : (
@@ -18451,22 +18602,44 @@ export default function PitchingSuite({
                               </div>
                             )
                           ) : (
-                            <video
-                              key={`single-${currentPitchKey}-${actionVideoUrls[0] ?? 'none'}-${actionVideoRefreshNonce}`}
-                              ref={singleActionVideoRef}
-                              crossOrigin="anonymous"
-                              autoPlay
-                              loop={actionVideoLoop}
-                              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-                              onLoadedMetadata={updateSyncedDuration}
-                              onPause={() => setActionVideoPlaying(false)}
-                              onPlay={() => setActionVideoPlaying(true)}
-                              onError={() => {
-                                void handleActionVideoLoadError(currentActionPitch ?? null);
+                            <div
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                overflow: 'hidden',
+                                touchAction: 'none',
+                                cursor: breakdownMode ? undefined : actionVideoZoom > 1 ? 'grab' : 'default',
                               }}
+                              onPointerDown={handleActionVideoPanStart}
+                              onPointerMove={handleActionVideoPanMove}
+                              onPointerUp={handleActionVideoPanEnd}
+                              onPointerCancel={handleActionVideoPanEnd}
                             >
-                              <source src={actionVideoUrls[0]} />
-                            </video>
+                              <video
+                                key={`single-${currentPitchKey}-${pickCamera(actionVideoUrls) || 'none'}-${actionVideoRefreshNonce}`}
+                                ref={singleActionVideoRef}
+                                crossOrigin="anonymous"
+                                autoPlay
+                                loop={actionVideoLoop}
+                                style={{
+                                  width: '100%',
+                                  height: '100%',
+                                  objectFit: 'contain',
+                                  transform: `translate(${actionVideoPan.x}px, ${actionVideoPan.y}px) scale(${actionVideoZoom})`,
+                                  transformOrigin: 'center center',
+                                  transition: actionVideoPanDragRef.current ? 'none' : 'transform 0.1s ease-out',
+                                  pointerEvents: 'none',
+                                }}
+                                onLoadedMetadata={updateSyncedDuration}
+                                onPause={() => setActionVideoPlaying(false)}
+                                onPlay={() => setActionVideoPlaying(true)}
+                                onError={() => {
+                                  void handleActionVideoLoadError(currentActionPitch ?? null);
+                                }}
+                              >
+                                <source src={pickCamera(actionVideoUrls)} />
+                              </video>
+                            </div>
                           )
                         ) : (
                           <div style={{ color: '#f8fafc', fontSize: '2rem', fontWeight: 700 }}>No video available</div>
