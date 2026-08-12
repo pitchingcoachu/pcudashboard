@@ -341,7 +341,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
                   Throwing Calendar
                 </Link>
                 <Link href="/portal/player/program/bullpens" className="btn btn-ghost">
-                  Bullpens
+                  Bullpen Scripts
                 </Link>
                 <Link href="/portal/player/program/velocity" className="btn btn-ghost">
                   Velocity
@@ -350,10 +350,24 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
                   href={session.role === 'admin' || session.role === 'coach' ? `/portal/player/program/drills?previewPlayerId=${effectivePlayerId}` : '/portal/player/program/drills'}
                   className="btn btn-ghost"
                 >
-                  Plyos and Drills
+                  Pitching Drills
                 </Link>
               </div>
             ) : null}
+            <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <Link
+                href={session.role === 'admin' || session.role === 'coach' ? `/portal/player/program/hitting?previewPlayerId=${effectivePlayerId}` : '/portal/player/program/hitting'}
+                className="btn btn-ghost"
+              >
+                BP Templates
+              </Link>
+              <Link
+                href={session.role === 'admin' || session.role === 'coach' ? `/portal/player/program/hitting-drills?previewPlayerId=${effectivePlayerId}` : '/portal/player/program/hitting-drills'}
+                className="btn btn-ghost"
+              >
+                Hitting Drills
+              </Link>
+            </div>
             {session.role === 'admin' || session.role === 'coach' ? (
               <div style={{ marginTop: '0.5rem' }}>
                 <Link href="/portal/dashboard?suite=player-notes" className="btn btn-ghost">

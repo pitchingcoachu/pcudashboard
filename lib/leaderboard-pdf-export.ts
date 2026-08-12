@@ -49,10 +49,24 @@ export async function downloadLeaderboardTablePdf(options: {
       URL.revokeObjectURL(objectUrl);
     }
   };
+  const originalTableWidth = tableNode.style.width;
+  const originalTableMinWidth = tableNode.style.minWidth;
+  const originalTableDisplay = tableNode.style.display;
   try {
     const isLightTheme = typeof document !== 'undefined' && document.body.classList.contains('theme-light');
     wrapNode.style.maxHeight = 'none';
     wrapNode.style.overflowY = 'visible';
+    // .portal-table has width:100% AND min-width:720px, so it always
+    // stretches to fill its container (or at least 720px) regardless of
+    // row/column count -- with few narrow columns that spreads sparse
+    // content out with large gaps, which the capture below would otherwise
+    // screenshot faithfully. width:auto alone doesn't override min-width
+    // (min-width always wins over a smaller computed width), so both must
+    // be cleared for the table to actually shrink to its content for the
+    // capture; restored in `finally`.
+    tableNode.style.display = 'inline-table';
+    tableNode.style.width = 'auto';
+    tableNode.style.minWidth = '0';
     for (const entry of originalHeaderStyles) {
       entry.node.style.position = 'static';
       entry.node.style.top = 'auto';
@@ -193,7 +207,39 @@ export async function downloadLeaderboardTablePdf(options: {
         col.style.width = `${w}px`;
         return col;
       });
-    if (theadNode) captureBatches.push(await captureNode(theadNode));
+    // Capturing theadNode in place (its normal position inside tableNode)
+    // is unreliable once the table has been shrunk to its natural content
+    // width above: getBoundingClientRect() on the live thead correctly
+    // reports the new, narrower width, but offsetWidth/scrollWidth --
+    // what html2canvas actually sizes its capture canvas from -- can keep
+    // reporting the table's OLD, pre-shrink width (a real, reproduced
+    // browser quirk, not a fixed-position/sticky artifact). That stale
+    // wide header canvas then wins the rawW = max(...) below, stretching
+    // the entire page to the header's old width even though every body
+    // batch capture is correctly sized. Cloning the header into its own
+    // fixed-width standalone table -- exactly like each body batch already
+    // is -- sidesteps the stale-measurement path entirely.
+    if (theadNode) {
+      const headerWrap = document.createElement('table');
+      headerWrap.className = tableNode.className;
+      if (headerCellWidths.length) {
+        const colgroup = document.createElement('colgroup');
+        for (const col of buildColgroup()) colgroup.appendChild(col);
+        headerWrap.appendChild(colgroup);
+        headerWrap.style.tableLayout = 'fixed';
+      }
+      headerWrap.appendChild(theadNode.cloneNode(true) as HTMLElement);
+      headerWrap.style.position = 'fixed';
+      headerWrap.style.top = '-100000px';
+      headerWrap.style.left = '0';
+      headerWrap.style.width = `${tableWidthPx}px`;
+      document.body.appendChild(headerWrap);
+      try {
+        captureBatches.push(await captureNode(headerWrap));
+      } finally {
+        document.body.removeChild(headerWrap);
+      }
+    }
     if (bodyRows.length > 0) {
       let batchStart = 0;
       while (batchStart < bodyRows.length) {
@@ -338,7 +384,26 @@ export async function downloadLeaderboardTablePdf(options: {
       drawPageChrome(isFirstPage);
       isFirstPage = false;
       const drawHeight = page.used * scale;
-      pdf.addImage(page.canvas.toDataURL('image/jpeg', 0.82), 'JPEG', margin, contentTop, contentWidth, drawHeight, undefined, 'FAST');
+      // page.canvas is always allocated at the full pageSourceHeight (the
+      // per-page budget), but page.used is usually less than that -- a
+      // short table never fills a whole page. toDataURL() on the full
+      // canvas serializes ALL of it, including the blank space below the
+      // real content; addImage() then scales that entire (mostly blank)
+      // image into a box sized only for the real content's height
+      // (drawHeight), which squashes the real content into a fraction of
+      // that box while width scales at the full intended factor -- an
+      // asymmetric width-vs-height scale that reads as "stretched" text.
+      // Cropping to just the used region before encoding keeps the image's
+      // own aspect ratio consistent with drawHeight/contentWidth.
+      let sourceCanvas = page.canvas;
+      if (page.used < page.canvas.height) {
+        const cropped = document.createElement('canvas');
+        cropped.width = page.canvas.width;
+        cropped.height = page.used;
+        cropped.getContext('2d')?.drawImage(page.canvas, 0, 0, page.canvas.width, page.used, 0, 0, page.canvas.width, page.used);
+        sourceCanvas = cropped;
+      }
+      pdf.addImage(sourceCanvas.toDataURL('image/jpeg', 0.82), 'JPEG', margin, contentTop, contentWidth, drawHeight, undefined, 'FAST');
     }
     pdf.save(fileName);
   } finally {
@@ -361,5 +426,8 @@ export async function downloadLeaderboardTablePdf(options: {
     }
     wrapNode.style.maxHeight = originalWrapMaxHeight;
     wrapNode.style.overflowY = originalWrapOverflowY;
+    tableNode.style.width = originalTableWidth;
+    tableNode.style.minWidth = originalTableMinWidth;
+    tableNode.style.display = originalTableDisplay;
   }
 }

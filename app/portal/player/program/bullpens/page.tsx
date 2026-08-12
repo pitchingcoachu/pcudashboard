@@ -55,7 +55,7 @@ export default async function PlayerBullpensPage({ searchParams }: BullpensPageP
     <div className="portal-shell">
       <section className="portal-panel">
         <div className="portal-row-between">
-          <h2 style={{ marginTop: 0 }}>Bullpens</h2>
+          <h2 style={{ marginTop: 0 }}>Bullpen Scripts</h2>
           <Link
             href={canPreview && previewPlayerId > 0 ? `/portal/player/program?previewPlayerId=${previewPlayerId}` : '/portal/player/program'}
             className="btn btn-ghost as-link"

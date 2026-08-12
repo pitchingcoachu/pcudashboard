@@ -170,16 +170,16 @@ export default async function AdminHomePage() {
         <>
           <article className="portal-admin-card">
             <h2>Exercise Library</h2>
-            <p>{exerciseCount} exercises and drills available for assignments.</p>
+            <p>{exerciseCount} PCU and school exercises and drills.</p>
             <Link href="/portal/admin/exercises" className="btn btn-primary as-link">
-              Manage Exercises
+              Open Exercise Library
             </Link>
           </article>
           <article className="portal-admin-card">
             <h2>Workout Library</h2>
-            <p>{workoutCount} workouts available to assign to players.</p>
+            <p>{workoutCount} PCU and school workouts.</p>
             <Link href="/portal/admin/workouts" className="btn btn-primary as-link">
-              Manage Workouts
+              Open Workout Library
             </Link>
           </article>
           <article className="portal-admin-card">

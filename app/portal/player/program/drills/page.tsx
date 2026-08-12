@@ -52,7 +52,7 @@ export default async function PlayerDrillsPage({ searchParams }: DrillsPageProps
     <div className="portal-shell">
       <section className="portal-panel">
         <div className="portal-row-between">
-          <h2 style={{ marginTop: 0 }}>Plyos and Drills</h2>
+          <h2 style={{ marginTop: 0 }}>Pitching Drills</h2>
           <Link href={backHref} className="btn btn-ghost as-link">Back to Program</Link>
         </div>
         <DrillsReadonly state={drillsState} drillVideos={drillVideos} playerId={resolvedPlayerId} />

@@ -13,6 +13,8 @@ import {
 } from '../../../../../lib/training-db';
 import { logApiTiming } from '../../../../../lib/request-timing';
 import { normalizeDrillsState, normalizeDrillTemplates } from '../../../../../lib/drills-program';
+import { normalizeHittingDrillsState, normalizeDrillTemplates as normalizeHittingDrillTemplates } from '../../../../../lib/hitting-drills-program';
+import { isBubbleColumnType } from '../../../../../lib/bullpen-column-types';
 
 type ScriptGrid = {
   title: string;
@@ -49,7 +51,7 @@ type ThrowingTemplate = {
 };
 const SHARED_PLAYER_ID = 0;
 const DEFAULT_COLUMNS = ['Pitch Type', 'Ball Type', 'Stretch/Windup', 'Location', 'Situation', 'Notes'];
-type BullpenColumnType = 'auto' | 'text' | 'fill' | 'velocity' | 'strike' | 'two-thirds';
+type BullpenColumnType = 'auto' | 'text' | 'fill' | 'velocity' | 'strike' | 'two-thirds' | string;
 const DEFAULT_COLUMN_TYPE: BullpenColumnType = 'auto';
 const ALLOWED_COLUMN_TYPES = new Set<BullpenColumnType>(['auto', 'text', 'fill', 'velocity', 'strike', 'two-thirds']);
 
@@ -74,6 +76,7 @@ function normalizeColumnTypes(raw: unknown, columnCount: number): BullpenColumnT
   const types = source.slice(0, columnCount).map((value) => {
     const normalized = String(value ?? '').trim().toLowerCase();
     if (normalized === 'yes-no') return 'strike';
+    if (isBubbleColumnType(normalized)) return normalized;
     return ALLOWED_COLUMN_TYPES.has(normalized as BullpenColumnType) ? normalized as BullpenColumnType : DEFAULT_COLUMN_TYPE;
   });
   while (types.length < columnCount) types.push(DEFAULT_COLUMN_TYPE);
@@ -374,6 +377,7 @@ export async function GET(request: Request) {
   let velocityTemplates = normalizeTemplateList(sharedTemplatesObj.velocityTemplates);
   const preThrowDrillTemplates = normalizeDrillTemplates(sharedTemplatesObj.preThrowDrillTemplates);
   const postThrowDrillTemplates = normalizeDrillTemplates(sharedTemplatesObj.postThrowDrillTemplates);
+  const hittingDrillTemplates = normalizeHittingDrillTemplates(sharedTemplatesObj.hittingDrillTemplates);
 
   if (bullpenTemplates.length === 0 && !isSharedOnly) {
     bullpenTemplates = extractLegacyTemplates(playerTemplatesObj.bullpen);
@@ -434,6 +438,8 @@ export async function GET(request: Request) {
       drillsState: normalizeDrillsState(playerTemplatesObj.drills),
       preThrowDrillTemplates,
       postThrowDrillTemplates,
+      hittingDrillsState: normalizeHittingDrillsState(playerTemplatesObj.hittingDrills),
+      hittingDrillTemplates,
       catchPlayNotes: normalizeCatchPlayNotes(playerTemplatesObj.catchPlayNotes),
       cycleNotes: normalizeCycleNotes(playerTemplatesObj.cycleNotes),
     },
@@ -474,6 +480,8 @@ export async function POST(request: Request) {
         drillsState?: unknown;
         preThrowDrillTemplates?: unknown[];
         postThrowDrillTemplates?: unknown[];
+        hittingDrillsState?: unknown;
+        hittingDrillTemplates?: unknown[];
         catchPlayNotes?: unknown;
         cycleNotes?: unknown;
       }
@@ -529,6 +537,8 @@ export async function POST(request: Request) {
   const incomingPost = normalizeDrillTemplates(body.postThrowDrillTemplates);
   const nextPreThrowDrillTemplates = incomingPre.length > 0 ? incomingPre : normalizeDrillTemplates(sharedObj.preThrowDrillTemplates);
   const nextPostThrowDrillTemplates = incomingPost.length > 0 ? incomingPost : normalizeDrillTemplates(sharedObj.postThrowDrillTemplates);
+  const incomingHittingDrills = normalizeHittingDrillTemplates(body.hittingDrillTemplates);
+  const nextHittingDrillTemplates = incomingHittingDrills.length > 0 ? incomingHittingDrills : normalizeHittingDrillTemplates(sharedObj.hittingDrillTemplates);
 
   if (nextBullpenTemplates.length === 0 && !hasBullpenTemplatesInput && !isSharedOnly) {
     nextBullpenTemplates = extractLegacyTemplates(playerObj.bullpen);
@@ -549,11 +559,15 @@ export async function POST(request: Request) {
   const nextBullpenState = normalizeScriptState(body.bullpenState ?? playerObj.bullpen);
   const nextVelocityState = normalizeScriptState(body.velocityState ?? playerObj.velocity);
   const nextDrillsState = normalizeDrillsState(body.drillsState ?? playerObj.drills);
+  const nextHittingDrillsState = normalizeHittingDrillsState(body.hittingDrillsState ?? playerObj.hittingDrills);
 
   const preTemplateIds = new Set(nextPreThrowDrillTemplates.map((template) => template.id));
   const postTemplateIds = new Set(nextPostThrowDrillTemplates.map((template) => template.id));
   if (!preTemplateIds.has(nextDrillsState.pre.selectedTemplateId)) nextDrillsState.pre.selectedTemplateId = '';
   if (!postTemplateIds.has(nextDrillsState.post.selectedTemplateId)) nextDrillsState.post.selectedTemplateId = '';
+
+  const hittingDrillTemplateIds = new Set(nextHittingDrillTemplates.map((template) => template.id));
+  if (!hittingDrillTemplateIds.has(nextHittingDrillsState.main.selectedTemplateId)) nextHittingDrillsState.main.selectedTemplateId = '';
 
   nextBullpenState.visibleTemplateIds = nextBullpenState.visibleTemplateIds.filter((id) => bullpenTemplateIds.has(id));
   nextVelocityState.visibleTemplateIds = nextVelocityState.visibleTemplateIds.filter((id) => velocityTemplateIds.has(id));
@@ -569,6 +583,7 @@ export async function POST(request: Request) {
         bullpen: nextBullpenState,
         velocity: nextVelocityState,
         drills: nextDrillsState,
+        hittingDrills: nextHittingDrillsState,
         catchPlayNotes: normalizeCatchPlayNotes(body.catchPlayNotes ?? playerObj.catchPlayNotes),
         cycleNotes: normalizeCycleNotes(body.cycleNotes ?? playerObj.cycleNotes),
       },
@@ -588,6 +603,7 @@ export async function POST(request: Request) {
       velocityTemplates: nextVelocityTemplates,
       preThrowDrillTemplates: nextPreThrowDrillTemplates,
       postThrowDrillTemplates: nextPostThrowDrillTemplates,
+      hittingDrillTemplates: nextHittingDrillTemplates,
     },
   });
   if (!saveShared.ok) return finish(400, { error: saveShared.error });

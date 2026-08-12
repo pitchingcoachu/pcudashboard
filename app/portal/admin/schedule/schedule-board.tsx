@@ -14,13 +14,17 @@ import {
   type DrillTemplate,
   type DrillsState,
 } from '../../../../lib/drills-program';
+import { normalizeHittingDrillsState } from '../../../../lib/hitting-drills-program';
 import WorkoutLogModal from '../../components/workout-log-modal';
 import BullpenEntry from '../../player/program/bullpens/bullpen-entry';
+import ScriptEntry from '../../player/program/shared-script-entry';
+import { bubbleCategoryIdFromType, bubbleColumnType, isBubbleColumnType } from '../../../../lib/bullpen-column-types';
+import type { BubbleCategoryDef } from '../../../../lib/bubble-categories';
 
 type PlayerChoice = { id: number; name: string };
-type CalendarLinkTarget = 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
+type CalendarLinkTarget = 'none' | 'throwing' | 'bullpens' | 'velocity' | 'drills' | 'hitting' | 'hitting-drills';
 type WorkoutChoice = { id: number; name: string; exerciseCount: number; category: string; calendarLinkTarget: CalendarLinkTarget };
-type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'plan' | 'throwing' | 'bullpens' | 'velocity' | 'drills';
+type ViewMode = 'day' | 'week' | 'month' | 'cycle' | 'plan' | 'throwing' | 'bullpens' | 'velocity' | 'drills' | 'hitting' | 'hitting-drills';
 type ThrowingBuilderMode = 'month' | 'weeks';
 type ThrowingCalendarView = 'day' | 'week' | 'month';
 type BuilderMode = 'schedule' | 'template';
@@ -63,7 +67,11 @@ type BullpenState = {
   notes?: string;
 };
 type BullpenFieldKey = number;
-type BullpenColumnType = 'auto' | 'text' | 'fill' | 'velocity' | 'strike' | 'two-thirds';
+// Widened to a plain string (not a strict literal union) so it can also hold
+// 'bubble:<categoryId>' -- a user-defined bubble category referenced by a
+// dynamic DB id, which a template-literal union can't validate against at
+// compile time anyway. Runtime validation happens in normalizeBullpenColumnTypes.
+type BullpenColumnType = 'auto' | 'text' | 'fill' | 'velocity' | 'strike' | 'two-thirds' | string;
 type TemplateChoice = {
   id: number;
   name: string;
@@ -169,6 +177,7 @@ const TRAINING_PROGRAM_SECTIONS: Array<{ key: ProgramPlanSection; label: string 
 const SCHEDULE_REQUEST_TIMEOUT_MS = 20000;
 
 const DEFAULT_BULLPEN_COLUMNS = ['Pitch Type', 'Ball Type', 'Stretch/Windup', 'Location', 'Situation', 'Notes'];
+const DEFAULT_HITTING_COLUMNS = ['Pitch Type', 'Result', 'Zone', 'Contact Quality', 'Notes'];
 const DEFAULT_BULLPEN_COLUMN_TYPE: BullpenColumnType = 'auto';
 const BULLPEN_COLUMN_TYPE_OPTIONS: Array<{ value: BullpenColumnType; label: string }> = [
   { value: 'auto', label: 'Auto' },
@@ -177,15 +186,20 @@ const BULLPEN_COLUMN_TYPE_OPTIONS: Array<{ value: BullpenColumnType; label: stri
   { value: 'velocity', label: 'Velocity' },
   { value: 'strike', label: 'Strike/Ball' },
   { value: 'two-thirds', label: '2/3' },
+  // Sentinel only -- 'bubble' alone is never a valid stored columnType value;
+  // choosing it in the UI reveals a second dropdown that sets the real value
+  // to 'bubble:<categoryId>' once a specific category is picked.
+  { value: 'bubble', label: 'Bubble Category…' },
 ];
 
 function normalizeBullpenColumnTypes(raw: unknown, columnCount: number): BullpenColumnType[] {
-  const allowed = new Set<BullpenColumnType>(BULLPEN_COLUMN_TYPE_OPTIONS.map((option) => option.value));
+  const allowed = new Set<BullpenColumnType>(BULLPEN_COLUMN_TYPE_OPTIONS.map((option) => option.value).filter((v) => v !== 'bubble'));
   const source = Array.isArray(raw) ? raw : [];
   const values = source.slice(0, columnCount).map((value) => {
     const normalized = String(value ?? '').trim().toLowerCase();
     if (normalized === 'yes-no') return 'strike';
-    return allowed.has(normalized as BullpenColumnType) ? normalized as BullpenColumnType : DEFAULT_BULLPEN_COLUMN_TYPE;
+    if (isBubbleColumnType(normalized)) return normalized;
+    return allowed.has(normalized) ? normalized : DEFAULT_BULLPEN_COLUMN_TYPE;
   });
   while (values.length < columnCount) values.push(DEFAULT_BULLPEN_COLUMN_TYPE);
   return values;
@@ -427,6 +441,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [visibleBullpenTemplateIds, setVisibleBullpenTemplateIds] = useState<string[]>([]);
   const [bullpenNotes, setBullpenNotes] = useState('');
   const [bullpenCurrentCategory, setBullpenCurrentCategory] = useState<BullpenCategory>('');
+  const [bubbleCategories, setBubbleCategories] = useState<BubbleCategoryDef[]>([]);
+  const [bubbleCategoriesLoading, setBubbleCategoriesLoading] = useState(false);
+  const [showBubbleCategoryManager, setShowBubbleCategoryManager] = useState(false);
+  const [bubbleManagerLabel, setBubbleManagerLabel] = useState('');
+  const [bubbleManagerOptionsText, setBubbleManagerOptionsText] = useState('');
+  const [bubbleManagerEditingId, setBubbleManagerEditingId] = useState<string | null>(null);
+  const [bubbleManagerError, setBubbleManagerError] = useState('');
+  const [bubbleManagerSaving, setBubbleManagerSaving] = useState(false);
   // Ids removed via deleteBullpenTemplate/deleteVelocityTemplate that still need to reach the
   // server -- the backend's shared-template merge otherwise re-adds a deleted id from its own
   // stored copy, so a delete has to be sent explicitly rather than inferred from list absence.
@@ -442,6 +464,17 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [selectedVelocityTemplateId, setSelectedVelocityTemplateId] = useState<string>('');
   const [visibleVelocityTemplateIds, setVisibleVelocityTemplateIds] = useState<string[]>([]);
   const [velocityNotes, setVelocityNotes] = useState('');
+  const [hittingCurrent, setHittingCurrent] = useState<BullpenScript>({
+    title: '',
+    rowCount: 20,
+    columns: [...DEFAULT_HITTING_COLUMNS],
+    rows: buildBullpenRows(20, DEFAULT_HITTING_COLUMNS.length),
+  });
+  const [hittingTemplates, setHittingTemplates] = useState<BullpenTemplate[]>([]);
+  const [selectedHittingTemplateId, setSelectedHittingTemplateId] = useState<string>('');
+  const [visibleHittingTemplateIds, setVisibleHittingTemplateIds] = useState<string[]>([]);
+  const [hittingNotes, setHittingNotes] = useState('');
+  const [pendingDeletedHittingTemplateIds, setPendingDeletedHittingTemplateIds] = useState<string[]>([]);
   const [drillsNotes, setDrillsNotes] = useState('');
   const [drillsRowCount, setDrillsRowCount] = useState<number>(4);
   const [drillsRows, setDrillsRows] = useState<DrillRow[]>(() => normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
@@ -453,6 +486,13 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [postDrillTemplateName, setPostDrillTemplateName] = useState('');
   const [preThrowDrillTemplates, setPreThrowDrillTemplates] = useState<DrillTemplate[]>([]);
   const [postThrowDrillTemplates, setPostThrowDrillTemplates] = useState<DrillTemplate[]>([]);
+  const [hittingDrillsNotes, setHittingDrillsNotes] = useState('');
+  const [hittingDrillsRowCount, setHittingDrillsRowCount] = useState<number>(DEFAULT_DRILL_ROW_COUNT);
+  const [hittingDrillsRows, setHittingDrillsRows] = useState<DrillRow[]>(() => normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
+  const [selectedHittingDrillTemplateId, setSelectedHittingDrillTemplateId] = useState('');
+  const [hittingDrillTemplateName, setHittingDrillTemplateName] = useState('');
+  const [hittingDrillTemplates, setHittingDrillTemplates] = useState<DrillTemplate[]>([]);
+  const [hittingDrillRowDrag, setHittingDrillRowDrag] = useState<number | null>(null);
   const [drillExerciseOptions, setDrillExerciseOptions] = useState<Array<{ id: number; name: string; category: string; instructionVideoUrl: string | null }>>(
     exercises.filter((exercise) => isDrillEligibleCategory(exercise.category))
   );
@@ -467,6 +507,93 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const [catchPlayMediumDay, setCatchPlayMediumDay] = useState('');
   const [catchPlayLowDay, setCatchPlayLowDay] = useState('');
   const [cycleNotes, setCycleNotes] = useState('');
+
+  const loadBubbleCategories = useCallback(async () => {
+    setBubbleCategoriesLoading(true);
+    try {
+      const response = await fetchWithTimeout('/api/bubble-categories');
+      const payload = (await response.json().catch(() => ({}))) as { categories?: BubbleCategoryDef[]; error?: string };
+      if (response.ok && Array.isArray(payload.categories)) setBubbleCategories(payload.categories);
+    } catch {
+      // Leave the existing (possibly empty) list in place on failure.
+    } finally {
+      setBubbleCategoriesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadBubbleCategories();
+  }, [loadBubbleCategories]);
+
+  const resetBubbleManagerForm = () => {
+    setBubbleManagerEditingId(null);
+    setBubbleManagerLabel('');
+    setBubbleManagerOptionsText('');
+    setBubbleManagerError('');
+  };
+
+  const startEditBubbleCategory = (category: BubbleCategoryDef) => {
+    setBubbleManagerEditingId(category.id);
+    setBubbleManagerLabel(category.label);
+    setBubbleManagerOptionsText(category.options.join('\n'));
+    setBubbleManagerError('');
+  };
+
+  const saveBubbleCategory = async () => {
+    const label = bubbleManagerLabel.trim();
+    const options = bubbleManagerOptionsText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!label) {
+      setBubbleManagerError('Category name is required.');
+      return;
+    }
+    if (options.length < 2) {
+      setBubbleManagerError('Enter at least two options, one per line.');
+      return;
+    }
+    setBubbleManagerSaving(true);
+    setBubbleManagerError('');
+    try {
+      const isEdit = !!bubbleManagerEditingId;
+      const response = await fetchWithTimeout(
+        isEdit ? `/api/bubble-categories/${bubbleManagerEditingId}` : '/api/bubble-categories',
+        {
+          method: isEdit ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label, options }),
+        }
+      );
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!response.ok || !payload.ok) {
+        setBubbleManagerError(payload.error || 'Failed to save bubble category.');
+        return;
+      }
+      resetBubbleManagerForm();
+      await loadBubbleCategories();
+    } catch (error) {
+      setBubbleManagerError(error instanceof Error ? error.message : 'Failed to save bubble category.');
+    } finally {
+      setBubbleManagerSaving(false);
+    }
+  };
+
+  const deleteBubbleCategoryById = async (id: string) => {
+    if (!window.confirm('Delete this bubble category? Scripts referencing it will keep the last-saved options for historical entries, but the category will no longer be selectable for new columns.')) return;
+    try {
+      const response = await fetchWithTimeout(`/api/bubble-categories/${id}`, { method: 'DELETE' });
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!response.ok || !payload.ok) {
+        window.alert(payload.error || 'Failed to delete bubble category.');
+        return;
+      }
+      if (bubbleManagerEditingId === id) resetBubbleManagerForm();
+      await loadBubbleCategories();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Failed to delete bubble category.');
+    }
+  };
 
   useEffect(() => {
     if (!players.length) return;
@@ -487,6 +614,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const bullpenFillTargetsRef = useRef<Set<string>>(new Set());
   const throwingCalendarRef = useRef<HTMLDivElement | null>(null);
   const throwingStateLoadedRef = useRef(false);
+  const hittingStateLoadedRef = useRef(false);
 
   const resetTemplateDraft = () => {
     setSelectedTemplateId(null);
@@ -583,7 +711,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       setItems([]);
       return;
     }
-    if (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'drills') {
+    if (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'hitting' || view === 'drills' || view === 'hitting-drills') {
       setItems([]);
       return;
     }
@@ -708,6 +836,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setSelectedPostDrillTemplateId('');
         setPreDrillTemplateName('');
         setPostDrillTemplateName('');
+        setHittingDrillsNotes('');
+        setHittingDrillsRowCount(DEFAULT_DRILL_ROW_COUNT);
+        setHittingDrillsRows(normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
+        setSelectedHittingDrillTemplateId('');
+        setHittingDrillTemplateName('');
         try {
           const sharedResponse = await fetchWithTimeout(`/api/admin/schedule/throwing?playerId=0`, { cache: 'no-store' });
           const sharedPayload = (await sharedResponse.json().catch(() => ({}))) as {
@@ -716,6 +849,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             velocityTemplates?: BullpenTemplate[];
             preThrowDrillTemplates?: DrillTemplate[];
             postThrowDrillTemplates?: DrillTemplate[];
+            hittingDrillTemplates?: DrillTemplate[];
           };
           if (cancelled) return;
           const sharedThrowingTemplates = Array.isArray(sharedPayload.templates) ? sharedPayload.templates : [];
@@ -751,6 +885,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           setVelocityTemplates(sharedVelocityTemplates);
           setPreThrowDrillTemplates(normalizeDrillTemplates(sharedPayload.preThrowDrillTemplates));
           setPostThrowDrillTemplates(normalizeDrillTemplates(sharedPayload.postThrowDrillTemplates));
+          setHittingDrillTemplates(normalizeDrillTemplates(sharedPayload.hittingDrillTemplates));
           setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
           setSelectedBullpenTemplateId('');
         } catch {
@@ -758,6 +893,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           setVelocityTemplates([]);
           setPreThrowDrillTemplates([]);
           setPostThrowDrillTemplates([]);
+          setHittingDrillTemplates([]);
           setBullpenCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
           setSelectedBullpenTemplateId('');
         }
@@ -777,6 +913,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           drillsState?: unknown;
           preThrowDrillTemplates?: DrillTemplate[];
           postThrowDrillTemplates?: DrillTemplate[];
+          hittingDrillsState?: unknown;
+          hittingDrillTemplates?: DrillTemplate[];
           catchPlayNotes?: { highDay?: string; mediumDay?: string; lowDay?: string };
           cycleNotes?: string;
           error?: string;
@@ -789,6 +927,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         const nextPostDrillTemplates = normalizeDrillTemplates(payload.postThrowDrillTemplates);
         setPreThrowDrillTemplates(nextPreDrillTemplates);
         setPostThrowDrillTemplates(nextPostDrillTemplates);
+        const nextHittingDrillTemplates = normalizeDrillTemplates(payload.hittingDrillTemplates);
+        setHittingDrillTemplates(nextHittingDrillTemplates);
+        const nextHittingDrillsState = normalizeHittingDrillsState(payload.hittingDrillsState);
+        setHittingDrillsNotes(nextHittingDrillsState.notes);
+        setHittingDrillsRowCount(nextHittingDrillsState.main.rowCount);
+        setHittingDrillsRows(nextHittingDrillsState.main.rows);
+        setSelectedHittingDrillTemplateId(nextHittingDrillsState.main.selectedTemplateId);
+        setHittingDrillTemplateName(nextHittingDrillTemplates.find((template) => template.id === nextHittingDrillsState.main.selectedTemplateId)?.name ?? '');
         const nextTemplates = Array.isArray(payload.templates) ? payload.templates : [];
         setThrowingTemplates(nextTemplates);
         if (nextTemplates.length > 0) {
@@ -952,6 +1098,12 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         setSelectedPostDrillTemplateId('');
         setPreThrowDrillTemplates([]);
         setPostThrowDrillTemplates([]);
+        setHittingDrillsNotes('');
+        setHittingDrillsRowCount(DEFAULT_DRILL_ROW_COUNT);
+        setHittingDrillsRows(normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
+        setSelectedHittingDrillTemplateId('');
+        setHittingDrillTemplateName('');
+        setHittingDrillTemplates([]);
         setCatchPlayHighDay('');
         setCatchPlayMediumDay('');
         setCatchPlayLowDay('');
@@ -987,6 +1139,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
             drillsState: normalizeDrillsState(null),
             preThrowDrillTemplates,
             postThrowDrillTemplates,
+            hittingDrillsState: normalizeHittingDrillsState(null),
+            hittingDrillTemplates,
           }),
         })
           .then(() => {
@@ -1029,6 +1183,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           } satisfies DrillsState,
           preThrowDrillTemplates,
           postThrowDrillTemplates,
+          hittingDrillsState: {
+            notes: hittingDrillsNotes,
+            main: { rowCount: hittingDrillsRowCount, rows: hittingDrillsRows.slice(0, hittingDrillsRowCount), selectedTemplateId: selectedHittingDrillTemplateId },
+          },
+          hittingDrillTemplates,
           catchPlayNotes: { highDay: catchPlayHighDay, mediumDay: catchPlayMediumDay, lowDay: catchPlayLowDay },
           cycleNotes,
         }),
@@ -1040,7 +1199,76 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         .catch(() => {});
     }, 350);
     return () => clearTimeout(handle);
-  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, bullpenNotes, pendingDeletedBullpenTemplateIds, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, velocityNotes, pendingDeletedVelocityTemplateIds, drillsNotes, drillsRowCount, drillsRows, postDrillsRowCount, postDrillsRows, selectedPreDrillTemplateId, selectedPostDrillTemplateId, preThrowDrillTemplates, postThrowDrillTemplates, catchPlayHighDay, catchPlayMediumDay, catchPlayLowDay, cycleNotes]);
+  }, [playerId, throwingByDate, throwingWeekNotes, throwingTemplates, bullpenCurrent, bullpenTemplates, selectedBullpenTemplateId, visibleBullpenTemplateIds, bullpenNotes, pendingDeletedBullpenTemplateIds, velocityCurrent, velocityTemplates, selectedVelocityTemplateId, visibleVelocityTemplateIds, velocityNotes, pendingDeletedVelocityTemplateIds, drillsNotes, drillsRowCount, drillsRows, postDrillsRowCount, postDrillsRows, selectedPreDrillTemplateId, selectedPostDrillTemplateId, preThrowDrillTemplates, postThrowDrillTemplates, hittingDrillsNotes, hittingDrillsRowCount, hittingDrillsRows, selectedHittingDrillTemplateId, hittingDrillTemplates, catchPlayHighDay, catchPlayMediumDay, catchPlayLowDay, cycleNotes]);
+
+  // Hitting is intentionally NOT folded into the throwing state load/autosave
+  // effects above -- it targets a separate API route (/api/admin/schedule/hitting)
+  // and a separate templates_json key, so it gets its own independent load +
+  // debounced autosave pair rather than risking a regression in the already
+  // fragile, heavily-depended-upon throwing effect.
+  useEffect(() => {
+    let cancelled = false;
+    const loadHittingState = async () => {
+      hittingStateLoadedRef.current = false;
+      try {
+        const response = await fetchWithTimeout(`/api/admin/schedule/hitting?playerId=${playerId || 0}`, { cache: 'no-store' });
+        const payload = (await response.json().catch(() => ({}))) as {
+          hittingState?: { current: BullpenScript; selectedTemplateId: string; visibleTemplateIds: string[]; notes?: string };
+          hittingTemplates?: BullpenTemplate[];
+        };
+        if (cancelled) return;
+        const sharedHittingTemplates = Array.isArray(payload.hittingTemplates) ? payload.hittingTemplates : [];
+        setHittingTemplates(sharedHittingTemplates);
+        if (!playerId) {
+          setHittingCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_HITTING_COLUMNS], rows: buildBullpenRows(20, DEFAULT_HITTING_COLUMNS.length) });
+          setSelectedHittingTemplateId('');
+          setVisibleHittingTemplateIds([]);
+          setHittingNotes('');
+        } else {
+          const state = payload.hittingState;
+          setHittingCurrent(state?.current ?? { title: '', rowCount: 20, columns: [...DEFAULT_HITTING_COLUMNS], rows: buildBullpenRows(20, DEFAULT_HITTING_COLUMNS.length) });
+          setSelectedHittingTemplateId(state?.selectedTemplateId ?? '');
+          setVisibleHittingTemplateIds(Array.isArray(state?.visibleTemplateIds) ? state.visibleTemplateIds : []);
+          setHittingNotes(state?.notes ?? '');
+        }
+      } catch {
+        if (cancelled) return;
+        setHittingTemplates([]);
+        setHittingCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_HITTING_COLUMNS], rows: buildBullpenRows(20, DEFAULT_HITTING_COLUMNS.length) });
+        setSelectedHittingTemplateId('');
+        setVisibleHittingTemplateIds([]);
+      } finally {
+        if (!cancelled) hittingStateLoadedRef.current = true;
+      }
+    };
+    void loadHittingState();
+    return () => {
+      cancelled = true;
+    };
+  }, [playerId]);
+
+  useEffect(() => {
+    if (!hittingStateLoadedRef.current) return;
+    const handle = setTimeout(() => {
+      void fetchWithTimeout('/api/admin/schedule/hitting', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          playerId: playerId || 0,
+          hittingState: playerId
+            ? { current: hittingCurrent, selectedTemplateId: selectedHittingTemplateId, visibleTemplateIds: visibleHittingTemplateIds, notes: hittingNotes }
+            : { current: hittingCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+          hittingTemplates,
+          deletedHittingTemplateIds: pendingDeletedHittingTemplateIds,
+        }),
+      })
+        .then(() => {
+          if (pendingDeletedHittingTemplateIds.length > 0) setPendingDeletedHittingTemplateIds([]);
+        })
+        .catch(() => {});
+    }, 350);
+    return () => clearTimeout(handle);
+  }, [playerId, hittingCurrent, hittingTemplates, selectedHittingTemplateId, visibleHittingTemplateIds, hittingNotes, pendingDeletedHittingTemplateIds]);
 
   useEffect(() => {
     if (!selectedTemplateId) {
@@ -1126,9 +1354,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const periodLabel = useMemo(() => {
     if (view === 'cycle') return '3-Day Cycle';
     if (view === 'plan') return 'Training Program';
-    if (view === 'bullpens') return 'Bullpens';
+    if (view === 'bullpens') return 'Bullpen Scripts';
     if (view === 'velocity') return 'Velocity';
-    if (view === 'drills') return 'Drills';
+    if (view === 'hitting') return 'BP Templates';
+    if (view === 'drills') return 'Pitching Drills';
+    if (view === 'hitting-drills') return 'Hitting Drills';
     if (view === 'throwing') {
       if (throwingBuilderMode === 'weeks') return 'Throwing Calendar · Week Builder';
       if (throwingCalendarView === 'day') {
@@ -1331,7 +1561,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         date.setUTCMonth(date.getUTCMonth() + direction);
         setAnchorDate(toIsoDate(date));
       }
-    } else if (view === 'bullpens' || view === 'velocity' || view === 'drills') {
+    } else if (view === 'bullpens' || view === 'velocity' || view === 'hitting' || view === 'drills' || view === 'hitting-drills') {
       return;
     }
     else if (view === 'week') setAnchorDate((prev) => addDays(prev, direction * 7));
@@ -1343,7 +1573,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   };
 
   const jumpToCurrentForView = (mode: ViewMode) => {
-    if (mode === 'day' || mode === 'week' || mode === 'cycle' || mode === 'plan' || mode === 'throwing' || mode === 'bullpens' || mode === 'velocity') {
+    if (mode === 'day' || mode === 'week' || mode === 'cycle' || mode === 'plan' || mode === 'throwing' || mode === 'bullpens' || mode === 'velocity' || mode === 'hitting') {
       setAnchorDate(toIsoDate(new Date()));
     }
   };
@@ -2624,6 +2854,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     setView('velocity');
                     return;
                   }
+                  if (linkTarget === 'hitting') {
+                    setView('hitting');
+                    return;
+                  }
+                  if (linkTarget === 'hitting-drills') {
+                    setView('hitting-drills');
+                    return;
+                  }
                   if (linkTarget === 'drills') {
                     setView('drills');
                     return;
@@ -2722,10 +2960,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   };
 
   const isVelocityView = view === 'velocity';
-  const activeCurrent = isVelocityView ? velocityCurrent : bullpenCurrent;
-  const activeTemplates = isVelocityView ? velocityTemplates : bullpenTemplates;
-  const activeSelectedTemplateId = isVelocityView ? selectedVelocityTemplateId : selectedBullpenTemplateId;
-  const activeVisibleTemplateIds = isVelocityView ? visibleVelocityTemplateIds : visibleBullpenTemplateIds;
+  const isHittingView = view === 'hitting';
+  const activeCurrent = isHittingView ? hittingCurrent : isVelocityView ? velocityCurrent : bullpenCurrent;
+  const activeTemplates = isHittingView ? hittingTemplates : isVelocityView ? velocityTemplates : bullpenTemplates;
+  const activeSelectedTemplateId = isHittingView ? selectedHittingTemplateId : isVelocityView ? selectedVelocityTemplateId : selectedBullpenTemplateId;
+  const activeVisibleTemplateIds = isHittingView ? visibleHittingTemplateIds : isVelocityView ? visibleVelocityTemplateIds : visibleBullpenTemplateIds;
   const activeSavedTemplateSelected = Boolean(activeSelectedTemplateId && activeTemplates.some((template) => template.id === activeSelectedTemplateId));
 
   const saveThrowingTemplate = () => {
@@ -2941,7 +3180,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       rowCount: nextCount,
       rows: buildBullpenRows(nextCount, prev.columns.length, prev.rows),
     });
-    if (isVelocityView) setVelocityCurrent(updater);
+    if (isHittingView) setHittingCurrent(updater);
+    else if (isVelocityView) setVelocityCurrent(updater);
     else setBullpenCurrent(updater);
   };
 
@@ -2960,7 +3200,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         rows: buildBullpenRows(prev.rowCount, nextCols.length, prev.rows),
       };
     };
-    if (isVelocityView) setVelocityCurrent(updater);
+    if (isHittingView) setHittingCurrent(updater);
+    else if (isVelocityView) setVelocityCurrent(updater);
     else setBullpenCurrent(updater);
   };
 
@@ -2970,7 +3211,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       cols[columnIndex] = value;
       return { ...prev, columns: cols };
     };
-    if (isVelocityView) setVelocityCurrent(updater);
+    if (isHittingView) setHittingCurrent(updater);
+    else if (isVelocityView) setVelocityCurrent(updater);
     else setBullpenCurrent(updater);
   };
 
@@ -2980,7 +3222,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       columnTypes[columnIndex] = value;
       return { ...prev, columnTypes };
     };
-    if (isVelocityView) setVelocityCurrent(updater);
+    if (isHittingView) setHittingCurrent(updater);
+    else if (isVelocityView) setVelocityCurrent(updater);
     else setBullpenCurrent(updater);
   };
 
@@ -3002,7 +3245,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       });
       return { ...prev, columns, columnTypes, rows };
     };
-    if (isVelocityView) setVelocityCurrent(updater);
+    if (isHittingView) setHittingCurrent(updater);
+    else if (isVelocityView) setVelocityCurrent(updater);
     else setBullpenCurrent(updater);
   };
 
@@ -3014,7 +3258,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       rows[rowIndex] = nextRow;
       return { ...prev, rows };
     };
-    if (isVelocityView) setVelocityCurrent(updater);
+    if (isHittingView) setHittingCurrent(updater);
+    else if (isVelocityView) setVelocityCurrent(updater);
     else setBullpenCurrent(updater);
   };
 
@@ -3027,7 +3272,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       rows[targetRow] = nextRow;
       return { ...prev, rows };
     };
-    if (isVelocityView) setVelocityCurrent(updater);
+    if (isHittingView) setHittingCurrent(updater);
+    else if (isVelocityView) setVelocityCurrent(updater);
     else setBullpenCurrent(updater);
   };
 
@@ -3050,7 +3296,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           }
           return { ...prev, rows };
         };
-        if (isVelocityView) setVelocityCurrent(applyFill);
+        if (isHittingView) setHittingCurrent(applyFill);
+        else if (isVelocityView) setVelocityCurrent(applyFill);
         else setBullpenCurrent(applyFill);
       }
       bullpenFillTargetsRef.current = new Set();
@@ -3058,10 +3305,13 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     };
     window.addEventListener('mouseup', onMouseUp);
     return () => window.removeEventListener('mouseup', onMouseUp);
-  }, [bullpenFillDrag, isVelocityView]);
+  }, [bullpenFillDrag, isVelocityView, isHittingView]);
 
   const startNewBullpenScript = () => {
-    if (isVelocityView) {
+    if (isHittingView) {
+      setSelectedHittingTemplateId('');
+      setHittingCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_HITTING_COLUMNS], rows: buildBullpenRows(20, DEFAULT_HITTING_COLUMNS.length) });
+    } else if (isVelocityView) {
       setSelectedVelocityTemplateId('');
       setVelocityCurrent({ title: '', rowCount: 20, columns: [...DEFAULT_BULLPEN_COLUMNS], rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length) });
     } else {
@@ -3075,32 +3325,35 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     if (!templateId) return;
     const selected = activeTemplates.find((template) => template.id === templateId);
     if (!selected) return;
-    if (isVelocityView) setSelectedVelocityTemplateId(selected.id);
+    if (isHittingView) setSelectedHittingTemplateId(selected.id);
+    else if (isVelocityView) setSelectedVelocityTemplateId(selected.id);
     else setSelectedBullpenTemplateId(selected.id);
-    if (!isVelocityView) setBullpenCurrentCategory((selected.category ?? '') as BullpenCategory);
+    if (!isVelocityView && !isHittingView) setBullpenCurrentCategory((selected.category ?? '') as BullpenCategory);
+    const defaultColumns = isHittingView ? DEFAULT_HITTING_COLUMNS : DEFAULT_BULLPEN_COLUMNS;
     const nextCurrent = {
       title: selected.name,
       rowCount: selected.rowCount,
-      columns: selected.columns?.length ? selected.columns : [...DEFAULT_BULLPEN_COLUMNS],
-      columnTypes: normalizeBullpenColumnTypes(selected.columnTypes, selected.columns?.length ? selected.columns.length : DEFAULT_BULLPEN_COLUMNS.length),
-      rows: buildBullpenRows(selected.rowCount, (selected.columns?.length ? selected.columns : DEFAULT_BULLPEN_COLUMNS).length, selected.rows),
+      columns: selected.columns?.length ? selected.columns : [...defaultColumns],
+      columnTypes: normalizeBullpenColumnTypes(selected.columnTypes, selected.columns?.length ? selected.columns.length : defaultColumns.length),
+      rows: buildBullpenRows(selected.rowCount, (selected.columns?.length ? selected.columns : defaultColumns).length, selected.rows),
     };
-    if (isVelocityView) setVelocityCurrent(nextCurrent);
+    if (isHittingView) setHittingCurrent(nextCurrent);
+    else if (isVelocityView) setVelocityCurrent(nextCurrent);
     else setBullpenCurrent(nextCurrent);
   };
 
   const saveBullpenTemplate = () => {
     const name = activeCurrent.title.trim();
     if (!name) {
-      setError(`${isVelocityView ? 'Velocity' : 'Bullpen'} script title is required before saving template.`);
+      setError(`${isHittingView ? 'Hitting' : isVelocityView ? 'Velocity' : 'Bullpen'} script title is required before saving template.`);
       return;
     }
     const nowIso = new Date().toISOString();
-    const templateId = activeSavedTemplateSelected ? activeSelectedTemplateId : `${isVelocityView ? 'vl' : 'bp'}-${Date.now()}`;
+    const templateId = activeSavedTemplateSelected ? activeSelectedTemplateId : `${isHittingView ? 'ht' : isVelocityView ? 'vl' : 'bp'}-${Date.now()}`;
     const next: BullpenTemplate = {
       id: templateId,
       name,
-      category: isVelocityView ? undefined : (bullpenCurrentCategory || undefined),
+      category: (isVelocityView || isHittingView) ? undefined : (bullpenCurrentCategory || undefined),
       rowCount: activeCurrent.rowCount,
       columns: activeCurrent.columns,
       columnTypes: normalizeBullpenColumnTypes(activeCurrent.columnTypes, activeCurrent.columns.length),
@@ -3114,6 +3367,27 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       copy[idx] = next;
       return copy;
     };
+
+    if (isHittingView) {
+      const nextHittingTemplates = applyTemplates(hittingTemplates);
+      setHittingTemplates(applyTemplates);
+      setSelectedHittingTemplateId(templateId);
+      setVisibleHittingTemplateIds((prev) => Array.from(new Set([templateId, ...prev])));
+      setError('');
+      if (!playerId) {
+        void fetchWithTimeout('/api/admin/schedule/hitting', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            playerId: 0,
+            hittingState: { current: hittingCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+            hittingTemplates: nextHittingTemplates,
+          }),
+        }).catch(() => {});
+      }
+      return;
+    }
+
     const nextBullpenTemplates = isVelocityView ? bullpenTemplates : applyTemplates(bullpenTemplates);
     const nextVelocityTemplates = isVelocityView ? applyTemplates(velocityTemplates) : velocityTemplates;
     if (isVelocityView) {
@@ -3150,15 +3424,15 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
 
   const duplicateBullpenTemplate = () => {
     const sourceName = activeCurrent.title.trim() || activeTemplates.find((template) => template.id === activeSelectedTemplateId)?.name?.trim();
-    const baseName = sourceName || `${isVelocityView ? 'Velocity' : 'Bullpen'} Script`;
+    const baseName = sourceName || `${isHittingView ? 'Hitting' : isVelocityView ? 'Velocity' : 'Bullpen'} Script`;
     const name = `${baseName} Copy`;
     const nowIso = new Date().toISOString();
-    const templateId = `${isVelocityView ? 'vl' : 'bp'}-${Date.now()}`;
+    const templateId = `${isHittingView ? 'ht' : isVelocityView ? 'vl' : 'bp'}-${Date.now()}`;
     const columnTypes = normalizeBullpenColumnTypes(activeCurrent.columnTypes, activeCurrent.columns.length);
     const next: BullpenTemplate = {
       id: templateId,
       name,
-      category: isVelocityView ? undefined : (bullpenCurrentCategory || undefined),
+      category: (isVelocityView || isHittingView) ? undefined : (bullpenCurrentCategory || undefined),
       rowCount: activeCurrent.rowCount,
       columns: [...activeCurrent.columns],
       columnTypes,
@@ -3172,6 +3446,28 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       columnTypes: [...columnTypes],
       rows: buildBullpenRows(next.rowCount, next.columns.length, next.rows),
     };
+
+    if (isHittingView) {
+      const nextHittingTemplates = [next, ...hittingTemplates];
+      setHittingTemplates(nextHittingTemplates);
+      setSelectedHittingTemplateId(templateId);
+      setVisibleHittingTemplateIds((prev) => Array.from(new Set([templateId, ...prev])));
+      setHittingCurrent(nextCurrent);
+      setError('');
+      if (!playerId) {
+        void fetchWithTimeout('/api/admin/schedule/hitting', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            playerId: 0,
+            hittingState: { current: nextCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+            hittingTemplates: nextHittingTemplates,
+          }),
+        }).catch(() => {});
+      }
+      return;
+    }
+
     const nextBullpenTemplates = isVelocityView ? bullpenTemplates : [next, ...bullpenTemplates];
     const nextVelocityTemplates = isVelocityView ? [next, ...velocityTemplates] : velocityTemplates;
 
@@ -3212,7 +3508,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
   const deleteBullpenTemplate = () => {
     const templateId = activeSelectedTemplateId;
     if (!templateId) {
-      setError(`Select a saved ${isVelocityView ? 'velocity' : 'bullpen'} script to delete.`);
+      setError(`Select a saved ${isHittingView ? 'hitting' : isVelocityView ? 'velocity' : 'bullpen'} script to delete.`);
       return;
     }
     const selected = activeTemplates.find((template) => template.id === templateId);
@@ -3220,18 +3516,44 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     if (!confirmed) return;
     setScriptVisibilityMenuOpen(false);
 
+    const resetCurrent = {
+      title: '',
+      rowCount: 20,
+      columns: [...(isHittingView ? DEFAULT_HITTING_COLUMNS : DEFAULT_BULLPEN_COLUMNS)],
+      rows: buildBullpenRows(20, (isHittingView ? DEFAULT_HITTING_COLUMNS : DEFAULT_BULLPEN_COLUMNS).length),
+    };
+
+    if (isHittingView) {
+      const nextHittingTemplates = hittingTemplates.filter((template) => template.id !== templateId);
+      setHittingTemplates(nextHittingTemplates);
+      setSelectedHittingTemplateId('');
+      setVisibleHittingTemplateIds((prev) => prev.filter((id) => id !== templateId));
+      setHittingCurrent(resetCurrent);
+      setPendingDeletedHittingTemplateIds((prev) => (prev.includes(templateId) ? prev : [...prev, templateId]));
+      setError('');
+      if (!playerId) {
+        void fetchWithTimeout('/api/admin/schedule/hitting', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            playerId: 0,
+            hittingState: { current: hittingCurrent, selectedTemplateId: '', visibleTemplateIds: [], notes: '' },
+            hittingTemplates: nextHittingTemplates,
+            deletedHittingTemplateIds: [...pendingDeletedHittingTemplateIds, templateId],
+          }),
+        })
+          .then(() => setPendingDeletedHittingTemplateIds([]))
+          .catch(() => {});
+      }
+      return;
+    }
+
     const nextBullpenTemplates = isVelocityView
       ? bullpenTemplates
       : bullpenTemplates.filter((template) => template.id !== templateId);
     const nextVelocityTemplates = isVelocityView
       ? velocityTemplates.filter((template) => template.id !== templateId)
       : velocityTemplates;
-    const resetCurrent = {
-      title: '',
-      rowCount: 20,
-      columns: [...DEFAULT_BULLPEN_COLUMNS],
-      rows: buildBullpenRows(20, DEFAULT_BULLPEN_COLUMNS.length),
-    };
 
     if (isVelocityView) {
       setVelocityTemplates(nextVelocityTemplates);
@@ -3363,6 +3685,61 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     });
   };
 
+  const applyHittingDrillTemplate = (templateId: string) => {
+    const selected = hittingDrillTemplates.find((template) => template.id === templateId);
+    if (!selected) {
+      setSelectedHittingDrillTemplateId('');
+      setHittingDrillTemplateName('');
+      return;
+    }
+    setSelectedHittingDrillTemplateId(selected.id);
+    setHittingDrillTemplateName(selected.name);
+    setHittingDrillsRowCount(selected.rowCount);
+    setHittingDrillsRows(normalizeDrillRows(selected.rows, selected.rowCount));
+  };
+
+  const startNewHittingDrillTemplate = () => {
+    setSelectedHittingDrillTemplateId('');
+    setHittingDrillTemplateName('');
+    setHittingDrillsRowCount(DEFAULT_DRILL_ROW_COUNT);
+    setHittingDrillsRows(normalizeDrillRows([], DEFAULT_DRILL_ROW_COUNT));
+  };
+
+  const saveHittingDrillTemplate = () => {
+    const name = hittingDrillTemplateName.trim();
+    if (!name) {
+      setError('Hitting drill template name is required.');
+      return;
+    }
+    const id = selectedHittingDrillTemplateId || `hitting-drill-${Date.now()}`;
+    const template: DrillTemplate = {
+      id,
+      name,
+      rowCount: hittingDrillsRowCount,
+      rows: normalizeDrillRows(hittingDrillsRows, hittingDrillsRowCount),
+      updatedAt: new Date().toISOString(),
+    };
+    setHittingDrillTemplates((previous) => {
+      const index = previous.findIndex((item) => item.id === id);
+      if (index < 0) return [template, ...previous];
+      const next = [...previous];
+      next[index] = template;
+      return next;
+    });
+    setSelectedHittingDrillTemplateId(id);
+    setError('');
+  };
+
+  const moveHittingDrillRow = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= hittingDrillsRowCount || toIndex >= hittingDrillsRowCount) return;
+    setHittingDrillsRows((previous) => {
+      const next = normalizeDrillRows(previous, Math.max(previous.length, hittingDrillsRowCount));
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved ?? emptyDrillRow());
+      return next;
+    });
+  };
+
   const renderDrillSection = (section: 'pre' | 'post') => {
     const isPre = section === 'pre';
     const sectionRows = isPre ? drillsRows : postDrillsRows;
@@ -3481,6 +3858,115 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
     );
   };
 
+  const renderHittingDrillSection = () => (
+    <section key="hitting-drill-section" className="portal-panel portal-drills-section">
+      <h3>Hitting Drills</h3>
+      <div className="portal-table-wrap">
+        <table className="portal-drills-table portal-hitting-drills-table">
+          <colgroup>
+            <col className="portal-drills-col-handle" />
+            <col className="portal-drills-col-drill" />
+            <col className="portal-drills-col-compact" />
+            <col className="portal-drills-col-compact" />
+            <col className="portal-drills-col-notes" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th aria-label="Reorder drills" />
+              {['Drill', 'Sets', 'Reps', 'Notes'].map((label) => <th key={label}>{label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {hittingDrillsRows.slice(0, hittingDrillsRowCount).map((row, index) => (
+              <tr
+                key={`hitting-drill-row-${index}`}
+                className={hittingDrillRowDrag === index ? 'portal-drills-row-dragging' : undefined}
+                onDragOver={(event) => {
+                  if (hittingDrillRowDrag === null) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const sourceIndex = Number(event.dataTransfer.getData('application/x-hitting-drill-row'));
+                  if (Number.isFinite(sourceIndex)) moveHittingDrillRow(sourceIndex, index);
+                  setHittingDrillRowDrag(null);
+                }}
+              >
+                <td className="portal-drills-row-handle-cell">
+                  <button
+                    type="button"
+                    className="portal-drills-row-handle"
+                    draggable
+                    aria-label={`Move hitting drill row ${index + 1}`}
+                    title="Drag to reorder"
+                    onDragStart={(event) => {
+                      setHittingDrillRowDrag(index);
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('application/x-hitting-drill-row', String(index));
+                    }}
+                    onDragEnd={() => setHittingDrillRowDrag(null)}
+                  >
+                    <span aria-hidden="true">||</span>
+                  </button>
+                </td>
+                {(['drill', 'sets', 'reps', 'notes'] as const).map((field) => (
+                  <td key={`hitting-drill-${index}-${field}`}>
+                    {field === 'drill' ? (
+                      <div className="portal-drill-picker-cell">
+                        <input
+                          className="portal-schedule-control"
+                          value={row.drill}
+                          placeholder="Select drill"
+                          list={`hitting-drill-options-${index}`}
+                          onChange={(event) => setHittingDrillsRows((previous) => {
+                            const next = [...previous];
+                            next[index] = { ...(next[index] ?? emptyDrillRow()), drill: event.target.value };
+                            return next;
+                          })}
+                        />
+                        <datalist id={`hitting-drill-options-${index}`}>
+                          {drillExerciseOptions.map((option) => (
+                            <option key={`hitting-drill-${index}-drill-${option.id}`} value={option.name} />
+                          ))}
+                        </datalist>
+                        {(() => {
+                          const selected = drillExerciseOptions.find((option) => option.name === row.drill);
+                          const videoUrl = String(selected?.instructionVideoUrl ?? '').trim();
+                          if (!videoUrl) return null;
+                          return (
+                            <button
+                              type="button"
+                              className="btn btn-ghost"
+                              onClick={() => setDrillVideoPreview({ title: selected?.name ?? 'Drill Video', url: embedVideoUrl(videoUrl) })}
+                            >
+                              Video
+                            </button>
+                          );
+                        })()}
+                      </div>
+                    ) : (
+                      <textarea
+                        className="portal-schedule-control"
+                        value={row[field]}
+                        rows={2}
+                        onChange={(event) => setHittingDrillsRows((previous) => {
+                          const next = [...previous];
+                          next[index] = { ...(next[index] ?? emptyDrillRow()), [field]: event.target.value };
+                          return next;
+                        })}
+                      />
+                    )}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
   const downloadBullpenScript = async () => {
     try {
       const { jsPDF } = await import('jspdf');
@@ -3528,7 +4014,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
       pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(16);
       pdf.setTextColor(isLightTheme ? 15 : 248, isLightTheme ? 23 : 250, isLightTheme ? 42 : 252);
-      const scriptTitle = activeCurrent.title.trim() || (isVelocityView ? 'Velocity Script' : 'Bullpen Script');
+      const scriptTitle = activeCurrent.title.trim() || (isHittingView ? 'Hitting Script' : isVelocityView ? 'Velocity Script' : 'Bullpen Script');
       pdf.text(scriptTitle, pageWidth / 2, margin + 12, { align: 'center' });
 
       const headers = ['Pitch #', ...activeCurrent.columns.map((value) => value.trim() || 'Column')];
@@ -3685,18 +4171,18 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 ) : null}
               </div>
             </div>
-            {playerId > 0 && (view === 'bullpens' || view === 'velocity') ? (
+            {playerId > 0 && (view === 'bullpens' || view === 'velocity' || view === 'hitting') ? (
               <button type="button" className="btn btn-ghost" onClick={() => { setPlayerId(0); setPlayerQuery(''); }}>
                 Clear Player
               </button>
             ) : null}
-            {playerId > 0 && view !== 'bullpens' && view !== 'velocity' ? (
+            {playerId > 0 && view !== 'bullpens' && view !== 'velocity' && view !== 'hitting' ? (
               <Link href={`/portal/player?previewPlayerId=${playerId}`} className="btn btn-ghost as-link">
                 View Profile
               </Link>
             ) : null}
             <div className="portal-schedule-view-switch" role="group" aria-label="Calendar view">
-              {(['day', 'week', 'month', 'plan', 'throwing', 'bullpens', 'drills'] as ViewMode[]).map((mode) => (
+              {(['day', 'week', 'month', 'plan', 'throwing', 'bullpens', 'drills', 'hitting', 'hitting-drills'] as ViewMode[]).map((mode) => (
                 <button
                   key={mode}
                   type="button"
@@ -3711,8 +4197,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     : mode === 'throwing'
                       ? 'Throwing Calendar'
                       : mode === 'bullpens'
-                        ? 'Bullpens'
-                        : `${mode[0].toUpperCase()}${mode.slice(1)}`}
+                        ? 'Bullpen Scripts'
+                        : mode === 'hitting'
+                          ? 'BP Templates'
+                          : mode === 'hitting-drills'
+                            ? 'Hitting Drills'
+                            : mode === 'drills'
+                              ? 'Pitching Drills'
+                              : `${mode[0].toUpperCase()}${mode.slice(1)}`}
                 </button>
               ))}
             </div>
@@ -3827,7 +4319,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 )}
               </>
             )}
-            {(view === 'bullpens' || view === 'velocity') && (
+            {(view === 'bullpens' || view === 'velocity' || view === 'hitting') && (
               <div style={{ display: 'grid', gap: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
                   <button
@@ -3847,12 +4339,23 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                   >
                     Download PDF
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      resetBubbleManagerForm();
+                      setShowBubbleCategoryManager(true);
+                    }}
+                    style={{ minWidth: 188, minHeight: 42, justifyContent: 'center', whiteSpace: 'nowrap' }}
+                  >
+                    Manage Bubble Categories
+                  </button>
                 </div>
                 {!scriptTemplateBuilderCollapsed ? (
                   <>
-                    <div style={{ display: 'grid', gridTemplateColumns: !isVelocityView ? '220px 1fr' : '1fr', gap: 12, alignItems: 'start' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: (!isVelocityView && !isHittingView) ? '220px 1fr' : '1fr', gap: 12, alignItems: 'start' }}>
                       {/* Folder browser — bullpen only */}
-                      {!isVelocityView ? (
+                      {(!isVelocityView && !isHittingView) ? (
                         <div style={{ border: '1px solid var(--calendar-grid-border, var(--border))', borderRadius: 8, overflow: 'hidden', background: 'rgba(0,0,0,0.18)' }}>
                           <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.5, padding: '7px 10px 5px', borderBottom: '1px solid var(--calendar-grid-border, var(--border))' }}>Script Library</div>
                           <div style={{ maxHeight: 340, overflowY: 'auto' }}>
@@ -3920,7 +4423,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                       ) : null}
                       {/* Right side: script editor controls */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        {isVelocityView ? (
+                        {(isVelocityView || isHittingView) ? (
                           <label style={{ display: 'grid', gap: 4 }}>
                             Script Template
                             <select
@@ -3928,7 +4431,8 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                               value={activeSelectedTemplateId}
                               onChange={(event) => {
                                 const value = event.target.value;
-                                setSelectedVelocityTemplateId(value);
+                                if (isHittingView) setSelectedHittingTemplateId(value);
+                                else setSelectedVelocityTemplateId(value);
                                 if (value) applyBullpenTemplate(value);
                               }}
                               style={{ minWidth: 200 }}
@@ -3945,13 +4449,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                           value={activeCurrent.title}
                           onChange={(event) => {
                             const value = event.target.value;
-                            if (isVelocityView) setVelocityCurrent((prev) => ({ ...prev, title: value }));
+                            if (isHittingView) setHittingCurrent((prev) => ({ ...prev, title: value }));
+                            else if (isVelocityView) setVelocityCurrent((prev) => ({ ...prev, title: value }));
                             else setBullpenCurrent((prev) => ({ ...prev, title: value }));
                           }}
-                          placeholder={view === 'velocity' ? 'Velocity Script Title' : 'Bullpen Script Title'}
+                          placeholder={view === 'velocity' ? 'Velocity Script Title' : view === 'hitting' ? 'Hitting Script Title' : 'Bullpen Script Title'}
                         />
                       </label>
-                      {!isVelocityView ? (
+                      {(!isVelocityView && !isHittingView) ? (
                         <label style={{ display: 'grid', gap: 4 }}>
                           Category
                           <select
@@ -4035,14 +4540,15 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     </div>{/* end grid: folder browser + controls */}
                     <div style={{ display: 'grid', gap: 6 }}>
                       <label style={{ display: 'grid', gap: 4 }}>
-                        {view === 'velocity' ? 'Velocity Notes (player can see)' : 'Bullpen Notes (player can see)'}
+                        {view === 'velocity' ? 'Velocity Notes (player can see)' : view === 'hitting' ? 'BP Templates Notes (player can see)' : 'Bullpen Scripts Notes (player can see)'}
                         <textarea
                       className="portal-schedule-control"
                       rows={3}
-                      value={isVelocityView ? velocityNotes : bullpenNotes}
+                      value={isHittingView ? hittingNotes : isVelocityView ? velocityNotes : bullpenNotes}
                       onChange={(event) => {
                         const value = event.target.value;
-                        if (isVelocityView) setVelocityNotes(value);
+                        if (isHittingView) setHittingNotes(value);
+                        else if (isVelocityView) setVelocityNotes(value);
                         else setBullpenNotes(value);
                       }}
                       placeholder="Write notes for player..."
@@ -4069,7 +4575,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                           {scriptVisibilityMenuOpen ? (
                             <div className="portal-script-visibility-menu">
                               {activeTemplates.length === 0 ? <span className="portal-muted-text">No scripts saved yet.</span> : null}
-                              {!isVelocityView ? (
+                              {(!isVelocityView && !isHittingView) ? (
                                 <>
                                   {BULLPEN_CATEGORIES.map((cat) => {
                                     const inCat = activeTemplates.filter((t) => t.category === cat);
@@ -4112,7 +4618,11 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                                     <label key={`bp-visible-${template.id}`} className="portal-script-visibility-option">
                                       <input type="checkbox" checked={checked} onChange={(event) => {
                                         const isChecked = event.target.checked;
-                                        setVisibleVelocityTemplateIds((prev) => isChecked ? Array.from(new Set([...prev, template.id])) : prev.filter((id) => id !== template.id));
+                                        if (isHittingView) {
+                                          setVisibleHittingTemplateIds((prev) => isChecked ? Array.from(new Set([...prev, template.id])) : prev.filter((id) => id !== template.id));
+                                        } else {
+                                          setVisibleVelocityTemplateIds((prev) => isChecked ? Array.from(new Set([...prev, template.id])) : prev.filter((id) => id !== template.id));
+                                        }
                                       }} />
                                       <span>{template.name}</span>
                                     </label>
@@ -4154,16 +4664,48 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                                 placeholder={`Column ${idx + 1}`}
                                 style={{ textAlign: 'center', fontWeight: 700, minWidth: 0 }}
                               />
-                              <select
-                                className="portal-schedule-control"
-                                value={normalizeBullpenColumnTypes(activeCurrent.columnTypes, activeCurrent.columns.length)[idx] ?? DEFAULT_BULLPEN_COLUMN_TYPE}
-                                onChange={(event) => updateBullpenColumnType(idx, event.target.value as BullpenColumnType)}
-                                style={{ minWidth: 0, width: '100%', fontSize: '0.82rem', padding: '0.28rem 0.35rem', textAlign: 'center' }}
-                              >
-                                {BULLPEN_COLUMN_TYPE_OPTIONS.map((option) => (
-                                  <option key={option.value} value={option.value}>{option.label}</option>
-                                ))}
-                              </select>
+                              {(() => {
+                                const currentType = normalizeBullpenColumnTypes(activeCurrent.columnTypes, activeCurrent.columns.length)[idx] ?? DEFAULT_BULLPEN_COLUMN_TYPE;
+                                const currentBubbleCategoryId = bubbleCategoryIdFromType(currentType);
+                                const selectValue = currentBubbleCategoryId ? 'bubble' : currentType;
+                                return (
+                                  <>
+                                    <select
+                                      className="portal-schedule-control"
+                                      value={selectValue}
+                                      onChange={(event) => {
+                                        const nextValue = event.target.value;
+                                        if (nextValue === 'bubble') {
+                                          // Sentinel only -- land on the first available category (if any) so the
+                                          // stored value is immediately a valid 'bubble:<id>', never bare 'bubble'.
+                                          const firstCategoryId = bubbleCategories[0]?.id;
+                                          updateBullpenColumnType(idx, firstCategoryId ? bubbleColumnType(firstCategoryId) : 'auto');
+                                          return;
+                                        }
+                                        updateBullpenColumnType(idx, nextValue as BullpenColumnType);
+                                      }}
+                                      style={{ minWidth: 0, width: '100%', fontSize: '0.82rem', padding: '0.28rem 0.35rem', textAlign: 'center' }}
+                                    >
+                                      {BULLPEN_COLUMN_TYPE_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                      ))}
+                                    </select>
+                                    {selectValue === 'bubble' ? (
+                                      <select
+                                        className="portal-schedule-control"
+                                        value={currentBubbleCategoryId ?? ''}
+                                        onChange={(event) => updateBullpenColumnType(idx, bubbleColumnType(event.target.value))}
+                                        style={{ minWidth: 0, width: '100%', fontSize: '0.78rem', padding: '0.26rem 0.35rem', textAlign: 'center' }}
+                                      >
+                                        {!bubbleCategories.length ? <option value="">No categories yet</option> : null}
+                                        {bubbleCategories.map((category) => (
+                                          <option key={category.id} value={category.id}>{category.label}</option>
+                                        ))}
+                                      </select>
+                                    ) : null}
+                                  </>
+                                );
+                              })()}
                             </div>
                           </div>
                         ))}
@@ -4309,6 +4851,50 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 </div>
               </div>
             )}
+            {view === 'hitting-drills' && (
+              <div style={{ display: 'grid', gap: 8, width: '100%' }}>
+                <div className="portal-drills-template-controls portal-hitting-drills-controls">
+                  <div className="portal-drills-template-control">
+                    <strong>Hitting Drills</strong>
+                    <label>
+                      Template
+                      <select className="portal-schedule-control" value={selectedHittingDrillTemplateId} onChange={(event) => applyHittingDrillTemplate(event.target.value)}>
+                        <option value="">New template</option>
+                        {hittingDrillTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      Template Name
+                      <input
+                        className="portal-schedule-control"
+                        value={hittingDrillTemplateName}
+                        onChange={(event) => setHittingDrillTemplateName(event.target.value)}
+                        placeholder="Hitting drill template name"
+                      />
+                    </label>
+                    <label>
+                      Rows
+                      <input
+                        className="portal-schedule-control"
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={hittingDrillsRowCount}
+                        onChange={(event) => {
+                          const nextCount = Math.max(1, Math.min(200, Number(event.target.value) || DEFAULT_DRILL_ROW_COUNT));
+                          setHittingDrillsRowCount(nextCount);
+                          setHittingDrillsRows((previous) => normalizeDrillRows(previous, nextCount));
+                        }}
+                      />
+                    </label>
+                    <div className="portal-drills-template-actions">
+                      <button type="button" className="btn btn-primary" onClick={saveHittingDrillTemplate}>Save Template</button>
+                      <button type="button" className="btn btn-ghost" onClick={startNewHittingDrillTemplate}>New Template</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -4374,7 +4960,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         )}
       </div>
 
-      {isMobileSchedule && !(builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'drills')) ? (
+      {isMobileSchedule && !(builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'hitting' || view === 'drills' || view === 'hitting-drills')) ? (
         <div style={{ marginBottom: '0.45rem' }}>
           <button
             type="button"
@@ -4386,7 +4972,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
         </div>
       ) : null}
       <div className="portal-schedule-layout">
-        {builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'drills') ? null : (!isMobileSchedule || !mobilePaletteCollapsed) ? (
+        {builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'hitting' || view === 'drills' || view === 'hitting-drills') ? null : (!isMobileSchedule || !mobilePaletteCollapsed) ? (
         <aside className="portal-workout-palette">
           <div className="portal-schedule-view-switch" role="group" aria-label="Palette folder" style={{ marginBottom: 8, flexWrap: 'wrap', rowGap: 6 }}>
             <button
@@ -4534,12 +5120,12 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           aria-busy={loading}
           data-throwing-export-root={builderMode === 'schedule' && view === 'throwing' ? 'true' : undefined}
           ref={builderMode === 'schedule' && view === 'throwing' ? throwingCalendarRef : undefined}
-          style={builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'drills') ? { gridColumn: '1 / -1', width: '100%' } : undefined}
+          style={builderMode === 'schedule' && (view === 'throwing' || view === 'bullpens' || view === 'velocity' || view === 'hitting' || view === 'drills' || view === 'hitting-drills') ? { gridColumn: '1 / -1', width: '100%' } : undefined}
         >
-          {builderMode === 'schedule' && view !== 'drills' ? (
+          {builderMode === 'schedule' && view !== 'drills' && view !== 'hitting-drills' ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: '0.45rem' }}>
               <h3 className="portal-schedule-period">{periodLabel}</h3>
-              {view !== 'cycle' && view !== 'plan' && view !== 'bullpens' && view !== 'velocity' && !(view === 'throwing' && throwingBuilderMode === 'weeks') && (
+              {view !== 'cycle' && view !== 'plan' && view !== 'bullpens' && view !== 'velocity' && view !== 'hitting' && !(view === 'throwing' && throwingBuilderMode === 'weeks') && (
                 <div className="portal-schedule-nav">
                   <button type="button" className="btn btn-ghost" onClick={() => movePeriod(-1)} aria-label="Previous period">
                     ←
@@ -4553,7 +5139,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           ) : builderMode !== 'schedule' ? (
             <h3 className="portal-schedule-period">Template Calendar</h3>
           ) : null}
-          {builderMode === 'schedule' && view !== 'day' && view !== 'cycle' && view !== 'plan' && view !== 'throwing' && view !== 'bullpens' && view !== 'velocity' && view !== 'drills' && (
+          {builderMode === 'schedule' && view !== 'day' && view !== 'cycle' && view !== 'plan' && view !== 'throwing' && view !== 'bullpens' && view !== 'velocity' && view !== 'hitting' && view !== 'drills' && view !== 'hitting-drills' && (
             <div
               data-schedule-weekdays="true"
               className={`portal-schedule-weekdays${view === 'week' ? ' is-week' : ''}`}
@@ -4616,12 +5202,12 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
               ))}
             </div>
           )}
-          {builderMode === 'schedule' && (view === 'bullpens' || view === 'velocity') && !playerId && (
+          {builderMode === 'schedule' && (view === 'bullpens' || view === 'velocity' || view === 'hitting') && !playerId && (
             <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(200,16,46,0.12)', border: '1px solid rgba(200,16,46,0.35)', color: '#f8fafc', fontSize: 13, marginBottom: 8 }}>
               No player selected — changes here update the <strong>shared templates</strong> visible to all players.
             </div>
           )}
-          {builderMode === 'schedule' && (view === 'bullpens' || view === 'velocity') && !scriptTemplateBuilderCollapsed && (
+          {builderMode === 'schedule' && (view === 'bullpens' || view === 'velocity' || view === 'hitting') && !scriptTemplateBuilderCollapsed && (
             <div
               className="portal-panel"
               style={{
@@ -4655,7 +5241,7 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                     letterSpacing: '0.01em',
                   }}
                 >
-                  {activeCurrent.title.trim() || (view === 'velocity' ? 'Velocity Script' : 'Bullpen Script')}
+                  {activeCurrent.title.trim() || (view === 'velocity' ? 'Velocity Script' : view === 'hitting' ? 'Hitting Script' : 'Bullpen Script')}
                 </h3>
                 <img
                   src="/pearl-clam-transparent.png"
@@ -4664,9 +5250,9 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 />
               </div>
               <div style={{ overflowX: 'auto' }}>
-                {(isVelocityView ? velocityNotes : bullpenNotes).trim() ? (
+                {(isHittingView ? hittingNotes : isVelocityView ? velocityNotes : bullpenNotes).trim() ? (
                   <div className="portal-muted-text" style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>
-                    {(isVelocityView ? velocityNotes : bullpenNotes).trim()}
+                    {(isHittingView ? hittingNotes : isVelocityView ? velocityNotes : bullpenNotes).trim()}
                   </div>
                 ) : null}
                 <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
@@ -4806,10 +5392,24 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
           )}
           {builderMode === 'schedule' && view === 'bullpens' && playerId > 0 && bullpenTemplates.length > 0 && (
             <div style={{ marginTop: 16 }}>
-              <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#94a3b8' }}>Player Bullpen Entry</h4>
+              <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#94a3b8' }}>Player Bullpen Scripts Entry</h4>
               <BullpenEntry
                 templates={bullpenTemplates}
                 state={{ selectedTemplateId: selectedBullpenTemplateId, visibleTemplateIds: visibleBullpenTemplateIds }}
+                playerId={playerId}
+                previewQuery={`?previewPlayerId=${playerId}`}
+                schoolLogoSrc={schoolLogoSrc}
+                schoolLogoAlt={schoolLogoAlt}
+              />
+            </div>
+          )}
+          {builderMode === 'schedule' && view === 'hitting' && playerId > 0 && hittingTemplates.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <h4 style={{ margin: '0 0 10px', fontSize: 14, color: '#94a3b8' }}>Player BP Templates Entry</h4>
+              <ScriptEntry
+                mode="hitting"
+                templates={hittingTemplates}
+                state={{ selectedTemplateId: selectedHittingTemplateId, visibleTemplateIds: visibleHittingTemplateIds }}
                 playerId={playerId}
                 previewQuery={`?previewPlayerId=${playerId}`}
                 schoolLogoSrc={schoolLogoSrc}
@@ -4878,6 +5478,23 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                   </label>
                 </div>
               </section>
+            </div>
+          )}
+          {builderMode === 'schedule' && view === 'hitting-drills' && (
+            <div className="portal-drills-sections portal-hitting-drills-sections">
+              <section className="portal-drills-note-section">
+                <label>
+                  <strong>Player Note</strong>
+                  <textarea
+                    className="portal-schedule-control"
+                    rows={2}
+                    placeholder="Notes for this player's hitting drills..."
+                    value={hittingDrillsNotes}
+                    onChange={(event) => setHittingDrillsNotes(event.target.value)}
+                  />
+                </label>
+              </section>
+              {renderHittingDrillSection()}
             </div>
           )}
           {builderMode === 'schedule' && view === 'month' && (
@@ -5192,6 +5809,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                                 setView('velocity');
                                 return;
                               }
+                              if (linkTarget === 'hitting') {
+                                setView('hitting');
+                                return;
+                              }
+                              if (linkTarget === 'hitting-drills') {
+                                setView('hitting-drills');
+                                return;
+                              }
                               if (linkTarget === 'drills') {
                                 setView('drills');
                                 return;
@@ -5328,6 +5953,14 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                                 }
                                 if (linkTarget === 'velocity') {
                                   setView('velocity');
+                                  return;
+                                }
+                                if (linkTarget === 'hitting') {
+                                  setView('hitting');
+                                  return;
+                                }
+                                if (linkTarget === 'hitting-drills') {
+                                  setView('hitting-drills');
                                   return;
                                 }
                                 if (linkTarget === 'drills') {
@@ -5764,6 +6397,110 @@ export default function ScheduleBoard({ players, workouts, exercises, schoolCode
                 allowFullScreen
                 style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, borderRadius: 8 }}
               />
+            </div>
+          </article>
+        </div>
+      ) : null}
+      {showBubbleCategoryManager ? (
+        <div
+          className="portal-modal-backdrop"
+          role="presentation"
+          onClick={() => setShowBubbleCategoryManager(false)}
+        >
+          <article
+            className="portal-modal-card"
+            role="dialog"
+            aria-modal="true"
+            onClick={(event) => event.stopPropagation()}
+            style={{ maxWidth: '640px', width: '92vw' }}
+          >
+            <div className="portal-modal-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <h3 style={{ margin: 0 }}>Bubble Categories</h3>
+              <button type="button" className="btn btn-ghost" onClick={() => setShowBubbleCategoryManager(false)}>
+                Close
+              </button>
+            </div>
+            <p style={{ marginTop: 6, fontSize: '0.85rem', opacity: 0.75 }}>
+              Define reusable toggle categories (a name plus a list of options, e.g. &quot;Contact Quality&quot; with Weak/Solid/Barrel) that can be used as a column type in any Bullpens or Hitting script.
+            </p>
+            <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+              <div style={{ display: 'grid', gap: 6 }}>
+                <label style={{ display: 'grid', gap: 4, fontSize: '0.82rem' }}>
+                  Category Name
+                  <input
+                    className="portal-schedule-control"
+                    value={bubbleManagerLabel}
+                    onChange={(event) => setBubbleManagerLabel(event.target.value)}
+                    placeholder="e.g. Contact Quality"
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 4, fontSize: '0.82rem' }}>
+                  Options (one per line)
+                  <textarea
+                    className="portal-schedule-control"
+                    value={bubbleManagerOptionsText}
+                    onChange={(event) => setBubbleManagerOptionsText(event.target.value)}
+                    placeholder={'Weak\nSolid\nBarrel'}
+                    rows={4}
+                    style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                  />
+                </label>
+                {bubbleManagerError ? (
+                  <div style={{ color: '#f87171', fontSize: '0.82rem' }}>{bubbleManagerError}</div>
+                ) : null}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={bubbleManagerSaving}
+                    onClick={() => void saveBubbleCategory()}
+                  >
+                    {bubbleManagerSaving ? 'Saving…' : bubbleManagerEditingId ? 'Save Changes' : 'Create Category'}
+                  </button>
+                  {bubbleManagerEditingId ? (
+                    <button type="button" className="btn btn-ghost" onClick={resetBubbleManagerForm}>
+                      Cancel Edit
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div style={{ borderTop: '1px solid var(--calendar-grid-border, var(--border))', paddingTop: 10, display: 'grid', gap: 6 }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.6 }}>
+                  Existing Categories {bubbleCategoriesLoading ? '(loading…)' : `(${bubbleCategories.length})`}
+                </span>
+                {!bubbleCategories.length && !bubbleCategoriesLoading ? (
+                  <span style={{ fontSize: '0.85rem', opacity: 0.6 }}>No bubble categories yet.</span>
+                ) : null}
+                {bubbleCategories.map((category) => (
+                  <div
+                    key={category.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '6px 8px',
+                      borderRadius: 8,
+                      background: bubbleManagerEditingId === category.id ? 'rgba(99,102,241,0.18)' : 'rgba(0,0,0,0.16)',
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{category.label}</div>
+                      <div style={{ fontSize: '0.76rem', opacity: 0.65, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {category.options.join(', ')}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                      <button type="button" className="btn btn-ghost" style={{ minHeight: 32, padding: '0 10px' }} onClick={() => startEditBubbleCategory(category)}>
+                        Edit
+                      </button>
+                      <button type="button" className="btn btn-ghost" style={{ minHeight: 32, padding: '0 10px' }} onClick={() => void deleteBubbleCategoryById(category.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </article>
         </div>

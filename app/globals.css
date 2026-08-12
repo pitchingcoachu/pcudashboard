@@ -6691,6 +6691,44 @@ body.theme-light .portal-player-search-option.active {
   align-items: start;
 }
 
+/* Hitting Drills has a single control card (no pre/post pair) and a single
+   drill table, so both rows are centered under one shared width instead of
+   each being centered independently in the left half of the 2-column grid
+   the regular Drills tab uses for its pre/post cards. Every child is forced
+   to the same width so their left/right edges line up instead of each one
+   auto-sizing to its own content and centering separately. */
+.portal-hitting-drills-controls.portal-hitting-drills-controls,
+.portal-hitting-drills-sections.portal-hitting-drills-sections {
+  grid-template-columns: minmax(0, 900px);
+  justify-content: center;
+}
+
+.portal-hitting-drills-controls .portal-drills-template-control {
+  width: 100%;
+  margin: 0 auto;
+}
+
+.portal-hitting-drills-sections .portal-drills-note-section {
+  width: 100%;
+  max-width: 100%;
+}
+
+.portal-hitting-drills-sections .portal-drills-section {
+  width: 100%;
+}
+
+.portal-hitting-drills-controls .portal-drills-template-control > strong {
+  text-align: center;
+}
+
+.portal-hitting-drills-controls .portal-drills-template-control label {
+  text-align: center;
+}
+
+.portal-hitting-drills-controls .portal-drills-template-actions {
+  justify-content: center;
+}
+
 .portal-drills-sections {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -6934,6 +6972,38 @@ body.theme-light .portal-player-search-option.active {
   text-align: left;
 }
 
+/* Hitting Drills: center every column (including the drill name and notes
+   cells that are left-aligned by default on the regular Drills tables). */
+.portal-hitting-drills-table th,
+.portal-hitting-drills-table td {
+  text-align: center;
+}
+
+.portal-hitting-drills-table .portal-drill-player-action-cell {
+  grid-template-columns: auto auto;
+  justify-content: center;
+}
+
+.portal-hitting-drills-table td:first-child,
+.portal-hitting-drills-table td:last-child,
+.portal-hitting-drills-table td:nth-child(2) {
+  text-align: center;
+}
+
+.portal-hitting-drills-table select,
+.portal-hitting-drills-table input,
+.portal-hitting-drills-table textarea,
+.portal-hitting-drills-table td:nth-child(2) input,
+.portal-hitting-drills-table td:nth-child(2) textarea,
+.portal-hitting-drills-table td:last-child input,
+.portal-hitting-drills-table td:last-child textarea {
+  text-align: center;
+}
+
+.portal-hitting-drills-table .portal-drill-picker-cell {
+  justify-content: center;
+}
+
 .portal-drill-player-action-cell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -6967,6 +7037,11 @@ body.theme-light .portal-player-search-option.active {
 
 .portal-drills-table-readonly td:last-child {
   text-align: left;
+}
+
+.portal-drills-table-readonly.portal-hitting-drills-table td:last-child,
+.portal-drills-table-readonly.portal-hitting-drills-table td:first-child {
+  text-align: center;
 }
 
 .portal-drills-table-readonly .portal-drill-video-link {

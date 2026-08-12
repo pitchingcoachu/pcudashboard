@@ -77,6 +77,7 @@ export default function ExerciseLibrary({ exercises }: ExerciseLibraryProps) {
                       <div>
                         <p className="portal-exercise-type">{exercise.category}</p>
                         <h4>{exercise.name}</h4>
+                        {exercise.isShared ? <span className="portal-tag">PCU Library</span> : null}
                       </div>
                       <p className="portal-muted-text">
                         Target type:{' '}
@@ -102,10 +103,12 @@ export default function ExerciseLibrary({ exercises }: ExerciseLibraryProps) {
                       ) : (
                         <p className="portal-muted-text">No video link</p>
                       )}
-                      <Link href={`/portal/admin/exercises/${exercise.id}`} className="btn btn-primary as-link">
-                        Edit Exercise
-                      </Link>
-                      <form
+                      {!exercise.isShared ? (
+                        <Link href={`/portal/admin/exercises/${exercise.id}`} className="btn btn-primary as-link">
+                          Edit Exercise
+                        </Link>
+                      ) : null}
+                      {!exercise.isShared ? <form
                         method="post"
                         action="/api/admin/exercises/delete"
                         onSubmit={async (event) => {
@@ -139,7 +142,7 @@ export default function ExerciseLibrary({ exercises }: ExerciseLibraryProps) {
                         <button type="submit" className="btn btn-ghost" disabled={busyExerciseId === exercise.id}>
                           {busyExerciseId === exercise.id ? 'Deleting...' : 'Delete'}
                         </button>
-                      </form>
+                      </form> : null}
                     </article>
                   ))}
                 </div>

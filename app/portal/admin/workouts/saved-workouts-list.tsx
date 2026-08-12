@@ -46,13 +46,16 @@ export default function SavedWorkoutsList({ workouts }: { workouts: WorkoutRow[]
           {filteredWorkouts.map((workout) => (
             <article key={workout.id} className="portal-exercise-card">
               <h4>{workout.name}</h4>
+              {workout.isShared ? <span className="portal-tag">PCU Library</span> : null}
               <p className="portal-muted-text">{workout.category}</p>
               <p className="portal-muted-text">{workout.exerciseCount} exercises</p>
               {workout.description && <p>{workout.description}</p>}
               {workout.exerciseNames.length > 0 && <p>{workout.exerciseNames.join(', ')}</p>}
-              <Link href={`/portal/admin/workouts/${workout.id}`} className="btn btn-primary as-link portal-workout-action-btn">
-                Edit Workout
-              </Link>
+              {!workout.isShared ? (
+                <Link href={`/portal/admin/workouts/${workout.id}`} className="btn btn-primary as-link portal-workout-action-btn">
+                  Edit Workout
+                </Link>
+              ) : null}
               <Link
                 href={`/portal/admin/workouts?duplicateWorkoutId=${workout.id}#create-workout`}
                 className="btn btn-ghost as-link portal-workout-action-btn"
@@ -60,7 +63,7 @@ export default function SavedWorkoutsList({ workouts }: { workouts: WorkoutRow[]
               >
                 Duplicate Workout
               </Link>
-              <DeleteWorkoutForm workoutId={workout.id} workoutName={workout.name} />
+              {!workout.isShared ? <DeleteWorkoutForm workoutId={workout.id} workoutName={workout.name} /> : null}
             </article>
           ))}
         </div>
@@ -68,4 +71,3 @@ export default function SavedWorkoutsList({ workouts }: { workouts: WorkoutRow[]
     </>
   );
 }
-

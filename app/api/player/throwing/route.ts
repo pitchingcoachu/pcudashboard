@@ -5,6 +5,8 @@ import { resolveProgrammingOrganizationId } from '../../../../lib/programming-sc
 import { getPlayerForUser, getRecoverableVelocityScripts, getScheduleThrowingState, playerExistsInOrganization } from '../../../../lib/training-db';
 import { canManagePlayer } from '../../../../lib/portal-access';
 import { normalizeDrillsState } from '../../../../lib/drills-program';
+import { normalizeHittingDrillsState, normalizeDrillTemplates as normalizeHittingDrillTemplates } from '../../../../lib/hitting-drills-program';
+import { isBubbleColumnType } from '../../../../lib/bullpen-column-types';
 
 const SHARED_PLAYER_ID = 0;
 
@@ -52,7 +54,7 @@ type ScriptState = {
 };
 
 const DEFAULT_COLUMNS = ['Pitch Type', 'Ball Type', 'Stretch/Windup', 'Location', 'Situation', 'Notes'];
-type BullpenColumnType = 'auto' | 'text' | 'fill' | 'velocity' | 'strike' | 'two-thirds';
+type BullpenColumnType = 'auto' | 'text' | 'fill' | 'velocity' | 'strike' | 'two-thirds' | string;
 const DEFAULT_COLUMN_TYPE: BullpenColumnType = 'auto';
 const ALLOWED_COLUMN_TYPES = new Set<BullpenColumnType>(['auto', 'text', 'fill', 'velocity', 'strike', 'two-thirds']);
 const DEFAULT_SCRIPT_STATE: ScriptState = {
@@ -73,6 +75,7 @@ function normalizeColumnTypes(raw: unknown, columnCount: number): BullpenColumnT
   const types = source.slice(0, columnCount).map((value) => {
     const normalized = String(value ?? '').trim().toLowerCase();
     if (normalized === 'yes-no') return 'strike';
+    if (isBubbleColumnType(normalized)) return normalized;
     return ALLOWED_COLUMN_TYPES.has(normalized as BullpenColumnType) ? normalized as BullpenColumnType : DEFAULT_COLUMN_TYPE;
   });
   while (types.length < columnCount) types.push(DEFAULT_COLUMN_TYPE);
@@ -206,6 +209,8 @@ export async function GET(request: Request) {
   let velocityTemplates = normalizeTemplateList(sharedTemplatesObj.velocityTemplates);
   const velocityState = normalizeScriptState(playerTemplatesObj.velocity);
   const drillsState = normalizeDrillsState(playerTemplatesObj.drills);
+  const hittingDrillsState = normalizeHittingDrillsState(playerTemplatesObj.hittingDrills);
+  const hittingDrillTemplates = normalizeHittingDrillTemplates(sharedTemplatesObj.hittingDrillTemplates);
 
   if (bullpenTemplates.length === 0) {
     bullpenTemplates = extractLegacyTemplates(playerTemplatesObj.bullpen);
@@ -231,6 +236,8 @@ export async function GET(request: Request) {
     velocityState,
     velocityTemplates,
     drillsState,
+    hittingDrillsState,
+    hittingDrillTemplates,
     catchPlayNotes: normalizeCatchPlayNotes(playerTemplatesObj.catchPlayNotes),
     cycleNotes: normalizeCycleNotes(playerTemplatesObj.cycleNotes),
   });

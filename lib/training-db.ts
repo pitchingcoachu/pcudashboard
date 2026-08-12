@@ -282,6 +282,8 @@ export type ExerciseCategoryRow = {
 
 export type ExerciseRow = {
   id: number;
+  sourceOrganizationId: number;
+  isShared: boolean;
   name: string;
   category: string;
   repMeasure: 'reps' | 'seconds' | 'distance';
@@ -294,6 +296,8 @@ export type ExerciseRow = {
 
 export type WorkoutRow = {
   id: number;
+  sourceOrganizationId: number;
+  isShared: boolean;
   name: string;
   category: string;
   description: string | null;
@@ -319,6 +323,8 @@ export type WorkoutEditorItem = {
 
 export type WorkoutDetailRow = {
   id: number;
+  sourceOrganizationId: number;
+  isShared: boolean;
   name: string;
   category: string;
   description: string | null;
@@ -747,6 +753,34 @@ export async function ensureTrainingDbReady(): Promise<void> {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_bullpen_log_entries_player ON bullpen_log_entries (organization_id, player_id, template_id, bullpen_date DESC);`);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS hitting_log_entries (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        template_id TEXT NOT NULL,
+        hitting_date DATE NOT NULL,
+        rows_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id, player_id, template_id, hitting_date)
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_hitting_log_entries_player ON hitting_log_entries (organization_id, player_id, template_id, hitting_date DESC);`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS bubble_category_defs (
+        id BIGSERIAL PRIMARY KEY,
+        organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        label TEXT NOT NULL,
+        options_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        updated_by_user_id BIGINT REFERENCES auth_users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (organization_id, label)
+      );
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bubble_category_defs_org ON bubble_category_defs (organization_id);`);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS questionnaires (
         id BIGSERIAL PRIMARY KEY,
         organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -1103,6 +1137,9 @@ function _invalidateTrainingReadCacheForOrganization(organizationId: number) {
     `workout_count:${org}`,
     `workout_choices:${org}`,
     `schedule_templates:${org}`,
+    ...(org === PCU_TEMPLATE_ORGANIZATION_ID
+      ? ['exercise_count:', 'workout_count:', 'workout_choices:']
+      : []),
   ]);
 }
 
@@ -1865,11 +1902,19 @@ export async function listWorkoutChoicesByOrganization(organizationId: number): 
           COUNT(we.id)::text AS exercise_count
         FROM workout_library w
         LEFT JOIN workout_exercises we ON we.workout_id = w.id
-        WHERE w.organization_id = $1
+        WHERE w.organization_id = ANY(ARRAY[$1, $2]::int[])
+          AND (
+            w.organization_id = $1
+            OR NOT EXISTS (
+              SELECT 1 FROM workout_library own
+              WHERE own.organization_id = $1
+                AND LOWER(TRIM(own.name)) = LOWER(TRIM(w.name))
+            )
+          )
         GROUP BY w.id, w.name, w.category, w.calendar_link_target
         ORDER BY w.name ASC
       `,
-      [organizationId]
+      [organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
     );
     return result.rows.map((row) => ({
       id: row.id,
@@ -1890,10 +1935,19 @@ export async function getExerciseCountByOrganization(organizationId: number): Pr
     const result = await pool.query<{ total_count: string }>(
       `
         SELECT COUNT(*)::text AS total_count
-        FROM exercise_library
-        WHERE organization_id = $1
+        FROM exercise_library e
+        WHERE e.organization_id = ANY(ARRAY[$1, $2]::int[])
+          AND (
+            e.organization_id = $1
+            OR NOT EXISTS (
+              SELECT 1 FROM exercise_library own
+              WHERE own.organization_id = $1
+                AND LOWER(TRIM(own.name)) = LOWER(TRIM(e.name))
+                AND LOWER(TRIM(COALESCE(own.category, ''))) = LOWER(TRIM(COALESCE(e.category, '')))
+            )
+          )
       `,
-      [organizationId]
+      [organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
     );
     return Number(result.rows[0]?.total_count ?? '0') || 0;
   });
@@ -1908,10 +1962,18 @@ export async function getWorkoutCountByOrganization(organizationId: number): Pro
     const result = await pool.query<{ total_count: string }>(
       `
         SELECT COUNT(*)::text AS total_count
-        FROM workout_library
-        WHERE organization_id = $1
+        FROM workout_library w
+        WHERE w.organization_id = ANY(ARRAY[$1, $2]::int[])
+          AND (
+            w.organization_id = $1
+            OR NOT EXISTS (
+              SELECT 1 FROM workout_library own
+              WHERE own.organization_id = $1
+                AND LOWER(TRIM(own.name)) = LOWER(TRIM(w.name))
+            )
+          )
       `,
-      [organizationId]
+      [organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
     );
     return Number(result.rows[0]?.total_count ?? '0') || 0;
   });
@@ -3909,12 +3971,12 @@ export async function listExerciseCategoriesByOrganization(organizationId: numbe
 
   const result = await pool.query<{ id: number; name: string }>(
     `
-      SELECT id, name
+      SELECT DISTINCT ON (LOWER(TRIM(name))) id, name
       FROM exercise_categories
-      WHERE organization_id = $1
-      ORDER BY name ASC
+      WHERE organization_id = ANY(ARRAY[$1, $2]::int[])
+      ORDER BY LOWER(TRIM(name)), (organization_id = $1) DESC, id
     `,
-    [organizationId]
+    [organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
   );
 
   const rows = result.rows.map((row) => ({ id: row.id, name: row.name }));
@@ -3968,6 +4030,7 @@ export async function listExercisesByOrganization(organizationId: number): Promi
 
   const result = await pool.query<{
     id: number;
+    organization_id: number;
     name: string;
     category: string;
     rep_measure: string;
@@ -3978,7 +4041,7 @@ export async function listExercisesByOrganization(organizationId: number): Promi
     coaching_cues: string | null;
   }>(
     `
-      SELECT id, name, category, rep_measure, tracking_type, reps_per_side, description, instruction_video_url, coaching_cues
+      SELECT id, organization_id, name, category, rep_measure, tracking_type, reps_per_side, description, instruction_video_url, coaching_cues
       FROM exercise_library e
       WHERE organization_id = ANY($1::int[])
         AND (
@@ -3997,6 +4060,8 @@ export async function listExercisesByOrganization(organizationId: number): Promi
 
   return result.rows.map((row) => ({
     id: row.id,
+    sourceOrganizationId: row.organization_id,
+    isShared: organizationId !== PCU_TEMPLATE_ORGANIZATION_ID && row.organization_id === PCU_TEMPLATE_ORGANIZATION_ID,
     name: row.name,
     category: row.category,
     repMeasure: row.rep_measure === 'seconds' ? 'seconds' : row.rep_measure === 'distance' ? 'distance' : 'reps',
@@ -4018,6 +4083,7 @@ export async function getExerciseByIdInOrganization(input: {
 
   const result = await pool.query<{
     id: number;
+    organization_id: number;
     name: string;
     category: string;
     rep_measure: string;
@@ -4028,7 +4094,7 @@ export async function getExerciseByIdInOrganization(input: {
     coaching_cues: string | null;
   }>(
     `
-      SELECT id, name, category, rep_measure, tracking_type, reps_per_side, description, instruction_video_url, coaching_cues
+      SELECT id, organization_id, name, category, rep_measure, tracking_type, reps_per_side, description, instruction_video_url, coaching_cues
       FROM exercise_library
       WHERE id = $2 AND organization_id = ANY(ARRAY[$1, $3]::int[])
       LIMIT 1
@@ -4040,6 +4106,8 @@ export async function getExerciseByIdInOrganization(input: {
   const row = result.rows[0];
   return {
     id: row.id,
+    sourceOrganizationId: row.organization_id,
+    isShared: input.organizationId !== PCU_TEMPLATE_ORGANIZATION_ID && row.organization_id === PCU_TEMPLATE_ORGANIZATION_ID,
     name: row.name,
     category: row.category,
     repMeasure: row.rep_measure === 'seconds' ? 'seconds' : row.rep_measure === 'distance' ? 'distance' : 'reps',
@@ -4201,9 +4269,10 @@ export async function deleteExercise(input: {
       SELECT COUNT(*)::text AS n
       FROM workout_exercises we
       JOIN workout_library w ON w.id = we.workout_id
-      WHERE we.exercise_id = $1 AND w.organization_id = $2
+      WHERE we.exercise_id = $1
+        AND ($2 = $3 OR w.organization_id = $2)
     `,
-    [input.exerciseId, input.organizationId]
+    [input.exerciseId, input.organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
   );
   if (Number(inWorkouts.rows[0]?.n ?? '0') > 0) {
     return { ok: false, error: 'This exercise is used in one or more workouts. Remove it from workouts first.' };
@@ -4215,9 +4284,10 @@ export async function deleteExercise(input: {
       FROM program_day_items i
       JOIN program_days d ON d.id = i.program_day_id
       JOIN programs p ON p.id = d.program_id
-      WHERE i.exercise_id = $1 AND p.organization_id = $2
+      WHERE i.exercise_id = $1
+        AND ($2 = $3 OR p.organization_id = $2)
     `,
-    [input.exerciseId, input.organizationId]
+    [input.exerciseId, input.organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
   );
   if (Number(inPrograms.rows[0]?.n ?? '0') > 0) {
     return { ok: false, error: 'This exercise is assigned in one or more programs. Remove assignments first.' };
@@ -4253,9 +4323,10 @@ export async function deleteWorkout(input: {
       FROM program_day_items i
       JOIN program_days d ON d.id = i.program_day_id
       JOIN programs p ON p.id = d.program_id
-      WHERE i.workout_id = $1 AND p.organization_id = $2
+      WHERE i.workout_id = $1
+        AND ($2 = $3 OR p.organization_id = $2)
     `,
-    [input.workoutId, input.organizationId]
+    [input.workoutId, input.organizationId, PCU_TEMPLATE_ORGANIZATION_ID]
   );
   if (Number(inPrograms.rows[0]?.n ?? '0') > 0) {
     return { ok: false, error: 'This workout is assigned in one or more programs. Remove assignments first.' };
@@ -4290,6 +4361,7 @@ export async function listWorkoutsByOrganization(organizationId: number): Promis
 
   const result = await pool.query<{
     id: number;
+    organization_id: number;
     name: string;
     category: string;
     description: string | null;
@@ -4300,6 +4372,7 @@ export async function listWorkoutsByOrganization(organizationId: number): Promis
     `
       SELECT
         w.id,
+        w.organization_id,
         w.name,
         w.category,
         w.description,
@@ -4326,7 +4399,7 @@ export async function listWorkoutsByOrganization(organizationId: number): Promis
               AND LOWER(TRIM(own.name)) = LOWER(TRIM(w.name))
           )
         )
-      GROUP BY w.id, w.name, w.category, w.description, w.calendar_link_target
+      GROUP BY w.id, w.organization_id, w.name, w.category, w.description, w.calendar_link_target
       ORDER BY w.name ASC
     `,
     [orgIds, organizationId]
@@ -4334,6 +4407,8 @@ export async function listWorkoutsByOrganization(organizationId: number): Promis
 
   return result.rows.map((row) => ({
     id: row.id,
+    sourceOrganizationId: row.organization_id,
+    isShared: organizationId !== PCU_TEMPLATE_ORGANIZATION_ID && row.organization_id === PCU_TEMPLATE_ORGANIZATION_ID,
     name: row.name,
     category: row.category,
     description: row.description,
@@ -4352,9 +4427,9 @@ export async function getWorkoutByIdInOrganization(input: {
   const pool = getDbPool();
   await ensureWorkoutLibraryCalendarLinkTargetColumn();
 
-  const workoutResult = await pool.query<{ id: number; name: string; category: string; description: string | null; calendar_link_target: string | null }>(
+  const workoutResult = await pool.query<{ id: number; organization_id: number; name: string; category: string; description: string | null; calendar_link_target: string | null }>(
     `
-      SELECT id, name, category, description, calendar_link_target
+      SELECT id, organization_id, name, category, description, calendar_link_target
       FROM workout_library
       WHERE id = $1 AND organization_id = ANY(ARRAY[$2, $3]::int[])
       LIMIT 1
@@ -4402,6 +4477,8 @@ export async function getWorkoutByIdInOrganization(input: {
   const workout = workoutResult.rows[0];
   return {
     id: workout.id,
+    sourceOrganizationId: workout.organization_id,
+    isShared: input.organizationId !== PCU_TEMPLATE_ORGANIZATION_ID && workout.organization_id === PCU_TEMPLATE_ORGANIZATION_ID,
     name: workout.name,
     category: workout.category,
     description: workout.description,
@@ -5017,9 +5094,9 @@ export async function createWorkout(input: {
       `
         SELECT id
         FROM exercise_library
-        WHERE organization_id = $1 AND id = ANY($2::int[])
+        WHERE organization_id = ANY(ARRAY[$1, $3]::int[]) AND id = ANY($2::int[])
       `,
-      [input.organizationId, uniqueExerciseIds]
+      [input.organizationId, uniqueExerciseIds, PCU_TEMPLATE_ORGANIZATION_ID]
     );
 
     if (exerciseCheck.rows.length !== uniqueExerciseIds.length) {
@@ -5165,9 +5242,9 @@ export async function updateWorkout(input: {
       `
         SELECT id
         FROM exercise_library
-        WHERE organization_id = $1 AND id = ANY($2::int[])
+        WHERE organization_id = ANY(ARRAY[$1, $3]::int[]) AND id = ANY($2::int[])
       `,
-      [input.organizationId, uniqueExerciseIds]
+      [input.organizationId, uniqueExerciseIds, PCU_TEMPLATE_ORGANIZATION_ID]
     );
     if (exerciseCheck.rows.length !== uniqueExerciseIds.length) {
       return { ok: false, error: 'One or more exercises were not found in your library.' };
@@ -9566,6 +9643,21 @@ export type BullpenLogEntry = {
   updatedAt: string;
 };
 
+export type HittingLogEntry = {
+  id: number;
+  templateId: string;
+  hittingDate: string;
+  rowsJson: Array<Record<string, string>>;
+  updatedAt: string;
+};
+
+export type BubbleCategoryDefRow = {
+  id: string;
+  label: string;
+  options: string[];
+  updatedAt: string;
+};
+
 export type QuestionnaireQuestionType = 'text' | 'multiple_choice' | 'scale' | 'number' | 'yes_no';
 
 export type QuestionnaireQuestion = {
@@ -9669,6 +9761,143 @@ export async function getBullpenLogEntries(input: {
     rowsJson: Array.isArray(row.rows_json) ? (row.rows_json as Array<Record<string, string>>) : [],
     updatedAt: String(row.updated_at ?? ''),
   }));
+}
+
+export async function saveHittingLogEntry(input: {
+  organizationId: number;
+  playerId: number;
+  userId: number | null;
+  templateId: string;
+  hittingDate: string;
+  rowsJson: Array<Record<string, string>>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  try {
+    await pool.query(
+      `INSERT INTO hitting_log_entries (organization_id, player_id, template_id, hitting_date, rows_json, created_by_user_id, updated_at)
+       VALUES ($1, $2, $3, $4::date, $5::jsonb, $6, NOW())
+       ON CONFLICT (organization_id, player_id, template_id, hitting_date)
+       DO UPDATE SET rows_json = EXCLUDED.rows_json, updated_at = NOW(), created_by_user_id = EXCLUDED.created_by_user_id`,
+      [input.organizationId, input.playerId, input.templateId, input.hittingDate, JSON.stringify(input.rowsJson), input.userId]
+    );
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to save hitting log entry.' };
+  }
+}
+
+export async function getHittingLogEntries(input: {
+  organizationId: number;
+  playerId: number;
+  templateId?: string | null;
+}): Promise<HittingLogEntry[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const templateFilter = input.templateId ? `AND template_id = $3` : '';
+  const values: unknown[] = [input.organizationId, input.playerId];
+  if (input.templateId) values.push(input.templateId);
+  const result = await pool.query<{ id: number; template_id: string; hitting_date: string; rows_json: unknown; updated_at: string }>(
+    `SELECT id, template_id, hitting_date::text AS hitting_date, rows_json, updated_at::text AS updated_at
+     FROM hitting_log_entries
+     WHERE organization_id = $1 AND player_id = $2 ${templateFilter}
+     ORDER BY hitting_date DESC`,
+    values
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    templateId: String(row.template_id ?? ''),
+    hittingDate: String(row.hitting_date ?? ''),
+    rowsJson: Array.isArray(row.rows_json) ? (row.rows_json as Array<Record<string, string>>) : [],
+    updatedAt: String(row.updated_at ?? ''),
+  }));
+}
+
+export async function getBubbleCategories(input: { organizationId: number }): Promise<BubbleCategoryDefRow[]> {
+  if (!isDatabaseConfigured()) return [];
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  const result = await pool.query<{ id: number; label: string; options_json: unknown; updated_at: string }>(
+    `SELECT id, label, options_json, updated_at::text AS updated_at
+     FROM bubble_category_defs
+     WHERE organization_id = $1
+     ORDER BY label ASC`,
+    [input.organizationId]
+  );
+  return result.rows.map((row) => ({
+    id: String(row.id),
+    label: String(row.label ?? ''),
+    options: Array.isArray(row.options_json) ? (row.options_json as string[]).map((v) => String(v)) : [],
+    updatedAt: String(row.updated_at ?? ''),
+  }));
+}
+
+export async function createBubbleCategory(input: {
+  organizationId: number;
+  userId: number | null;
+  label: string;
+  options: string[];
+}): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  try {
+    const result = await pool.query<{ id: number }>(
+      `INSERT INTO bubble_category_defs (organization_id, label, options_json, created_by_user_id, updated_by_user_id, updated_at)
+       VALUES ($1, $2, $3::jsonb, $4, $4, NOW())
+       RETURNING id`,
+      [input.organizationId, input.label, JSON.stringify(input.options), input.userId]
+    );
+    return { ok: true, id: String(result.rows[0]?.id ?? '') };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to create bubble category.';
+    if (message.includes('duplicate key value') || message.includes('unique constraint')) {
+      return { ok: false, error: 'A bubble category with that name already exists.' };
+    }
+    return { ok: false, error: message };
+  }
+}
+
+export async function updateBubbleCategory(input: {
+  organizationId: number;
+  userId: number | null;
+  id: string;
+  label: string;
+  options: string[];
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  try {
+    const result = await pool.query(
+      `UPDATE bubble_category_defs
+       SET label = $3, options_json = $4::jsonb, updated_by_user_id = $5, updated_at = NOW()
+       WHERE organization_id = $1 AND id = $2::bigint`,
+      [input.organizationId, input.id, input.label, JSON.stringify(input.options), input.userId]
+    );
+    if (!result.rowCount) return { ok: false, error: 'Bubble category not found.' };
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to update bubble category.';
+    if (message.includes('duplicate key value') || message.includes('unique constraint')) {
+      return { ok: false, error: 'A bubble category with that name already exists.' };
+    }
+    return { ok: false, error: message };
+  }
+}
+
+export async function deleteBubbleCategory(input: { organizationId: number; id: string }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!isDatabaseConfigured()) return { ok: false, error: 'DATABASE_URL is not configured.' };
+  await ensureTrainingDbReady();
+  const pool = getDbPool();
+  try {
+    await pool.query(`DELETE FROM bubble_category_defs WHERE organization_id = $1 AND id = $2::bigint`, [input.organizationId, input.id]);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Failed to delete bubble category.' };
+  }
 }
 
 function normalizeQuestionnaireFrequency(value: unknown): QuestionnaireAssignmentRow['frequency'] {
