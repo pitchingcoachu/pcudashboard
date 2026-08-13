@@ -37,7 +37,7 @@ jobs:
         with:
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/drive.readonly
-          workload_identity_provider: projects/207343368088/locations/global/workloadIdentityPools/github-actions/providers/pcu-dashboard
+          workload_identity_provider: projects/207334368088/locations/global/workloadIdentityPools/github-actions/providers/pcu-dashboard
           service_account: pcu-drive-sync@pearl-player-development.iam.gserviceaccount.com
 
       - name: Import new Axioforce CSVs from Google Drive
