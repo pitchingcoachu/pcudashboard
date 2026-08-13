@@ -70,7 +70,7 @@ type BiomechTableSummaryRow = {
   'Y Transfer (s)': number | null;
   'Z Transfer (s)': number | null;
   'Stride Length (in)': number | null;
-  'Stride Direction (in)': number | null;
+  'Stride Direction (deg)': number | null;
 };
 
 type NameMapping = {
@@ -1707,6 +1707,12 @@ export async function getBiomechanicsSnapshot(args: {
     const dateKey = dateKeyPhoenixFromIso(capturedAt);
     const strideLengthCm = toFinite(pickValueCaseInsensitive(json, ['strideLength (cm)', 'strideLength', 'Stride Length (cm)']));
     const strideWidthCm = toFinite(pickValueCaseInsensitive(json, ['strideWidth (cm)', 'strideWidth', 'Stride Width (cm)']));
+    const strideAngleDeg = toFinite(pickValueCaseInsensitive(json, ['strideAngle (deg)', 'strideAngle', 'Stride Angle (deg)']));
+    const strideDirectionDeg = strideAngleDeg ?? (
+      strideWidthCm !== null && strideLengthCm !== null && strideLengthCm !== 0
+        ? Math.atan2(strideWidthCm, strideLengthCm) * (180 / Math.PI)
+        : null
+    );
     const systemWeightN = toFinite(pickValueCaseInsensitive(json, ['systemWeight (N)', 'systemWeight', 'System Weight (N)']));
     const velocityMph = pickVelocityFromRow(json);
     const rawNumericValues = includeAllPitchValues
@@ -1725,7 +1731,9 @@ export async function getBiomechanicsSnapshot(args: {
       capturedAt,
       velocityMph,
       strideLengthIn: strideLengthCm === null ? null : strideLengthCm / 2.54,
-      strideDirectionIn: strideWidthCm === null ? null : strideWidthCm / 2.54,
+      // Axioforce changed from stride width to stride angle in July 2026.
+      // Keep one consistent direction metric by deriving the historical angle.
+      strideDirectionIn: strideDirectionDeg,
       bodyWeightLb: systemWeightN === null ? null : systemWeightN * 0.22480894387096,
       rawNumericValues,
     };
@@ -2201,7 +2209,7 @@ export async function getBiomechanicsSnapshot(args: {
     'Y Transfer (s)',
     'Z Transfer (s)',
     'Stride Length (in)',
-    'Stride Direction (in)',
+    'Stride Direction (deg)',
   ];
   const tableAgg = new Map<string, { name: string; tags: string; count: number; dates: Set<string>; pitchTypeCounts: Map<string, number>; sums: Record<string, number>; strideLen: number[]; strideDir: number[]; velo: number[] }>();
   const leaderboardPitchRows: Array<Record<string, string | number | null>> = [];
@@ -2292,7 +2300,7 @@ export async function getBiomechanicsSnapshot(args: {
       'Y Transfer (s)': metrics.yTransfer,
       'Z Transfer (s)': metrics.zTransfer,
       'Stride Length (in)': meta.strideLengthIn,
-      'Stride Direction (in)': meta.strideDirectionIn,
+      'Stride Direction (deg)': meta.strideDirectionIn,
       ...meta.allPitchValues,
     });
   }
@@ -2349,7 +2357,7 @@ export async function getBiomechanicsSnapshot(args: {
       'Y Transfer (s)': avg(r.sums.yTransfer, r.count),
       'Z Transfer (s)': avg(r.sums.zTransfer, r.count),
       'Stride Length (in)': avgArr(r.strideLen),
-      'Stride Direction (in)': avgArr(r.strideDir),
+      'Stride Direction (deg)': avgArr(r.strideDir),
     }));
 
   const leaderboardAverageColumns = tableColumnNames;
@@ -2394,7 +2402,7 @@ export async function getBiomechanicsSnapshot(args: {
     addNum('Y Transfer (s)', curr.sums);
     addNum('Z Transfer (s)', curr.sums);
     const strideLen = toFinite(row['Stride Length (in)']);
-    const strideDir = toFinite(row['Stride Direction (in)']);
+    const strideDir = toFinite(row['Stride Direction (deg)']);
     const velo = toFinite(row['Pitch Velocity (mph)']);
     if (strideLen !== null) curr.strideLen.push(strideLen);
     if (strideDir !== null) curr.strideDir.push(strideDir);
@@ -2436,7 +2444,7 @@ export async function getBiomechanicsSnapshot(args: {
       'Y Transfer (s)': avg(r.sums['Y Transfer (s)'], r.count),
       'Z Transfer (s)': avg(r.sums['Z Transfer (s)'], r.count),
       'Stride Length (in)': avgArr(r.strideLen),
-      'Stride Direction (in)': avgArr(r.strideDir),
+      'Stride Direction (deg)': avgArr(r.strideDir),
     }));
 
   return {

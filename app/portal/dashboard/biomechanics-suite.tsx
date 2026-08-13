@@ -104,7 +104,7 @@ const BIOMECH_TABLE_COLUMNS = [
   'Y Transfer (s)',
   'Z Transfer (s)',
   'Stride Length (in)',
-  'Stride Direction (in)',
+  'Stride Direction (deg)',
 ] as const;
 
 const EXCLUDED_SINGLE_PLAYER_TAGS = new Set([
@@ -973,7 +973,7 @@ function LineChart({
           <span style={{ color: '#cbd5e1' }}>Y Transfer (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.yTransfer)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>Z Transfer (ms): <strong style={{ color: '#f8fafc' }}>{fmtMs(keyMetrics.zTransfer)}</strong></span>
           <span style={{ color: '#cbd5e1' }}>Stride Length (in): <strong style={{ color: '#f8fafc' }}>{fmt(strideLengthIn, 1)}</strong></span>
-          <span style={{ color: '#cbd5e1' }}>Stride Direction (in): <strong style={{ color: '#f8fafc' }}>{fmt(strideDirectionIn, 1)}</strong></span>
+          <span style={{ color: '#cbd5e1' }}>Stride Direction (deg): <strong style={{ color: '#f8fafc' }}>{fmt(strideDirectionIn, 1)}</strong></span>
         </div>
       </aside>
     </div>

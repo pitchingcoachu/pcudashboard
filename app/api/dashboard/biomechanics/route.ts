@@ -325,7 +325,7 @@ export async function GET(request: Request) {
     ? (playerScopedName ? JSON.stringify([playerScopedName]) : null)
     : selectedPitcherRaw;
   const cacheKey = [
-    'biomech:v8',
+    'biomech:v9',
     Number(organizationId),
     String(schoolCode),
     session.role === 'player' ? `player:${String(session.userId ?? '')}` : `role:${session.role}`,
@@ -482,7 +482,7 @@ export async function GET(request: Request) {
     const selectedPitchers = parseSelectedValues(selectedPitcher).filter((v) => v.toUpperCase() !== 'ALL');
     if (selectedPitchers.length === 1) {
       const allSessionsCacheKey = [
-        'biomech:allsessions:v7',
+        'biomech:allsessions:v8',
         Number(selectedOrgId),
         String(schoolCode),
         session.role === 'player' ? `player:${String(session.userId ?? '')}` : `role:${session.role}`,
