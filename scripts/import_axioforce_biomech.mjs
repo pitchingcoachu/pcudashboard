@@ -11,6 +11,7 @@ const ROOT = path.resolve(process.env.AXIOFORCE_ROOT ?? path.join(process.cwd(),
 const ALL_PITCH_DIR = path.join(ROOT, 'All pitch CSVs');
 const SINGLE_PITCH_DIR = path.join(ROOT, 'Single Pitch CSVs');
 const IMPORT_MODE = String(process.env.AXIOFORCE_IMPORT_MODE ?? 'replace').trim().toLowerCase();
+const GRAPH_CACHE_TARGET_POINTS = 600;
 
 async function listCsvFilesRecursive(directory) {
   const files = [];
@@ -36,12 +37,17 @@ async function fileSha256(filePath) {
 async function alreadyImported(client, uploadKind, filePath) {
   const sourceFileHash = await fileSha256(filePath);
   const result = await client.query(
-    `SELECT 1 FROM biomechanics_uploads
-     WHERE organization_id = $1 AND school_code = $2 AND upload_kind = $3 AND source_file_hash = $4
-     LIMIT 1`,
+    `SELECT EXISTS (
+       SELECT 1 FROM biomechanics_uploads
+       WHERE organization_id = $1 AND school_code = $2 AND upload_kind = $3 AND source_file_hash = $4
+     ) AS has_upload,
+     CASE WHEN $3 = 'single_pitch' THEN EXISTS (
+       SELECT 1 FROM biomechanics_graph_cache
+       WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = $4
+     ) ELSE TRUE END AS has_graph_cache`,
     [ORG_ID, SCHOOL_CODE, uploadKind, sourceFileHash]
   );
-  return result.rowCount > 0;
+  return Boolean(result.rows[0]?.has_upload && result.rows[0]?.has_graph_cache);
 }
 
 function parseCsv(text) {
@@ -194,6 +200,62 @@ function parsePitchLabelFromRow(row, fallback) {
 
 function normalizeName(value) {
   return String(value ?? '').trim().toLowerCase().replace(/\./g, '').replace(/[^a-z0-9]+/g, ' ');
+}
+
+function inferPlayerNameFromPath(filePath) {
+  const folder = path.basename(path.dirname(filePath));
+  const parts = folder.split(/[_-]+/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const [last, ...firstParts] = parts;
+  return `${firstParts.join(' ')} ${last}`.trim() || null;
+}
+
+function lttbDownsample(points, targetCount) {
+  const n = points.length;
+  if (n <= targetCount) return points;
+  if (targetCount < 3) return [points[0], points[n - 1]];
+  const sampled = [points[0]];
+  const bucketSize = (n - 2) / (targetCount - 2);
+  let prevIdx = 0;
+  for (let i = 0; i < targetCount - 2; i += 1) {
+    const bucketStart = Math.floor(i * bucketSize) + 1;
+    const bucketEnd = Math.min(Math.floor((i + 1) * bucketSize) + 1, n - 1);
+    const nextBucketStart = Math.floor((i + 1) * bucketSize) + 1;
+    const nextBucketEnd = Math.min(Math.floor((i + 2) * bucketSize) + 1, n - 1);
+    let avgFz = 0;
+    let avgT = 0;
+    let avgCount = 0;
+    for (let j = nextBucketStart; j < nextBucketEnd; j += 1) {
+      const point = points[j];
+      if (!point) continue;
+      avgT += point.t;
+      avgFz += point.fz ?? 0;
+      avgCount += 1;
+    }
+    if (avgCount > 0) {
+      avgT /= avgCount;
+      avgFz /= avgCount;
+    }
+    const previous = points[prevIdx];
+    let maxArea = -1;
+    let maxIdx = bucketStart;
+    for (let j = bucketStart; j < bucketEnd; j += 1) {
+      const point = points[j];
+      if (!point) continue;
+      const area = Math.abs(
+        (previous.t - avgT) * ((point.fz ?? 0) - (previous.fz ?? 0)) -
+        (previous.t - point.t) * (avgFz - (previous.fz ?? 0))
+      ) * 0.5;
+      if (area > maxArea) {
+        maxArea = area;
+        maxIdx = j;
+      }
+    }
+    sampled.push(points[maxIdx]);
+    prevIdx = maxIdx;
+  }
+  sampled.push(points[n - 1]);
+  return sampled;
 }
 
 function normalizePhase(value) {
@@ -354,6 +416,7 @@ async function upsertUpload(client, { uploadKind, sourceFileName, sourceFileHash
 
 async function clearBiomech(client) {
   await client.query(`DELETE FROM biomechanics_pitch_metrics WHERE organization_id = $1 AND school_code = $2`, [ORG_ID, SCHOOL_CODE]);
+  await client.query(`DELETE FROM biomechanics_graph_cache WHERE organization_id = $1 AND school_code = $2`, [ORG_ID, SCHOOL_CODE]);
   await client.query(`DELETE FROM biomechanics_single_pitch_points WHERE organization_id = $1 AND school_code = $2`, [ORG_ID, SCHOOL_CODE]);
   await client.query(`DELETE FROM biomechanics_pitch_rows WHERE organization_id = $1 AND school_code = $2`, [ORG_ID, SCHOOL_CODE]);
   await client.query(`DELETE FROM biomechanics_uploads WHERE organization_id = $1 AND school_code = $2`, [ORG_ID, SCHOOL_CODE]);
@@ -396,14 +459,16 @@ async function importSinglePitchFile(client, filePath, idx, total) {
   const firstRow = rows[0] ?? {};
   const firstName = pickStringCaseInsensitive(firstRow, ['First Name', 'FirstName', 'first_name']) ?? '';
   const lastName = pickStringCaseInsensitive(firstRow, ['Last Name', 'LastName', 'last_name']) ?? '';
-  const playerName = pickStringCaseInsensitive(firstRow, ['Player', 'Pitcher', 'Name']) ?? (`${firstName} ${lastName}`.trim() || null);
+  const playerName = pickStringCaseInsensitive(firstRow, ['Player', 'Pitcher', 'Name']) ?? (`${firstName} ${lastName}`.trim() || inferPlayerNameFromPath(filePath));
   const playerNorm = playerName ? normalizeName(playerName) : null;
+  const pitchCapturedAt = parseCapturedAtFromRow(firstRow);
 
   const pointsForMetrics = [];
   await client.query('BEGIN');
   try {
     const uploadId = await upsertUpload(client, { uploadKind: 'single_pitch', sourceFileName, sourceFileHash, rowCount: rows.length });
     await client.query(`DELETE FROM biomechanics_single_pitch_points WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = $3`, [ORG_ID, SCHOOL_CODE, sourceFileHash]);
+    await client.query(`DELETE FROM biomechanics_graph_cache WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = $3`, [ORG_ID, SCHOOL_CODE, sourceFileHash]);
     await client.query(`DELETE FROM biomechanics_pitch_metrics WHERE organization_id = $1 AND school_code = $2 AND source_file_hash = $3`, [ORG_ID, SCHOOL_CODE, sourceFileHash]);
 
     const batchSize = 500;
@@ -424,7 +489,8 @@ async function importSinglePitchFile(client, filePath, idx, total) {
         const capturedAt = parseCapturedAtFromRow(row);
         const phaseName = pickStringCaseInsensitive(row, ['Phase Name', 'Phase']);
         const deviceId = pickStringCaseInsensitive(row, ['Device Id', 'Device']);
-        pointsForMetrics.push({ t, fx, fy, fz, mx, my, mz, phase_name: phaseName, device_id: deviceId });
+        const positionId = pickStringCaseInsensitive(row, ['Position Id', 'Position']);
+        pointsForMetrics.push({ t, fx, fy, fz, mx, my, mz, phase_name: phaseName, device_id: deviceId, position_id: positionId });
         const base = i * 16;
         placeholders.push(`($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},$${base + 13}::jsonb,$${base + 14},$${base + 15},$${base + 16})`);
         values.push(
@@ -447,6 +513,32 @@ async function importSinglePitchFile(client, filePath, idx, total) {
          (organization_id, school_code, upload_id, source_file_hash, point_index, t, fx, fy, fz, mx, my, mz, row_json, captured_at, pitch_label, pitcher_name, pitcher_name_norm)
          VALUES ${placeholdersWithNorm.join(',')}`,
         valuesWithNorm
+      );
+    }
+
+    const graphPoints = lttbDownsample(pointsForMetrics, GRAPH_CACHE_TARGET_POINTS);
+    const graphChunkSize = 100;
+    for (let offset = 0; offset < graphPoints.length; offset += graphChunkSize) {
+      const chunk = graphPoints.slice(offset, offset + graphChunkSize);
+      const values = [];
+      const placeholders = [];
+      for (let i = 0; i < chunk.length; i += 1) {
+        const point = chunk[i];
+        const base = i * 17;
+        placeholders.push(`($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},$${base + 13},$${base + 14},$${base + 15},$${base + 16},$${base + 17})`);
+        values.push(
+          ORG_ID, SCHOOL_CODE, sourceFileHash, offset + i,
+          point.t, point.fx, point.fy, point.fz, point.mx, point.my, point.mz,
+          point.phase_name, point.device_id, point.position_id,
+          pitchCapturedAt, playerName, playerNorm
+        );
+      }
+      await client.query(
+        `INSERT INTO biomechanics_graph_cache
+         (organization_id, school_code, source_file_hash, point_index, t, fx, fy, fz, mx, my, mz,
+          phase_name, device_id, position_id, captured_at, pitcher_name, pitcher_name_norm)
+         VALUES ${placeholders.join(',')}`,
+        values
       );
     }
 
@@ -537,6 +629,7 @@ async function main() {
       `SELECT
         (SELECT COUNT(*) FROM biomechanics_pitch_rows WHERE organization_id = $1 AND school_code = $2)::int AS all_pitch_rows,
         (SELECT COUNT(DISTINCT source_file_hash) FROM biomechanics_single_pitch_points WHERE organization_id = $1 AND school_code = $2)::int AS single_files,
+        (SELECT COUNT(DISTINCT source_file_hash) FROM biomechanics_graph_cache WHERE organization_id = $1 AND school_code = $2)::int AS graph_cache_files,
         (SELECT COUNT(*) FROM biomechanics_single_pitch_points WHERE organization_id = $1 AND school_code = $2)::bigint AS single_points,
         (SELECT COUNT(*) FROM biomechanics_pitch_metrics WHERE organization_id = $1 AND school_code = $2)::int AS metrics_rows`,
       [ORG_ID, SCHOOL_CODE]

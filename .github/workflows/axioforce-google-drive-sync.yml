@@ -50,3 +50,10 @@ jobs:
           AXIOFORCE_ORGANIZATION_ID: "1"
           AXIOFORCE_SCHOOL_CODE: PCU
         run: node scripts/sync_axioforce_google_drive.mjs
+
+      - name: Repair any missing biomechanics graph caches
+        env:
+          DATABASE_URL: ${{ secrets.DASHBOARD_DATABASE_URL }}
+          AXIOFORCE_ORGANIZATION_ID: "1"
+          AXIOFORCE_SCHOOL_CODE: PCU
+        run: npx tsx scripts/backfill-graph-cache.ts
