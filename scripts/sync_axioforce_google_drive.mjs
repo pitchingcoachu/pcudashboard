@@ -174,6 +174,33 @@ async function runImporter(root) {
   });
 }
 
+async function markDriveFiles(pool, files) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const file of files) {
+      await client.query(
+        `INSERT INTO biomechanics_drive_sync_files
+           (organization_id, school_code, drive_file_id, drive_path, upload_kind, md5_checksum, drive_modified_at, imported_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+         ON CONFLICT (organization_id, school_code, drive_file_id) DO UPDATE SET
+           drive_path = EXCLUDED.drive_path,
+           upload_kind = EXCLUDED.upload_kind,
+           md5_checksum = EXCLUDED.md5_checksum,
+           drive_modified_at = EXCLUDED.drive_modified_at,
+           imported_at = NOW()`,
+        [organizationId, schoolCode, file.id, file.relativeParts.join('/'), file.uploadKind, file.md5Checksum || null, file.modifiedTime || null]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function main() {
   if (!Number.isInteger(organizationId) || organizationId <= 0) throw new Error('AXIOFORCE_ORGANIZATION_ID must be a positive integer.');
   const databaseUrl = required('DATABASE_URL');
@@ -252,39 +279,34 @@ async function main() {
     if (!pending.length) return;
 
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'axioforce-drive-'));
+    const stagingRoot = path.join(tempRoot, 'staging');
     for (let index = 0; index < pending.length; index += 1) {
       const file = pending[index];
       const base = file.uploadKind === 'all_pitches' ? 'All pitch CSVs' : 'Single Pitch CSVs';
       const relative = file.relativeParts.map(safePathPart);
-      const destination = path.join(tempRoot, base, ...relative);
+      const destination = path.join(stagingRoot, base, ...relative);
+      file.localDestination = destination;
       console.log(`downloading ${index + 1}/${pending.length}: ${file.relativeParts.join('/')}`);
       await downloadFile(token, file, destination);
     }
-    await runImporter(tempRoot);
 
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      for (const file of pending) {
-        await client.query(
-          `INSERT INTO biomechanics_drive_sync_files
-             (organization_id, school_code, drive_file_id, drive_path, upload_kind, md5_checksum, drive_modified_at, imported_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
-           ON CONFLICT (organization_id, school_code, drive_file_id) DO UPDATE SET
-             drive_path = EXCLUDED.drive_path,
-             upload_kind = EXCLUDED.upload_kind,
-             md5_checksum = EXCLUDED.md5_checksum,
-             drive_modified_at = EXCLUDED.drive_modified_at,
-             imported_at = NOW()`,
-          [organizationId, schoolCode, file.id, file.relativeParts.join('/'), file.uploadKind, file.md5Checksum || null, file.modifiedTime || null]
-        );
+    // Commit Drive ledger progress in small batches. If a large first-time
+    // catch-up reaches the Actions time limit, the next run resumes after the
+    // last completed batch instead of downloading and scanning everything again.
+    const batchSize = 25;
+    for (let start = 0; start < pending.length; start += batchSize) {
+      const batch = pending.slice(start, start + batchSize);
+      const batchRoot = path.join(tempRoot, `batch-${String(start / batchSize + 1).padStart(4, '0')}`);
+      for (const file of batch) {
+        const base = file.uploadKind === 'all_pitches' ? 'All pitch CSVs' : 'Single Pitch CSVs';
+        const destination = path.join(batchRoot, base, ...file.relativeParts.map(safePathPart));
+        await fs.mkdir(path.dirname(destination), { recursive: true });
+        await fs.rename(file.localDestination, destination);
       }
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+      await runImporter(batchRoot);
+      await markDriveFiles(pool, batch);
+      await fs.rm(batchRoot, { recursive: true, force: true });
+      console.log(`Drive checkpoint saved: ${Math.min(start + batch.length, pending.length)}/${pending.length}`);
     }
     console.log(`Axioforce Drive sync complete: ${pending.length} file(s) processed.`);
   } finally {
