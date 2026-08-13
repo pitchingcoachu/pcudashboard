@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { sortTableRows, type SortDirection } from '../../../lib/table-sort';
 import LeaderboardCorrelationModal from './leaderboard-correlation-modal';
 import NativeDateInput from '../components/native-date-input';
+import { resolveSchoolBrand } from '../../../lib/school-brand';
 
 type Role = 'admin' | 'coach' | 'player';
 type ViewMode = 'Force' | 'Moments';
@@ -989,7 +990,7 @@ function LineChart({
   );
 }
 
-export default function BiomechanicsSuite({ role, isActive = true }: { role: Role; isActive?: boolean }) {
+export default function BiomechanicsSuite({ role, schoolCode, isActive = true }: { role: Role; schoolCode: string; isActive?: boolean }) {
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [mode, setMode] = useState<ViewMode>('Force');
@@ -1629,6 +1630,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const pearlLogoSrc = isLightTheme
         ? '/pearl-lockup-stacked-black-transparent.png'
         : '/pearl-clam-transparent.png';
+      const schoolBrand = resolveSchoolBrand(schoolCode);
+      const schoolLogoSrc = schoolBrand.logoSrc ?? pearlLogoSrc;
       const exportRoot = summaryCardRef.current.cloneNode(true) as HTMLDivElement;
       exportRoot.style.width = isSinglePlayerPdf ? '1360px' : '920px';
       exportRoot.style.position = 'fixed';
@@ -1646,16 +1649,18 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       pdfLogoRow.style.alignItems = 'center';
       pdfLogoRow.style.margin = '0 0 4px 0';
       const leftLogo = document.createElement('img');
-      leftLogo.src = pearlLogoSrc;
-      leftLogo.alt = 'Pearl Player Development';
-      leftLogo.style.width = '70px';
-      leftLogo.style.height = '70px';
+      leftLogo.src = schoolLogoSrc;
+      leftLogo.alt = schoolBrand.logoAlt;
+      leftLogo.style.width = 'auto';
+      leftLogo.style.height = '68px';
+      leftLogo.style.maxWidth = '150px';
       leftLogo.style.objectFit = 'contain';
       const rightLogo = document.createElement('img');
       rightLogo.src = pearlLogoSrc;
       rightLogo.alt = 'Pearl Player Development';
-      rightLogo.style.width = '70px';
-      rightLogo.style.height = '70px';
+      rightLogo.style.width = 'auto';
+      rightLogo.style.height = '62px';
+      rightLogo.style.maxWidth = '150px';
       rightLogo.style.objectFit = 'contain';
       pdfLogoRow.append(leftLogo, rightLogo);
       exportRoot.prepend(pdfLogoRow);
@@ -1707,6 +1712,12 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
         });
       }
       document.body.appendChild(exportRoot);
+      await Promise.all(
+        [leftLogo, rightLogo].map(async (logo) => {
+          if (logo.complete && logo.naturalWidth > 0) return;
+          await logo.decode().catch(() => undefined);
+        })
+      );
       const canvas = await html2canvas(exportRoot, {
         backgroundColor: pageBgHex,
         scale: Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1),
@@ -1757,6 +1768,8 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       const pearlLogoSrc = isLightTheme
         ? '/pearl-lockup-stacked-black-transparent.png'
         : '/pearl-clam-transparent.png';
+      const schoolBrand = resolveSchoolBrand(schoolCode);
+      const schoolLogoSrc = schoolBrand.logoSrc ?? pearlLogoSrc;
       const exportRoot = compareCardRef.current.cloneNode(true) as HTMLDivElement;
       exportRoot.style.width = '1400px';
       exportRoot.style.position = 'fixed';
@@ -1774,16 +1787,18 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       pdfLogoRow.style.alignItems = 'center';
       pdfLogoRow.style.margin = '0 0 8px 0';
       const leftLogo = document.createElement('img');
-      leftLogo.src = pearlLogoSrc;
-      leftLogo.alt = 'Pearl Player Development';
-      leftLogo.style.width = '70px';
-      leftLogo.style.height = '70px';
+      leftLogo.src = schoolLogoSrc;
+      leftLogo.alt = schoolBrand.logoAlt;
+      leftLogo.style.width = 'auto';
+      leftLogo.style.height = '68px';
+      leftLogo.style.maxWidth = '150px';
       leftLogo.style.objectFit = 'contain';
       const rightLogo = document.createElement('img');
       rightLogo.src = pearlLogoSrc;
       rightLogo.alt = 'Pearl Player Development';
-      rightLogo.style.width = '70px';
-      rightLogo.style.height = '70px';
+      rightLogo.style.width = 'auto';
+      rightLogo.style.height = '62px';
+      rightLogo.style.maxWidth = '150px';
       rightLogo.style.objectFit = 'contain';
       pdfLogoRow.append(leftLogo, rightLogo);
       exportRoot.prepend(pdfLogoRow);
@@ -1793,6 +1808,12 @@ export default function BiomechanicsSuite({ role, isActive = true }: { role: Rol
       // Uncap SVG heights for export
       exportRoot.querySelectorAll('svg').forEach((svg) => { (svg as SVGElement).style.height = '340px'; });
       document.body.appendChild(exportRoot);
+      await Promise.all(
+        [leftLogo, rightLogo].map(async (logo) => {
+          if (logo.complete && logo.naturalWidth > 0) return;
+          await logo.decode().catch(() => undefined);
+        })
+      );
       const canvas = await html2canvas(exportRoot, {
         backgroundColor: pageBgHex,
         scale: Math.min(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1),

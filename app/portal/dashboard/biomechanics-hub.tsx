@@ -6,12 +6,13 @@ import BiomechanicsSuite from './biomechanics-suite';
 
 type BiomechanicsHubProps = {
   role: 'admin' | 'coach' | 'player';
+  schoolCode: string;
   isActive?: boolean;
 };
 
 type BiomechanicsSubPage = 'force-plates' | 'motion-capture';
 
-export default function BiomechanicsHub({ role, isActive = true }: BiomechanicsHubProps) {
+export default function BiomechanicsHub({ role, schoolCode, isActive = true }: BiomechanicsHubProps) {
   const [activeSubPage, setActiveSubPage] = useState<BiomechanicsSubPage>('force-plates');
 
   return (
@@ -36,7 +37,7 @@ export default function BiomechanicsHub({ role, isActive = true }: BiomechanicsH
       </div>
 
       <div style={{ display: activeSubPage === 'force-plates' ? 'block' : 'none' }}>
-        <BiomechanicsSuite role={role} isActive={isActive && activeSubPage === 'force-plates'} />
+        <BiomechanicsSuite role={role} schoolCode={schoolCode} isActive={isActive && activeSubPage === 'force-plates'} />
       </div>
       <div style={{ display: activeSubPage === 'motion-capture' ? 'block' : 'none' }}>
         <MotionCaptureDashboard />

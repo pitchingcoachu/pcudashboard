@@ -560,7 +560,7 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       ) : null}
       {mountedSuites.Biomechanics ? (
         <div style={{ display: showSuite('Biomechanics') ? 'block' : 'none' }}>
-          <BiomechanicsHub role={role} isActive={showSuite('Biomechanics')} />
+          <BiomechanicsHub role={role} schoolCode={selectedSchoolCode} isActive={showSuite('Biomechanics')} />
         </div>
       ) : null}
       {!isLeague && mountedSuites['Player Plans'] ? (
