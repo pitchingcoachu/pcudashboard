@@ -180,6 +180,55 @@ async function main() {
       [organizationId, schoolCode]
     );
     const stateById = new Map(state.rows.map((row) => [String(row.drive_file_id), row]));
+
+    // On the first automated run, most historical Drive exports may already be
+    // present from a manual import. Seed the Drive ledger by scoped filename so
+    // we do not download thousands of immutable historical exports just to
+    // rediscover their content hashes. Later runs use Drive checksums/timestamps.
+    if (state.rows.length === 0) {
+      const existingUploads = await pool.query(
+        `SELECT upload_kind, source_file_name
+         FROM biomechanics_uploads
+         WHERE organization_id = $1 AND school_code = $2`,
+        [organizationId, schoolCode]
+      );
+      const existingKeys = new Set(existingUploads.rows.map((row) => {
+        const kind = String(row.upload_kind ?? '').trim();
+        const name = path.basename(String(row.source_file_name ?? '')).trim().toLowerCase();
+        return `${kind}\u0000${name}`;
+      }));
+      const baselineFiles = driveFiles.filter((file) =>
+        existingKeys.has(`${file.uploadKind}\u0000${path.basename(file.name).trim().toLowerCase()}`)
+      );
+      if (baselineFiles.length) {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          for (const file of baselineFiles) {
+            await client.query(
+              `INSERT INTO biomechanics_drive_sync_files
+                 (organization_id, school_code, drive_file_id, drive_path, upload_kind, md5_checksum, drive_modified_at, imported_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+               ON CONFLICT (organization_id, school_code, drive_file_id) DO NOTHING`,
+              [organizationId, schoolCode, file.id, file.relativeParts.join('/'), file.uploadKind, file.md5Checksum || null, file.modifiedTime || null]
+            );
+            stateById.set(file.id, {
+              drive_file_id: file.id,
+              md5_checksum: file.md5Checksum || null,
+              drive_modified_at: file.modifiedTime || null,
+            });
+          }
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+        console.log(`Bootstrapped ${baselineFiles.length} existing Drive file(s) from prior dashboard imports.`);
+      }
+    }
+
     const pending = driveFiles.filter((file) => {
       const prior = stateById.get(file.id);
       if (!prior) return true;
