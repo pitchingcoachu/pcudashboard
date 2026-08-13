@@ -1,0 +1,50 @@
+name: Axioforce Google Drive Sync
+
+on:
+  schedule:
+    # 5:30 AM Arizona time (Arizona does not observe daylight saving time).
+    - cron: "30 12 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: axioforce-google-drive-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Authenticate to Google Cloud
+        id: google-auth
+        uses: google-github-actions/auth@v3
+        with:
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/drive.readonly
+          workload_identity_provider: projects/207343368088/locations/global/workloadIdentityPools/github-actions/providers/pcu-dashboard
+          service_account: pcu-drive-sync@pearl-player-development.iam.gserviceaccount.com
+
+      - name: Import new Axioforce CSVs from Google Drive
+        env:
+          DATABASE_URL: ${{ secrets.DASHBOARD_DATABASE_URL }}
+          GOOGLE_DRIVE_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          GOOGLE_DRIVE_AXIOFORCE_FOLDER_ID: "1WcYbH6cN5R5b2viB1eqIEkHD3CV40FSR"
+          AXIOFORCE_ORGANIZATION_ID: "1"
+          AXIOFORCE_SCHOOL_CODE: PCU
+        run: node scripts/sync_axioforce_google_drive.mjs

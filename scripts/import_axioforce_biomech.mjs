@@ -5,11 +5,44 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
-const ORG_ID = 1;
-const SCHOOL_CODE = 'PCU';
-const ROOT = '/Users/jaredgaynor/Documents/GitHub/pcudashboard/Axioforce';
+const ORG_ID = Number(process.env.AXIOFORCE_ORGANIZATION_ID ?? 1);
+const SCHOOL_CODE = String(process.env.AXIOFORCE_SCHOOL_CODE ?? 'PCU').trim().toUpperCase();
+const ROOT = path.resolve(process.env.AXIOFORCE_ROOT ?? path.join(process.cwd(), 'Axioforce'));
 const ALL_PITCH_DIR = path.join(ROOT, 'All pitch CSVs');
-const SINGLE_PITCH_DIR = path.join(ROOT, 'Single Pitch CSVs', 'Axioforce');
+const SINGLE_PITCH_DIR = path.join(ROOT, 'Single Pitch CSVs');
+const IMPORT_MODE = String(process.env.AXIOFORCE_IMPORT_MODE ?? 'replace').trim().toLowerCase();
+
+async function listCsvFilesRecursive(directory) {
+  const files = [];
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') return files;
+    throw error;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...await listCsvFilesRecursive(fullPath));
+    else if (entry.isFile() && entry.name.toLowerCase().endsWith('.csv')) files.push(fullPath);
+  }
+  return files.sort((a, b) => a.localeCompare(b));
+}
+
+async function fileSha256(filePath) {
+  return createHash('sha256').update(await fs.readFile(filePath)).digest('hex');
+}
+
+async function alreadyImported(client, uploadKind, filePath) {
+  const sourceFileHash = await fileSha256(filePath);
+  const result = await client.query(
+    `SELECT 1 FROM biomechanics_uploads
+     WHERE organization_id = $1 AND school_code = $2 AND upload_kind = $3 AND source_file_hash = $4
+     LIMIT 1`,
+    [ORG_ID, SCHOOL_CODE, uploadKind, sourceFileHash]
+  );
+  return result.rowCount > 0;
+}
 
 function parseCsv(text) {
   const out = [];
@@ -327,7 +360,7 @@ async function clearBiomech(client) {
 }
 
 async function importAllPitchFile(client, filePath) {
-  const sourceFileName = path.basename(filePath);
+  const sourceFileName = path.relative(ROOT, filePath);
   const csvContent = await fs.readFile(filePath, 'utf8');
   const rows = parseCsv(csvContent);
   const sourceFileHash = createHash('sha256').update(csvContent).digest('hex');
@@ -354,7 +387,7 @@ async function importAllPitchFile(client, filePath) {
 }
 
 async function importSinglePitchFile(client, filePath, idx, total) {
-  const sourceFileName = path.basename(filePath);
+  const sourceFileName = path.relative(ROOT, filePath);
   const csvContent = await fs.readFile(filePath, 'utf8');
   const rows = parseCsv(csvContent);
   const sourceFileHash = createHash('sha256').update(csvContent).digest('hex');
@@ -457,30 +490,45 @@ async function main() {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error('DATABASE_URL missing');
 
-  const allFiles = (await fs.readdir(ALL_PITCH_DIR)).filter((f) => f.toLowerCase().endsWith('.csv')).map((f) => path.join(ALL_PITCH_DIR, f));
-  const singleFiles = (await fs.readdir(SINGLE_PITCH_DIR)).filter((f) => f.toLowerCase().endsWith('.csv')).sort().map((f) => path.join(SINGLE_PITCH_DIR, f));
-  if (!allFiles.length) throw new Error('No all-pitch CSV files found.');
-  if (!singleFiles.length) throw new Error('No single-pitch CSV files found.');
+  const allFiles = await listCsvFilesRecursive(ALL_PITCH_DIR);
+  const singleFiles = await listCsvFilesRecursive(SINGLE_PITCH_DIR);
+  if (!allFiles.length && !singleFiles.length) throw new Error(`No Axioforce CSV files found under ${ROOT}.`);
+  if (!Number.isInteger(ORG_ID) || ORG_ID <= 0) throw new Error('AXIOFORCE_ORGANIZATION_ID must be a positive integer.');
+  if (IMPORT_MODE !== 'replace' && IMPORT_MODE !== 'incremental') {
+    throw new Error('AXIOFORCE_IMPORT_MODE must be replace or incremental.');
+  }
 
   const pool = new Pool({ connectionString: dbUrl });
   const client = await pool.connect();
   try {
+    console.log(`scope: organization=${ORG_ID} school=${SCHOOL_CODE} mode=${IMPORT_MODE}`);
     console.log(`found all-pitch files: ${allFiles.length}`);
     console.log(`found single-pitch files: ${singleFiles.length}`);
-    await client.query('BEGIN');
-    await clearBiomech(client);
-    await client.query('COMMIT');
-    console.log('cleared existing biomechanics data');
+    if (IMPORT_MODE === 'replace') {
+      await client.query('BEGIN');
+      await clearBiomech(client);
+      await client.query('COMMIT');
+      console.log('cleared existing biomechanics data');
+    }
 
     let allRowsInserted = 0;
+    let skippedFiles = 0;
     for (const file of allFiles) {
+      if (IMPORT_MODE === 'incremental' && await alreadyImported(client, 'all_pitches', file)) {
+        skippedFiles += 1;
+        continue;
+      }
       const count = await importAllPitchFile(client, file);
       allRowsInserted += count;
-      console.log(`all-pitch imported: ${path.basename(file)} (${count} rows)`);
+      console.log(`all-pitch imported: ${path.relative(ROOT, file)} (${count} rows)`);
     }
 
     let singlePointsInserted = 0;
     for (let i = 0; i < singleFiles.length; i += 1) {
+      if (IMPORT_MODE === 'incremental' && await alreadyImported(client, 'single_pitch', singleFiles[i])) {
+        skippedFiles += 1;
+        continue;
+      }
       const count = await importSinglePitchFile(client, singleFiles[i], i + 1, singleFiles.length);
       singlePointsInserted += count;
     }
@@ -494,7 +542,7 @@ async function main() {
       [ORG_ID, SCHOOL_CODE]
     );
     console.log(JSON.stringify({
-      imported: { allRowsInserted, singlePointsInserted, singleFileCount: singleFiles.length },
+      imported: { allRowsInserted, singlePointsInserted, singleFileCount: singleFiles.length, skippedFiles },
       verify: verify.rows[0],
     }, null, 2));
   } finally {
