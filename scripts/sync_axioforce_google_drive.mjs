@@ -92,12 +92,25 @@ async function listChildren(token, folderId) {
   return files;
 }
 
-async function walkDriveFolder(token, folderId, relativeParts = []) {
+async function walkDriveFolder(token, folderId) {
   const results = [];
-  for (const item of await listChildren(token, folderId)) {
-    const nextParts = [...relativeParts, item.name];
-    if (item.mimeType === FOLDER_MIME) results.push(...await walkDriveFolder(token, item.id, nextParts));
-    else results.push({ ...item, relativeParts: nextParts });
+  let folders = [{ id: folderId, relativeParts: [] }];
+  const concurrency = 10;
+  while (folders.length) {
+    const nextFolders = [];
+    for (let start = 0; start < folders.length; start += concurrency) {
+      const batch = folders.slice(start, start + concurrency);
+      const childrenByFolder = await Promise.all(batch.map((folder) => listChildren(token, folder.id)));
+      for (let index = 0; index < batch.length; index += 1) {
+        const parent = batch[index];
+        for (const item of childrenByFolder[index]) {
+          const nextParts = [...parent.relativeParts, item.name];
+          if (item.mimeType === FOLDER_MIME) nextFolders.push({ id: item.id, relativeParts: nextParts });
+          else results.push({ ...item, relativeParts: nextParts });
+        }
+      }
+    }
+    folders = nextFolders;
   }
   return results;
 }
