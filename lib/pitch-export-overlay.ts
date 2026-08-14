@@ -108,6 +108,28 @@ function getLogoDataUri(): string {
   return cachedLogoDataUri;
 }
 
+// Bundled font files rather than relying on loadSystemFonts -- the deploy
+// environment (Vercel serverless) has no system fonts installed, which
+// silently rendered blank/missing text in production even though it worked
+// locally on macOS (confirmed: production exports showed the panel frame
+// and colors but no readable stat/name text at all).
+let cachedFontFiles: string[] | null = null;
+function getFontFiles(): string[] {
+  if (cachedFontFiles !== null) return cachedFontFiles;
+  const fontDir = path.join(process.cwd(), 'assets', 'fonts');
+  cachedFontFiles = ['Manrope-Medium.ttf', 'Manrope-Bold.ttf']
+    .map((name) => path.join(fontDir, name))
+    .filter((filePath) => {
+      try {
+        readFileSync(filePath);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  return cachedFontFiles;
+}
+
 // Strike-zone geometry, in "feet" units -- matches actionZonePx/actionZonePy
 // and the strike-zone constants in pitching-suite.tsx exactly.
 const ZONE_W = 240;
@@ -249,13 +271,13 @@ export function renderPitchExportOverlayPng(pitch: PitchExportMetrics, panelHeig
 
   const nameFontSize = fitFontSize(headerName, 28, PANEL_WIDTH - PAD_X * 2);
   parts.push(
-    `<text x="${PAD_X}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${s(nameFontSize)}" font-weight="700" fill="${TEXT_STRONG}" letter-spacing="-0.3">${escapeXml(headerName)}</text>`
+    `<text x="${PAD_X}" y="${y}" font-family="Manrope" font-size="${s(nameFontSize)}" font-weight="700" fill="${TEXT_STRONG}" letter-spacing="-0.3">${escapeXml(headerName)}</text>`
   );
   y += s(30);
   const dateLine = `${headerDate}${headerBatter ? `  •  ${headerBatter}` : ''}`;
   const dateLineFontSize = fitFontSize(dateLine, 20, PANEL_WIDTH - PAD_X * 2);
   parts.push(
-    `<text x="${PAD_X}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${s(dateLineFontSize)}" font-weight="500" fill="${TEXT_MUTED}">${escapeXml(dateLine)}</text>`
+    `<text x="${PAD_X}" y="${y}" font-family="Manrope" font-size="${s(dateLineFontSize)}" font-weight="500" fill="${TEXT_MUTED}">${escapeXml(dateLine)}</text>`
   );
 
   y += s(38);
@@ -266,7 +288,7 @@ export function renderPitchExportOverlayPng(pitch: PitchExportMetrics, panelHeig
   // so the pitch type reads as one consistent color-coded identity.
   parts.push(`<circle cx="${PAD_X + 7}" cy="${y - s(9)}" r="${s(7)}" fill="${pitchTypeColor}" />`);
   parts.push(
-    `<text x="${PAD_X + 24}" y="${y}" font-family="Arial, Helvetica, sans-serif" font-size="${s(26)}" font-weight="700" fill="${TEXT_STRONG}">${escapeXml(pitch.pitch_type)}</text>`
+    `<text x="${PAD_X + 24}" y="${y}" font-family="Manrope" font-size="${s(26)}" font-weight="700" fill="${TEXT_STRONG}">${escapeXml(pitch.pitch_type)}</text>`
   );
   y += s(44);
 
@@ -284,10 +306,10 @@ export function renderPitchExportOverlayPng(pitch: PitchExportMetrics, panelHeig
     const colCenter = PAD_X + col * (colWidth + colGap) + colWidth / 2;
     const cy = y + rowIdx * rowHeight;
     parts.push(
-      `<text x="${colCenter}" y="${cy}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${s(13)}" font-weight="700" fill="${TEXT_LABEL}" letter-spacing="0.6">${escapeXml(row.label.toUpperCase())}</text>`
+      `<text x="${colCenter}" y="${cy}" text-anchor="middle" font-family="Manrope" font-size="${s(13)}" font-weight="700" fill="${TEXT_LABEL}" letter-spacing="0.6">${escapeXml(row.label.toUpperCase())}</text>`
     );
     parts.push(
-      `<text x="${colCenter}" y="${cy + s(26)}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="${s(22)}" font-weight="700" fill="${ACCENT}">${escapeXml(row.value)}</text>`
+      `<text x="${colCenter}" y="${cy + s(26)}" text-anchor="middle" font-family="Manrope" font-size="${s(22)}" font-weight="700" fill="${ACCENT}">${escapeXml(row.value)}</text>`
     );
   });
   y += Math.ceil(stats.length / 2) * rowHeight + s(20);
@@ -320,7 +342,14 @@ export function renderPitchExportOverlayPng(pitch: PitchExportMetrics, panelHeig
     </svg>
   `;
 
-  const resvg = new Resvg(svg, { fitTo: { mode: 'width', value: PANEL_WIDTH } });
+  const resvg = new Resvg(svg, {
+    fitTo: { mode: 'width', value: PANEL_WIDTH },
+    font: {
+      loadSystemFonts: false,
+      fontFiles: getFontFiles(),
+      defaultFontFamily: 'Manrope',
+    },
+  });
   return resvg.render().asPng();
 }
 

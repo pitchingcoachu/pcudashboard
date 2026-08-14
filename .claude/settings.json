@@ -428,7 +428,21 @@
       "Bash(awk -F: '$1>=12000')",
       "Bash(awk 'NR==12384,NR==12960' /Users/jaredgaynor/Documents/GitHub/pcudashboard/app/globals.css)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/portal/admin)",
-      "Bash(python3 -c \"import json; json.load\\(open\\('app.json'\\)\\)\")"
+      "Bash(python3 -c \"import json; json.load\\(open\\('app.json'\\)\\)\")",
+      "Bash(curl -sL \"https://github.com/google/fonts/raw/main/ofl/manrope/Manrope%5Bwght%5D.ttf\" -o assets/fonts/Manrope-Variable.ttf -w \"HTTP %{http_code}, size: %{size_download} bytes\\\\n\")",
+      "Bash(curl -sL \"https://github.com/google/fonts/raw/main/ofl/manrope/static/Manrope-Regular.ttf\" -o assets/fonts/Manrope-Regular.ttf -w \"Regular: HTTP %{http_code}, %{size_download} bytes\\\\n\")",
+      "Bash(curl -sL \"https://github.com/google/fonts/raw/main/ofl/manrope/static/Manrope-Medium.ttf\" -o assets/fonts/Manrope-Medium.ttf -w \"Medium: HTTP %{http_code}, %{size_download} bytes\\\\n\")",
+      "Bash(curl -sL \"https://github.com/google/fonts/raw/main/ofl/manrope/static/Manrope-Bold.ttf\" -o assets/fonts/Manrope-Bold.ttf -w \"Bold: HTTP %{http_code}, %{size_download} bytes\\\\n\")",
+      "Bash(file assets/fonts/*.ttf)",
+      "Bash(rm -f /Users/jaredgaynor/Documents/GitHub/pcudashboard/assets/fonts/*.ttf)",
+      "Bash(curl -sL \"https://api.github.com/repos/google/fonts/contents/ofl/manrope/static\")",
+      "Bash(python3 -c \"import json,sys; data=json.load\\(sys.stdin\\); [print\\(f['name']\\) for f in data] if isinstance\\(data,list\\) else print\\(data\\)\")",
+      "Bash(curl -sL -A \"Mozilla/5.0\" \"https://fonts.googleapis.com/css2?family=Manrope:wght@500;700&display=swap\" -o /tmp/manrope.css)",
+      "Bash(curl -sL \"https://fonts.gstatic.com/s/manrope/v20/xn7_YHE41ni1AdIRqAuZuw1Bx9mbZk7PFO_F.ttf\" -o assets/fonts/Manrope-Medium.ttf -w \"Medium: HTTP %{http_code}, %{size_download} bytes\\\\n\")",
+      "Bash(curl -sL \"https://fonts.gstatic.com/s/manrope/v20/xn7_YHE41ni1AdIRqAuZuw1Bx9mbZk4aE-_F.ttf\" -o assets/fonts/Manrope-Bold.ttf -w \"Bold: HTTP %{http_code}, %{size_download} bytes\\\\n\")",
+      "Bash(curl -s -X POST http://localhost:3000/api/dashboard/pitching/video-export -H 'Content-Type: application/json' -H 'Cookie: pcu_session_v3=__CMDSUB_OUTPUT__' -d '{\"pitchEventIds\":[7750526],\"camera\":[\"edger\"],\"mode\":\"sequential\"}' --max-time 60)",
+      "Bash(cp /Users/jaredgaynor/.claude/projects/-Users-jaredgaynor-Documents-GitHub-pcudashboard/6633b991-5872-40d4-8575-b5a97c5910bc/tool-results/bpcicpzjx.txt /tmp/font-fix-test.mp4)",
+      "Bash(ffmpeg -y -i /tmp/font-fix-test.mp4 -update 1 -vframes 1 /tmp/font-fix-frame.png)"
     ],
     "additionalDirectories": [
       "/tmp",
