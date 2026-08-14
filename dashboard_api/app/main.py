@@ -6608,6 +6608,7 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
         "TRIAL": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "TRIAL", "school_config.R"),
         "UNM": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "UNM", "school_config.R"),
         "UNOH": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "UNOH", "school_config.R"),
+        "LEC": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "LEC", "school_config.R"),
         "SEMO": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "SEMO", "school_config.R"),
         "CREIGHTON": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "CREIGHTON", "school_config.R"),
         "HARVARD": os.path.join(_BUNDLED_SCHOOL_CONFIG_ROOT, "HARVARD", "school_config.R"),
@@ -6660,6 +6661,7 @@ def _load_school_roster(school_code: str) -> Dict[str, List[str]]:
             "Lambright, Gavin",
             "Moorhouse, Richard",
             "Bates, Tyler",
+            "Hicks, Jackson",
         ]
         allowed_pitchers = sorted({*allowed_pitchers, *pcu_additions})
         allowed_hitters = sorted({*allowed_hitters, *pcu_additions})
@@ -14862,6 +14864,7 @@ def _mod_namespaces_for_school(school_code: str) -> List[str]:
         "TRIAL": ["dashboardtrial", "trial"],
         "UNM": ["unmbaseball", "unm", "newmexico"],
         "UNOH": ["unohbaseball", "unoh"],
+        "LEC": ["lecbaseball", "lec", "lakeerie"],
         "SEMO": ["semobaseball", "semo"],
         "PCU": ["tmdata", "pcu", "pcubaseball"],
     }

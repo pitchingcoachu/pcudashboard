@@ -31,7 +31,6 @@ export async function GET(request: Request) {
     page: 1,
     pageSize: 500,
     query: q,
-    assignedCoachOnlyUserId: session.role === 'coach' ? (session.userId ?? null) : null,
   });
   return NextResponse.json({
     players: result.rows.map((r) => ({ playerId: r.playerId, fullName: r.fullName })),
@@ -79,11 +78,9 @@ export async function POST(request: Request) {
     const throwsHand = String(form.get('throwsHand') ?? '');
     const assignedCoachUserIdFromForm = Number(String(form.get('assignedCoachUserId') ?? '0'));
     const assignedCoachUserId =
-      session.role === 'coach'
-        ? session.userId ?? undefined
-        : Number.isFinite(assignedCoachUserIdFromForm) && assignedCoachUserIdFromForm > 0
-          ? assignedCoachUserIdFromForm
-          : undefined;
+      Number.isFinite(assignedCoachUserIdFromForm) && assignedCoachUserIdFromForm > 0
+        ? assignedCoachUserIdFromForm
+        : undefined;
 
     const result = await createClientWithLogin({
       organizationId,

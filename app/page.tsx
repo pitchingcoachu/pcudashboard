@@ -383,7 +383,7 @@ export default function Home() {
           )}
           <div className="nav-social-row">
             <Link
-              href="https://x.com/pitchingcoachu"
+              href="https://x.com/pearlplayerdev"
               target="_blank"
               rel="noopener noreferrer"
               className="social-link"

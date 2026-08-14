@@ -1009,6 +1009,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
   const [showLeaderboardCorrelation, setShowLeaderboardCorrelation] = useState<boolean>(false);
   const [pageTab, setPageTab] = useState<BiomechPageTab>('summary');
   const [leaderboardViewMode, setLeaderboardViewMode] = useState<LeaderboardViewMode>('individual');
+  const [showAllSessions, setShowAllSessions] = useState<boolean>(true);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [isExportingSummaryPdf, setIsExportingSummaryPdf] = useState<boolean>(false);
   const [isExportingComparePdf, setIsExportingComparePdf] = useState<boolean>(false);
@@ -1144,6 +1145,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
     },
     loadOptions?: {
       includeAllPitchCorrelation?: boolean;
+      includeAllSessions?: boolean;
     }
   ) => {
     setIsLoading(true);
@@ -1157,6 +1159,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       const activeForceMode = override?.forceMode ?? appliedForceMode;
       const activeVelocityMin = override?.velocityMin ?? appliedVelocityMin;
       const activeVelocityMax = override?.velocityMax ?? appliedVelocityMax;
+      const activeIncludeAllSessions = loadOptions?.includeAllSessions ?? (showAllSessions && pageTab === 'summary');
       const query = new URLSearchParams();
       if (activeStartDate) query.set('startDate', activeStartDate);
       if (activeEndDate) query.set('endDate', activeEndDate);
@@ -1167,6 +1170,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       if (activeVelocityMax !== null && Number.isFinite(activeVelocityMax)) query.set('velocityMax', String(activeVelocityMax));
       query.set('forceMode', activeForceMode);
       if (loadOptions?.includeAllPitchCorrelation) query.set('includeAllPitchValues', '1');
+      if (activeIncludeAllSessions) query.set('includeAllSessions', '1');
       const response = await fetch(`/api/dashboard/biomechanics?${query.toString()}`, { cache: 'no-store' });
       const payload = (await response.json().catch(() => ({}))) as Payload;
       setDebugInfo('');
@@ -1384,20 +1388,11 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       const rowName = toFirstLastName(String(row.Name ?? ''));
       return rowName === selectedPlayerFirstLast;
     });
-    const allSessionRows = allSessionsLeaderboardIndividualRows.filter((row) => {
+    const allSessionRows = (showAllSessions ? allSessionsLeaderboardIndividualRows : []).filter((row) => {
       const rowName = toFirstLastName(String(row.Name ?? ''));
       return rowName === selectedPlayerFirstLast;
     });
-    const currentSessionDates = new Set(
-      sourceRows
-        .map((row) => String(row.Date ?? '').trim())
-        .filter(Boolean)
-    );
-    const allSessionRowsExcludingCurrent = allSessionRows.filter((row) => {
-      const date = String(row.Date ?? '').trim();
-      return !date || !currentSessionDates.has(date);
-    });
-    if (!sourceRows.length && !allSessionRowsExcludingCurrent.length) return sortedRows;
+    if (!sourceRows.length && !allSessionRows.length) return sortedRows;
     type Agg = {
       pitchType: string;
       name: string;
@@ -1441,7 +1436,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       return byType;
     };
     const currentByType = aggregateRows(sourceRows, 'Current Session');
-    const allByType = aggregateRows(allSessionRowsExcludingCurrent, 'All Sessions');
+    const allByType = aggregateRows(allSessionRows, 'All Sessions');
     const allTypes = new Set<string>([...currentByType.keys(), ...allByType.keys()]);
     const rank = new Map<string, number>(PITCH_TYPE_ORDER.map((name, idx) => [name.toLowerCase(), idx]));
     const orderedTypes = Array.from(allTypes).sort((a, b) => {
@@ -1477,7 +1472,7 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       }
       return output;
     });
-  }, [isSingleAppliedPlayer, pageTab, sortedRows, appliedPitchers, leaderboardIndividualRows, allSessionsLeaderboardIndividualRows]);
+  }, [isSingleAppliedPlayer, pageTab, sortedRows, appliedPitchers, leaderboardIndividualRows, allSessionsLeaderboardIndividualRows, showAllSessions]);
 
   const shouldHideTagsColumnForSinglePlayer = useMemo(() => {
     if (!isSingleAppliedPlayer || pageTab !== 'summary') return false;
@@ -2082,6 +2077,31 @@ export default function BiomechanicsSuite({ role, schoolCode, isActive = true }:
       {pageTab === 'compare' ? null : <div ref={summaryTableCardRef} style={{ border: '1px solid rgba(148,163,184,0.25)', borderRadius: 10, padding: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <h3 style={{ marginTop: 0, marginBottom: 0 }}>{activeTableTitle}</h3>
+          {pageTab === 'summary' && isSingleAppliedPlayer ? (
+            <label data-html2canvas-ignore="true" style={{ display: 'grid', gap: 4, minWidth: 220 }}>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>Session Rows</span>
+              <select
+                className="portal-select"
+                value={showAllSessions ? 'all' : 'current'}
+                style={selectStyle}
+                disabled={isLoading}
+                onChange={(event) => {
+                  const nextShowAllSessions = event.target.value === 'all';
+                  setShowAllSessions(nextShowAllSessions);
+                  if (
+                    nextShowAllSessions &&
+                    hasAppliedFilters &&
+                    allSessionsLeaderboardIndividualRows.length === 0
+                  ) {
+                    void loadData(undefined, undefined, { includeAllSessions: true });
+                  }
+                }}
+              >
+                <option value="current">Current Session Only</option>
+                <option value="all">Current + All Sessions</option>
+              </select>
+            </label>
+          ) : null}
           {pageTab === 'leaderboard' ? (
             <button type="button" className="btn btn-ghost" onClick={() => void openLeaderboardCorrelation()}>
               View Chart

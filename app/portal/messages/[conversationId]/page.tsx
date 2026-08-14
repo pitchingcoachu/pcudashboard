@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { requirePortalSession } from '../../../../lib/portal-session';
+import { resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
+import { schoolBrandCssVars } from '../../../../lib/school-brand';
 import MobileNavSelect from '../../mobile-nav-select';
 import LogoutButton from '../../logout-button';
 import PortalUserMenu from '../../user-menu';
@@ -14,12 +16,13 @@ export default async function MessageThreadPage({
 }) {
   const session = await requirePortalSession();
   const isStaff = session.role === 'admin' || session.role === 'coach';
+  const selectedSchool = resolveDashboardSchoolCode(session);
   const { conversationId } = await params;
   const parsedConversationId = Number(conversationId);
   const selectedConversationId = Number.isFinite(parsedConversationId) && parsedConversationId > 0 ? parsedConversationId : null;
 
   return (
-    <div className="portal-shell">
+    <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
       <header className="portal-header">
         <div className="portal-header-left" />
         <div className="portal-header-center">

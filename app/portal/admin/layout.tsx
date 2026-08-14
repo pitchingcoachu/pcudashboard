@@ -10,7 +10,9 @@ import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import PortalMessagesNavButton from '../messages-nav-button';
+import PortalNavOverflowMenu from '../nav-overflow-menu';
 import { resolveSessionDashboardSchoolOptions } from '../../../lib/dashboard-school-options';
+import { canViewPortalActivity } from '../../../lib/portal-activity';
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -48,10 +50,43 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const isProSchool = String(selectedSchool).trim().toUpperCase() === 'PRO';
   const showCoachClientTabs = canAccessClientManagement && !(session.role === 'coach' && isProSchool);
   const useCompactProgrammingNav = canAccessProgramming;
+  const isLeagueSchool = String(selectedSchool || '').toUpperCase() === 'LEAGUE';
+  const isTrialSchool = String(selectedSchool || '').toUpperCase() === 'TRIAL';
+  const canAccessPlayerNotes = (session.role === 'admin' || session.role === 'coach') && !isLeagueSchool;
+  const canAccessActivityTracker = !isTrialSchool && canViewPortalActivity(session);
+  const canAccessEmailAutomations =
+    !isTrialSchool && session.role === 'admin' && session.email.trim().toLowerCase() === 'jgaynor@pitchingcoachu.com';
 
   if (session.role === 'player') {
     redirect('/portal/player');
   }
+
+  const moreItemsCompact = [
+    { href: '/profiles', label: 'Profiles' },
+    ...(showCoachClientTabs ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
+    { href: '/portal/admin/exercises', label: 'Exercise Library' },
+    { href: '/portal/admin/workouts', label: 'Workout Library' },
+    { href: '/portal/admin/master-calendar', label: 'Master Calendar' },
+    { href: '/portal/admin/testing', label: 'Testing' },
+    { href: '/portal/admin/questionnaires', label: 'Questionnaires' },
+    ...(canAccessActivityTracker ? [{ href: '/portal/admin/activity', label: 'Activity Tracker' }] : []),
+    ...(canAccessEmailAutomations ? [{ href: '/portal/admin/email-templates', label: 'Email Automations' }] : []),
+    ...(!isTrialSchool ? [{ href: '/portal/force-plates', label: 'Force Plate Data' }] : []),
+    ...(!isTrialSchool && session.role === 'admin' ? [{ href: '/portal/admin/csv-uploads', label: 'CSV Uploads' }] : []),
+  ];
+
+  const moreItemsClientManagement = [
+    ...((session.role === 'admin' || session.role === 'coach') && showCoachClientTabs
+      ? [{ href: '/portal/admin/clients', label: 'Players' }]
+      : []),
+    ...((session.role === 'admin' || session.role === 'coach') && showCoachClientTabs
+      ? [{ href: '/portal/admin/coaches', label: 'Coaches' }]
+      : []),
+    ...(canAccessActivityTracker ? [{ href: '/portal/admin/activity', label: 'Activity Tracker' }] : []),
+    ...(canAccessEmailAutomations ? [{ href: '/portal/admin/email-templates', label: 'Email Automations' }] : []),
+    ...(!isTrialSchool ? [{ href: '/portal/force-plates', label: 'Force Plate Data' }] : []),
+    ...(!isTrialSchool && session.role === 'admin' ? [{ href: '/portal/admin/csv-uploads', label: 'CSV Uploads' }] : []),
+  ];
 
   return (
     <div className={`portal-shell${isProSchool ? ' portal-shell--pro' : ''}`} style={schoolBrandCssVars(selectedSchool)}>
@@ -80,34 +115,36 @@ export default async function AdminLayout({ children }: { children: React.ReactN
                   <Link href="/portal/dashboard" className="portal-nav-link">
                     Dashboard
                   </Link>
+                  <Link href="/portal/admin/game-tracker" className="portal-nav-link">
+                    Game Tracker
+                  </Link>
                   <Link href="/portal/admin/schedule" className="portal-nav-link">
                     Schedule
                   </Link>
-                  <Link href="/profiles" className="portal-nav-link">
-                    Profiles
-                  </Link>
-                  <Link href="/portal/admin/questionnaires" className="portal-nav-link">
-                    Questionnaires
-                  </Link>
+                  {canAccessPlayerNotes && (
+                    <Link href="/portal/admin/player-notes" className="portal-nav-link">
+                      Player Notes
+                    </Link>
+                  )}
+                  <PortalNavOverflowMenu items={moreItemsCompact} />
                 </>
               ) : (
                 <>
                   <Link href="/portal/admin" className="portal-nav-link">
                     Home
                   </Link>
-                  {(session.role === 'admin' || session.role === 'coach') && showCoachClientTabs && (
-                    <Link href="/portal/admin/clients" className="portal-nav-link">
-                      Players
-                    </Link>
-                  )}
-                  {session.role === 'admin' && showCoachClientTabs && (
-                    <Link href="/portal/admin/coaches" className="portal-nav-link">
-                      Coaches
-                    </Link>
-                  )}
                   <Link href="/portal/dashboard" className="portal-nav-link">
                     Dashboard
                   </Link>
+                  <Link href="/portal/admin/game-tracker" className="portal-nav-link">
+                    Game Tracker
+                  </Link>
+                  {canAccessPlayerNotes && (
+                    <Link href="/portal/admin/player-notes" className="portal-nav-link">
+                      Player Notes
+                    </Link>
+                  )}
+                  <PortalNavOverflowMenu items={moreItemsClientManagement} />
                 </>
               )}
             </nav>
@@ -119,17 +156,17 @@ export default async function AdminLayout({ children }: { children: React.ReactN
                 ? [
                     { href: '/portal/admin', label: 'Home' },
                     { href: '/portal/dashboard', label: 'Dashboard' },
+                    { href: '/portal/admin/game-tracker', label: 'Game Tracker' },
                     { href: '/portal/admin/schedule', label: 'Schedule' },
-                    { href: '/profiles', label: 'Profiles' },
-                    { href: '/portal/admin/questionnaires', label: 'Questionnaires' },
+                    ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
+                    ...moreItemsCompact,
                   ]
                 : [
                     { href: '/portal/admin', label: 'Home' },
-                    ...(session.role === 'admin' || session.role === 'coach'
-                      ? [...(showCoachClientTabs ? [{ href: '/portal/admin/clients', label: 'Players' }] : [])]
-                      : []),
-                    ...(session.role === 'admin' && showCoachClientTabs ? [{ href: '/portal/admin/coaches', label: 'Coaches' }] : []),
                     { href: '/portal/dashboard', label: 'Dashboard' },
+                    { href: '/portal/admin/game-tracker', label: 'Game Tracker' },
+                    ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
+                    ...moreItemsClientManagement,
                   ]
             }
           />
@@ -140,7 +177,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <PortalNotificationsBell />
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">
-            <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">
+            <Link href="https://x.com/pearlplayerdev" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="Pearl Player Development on X">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M18.244 2H21l-6.528 7.462L22.148 22h-6.012l-4.708-6.163L6.035 22H3.277l6.983-7.979L2 2h6.166l4.255 5.617L18.244 2Zm-2.108 18h1.58L7.308 3.896H5.612L16.136 20Z" />
               </svg>

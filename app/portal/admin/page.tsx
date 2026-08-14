@@ -80,13 +80,13 @@ export default async function AdminHomePage() {
       ? withTimeout(
           getClientCountByOrganization({
             organizationId: clientManagementOrganizationId,
-            assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
+            assignedCoachUserId: null,
           }),
           3_500,
           0
         )
       : Promise.resolve(0),
-    session.role === 'admin' && clientManagementOrganizationId > 0
+    (session.role === 'admin' || session.role === 'coach') && clientManagementOrganizationId > 0
       ? withTimeout(listCoachesByOrganization(clientManagementOrganizationId), 3_500, [])
       : Promise.resolve([]),
     programmingOrganizationId > 0 ? withTimeout(getExerciseCountByOrganization(programmingOrganizationId), 3_500, 0) : Promise.resolve(0),
@@ -114,6 +114,13 @@ export default async function AdminHomePage() {
     <div className={isTrialSchool ? 'portal-admin-home portal-admin-home--trial' : 'portal-admin-home'} style={{ display: 'grid', gap: 20 }}>
       <PlayerSearch />
     <div className="portal-admin-grid">
+      <article className="portal-admin-card">
+        <h2>Game Tracker</h2>
+        <p>Score games, scrimmages, and live BP pitch by pitch with live box scores and situational stats.</p>
+        <Link href="/portal/admin/game-tracker" className="btn btn-primary as-link">
+          Open Game Tracker
+        </Link>
+      </article>
       {programmingOrganizationId <= 0 ? (
         <article className="portal-admin-card">
           <h2>Programming Data</h2>
@@ -130,25 +137,16 @@ export default async function AdminHomePage() {
           }}
         />
       ) : null}
-      {session.role === 'admin' && canAccessClientManagement ? (
+      {canAccessClientManagement ? (
         <article className="portal-admin-card">
           <h2>Players</h2>
-          <p>{visibleClientCount} total athletes with plans and login access.</p>
+          <p>{visibleClientCount} school athletes with plans and login access.</p>
           <Link href="/portal/admin/clients" className="btn btn-primary as-link">
             Manage Players
           </Link>
         </article>
       ) : null}
-      {session.role === 'coach' ? (
-        <article className="portal-admin-card">
-          <h2>Assigned Players</h2>
-          <p>{visibleClientCount} players assigned to your coaching account.</p>
-          <Link href="/portal/admin/schedule" className="btn btn-primary as-link">
-            Open Schedule
-          </Link>
-        </article>
-      ) : null}
-      {session.role === 'admin' && canAccessClientManagement && (
+      {(session.role === 'admin' || session.role === 'coach') && canAccessClientManagement && (
         <article className="portal-admin-card">
           <h2>Coaches</h2>
           <p>{coaches.length} staff accounts with coach/admin access.</p>
@@ -212,8 +210,8 @@ export default async function AdminHomePage() {
       ) : null}
       <article className="portal-admin-card">
         <h2>Player Notes</h2>
-        <p>Open player notes in dashboard.</p>
-        <Link href="/portal/dashboard?suite=player-notes" className="btn btn-primary as-link">
+        <p>Log and review notes for players.</p>
+        <Link href="/portal/admin/player-notes" className="btn btn-primary as-link">
           Open Player Notes
         </Link>
       </article>

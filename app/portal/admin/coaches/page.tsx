@@ -10,6 +10,8 @@ import {
 } from '../../../../lib/training-db';
 import {
   canUseClientManagement,
+  isGlobalAdminSession,
+  resolveClientManagementOrganizationId,
   resolveProgrammingSchoolCode,
 } from '../../../../lib/programming-scope';
 import { CoachesTable } from './table-client';
@@ -28,25 +30,27 @@ function readMessage(params: Record<string, string | string[] | undefined>) {
 
 export default async function AdminCoachesPage({ searchParams }: CoachPageProps) {
   const session = await requirePortalSession();
-  if (session.role !== 'admin') notFound();
+  if (session.role !== 'admin' && session.role !== 'coach') notFound();
   const canAccessClientManagement = await canUseClientManagement(session);
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const isTrialSchool = programmingSchoolCode === 'TRIAL';
-  const clientManagementOrganizationId = isTrialSchool
+  const isGlobalAdmin = isGlobalAdminSession(session);
+  const scopedOrganizationId = await resolveClientManagementOrganizationId(session);
+  const clientManagementOrganizationId = isTrialSchool && isGlobalAdmin
     ? 1
     : await resolveOrganizationIdForSchool({
         schoolCode: programmingSchoolCode,
-        fallbackOrganizationId: 0,
+        fallbackOrganizationId: scopedOrganizationId,
         createIfMissing: session.role === 'admin' && programmingSchoolCode !== 'LEAGUE',
       });
 
   const [coaches, assignedPlayers, params] = await Promise.all([
-    isTrialSchool
+    isTrialSchool && isGlobalAdmin
       ? listDashboardTrialCoaches()
       : clientManagementOrganizationId > 0
         ? listCoachesByOrganization(clientManagementOrganizationId)
         : Promise.resolve([]),
-    isTrialSchool
+    isTrialSchool && isGlobalAdmin
       ? listDashboardTrialCoachAssignedPlayers()
       : clientManagementOrganizationId > 0
         ? listCoachAssignedPlayersByOrganization(clientManagementOrganizationId)
@@ -58,7 +62,9 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
   const editId = Number(editIdRaw);
   const coachToEdit =
     Number.isFinite(editId) && editId > 0
-      ? coaches.find((coach) => Number(coach.userId) === editId) ?? null
+      ? coaches.find(
+          (coach) => Number(coach.userId) === editId && (session.role === 'admin' || coach.role === 'coach')
+        ) ?? null
       : null;
 
   return (
@@ -71,7 +77,11 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
       ) : null}
       <div className="portal-admin-headline">
         <h2>Coaches</h2>
-        <p>Create coach/admin logins and assign coaches to player profiles.</p>
+        <p>
+          {session.role === 'admin'
+            ? 'Create coach/admin logins and assign coaches to player profiles.'
+            : 'Create and manage coach logins for your school.'}
+        </p>
       </div>
 
       {canAccessClientManagement && clientManagementOrganizationId > 0 ? (
@@ -93,10 +103,17 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
           </label>
           <label>
             Role
-            <select name="role" defaultValue="coach">
-              <option value="coach">Coach</option>
-              <option value="admin">Admin</option>
-            </select>
+            {session.role === 'admin' ? (
+              <select name="role" defaultValue="coach">
+                <option value="coach">Coach</option>
+                <option value="admin">Admin</option>
+              </select>
+            ) : (
+              <>
+                <input type="hidden" name="role" value="coach" />
+                <input value="Coach" readOnly aria-label="Role" />
+              </>
+            )}
           </label>
           <label>
             Temporary Password
@@ -132,10 +149,17 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
             </label>
             <label>
               Role
-              <select name="role" defaultValue={coachToEdit.role}>
-                <option value="coach">Coach</option>
-                <option value="admin">Admin</option>
-              </select>
+              {session.role === 'admin' ? (
+                <select name="role" defaultValue={coachToEdit.role}>
+                  <option value="coach">Coach</option>
+                  <option value="admin">Admin</option>
+                </select>
+              ) : (
+                <>
+                  <input type="hidden" name="role" value="coach" />
+                  <input value="Coach" readOnly aria-label="Role" />
+                </>
+              )}
             </label>
             <div className="portal-choice-line-actions">
               <button type="submit" className="btn btn-primary">
@@ -154,7 +178,12 @@ export default async function AdminCoachesPage({ searchParams }: CoachPageProps)
         {coaches.length === 0 ? (
           <p>No coaches yet.</p>
         ) : (
-          <CoachesTable coaches={coaches} clients={assignedPlayers} currentUserId={session.userId} />
+          <CoachesTable
+            coaches={coaches}
+            clients={assignedPlayers}
+            currentUserId={session.userId}
+            canManageAdmins={session.role === 'admin'}
+          />
         )}
       </article>
     </div>

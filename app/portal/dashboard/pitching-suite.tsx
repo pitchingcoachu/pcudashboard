@@ -445,6 +445,7 @@ const TEAM_CODE_PREFIX_LABELS: Record<string, string> = {
   GMU: 'GMU',
   UNM: 'UNM',
   UNOH: 'University of Northwestern Ohio',
+  LEC: 'Lake Erie College',
   SEMO: 'SEMO',
   CRE: 'Creighton',
   PCU: 'Pitching Coach U',
@@ -5323,12 +5324,20 @@ export default function PitchingSuite({
   // the active pitch(es) change so a stale index from a different pitch's
   // camera set never carries over.
   const [actionCameraIndex, setActionCameraIndex] = useState(0);
-  // Manual click-and-drag pan + zoom for the single-view video, mainly so a
+  // Compare mode lets each side pick its own camera angle independently
+  // (e.g. left = Edger, right = Camera 2), unlike single view which only
+  // ever has one clip array to index into.
+  const [actionCameraIndexLeft, setActionCameraIndexLeft] = useState(0);
+  const [actionCameraIndexRight, setActionCameraIndexRight] = useState(0);
+  // Manual click-and-drag pan + zoom for the video, mainly so a
   // portrait/oddly-framed camera angle can be recentered/zoomed by hand
   // regardless of how the browser happens to be sizing the element -- a
   // direct escape hatch that doesn't depend on getting object-fit/aspect
   // CSS exactly right for every camera. Reset whenever the pitch or camera
-  // selection changes so a stale pan/zoom never carries over.
+  // selection changes so a stale pan/zoom never carries over. Compare mode
+  // uses the same single pan/zoom pair applied to both panes at once (kept
+  // in sync visually), matching how playback/scrubbing is already shared
+  // across both compare videos elsewhere in this component.
   const [actionVideoZoom, setActionVideoZoom] = useState(1);
   const [actionVideoPan, setActionVideoPan] = useState({ x: 0, y: 0 });
   const actionVideoPanDragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
@@ -5338,6 +5347,11 @@ export default function PitchingSuite({
   const [actionExportMenuOpen, setActionExportMenuOpen] = useState(false);
   const [actionExportScope, setActionExportScope] = useState<'current' | 'all'>('current');
   const [actionExportCameras, setActionExportCameras] = useState<Array<'edger' | '1' | '2' | '3'>>(['edger']);
+  // 'sequential' (default) is the original export -- each selected camera's
+  // clips concatenated across all pitches before moving to the next camera.
+  // 'combined' shows every selected camera side by side for one pitch, then
+  // advances to the next pitch's composite -- needs 2+ cameras selected.
+  const [actionExportMode, setActionExportMode] = useState<'sequential' | 'combined'>('sequential');
   const [actionExportState, setActionExportState] = useState<'idle' | 'exporting' | 'error'>('idle');
   const [actionExportMessage, setActionExportMessage] = useState('');
   const [breakdownMode, setBreakdownMode] = useState(false);
@@ -9015,6 +9029,8 @@ export default function PitchingSuite({
 
   useEffect(() => {
     setActionCameraIndex(0);
+    setActionCameraIndexLeft(0);
+    setActionCameraIndexRight(0);
   }, [currentPitchKey, actionLeftPitchKey, actionRightPitchKey, actionSideBySide]);
 
   useEffect(() => {
@@ -9030,7 +9046,7 @@ export default function PitchingSuite({
   useEffect(() => {
     setActionVideoZoom(1);
     setActionVideoPan({ x: 0, y: 0 });
-  }, [currentPitchKey, actionCameraIndex, actionSideBySide]);
+  }, [currentPitchKey, actionCameraIndex, actionCameraIndexLeft, actionCameraIndexRight, actionSideBySide]);
 
   const handleActionVideoPanStart = (event: React.PointerEvent<HTMLDivElement>) => {
     if (breakdownMode) return;
@@ -9057,18 +9073,19 @@ export default function PitchingSuite({
 
   // Clamped so a shorter clip array (e.g. the compare-mode right pitch has
   // fewer camera angles than the left one) never indexes out of range.
-  const pickCamera = (urls: string[]): string =>
-    urls.length ? urls[Math.min(actionCameraIndex, urls.length - 1)] : '';
+  const pickCamera = (urls: string[], camIdx: number = actionCameraIndex): string =>
+    urls.length ? urls[Math.min(camIdx, urls.length - 1)] : '';
   const activeCameraCount = Math.max(
     actionSideBySide ? selectedLeftUrls.length : actionVideoUrls.length,
     actionSideBySide ? selectedRightUrls.length : 0
   );
+  const leftCameraCount = selectedLeftUrls.length;
+  const rightCameraCount = selectedRightUrls.length;
   // "Camera 1" isn't a stable device -- it's Edgertronic footage the large
   // majority of the time but occasionally a phone, per-pitch. Only relabel
   // the tab to "Edger" when this specific pitch's clip in that slot is
   // actually confirmed Edgertronic; otherwise keep the generic "Camera N".
-  const cameraTabLabel = (camIdx: number): string => {
-    const referencePitch = actionSideBySide ? selectedLeftPitch : currentActionPitch;
+  const cameraTabLabel = (camIdx: number, referencePitch: PitchActionPoint | null = actionSideBySide ? selectedLeftPitch : currentActionPitch): string => {
     const id = Number(referencePitch?.pitch_event_id);
     const flags = Number.isFinite(id) && id > 0 ? actionVideoEdgerFlagsRef.current.get(Math.trunc(id)) : undefined;
     return flags?.[camIdx] ? 'Edger' : `Camera ${camIdx + 1}`;
@@ -9334,6 +9351,11 @@ export default function PitchingSuite({
       setActionExportMessage('Pick at least one camera to export.');
       return;
     }
+    if (actionExportMode === 'combined' && camerasToSend.length < 2) {
+      setActionExportState('error');
+      setActionExportMessage('Combined export needs at least 2 cameras selected.');
+      return;
+    }
 
     setActionExportState('exporting');
     setActionExportMessage('');
@@ -9341,7 +9363,7 @@ export default function PitchingSuite({
       const response = await fetch('/api/dashboard/pitching/video-export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pitchEventIds, camera: camerasToSend }),
+        body: JSON.stringify({ pitchEventIds, camera: camerasToSend, mode: actionExportMode }),
       });
       if (!response.ok) {
         const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -18254,7 +18276,7 @@ export default function PitchingSuite({
                               zIndex: 60,
                               display: 'grid',
                               gap: 10,
-                              width: 260,
+                              width: 290,
                               padding: '0.75rem',
                               borderRadius: 12,
                               background: actionModalTheme.controlBg,
@@ -18262,6 +18284,34 @@ export default function PitchingSuite({
                               boxShadow: isLightTheme ? '0 18px 44px rgba(15,23,42,0.22)' : '0 18px 44px rgba(0,0,0,0.55)',
                             }}
                           >
+                            <div style={{ display: 'grid', gap: 6 }}>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: actionModalTheme.muted, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                Layout
+                              </div>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <button
+                                  type="button"
+                                  className={actionExportMode === 'sequential' ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  style={actionExportMode === 'sequential' ? { flex: 1, padding: '0.4rem 0.5rem' } : { ...actionModalButtonStyle, flex: 1, padding: '0.4rem 0.5rem' }}
+                                  onClick={() => setActionExportMode('sequential')}
+                                >
+                                  Sequential
+                                </button>
+                                <button
+                                  type="button"
+                                  className={actionExportMode === 'combined' ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  style={actionExportMode === 'combined' ? { flex: 1, padding: '0.4rem 0.5rem' } : { ...actionModalButtonStyle, flex: 1, padding: '0.4rem 0.5rem' }}
+                                  onClick={() => setActionExportMode('combined')}
+                                >
+                                  Combined
+                                </button>
+                              </div>
+                              <div style={{ fontSize: '0.7rem', color: actionModalTheme.muted, lineHeight: 1.3 }}>
+                                {actionExportMode === 'combined'
+                                  ? 'Selected cameras shown together per pitch, then next pitch. Needs 2+ cameras.'
+                                  : 'Each camera’s clips play through in full before the next camera.'}
+                              </div>
+                            </div>
                             <div style={{ display: 'grid', gap: 6 }}>
                               <div style={{ fontSize: '0.7rem', fontWeight: 700, color: actionModalTheme.muted, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
                                 Pitches
@@ -18340,7 +18390,12 @@ export default function PitchingSuite({
                               className="btn btn-primary"
                               style={{ padding: '0.5rem 0.75rem', fontWeight: 700 }}
                               onClick={() => void runActionVideoExport()}
-                              disabled={actionExportState === 'exporting' || !actionExportAvailableCameras.length || !actionExportCameras.length}
+                              disabled={
+                                actionExportState === 'exporting' ||
+                                !actionExportAvailableCameras.length ||
+                                !actionExportCameras.length ||
+                                (actionExportMode === 'combined' && actionExportCameras.length < 2)
+                              }
                             >
                               {actionExportState === 'exporting' ? 'Exporting…' : 'Download Export'}
                             </button>
@@ -18388,7 +18443,7 @@ export default function PitchingSuite({
                           overflow: 'hidden',
                         }}
                       >
-                        {activeCameraCount >= 1 ? (
+                        {!actionSideBySide && activeCameraCount >= 1 ? (
                           <div
                             style={{
                               position: 'absolute',
@@ -18430,12 +18485,13 @@ export default function PitchingSuite({
                             )}
                           </div>
                         ) : null}
-                        {actionMode === 'video' && !actionSideBySide && hasActionVideo ? (
+                        {actionMode === 'video' && hasActionVideo ? (
                           <div
                             style={{
                               position: 'absolute',
                               bottom: 10,
-                              left: 10,
+                              left: actionSideBySide ? 'auto' : 10,
+                              right: actionSideBySide ? 10 : 'auto',
                               zIndex: 20,
                               display: 'flex',
                               alignItems: 'center',
@@ -18451,8 +18507,8 @@ export default function PitchingSuite({
                               type="button"
                               className="btn btn-ghost"
                               style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
-                              onClick={() => setActionVideoZoom((z) => Math.max(1, Math.round((z - 0.25) * 100) / 100))}
-                              disabled={actionVideoZoom <= 1}
+                              onClick={() => setActionVideoZoom((z) => Math.max(actionSideBySide ? 0.25 : 1, Math.round((z - 0.25) * 100) / 100))}
+                              disabled={actionVideoZoom <= (actionSideBySide ? 0.25 : 1)}
                             >
                               −
                             </button>
@@ -18467,7 +18523,7 @@ export default function PitchingSuite({
                             >
                               +
                             </button>
-                            {actionVideoZoom > 1 || actionVideoPan.x !== 0 || actionVideoPan.y !== 0 ? (
+                            {actionVideoZoom !== 1 || actionVideoPan.x !== 0 || actionVideoPan.y !== 0 ? (
                               <button
                                 type="button"
                                 className="btn btn-ghost"
@@ -18504,64 +18560,275 @@ export default function PitchingSuite({
                               >
                                 <div
                                   style={{
-                                    display: 'grid',
-                                    gridTemplateRows: actionCompareLayout === 'overlay' ? 'minmax(0, 1fr)' : 'auto minmax(0, 1fr)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
                                     gap: 8,
+                                    width: '100%',
+                                    height: '100%',
                                     minWidth: 0,
                                     minHeight: 0,
-                                    gridColumn: actionCompareLayout === 'overlay' ? '1 / 2' : undefined,
-                                    gridRow: actionCompareLayout === 'overlay' ? '1 / 2' : undefined,
+                                    overflow: 'hidden',
+                                    position: 'relative',
+                                    gridColumn: '1 / 2',
+                                    gridRow: '1 / 2',
                                   }}
                                 >
-                                  {actionCompareLayout !== 'overlay' ? renderCompactVideoMetrics(selectedLeftPitch, 'left') : null}
-                                  <video
-                                    key={`left-${actionLeftPitchKey}-${pickCamera(selectedLeftUrls) || 'none'}-${actionVideoRefreshNonce}`}
-                                    ref={leftCompareVideoRef}
-                                    crossOrigin="anonymous"
-                                    loop={actionVideoLoop}
-                                    style={{ width: '100%', height: '100%', minHeight: 0, objectFit: 'contain', background: '#000' }}
-                                    onLoadedMetadata={updateSyncedDuration}
-                                    onPause={() => setActionVideoPlaying(false)}
-                                    onPlay={() => setActionVideoPlaying(true)}
-                                    onError={() => {
-                                      void handleActionVideoLoadError(selectedLeftPitch ?? null);
+                                  {actionCompareLayout !== 'overlay' ? (
+                                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', flex: '0 0 auto' }}>
+                                      {renderCompactVideoMetrics(selectedLeftPitch, 'left')}
+                                      {leftCameraCount >= 1 ? (
+                                        <div
+                                          style={{
+                                            display: 'flex',
+                                            gap: 6,
+                                            flexShrink: 0,
+                                            background: 'rgba(2,6,23,0.72)',
+                                            borderRadius: 10,
+                                            padding: 4,
+                                            backdropFilter: 'blur(8px)',
+                                          }}
+                                          onPointerDown={(event) => event.stopPropagation()}
+                                        >
+                                          {Array.from({ length: leftCameraCount }, (_, camIdx) =>
+                                            leftCameraCount > 1 ? (
+                                              <button
+                                                key={camIdx}
+                                                type="button"
+                                                className={camIdx === actionCameraIndexLeft ? 'btn btn-primary' : 'btn btn-ghost'}
+                                                style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem' }}
+                                                onClick={() => setActionCameraIndexLeft(camIdx)}
+                                              >
+                                                {cameraTabLabel(camIdx, selectedLeftPitch)}
+                                              </button>
+                                            ) : (
+                                              <div
+                                                key={camIdx}
+                                                style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem', color: '#e2e8f0', fontWeight: 600 }}
+                                              >
+                                                {cameraTabLabel(camIdx, selectedLeftPitch)}
+                                              </div>
+                                            )
+                                          )}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ) : leftCameraCount >= 1 ? (
+                                    <div
+                                      style={{
+                                        position: 'absolute',
+                                        top: 10,
+                                        left: 10,
+                                        zIndex: 20,
+                                        display: 'flex',
+                                        gap: 6,
+                                        background: 'rgba(2,6,23,0.72)',
+                                        borderRadius: 10,
+                                        padding: 4,
+                                        backdropFilter: 'blur(8px)',
+                                      }}
+                                      onPointerDown={(event) => event.stopPropagation()}
+                                    >
+                                      {Array.from({ length: leftCameraCount }, (_, camIdx) =>
+                                        leftCameraCount > 1 ? (
+                                          <button
+                                            key={camIdx}
+                                            type="button"
+                                            className={camIdx === actionCameraIndexLeft ? 'btn btn-primary' : 'btn btn-ghost'}
+                                            style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem' }}
+                                            onClick={() => setActionCameraIndexLeft(camIdx)}
+                                          >
+                                            {cameraTabLabel(camIdx, selectedLeftPitch)}
+                                          </button>
+                                        ) : (
+                                          <div
+                                            key={camIdx}
+                                            style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem', color: '#e2e8f0', fontWeight: 600 }}
+                                          >
+                                            {cameraTabLabel(camIdx, selectedLeftPitch)}
+                                          </div>
+                                        )
+                                      )}
+                                    </div>
+                                  ) : null}
+                                  <div
+                                    style={{
+                                      flex: '1 1 0',
+                                      width: '100%',
+                                      minWidth: 0,
+                                      minHeight: 0,
+                                      overflow: 'hidden',
+                                      touchAction: 'none',
+                                      cursor: breakdownMode ? undefined : actionVideoZoom > 1 ? 'grab' : 'default',
                                     }}
+                                    onPointerDown={handleActionVideoPanStart}
+                                    onPointerMove={handleActionVideoPanMove}
+                                    onPointerUp={handleActionVideoPanEnd}
+                                    onPointerCancel={handleActionVideoPanEnd}
                                   >
-                                    <source src={pickCamera(selectedLeftUrls)} />
-                                  </video>
+                                    <video
+                                      key={`left-${actionLeftPitchKey}-${pickCamera(selectedLeftUrls, actionCameraIndexLeft) || 'none'}-${actionVideoRefreshNonce}`}
+                                      ref={leftCompareVideoRef}
+                                      crossOrigin="anonymous"
+                                      loop={actionVideoLoop}
+                                      style={{
+                                        width: '100%',
+                                        height: '100%',
+                                        objectFit: 'contain',
+                                        background: '#000',
+                                        transform: `translate(${actionVideoPan.x}px, ${actionVideoPan.y}px) scale(${actionVideoZoom})`,
+                                        transformOrigin: 'center center',
+                                        transition: actionVideoPanDragRef.current ? 'none' : 'transform 0.1s ease-out',
+                                        pointerEvents: 'none',
+                                      }}
+                                      onLoadedMetadata={updateSyncedDuration}
+                                      onPause={() => setActionVideoPlaying(false)}
+                                      onPlay={() => setActionVideoPlaying(true)}
+                                      onError={() => {
+                                        void handleActionVideoLoadError(selectedLeftPitch ?? null);
+                                      }}
+                                    >
+                                      <source src={pickCamera(selectedLeftUrls, actionCameraIndexLeft)} />
+                                    </video>
+                                  </div>
                                 </div>
                                 {selectedRightPitch ? (
                                   selectedRightUrls.length ? (
                                     <div
                                       style={{
-                                        display: 'grid',
-                                        gridTemplateRows: actionCompareLayout === 'overlay' ? 'minmax(0, 1fr)' : 'auto minmax(0, 1fr)',
+                                        display: 'flex',
+                                        flexDirection: 'column',
                                         gap: 8,
+                                        width: '100%',
+                                        height: '100%',
                                         minWidth: 0,
                                         minHeight: 0,
-                                        gridColumn: actionCompareLayout === 'overlay' ? '1 / 2' : undefined,
-                                        gridRow: actionCompareLayout === 'overlay' ? '1 / 2' : undefined,
+                                        overflow: 'hidden',
+                                        position: 'relative',
+                                        gridColumn: actionCompareLayout === 'side-by-side' ? '2 / 3' : '1 / 2',
+                                        gridRow: actionCompareLayout === 'stacked' ? '2 / 3' : '1 / 2',
                                         opacity: actionCompareLayout === 'overlay' ? 0.58 : 1,
                                         mixBlendMode: actionCompareLayout === 'overlay' ? 'screen' : undefined,
                                         pointerEvents: actionCompareLayout === 'overlay' ? 'none' : undefined,
                                       }}
                                     >
-                                      {actionCompareLayout !== 'overlay' ? renderCompactVideoMetrics(selectedRightPitch, 'right') : null}
-                                      <video
-                                        key={`right-${actionRightPitchKey}-${pickCamera(selectedRightUrls) || 'none'}-${actionVideoRefreshNonce}`}
-                                        ref={rightCompareVideoRef}
-                                        crossOrigin="anonymous"
-                                        loop={actionVideoLoop}
-                                        style={{ width: '100%', height: '100%', minHeight: 0, objectFit: 'contain', background: '#000' }}
-                                        onLoadedMetadata={updateSyncedDuration}
-                                        onPause={() => setActionVideoPlaying(false)}
-                                        onPlay={() => setActionVideoPlaying(true)}
-                                        onError={() => {
-                                          void handleActionVideoLoadError(selectedRightPitch ?? null);
+                                      {actionCompareLayout !== 'overlay' ? (
+                                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', flex: '0 0 auto' }}>
+                                          {renderCompactVideoMetrics(selectedRightPitch, 'right')}
+                                          {rightCameraCount >= 1 ? (
+                                            <div
+                                              style={{
+                                                display: 'flex',
+                                                gap: 6,
+                                                flexShrink: 0,
+                                                background: 'rgba(2,6,23,0.72)',
+                                                borderRadius: 10,
+                                                padding: 4,
+                                                backdropFilter: 'blur(8px)',
+                                              }}
+                                              onPointerDown={(event) => event.stopPropagation()}
+                                            >
+                                              {Array.from({ length: rightCameraCount }, (_, camIdx) =>
+                                                rightCameraCount > 1 ? (
+                                                  <button
+                                                    key={camIdx}
+                                                    type="button"
+                                                    className={camIdx === actionCameraIndexRight ? 'btn btn-primary' : 'btn btn-ghost'}
+                                                    style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem' }}
+                                                    onClick={() => setActionCameraIndexRight(camIdx)}
+                                                  >
+                                                    {cameraTabLabel(camIdx, selectedRightPitch)}
+                                                  </button>
+                                                ) : (
+                                                  <div
+                                                    key={camIdx}
+                                                    style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem', color: '#e2e8f0', fontWeight: 600 }}
+                                                  >
+                                                    {cameraTabLabel(camIdx, selectedRightPitch)}
+                                                  </div>
+                                                )
+                                              )}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      ) : rightCameraCount >= 1 ? (
+                                        <div
+                                          style={{
+                                            position: 'absolute',
+                                            top: 10,
+                                            right: 10,
+                                            zIndex: 20,
+                                            display: 'flex',
+                                            gap: 6,
+                                            background: 'rgba(2,6,23,0.72)',
+                                            borderRadius: 10,
+                                            padding: 4,
+                                            backdropFilter: 'blur(8px)',
+                                          }}
+                                          onPointerDown={(event) => event.stopPropagation()}
+                                        >
+                                          {Array.from({ length: rightCameraCount }, (_, camIdx) =>
+                                            rightCameraCount > 1 ? (
+                                              <button
+                                                key={camIdx}
+                                                type="button"
+                                                className={camIdx === actionCameraIndexRight ? 'btn btn-primary' : 'btn btn-ghost'}
+                                                style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem' }}
+                                                onClick={() => setActionCameraIndexRight(camIdx)}
+                                              >
+                                                {cameraTabLabel(camIdx, selectedRightPitch)}
+                                              </button>
+                                            ) : (
+                                              <div
+                                                key={camIdx}
+                                                style={{ padding: '0.3rem 0.65rem', fontSize: '0.78rem', color: '#e2e8f0', fontWeight: 600 }}
+                                              >
+                                                {cameraTabLabel(camIdx, selectedRightPitch)}
+                                              </div>
+                                            )
+                                          )}
+                                        </div>
+                                      ) : null}
+                                      <div
+                                        style={{
+                                          flex: '1 1 0',
+                                          width: '100%',
+                                          minWidth: 0,
+                                          minHeight: 0,
+                                          overflow: 'hidden',
+                                          touchAction: 'none',
+                                          cursor: breakdownMode ? undefined : actionVideoZoom > 1 ? 'grab' : 'default',
+                                          pointerEvents: actionCompareLayout === 'overlay' ? 'none' : undefined,
                                         }}
+                                        onPointerDown={handleActionVideoPanStart}
+                                        onPointerMove={handleActionVideoPanMove}
+                                        onPointerUp={handleActionVideoPanEnd}
+                                        onPointerCancel={handleActionVideoPanEnd}
                                       >
-                                        <source src={pickCamera(selectedRightUrls)} />
-                                      </video>
+                                        <video
+                                          key={`right-${actionRightPitchKey}-${pickCamera(selectedRightUrls, actionCameraIndexRight) || 'none'}-${actionVideoRefreshNonce}`}
+                                          ref={rightCompareVideoRef}
+                                          crossOrigin="anonymous"
+                                          loop={actionVideoLoop}
+                                          style={{
+                                            width: '100%',
+                                            height: '100%',
+                                            objectFit: 'contain',
+                                            background: '#000',
+                                            transform: `translate(${actionVideoPan.x}px, ${actionVideoPan.y}px) scale(${actionVideoZoom})`,
+                                            transformOrigin: 'center center',
+                                            transition: actionVideoPanDragRef.current ? 'none' : 'transform 0.1s ease-out',
+                                            pointerEvents: 'none',
+                                          }}
+                                          onLoadedMetadata={updateSyncedDuration}
+                                          onPause={() => setActionVideoPlaying(false)}
+                                          onPlay={() => setActionVideoPlaying(true)}
+                                          onError={() => {
+                                            void handleActionVideoLoadError(selectedRightPitch ?? null);
+                                          }}
+                                        >
+                                          <source src={pickCamera(selectedRightUrls, actionCameraIndexRight)} />
+                                        </video>
+                                      </div>
                                     </div>
                                   ) : (
                                     <>
@@ -18991,27 +19258,67 @@ export default function PitchingSuite({
                   </div>
 
                   {!(actionMode === 'video' && actionSideBySide) ? (
-                  <div style={{ display: 'grid', gap: '0.5rem', color: actionModalTheme.textStrong, fontWeight: 700, fontSize: '0.98rem', alignSelf: 'start', overflowY: 'auto' }}>
-                    <div>
-                      <div>{formatNameFirstLast(currentActionPitch.pitcher)}</div>
-                      <div>{actionDateLabel}</div>
+                  <div style={{ display: 'grid', gap: 0, color: actionModalTheme.textStrong, fontSize: '0.98rem', alignSelf: 'start', overflowY: 'auto', width: 220 }}>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 700, letterSpacing: '-0.01em' }}>
+                      {formatNameFirstLast(currentActionPitch.pitcher)}
                     </div>
-                    <hr style={{ width: '100%', borderColor: actionModalTheme.border }} />
-                    <div>{currentActionPitch.pitch_type}</div>
-                    <div>{fmtNum(currentActionPitch.velo, 1)} mph</div>
-                    <div>IVB: {fmtNum(currentActionPitch.ivb, 1)} in</div>
-                    <div>HB: {fmtNum(currentActionPitch.hb, 1)} in</div>
-                    <div>{fmtNum(currentActionPitch.spin, 0)} rpm</div>
-                    <div>
-                      SpinEff:{' '}
-                      {currentActionPitch.spin_eff !== null
-                        ? `${fmtNum(currentActionPitch.spin_eff > 1 ? currentActionPitch.spin_eff : currentActionPitch.spin_eff * 100, 1)}%`
-                        : '—'}
+                    <div style={{ fontSize: '0.82rem', fontWeight: 500, color: actionModalTheme.muted, marginTop: 4 }}>
+                      {actionDateLabel}
                     </div>
-                    <div>rTilt: {formatTiltClock(currentActionPitch.release_tilt)}</div>
-                    <div>bTilt: {formatTiltClock(currentActionPitch.break_tilt)}</div>
-                    <div>Height: {fmtNum(currentActionPitch.release_height, 1)}</div>
-                    <div>Side: {typeof currentActionPitch.release_side === 'number' ? fmtNum(orientX(currentActionPitch.release_side, currentActionPitch.school_code), 1) : '-'}</div>
+                    <hr style={{ width: '100%', borderColor: actionModalTheme.border, margin: '0.85rem 0' }} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '0.85rem' }}>
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          width: 12,
+                          height: 12,
+                          borderRadius: '50%',
+                          background: pitchColors[currentActionPitch.pitch_type] ?? '#9ca3af',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span style={{ fontSize: '1.02rem', fontWeight: 700 }}>{currentActionPitch.pitch_type}</span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 14, rowGap: 12 }}>
+                      {[
+                        ['Velo', fmtNum(currentActionPitch.velo, 1)],
+                        ['Spin', fmtNum(currentActionPitch.spin, 0)],
+                        ['IVB', `${fmtNum(currentActionPitch.ivb, 1)} in`],
+                        ['HB', `${fmtNum(currentActionPitch.hb, 1)} in`],
+                        ['rTilt', formatTiltClock(currentActionPitch.release_tilt)],
+                        ['bTilt', formatTiltClock(currentActionPitch.break_tilt)],
+                        ['Height', fmtNum(currentActionPitch.release_height, 1)],
+                        [
+                          'Side',
+                          typeof currentActionPitch.release_side === 'number'
+                            ? fmtNum(orientX(currentActionPitch.release_side, currentActionPitch.school_code), 1)
+                            : '-',
+                        ],
+                        ['Ext', fmtNum(currentActionPitch.extension, 1)],
+                        [
+                          'Spin Eff',
+                          currentActionPitch.spin_eff !== null
+                            ? `${fmtNum(currentActionPitch.spin_eff > 1 ? currentActionPitch.spin_eff : currentActionPitch.spin_eff * 100, 1)}%`
+                            : '—',
+                        ],
+                      ].map(([label, value]) => (
+                        <div key={label} style={{ textAlign: 'center' }}>
+                          <div
+                            style={{
+                              fontSize: '0.68rem',
+                              fontWeight: 700,
+                              color: actionModalTheme.softMuted,
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.04em',
+                            }}
+                          >
+                            {label}
+                          </div>
+                          <div style={{ fontSize: '1.05rem', fontWeight: 700, marginTop: 2 }}>{value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <hr style={{ width: '100%', borderColor: actionModalTheme.border, margin: '1rem 0 0' }} />
                     <div style={{ display: 'grid', justifyContent: 'center', marginTop: 10 }}>
                       <svg viewBox={`0 0 ${actionZoneW} ${actionZoneH}`} style={{ width: 172, height: 186 }}>
                         <polygon

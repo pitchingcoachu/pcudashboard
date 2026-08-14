@@ -1,7 +1,11 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../lib/auth';
-import { isGlobalAdminSession, resolveProgrammingSchoolCode } from '../../../../lib/programming-scope';
+import {
+  isGlobalAdminSession,
+  resolveClientManagementOrganizationId,
+  resolveProgrammingSchoolCode,
+} from '../../../../lib/programming-scope';
 import {
   createStaffUser,
   ensureDashboardTrialOrganizationForCoach,
@@ -22,7 +26,7 @@ export async function POST(request: Request) {
     if (!session) {
       return NextResponse.redirect(new URL('/login', request.url), 303);
     }
-    if ((session.role ?? 'admin') !== 'admin') {
+    if (session.role !== 'admin' && session.role !== 'coach') {
       return NextResponse.redirect(new URL('/portal/player', request.url), 303);
     }
 
@@ -30,12 +34,13 @@ export async function POST(request: Request) {
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/coaches');
     const selectedSchoolCode = resolveProgrammingSchoolCode(session);
     const email = String(form.get('email') ?? '').trim();
+    const scopedOrganizationId = await resolveClientManagementOrganizationId(session);
     const organizationId =
-      selectedSchoolCode === 'TRIAL'
+      selectedSchoolCode === 'TRIAL' && isGlobalAdminSession(session)
         ? await ensureDashboardTrialOrganizationForCoach(email)
         : await resolveOrganizationIdForSchool({
             schoolCode: selectedSchoolCode,
-            fallbackOrganizationId: 0,
+            fallbackOrganizationId: scopedOrganizationId,
             createIfMissing: session.role === 'admin' && selectedSchoolCode !== 'LEAGUE',
           });
     if (organizationId <= 0) {
@@ -43,7 +48,7 @@ export async function POST(request: Request) {
     }
 
     const roleRaw = String(form.get('role') ?? '').trim().toLowerCase();
-    const role = roleRaw === 'coach' ? 'coach' : 'admin';
+    const role = session.role === 'coach' || roleRaw === 'coach' ? 'coach' : 'admin';
     const result = await createStaffUser({
       organizationId,
       name: String(form.get('name') ?? ''),

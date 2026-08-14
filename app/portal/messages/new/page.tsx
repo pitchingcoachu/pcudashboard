@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { requirePortalSession } from '../../../../lib/portal-session';
+import { resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
+import { schoolBrandCssVars } from '../../../../lib/school-brand';
 import MobileNavSelect from '../../mobile-nav-select';
 import LogoutButton from '../../logout-button';
 import PortalUserMenu from '../../user-menu';
@@ -10,9 +12,10 @@ import { NewConversationPanel } from '../new-conversation-panel';
 export default async function NewMessagePage() {
   const session = await requirePortalSession();
   const isStaff = session.role === 'admin' || session.role === 'coach';
+  const selectedSchool = resolveDashboardSchoolCode(session);
 
   return (
-    <div className="portal-shell">
+    <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
       <header className="portal-header">
         <div className="portal-header-left" />
         <div className="portal-header-center">

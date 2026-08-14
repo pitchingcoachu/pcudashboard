@@ -1,9 +1,14 @@
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { getSessionFromCookies } from '../../../../../lib/auth';
-import { resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
+import {
+  isGlobalAdminSession,
+  resolveClientManagementOrganizationId,
+  resolveProgrammingSchoolCode,
+} from '../../../../../lib/programming-scope';
 import {
   deleteStaffUser,
+  listCoachesByOrganization,
   resolveDashboardTrialOrganizationIdForStaffUser,
   resolveOrganizationIdForSchool,
   setStaffActiveStatus,
@@ -23,7 +28,7 @@ export async function POST(request: Request) {
     if (!session) {
       return NextResponse.redirect(new URL('/login', request.url), 303);
     }
-    if ((session.role ?? 'admin') !== 'admin') {
+    if (session.role !== 'admin' && session.role !== 'coach') {
       return NextResponse.redirect(new URL('/portal/player', request.url), 303);
     }
 
@@ -31,12 +36,13 @@ export async function POST(request: Request) {
     const redirectTo = String(form.get('redirectTo') ?? '/portal/admin/coaches');
     const selectedSchoolCode = resolveProgrammingSchoolCode(session);
     const staffUserId = Number(String(form.get('staffUserId') ?? '0'));
+    const scopedOrganizationId = await resolveClientManagementOrganizationId(session);
     const organizationId =
-      selectedSchoolCode === 'TRIAL'
+      selectedSchoolCode === 'TRIAL' && isGlobalAdminSession(session)
         ? await resolveDashboardTrialOrganizationIdForStaffUser(staffUserId)
         : await resolveOrganizationIdForSchool({
             schoolCode: selectedSchoolCode,
-            fallbackOrganizationId: 0,
+            fallbackOrganizationId: scopedOrganizationId,
             createIfMissing: session.role === 'admin' && selectedSchoolCode !== 'LEAGUE',
           });
     if (organizationId <= 0) {
@@ -52,6 +58,16 @@ export async function POST(request: Request) {
       return redirectWithMessage(request, redirectTo, 'error', 'You cannot modify your own account here.');
     }
 
+    const targetStaff = (await listCoachesByOrganization(organizationId)).find(
+      (coach) => Number(coach.userId) === staffUserId
+    );
+    if (!targetStaff) {
+      return redirectWithMessage(request, redirectTo, 'error', 'Coach user not found.');
+    }
+    if (session.role === 'coach' && targetStaff.role !== 'coach') {
+      return redirectWithMessage(request, redirectTo, 'error', 'Coaches cannot manage administrator accounts.');
+    }
+
     if (action === 'activate' || action === 'deactivate') {
       const result = await setStaffActiveStatus({
         organizationId,
@@ -64,7 +80,7 @@ export async function POST(request: Request) {
 
     if (action === 'update') {
       const roleRaw = String(form.get('role') ?? '').trim().toLowerCase();
-      const role = roleRaw === 'coach' ? 'coach' : 'admin';
+      const role = session.role === 'coach' || roleRaw === 'coach' ? 'coach' : 'admin';
       const result = await updateStaffUser({
         organizationId,
         staffUserId,

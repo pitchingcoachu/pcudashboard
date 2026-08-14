@@ -133,7 +133,7 @@ export default function CollegePricingPage() {
           <div className={styles.headerActions}>
             <nav className={styles.socialNav} aria-label="Pearl social media">
               <Link
-                href="https://x.com/pitchingcoachu"
+                href="https://x.com/pearlplayerdev"
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="Pearl on X"

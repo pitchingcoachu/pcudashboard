@@ -31,6 +31,7 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
     LSU: `${bundledRoot}/dashboard_api/config/schools/LSU/school_config.R`,
     UNM: `${bundledRoot}/dashboard_api/config/schools/UNM/school_config.R`,
     UNOH: `${bundledRoot}/dashboard_api/config/schools/UNOH/school_config.R`,
+    LEC: `${bundledRoot}/dashboard_api/config/schools/LEC/school_config.R`,
     SEMO: `${bundledRoot}/dashboard_api/config/schools/SEMO/school_config.R`,
     CREIGHTON: `${bundledRoot}/dashboard_api/config/schools/CREIGHTON/school_config.R`,
     HARVARD: `${bundledRoot}/dashboard_api/config/schools/HARVARD/school_config.R`,
@@ -45,7 +46,7 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
       allowedHitters: extractRVector(text, 'allowed_hitters'),
     };
     if (upper === 'PCU') {
-      const additions = ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke'];
+      const additions = ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke', 'Hicks, Jackson'];
       const pitcherAdditions = [...additions, 'Masi, Jack', 'Jacobs, Brody', 'Stevenson, Townsend', 'Bates, Tyler'];
       return {
         allowedPitchers: uniqueNames([...base.allowedPitchers, ...pitcherAdditions]),

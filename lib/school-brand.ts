@@ -126,6 +126,15 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
     accentRgb: '137, 31, 26',
     accentRgbSecondary: '255, 255, 255',
   },
+  LEC: {
+    schoolCode: 'LEC',
+    logoSrc: '/lec-logo.png',
+    logoAlt: 'Lake Erie College logo',
+    accent: '#004f3d',
+    accentSoft: '#00382c',
+    accentRgb: '0, 79, 61',
+    accentRgbSecondary: '255, 255, 255',
+  },
   LEAGUE: {
     schoolCode: 'LEAGUE',
     logoSrc: '/ncaa-logo.png',

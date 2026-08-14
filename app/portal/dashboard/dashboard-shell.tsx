@@ -7,7 +7,6 @@ import ComparisonToolSuite from './comparison-tool-suite';
 import CustomReportsSuite from './custom-reports-suite';
 import HittingSuite from './hitting-suite';
 import HomeSuite from './home-suite';
-import PlayerNotesSuite from './player-notes-suite';
 import PlayerPlansSuite from './player-plans-suite';
 import PitchingSuite from './pitching-suite';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
@@ -49,7 +48,6 @@ type SuiteName =
   | 'Comparison Tool'
   | 'Biomechanics'
   | 'Player Plans'
-  | 'Player Notes'
   | 'Stuff+ Calculator';
 
 type HomeNavigateRequest = {
@@ -72,7 +70,6 @@ const ALL_SUITE_NAMES: SuiteName[] = [
   'Comparison Tool',
   'Biomechanics',
   'Player Plans',
-  'Player Notes',
   'Stuff+ Calculator',
 ];
 
@@ -175,10 +172,8 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
     'Comparison Tool': suite === 'Comparison Tool',
     'Biomechanics': suite === 'Biomechanics',
     'Player Plans': suite === 'Player Plans',
-    'Player Notes': suite === 'Player Notes',
     'Stuff+ Calculator': suite === 'Stuff+ Calculator',
   }));
-  const canAccessPlayerNotes = role === 'admin' || role === 'coach';
   const isLeague = String(selectedSchoolCode || '').toUpperCase() === 'LEAGUE';
   const isPro = String(selectedSchoolCode || '').toUpperCase() === 'PRO';
   const navSearchBorder = isPro
@@ -207,10 +202,9 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
     base.push('Custom Reports', 'Comparison Tool');
     if (String(selectedSchoolCode || '').trim().toUpperCase() === 'PCU') base.push('Biomechanics');
     if (!isLeague) base.push('Player Plans');
-    if (!isLeague && canAccessPlayerNotes) base.push('Player Notes');
     if (!isLeague) base.push('Stuff+ Calculator');
     return base;
-  }, [canAccessPlayerNotes, isLeague, isPro, selectedSchoolCode]);
+  }, [isLeague, isPro, selectedSchoolCode]);
 
   const activeSuite: SuiteName = suiteOptions.includes(suite) ? suite : 'Home';
   const showSuite = (name: SuiteName) => activeSuite === name;
@@ -566,11 +560,6 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       {!isLeague && mountedSuites['Player Plans'] ? (
         <div style={{ display: showSuite('Player Plans') ? 'block' : 'none' }}>
           <PlayerPlansSuite selectedSchoolCode={selectedSchoolCode} />
-        </div>
-      ) : null}
-      {!isLeague && canAccessPlayerNotes && mountedSuites['Player Notes'] ? (
-        <div style={{ display: showSuite('Player Notes') ? 'block' : 'none' }}>
-          <PlayerNotesSuite />
         </div>
       ) : null}
       {!isLeague && mountedSuites['Stuff+ Calculator'] ? (

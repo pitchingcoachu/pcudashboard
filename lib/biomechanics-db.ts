@@ -203,18 +203,32 @@ async function getTrackmanVelocityByNameDate(args: {
   // When we know the exact seconds-of-day for each pitch, restrict to a ±90s window
   // around each known time. This avoids fetching all TrackMan rows for a wide date range.
   let timeSql = '';
-  const knownTimes = (args.knownTimesOfDaySec ?? []).filter((t) => Number.isFinite(t));
+  const knownTimes = Array.from(
+    new Set(
+      (args.knownTimesOfDaySec ?? [])
+        .filter((t) => Number.isFinite(t))
+        .map((t) => Math.max(0, Math.min(86399, Math.round(t))))
+    )
+  ).sort((a, b) => a - b);
   if (knownTimes.length) {
-    // Build OR clauses: EXTRACT(EPOCH FROM time::time) BETWEEN lo AND hi
-    // Use a 90s window (>5s matching threshold + generous buffer for clock drift)
+    // Use a 90s window (>5s matching threshold + generous buffer for clock drift).
+    // Merge overlapping windows before building SQL. Historical views can contain
+    // thousands of pitch timestamps; one clause per timestamp can exceed Postgres'
+    // practical query size even though most of those windows overlap.
     const WINDOW = 90;
-    const timeClauses = knownTimes.map((t) => {
-      const lo = Math.max(0, t - WINDOW);
-      const hi = Math.min(86399, t + WINDOW);
-      return `EXTRACT(EPOCH FROM time::time) BETWEEN ${lo} AND ${hi}`;
-    });
-    // Deduplicate overlapping windows by merging — but with potentially many pitches
-    // a simple OR is fine; the DB optimizer handles it.
+    const mergedWindows: Array<{ lo: number; hi: number }> = [];
+    for (const t of knownTimes) {
+      const next = { lo: Math.max(0, t - WINDOW), hi: Math.min(86399, t + WINDOW) };
+      const current = mergedWindows[mergedWindows.length - 1];
+      if (current && next.lo <= current.hi + 1) {
+        current.hi = Math.max(current.hi, next.hi);
+      } else {
+        mergedWindows.push(next);
+      }
+    }
+    const timeClauses = mergedWindows.map(({ lo, hi }) =>
+      `EXTRACT(EPOCH FROM time::time) BETWEEN ${lo} AND ${hi}`
+    );
     timeSql = `AND (${timeClauses.join(' OR ')})`;
   }
 
@@ -1745,24 +1759,28 @@ export async function getBiomechanicsSnapshot(args: {
   };
   const filteredAllRows = allRows.filter((row) => isSelectedPitcherMatch(row.name));
 
-  // Extract known times-of-day from single-pitch filenames to narrow the TrackMan query
+  // Extract known times-of-day to narrow the TrackMan query. When a player is
+  // selected, the all-pitches rows already contain every timestamp needed for
+  // matching. Avoid adding every cached single-pitch file from every player.
   const knownTimesOfDaySec: number[] = [];
-  for (const row of pitchOptionsResult.rows) {
-    const sourceFileName = String(row.source_file_name ?? '').trim();
-    const parts = parseSingleFileNameParts(sourceFileName || String(row.label ?? ''));
-    if (Number.isFinite(parts.timeKey) && parts.timeKey !== null) {
-      knownTimesOfDaySec.push(Number(parts.timeKey));
-    } else {
-      const fallback = secondsOfDayFromIso(row.captured_at);
-      if (fallback !== null) knownTimesOfDaySec.push(fallback);
+  if (!selectedPitcherKeys.size) {
+    for (const row of pitchOptionsResult.rows) {
+      const sourceFileName = String(row.source_file_name ?? '').trim();
+      const parts = parseSingleFileNameParts(sourceFileName || String(row.label ?? ''));
+      if (Number.isFinite(parts.timeKey) && parts.timeKey !== null) {
+        knownTimesOfDaySec.push(Number(parts.timeKey));
+      } else {
+        const fallback = secondsOfDayFromIso(row.captured_at);
+        if (fallback !== null) knownTimesOfDaySec.push(fallback);
+      }
     }
   }
-  // Also include times from all-pitch rows (captured_at) as a fallback source
-  for (const row of allRows) {
+  // Include the selected player's all-pitch timestamps (or every row when no
+  // player is selected) as the authoritative matching source.
+  for (const row of filteredAllRows) {
     const t = secondsOfDayFromIso(row.capturedAt);
     if (t !== null) knownTimesOfDaySec.push(t);
   }
-
   const trackmanVeloByNameDate = await getTrackmanVelocityByNameDate({
     schoolCode,
     startDate: args.startDate ?? null,

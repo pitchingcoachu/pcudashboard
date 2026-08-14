@@ -54,7 +54,6 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
           pageSize,
           query,
           coachUserId: requestedCoachFilterId,
-          assignedCoachOnlyUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
         })
       : Promise.resolve({ rows: [], totalCount: 0, page: 1, pageSize }),
     clientManagementOrganizationId > 0 ? listCoachesByOrganization(clientManagementOrganizationId) : Promise.resolve([]),
@@ -150,21 +149,14 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
           </label>
           <label>
             Assigned Coach
-            {session.role === 'coach' ? (
-              <>
-                <input value={session.name ?? session.email} readOnly />
-                <input type="hidden" name="assignedCoachUserId" value={String(session.userId ?? '')} />
-              </>
-            ) : (
-              <select name="assignedCoachUserId" defaultValue="">
-                <option value="">Unassigned</option>
-                {coaches.map((coach) => (
-                  <option key={coach.userId} value={String(coach.userId)}>
-                    {coach.name} ({coach.role})
-                  </option>
-                ))}
-              </select>
-            )}
+            <select name="assignedCoachUserId" defaultValue={session.role === 'coach' ? String(session.userId ?? '') : ''}>
+              <option value="">Unassigned</option>
+              {coaches.map((coach) => (
+                <option key={coach.userId} value={String(coach.userId)}>
+                  {coach.name} ({coach.role})
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             Temporary Password

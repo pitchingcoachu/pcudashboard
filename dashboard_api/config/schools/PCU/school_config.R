@@ -5,6 +5,7 @@ school_config <- list(
   # Player filters
   allowed_pitchers = c(
   "Stoller, Cody",
+  "Hicks, Jackson",
   "Levine, Will",
   "Shreve, Ryan",
   "DeVries, Jadon",
@@ -158,6 +159,7 @@ school_config <- list(
   ),
   allowed_hitters = c(
     "Stoller, Cody",
+  "Hicks, Jackson",
   "Barnes, Jon",
   "Giles, Ken",
   "Dillard, Trey",

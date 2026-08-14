@@ -320,12 +320,13 @@ export async function GET(request: Request) {
   const selectedVelocityMax = Number.isFinite(velocityMax) ? velocityMax : null;
   const forceMode = String(searchParams.get('forceMode') ?? '').trim().toLowerCase() === 'bw' ? 'bw' : 'force';
   const includeAllPitchValues = String(searchParams.get('includeAllPitchValues') ?? '').trim() === '1';
+  const includeAllSessions = String(searchParams.get('includeAllSessions') ?? '').trim() === '1';
   const playerScopedName = session.role === 'player' ? String(session.name ?? '').trim() : '';
   const selectedPitcher = session.role === 'player'
     ? (playerScopedName ? JSON.stringify([playerScopedName]) : null)
     : selectedPitcherRaw;
   const cacheKey = [
-    'biomech:v9',
+    'biomech:v10',
     Number(organizationId),
     String(schoolCode),
     session.role === 'player' ? `player:${String(session.userId ?? '')}` : `role:${session.role}`,
@@ -338,6 +339,7 @@ export async function GET(request: Request) {
     selectedVelocityMax ?? '',
     forceMode,
     includeAllPitchValues ? 'raw:1' : 'raw:0',
+    includeAllSessions ? 'sessions:all' : 'sessions:current',
   ].join('|');
   const cached = biomechanicsResponseCache.get(cacheKey);
   if (cached && Date.now() - cached.at < BIOMECH_RESPONSE_CACHE_TTL_MS) {
@@ -480,9 +482,9 @@ export async function GET(request: Request) {
     }
 
     const selectedPitchers = parseSelectedValues(selectedPitcher).filter((v) => v.toUpperCase() !== 'ALL');
-    if (selectedPitchers.length === 1) {
+    if (includeAllSessions && selectedPitchers.length === 1) {
       const allSessionsCacheKey = [
-        'biomech:allsessions:v8',
+        'biomech:allsessions:v9',
         Number(selectedOrgId),
         String(schoolCode),
         session.role === 'player' ? `player:${String(session.userId ?? '')}` : `role:${session.role}`,

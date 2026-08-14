@@ -83,7 +83,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
     }
 
     if (!effectivePlayerId && !previewSelf) {
-      redirect(session.role === 'coach' ? '/portal/admin/schedule' : '/portal/admin/clients');
+      redirect('/portal/admin/clients');
     }
   }
 
@@ -204,7 +204,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
 
   if (session.role === 'coach') {
     const allowed = await canManagePlayer(session, effectivePlayerId);
-    if (!allowed) redirect('/portal/admin/schedule');
+    if (!allowed) redirect('/portal/admin/clients');
   }
 
   const initialRange = monthRange(month);
@@ -216,14 +216,13 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
   ]);
 
   if (!player) {
-    redirect(session.role === 'coach' ? '/portal/admin/schedule' : '/portal/admin/clients');
+    redirect('/portal/admin/clients');
   }
 
   const previewClients =
     session.role === 'admin' || session.role === 'coach'
       ? await listPlayerChoicesByOrganization({
           organizationId: programmingOrganizationId,
-          assignedCoachUserId: session.role === 'coach' ? (session.userId ?? 0) : null,
         })
       : [];
   return (
@@ -309,7 +308,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           <PortalMessagesNavButton />
           <PortalNotificationsBell />
           <div className="portal-social-row" aria-label="PCU Social Links">
-            <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">
+            <Link href="https://x.com/pearlplayerdev" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="Pearl Player Development on X">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M18.244 2H21l-6.528 7.462L22.148 22h-6.012l-4.708-6.163L6.035 22H3.277l6.983-7.979L2 2h6.166l4.255 5.617L18.244 2Zm-2.108 18h1.58L7.308 3.896H5.612L16.136 20Z" />
               </svg>

@@ -9,9 +9,10 @@ type Props = {
   coaches: CoachRow[];
   clients: CoachAssignedPlayerRow[];
   currentUserId: number;
+  canManageAdmins: boolean;
 };
 
-export function CoachesTable({ coaches, clients, currentUserId }: Props) {
+export function CoachesTable({ coaches, clients, currentUserId, canManageAdmins }: Props) {
   const [expandedCoachId, setExpandedCoachId] = useState<number | null>(null);
 
   const playersByCoach = useMemo(() => {
@@ -49,6 +50,7 @@ export function CoachesTable({ coaches, clients, currentUserId }: Props) {
             const coachId = Number(coach.userId);
             const isExpanded = expandedCoachId === coachId;
             const assignedPlayers = playersByCoach.get(coach.userId) ?? [];
+            const canManageCoach = coachId !== currentUserId && (canManageAdmins || coach.role === 'coach');
             return (
               <Fragment key={coachId}>
                 <tr>
@@ -70,6 +72,8 @@ export function CoachesTable({ coaches, clients, currentUserId }: Props) {
                   <td className="portal-table-actions">
                     {coachId === currentUserId ? (
                       <span className="portal-muted-text">Current user</span>
+                    ) : !canManageCoach ? (
+                      <span className="portal-muted-text">Admin only</span>
                     ) : (
                       <>
                         <Link className="btn btn-ghost as-link" href={`/portal/admin/coaches?edit=${coachId}`}>

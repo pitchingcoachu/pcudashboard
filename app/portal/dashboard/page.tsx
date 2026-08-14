@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../lib/portal-session';
 import MobileNavSelect from '../mobile-nav-select';
 import LogoutButton from '../logout-button';
@@ -26,7 +27,6 @@ type DashboardSuiteName =
   | 'Comparison Tool'
   | 'Biomechanics'
   | 'Player Plans'
-  | 'Player Notes'
   | 'Stuff+ Calculator';
 
 const SUITE_SLUG_MAP: Record<string, DashboardSuiteName> = {
@@ -47,9 +47,6 @@ const SUITE_SLUG_MAP: Record<string, DashboardSuiteName> = {
   'player-plans': 'Player Plans',
   player_plans: 'Player Plans',
   'player plans': 'Player Plans',
-  'player-notes': 'Player Notes',
-  player_notes: 'Player Notes',
-  'player notes': 'Player Notes',
   'stuff-calculator': 'Stuff+ Calculator',
   stuff_calculator: 'Stuff+ Calculator',
   'stuff+ calculator': 'Stuff+ Calculator',
@@ -70,6 +67,10 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
     (Array.isArray(resolvedSearchParams.home)
       ? resolvedSearchParams.home[0]
       : resolvedSearchParams.home) === '1';
+  const suiteParamRaw = Array.isArray(resolvedSearchParams.suite) ? resolvedSearchParams.suite[0] : resolvedSearchParams.suite;
+  if (['player-notes', 'player_notes', 'player notes'].includes(String(suiteParamRaw ?? '').trim().toLowerCase())) {
+    redirect('/portal/admin/player-notes');
+  }
   const initialSuite = readSuiteParam(resolvedSearchParams.suite);
   const session = await requirePortalSession();
   const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
@@ -150,7 +151,7 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
           <div className="portal-social-row" aria-label="PCU Social Links">
-            <Link href="https://x.com/pitchingcoachu" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="PCU on X">
+            <Link href="https://x.com/pearlplayerdev" target="_blank" rel="noopener noreferrer" className="social-link" aria-label="Pearl Player Development on X">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M18.244 2H21l-6.528 7.462L22.148 22h-6.012l-4.708-6.163L6.035 22H3.277l6.983-7.979L2 2h6.166l4.255 5.617L18.244 2Zm-2.108 18h1.58L7.308 3.896H5.612L16.136 20Z" />
               </svg>
