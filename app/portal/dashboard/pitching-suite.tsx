@@ -5305,6 +5305,11 @@ export default function PitchingSuite({
     setAppliedFilterVersion((current) => current + 1);
   }, [homeNavigateRequest, loadingFilters, filters, selectedSchoolCode, role]);
   const [actionSideBySide, setActionSideBySide] = useState(false);
+  // Multi-Camera view: this pitch's own camera angles shown together (not to
+  // be confused with actionSideBySide/Compare, which shows two DIFFERENT
+  // pitches). Mutually exclusive with Compare -- turning one on turns the
+  // other off, matching how each fully replaces the video stage's layout.
+  const [actionMultiCameraMode, setActionMultiCameraMode] = useState(false);
   const [actionCompareLayout, setActionCompareLayout] = useState<ActionCompareLayout>('side-by-side');
   const [actionLeftPitchKey, setActionLeftPitchKey] = useState('');
   const [actionRightPitchKey, setActionRightPitchKey] = useState('');
@@ -5329,6 +5334,14 @@ export default function PitchingSuite({
   // ever has one clip array to index into.
   const [actionCameraIndexLeft, setActionCameraIndexLeft] = useState(0);
   const [actionCameraIndexRight, setActionCameraIndexRight] = useState(0);
+  // Multi-camera view: view 2+ of THIS pitch's own camera angles together,
+  // in the modal itself, without exporting a file first -- distinct from
+  // Compare mode (actionSideBySide), which shows two DIFFERENT pitches
+  // side by side. Defaults to a single camera selected (index 0); clicking
+  // additional camera tabs toggles them in/out (min 1 stays selected).
+  // Reset whenever the active pitch changes so a stale selection referencing
+  // a camera index this pitch doesn't have never carries over.
+  const [actionMultiCameraIndices, setActionMultiCameraIndices] = useState<number[]>([0]);
   // Manual click-and-drag pan + zoom for the video, mainly so a
   // portrait/oddly-framed camera angle can be recentered/zoomed by hand
   // regardless of how the browser happens to be sizing the element -- a
@@ -5352,6 +5365,10 @@ export default function PitchingSuite({
   // 'combined' shows every selected camera side by side for one pitch, then
   // advances to the next pitch's composite -- needs 2+ cameras selected.
   const [actionExportMode, setActionExportMode] = useState<'sequential' | 'combined'>('sequential');
+  // Whether the metrics + strike-zone side panel is burned into the exported
+  // video -- on by default (matches prior behavior before this toggle
+  // existed), off gives a plain video-only export.
+  const [actionExportShowMetrics, setActionExportShowMetrics] = useState(true);
   const [actionExportState, setActionExportState] = useState<'idle' | 'exporting' | 'error'>('idle');
   const [actionExportMessage, setActionExportMessage] = useState('');
   const [breakdownMode, setBreakdownMode] = useState(false);
@@ -5381,6 +5398,20 @@ export default function PitchingSuite({
   const singleActionVideoRef = useRef<HTMLVideoElement | null>(null);
   const leftCompareVideoRef = useRef<HTMLVideoElement | null>(null);
   const rightCompareVideoRef = useRef<HTMLVideoElement | null>(null);
+  // One ref per tile in Multi-Camera view (up to 3 today, since a pitch only
+  // ever has up to 3 camera slots) -- indexed to match
+  // actionMultiCameraIndices' order, not fixed like the single/compare refs
+  // above, since which/how-many tiles are showing changes as the user
+  // toggles cameras on and off.
+  const multiCameraVideoRefs = useRef<Array<HTMLVideoElement | null>>([]);
+  // Each tile's real video dimensions, read for free from the <video>
+  // element's own loadedmetadata event (no extra network request) -- used
+  // to weight the 2-up split by aspect ratio, matching the export feature's
+  // fix for the same "landscape clip squeezed into a narrow cell looks
+  // tiny" problem. Keyed by tile index, reset whenever the pitch/camera
+  // selection changes so a stale dimension from a different clip never
+  // carries over into a new layout.
+  const [actionMultiCameraDims, setActionMultiCameraDims] = useState<Array<{ width: number; height: number } | null>>([]);
   const actionViewRef = useRef<HTMLDivElement | null>(null);
   const actionModalCardRef = useRef<HTMLDivElement | null>(null);
   const breakdownCaptureRef = useRef<HTMLDivElement | null>(null);
@@ -9033,6 +9064,20 @@ export default function PitchingSuite({
     setActionCameraIndexRight(0);
   }, [currentPitchKey, actionLeftPitchKey, actionRightPitchKey, actionSideBySide]);
 
+  // Multi-camera selection deliberately does NOT reset on every pitch change
+  // (unlike actionCameraIndex above) -- picking Edger + Camera 2 should stay
+  // selected as you click Next/Prev through pitches, not snap back to just
+  // Edger every time. Only clamp when the new pitch genuinely has fewer
+  // camera slots than the current selection references (would otherwise
+  // read out of range), and always leave at least camera 0 selected.
+  useEffect(() => {
+    setActionMultiCameraIndices((current) => {
+      const clamped = current.filter((camIdx) => camIdx < actionVideoUrls.length);
+      return clamped.length ? clamped : [0];
+    });
+    setActionMultiCameraDims([]);
+  }, [currentPitchKey, actionVideoUrls.length]);
+
   useEffect(() => {
     setActionExportMenuOpen(false);
     setActionExportState('idle');
@@ -9075,6 +9120,27 @@ export default function PitchingSuite({
   // fewer camera angles than the left one) never indexes out of range.
   const pickCamera = (urls: string[], camIdx: number = actionCameraIndex): string =>
     urls.length ? urls[Math.min(camIdx, urls.length - 1)] : '';
+  // The selected cameras' URLs, in a stable order (matches
+  // actionMultiCameraIndices' sorted order, i.e. Camera 1/2/3 left-to-right
+  // -- not the export's Edger-first/Back/Side ordering, since that requires
+  // per-pitch camera_target data this component doesn't have loaded; good
+  // enough for viewing, since the user is the one actively choosing which
+  // cameras to look at here). Clamped against actionVideoUrls so a stale
+  // index from a differently-shaped pitch never reads out of range.
+  const actionMultiCameraUrls = actionMultiCameraIndices
+    .map((camIdx) => actionVideoUrls[camIdx])
+    .filter((url): url is string => !!url && url.trim().length > 0);
+  const actionMultiCameraUrlsKey = actionMultiCameraUrls.join(',');
+
+  // A stale dimension from the PREVIOUS tile arrangement must never apply to
+  // the new one -- e.g. toggling Camera 3 off shifts what was tile index 2
+  // down to index 1, and that slot's old (different clip's) aspect ratio
+  // would otherwise briefly mis-weight the split until the new clip's own
+  // loadedmetadata fires.
+  useEffect(() => {
+    setActionMultiCameraDims([]);
+  }, [actionMultiCameraUrlsKey]);
+
   const activeCameraCount = Math.max(
     actionSideBySide ? selectedLeftUrls.length : actionVideoUrls.length,
     actionSideBySide ? selectedRightUrls.length : 0
@@ -9177,6 +9243,8 @@ export default function PitchingSuite({
     };
   }, [actionSideBySide, selectedLeftPitch, selectedRightPitch]);
 
+  const isMultiCameraActive = actionMultiCameraMode && actionMultiCameraUrls.length > 1;
+
   const updateSyncedDuration = () => {
     const left = leftCompareVideoRef.current;
     const right = rightCompareVideoRef.current;
@@ -9184,7 +9252,18 @@ export default function PitchingSuite({
     const leftDur = left?.duration && Number.isFinite(left.duration) ? left.duration : 0;
     const rightDur = right?.duration && Number.isFinite(right.duration) ? right.duration : 0;
     const singleDur = single?.duration && Number.isFinite(single.duration) ? single.duration : 0;
-    const next = actionSideBySide ? (leftDur && rightDur ? Math.min(leftDur, rightDur) : leftDur || rightDur || 0) : singleDur;
+    const multiDurs = multiCameraVideoRefs.current
+      .map((video) => (video?.duration && Number.isFinite(video.duration) ? video.duration : 0))
+      .filter((d) => d > 0);
+    const next = actionSideBySide
+      ? leftDur && rightDur
+        ? Math.min(leftDur, rightDur)
+        : leftDur || rightDur || 0
+      : isMultiCameraActive
+        ? multiDurs.length
+          ? Math.min(...multiDurs)
+          : 0
+        : singleDur;
     setActionVideoDuration(next);
   };
 
@@ -9196,6 +9275,10 @@ export default function PitchingSuite({
     if (actionSideBySide) {
       if (left) left.currentTime = bounded;
       if (right) right.currentTime = bounded;
+    } else if (isMultiCameraActive) {
+      multiCameraVideoRefs.current.forEach((video) => {
+        if (video) video.currentTime = bounded;
+      });
     } else if (single) {
       single.currentTime = bounded;
     }
@@ -9206,7 +9289,11 @@ export default function PitchingSuite({
     const single = singleActionVideoRef.current;
     const left = leftCompareVideoRef.current;
     const right = rightCompareVideoRef.current;
-    const videos = actionSideBySide ? [left, right].filter(Boolean) : [single].filter(Boolean);
+    const videos = actionSideBySide
+      ? [left, right].filter(Boolean)
+      : isMultiCameraActive
+        ? multiCameraVideoRefs.current.filter(Boolean)
+        : [single].filter(Boolean);
     if (!videos.length) return;
     if (actionVideoPlaying) {
       videos.forEach((video) => video?.pause());
@@ -9225,12 +9312,16 @@ export default function PitchingSuite({
   };
 
   const stepActionVideo = (seconds: number) => {
-    const base = actionSideBySide ? (leftCompareVideoRef.current?.currentTime ?? actionVideoTime) : (singleActionVideoRef.current?.currentTime ?? actionVideoTime);
+    const base = actionSideBySide
+      ? (leftCompareVideoRef.current?.currentTime ?? actionVideoTime)
+      : isMultiCameraActive
+        ? (multiCameraVideoRefs.current[0]?.currentTime ?? actionVideoTime)
+        : (singleActionVideoRef.current?.currentTime ?? actionVideoTime);
     syncSeekVideos(base + seconds);
   };
 
   const resetActionVideos = () => {
-    [singleActionVideoRef.current, leftCompareVideoRef.current, rightCompareVideoRef.current].forEach((video) => {
+    [singleActionVideoRef.current, leftCompareVideoRef.current, rightCompareVideoRef.current, ...multiCameraVideoRefs.current].forEach((video) => {
       if (!video) return;
       video.pause();
       video.currentTime = 0;
@@ -9263,7 +9354,7 @@ export default function PitchingSuite({
 
   const setActionVideoRate = (rate: number) => {
     setActionPlaybackRate(rate);
-    [singleActionVideoRef.current, leftCompareVideoRef.current, rightCompareVideoRef.current].forEach((video) => {
+    [singleActionVideoRef.current, leftCompareVideoRef.current, rightCompareVideoRef.current, ...multiCameraVideoRefs.current].forEach((video) => {
       if (video) video.playbackRate = rate;
     });
   };
@@ -9271,7 +9362,7 @@ export default function PitchingSuite({
   const toggleActionVideoLoop = () => {
     setActionVideoLoop((prev) => {
       const next = !prev;
-      [singleActionVideoRef.current, leftCompareVideoRef.current, rightCompareVideoRef.current].forEach((video) => {
+      [singleActionVideoRef.current, leftCompareVideoRef.current, rightCompareVideoRef.current, ...multiCameraVideoRefs.current].forEach((video) => {
         if (video) video.loop = next;
       });
       return next;
@@ -9294,17 +9385,22 @@ export default function PitchingSuite({
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      const primary = actionSideBySide ? leftCompareVideoRef.current : singleActionVideoRef.current;
+      const primary = actionSideBySide
+        ? leftCompareVideoRef.current
+        : isMultiCameraActive
+          ? multiCameraVideoRefs.current[0]
+          : singleActionVideoRef.current;
       if (!primary) return;
       setActionVideoTime(primary.currentTime || 0);
       if (!actionVideoLoop && actionVideoDuration > 0 && primary.currentTime >= actionVideoDuration) {
         primary.pause();
         if (actionSideBySide) rightCompareVideoRef.current?.pause();
+        if (isMultiCameraActive) multiCameraVideoRefs.current.forEach((video) => video?.pause());
         setActionVideoPlaying(false);
       }
     }, 50);
     return () => window.clearInterval(timer);
-  }, [actionSideBySide, actionVideoDuration]);
+  }, [actionSideBySide, actionVideoDuration, isMultiCameraActive]);
 
   useEffect(() => {
     if (!actionSideBySide) return;
@@ -9363,7 +9459,12 @@ export default function PitchingSuite({
       const response = await fetch('/api/dashboard/pitching/video-export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pitchEventIds, camera: camerasToSend, mode: actionExportMode }),
+        body: JSON.stringify({
+          pitchEventIds,
+          camera: camerasToSend,
+          mode: actionExportMode,
+          showMetrics: actionExportShowMetrics,
+        }),
       });
       if (!response.ok) {
         const payload = (await response.json().catch(() => ({}))) as { error?: string };
@@ -18202,10 +18303,25 @@ export default function PitchingSuite({
                         type="button"
                         className={actionSideBySide ? 'btn btn-primary' : 'btn btn-ghost'}
                         style={actionSideBySide ? { padding: '0.42rem 0.75rem' } : actionModalButtonStyle}
-                        onClick={() => setActionSideBySide((v) => !v)}
+                        onClick={() =>
+                          setActionSideBySide((v) => {
+                            if (!v) setActionMultiCameraMode(false);
+                            return !v;
+                          })
+                        }
                       >
                         {actionSideBySide ? 'Single View' : 'Compare'}
                       </button>
+                      {!actionSideBySide && activeCameraCount > 1 ? (
+                        <button
+                          type="button"
+                          className={actionMultiCameraMode ? 'btn btn-primary' : 'btn btn-ghost'}
+                          style={actionMultiCameraMode ? { padding: '0.42rem 0.75rem' } : actionModalButtonStyle}
+                          onClick={() => setActionMultiCameraMode((v) => !v)}
+                        >
+                          {actionMultiCameraMode ? 'Single Camera' : 'Multi-Camera'}
+                        </button>
+                      ) : null}
                       {actionSideBySide ? (
                         <>
                           <button
@@ -18310,6 +18426,29 @@ export default function PitchingSuite({
                                 {actionExportMode === 'combined'
                                   ? 'Selected cameras shown together per pitch, then next pitch. Needs 2+ cameras.'
                                   : 'Each camera’s clips play through in full before the next camera.'}
+                              </div>
+                            </div>
+                            <div style={{ display: 'grid', gap: 6 }}>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: actionModalTheme.muted, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                                Metrics Panel
+                              </div>
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <button
+                                  type="button"
+                                  className={actionExportShowMetrics ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  style={actionExportShowMetrics ? { flex: 1, padding: '0.4rem 0.5rem' } : { ...actionModalButtonStyle, flex: 1, padding: '0.4rem 0.5rem' }}
+                                  onClick={() => setActionExportShowMetrics(true)}
+                                >
+                                  On
+                                </button>
+                                <button
+                                  type="button"
+                                  className={!actionExportShowMetrics ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  style={!actionExportShowMetrics ? { flex: 1, padding: '0.4rem 0.5rem' } : { ...actionModalButtonStyle, flex: 1, padding: '0.4rem 0.5rem' }}
+                                  onClick={() => setActionExportShowMetrics(false)}
+                                >
+                                  Off
+                                </button>
                               </div>
                             </div>
                             <div style={{ display: 'grid', gap: 6 }}>
@@ -18464,9 +18603,28 @@ export default function PitchingSuite({
                                 <button
                                   key={camIdx}
                                   type="button"
-                                  className={camIdx === actionCameraIndex ? 'btn btn-primary' : 'btn btn-ghost'}
+                                  className={
+                                    (actionMultiCameraMode ? actionMultiCameraIndices.includes(camIdx) : camIdx === actionCameraIndex)
+                                      ? 'btn btn-primary'
+                                      : 'btn btn-ghost'
+                                  }
                                   style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem' }}
-                                  onClick={() => setActionCameraIndex(camIdx)}
+                                  onClick={() => {
+                                    if (!actionMultiCameraMode) {
+                                      setActionCameraIndex(camIdx);
+                                      return;
+                                    }
+                                    setActionMultiCameraIndices((current) => {
+                                      if (current.includes(camIdx)) {
+                                        // Never let the last selected camera be
+                                        // deselected -- there must always be
+                                        // something to show.
+                                        if (current.length === 1) return current;
+                                        return current.filter((i) => i !== camIdx);
+                                      }
+                                      return [...current, camIdx].sort((a, b) => a - b);
+                                    });
+                                  }}
                                 >
                                   {cameraTabLabel(camIdx)}
                                 </button>
@@ -18485,7 +18643,7 @@ export default function PitchingSuite({
                             )}
                           </div>
                         ) : null}
-                        {actionMode === 'video' && hasActionVideo ? (
+                        {actionMode === 'video' && hasActionVideo && !isMultiCameraActive ? (
                           <div
                             style={{
                               position: 'absolute',
@@ -18868,6 +19026,112 @@ export default function PitchingSuite({
                                 Selected left pitch has no video.
                               </div>
                             )
+                          ) : actionMultiCameraMode && actionMultiCameraUrls.length > 1 ? (
+                            // Multi-Camera view: mirrors the export feature's tile
+                            // layout (1 fills the frame, 2 side by side weighted by
+                            // aspect ratio, 3 = first tile on top spanning full
+                            // width with the other two split below it) so switching
+                            // between viewing here and the exported file looks the
+                            // same. leftWFrac is read from each <video>'s own
+                            // loadedmetadata event (videoWidth/videoHeight) rather
+                            // than a HEAD request like the export uses server-side
+                            // -- same math (computeTwoTileWidthFrac in the export
+                            // route), just sourced client-side since the browser
+                            // already has to load the video anyway.
+                            (() => {
+                              const twoTileLeftDims = actionMultiCameraUrls.length === 2 ? actionMultiCameraDims[0] : null;
+                              const twoTileRightDims = actionMultiCameraUrls.length === 2 ? actionMultiCameraDims[1] : null;
+                              let leftWFrac = 0.5;
+                              if (twoTileLeftDims && twoTileRightDims && twoTileLeftDims.height > 0 && twoTileRightDims.height > 0) {
+                                const leftRatio = twoTileLeftDims.width / twoTileLeftDims.height;
+                                const rightRatio = twoTileRightDims.width / twoTileRightDims.height;
+                                const total = leftRatio + rightRatio;
+                                if (Number.isFinite(total) && total > 0) {
+                                  leftWFrac = Math.min(0.85, Math.max(0.15, leftRatio / total));
+                                }
+                              }
+                              const columns =
+                                actionMultiCameraUrls.length === 3
+                                  ? '1fr 1fr'
+                                  : actionMultiCameraUrls.length === 2
+                                    ? `${leftWFrac}fr ${1 - leftWFrac}fr`
+                                    : `repeat(${actionMultiCameraUrls.length}, 1fr)`;
+                              return (
+                            <div
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                minHeight: 0,
+                                display: 'grid',
+                                gridTemplateColumns: columns,
+                                gridTemplateRows: actionMultiCameraUrls.length === 3 ? '1fr 1fr' : '1fr',
+                                gap: 4,
+                                padding: 4,
+                              }}
+                            >
+                              {actionMultiCameraUrls.map((url, tileIdx) => {
+                                // Explicit placement for every tile (not just the
+                                // spanning one) -- letting the 2nd/3rd tiles fall
+                                // through to grid auto-flow while only tile 0 gets
+                                // an explicit span produced a real bug: the browser
+                                // placed tile 1 into row 1 / column 2 (auto-flow's
+                                // next open cell) UNDER/instead of where tile 0's
+                                // span should have reached, leaving row 1's right
+                                // half blank and tile 1 missing from row 2 (confirmed
+                                // via a real screenshot -- solid black gap top-right,
+                                // only 2 of 3 tiles visible).
+                                const gridArea =
+                                  actionMultiCameraUrls.length === 3
+                                    ? tileIdx === 0
+                                      ? { gridColumn: '1 / 3', gridRow: '1 / 2' }
+                                      : { gridColumn: tileIdx === 1 ? '1 / 2' : '2 / 3', gridRow: '2 / 3' }
+                                    : { gridColumn: `${tileIdx + 1} / ${tileIdx + 2}`, gridRow: '1 / 2' };
+                                return (
+                                <div
+                                  key={`multi-${currentPitchKey}-${url}-${actionVideoRefreshNonce}`}
+                                  style={{
+                                    position: 'relative',
+                                    minWidth: 0,
+                                    minHeight: 0,
+                                    background: '#000',
+                                    borderRadius: 6,
+                                    overflow: 'hidden',
+                                    ...gridArea,
+                                  }}
+                                >
+                                  <video
+                                    ref={(el) => {
+                                      multiCameraVideoRefs.current[tileIdx] = el;
+                                    }}
+                                    crossOrigin="anonymous"
+                                    autoPlay
+                                    loop={actionVideoLoop}
+                                    style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }}
+                                    onLoadedMetadata={(event) => {
+                                      if (tileIdx === 0) updateSyncedDuration();
+                                      const video = event.currentTarget;
+                                      if (video.videoWidth > 0 && video.videoHeight > 0) {
+                                        setActionMultiCameraDims((current) => {
+                                          const next = [...current];
+                                          next[tileIdx] = { width: video.videoWidth, height: video.videoHeight };
+                                          return next;
+                                        });
+                                      }
+                                    }}
+                                    onPause={tileIdx === 0 ? () => setActionVideoPlaying(false) : undefined}
+                                    onPlay={tileIdx === 0 ? () => setActionVideoPlaying(true) : undefined}
+                                    onError={() => {
+                                      void handleActionVideoLoadError(currentActionPitch ?? null);
+                                    }}
+                                  >
+                                    <source src={url} />
+                                  </video>
+                                </div>
+                                );
+                              })}
+                            </div>
+                              );
+                            })()
                           ) : (
                             <div
                               style={{

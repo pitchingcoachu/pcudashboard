@@ -15,7 +15,11 @@ import {
   type PitchExportMetrics,
   type PitchVideoUrls,
 } from '../../../../../lib/pitching-video-lookup';
-import { renderPitchExportOverlayPng, PITCH_EXPORT_PANEL_WIDTH } from '../../../../../lib/pitch-export-overlay';
+import {
+  renderPitchExportOverlayPng,
+  renderPitchExportOverlayHorizontalPng,
+  PITCH_EXPORT_PANEL_WIDTH,
+} from '../../../../../lib/pitch-export-overlay';
 
 // Multi-clip download + ffmpeg re-encode/concat can genuinely take a while
 // (each clip is downloaded fresh from Cloudinary, then re-encoded to a
@@ -260,14 +264,24 @@ type TileSlot = { xFrac: number; yFrac: number; wFrac: number; hFrac: number };
  * cameras gets its remaining tile(s) resized to fill the space instead of
  * leaving a blank placeholder, per explicit request. 1 clip fills the whole
  * canvas (matches the single-video view in the live modal); 2 go side by
- * side; 3 puts the first tile (Edger, when present) on top spanning the full
- * width with the other two split below it. */
-function buildTileLayout(count: number): TileSlot[] {
+ * side (see leftWFrac below) UNLESS stacked is true (both clips landscape --
+ * side by side would squeeze both down to portrait-shaped slots, so they
+ * stack vertically full-width instead, per explicit request); 3 puts the
+ * first tile (Edger, when present) on top spanning the full width with the
+ * other two split evenly below it. */
+function buildTileLayout(count: number, leftWFrac = 0.5, stacked = false): TileSlot[] {
   if (count <= 1) return count === 1 ? [{ xFrac: 0, yFrac: 0, wFrac: 1, hFrac: 1 }] : [];
   if (count === 2) {
+    if (stacked) {
+      return [
+        { xFrac: 0, yFrac: 0, wFrac: 1, hFrac: 0.5 },
+        { xFrac: 0, yFrac: 0.5, wFrac: 1, hFrac: 0.5 },
+      ];
+    }
+    const left = Math.min(0.9, Math.max(0.1, leftWFrac));
     return [
-      { xFrac: 0, yFrac: 0, wFrac: 0.5, hFrac: 1 },
-      { xFrac: 0.5, yFrac: 0, wFrac: 0.5, hFrac: 1 },
+      { xFrac: 0, yFrac: 0, wFrac: left, hFrac: 1 },
+      { xFrac: left, yFrac: 0, wFrac: 1 - left, hFrac: 1 },
     ];
   }
   return [
@@ -275,6 +289,27 @@ function buildTileLayout(count: number): TileSlot[] {
     { xFrac: 0, yFrac: 0.5, wFrac: 0.5, hFrac: 0.5 },
     { xFrac: 0.5, yFrac: 0.5, wFrac: 0.5, hFrac: 0.5 },
   ];
+}
+
+/** For a pitch's 2-tile composite, how wide the LEFT tile should be as a
+ * fraction of the combined tile-pair width (not the full canvas -- the pair
+ * may itself be narrower than canvasWidth when there's a 3rd/metrics-panel
+ * tile involved elsewhere), based on each clip's own aspect ratio at a
+ * shared tile height -- e.g. landscape (16:9) paired with portrait (9:16) at
+ * the same height naturally wants roughly 2.7x the portrait tile's width.
+ * Falls back to an even 0.5/0.5 split whenever a clip's real dimensions
+ * aren't known (probe failure) -- never crash or degenerate the layout over
+ * a missing HEAD-request field. */
+function computeTwoTileWidthFrac(
+  leftDims: { width: number; height: number } | null,
+  rightDims: { width: number; height: number } | null
+): number {
+  if (!leftDims || !rightDims || leftDims.height <= 0 || rightDims.height <= 0) return 0.5;
+  const leftRatio = leftDims.width / leftDims.height;
+  const rightRatio = rightDims.width / rightDims.height;
+  const total = leftRatio + rightRatio;
+  if (!Number.isFinite(total) || total <= 0) return 0.5;
+  return leftRatio / total;
 }
 
 /** One real clip resolved for a single pitch's Combined-mode composite,
@@ -401,6 +436,47 @@ async function addMetricsPanel(
   return outputPath;
 }
 
+/** Horizontal-strip variant of addMetricsPanel, used for the landscape+
+ * portrait 2-tile case: widening the canvas for a side panel next to
+ * already-landscape-weighted video would make the export excessively wide,
+ * so instead the panel goes BELOW the video (vstack, not hstack) and the
+ * export grows taller instead. Panel width matches the video's width (so
+ * vstack doesn't need extra scaling); panel height is the overlay module's
+ * own fixed HORIZONTAL_PANEL_HEIGHT, unlike the side panel where the video
+ * dictates the panel's height -- here the video dictates the panel's width
+ * instead, the same relationship inverted. */
+async function addMetricsPanelBelow(
+  workDir: string,
+  namePrefix: string,
+  videoPath: string,
+  videoWidth: number,
+  metrics: PitchExportMetrics
+): Promise<string> {
+  const panelPng = renderPitchExportOverlayHorizontalPng(metrics, videoWidth);
+  const panelPath = path.join(workDir, `${namePrefix}.png`);
+  await writeFile(panelPath, panelPng);
+
+  const durationSeconds = (await probeDurationSeconds(videoPath)) ?? EXPORT_CLIP_SECONDS;
+
+  const outputPath = path.join(workDir, `${namePrefix}-out.mp4`);
+  await runFfmpeg([
+    '-y',
+    '-i', videoPath,
+    '-framerate', '30',
+    '-loop', '1',
+    '-t', String(durationSeconds),
+    '-i', panelPath,
+    '-filter_complex', '[0:v]fps=30[v0];[1:v]fps=30[v1];[v0][v1]vstack=inputs=2[out]',
+    '-map', '[out]',
+    '-t', String(durationSeconds),
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-an',
+    outputPath,
+  ]);
+  return outputPath;
+}
+
 /** Builds one pitch's multi-camera composite: whichever of the selected
  * cameras this pitch actually has footage for (see
  * resolvePitchCombinedClips), each trimmed per exportTrimArgs, laid out per
@@ -415,11 +491,14 @@ async function buildCombinedPitchClip(
   selections: CameraSelection[],
   tileCanvasWidth: number,
   tileCanvasHeight: number,
-  metrics: PitchExportMetrics | undefined
+  metrics: PitchExportMetrics | undefined,
+  twoTileLeftWFrac = 0.5,
+  twoTileStacked = false,
+  metricsPanelMode: 'side' | 'below' = 'side'
 ): Promise<string | null> {
   const clips = resolvePitchCombinedClips(pitch, selections);
   if (!clips.length) return null;
-  const layout = buildTileLayout(clips.length);
+  const layout = buildTileLayout(clips.length, twoTileLeftWFrac, clips.length === 2 && twoTileStacked);
 
   const tilePaths: Array<{ path: string; slot: TileSlot }> = [];
   for (let i = 0; i < clips.length; i += 1) {
@@ -472,6 +551,9 @@ async function buildCombinedPitchClip(
   }
 
   if (!metrics) return videoPath;
+  if (metricsPanelMode === 'below') {
+    return addMetricsPanelBelow(workDir, `pitch${pitchIndex}-panel`, videoPath, tileCanvasWidth, metrics);
+  }
   return addMetricsPanel(workDir, `pitch${pitchIndex}-panel`, videoPath, tileCanvasHeight, metrics);
 }
 
@@ -481,9 +563,13 @@ export async function POST(request: Request) {
   if (!isDatabaseConfigured()) return NextResponse.json({ error: 'DATABASE_URL is not configured.' }, { status: 500 });
 
   const body = (await request.json().catch(() => null)) as
-    | { pitchEventIds?: number[]; camera?: string | string[]; mode?: string }
+    | { pitchEventIds?: number[]; camera?: string | string[]; mode?: string; showMetrics?: boolean }
     | null;
   if (!body) return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+  // Whether to burn the metrics + strike-zone side panel into the exported
+  // video -- defaults to true (matches behavior before this option existed)
+  // so older callers that don't send this field are unaffected.
+  const showMetrics = body.showMetrics !== false;
 
   const pitchEventIds = Array.from(
     new Set((body.pitchEventIds ?? []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
@@ -534,16 +620,20 @@ export async function POST(request: Request) {
 
   // Metrics/location for the exported video's side panel -- best-effort:
   // export still proceeds without the panel if this lookup fails, since
-  // the video itself is the primary thing being requested.
+  // the video itself is the primary thing being requested. Skipped entirely
+  // when showMetrics is off (leaving metricsById empty makes every
+  // downstream site render video-only, same as a failed lookup would).
   let metricsById = new Map<number, PitchExportMetrics>();
-  try {
-    const metrics = await lookupPitchExportMetrics(
-      orderedPitches.map((p) => p.pitch_event_id),
-      schoolCode
-    );
-    metricsById = new Map(metrics.map((m) => [m.pitch_event_id, m]));
-  } catch {
-    // Export continues without the metrics panel.
+  if (showMetrics) {
+    try {
+      const metrics = await lookupPitchExportMetrics(
+        orderedPitches.map((p) => p.pitch_event_id),
+        schoolCode
+      );
+      metricsById = new Map(metrics.map((m) => [m.pitch_event_id, m]));
+    } catch {
+      // Export continues without the metrics panel.
+    }
   }
 
   const clipsByCamera = new Map(
@@ -568,14 +658,102 @@ export async function POST(request: Request) {
   // copy never renegotiates resolution mid-stream.
   const allUrls = Array.from(clipsByCamera.values()).flat().map((c) => c.url);
   const dimensions = await Promise.all(allUrls.map((url) => probeDimensions(url)));
+  const dimensionsByUrl = new Map(allUrls.map((url, i) => [url, dimensions[i]]));
   const canvasWidth = Math.max(480, ...dimensions.map((d) => d?.width ?? 0));
   const canvasHeight = Math.max(360, ...dimensions.map((d) => d?.height ?? 0));
+
+  // Combined mode's 2-tile layout normally splits the tile pair 50/50, but a
+  // landscape clip (e.g. Edger) squeezed into the same width as a portrait
+  // clip crops away most of its frame (confirmed via a real export
+  // screenshot -- the landscape tile lost nearly all its horizontal field of
+  // view). Every pitch's clip is concatenated into one final file, so they
+  // all must share one canvas size/split -- can't vary per pitch. Instead,
+  // look at every pitch that will actually render 2 tiles and use whichever
+  // one needs the widest landscape tile, applied to all of them; portrait-
+  // only pitches just get a bit of unused space on the sides of their
+  // (now-wider) landscape-shaped slot instead of any clip ever being cropped
+  // tighter than necessary.
+  //
+  // Separately, the metrics panel PLACEMENT for a 2-tile pitch also depends
+  // on this same landscape/portrait shape, per explicit request: two
+  // portraits keep the side-by-side + side-panel layout as-is; two
+  // landscapes stack the videos vertically (side by side would squeeze both
+  // to portrait-shaped slots) with the panel still on the side; one of each
+  // keeps side-by-side videos but moves the panel BELOW them instead of
+  // widening the canvas further. Since every pitch shares one canvas/layout,
+  // classify each 2-tile pitch's shape combo and use whichever combo the
+  // MOST pitches in this export actually have.
+  let twoTileLeftWFrac = 0.5;
+  let twoTileCanvasWidth = canvasWidth;
+  let twoTileCanvasHeight = canvasHeight;
+  let twoTileStacked = false;
+  let metricsPanelMode: 'side' | 'below' = 'side';
+  if (mode === 'combined') {
+    let widestDelta = 0;
+    const comboCounts = { landscapePortrait: 0, bothLandscape: 0, bothPortrait: 0 };
+    for (const pitch of orderedPitches) {
+      const clips = resolvePitchCombinedClips(pitch, camerasToExport);
+      if (clips.length !== 2) continue;
+      const leftDims = dimensionsByUrl.get(clips[0].url) ?? null;
+      const rightDims = dimensionsByUrl.get(clips[1].url) ?? null;
+      const leftWFrac = computeTwoTileWidthFrac(leftDims, rightDims);
+      const delta = Math.abs(leftWFrac - 0.5);
+      if (delta > widestDelta) {
+        widestDelta = delta;
+        twoTileLeftWFrac = leftWFrac;
+      }
+
+      if (leftDims && rightDims && leftDims.height > 0 && rightDims.height > 0) {
+        const leftIsLandscape = leftDims.width >= leftDims.height;
+        const rightIsLandscape = rightDims.width >= rightDims.height;
+        if (leftIsLandscape && rightIsLandscape) comboCounts.bothLandscape += 1;
+        else if (!leftIsLandscape && !rightIsLandscape) comboCounts.bothPortrait += 1;
+        else comboCounts.landscapePortrait += 1;
+      }
+    }
+    if (widestDelta > 0) {
+      // Keep the narrower tile's absolute width at least what the even
+      // 50/50 split would have given it (canvasWidth / 2), rather than
+      // shrinking it to make room -- so only the canvas grows, nothing gets
+      // smaller than today's baseline.
+      const narrowerFrac = Math.min(twoTileLeftWFrac, 1 - twoTileLeftWFrac);
+      const neededWidth = Math.round(canvasWidth / 2 / narrowerFrac);
+      twoTileCanvasWidth = Math.max(canvasWidth, neededWidth);
+      twoTileCanvasWidth -= twoTileCanvasWidth % 2;
+    }
+
+    const totalClassified = comboCounts.landscapePortrait + comboCounts.bothLandscape + comboCounts.bothPortrait;
+    if (totalClassified > 0) {
+      if (comboCounts.bothLandscape >= comboCounts.landscapePortrait && comboCounts.bothLandscape >= comboCounts.bothPortrait) {
+        twoTileStacked = true;
+        metricsPanelMode = 'side';
+        // Stacked full-width videos don't need the aspect-ratio-driven
+        // width growth that side-by-side layouts do -- revert to the plain
+        // probed canvas width, since there's no longer a narrow tile being
+        // squeezed. Height doubles instead, since each of the 2 stacked
+        // tiles now only gets half the canvas height -- without this, two
+        // landscape clips stacked into a normal single-video-height canvas
+        // would each render at half their natural height.
+        twoTileCanvasWidth = canvasWidth;
+        twoTileCanvasHeight = canvasHeight * 2;
+      } else if (comboCounts.landscapePortrait >= comboCounts.bothPortrait) {
+        metricsPanelMode = 'below';
+      }
+    }
+  }
 
   const workDir = await mkdtemp(path.join(tmpdir(), 'pcu-video-export-'));
   try {
     let finalPath: string;
 
     if (mode === 'combined') {
+      // Every pitch's composite is concatenated into one final file, so all
+      // of them -- regardless of whether THIS particular pitch renders 1, 2,
+      // or 3 tiles -- must share the exact same canvas size (see the
+      // stream-copy/resolution-mismatch note above). twoTileCanvasWidth/
+      // twoTileCanvasHeight are only ever >= canvasWidth/canvasHeight (grown,
+      // never shrunk), so 1- and 3-tile pitches just get proportionally more
+      // background canvas, never less.
       const pitchClipPaths: string[] = [];
       for (let i = 0; i < orderedPitches.length; i += 1) {
         const clipPath = await buildCombinedPitchClip(
@@ -583,9 +761,12 @@ export async function POST(request: Request) {
           i,
           orderedPitches[i],
           camerasToExport,
-          canvasWidth,
-          canvasHeight,
-          metricsById.get(orderedPitches[i].pitch_event_id)
+          twoTileCanvasWidth,
+          twoTileCanvasHeight,
+          metricsById.get(orderedPitches[i].pitch_event_id),
+          twoTileLeftWFrac,
+          twoTileStacked,
+          metricsPanelMode
         );
         if (clipPath) pitchClipPaths.push(clipPath);
       }

@@ -72,6 +72,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     ...(canAccessActivityTracker ? [{ href: '/portal/admin/activity', label: 'Activity Tracker' }] : []),
     ...(canAccessEmailAutomations ? [{ href: '/portal/admin/email-templates', label: 'Email Automations' }] : []),
     ...(!isTrialSchool ? [{ href: '/portal/force-plates', label: 'Force Plate Data' }] : []),
+    ...(!isTrialSchool ? [{ href: '/portal/admin/force-plates-live', label: 'Force Plate Live Search' }] : []),
     ...(!isTrialSchool && session.role === 'admin' ? [{ href: '/portal/admin/csv-uploads', label: 'CSV Uploads' }] : []),
   ];
 
@@ -85,6 +86,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     ...(canAccessActivityTracker ? [{ href: '/portal/admin/activity', label: 'Activity Tracker' }] : []),
     ...(canAccessEmailAutomations ? [{ href: '/portal/admin/email-templates', label: 'Email Automations' }] : []),
     ...(!isTrialSchool ? [{ href: '/portal/force-plates', label: 'Force Plate Data' }] : []),
+    ...(!isTrialSchool ? [{ href: '/portal/admin/force-plates-live', label: 'Force Plate Live Search' }] : []),
     ...(!isTrialSchool && session.role === 'admin' ? [{ href: '/portal/admin/csv-uploads', label: 'CSV Uploads' }] : []),
   ];
 
