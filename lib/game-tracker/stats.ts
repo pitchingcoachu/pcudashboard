@@ -24,7 +24,8 @@ type BattingAccumulator = CommonLine & {
 type PitchingAccumulator = CommonLine & {
   outs: number; battersFaced: number; pitches: number; strikes: number; swings: number; whiffs: number; calledStrikes: number;
   firstPitches: number; firstPitchStrikes: number; eaDen: number; eaNum: number; hits: number; runs: number; earnedRuns: number;
-  walks: number; strikeouts: number; hbp: number; homeRuns: number; wildPitches: number; groundBalls: number; flyBalls: number;
+  walks: number; strikeouts: number; hbp: number; homeRuns: number; wildPitches: number; groundBalls: number; lineDrives: number;
+  flyBalls: number; popups: number;
 };
 type FieldingAccumulator = CommonLine & { putouts: number; assists: number; errors: number; doublePlays: number };
 
@@ -35,7 +36,8 @@ export type BattingStatLine = Omit<BattingAccumulator, 'games'> & {
 export type PitchingStatLine = Omit<PitchingAccumulator, 'games'> & {
   games: number; ip: string; era: number | null; whip: number | null; kPct: number | null; bbPct: number | null;
   kMinusBbPct: number | null; strikePct: number | null; whiffPct: number | null; cswPct: number | null;
-  fpsPct: number | null; eaPct: number | null; gbPct: number | null;
+  swingingStrikePct: number | null; fpsPct: number | null; eaPct: number | null; gbPct: number | null;
+  fbPct: number | null; hrPerFbPct: number | null; fip: number | null; xFip: number | null; siera: number | null;
 };
 export type FieldingStatLine = Omit<FieldingAccumulator, 'games'> & { games: number; totalChances: number; fieldingPct: number | null };
 
@@ -48,6 +50,8 @@ export type GameTrackerStats = {
 const HIT_RESULTS = new Set(['single', 'double', 'triple', 'home_run']);
 const WALK_RESULTS = new Set(['walk', 'intentional_walk']);
 const AB_EXCLUSIONS = new Set(['walk', 'intentional_walk', 'hit_by_pitch', 'sacrifice_fly', 'sacrifice_bunt', 'catcher_interference']);
+const FIP_CONSTANT = 3.20;
+const LEAGUE_AVERAGE_HR_PER_FB = 0.13;
 
 function pct(num: number, den: number): number | null {
   return den > 0 ? Number(((100 * num) / den).toFixed(1)) : null;
@@ -102,7 +106,7 @@ function pitchingBase(player: GameTrackerPlayer): PitchingAccumulator {
   return {
     ...common(player), outs: 0, battersFaced: 0, pitches: 0, strikes: 0, swings: 0, whiffs: 0, calledStrikes: 0,
     firstPitches: 0, firstPitchStrikes: 0, eaDen: 0, eaNum: 0, hits: 0, runs: 0, earnedRuns: 0, walks: 0,
-    strikeouts: 0, hbp: 0, homeRuns: 0, wildPitches: 0, groundBalls: 0, flyBalls: 0,
+    strikeouts: 0, hbp: 0, homeRuns: 0, wildPitches: 0, groundBalls: 0, lineDrives: 0, flyBalls: 0, popups: 0,
   };
 }
 
@@ -127,11 +131,11 @@ function isSwing(input: PitchEventInput): boolean {
   return ['swinging_strike', 'foul', 'foul_tip', 'in_play'].includes(input.result);
 }
 
-function addBattedBall(line: { groundBalls: number; lineDrives?: number; flyBalls: number; popups?: number }, type?: BattedBallType | null) {
+function addBattedBall(line: { groundBalls: number; lineDrives: number; flyBalls: number; popups: number }, type?: BattedBallType | null) {
   if (type === 'ground_ball' || type === 'bunt') line.groundBalls += 1;
-  if (type === 'line_drive' && line.lineDrives !== undefined) line.lineDrives += 1;
+  if (type === 'line_drive') line.lineDrives += 1;
   if (type === 'fly_ball') line.flyBalls += 1;
-  if (type === 'popup' && line.popups !== undefined) line.popups += 1;
+  if (type === 'popup') line.popups += 1;
 }
 
 function addTerminalStats(batter: BattingAccumulator, pitcher: PitchingAccumulator, input: PitchEventInput) {
@@ -231,6 +235,26 @@ function pitchingOutput(line: PitchingAccumulator): PitchingStatLine {
   const innings = Math.floor(line.outs / 3);
   const thirds = line.outs % 3;
   const ip = `${innings}.${thirds}`;
+  const inningsPitched = line.outs / 3;
+  const ballsInPlay = line.groundBalls + line.lineDrives + line.flyBalls + line.popups;
+  const fipNumerator = (13 * line.homeRuns) + (3 * (line.walks + line.hbp)) - (2 * line.strikeouts);
+  const expectedHomeRuns = line.flyBalls * LEAGUE_AVERAGE_HR_PER_FB;
+  const xFipNumerator = (13 * expectedHomeRuns) + (3 * (line.walks + line.hbp)) - (2 * line.strikeouts);
+  const strikeoutRate = line.battersFaced > 0 ? line.strikeouts / line.battersFaced : 0;
+  const walkRate = line.battersFaced > 0 ? line.walks / line.battersFaced : 0;
+  const netGroundBallRate = line.battersFaced > 0
+    ? (line.groundBalls - line.flyBalls - line.popups) / line.battersFaced
+    : 0;
+  const siera = line.battersFaced > 0
+    ? 6.145
+      - (16.986 * strikeoutRate)
+      + (11.434 * walkRate)
+      - (1.858 * netGroundBallRate)
+      + (7.653 * strikeoutRate * strikeoutRate)
+      + (6.664 * netGroundBallRate * Math.abs(netGroundBallRate))
+      + (10.130 * strikeoutRate * netGroundBallRate)
+      - (5.195 * walkRate * netGroundBallRate)
+    : null;
   return {
     ...line,
     games: line.games.size,
@@ -242,10 +266,16 @@ function pitchingOutput(line: PitchingAccumulator): PitchingStatLine {
     kMinusBbPct: line.battersFaced > 0 ? Number((((line.strikeouts - line.walks) * 100) / line.battersFaced).toFixed(1)) : null,
     strikePct: pct(line.strikes, line.pitches),
     whiffPct: pct(line.whiffs, line.swings),
+    swingingStrikePct: pct(line.whiffs, line.pitches),
     cswPct: pct(line.calledStrikes + line.whiffs, line.pitches),
     fpsPct: pct(line.firstPitchStrikes, line.firstPitches),
     eaPct: pct(line.eaNum, line.eaDen),
-    gbPct: pct(line.groundBalls, line.groundBalls + line.flyBalls),
+    gbPct: pct(line.groundBalls, ballsInPlay),
+    fbPct: pct(line.flyBalls, ballsInPlay),
+    hrPerFbPct: pct(line.homeRuns, line.flyBalls),
+    fip: inningsPitched > 0 ? Number(((fipNumerator / inningsPitched) + FIP_CONSTANT).toFixed(2)) : null,
+    xFip: inningsPitched > 0 ? Number(((xFipNumerator / inningsPitched) + FIP_CONSTANT).toFixed(2)) : null,
+    siera: siera === null ? null : Number(siera.toFixed(2)),
   };
 }
 

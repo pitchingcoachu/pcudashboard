@@ -3,10 +3,11 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import type { GameTrackerGame, GameType } from '../../lib/game-tracker/types';
+import styles from './game-tracker-hub.module.css';
 
 const GAME_TYPE_LABELS: Record<GameType, string> = { game: 'Game', scrimmage: 'Scrimmage', live_bp: 'Live BP' };
 
-export default function GameTrackerHub() {
+export default function GameTrackerHub({ logoSrc }: { logoSrc: string }) {
   const [games, setGames] = useState<GameTrackerGame[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -42,15 +43,18 @@ export default function GameTrackerHub() {
 
   const today = new Date().toISOString().slice(0, 10);
   return (
-    <main className="game-tracker-shell">
+    <main className={`${styles.shell} game-tracker-shell`}>
       <section className="game-tracker-hero">
+        <img className="game-tracker-hero-logo" src={logoSrc} alt="" aria-hidden="true" />
         <div>
           <p className="game-tracker-eyebrow">LIVE SCORING + TEAM ANALYTICS</p>
           <h1>Game Tracker</h1>
           <p>Score every pitch, manage runners, and turn each game, scrimmage, or live BP into searchable season data.</p>
         </div>
-        <Link href="/portal/admin/game-tracker/stats" className="btn btn-primary as-link">Season Stats</Link>
       </section>
+      <div className="game-tracker-hero-actions">
+        <Link href="/portal/admin/game-tracker/stats" className="btn btn-primary as-link">Season Stats</Link>
+      </div>
 
       <section className="game-tracker-grid game-tracker-grid--top">
         <article className="game-tracker-card game-tracker-card--new">

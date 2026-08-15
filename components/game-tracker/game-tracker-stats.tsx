@@ -3,15 +3,17 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import type { GameTrackerStats } from '../../lib/game-tracker/stats';
+import styles from './game-tracker-stats.module.css';
 
 type View = keyof GameTrackerStats;
 const dash = (value: unknown) => value === null || value === undefined ? '—' : String(value);
-const pct = (value: unknown) => value === null || value === undefined ? '—' : `${value}%`;
+const pct = (value: unknown) => value === null || value === undefined ? '—' : `${Number(value).toFixed(1)}%`;
+const twoDecimals = (value: unknown) => value === null || value === undefined ? '—' : Number(value).toFixed(2);
 const rate = (value: unknown) => value === null || value === undefined ? '—' : Number(value).toFixed(3).replace(/^0/, '');
 
 const columns: Record<View, Array<[string, string, (value: unknown) => string]>> = {
   batting: [['games','G',dash],['pa','PA',dash],['ab','AB',dash],['runs','R',dash],['hits','H',dash],['doubles','2B',dash],['triples','3B',dash],['homeRuns','HR',dash],['rbi','RBI',dash],['walks','BB',dash],['strikeouts','K',dash],['avg','AVG',rate],['obp','OBP',rate],['slg','SLG',rate],['ops','OPS',rate],['iso','ISO',rate],['babip','BABIP',rate],['kPct','K%',pct],['bbPct','BB%',pct],['whiffPct','Whiff%',pct]],
-  pitching: [['games','G',dash],['ip','IP',dash],['era','ERA',dash],['whip','WHIP',dash],['pitches','P',dash],['hits','H',dash],['runs','R',dash],['earnedRuns','ER',dash],['walks','BB',dash],['strikeouts','K',dash],['kPct','K%',pct],['bbPct','BB%',pct],['kMinusBbPct','K-BB%',pct],['strikePct','Strike%',pct],['whiffPct','Whiff%',pct],['cswPct','CSW%',pct],['fpsPct','FPS%',pct],['eaPct','E+A%',pct],['gbPct','GB%',pct]],
+  pitching: [['games','G',dash],['ip','IP',dash],['era','ERA',twoDecimals],['fip','FIP',twoDecimals],['xFip','xFIP',twoDecimals],['siera','SIERA',twoDecimals],['whip','WHIP',twoDecimals],['pitches','P',dash],['hits','H',dash],['runs','R',dash],['earnedRuns','ER',dash],['walks','BB',dash],['strikeouts','K',dash],['kPct','K%',pct],['bbPct','BB%',pct],['kMinusBbPct','K-BB%',pct],['strikePct','Strike%',pct],['whiffPct','Whiff%',pct],['swingingStrikePct','SwStrk%',pct],['cswPct','CSW%',pct],['fpsPct','FPS%',pct],['eaPct','E+A%',pct],['gbPct','GB%',pct],['fbPct','FB%',pct],['hrPerFbPct','HR/FB%',pct]],
   fielding: [['games','G',dash],['putouts','PO',dash],['assists','A',dash],['errors','E',dash],['doublePlays','DP',dash],['totalChances','TC',dash],['fieldingPct','FLD%',rate]],
 };
 
@@ -30,7 +32,7 @@ export default function GameTrackerStatsView() {
   }
   useEffect(() => { void load(); }, []);
 
-  return <main className="game-tracker-shell">
+  return <main className={`${styles.shell} game-tracker-shell`}>
     <div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← Game Tracker</Link></div>
     <section className="game-tracker-hero"><div><p className="game-tracker-eyebrow">SITUATIONAL REPORTING</p><h1>Season Stats</h1><p>Filter every line by game context, count, outs, base state, RISP, and matchup handedness.</p></div></section>
     <form className="game-tracker-card game-tracker-filters" onSubmit={(event) => { event.preventDefault(); void load(event.currentTarget); }}>
@@ -44,9 +46,10 @@ export default function GameTrackerStatsView() {
       <button className="btn btn-primary">Apply filters</button>
     </form>
     <section className="game-tracker-card game-tracker-stats-card">
-      <div className="game-tracker-tabs">{(['batting','pitching','fielding'] as View[]).map((name) => <button key={name} className={view === name ? 'is-active' : ''} onClick={() => setView(name)}>{name}</button>)}</div>
+      <div className="game-tracker-tabs">{(['batting','pitching','fielding'] as View[]).map((name) => <button type="button" key={name} className={view === name ? 'is-active' : ''} onClick={() => setView(name)}>{name}</button>)}</div>
       {error ? <p className="game-tracker-error">{error}</p> : loading ? <p className="game-tracker-muted">Calculating stats…</p> : <div className="game-tracker-table-wrap"><table><thead><tr><th>Player</th>{columns[view].map(([,label]) => <th key={label}>{label}</th>)}</tr></thead><tbody>{stats[view].length === 0 ? <tr><td colSpan={columns[view].length + 1}>No tracked events match these filters.</td></tr> : stats[view].map((line) => <tr key={`${line.playerId ?? line.gamePlayerId}-${line.playerName}`}><th>{line.playerName}</th>{columns[view].map(([key,label,format]) => <td key={label}>{format((line as unknown as Record<string, unknown>)[key])}</td>)}</tr>)}</tbody></table></div>}
       {view === 'batting' ? <p className="game-tracker-footnote">Hitting intentionally excludes Strike%. Whiff% is misses divided by swings.</p> : null}
+      {view === 'pitching' ? <p className="game-tracker-footnote">Whiff% is misses per swing; SwStrk% is misses per pitch. xFIP uses a 13% league-average HR/FB baseline, and FIP/xFIP use a 3.20 ERA-scale constant.</p> : null}
     </section>
   </main>;
 }

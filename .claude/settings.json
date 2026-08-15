@@ -442,7 +442,14 @@
       "Bash(curl -sL \"https://fonts.gstatic.com/s/manrope/v20/xn7_YHE41ni1AdIRqAuZuw1Bx9mbZk4aE-_F.ttf\" -o assets/fonts/Manrope-Bold.ttf -w \"Bold: HTTP %{http_code}, %{size_download} bytes\\\\n\")",
       "Bash(curl -s -X POST http://localhost:3000/api/dashboard/pitching/video-export -H 'Content-Type: application/json' -H 'Cookie: pcu_session_v3=__CMDSUB_OUTPUT__' -d '{\"pitchEventIds\":[7750526],\"camera\":[\"edger\"],\"mode\":\"sequential\"}' --max-time 60)",
       "Bash(cp /Users/jaredgaynor/.claude/projects/-Users-jaredgaynor-Documents-GitHub-pcudashboard/6633b991-5872-40d4-8575-b5a97c5910bc/tool-results/bpcicpzjx.txt /tmp/font-fix-test.mp4)",
-      "Bash(ffmpeg -y -i /tmp/font-fix-test.mp4 -update 1 -vframes 1 /tmp/font-fix-frame.png)"
+      "Bash(ffmpeg -y -i /tmp/font-fix-test.mp4 -update 1 -vframes 1 /tmp/font-fix-frame.png)",
+      "Bash(ffmpeg -y -i /tmp/combo-3view-test.mp4 -update 1 -vframes 1 /tmp/combo-3view-frame.png)",
+      "Bash(curl -s -X POST http://localhost:3000/api/dashboard/pitching/video-export -H 'Content-Type: application/json' -H 'Cookie: pcu_session_v3=__CMDSUB_OUTPUT__' -d '{\"pitchEventIds\":[7750294],\"camera\":[\"all\",\"edger\"],\"mode\":\"combined\"}' -o /tmp/combo-blank-target-test.mp4 -w 'HTTP %{http_code}\\\\n' --max-time 90)",
+      "Bash(curl -s -X POST http://localhost:3000/api/dashboard/pitching/video-export -H 'Content-Type: application/json' -H 'Cookie: pcu_session_v3=__CMDSUB_OUTPUT__' -d '{\"pitchEventIds\":[7750294],\"camera\":[\"all\",\"edger\"],\"mode\":\"combined\"}' --max-time 90)",
+      "Bash(cp /Users/jaredgaynor/.claude/projects/-Users-jaredgaynor-Documents-GitHub-pcudashboard/6633b991-5872-40d4-8575-b5a97c5910bc/tool-results/bn9ye7jnx.txt /tmp/combo-blank-target-test.mp4)",
+      "Bash(ffmpeg -y -i /tmp/combo-blank-target-test.mp4 -update 1 -vframes 1 /tmp/combo-blank-frame.png)",
+      "Bash(curl -s -X POST http://localhost:3000/api/dashboard/pitching/video-export -H 'Content-Type: application/json' -H 'Cookie: pcu_session_v3=__CMDSUB_OUTPUT__' -d '{\"pitchEventIds\":[7750049],\"camera\":[\"all\",\"edger\"],\"mode\":\"combined\"}' -o /tmp/combo-2of3-test.mp4 -w 'HTTP %{http_code}\\\\n' --max-time 90)",
+      "Bash(ffmpeg -y -i /tmp/combo-2of3-test.mp4 -update 1 -vframes 1 /tmp/combo-2of3-frame.png)"
     ],
     "additionalDirectories": [
       "/tmp",

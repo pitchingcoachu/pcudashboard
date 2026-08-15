@@ -40,7 +40,29 @@ export type PitchVideoUrls = {
   video_clip_1_is_edger: boolean;
   video_clip_2_is_edger: boolean;
   video_clip_3_is_edger: boolean;
+  // Which physical iPhone angle that slot's clip is, per the video_map
+  // table's camera_target column ("PitchersBack" -> 'back', "PitchersOpenSide"
+  // or "PitchersFront" -> 'side', blank/unrecognized -> null). Slot number
+  // alone isn't a reliable proxy for this -- confirmed via a real data check
+  // that "PitchersOpenSide" clips land in VideoClip2 for some pitches and
+  // VideoClip3 for others -- so exports need this to show a consistent
+  // Back/Side ordering instead of whatever slot Trackman happened to upload
+  // to first.
+  video_clip_1_view: 'back' | 'side' | null;
+  video_clip_2_view: 'back' | 'side' | null;
+  video_clip_3_view: 'back' | 'side' | null;
 };
+
+// "PitchersOpenSide" (landscape) and the rare "PitchersFront" both read as
+// the non-Back angle for export layout purposes -- there's no third position
+// in the fixed 2-up Back/Side layout, and PitchersFront is too rare (~25
+// clips total in a real data check) to warrant its own slot.
+function normalizeCameraView(target: string | null | undefined): 'back' | 'side' | null {
+  const normalized = String(target ?? '').trim().toLowerCase();
+  if (normalized === 'pitchersback') return 'back';
+  if (normalized === 'pitchersopenside' || normalized === 'pitchersfront') return 'side';
+  return null;
+}
 
 type VideoMapMeta = {
   tableName: string;
@@ -136,6 +158,9 @@ export async function lookupPitchVideoUrls(ids: number[], schoolCode: string): P
         video_clip_1_is_edger: boolean;
         video_clip_2_is_edger: boolean;
         video_clip_3_is_edger: boolean;
+        video_clip_1_target: string | null;
+        video_clip_2_target: string | null;
+        video_clip_3_target: string | null;
       }
     >();
     const playIds = Array.from(new Set(pitchResult.rows.map((row) => String(row.play_id ?? '').trim()).filter(Boolean)));
@@ -154,6 +179,9 @@ export async function lookupPitchVideoUrls(ids: number[], schoolCode: string): P
           video_clip_1_is_edger: boolean;
           video_clip_2_is_edger: boolean;
           video_clip_3_is_edger: boolean;
+          video_clip_1_target: string | null;
+          video_clip_2_target: string | null;
+          video_clip_3_target: string | null;
         }>(
           // video_type is occasionally wrong at the source (confirmed: ~16 rows
           // tagged video_type='EdgertronicVideos' with camera_name='iPhone' --
@@ -169,7 +197,10 @@ export async function lookupPitchVideoUrls(ids: number[], schoolCode: string): P
             MAX(vm.cloudinary_url) FILTER (WHERE vm.camera_slot = 'VideoClip3') AS video_clip_3,
             BOOL_OR(vm.camera_slot = 'VideoClip' AND vm.video_type = 'EdgertronicVideos' AND coalesce(vm.camera_name, '') <> 'iPhone') AS video_clip_1_is_edger,
             BOOL_OR(vm.camera_slot = 'VideoClip2' AND vm.video_type = 'EdgertronicVideos' AND coalesce(vm.camera_name, '') <> 'iPhone') AS video_clip_2_is_edger,
-            BOOL_OR(vm.camera_slot = 'VideoClip3' AND vm.video_type = 'EdgertronicVideos' AND coalesce(vm.camera_name, '') <> 'iPhone') AS video_clip_3_is_edger
+            BOOL_OR(vm.camera_slot = 'VideoClip3' AND vm.video_type = 'EdgertronicVideos' AND coalesce(vm.camera_name, '') <> 'iPhone') AS video_clip_3_is_edger,
+            MAX(vm.camera_target) FILTER (WHERE vm.camera_slot = 'VideoClip') AS video_clip_1_target,
+            MAX(vm.camera_target) FILTER (WHERE vm.camera_slot = 'VideoClip2') AS video_clip_2_target,
+            MAX(vm.camera_target) FILTER (WHERE vm.camera_slot = 'VideoClip3') AS video_clip_3_target
           FROM ${videoMapTable} vm
           WHERE vm.play_id = ANY($1::text[])
             AND vm.cloudinary_url IS NOT NULL
@@ -204,6 +235,9 @@ export async function lookupPitchVideoUrls(ids: number[], schoolCode: string): P
         video_clip_1_is_edger: mapped?.video_clip_1_is_edger ?? false,
         video_clip_2_is_edger: mapped?.video_clip_2_is_edger ?? false,
         video_clip_3_is_edger: mapped?.video_clip_3_is_edger ?? false,
+        video_clip_1_view: normalizeCameraView(mapped?.video_clip_1_target),
+        video_clip_2_view: normalizeCameraView(mapped?.video_clip_2_target),
+        video_clip_3_view: normalizeCameraView(mapped?.video_clip_3_target),
       };
     });
   } finally {

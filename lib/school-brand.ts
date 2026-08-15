@@ -155,6 +155,8 @@ const SCHOOL_BRANDS: Record<string, SchoolBrand> = {
   },
 };
 
+export const SCHOOL_BRAND_CODES = Object.freeze(Object.keys(SCHOOL_BRANDS));
+
 export function resolveSchoolBrand(schoolCode: string | null | undefined): SchoolBrand {
   const normalized = String(schoolCode ?? '')
     .trim()
@@ -176,10 +178,19 @@ export function isKnownSchoolBrand(schoolCode: string | null | undefined): boole
 
 export function schoolBrandCssVars(schoolCode: string | null | undefined): Record<string, string> {
   const brand = resolveSchoolBrand(schoolCode);
+  const hex = brand.accent.replace('#', '');
+  const channels = hex.length === 3
+    ? hex.split('').map((value) => Number.parseInt(`${value}${value}`, 16))
+    : [hex.slice(0, 2), hex.slice(2, 4), hex.slice(4, 6)].map((value) => Number.parseInt(value, 16));
+  const luminance = channels
+    .map((value) => value / 255)
+    .map((value) => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4))
+    .reduce((total, value, index) => total + value * [0.2126, 0.7152, 0.0722][index], 0);
   return {
     '--accent': brand.accent,
     '--accent-soft': brand.accentSoft,
     '--portal-accent-rgb': brand.accentRgb,
     '--portal-accent-rgb-secondary': brand.accentRgbSecondary ?? brand.accentRgb,
+    '--portal-accent-contrast': luminance > 0.179 ? '#08090a' : '#ffffff',
   } as Record<string, string>;
 }

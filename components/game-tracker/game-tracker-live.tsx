@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import styles from './game-tracker-live.module.css';
 import {
   BATTED_BALL_TYPES, PA_RESULTS, PITCH_TYPES, RUNNER_REASONS, battingSideForHalf, fieldingSideForHalf,
   type BattedBallType, type GameEventInput, type GameTrackerGame, type GameTrackerPlayer,
@@ -65,6 +66,59 @@ function LineupEditor({ bundle, onSaved }: { bundle: Bundle; onSaved: () => Prom
 
 function playerName(players: GameTrackerPlayer[], id: number | null) { return players.find((player) => player.id === id)?.displayName ?? 'Not set'; }
 
+function BaseballFieldGraphic() {
+  return (
+    <svg className="game-tracker-field-art" viewBox="0 0 600 520" aria-hidden="true">
+      <defs>
+        <linearGradient id="gt-field-grass" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#244d31" />
+          <stop offset="1" stopColor="#102719" />
+        </linearGradient>
+        <linearGradient id="gt-field-dirt" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#a8754f" />
+          <stop offset="1" stopColor="#70482f" />
+        </linearGradient>
+        <clipPath id="gt-field-clip">
+          <path d="M300 496 10 225A320 320 0 0 1 590 225Z" />
+        </clipPath>
+      </defs>
+      <path className="field-shadow" d="M300 504 5 228A326 326 0 0 1 595 228Z" />
+      <path className="field-grass" d="M300 496 10 225A320 320 0 0 1 590 225Z" fill="url(#gt-field-grass)" />
+      <g clipPath="url(#gt-field-clip)" className="field-mow-lines">
+        <path d="M-10 190 300 510 610 190" />
+        <path d="M48 105 300 510 552 105" />
+        <path d="M112 36 300 510 488 36" />
+        <path d="M178 -4 300 510 422 -4" />
+      </g>
+      <path className="field-outfield-fence" d="M7 228A326 326 0 0 1 593 228" />
+      <path className="field-warning-track" d="M31 226A299 299 0 0 1 569 226" />
+      <circle className="field-home-dirt" cx="300" cy="476" r="35" fill="url(#gt-field-dirt)" />
+      <path
+        className="field-infield-dirt"
+        d="M300 492 163 359Q153 348 169 329Q217 268 300 250Q383 268 431 329Q447 348 437 359Z"
+        fill="url(#gt-field-dirt)"
+      />
+      <path
+        className="field-infield-grass"
+        d="M300 463 199 365Q191 356 202 344Q244 300 300 286Q356 300 398 344Q409 356 401 365Z"
+      />
+      <circle className="field-mound-dirt" cx="300" cy="378" r="24" fill="url(#gt-field-dirt)" />
+      <rect className="field-rubber" x="291" y="375" width="18" height="5" rx="1" />
+      <path className="field-foul-line" d="M300 496 10 225M300 496 590 225" />
+      <g className="field-base">
+        <rect x="406" y="370" width="16" height="16" transform="rotate(45 414 378)" />
+        <rect x="292" y="256" width="16" height="16" transform="rotate(45 300 264)" />
+        <rect x="178" y="370" width="16" height="16" transform="rotate(45 186 378)" />
+      </g>
+      <path className="field-home-plate" d="M290 478h20v8l-10 10-10-10Z" />
+      <circle className="field-position" cx="300" cy="130" r="4" />
+      <circle className="field-position" cx="155" cy="220" r="4" />
+      <circle className="field-position" cx="445" cy="220" r="4" />
+      <circle className="field-position" cx="300" cy="378" r="4" />
+    </svg>
+  );
+}
+
 export default function GameTrackerLive({ gameId }: { gameId: number }) {
   const [bundle, setBundle] = useState<Bundle | null>(null);
   const [pitchType, setPitchType] = useState('Fastball');
@@ -116,24 +170,53 @@ export default function GameTrackerLive({ gameId }: { gameId: number }) {
     if (response.ok) await load();
   }
 
-  if (!bundle) return <main className="game-tracker-shell"><p>{error || 'Loading Game Tracker…'}</p></main>;
+  if (!bundle) return <main className={`${styles.shell} game-tracker-shell`}><p>{error || 'Loading Game Tracker…'}</p></main>;
   const state = bundle.game.state;
-  const box = bundle.events.reduce((totals, event) => {
-    if (event.isVoided || event.input.type !== 'pitch') return totals;
+  const lineScore = bundle.events.reduce((totals, event) => {
+    if (event.isVoided) return totals;
     const batting = event.situation.battingSide;
-    if (['single','double','triple','home_run'].includes(String(event.input.plateAppearanceResult))) totals[batting].hits += 1;
-    for (const credit of event.input.fielderCredits ?? []) if (credit.credit === 'error') totals[event.situation.fieldingSide].errors += 1;
+    if (event.input.type === 'pitch') {
+      if (['single','double','triple','home_run'].includes(String(event.input.plateAppearanceResult))) totals[batting].hits += 1;
+      for (const credit of event.input.fielderCredits ?? []) if (credit.credit === 'error') totals[event.situation.fieldingSide].errors += 1;
+    }
+    const runDelta = Math.max(0, event.stateAfter.score[batting] - totals.previousScore[batting]);
+    if (runDelta > 0) totals[batting].innings[event.situation.inning] = (totals[batting].innings[event.situation.inning] ?? 0) + runDelta;
+    totals.previousScore = { ...event.stateAfter.score };
     return totals;
-  }, { us: { hits: 0, errors: 0 }, opponent: { hits: 0, errors: 0 } });
+  }, {
+    us: { hits: 0, errors: 0, innings: {} as Record<number, number> },
+    opponent: { hits: 0, errors: 0, innings: {} as Record<number, number> },
+    previousScore: { us: 0, opponent: 0 },
+  });
+  const lineScoreInnings = Array.from(
+    { length: Math.max(bundle.game.inningsScheduled, state.inning) },
+    (_, index) => index + 1
+  );
+  const activeBattingSide = battingSideForHalf(bundle.game.homeAway, state.half);
+  const inningDisplay = (side: 'us' | 'opponent', inning: number) => {
+    const sideHasBatted = inning < state.inning
+      || (inning === state.inning && (state.half === 'bottom' || side === activeBattingSide));
+    return sideHasBatted ? (lineScore[side].innings[inning] ?? 0) : '';
+  };
   const hasLineups = bundle.players.some((p) => p.teamSide === 'us') && bundle.players.some((p) => p.teamSide === 'opponent');
-  if (!hasLineups || lineupOpen) return <main className="game-tracker-shell"><div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← All sessions</Link>{hasLineups ? <button className="btn btn-ghost" onClick={() => setLineupOpen(false)}>Return to scoring</button> : null}</div><LineupEditor bundle={bundle} onSaved={async () => { await load(); setLineupOpen(false); }} /></main>;
+  if (!hasLineups || lineupOpen) return <main className={`${styles.shell} game-tracker-shell`}><div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← All sessions</Link>{hasLineups ? <button className="btn btn-ghost" onClick={() => setLineupOpen(false)}>Return to scoring</button> : null}</div><LineupEditor bundle={bundle} onSaved={async () => { await load(); setLineupOpen(false); }} /></main>;
 
-  return <main className="game-tracker-shell game-tracker-live">
+  return <main className={`${styles.shell} game-tracker-shell game-tracker-live`}>
     <div className="game-tracker-back"><Link href="/portal/admin/game-tracker">← All sessions</Link><div><button className="btn btn-ghost" onClick={() => setLineupOpen(true)}>Edit lineups</button> <Link className="btn btn-ghost as-link" href="/portal/admin/game-tracker/stats">Stats</Link></div></div>
-    <section className="game-tracker-scoreboard">
-      <div><span>{bundle.game.schoolCode}</span><strong>{state.score.us}</strong></div><div className="game-tracker-inning"><span>{state.half === 'top' ? '▲' : '▼'} {state.inning}</span><small>{state.outs} OUT{state.outs === 1 ? '' : 'S'}</small></div><div><span>{bundle.game.opponentName}</span><strong>{state.score.opponent}</strong></div>
+    <section className="game-tracker-scoreboard-panel">
+      <div className="game-tracker-scoreboard">
+        <div><span>{bundle.game.schoolCode}</span><strong>{state.score.us}</strong></div><div className="game-tracker-inning"><span>{state.half === 'top' ? '▲' : '▼'} {state.inning}</span><small>{state.outs} OUT{state.outs === 1 ? '' : 'S'}</small></div><div><span>{bundle.game.opponentName}</span><strong>{state.score.opponent}</strong></div>
+      </div>
+      <div className="game-tracker-linescore-wrap">
+        <table className="game-tracker-linescore" aria-label="Inning-by-inning line score">
+          <thead><tr><th>Team</th>{lineScoreInnings.map((inning) => <th key={inning} className={inning === state.inning ? 'is-current' : ''}>{inning}</th>)}<th>R</th><th>H</th><th>E</th></tr></thead>
+          <tbody>
+            <tr><th>{bundle.game.schoolCode}</th>{lineScoreInnings.map((inning) => <td key={inning} className={inning === state.inning ? 'is-current' : ''}>{inningDisplay('us', inning)}</td>)}<td>{state.score.us}</td><td>{lineScore.us.hits}</td><td>{lineScore.us.errors}</td></tr>
+            <tr><th>{bundle.game.opponentName}</th>{lineScoreInnings.map((inning) => <td key={inning} className={inning === state.inning ? 'is-current' : ''}>{inningDisplay('opponent', inning)}</td>)}<td>{state.score.opponent}</td><td>{lineScore.opponent.hits}</td><td>{lineScore.opponent.errors}</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
-    <section className="game-tracker-boxscore" aria-label="Live box score"><span /><b>R</b><b>H</b><b>E</b><strong>{bundle.game.schoolCode}</strong><span>{state.score.us}</span><span>{box.us.hits}</span><span>{box.us.errors}</span><strong>{bundle.game.opponentName}</strong><span>{state.score.opponent}</span><span>{box.opponent.hits}</span><span>{box.opponent.errors}</span></section>
     <section className="game-tracker-live-grid">
       <article className="game-tracker-card game-tracker-atbat">
         <div className="game-tracker-matchup"><div><small>BATTER · {context?.batter?.bats ?? '—'}HH</small><strong>{context?.batter?.displayName ?? 'Set batter'}</strong></div><span>vs</span><div><small>PITCHER · {context?.pitcher?.throws ?? '—'}HP</small><strong>{context?.pitcher?.displayName ?? 'Set pitcher'}</strong></div></div>
@@ -148,7 +231,11 @@ export default function GameTrackerLive({ gameId }: { gameId: number }) {
           <button disabled={busy} className="is-contact" onClick={() => setInPlay(true)}>Ball in play →</button>
         </div> : <div className="game-tracker-inplay">
           <div><label>Outcome<select value={paResult} onChange={(e) => setPaResult(e.target.value as PlateAppearanceResult)}>{IN_PLAY_RESULTS.map((result) => <option key={result} value={result}>{RESULT_LABELS[result] ?? result}</option>)}</select></label><label>Batted ball<select value={battedBallType} onChange={(e) => setBattedBallType(e.target.value as BattedBallType)}>{BATTED_BALL_TYPES.map((type) => <option key={type} value={type}>{type.replaceAll('_', ' ')}</option>)}</select></label><label>Primary fielder<select value={fielderId} onChange={(e) => setFielderId(e.target.value)}><option value="">Not recorded</option>{bundle.players.filter((player) => player.teamSide === context?.fieldingSide && player.isActive).map((player) => <option key={player.id} value={player.id}>{player.position ?? '—'} · {player.displayName}</option>)}</select></label><label>Fielding credit<select value={fieldingCredit} onChange={(e) => setFieldingCredit(e.target.value as typeof fieldingCredit)}><option value="putout">Putout</option><option value="assist">Assist</option><option value="error">Error</option></select></label></div>
-          <button className="game-tracker-field" onClick={(e) => { const box = e.currentTarget.getBoundingClientRect(); setFieldPoint({ x: (e.clientX - box.left) / box.width, y: (e.clientY - box.top) / box.height }); }}><span>Tap where the ball was hit</span>{fieldPoint ? <i style={{ left: `${fieldPoint.x * 100}%`, top: `${fieldPoint.y * 100}%` }} /> : null}</button>
+          <button className="game-tracker-field" onClick={(e) => { const box = e.currentTarget.getBoundingClientRect(); setFieldPoint({ x: (e.clientX - box.left) / box.width, y: (e.clientY - box.top) / box.height }); }}>
+            <BaseballFieldGraphic />
+            <span>Tap where the ball was hit</span>
+            {fieldPoint ? <i style={{ left: `${fieldPoint.x * 100}%`, top: `${fieldPoint.y * 100}%` }} /> : null}
+          </button>
           <div className="game-tracker-inline-actions"><button className="btn btn-ghost" onClick={() => setInPlay(false)}>Back</button><button className="btn btn-primary" disabled={busy} onClick={() => sendEvent({ type: 'pitch', pitchType, result: 'in_play', plateAppearanceResult: paResult, battedBallType, fieldX: fieldPoint?.x ?? null, fieldY: fieldPoint?.y ?? null, fielderCredits: fielderId ? [{ gamePlayerId: Number(fielderId), position: bundle.players.find((player) => player.id === Number(fielderId))?.position ?? '—', credit: fieldingCredit }] : [] })}>Record play</button></div>
         </div>}
         {error ? <p className="game-tracker-error">{error}</p> : null}

@@ -1,0 +1,124 @@
+.shell {
+  --gt-accent: rgb(var(--portal-accent-rgb, 220, 193, 161));
+  --gt-on-accent: var(--portal-accent-contrast, #08090a);
+  --gt-ink: #f7f6f2;
+  --gt-muted: #9b9da1;
+  --gt-line: rgba(255, 255, 255, 0.11);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1240px;
+  min-height: calc(100vh - 150px);
+  margin: 0 auto;
+  padding: 38px clamp(20px, 4vw, 54px) 64px;
+  color: var(--gt-ink);
+}
+
+.shell *, .shell *::before, .shell *::after { box-sizing: border-box; }
+.shell :global(.btn-primary) { color: var(--gt-on-accent); }
+
+.shell :global(.game-tracker-hero) {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 36px;
+  min-height: 230px;
+  overflow: hidden;
+  padding: clamp(28px, 4vw, 48px);
+  border: 1px solid var(--gt-line);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 84% 20%, rgba(var(--portal-accent-rgb, 220, 193, 161), 0.13), transparent 28%),
+    linear-gradient(120deg, #151719, #090a0b 66%);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+}
+
+.shell :global(.game-tracker-hero-logo) {
+  position: absolute;
+  top: 18px;
+  right: clamp(22px, 5vw, 68px);
+  bottom: 18px;
+  width: clamp(210px, 29vw, 360px);
+  height: calc(100% - 36px);
+  filter: saturate(0.78) brightness(1.2);
+  object-fit: contain;
+  opacity: 0.16;
+  pointer-events: none;
+}
+
+.shell :global(.game-tracker-hero > div) { position: relative; z-index: 1; }
+.shell :global(.game-tracker-eyebrow) { margin: 0 0 13px; color: var(--gt-accent); font-size: 0.64rem; font-weight: 850; letter-spacing: 0.18em; }
+.shell :global(.game-tracker-hero h1) { margin: 0 0 13px; font-size: clamp(3.4rem, 7vw, 6.7rem); font-weight: 900; letter-spacing: -0.07em; line-height: 0.82; }
+.shell :global(.game-tracker-hero div > p:last-child) { max-width: 690px; margin: 0; color: var(--gt-muted); font-size: 0.94rem; line-height: 1.6; }
+.shell :global(.game-tracker-hero-actions) { display: flex; justify-content: flex-end; padding-top: 14px; }
+.shell :global(.game-tracker-hero-actions > a) { min-width: 180px; }
+
+.shell :global(.game-tracker-grid) {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 18px;
+  width: 100%;
+}
+.shell :global(.game-tracker-grid--top) { padding-top: 18px; }
+.shell :global(.game-tracker-card) {
+  min-width: 0;
+  padding: clamp(22px, 2.7vw, 32px);
+  border: 1px solid var(--gt-line);
+  border-radius: 19px;
+  background: linear-gradient(145deg, #131517, #0b0c0d 72%);
+  box-shadow: 0 20px 45px rgba(0,0,0,.2);
+}
+.shell :global(.game-tracker-card-heading) { display: flex; align-items: flex-start; gap: 14px; min-height: 54px; margin-bottom: 24px; }
+.shell :global(.game-tracker-card-heading h2) { margin: 0 0 5px; font-size: 1.35rem; letter-spacing: -0.02em; }
+.shell :global(.game-tracker-card-heading p) { margin: 0; color: var(--gt-muted); font-size: 0.78rem; line-height: 1.45; }
+.shell :global(.game-tracker-step) { display: grid; flex: 0 0 36px; height: 36px; place-items: center; border: 1px solid var(--gt-accent); border-radius: 50%; color: var(--gt-accent); font: 750 0.67rem/1 monospace; }
+
+.shell :global(.game-tracker-form) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.shell :global(.game-tracker-form label) { display: grid; gap: 7px; color: var(--gt-muted); font-size: 0.61rem; font-weight: 850; letter-spacing: 0.1em; text-transform: uppercase; }
+.shell :global(.game-tracker-form input), .shell :global(.game-tracker-form select) { width: 100%; min-width: 0; height: 43px; padding: 9px 11px; border: 1px solid var(--gt-line); border-radius: 9px; background: #08090a; color: var(--gt-ink); font: 650 0.82rem/1 inherit; text-transform: none; }
+.shell :global(.game-tracker-form input:focus), .shell :global(.game-tracker-form select:focus) { border-color: var(--gt-accent); box-shadow: 0 0 0 3px rgba(var(--portal-accent-rgb, 220, 193, 161), 0.1); outline: 0; }
+.shell :global(.game-tracker-submit) { grid-column: 1 / -1; min-height: 45px; margin-top: 3px; }
+.shell :global(.game-tracker-error) { margin: 14px 0 0; padding: 10px 12px; border: 1px solid rgba(255,100,83,.3); border-radius: 9px; background: rgba(175,42,28,.14); color: #ff9286; font-size: 0.78rem; }
+
+.shell :global(.game-tracker-game-list) { display: grid; gap: 8px; }
+.shell :global(.game-tracker-game-row) {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) auto 20px;
+  align-items: center;
+  gap: 13px;
+  min-height: 70px;
+  padding: 12px 13px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  background: #0a0b0c;
+  color: var(--gt-ink);
+  text-decoration: none;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+.shell :global(.game-tracker-game-row:hover) { border-color: rgba(var(--portal-accent-rgb, 220, 193, 161), .48); background: #111315; transform: translateX(3px); }
+.shell :global(.game-tracker-game-row > span:nth-child(2)) { display: grid; min-width: 0; gap: 4px; }
+.shell :global(.game-tracker-game-row strong) { overflow: hidden; font-size: 0.9rem; text-overflow: ellipsis; white-space: nowrap; }
+.shell :global(.game-tracker-game-row small) { color: var(--gt-muted); font-size: 0.65rem; }
+.shell :global(.game-tracker-status) { padding: 6px 7px; border: 1px solid var(--gt-line); border-radius: 999px; color: var(--gt-muted); font-size: 0.55rem; font-weight: 850; letter-spacing: 0.1em; text-align: center; text-transform: uppercase; }
+.shell :global(.game-tracker-status--live) { border-color: rgba(115,216,159,.42); background: rgba(37,121,75,.13); color: #7cdda5; }
+.shell :global(.game-tracker-status--setup) { border-color: rgba(var(--portal-accent-rgb, 220, 193, 161), .35); color: var(--gt-accent); }
+.shell :global(.game-tracker-score) { display: flex; align-items: center; gap: 7px; font-size: 1.55rem; font-variant-numeric: tabular-nums; font-weight: 900; }
+.shell :global(.game-tracker-score small) { font-size: 0.72rem; }
+.shell :global(.game-tracker-game-row > span:last-child) { color: var(--gt-accent); font-size: 1rem; }
+.shell :global(.game-tracker-muted), .shell :global(.game-tracker-empty) { display: grid; min-height: 170px; margin: 0; place-items: center; border: 1px dashed var(--gt-line); border-radius: 12px; color: var(--gt-muted); font-size: 0.8rem; text-align: center; }
+
+@media (max-width: 920px) {
+  .shell { padding: 24px 16px 48px; }
+  .shell :global(.game-tracker-grid) { grid-template-columns: 1fr; }
+  .shell :global(.game-tracker-hero) { min-height: 210px; }
+}
+
+@media (max-width: 600px) {
+  .shell :global(.game-tracker-hero) { align-items: flex-start; flex-direction: column; min-height: 0; padding: 28px 22px; }
+  .shell :global(.game-tracker-hero-logo) { right: -18px; width: 210px; opacity: 0.11; }
+  .shell :global(.game-tracker-hero h1) { font-size: 4rem; }
+  .shell :global(.game-tracker-hero-actions > a) { width: 100%; }
+  .shell :global(.game-tracker-form) { grid-template-columns: 1fr; }
+  .shell :global(.game-tracker-game-row) { grid-template-columns: 68px minmax(0, 1fr) auto; }
+  .shell :global(.game-tracker-game-row > span:last-child) { display: none; }
+}

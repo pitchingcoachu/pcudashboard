@@ -254,31 +254,72 @@ async function concatCameraGroup(
  * fractions of the full canvas so the same layout works at any tile size. */
 type TileSlot = { xFrac: number; yFrac: number; wFrac: number; hFrac: number };
 
-/** Fixed per-camera-count layouts for the "Combined" export mode. 2 cameras
- * go side by side; 3 cameras put the Edger clip on top spanning the full
- * width with the two non-Edger cameras split below it, per explicit request
- * (Edger is the wide/primary angle, the two other cameras are secondary). */
-function buildTileLayout(selections: CameraSelection[]): Map<CameraSelection, TileSlot> {
-  const layout = new Map<CameraSelection, TileSlot>();
-  if (selections.length <= 1) {
-    if (selections.length === 1) layout.set(selections[0], { xFrac: 0, yFrac: 0, wFrac: 1, hFrac: 1 });
-    return layout;
+/** Fixed layouts for the "Combined" export mode, sized to however many real
+ * clips THIS pitch actually has among the selected cameras (not how many
+ * cameras were selected overall) -- a pitch missing one of the selected
+ * cameras gets its remaining tile(s) resized to fill the space instead of
+ * leaving a blank placeholder, per explicit request. 1 clip fills the whole
+ * canvas (matches the single-video view in the live modal); 2 go side by
+ * side; 3 puts the first tile (Edger, when present) on top spanning the full
+ * width with the other two split below it. */
+function buildTileLayout(count: number): TileSlot[] {
+  if (count <= 1) return count === 1 ? [{ xFrac: 0, yFrac: 0, wFrac: 1, hFrac: 1 }] : [];
+  if (count === 2) {
+    return [
+      { xFrac: 0, yFrac: 0, wFrac: 0.5, hFrac: 1 },
+      { xFrac: 0.5, yFrac: 0, wFrac: 0.5, hFrac: 1 },
+    ];
   }
-  if (selections.length === 2) {
-    layout.set(selections[0], { xFrac: 0, yFrac: 0, wFrac: 0.5, hFrac: 1 });
-    layout.set(selections[1], { xFrac: 0.5, yFrac: 0, wFrac: 0.5, hFrac: 1 });
-    return layout;
+  return [
+    { xFrac: 0, yFrac: 0, wFrac: 1, hFrac: 0.5 },
+    { xFrac: 0, yFrac: 0.5, wFrac: 0.5, hFrac: 0.5 },
+    { xFrac: 0.5, yFrac: 0.5, wFrac: 0.5, hFrac: 0.5 },
+  ];
+}
+
+/** One real clip resolved for a single pitch's Combined-mode composite,
+ * already in final display order (see resolvePitchCombinedClips). */
+type ResolvedPitchClip = { url: string; isEdger: boolean };
+
+/** Resolves, for ONE pitch, the ordered list of real clips to composite --
+ * dropping any selected camera this pitch has no footage for entirely
+ * (buildTileLayout then sizes tiles to however many clips are actually left,
+ * instead of rendering a blank gray placeholder in the gap). Order is fixed
+ * regardless of which numbered slot (video_clip_1/2/3) each clip happens to
+ * live in for this particular pitch:
+ *   1. Edger (if selected and present)
+ *   2. Back view (camera_target = "PitchersBack")
+ *   3. Side view (camera_target = "PitchersOpenSide"/"PitchersFront")
+ * iPhone clips whose camera_target is blank for this pitch (a real gap in
+ * the source data, not a bug -- confirmed common) fall back to plain slot
+ * order (video_clip_2 before video_clip_3) after the ones with a known view,
+ * so ordering is still deterministic even without camera_target. */
+function resolvePitchCombinedClips(pitch: PitchVideoUrls, selections: CameraSelection[]): ResolvedPitchClip[] {
+  const selected = new Set(selections);
+  const edger: ResolvedPitchClip[] = [];
+  const back: ResolvedPitchClip[] = [];
+  const side: ResolvedPitchClip[] = [];
+  const unknown: ResolvedPitchClip[] = [];
+
+  for (const key of CAMERA_KEYS) {
+    const isEdgerClip = Boolean(pitch[EDGER_KEY_BY_CAMERA_KEY[key]]);
+    const wantedBySlot = selected.has(key);
+    const wantedAsEdger = isEdgerClip && selected.has('edger');
+    if (!wantedBySlot && !wantedAsEdger) continue;
+    const url = String(pitch[key] ?? '').trim();
+    if (!url) continue;
+
+    if (isEdgerClip) {
+      edger.push({ url, isEdger: true });
+      continue;
+    }
+    const view = pitch[`${key}_view` as const];
+    if (view === 'back') back.push({ url, isEdger: false });
+    else if (view === 'side') side.push({ url, isEdger: false });
+    else unknown.push({ url, isEdger: false });
   }
-  // 3 cameras: Edger (if present) always takes the full-width top row;
-  // otherwise the first selection takes that slot so the layout is still
-  // filled predictably. The remaining two share the bottom row.
-  const edgerIdx = selections.indexOf('edger');
-  const topSelection = edgerIdx >= 0 ? selections[edgerIdx] : selections[0];
-  const rest = selections.filter((s) => s !== topSelection);
-  layout.set(topSelection, { xFrac: 0, yFrac: 0, wFrac: 1, hFrac: 0.5 });
-  layout.set(rest[0], { xFrac: 0, yFrac: 0.5, wFrac: 0.5, hFrac: 0.5 });
-  if (rest[1]) layout.set(rest[1], { xFrac: 0.5, yFrac: 0.5, wFrac: 0.5, hFrac: 0.5 });
-  return layout;
+
+  return [...edger, ...back, ...side, ...unknown];
 }
 
 /** Downloads one clip, trims it to EXPORT_CLIP_SECONDS per exportTrimArgs
@@ -313,26 +354,6 @@ async function prepareCombinedTile(
     outputPath,
   ]);
   await rm(inputPath, { force: true });
-}
-
-/** Generates a solid dark gray tile of the given size/duration, for a pitch
- * missing one of the selected cameras -- keeps every pitch's composite the
- * same tile layout instead of reflowing. Deliberately no text label: ffmpeg's
- * drawtext filter requires a font file, and the deploy environment isn't
- * guaranteed to have one at a known path (confirmed: crashes with "No font
- * filename provided" when none is configured) -- a plain, visually distinct
- * gray fill (vs. black video letterboxing/backgrounds elsewhere) doesn't
- * depend on that. */
-async function prepareBlankTile(outputPath: string, tileWidth: number, tileHeight: number, durationSeconds: number): Promise<void> {
-  await runFfmpeg([
-    '-y',
-    '-f', 'lavfi',
-    '-i', `color=c=0x333333:s=${tileWidth}x${tileHeight}:d=${durationSeconds}:r=30`,
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-an',
-    outputPath,
-  ]);
 }
 
 /** Renders the metrics + strike-zone side panel (see
@@ -380,12 +401,13 @@ async function addMetricsPanel(
   return outputPath;
 }
 
-/** Builds one pitch's multi-camera composite: each selected camera's clip
- * (or a blank placeholder tile if that pitch has no clip for that camera)
- * trimmed per exportTrimArgs, laid out per buildTileLayout, overlaid onto
- * one canvas via ffmpeg's overlay filter chain, and paired with a metrics +
- * strike-zone side panel (see renderPitchExportOverlayPng) if metrics data
- * is available for this pitch. */
+/** Builds one pitch's multi-camera composite: whichever of the selected
+ * cameras this pitch actually has footage for (see
+ * resolvePitchCombinedClips), each trimmed per exportTrimArgs, laid out per
+ * buildTileLayout (sized to however many clips this pitch has, not the
+ * overall selection count), overlaid onto one canvas via ffmpeg's overlay
+ * filter chain, and paired with a metrics + strike-zone side panel (see
+ * renderPitchExportOverlayPng) if metrics data is available for this pitch. */
 async function buildCombinedPitchClip(
   workDir: string,
   pitchIndex: number,
@@ -395,25 +417,19 @@ async function buildCombinedPitchClip(
   tileCanvasHeight: number,
   metrics: PitchExportMetrics | undefined
 ): Promise<string | null> {
-  const layout = buildTileLayout(selections);
-  const clipsBySelection = new Map(
-    selections.map((s) => [s, { url: resolveClipUrl(pitch, s), isEdger: resolveClipIsEdger(pitch, s) }])
-  );
-  if (![...clipsBySelection.values()].some((c) => c.url)) return null;
+  const clips = resolvePitchCombinedClips(pitch, selections);
+  if (!clips.length) return null;
+  const layout = buildTileLayout(clips.length);
 
   const tilePaths: Array<{ path: string; slot: TileSlot }> = [];
-  for (const selection of selections) {
-    const slot = layout.get(selection);
+  for (let i = 0; i < clips.length; i += 1) {
+    const clip = clips[i];
+    const slot = layout[i];
     if (!slot) continue;
     const tileWidth = Math.max(2, Math.round(tileCanvasWidth * slot.wFrac) - (Math.round(tileCanvasWidth * slot.wFrac) % 2));
     const tileHeight = Math.max(2, Math.round(tileCanvasHeight * slot.hFrac) - (Math.round(tileCanvasHeight * slot.hFrac) % 2));
-    const tilePath = path.join(workDir, `pitch${pitchIndex}-${selection}.mp4`);
-    const clip = clipsBySelection.get(selection);
-    if (clip?.url) {
-      await prepareCombinedTile(clip.url, tilePath, tileWidth, tileHeight, clip.isEdger);
-    } else {
-      await prepareBlankTile(tilePath, tileWidth, tileHeight, EXPORT_CLIP_SECONDS);
-    }
+    const tilePath = path.join(workDir, `pitch${pitchIndex}-tile${i}.mp4`);
+    await prepareCombinedTile(clip.url, tilePath, tileWidth, tileHeight, clip.isEdger);
     tilePaths.push({ path: tilePath, slot });
   }
   if (!tilePaths.length) return null;
