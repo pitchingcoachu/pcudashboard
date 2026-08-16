@@ -5057,6 +5057,7 @@ export default function PitchingSuite({
   const [pitchLogError, setPitchLogError] = useState('');
   const [pitchLogSortColumn, setPitchLogSortColumn] = useState('Date');
   const [pitchLogSortDirection, setPitchLogSortDirection] = useState<SortDirection>('desc');
+  const [pinnedPitchLogKeys, setPinnedPitchLogKeys] = useState<Set<string>>(new Set());
   const pitchLogDefaultTableAppliedRef = useRef(false);
   const autoFallbackAppliedRef = useRef(false);
   const filtersCacheRef = useRef(new Map<string, { at: number; payload: FiltersPayload }>());
@@ -6063,7 +6064,16 @@ export default function PitchingSuite({
   const canRunPitchLog = canRunGameLog;
   const [selectedPitcherLastGameDate, setSelectedPitcherLastGameDate] = useState('');
   useEffect(() => {
-    if (dashboardPage !== 'Game Log' && dashboardPage !== 'Pitch Log') return;
+    // Game Log is specifically about games, so it defaults its own Session
+    // Type filter to 'Season' (games) rather than inheriting whatever was
+    // last selected elsewhere. Pitch Log is meant to show every pitch --
+    // bullpens included -- so it must NOT get this same forced default:
+    // '' is the real "All" option in the Session Type dropdown (see the
+    // SearchableSingleSelect below), and silently overwriting it here to
+    // 'Season' the moment the user opens Pitch Log excluded all bullpen
+    // data with no visible explanation (confirmed via a live PCU report --
+    // "no data" on Pitch Log despite real bullpen sessions existing).
+    if (dashboardPage !== 'Game Log') return;
     if (isPro) return;
     if (sessionType) return;
     setSessionType('Season');
@@ -7262,6 +7272,43 @@ export default function PitchingSuite({
     () => sortTableRows(pitchLogRows, pitchLogSortColumn, pitchLogSortDirection),
     [pitchLogRows, pitchLogSortColumn, pitchLogSortDirection]
   );
+  const pinnedPitchLogRows = useMemo(
+    () => sortedPitchLogRows.filter((row) => pinnedPitchLogKeys.has(String(row._pitch_pin_key ?? ''))),
+    [sortedPitchLogRows, pinnedPitchLogKeys]
+  );
+  const pitchLogRowsWithPins = useMemo(() => {
+    if (!pinnedPitchLogRows.length) return sortedPitchLogRows;
+    const pinnedAll = buildPinnedAllRow(
+      pitchLogColumns,
+      pinnedPitchLogRows as Array<Record<string, string | number | null | undefined>>
+    );
+    const pinnedAllRow: Record<string, unknown> | null = pinnedAll
+      ? {
+          ...pinnedAll,
+          Date: '-',
+          Team: '-',
+          Opponent: '-',
+          Pitcher: 'All (Pinned)',
+          Batter: '-',
+          'Pitch Type': '-',
+          Count: '-',
+          Result: '-',
+          _pitch_pin_key: '__pitch_all_pinned__',
+          _pitch_row_kind: 'all_pinned',
+        }
+      : null;
+    return [
+      ...pinnedPitchLogRows,
+      ...(pinnedAllRow ? [pinnedAllRow] : []),
+      ...sortedPitchLogRows.filter((row) => !pinnedPitchLogKeys.has(String(row._pitch_pin_key ?? ''))),
+    ];
+  }, [sortedPitchLogRows, pinnedPitchLogRows, pinnedPitchLogKeys, pitchLogColumns]);
+  const pitchLogVideoQueue = useMemo(() => {
+    const sourceRows = pinnedPitchLogRows.length ? pinnedPitchLogRows : pitchLogRowsWithPins;
+    return sourceRows
+      .map((row) => row._pitch_action_point)
+      .filter((pitch): pitch is PitchActionPoint => Boolean(pitch && typeof pitch === 'object'));
+  }, [pinnedPitchLogRows, pitchLogRowsWithPins]);
   const pitchLogDisplayColumns = useMemo(() => {
     if (!pitchLogColumns.length) return pitchLogColumns;
     const lead = ['Date', 'Team', 'Opponent', 'Pitcher', 'Batter', 'Pitch Type', 'Count', 'Result'];
@@ -7775,6 +7822,8 @@ export default function PitchingSuite({
             _pitch_sort_game: gameKeyCandidates[0] || '-',
             _pitch_sort_no: Number(pitch.pitch_number ?? pitch.pitch_no ?? pitch.pitch_event_id ?? 0),
             _pitch_sort_event_id: Number(pitch.pitch_event_id ?? 0),
+            _pitch_pin_key: pitchIdentityKey(pitch),
+            _pitch_action_point: pitch,
           };
           for (const column of metricColumns) {
             const pitchValue = pitchLogMetricValue(column, pitch, isPro);
@@ -7819,6 +7868,8 @@ export default function PitchingSuite({
             _pitch_sort_game: parsed.gameKey || String(pitch.game_uid ?? '').trim() || String(pitch.game_id ?? '').trim(),
             _pitch_sort_no: Number(pitch.pitch_number ?? pitch.pitch_no ?? pitch.pitch_event_id ?? 0),
             _pitch_sort_event_id: Number(pitch.pitch_event_id ?? 0),
+            _pitch_pin_key: pitchIdentityKey(pitch),
+            _pitch_action_point: pitch,
           };
           for (const column of metricColumns) {
             const pitchValue = pitchLogMetricValue(column, pitch, isPro);
@@ -13424,6 +13475,46 @@ export default function PitchingSuite({
     ) as Array<Record<string, string | number | null>>;
     return sorted;
   }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
+  const pinnedLeaderboardRows = useMemo(() => {
+    const firstColumn = leaderboardBaseColumns[0] ?? '';
+    if (!isLeaderboardPage || !firstColumn || !pinnedLeaderboardKeys.size) return [];
+    return leaderboardRows.filter((row) =>
+      pinnedLeaderboardKeys.has(
+        pinKeyFromRow(
+          row as Record<string, string | number | null | undefined>,
+          firstColumn
+        )
+      )
+    ) as Array<Record<string, string | number | null>>;
+  }, [isLeaderboardPage, leaderboardRows, leaderboardBaseColumns, pinnedLeaderboardKeys]);
+  const openLeaderboardVideoQueue = async (
+    clickedRow: Record<string, string | number | null>,
+    clickedRowKey: string,
+    clickedRowPitches: PitchActionPoint[]
+  ) => {
+    if (!pinnedLeaderboardRows.length) {
+      await openActionModal(
+        await fetchCompletePitchesForRow(clickedRow, clickedRowKey, clickedRowPitches)
+      );
+      return;
+    }
+
+    const firstColumn = leaderboardBaseColumns[0] ?? '';
+    const completePinnedRows = await Promise.all(
+      pinnedLeaderboardRows.map(async (row) => {
+        const rowKey = String(row[firstColumn] ?? 'Unknown');
+        const currentPitches = resolveEditablePitchesForRow(row, rowKey);
+        return {
+          pinKey: pinKeyFromRow(row, firstColumn),
+          pitches: await fetchCompletePitchesForRow(row, rowKey, currentPitches),
+        };
+      })
+    );
+    const queuedPitches = completePinnedRows.flatMap((entry) => entry.pitches);
+    const clickedPinKey = pinKeyFromRow(clickedRow, firstColumn);
+    const startingPitch = completePinnedRows.find((entry) => entry.pinKey === clickedPinKey)?.pitches[0];
+    await openActionModal(queuedPitches, startingPitch);
+  };
   const percentileTableColumns = useMemo(
     () => (dashboardPage === 'Game Log' ? gameLogColumns : (dashboardPage === 'Pitch Log' ? pitchLogColumns : displayedTableColumns)),
     [dashboardPage, gameLogColumns, pitchLogColumns, displayedTableColumns]
@@ -15706,7 +15797,7 @@ export default function PitchingSuite({
                                 }}
                                 onClick={
                                   column === '#' && canOpenRowPitches
-                                    ? async () => openActionModal(await fetchCompletePitchesForRow(row, rowKey, rowPitches))
+                                    ? () => void openLeaderboardVideoQueue(row, rowKey, rowPitches)
                                     : (isLeaderboardPage && column === leaderboardPrimaryColumn && !isAllRow)
                                       ? () => applyLeaderboardDrilldown(row[column], leaderboardViewBy)
                                       : undefined
@@ -16421,6 +16512,19 @@ export default function PitchingSuite({
                   <table className="portal-table">
                     <thead>
                       <tr>
+                        <th
+                          style={{
+                            textAlign: 'center',
+                            position: 'sticky',
+                            top: 0,
+                            zIndex: 3,
+                            background: (typeof document !== 'undefined' && document.body.classList.contains('theme-light'))
+                              ? 'rgba(248,250,252,0.98)'
+                              : 'rgba(7,9,14,0.98)',
+                          }}
+                        >
+                          Pin
+                        </th>
                         {pitchLogDisplayColumns.map((column) => {
                           const activeSort = pitchLogSortColumn === column;
                           return (
@@ -16452,11 +16556,53 @@ export default function PitchingSuite({
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedPitchLogRows.map((row, rowIndex) => (
-                        <tr key={`pitch-log-row-${rowIndex}`}>
+                      {pitchLogRowsWithPins.map((row, rowIndex) => {
+                        const pinKey = String(row._pitch_pin_key ?? '');
+                        const isPinned = Boolean(pinKey) && pinnedPitchLogKeys.has(pinKey);
+                        const isPinnedAllRow = row._pitch_row_kind === 'all_pinned';
+                        const rowPitch = row._pitch_action_point as PitchActionPoint | undefined;
+                        return (
+                        <tr
+                          key={pinKey || `pitch-log-row-${rowIndex}`}
+                          style={isPinnedAllRow ? { background: 'rgba(255,255,255,0.12)', fontWeight: 700 } : undefined}
+                        >
+                          <td style={{ textAlign: 'center' }}>
+                            {isPinnedAllRow ? (
+                              <span aria-hidden="true">—</span>
+                            ) : (
+                              <button
+                              type="button"
+                              aria-label={isPinned ? 'Unpin pitch' : 'Pin pitch'}
+                              title={isPinned ? 'Unpin' : 'Pin'}
+                              disabled={!pinKey}
+                              onClick={() => {
+                                if (!pinKey) return;
+                                setPinnedPitchLogKeys((current) => {
+                                  const next = new Set(current);
+                                  if (next.has(pinKey)) next.delete(pinKey);
+                                  else next.add(pinKey);
+                                  return next;
+                                });
+                              }}
+                              style={{
+                                border: 'none',
+                                background: 'transparent',
+                                color: isPinned ? '#fbbf24' : 'inherit',
+                                opacity: isPinned ? 1 : 0.7,
+                                cursor: pinKey ? 'pointer' : 'default',
+                                padding: 0,
+                                lineHeight: 1,
+                                fontSize: 14,
+                              }}
+                            >
+                              {isPinned ? '📌' : '📍'}
+                              </button>
+                            )}
+                          </td>
                           {pitchLogDisplayColumns.map((column) => {
                             const rawValue = row[column];
                             const displayValue = column === 'Date' ? formatShortDate(String(rawValue ?? '')) : formatPitchLogCellDisplayValue(column, rawValue);
+                            const canOpenPitchVideo = column === '#' && (Boolean(rowPitch) || isPinnedAllRow);
                             const percentileValue = getCellPercentile(
                               row as Record<string, string | number | null>,
                               column,
@@ -16499,7 +16645,10 @@ export default function PitchingSuite({
                                   textAlign: 'center',
                                   background: pitchLogSortColumn === column ? 'rgb(var(--portal-accent-rgb, 59,130,246))' : undefined,
                                   color: pitchLogSortColumn === column ? '#fff' : undefined,
+                                  cursor: canOpenPitchVideo ? 'pointer' : undefined,
+                                  textDecoration: canOpenPitchVideo ? 'underline' : undefined,
                                 }}
+                                onClick={canOpenPitchVideo ? () => void openActionModal(pitchLogVideoQueue, rowPitch) : undefined}
                               >
                                 {column === 'Team' && isPro ? (
                                   (() => {
@@ -16572,7 +16721,8 @@ export default function PitchingSuite({
                             );
                           })}
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

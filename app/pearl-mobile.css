@@ -275,6 +275,13 @@
     text-transform: none;
   }
 
+  /* Generic utility: a card/section that should only ever appear in the
+     mobile app view (e.g. the admin Display/desktop-toggle card) -- hidden
+     by default below, shown only here. */
+  .portal-shell.portal-shell--viewmode-auto .portal-mobile-only-card {
+    display: grid;
+  }
+
   /* Roster (Players) card list -- Pearl's Players tab shows avatar-circle
      rows, not a wide data table. Desktop's <table> stays untouched (it is
      hidden here, not restyled); PlayerRosterCards renders the same data as
@@ -360,17 +367,23 @@
   /* Dashboard tab: match Pearl's thin report-link list instead of the
      desktop Home suite's full search/leaderboard experience. The desktop
      HomeSuite still fully renders (just hidden) so nothing is lost -- the
-     "Open Full Dashboard" card flips to forced-desktop mode. */
-  .portal-desktop-dashboard-home {
+     "Open Full Dashboard" card flips to forced-desktop mode. Must stay
+     scoped to auto view-mode like every other rule in this block --
+     unscoped, it also hid the desktop HomeSuite while IN forced-desktop
+     mode at narrow width (e.g. portrait phone), and since the mobile-only
+     card list below is correctly scoped to auto mode and stays hidden
+     there, the result was both renderings hidden at once: a blank content
+     area under otherwise-normal chrome. */
+  .portal-shell.portal-shell--viewmode-auto .portal-desktop-dashboard-home {
     display: none;
   }
 
-  .portal-mobile-dashboard-home {
+  .portal-shell.portal-shell--viewmode-auto .portal-mobile-dashboard-home {
     display: grid;
     gap: 8px;
   }
 
-  .portal-mobile-dashboard-home-card {
+  .portal-shell.portal-shell--viewmode-auto .portal-mobile-dashboard-home-card {
     width: 100%;
     text-align: left;
     cursor: pointer;
@@ -378,6 +391,10 @@
 }
 
 .portal-mobile-dashboard-home {
+  display: none;
+}
+
+.portal-mobile-only-card {
   display: none;
 }
 
@@ -403,5 +420,167 @@
 
   div:has(> .dashboard-chat-toggle) {
     bottom: calc(64px + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Pitch video-review modal (pitching-suite.tsx, actionMode === 'video').
+
+   Pre-existing rules in globals.css (roughly lines 8512-9860) already give
+   this modal a full-screen phone takeover, but were written before the
+   Pearl-mobile-web project and are NOT scoped to
+   .portal-shell--viewmode-auto -- confirmed they only apply at <=1024px /
+   <=780px regardless of forced-desktop mode, which is out of scope to fix
+   here (that legacy CSS also drives a *different* modal,
+   .portal-media-breakdown-modal--video, that this project isn't touching).
+   Rather than rewrite that large, `!important`-heavy block (risking
+   regressions to that other modal and to real narrow-desktop windows),
+   this section adds narrower, more specific overrides -- scoped to real
+   mobile only via .portal-shell.portal-shell--viewmode-auto, and to this
+   modal only via .portal-edger-video-modal -- that win on selector
+   specificity/source order and fix three confirmed bugs without touching
+   the legacy rules:
+
+   1. Can't scroll/reach controls: the legacy backdrop/modal rule at
+      globals.css:8512 sets `touch-action: none; overscroll-behavior: none`
+      on the ENTIRE modal root at <=1024px with no exception for any
+      control surface. That's fine for the video stage itself (pinch/pan
+      is handled by the app's own zoom controls, not native gestures) but
+      it also blocked reaching the annotation rail and playback bar,
+      because -- bug 2 below -- the annotation rail can be positioned on
+      top of them. We keep the root `touch-action: none` policy from the
+      legacy CSS (removing it repo-wide risks reintroducing rubber-band
+      scroll of the whole page underneath the modal) and instead fix the
+      actual reachability problem: the overlap.
+
+   2. Annotation toolbar overlapping Next / camera chips: the legacy
+      `.portal-edger-breakdown-ui` rule pins the rail at
+      `top: var(--breakdown-rail-top)` (~5-10dvh) while
+      `.portal-edger-video-nav` is `position: fixed; top: ~1rem`, and the
+      per-camera tab chips render *inside* the video stage at
+      `top: 10px; right: 10px; z-index: 20` (inline styles in
+      pitching-suite.tsx, not overridable from here by class). The
+      breakdown rail's z-index (2147482104) sits above both, so on short
+      screens / with the export panel open it can cover them. Pearl's
+      native app (pearl-player-development/components/reports/
+      pitch-video-modal.tsx) has NO drawing/annotation toolbar at all --
+      confirmed by reading that file in full, it only has Prev/Next nav,
+      camera tabs, native video controls, and Download/Export. Since
+      there's no native equivalent to size this against, we deprioritize
+      it on mobile web: shrink it to a compact floating pill docked well
+      below the nav/camera-chip row and above the playback bar, verified
+      against the actual rail-top/bottom custom properties the legacy CSS
+      computes, instead of trying to force full parity with a control
+      Pearl's app doesn't have.
+
+   3. Chat bubble overlapping the timeline: globals.css:10292's hide rule
+      checks for `.portal-media-breakdown-modal--video`, a class this
+      modal never carries (it carries `.portal-edger-video-modal`
+      instead), so the chat toggle/panel are never hidden while this modal
+      is open. Fixed below with the correct class name, kept mobile-only.
+   --------------------------------------------------------------------- */
+
+@media (max-width: 780px) {
+  /* Bug 3: hide the coaching-assistant chat bubble while the video modal
+     is open. Chat toggle/panel are mounted in app/portal/layout.tsx as
+     siblings of .portal-shell (see comment above), so they can't be
+     scoped by .portal-shell--viewmode-auto directly -- gate on the
+     .portal-shell--viewmode-auto class existing elsewhere in the DOM
+     instead via :has() on body, same technique the legacy (mis-targeted)
+     globals.css:10292 rule used. */
+  body:has(.portal-shell--viewmode-auto):has(.portal-edger-video-modal) .global-feedback-button,
+  body:has(.portal-shell--viewmode-auto):has(.portal-edger-video-modal) .dashboard-chat-toggle,
+  body:has(.portal-shell--viewmode-auto):has(.portal-edger-video-modal) .dashboard-chat-panel {
+    display: none !important;
+  }
+}
+
+@media (max-width: 780px) {
+  /* Bug 2: keep the annotation rail out of the nav/camera-chip band and
+     out of the playback-controls band. The legacy rail-top custom
+     property (--breakdown-rail-top, defined on .portal-edger-video-backdrop
+     in globals.css ~line 9674) already reserves roughly the nav-bar
+     height, but the per-camera chip row drawn inside the video stage
+     (inline-styled top:10/right:10 in pitching-suite.tsx, not reachable
+     from CSS by class) sits inside that same reserved band, so the two
+     can still collide. Re-anchor the rail to the bottom-right, stacked
+     just above the playback-controls bar, where nothing else in this
+     modal ever renders -- mirrors how a secondary/overflow tool tray
+     would be tucked away in a native app, since Pearl's app has no
+     drawing toolbar to size this against at all (confirmed in
+     pearl-player-development/components/reports/pitch-video-modal.tsx). */
+  .portal-shell.portal-shell--viewmode-auto .portal-edger-video-modal .portal-edger-breakdown-ui {
+    top: auto !important;
+    bottom: calc(var(--breakdown-bottom-pad, 1.25rem) + 4.6rem) !important;
+    right: max(0.65rem, env(safe-area-inset-right, 0px)) !important;
+    left: auto !important;
+    max-width: 3.6rem !important;
+    /* Above the playback bar's own stacking context but below the fixed
+       nav row (2147482110) and mobile-close button (9000/2147482100), so
+       it can never re-cover either even if its height grows. */
+    z-index: 2147482102 !important;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-edger-video-modal .portal-edger-breakdown-toolbar {
+    width: 3.6rem !important;
+    max-height: 40dvh !important;
+  }
+
+  /* Collapsed "Tools" reopen pill (rendered when breakdownToolbarVisible
+     is false) gets the same compact treatment so it doesn't jump position
+     when toggled. */
+  .portal-shell.portal-shell--viewmode-auto .portal-edger-video-modal .portal-edger-breakdown-ui > button[data-breakdown-ui='true'] {
+    width: 3.6rem !important;
+    min-width: 3.6rem !important;
+  }
+
+  /* The save/note panel opens to the *left* of the rail in the legacy CSS
+     (right: 4.7rem), which is still correct once the rail itself moves --
+     just re-anchor its vertical position to track the rail's new bottom
+     anchor instead of the old top anchor so it doesn't open off-screen
+     above the nav bar. */
+  .portal-shell.portal-shell--viewmode-auto .portal-edger-video-modal .portal-edger-breakdown-save-panel {
+    top: auto !important;
+    bottom: 0 !important;
+  }
+}
+
+@media (max-width: 780px) {
+  /* Bug 1 (root-cause fix for "can't scroll / can't reach buttons"):
+     the legacy rule at globals.css:8512 applies `touch-action: none;
+     overscroll-behavior: none` to the whole modal root at <=1024px. That
+     alone doesn't block reaching controls -- each control surface
+     (.portal-edger-video-nav, .portal-edger-breakdown-ui,
+     .portal-edger-video-controls) is `position: fixed` with its own box,
+     so pointer events on THEM were never actually captured by the video
+     stage's touch-action. The real blocker was bug 2's overlap (the
+     rail physically covering the nav/chips, so taps landed on the rail's
+     transparent gaps or the stage underneath instead). With the rail
+     relocated above, explicitly confirm every control surface accepts
+     normal touch/pointer interaction and can scroll internally where it
+     needs to (the playback-controls box and the breakdown toolbar rail
+     both already get their own `overflow-y: auto` from the legacy CSS --
+     this just guarantees `touch-action` on those specific boxes is never
+     left at `none` by inheritance from a `!important` ancestor rule, since
+     `touch-action` does not itself inherit but an ancestor's `none` still
+     wins over a child with no explicit value in some older WebKit
+     versions on iOS). */
+  .portal-shell.portal-shell--viewmode-auto .portal-edger-video-modal .portal-edger-video-nav,
+  .portal-shell.portal-shell--viewmode-auto .portal-edger-video-modal .portal-edger-breakdown-ui,
+  .portal-shell.portal-shell--viewmode-auto .portal-edger-video-modal .portal-edger-video-controls {
+    touch-action: manipulation !important;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-edger-video-modal .portal-edger-breakdown-toolbar,
+  .portal-shell.portal-shell--viewmode-auto .portal-edger-video-modal .portal-edger-video-controls {
+    touch-action: pan-y !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Playback bar: cap its width so it never runs into the breakdown rail
+     now docked at bottom-right, and guarantee it stays above the home
+     indicator / safe area without merging into the rail's stack. */
+  .portal-shell.portal-shell--viewmode-auto .portal-edger-video-modal .portal-edger-video-controls {
+    right: calc(4.4rem + env(safe-area-inset-right, 0px)) !important;
   }
 }

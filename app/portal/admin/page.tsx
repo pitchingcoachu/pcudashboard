@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import SchoolAccessCard from './school-access-card';
 import PlayerSearch from './player-search';
+import ViewModeToggle from '../view-mode-toggle';
 import {
   getClientCountByOrganization,
   getExerciseCountByOrganization,
@@ -19,6 +20,7 @@ import {
   resolveProgrammingSchoolCode,
 } from '../../../lib/programming-scope';
 import { canViewPortalActivity } from '../../../lib/portal-activity';
+import { resolveViewMode } from '../../../lib/view-mode';
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -36,6 +38,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: 
 
 export default async function AdminHomePage() {
   const session = await requirePortalSession();
+  const viewMode = await resolveViewMode();
   const programmingSchoolCode = resolveProgrammingSchoolCode(session);
   const isTrialSchool = programmingSchoolCode === 'TRIAL';
   const schoolAccess = await withTimeout(
@@ -257,6 +260,17 @@ export default async function AdminHomePage() {
         <Link href="/portal/dashboard" className="btn btn-primary as-link">
           Open Dashboard
         </Link>
+      </article>
+      {/* Admin/coach's tab bar Settings destination is this page (players
+          get a dedicated /portal/settings instead) -- without this card,
+          admin/coach had no reachable way to switch to the desktop site on
+          mobile at all. Mobile-app-view only (see .portal-mobile-only-card
+          in pearl-mobile.css); a redundant control on the real desktop
+          dashboard would make no sense there. */}
+      <article className="portal-admin-card portal-mobile-only-card">
+        <h2>Display</h2>
+        <p>Choose between the mobile app view and the full desktop site.</p>
+        <ViewModeToggle viewMode={viewMode} />
       </article>
     </div>
     </div>
