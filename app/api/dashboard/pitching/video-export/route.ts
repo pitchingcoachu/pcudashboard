@@ -3,10 +3,9 @@ import { NextResponse } from 'next/server';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { Readable } from 'node:stream';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
 import { getSessionFromRequest } from '../../../../../lib/auth';
 import { isDatabaseConfigured } from '../../../../../lib/auth-db';
@@ -695,6 +694,12 @@ export async function POST(request: Request) {
   // then freezes while the duration/timer keeps advancing) since stream
   // copy never renegotiates resolution mid-stream.
   const allUrls = Array.from(clipsByCamera.values()).flat().map((c) => c.url);
+  if (!allUrls.length) {
+    return NextResponse.json(
+      { error: 'None of the selected pitches have video for the requested camera(s).' },
+      { status: 404 }
+    );
+  }
   const dimensions = await Promise.all(allUrls.map((url) => probeDimensions(url)));
   const dimensionsByUrl = new Map(allUrls.map((url, i) => [url, dimensions[i]]));
   const canvasWidth = Math.max(480, ...dimensions.map((d) => d?.width ?? 0));
@@ -780,10 +785,18 @@ export async function POST(request: Request) {
     }
   }
 
-  const workDir = await mkdtemp(path.join(tmpdir(), 'pcu-video-export-'));
-  let cleanupOwnedByResponseStream = false;
-  try {
-    let finalPath: string;
+  const fileName = `pitch-export-${randomUUID().slice(0, 8)}.mp4`;
+  // Commit the response headers before the expensive ffmpeg phase starts.
+  // Keeping a streaming response open prevents browser/proxy idle-header
+  // timeouts, and streaming the completed file avoids Vercel's 4.5 MB
+  // buffered Function response limit.
+  const responseStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      void (async () => {
+        let workDir = '';
+        try {
+          workDir = await mkdtemp(path.join(tmpdir(), 'pcu-video-export-'));
+          let finalPath: string;
 
     if (mode === 'combined') {
       // Every pitch's composite is concatenated into one final file, so all
@@ -812,7 +825,7 @@ export async function POST(request: Request) {
       );
       const pitchClipPaths = builtPitchClipPaths.filter((clipPath): clipPath is string => Boolean(clipPath));
       if (!pitchClipPaths.length) {
-        return NextResponse.json({ error: 'None of the selected pitches have video for the requested camera(s).' }, { status: 404 });
+        throw new Error('No requested camera video was available.');
       }
       if (pitchClipPaths.length === 1) {
         finalPath = pitchClipPaths[0];
@@ -839,7 +852,7 @@ export async function POST(request: Request) {
       const groupOutputs = builtGroupOutputs.filter((output): output is string => Boolean(output));
 
       if (!groupOutputs.length) {
-        return NextResponse.json({ error: 'None of the selected pitches have video for the requested camera(s).' }, { status: 404 });
+        throw new Error('No requested camera video was available.');
       }
 
       if (groupOutputs.length === 1) {
@@ -860,32 +873,27 @@ export async function POST(request: Request) {
       }
     }
 
-    const fileName = `pitch-export-${randomUUID().slice(0, 8)}.mp4`;
-    const fileSize = (await stat(finalPath)).size;
-    const fileStream = createReadStream(finalPath);
-    // Returning a real stream avoids Vercel's 4.5 MB buffered Function
-    // response limit. Keep the temp directory alive until the file has been
-    // sent (or the browser cancels), then clean it up exactly once.
-    fileStream.once('close', () => {
-      void rm(workDir, { recursive: true, force: true });
-    });
-    cleanupOwnedByResponseStream = true;
-    return new NextResponse(Readable.toWeb(fileStream) as ReadableStream<Uint8Array>, {
-      status: 200,
-      headers: {
-        'Content-Type': 'video/mp4',
-        'Content-Disposition': `attachment; filename="${fileName}"`,
-        'Content-Length': String(fileSize),
-      },
-    });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to export video.' },
-      { status: 500 }
-    );
-  } finally {
-    if (!cleanupOwnedByResponseStream) {
-      await rm(workDir, { recursive: true, force: true });
-    }
-  }
+          const fileStream = createReadStream(finalPath);
+          for await (const chunk of fileStream) {
+            controller.enqueue(new Uint8Array(chunk));
+          }
+          controller.close();
+        } catch (error) {
+          console.error('[video-export] streaming export failed', error);
+          controller.error(error);
+        } finally {
+          if (workDir) await rm(workDir, { recursive: true, force: true });
+        }
+      })();
+    },
+  });
+
+  return new NextResponse(responseStream, {
+    status: 200,
+    headers: {
+      'Content-Type': 'video/mp4',
+      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
 }
