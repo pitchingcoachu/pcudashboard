@@ -234,6 +234,20 @@
     height: 22px;
   }
 
+  /* Reaction picker: desktop positions it above the bubble via a fixed
+     negative offset, which clips off-screen for messages near the top of
+     the thread (common on a phone-height viewport). At mobile-app width,
+     drop it below the action row instead -- there is reliably more room
+     below (new messages append there) than above. Widened to allow
+     wrapping instead of a single unbreakable row, and given a max-width so
+     it can't run off the side of a narrow viewport either. */
+  .portal-shell.portal-shell--viewmode-auto .portal-messages-reaction-picker {
+    top: calc(100% + 4px);
+    bottom: auto;
+    max-width: min(280px, 90vw);
+    flex-wrap: wrap;
+  }
+
   /* Admin home + card-grid pages: Pearl's screens are a single-column
      vertical stack of full-width rows, not a 2-column grid. Card look
      (radius/border/fill) already lines up closely with Pearl's spec, so
@@ -372,4 +386,22 @@
    single-pane layout above. */
 .portal-messages-thread-back {
   display: none;
+}
+
+/* Feedback button (bottom-left) and Coaching Assistant toggle (bottom-right)
+   are mounted in app/portal/layout.tsx as siblings of .portal-shell, not
+   descendants -- so they can't be scoped by .portal-shell--viewmode-auto.
+   At phone width they otherwise sit at true viewport bottom (0/16-18px),
+   colliding with the fixed tab bar (auto mode) or the desktop-site strip
+   (forced-desktop mode). Lift both above either, unconditionally at this
+   width -- correct in both view modes since something is always docked to
+   the bottom at <=780px now. */
+@media (max-width: 780px) {
+  .global-feedback-button {
+    bottom: calc(64px + env(safe-area-inset-bottom)) !important;
+  }
+
+  div:has(> .dashboard-chat-toggle) {
+    bottom: calc(64px + env(safe-area-inset-bottom)) !important;
+  }
 }

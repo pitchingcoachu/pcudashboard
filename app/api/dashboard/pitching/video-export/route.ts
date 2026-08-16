@@ -50,10 +50,13 @@ const CAMERA_KEY_BY_NUMBER: Record<string, CameraKey> = {
 type CameraSelection = CameraKey | 'edger';
 
 /** Maps independent work with a small concurrency cap. Video exports are a
- * mix of remote downloads and ffmpeg work; two workers overlap network waits
- * without allowing a large export to launch dozens of ffmpeg processes and
- * exhaust the function's memory/file-descriptor budget. Results retain input
- * order so the final video still follows the modal's pitch order. */
+ * mix of remote downloads and ffmpeg work; a bounded pool overlaps network
+ * waits without allowing a large export to launch dozens of ffmpeg processes
+ * at once and exhaust the function's memory/file-descriptor budget. Combined
+ * mode's per-pitch tiles are ALSO parallelized internally (see
+ * buildCombinedPitchClip), so this outer cap is deliberately kept low there
+ * -- the two multiply. Results retain input order so the final video still
+ * follows the modal's pitch order. */
 async function mapWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,
@@ -319,15 +322,16 @@ async function concatCameraGroup(
 ): Promise<string | null> {
   if (!clips.length) return null;
 
-  const normalizedPaths: string[] = [];
-  for (let i = 0; i < clips.length; i += 1) {
+  // Each clip in a camera group is independent (own source download, own
+  // output path) until the final concat step -- normalizing them with
+  // bounded concurrency rather than one at a time is the main lever for
+  // wall-clock time on a 25-pitch export, since most of the cost per clip is
+  // waiting on the Cloudinary download, not local CPU.
+  const normalizedPaths = await mapWithConcurrency(clips, 4, async (clip, i) => {
     const outPath = path.join(workDir, `${groupName}-${i}.mp4`);
-    await normalizeClip(clips[i].url, outPath, canvasWidth, canvasHeight, clips[i].isEdger);
-    const withPanel = clips[i].metrics
-      ? await addMetricsPanel(workDir, `${groupName}-${i}-panel`, outPath, canvasHeight, clips[i].metrics!)
-      : outPath;
-    normalizedPaths.push(withPanel);
-  }
+    await normalizeClip(clip.url, outPath, canvasWidth, canvasHeight, clip.isEdger);
+    return clip.metrics ? addMetricsPanel(workDir, `${groupName}-${i}-panel`, outPath, canvasHeight, clip.metrics) : outPath;
+  });
 
   if (normalizedPaths.length === 1) return normalizedPaths[0];
 
@@ -586,17 +590,23 @@ async function buildCombinedPitchClip(
   if (!clips.length) return null;
   const layout = buildTileLayout(clips.length, twoTileLeftWFrac, clips.length === 2 && twoTileStacked);
 
-  const tilePaths: Array<{ path: string; slot: TileSlot }> = [];
-  for (let i = 0; i < clips.length; i += 1) {
-    const clip = clips[i];
-    const slot = layout[i];
-    if (!slot) continue;
-    const tileWidth = Math.max(2, Math.round(tileCanvasWidth * slot.wFrac) - (Math.round(tileCanvasWidth * slot.wFrac) % 2));
-    const tileHeight = Math.max(2, Math.round(tileCanvasHeight * slot.hFrac) - (Math.round(tileCanvasHeight * slot.hFrac) % 2));
-    const tilePath = path.join(workDir, `pitch${pitchIndex}-tile${i}.mp4`);
-    await prepareCombinedTile(clip.url, tilePath, tileWidth, tileHeight, clip.isEdger);
-    tilePaths.push({ path: tilePath, slot });
-  }
+  // A pitch's 2-3 tiles are independent clips (different source, different
+  // output path) -- preparing them in parallel rather than one at a time
+  // materially shortens wall-clock time for combined exports, where most of
+  // each tile's cost is waiting on a Cloudinary download rather than CPU.
+  const tilePlans = clips
+    .map((clip, i) => ({ clip, slot: layout[i], index: i }))
+    .filter((plan): plan is { clip: ResolvedPitchClip; slot: TileSlot; index: number } => Boolean(plan.slot));
+  const preparedTiles = await Promise.all(
+    tilePlans.map(async ({ clip, slot, index }) => {
+      const tileWidth = Math.max(2, Math.round(tileCanvasWidth * slot.wFrac) - (Math.round(tileCanvasWidth * slot.wFrac) % 2));
+      const tileHeight = Math.max(2, Math.round(tileCanvasHeight * slot.hFrac) - (Math.round(tileCanvasHeight * slot.hFrac) % 2));
+      const tilePath = path.join(workDir, `pitch${pitchIndex}-tile${index}.mp4`);
+      await prepareCombinedTile(clip.url, tilePath, tileWidth, tileHeight, clip.isEdger);
+      return { path: tilePath, slot };
+    })
+  );
+  const tilePaths: Array<{ path: string; slot: TileSlot }> = preparedTiles;
   if (!tilePaths.length) return null;
 
   const tileGridPath = path.join(workDir, `pitch${pitchIndex}-grid.mp4`);

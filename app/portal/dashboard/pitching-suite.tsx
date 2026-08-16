@@ -5371,6 +5371,12 @@ export default function PitchingSuite({
   const [actionExportShowMetrics, setActionExportShowMetrics] = useState(true);
   const [actionExportState, setActionExportState] = useState<'idle' | 'exporting' | 'error'>('idle');
   const [actionExportMessage, setActionExportMessage] = useState('');
+  // Elapsed export time, driven by chunks actually arriving off the response
+  // stream (see runActionVideoExport) rather than a plain timer -- this is a
+  // multi-minute server-side ffmpeg job with no discrete progress signal, so
+  // "time elapsed while bytes keep arriving" is the only honest indicator
+  // that it's still alive rather than hung.
+  const [actionExportElapsedSeconds, setActionExportElapsedSeconds] = useState(0);
   const [breakdownMode, setBreakdownMode] = useState(false);
   const [breakdownToolbarVisible, setBreakdownToolbarVisible] = useState(true);
   const [breakdownTool, setBreakdownTool] = useState<BreakdownTool>('line');
@@ -9455,6 +9461,11 @@ export default function PitchingSuite({
 
     setActionExportState('exporting');
     setActionExportMessage('');
+    setActionExportElapsedSeconds(0);
+    const startedAt = Date.now();
+    const tickTimer = window.setInterval(() => {
+      setActionExportElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
     try {
       const response = await fetch('/api/dashboard/pitching/video-export', {
         method: 'POST',
@@ -9470,13 +9481,32 @@ export default function PitchingSuite({
         const payload = (await response.json().catch(() => ({}))) as { error?: string };
         throw new Error(payload.error || 'Failed to export video.');
       }
-      const blob = await response.blob();
-      downloadBlob(blob, `pitch-export-${pitchEventIds.length}-clip${pitchEventIds.length === 1 ? '' : 's'}.mp4`);
+      // Read the response as it streams in rather than a single blocking
+      // response.blob() -- the server sends real progress the whole time
+      // (a 15s no-op heartbeat until ffmpeg finishes, then the actual file in
+      // 64KB chunks), so this is the only way the UI can reflect "still
+      // alive" instead of looking frozen for however long the export takes.
+      const reader = response.body?.getReader();
+      if (!reader) {
+        const blob = await response.blob();
+        downloadBlob(blob, `pitch-export-${pitchEventIds.length}-clip${pitchEventIds.length === 1 ? '' : 's'}.mp4`);
+      } else {
+        const chunks: Uint8Array[] = [];
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) chunks.push(value);
+        }
+        const blob = new Blob(chunks as BlobPart[], { type: 'video/mp4' });
+        downloadBlob(blob, `pitch-export-${pitchEventIds.length}-clip${pitchEventIds.length === 1 ? '' : 's'}.mp4`);
+      }
       setActionExportState('idle');
       setActionExportMenuOpen(false);
     } catch (error) {
       setActionExportState('error');
       setActionExportMessage(error instanceof Error ? error.message : 'Failed to export video.');
+    } finally {
+      window.clearInterval(tickTimer);
     }
   };
 
@@ -18536,8 +18566,16 @@ export default function PitchingSuite({
                                 (actionExportMode === 'combined' && actionExportCameras.length < 2)
                               }
                             >
-                              {actionExportState === 'exporting' ? 'Exporting…' : 'Download Export'}
+                              {actionExportState === 'exporting'
+                                ? `Exporting… ${String(Math.floor(actionExportElapsedSeconds / 60)).padStart(2, '0')}:${String(actionExportElapsedSeconds % 60).padStart(2, '0')}`
+                                : 'Download Export'}
                             </button>
+                            {actionExportState === 'exporting' ? (
+                              <div style={{ color: actionModalTheme.muted, fontWeight: 600, fontSize: '0.8rem' }}>
+                                Large combined exports (many pitches, multiple cameras) can take several minutes -- this is
+                                still working as long as the timer keeps counting up.
+                              </div>
+                            ) : null}
                             {actionExportState === 'error' && actionExportMessage ? (
                               <div style={{ color: '#b91c1c', fontWeight: 600, fontSize: '0.8rem' }}>{actionExportMessage}</div>
                             ) : null}

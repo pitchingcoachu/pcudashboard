@@ -1,7 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { attachmentSrc, MESSAGE_REACTION_EMOJIS, type Message } from '../../../lib/messages-client';
+
+const LONG_PRESS_MS = 420;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -23,6 +25,37 @@ export function MessageBubble({
   onReact?: (messageId: number, emoji: string) => void;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [actionsVisible, setActionsVisible] = useState(false);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!actionsVisible) return;
+    function onPointerDownOutside(event: PointerEvent) {
+      if (!wrapRef.current?.contains(event.target as Node)) {
+        setActionsVisible(false);
+        setPickerOpen(false);
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDownOutside);
+    return () => document.removeEventListener('pointerdown', onPointerDownOutside);
+  }, [actionsVisible]);
+
+  function clearLongPressTimer() {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }
+
+  function startLongPress() {
+    if (!onReact) return;
+    clearLongPressTimer();
+    longPressTimer.current = setTimeout(() => {
+      setActionsVisible(true);
+      setPickerOpen(true);
+    }, LONG_PRESS_MS);
+  }
 
   if (message.deletedAt) {
     return (
@@ -38,12 +71,12 @@ export function MessageBubble({
   }
 
   return (
-    <div className={`portal-messages-bubble-wrap${isOwn ? ' is-own' : ' is-other'}`}>
+    <div ref={wrapRef} className={`portal-messages-bubble-wrap${isOwn ? ' is-own' : ' is-other'}`}>
       {showSenderName && message.senderName ? (
         <span className="portal-messages-sender-name">{message.senderName}</span>
       ) : null}
       {onReact || (isOwn && onDelete) ? (
-        <div className="portal-messages-bubble-actions">
+        <div className={`portal-messages-bubble-actions${actionsVisible ? ' is-visible' : ''}`}>
           {onReact ? (
             <button
               type="button"
@@ -51,7 +84,10 @@ export function MessageBubble({
               title="Add reaction"
               aria-label="Add reaction"
               aria-expanded={pickerOpen}
-              onClick={() => setPickerOpen((open) => !open)}
+              onClick={() => {
+                setActionsVisible(true);
+                setPickerOpen((open) => !open);
+              }}
             >
               ☺
             </button>
@@ -80,6 +116,7 @@ export function MessageBubble({
                   onClick={() => {
                     onReact(message.id, emoji);
                     setPickerOpen(false);
+                    setActionsVisible(false);
                   }}
                 >
                   {emoji}
@@ -89,7 +126,22 @@ export function MessageBubble({
           ) : null}
         </div>
       ) : null}
-      <div className={`portal-messages-bubble${isOwn ? ' is-own' : ' is-other'}`}>
+      <div
+        className={`portal-messages-bubble${isOwn ? ' is-own' : ' is-other'}`}
+        onPointerDown={onReact ? startLongPress : undefined}
+        onPointerUp={onReact ? clearLongPressTimer : undefined}
+        onPointerLeave={onReact ? clearLongPressTimer : undefined}
+        onPointerCancel={onReact ? clearLongPressTimer : undefined}
+        onContextMenu={
+          onReact
+            ? (event) => {
+                event.preventDefault();
+                setActionsVisible(true);
+                setPickerOpen(true);
+              }
+            : undefined
+        }
+      >
         {message.attachments.map((attachment) => (
           <div key={attachment.id} className="portal-messages-attachment">
             {attachment.kind === 'photo' ? (

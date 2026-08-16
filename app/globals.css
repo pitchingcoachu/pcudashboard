@@ -12780,7 +12780,7 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 }
 
 .portal-messages-bubble.is-own .portal-messages-bubble-text {
-  color: #050505;
+  color: #ffffff;
 }
 
 .portal-messages-bubble.is-other .portal-messages-bubble-text {
@@ -13039,7 +13039,8 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 }
 
 .portal-messages-bubble-wrap:hover .portal-messages-bubble-actions,
-.portal-messages-bubble-actions:focus-within {
+.portal-messages-bubble-actions:focus-within,
+.portal-messages-bubble-actions.is-visible {
   display: flex;
 }
 
