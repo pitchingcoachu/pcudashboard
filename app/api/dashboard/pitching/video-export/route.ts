@@ -2,8 +2,7 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
@@ -202,6 +201,47 @@ const STREAMING_MP4_FTYP = Buffer.from(
   '000000206674797069736f6d0000020069736f6d69736f32617663316d703431',
   'hex'
 );
+// A valid empty ISO BMFF `free` box. Emitting one periodically is a no-op to
+// MP4 players but prevents infrastructure from closing an otherwise-idle
+// response while ffmpeg is still rendering the real media boxes.
+const STREAMING_MP4_HEARTBEAT = Buffer.from('0000000866726565', 'hex');
+
+/** Adjusts MP4 chunk offsets after no-op boxes have been inserted between
+ * `ftyp` and the rest of the original file. Chunk tables live inside `moov`;
+ * searching only that top-level box avoids false matches in encoded `mdat`
+ * bytes while supporting both 32-bit `stco` and 64-bit `co64` tables. */
+function adjustMp4ChunkOffsets(file: Buffer, delta: number): void {
+  if (!delta) return;
+  let cursor = 0;
+  while (cursor + 8 <= file.length) {
+    const boxSize = file.readUInt32BE(cursor);
+    const boxType = file.toString('ascii', cursor + 4, cursor + 8);
+    if (boxSize < 8 || cursor + boxSize > file.length) break;
+    if (boxType === 'moov') {
+      const moovEnd = cursor + boxSize;
+      for (let typeOffset = cursor + 12; typeOffset + 12 <= moovEnd; typeOffset += 1) {
+        const tableType = file.toString('ascii', typeOffset, typeOffset + 4);
+        if (tableType !== 'stco' && tableType !== 'co64') continue;
+        const tableStart = typeOffset - 4;
+        const tableSize = file.readUInt32BE(tableStart);
+        const entryCount = file.readUInt32BE(tableStart + 12);
+        const entryBytes = tableType === 'stco' ? 4 : 8;
+        if (tableSize < 16 || tableStart + tableSize > moovEnd || 16 + entryCount * entryBytes > tableSize) continue;
+        for (let index = 0; index < entryCount; index += 1) {
+          const entryOffset = tableStart + 16 + index * entryBytes;
+          if (tableType === 'stco') {
+            file.writeUInt32BE(file.readUInt32BE(entryOffset) + delta, entryOffset);
+          } else {
+            file.writeBigUInt64BE(file.readBigUInt64BE(entryOffset) + BigInt(delta), entryOffset);
+          }
+        }
+        typeOffset = tableStart + tableSize - 1;
+      }
+      return;
+    }
+    cursor += boxSize;
+  }
+}
 
 /** Given a clip's real duration, returns the ffmpeg trim args needed to cap
  * it at EXPORT_CLIP_SECONDS, or an empty array if it's already short enough
@@ -799,9 +839,28 @@ export async function POST(request: Request) {
   // Keeping a streaming response open prevents browser/proxy idle-header
   // timeouts, and streaming the completed file avoids Vercel's 4.5 MB
   // buffered Function response limit.
+  let responseCancelled = false;
+  let heartbeatBytes = 0;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   const responseStream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(new Uint8Array(STREAMING_MP4_FTYP));
+      const enqueue = (chunk: Uint8Array): boolean => {
+        if (responseCancelled) return false;
+        try {
+          controller.enqueue(chunk);
+          return true;
+        } catch {
+          responseCancelled = true;
+          return false;
+        }
+      };
+
+      enqueue(new Uint8Array(STREAMING_MP4_FTYP));
+      heartbeatTimer = setInterval(() => {
+        if (enqueue(new Uint8Array(STREAMING_MP4_HEARTBEAT))) {
+          heartbeatBytes += STREAMING_MP4_HEARTBEAT.length;
+        }
+      }, 15_000);
       void (async () => {
         let workDir = '';
         try {
@@ -883,31 +942,46 @@ export async function POST(request: Request) {
       }
           }
 
-          const fileStream = createReadStream(finalPath);
-          let firstChunk = true;
-          for await (const chunk of fileStream) {
-            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-            if (firstChunk) {
-              firstChunk = false;
-              const firstBoxSize = buffer.length >= 8 ? buffer.readUInt32BE(0) : 0;
-              const firstBoxType = buffer.length >= 8 ? buffer.toString('ascii', 4, 8) : '';
-              const withoutDuplicateFtyp =
-                firstBoxType === 'ftyp' && firstBoxSize >= 8 && firstBoxSize <= buffer.length
-                  ? buffer.subarray(firstBoxSize)
-                  : buffer;
-              if (withoutDuplicateFtyp.length) controller.enqueue(new Uint8Array(withoutDuplicateFtyp));
-              continue;
-            }
-            controller.enqueue(new Uint8Array(buffer));
+          if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
           }
-          controller.close();
+          const fileBuffer = await readFile(finalPath);
+          const originalFtypSize =
+            fileBuffer.length >= 8 && fileBuffer.toString('ascii', 4, 8) === 'ftyp'
+              ? fileBuffer.readUInt32BE(0)
+              : 0;
+          if (originalFtypSize < 8 || originalFtypSize > fileBuffer.length) {
+            throw new Error('Rendered MP4 is missing a valid file-type box.');
+          }
+          adjustMp4ChunkOffsets(
+            fileBuffer,
+            STREAMING_MP4_FTYP.length + heartbeatBytes - originalFtypSize
+          );
+          const responseChunkBytes = 64 * 1024;
+          for (let offset = originalFtypSize; offset < fileBuffer.length; offset += responseChunkBytes) {
+            const end = Math.min(fileBuffer.length, offset + responseChunkBytes);
+            if (!enqueue(new Uint8Array(fileBuffer.subarray(offset, end)))) break;
+          }
+          if (!responseCancelled) controller.close();
         } catch (error) {
-          console.error('[video-export] streaming export failed', error);
-          controller.error(error);
+          if (!responseCancelled) {
+            console.error('[video-export] streaming export failed', error);
+            try {
+              controller.error(error);
+            } catch {
+              responseCancelled = true;
+            }
+          }
         } finally {
+          if (heartbeatTimer) clearInterval(heartbeatTimer);
           if (workDir) await rm(workDir, { recursive: true, force: true });
         }
       })();
+    },
+    cancel() {
+      responseCancelled = true;
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
     },
   });
 
