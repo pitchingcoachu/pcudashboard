@@ -2,9 +2,11 @@ import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
 import { getSessionFromRequest } from '../../../../../lib/auth';
 import { isDatabaseConfigured } from '../../../../../lib/auth-db';
@@ -21,11 +23,12 @@ import {
   PITCH_EXPORT_PANEL_WIDTH,
 } from '../../../../../lib/pitch-export-overlay';
 
-// Multi-clip download + ffmpeg re-encode/concat can genuinely take a while
-// (each clip is downloaded fresh from Cloudinary, then re-encoded to a
-// shared canvas before concatenation) -- give this route real headroom
-// rather than the Next.js default.
-export const maxDuration = 300;
+// Multi-clip download + ffmpeg re-encode/concat is a media-processing job,
+// not a normal API request. A 25-pitch, 2-camera combined export performs
+// work on roughly 50 source videos and previously hit the old 300-second
+// ceiling exactly. This project runs on Vercel Pro + Fluid Compute, whose
+// Node runtime supports the 30-minute media-processing duration.
+export const maxDuration = 1800;
 
 const MAX_PITCHES_PER_EXPORT = 50;
 const CAMERA_KEYS = ['video_clip_1', 'video_clip_2', 'video_clip_3'] as const;
@@ -47,6 +50,41 @@ const CAMERA_KEY_BY_NUMBER: Record<string, CameraKey> = {
 };
 
 type CameraSelection = CameraKey | 'edger';
+
+/** Maps independent work with a small concurrency cap. Video exports are a
+ * mix of remote downloads and ffmpeg work; two workers overlap network waits
+ * without allowing a large export to launch dozens of ffmpeg processes and
+ * exhaust the function's memory/file-descriptor budget. Results retain input
+ * order so the final video still follows the modal's pitch order. */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  let hasError = false;
+  let firstError: unknown;
+
+  const worker = async () => {
+    while (!hasError) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = await mapper(items[index], index);
+      } catch (error) {
+        hasError = true;
+        firstError = error;
+      }
+    }
+  };
+
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (hasError) throw firstError;
+  return results;
+}
 
 // Accepts either the legacy single-value shape ("1" | "2" | "3" | "all") or
 // an array of camera selectors (["1","3"] or ["edger"]) for a custom
@@ -743,6 +781,7 @@ export async function POST(request: Request) {
   }
 
   const workDir = await mkdtemp(path.join(tmpdir(), 'pcu-video-export-'));
+  let cleanupOwnedByResponseStream = false;
   try {
     let finalPath: string;
 
@@ -754,22 +793,24 @@ export async function POST(request: Request) {
       // twoTileCanvasHeight are only ever >= canvasWidth/canvasHeight (grown,
       // never shrunk), so 1- and 3-tile pitches just get proportionally more
       // background canvas, never less.
-      const pitchClipPaths: string[] = [];
-      for (let i = 0; i < orderedPitches.length; i += 1) {
-        const clipPath = await buildCombinedPitchClip(
-          workDir,
-          i,
-          orderedPitches[i],
-          camerasToExport,
-          twoTileCanvasWidth,
-          twoTileCanvasHeight,
-          metricsById.get(orderedPitches[i].pitch_event_id),
-          twoTileLeftWFrac,
-          twoTileStacked,
-          metricsPanelMode
-        );
-        if (clipPath) pitchClipPaths.push(clipPath);
-      }
+      const builtPitchClipPaths = await mapWithConcurrency(
+        orderedPitches,
+        2,
+        (pitch, i) =>
+          buildCombinedPitchClip(
+            workDir,
+            i,
+            pitch,
+            camerasToExport,
+            twoTileCanvasWidth,
+            twoTileCanvasHeight,
+            metricsById.get(pitch.pitch_event_id),
+            twoTileLeftWFrac,
+            twoTileStacked,
+            metricsPanelMode
+          )
+      );
+      const pitchClipPaths = builtPitchClipPaths.filter((clipPath): clipPath is string => Boolean(clipPath));
       if (!pitchClipPaths.length) {
         return NextResponse.json({ error: 'None of the selected pitches have video for the requested camera(s).' }, { status: 404 });
       }
@@ -783,12 +824,19 @@ export async function POST(request: Request) {
         await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', finalPath]);
       }
     } else {
-      const groupOutputs: string[] = [];
-      for (const selection of camerasToExport) {
-        const clips = clipsByCamera.get(selection) ?? [];
-        const output = await concatCameraGroup(workDir, selection, clips, canvasWidth, canvasHeight);
-        if (output) groupOutputs.push(output);
-      }
+      const builtGroupOutputs = await mapWithConcurrency(
+        camerasToExport,
+        2,
+        (selection) =>
+          concatCameraGroup(
+            workDir,
+            selection,
+            clipsByCamera.get(selection) ?? [],
+            canvasWidth,
+            canvasHeight
+          )
+      );
+      const groupOutputs = builtGroupOutputs.filter((output): output is string => Boolean(output));
 
       if (!groupOutputs.length) {
         return NextResponse.json({ error: 'None of the selected pitches have video for the requested camera(s).' }, { status: 404 });
@@ -812,14 +860,22 @@ export async function POST(request: Request) {
       }
     }
 
-    const fileBuffer = await readFile(finalPath);
     const fileName = `pitch-export-${randomUUID().slice(0, 8)}.mp4`;
-    return new NextResponse(new Uint8Array(fileBuffer), {
+    const fileSize = (await stat(finalPath)).size;
+    const fileStream = createReadStream(finalPath);
+    // Returning a real stream avoids Vercel's 4.5 MB buffered Function
+    // response limit. Keep the temp directory alive until the file has been
+    // sent (or the browser cancels), then clean it up exactly once.
+    fileStream.once('close', () => {
+      void rm(workDir, { recursive: true, force: true });
+    });
+    cleanupOwnedByResponseStream = true;
+    return new NextResponse(Readable.toWeb(fileStream) as ReadableStream<Uint8Array>, {
       status: 200,
       headers: {
         'Content-Type': 'video/mp4',
         'Content-Disposition': `attachment; filename="${fileName}"`,
-        'Content-Length': String(fileBuffer.length),
+        'Content-Length': String(fileSize),
       },
     });
   } catch (error) {
@@ -828,6 +884,8 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   } finally {
-    await rm(workDir, { recursive: true, force: true });
+    if (!cleanupOwnedByResponseStream) {
+      await rm(workDir, { recursive: true, force: true });
+    }
   }
 }
