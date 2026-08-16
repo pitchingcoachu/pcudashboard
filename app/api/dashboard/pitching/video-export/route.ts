@@ -194,6 +194,15 @@ async function probeDurationSeconds(filePath: string): Promise<number | null> {
 // itself is usually right before the clip ends).
 const EXPORT_CLIP_SECONDS = 2.5;
 
+// Standard ISO Base Media File Type box emitted by ffmpeg for these H.264
+// MP4s. Sending it as the first response chunk flushes HTTP headers while
+// the export is still rendering. The identical box at the start of ffmpeg's
+// completed file is skipped when that file is streamed below.
+const STREAMING_MP4_FTYP = Buffer.from(
+  '000000206674797069736f6d0000020069736f6d69736f32617663316d703431',
+  'hex'
+);
+
 /** Given a clip's real duration, returns the ffmpeg trim args needed to cap
  * it at EXPORT_CLIP_SECONDS, or an empty array if it's already short enough
  * to leave untouched. */
@@ -792,6 +801,7 @@ export async function POST(request: Request) {
   // buffered Function response limit.
   const responseStream = new ReadableStream<Uint8Array>({
     start(controller) {
+      controller.enqueue(new Uint8Array(STREAMING_MP4_FTYP));
       void (async () => {
         let workDir = '';
         try {
@@ -871,11 +881,24 @@ export async function POST(request: Request) {
         finalPath = path.join(workDir, 'final-combined.mp4');
         await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', finalPath]);
       }
-    }
+          }
 
           const fileStream = createReadStream(finalPath);
+          let firstChunk = true;
           for await (const chunk of fileStream) {
-            controller.enqueue(new Uint8Array(chunk));
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            if (firstChunk) {
+              firstChunk = false;
+              const firstBoxSize = buffer.length >= 8 ? buffer.readUInt32BE(0) : 0;
+              const firstBoxType = buffer.length >= 8 ? buffer.toString('ascii', 4, 8) : '';
+              const withoutDuplicateFtyp =
+                firstBoxType === 'ftyp' && firstBoxSize >= 8 && firstBoxSize <= buffer.length
+                  ? buffer.subarray(firstBoxSize)
+                  : buffer;
+              if (withoutDuplicateFtyp.length) controller.enqueue(new Uint8Array(withoutDuplicateFtyp));
+              continue;
+            }
+            controller.enqueue(new Uint8Array(buffer));
           }
           controller.close();
         } catch (error) {
