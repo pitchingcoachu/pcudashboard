@@ -203,8 +203,8 @@ export function sortRowsWithPins(
   const pinnedAll = buildPinnedAllRow(columns, pinnedRows);
   return [
     ...(allRow ? [allRow] : []),
-    ...(pinnedAll ? [pinnedAll] : []),
     ...pinnedRows,
+    ...(pinnedAll ? [pinnedAll] : []),
     ...unpinnedRows,
   ];
 }
