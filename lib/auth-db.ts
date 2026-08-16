@@ -188,6 +188,13 @@ export function getDbPool(): Pool {
       keepAlive: true,
       keepAliveInitialDelayMillis: 0,
     });
+    // Idle pool clients can be dropped by the server (e.g. Neon closing an
+    // idle connection) outside of any in-flight query. node-postgres emits
+    // that as an 'error' event on the Pool itself; without a listener it
+    // becomes an uncaught exception that can crash the process.
+    global.__pcuPool.on('error', (err) => {
+      console.error('[auth-db] idle pool client error', err instanceof Error ? err.message : err);
+    });
   }
 
   return global.__pcuPool;

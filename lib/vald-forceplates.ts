@@ -470,11 +470,26 @@ async function fetchAllTestsWindowed(
       : [];
     const fromMs = new Date(fromUtc).getTime();
     const toMs = new Date(toUtc).getTime();
-    const canSplit = Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs - fromMs > 3_600_000;
+    // VALD's /tests endpoint appears to only filter at day granularity, not
+    // the finer hour-level precision this bisection originally assumed
+    // (confirmed directly: a 1-hour window and its parent day both returned
+    // the exact same set of tests) -- splitting a window smaller than a day
+    // never actually reduces the result count, so the old 1-hour split floor
+    // let this recurse toward its depth cap on any day with >= 50 tests,
+    // firing 800+ near-duplicate requests for a single 30-day lookback in
+    // real testing. A ~1-day floor matches VALD's actual granularity.
+    const ONE_DAY_MS = 24 * 3_600_000;
+    const canSplit = Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs - fromMs > ONE_DAY_MS;
     if (rows.length >= VALD_TEST_PAGE_LIMIT && canSplit && depth < 20) {
       const midpoint = new Date(fromMs + Math.floor((toMs - fromMs) / 2)).toISOString();
       const left = await fetchRange(fromUtc, midpoint, depth + 1);
       const right = await fetchRange(midpoint, toUtc, depth + 1);
+      // If splitting produced no more distinct rows than the unsplit window
+      // already had, VALD isn't actually differentiating between the two
+      // halves (same day-granularity quirk) -- keep whichever side has
+      // everything rather than silently duplicating/looping further only to
+      // dedupe later at a cost of many more wasted requests.
+      if (left.length + right.length <= rows.length) return rows;
       return [...left, ...right];
     }
     return rows;
@@ -664,6 +679,25 @@ export async function fetchValdForceDecksSnapshot(
     const metricRows: ValdMetricRow[] = [];
     const trialMetricsByTestId = new Map<string, ValdTrialMetric[]>();
     const trialRawByTestId = new Map<string, ValdTrialMetricPoint[]>();
+    // Trial-detail fetches (one HTTP call per test, up to effectiveTrialFetchLimit
+    // tests) used to run sequentially inside the loop below, one `await` at a
+    // time -- with each VALD call taking a few seconds, that alone made a
+    // single-player live lookup take 60-120+ seconds (confirmed via direct
+    // testing). Firing them all in parallel up front (Promise.all) instead
+    // -- same calls, same results, just concurrent -- cuts that down to
+    // roughly the slowest single call instead of the sum of all of them.
+    // The loop below is otherwise unchanged: it still processes tests in
+    // order and does all its other bookkeeping inline, it just looks up the
+    // already-fetched trial result instead of awaiting it itself.
+    const trialFetchResults = await Promise.all(
+      recent.map((test, idx) =>
+        idx < effectiveTrialFetchLimit
+          ? fetchTrialMetricsForTest(base.forcedecks, String(test.teamId ?? '').trim() || tenantId, test.testId).catch(
+              () => ({ aggregate: [] as ValdTrialMetric[], raw: [] as ValdTrialMetricPoint[] })
+            )
+          : Promise.resolve({ aggregate: [] as ValdTrialMetric[], raw: [] as ValdTrialMetricPoint[] })
+      )
+    );
     for (let idx = 0; idx < recent.length; idx += 1) {
       const test = recent[idx];
       let hasBodyWeightMetricRow = false;
@@ -694,14 +728,8 @@ export async function fetchValdForceDecksSnapshot(
       if (Number.isFinite(Number(test.weight)) && Number(test.weight) > 0) {
         addBodyWeightMetricRow(-1, 'Body Weight', 'kg', Number(test.weight));
       }
-      let trialMetrics: { aggregate: ValdTrialMetric[]; raw: ValdTrialMetricPoint[] } = { aggregate: [], raw: [] };
-      if (idx < effectiveTrialFetchLimit) {
-        try {
-          trialMetrics = await fetchTrialMetricsForTest(base.forcedecks, String(test.teamId ?? '').trim() || tenantId, test.testId);
-        } catch {
-          trialMetrics = { aggregate: [], raw: [] };
-        }
-      } else {
+      const trialMetrics = trialFetchResults[idx] ?? { aggregate: [], raw: [] };
+      if (idx >= effectiveTrialFetchLimit) {
         console.info('[vald-forceplates] trial fetch skipped by limit', {
           testId: test.testId,
           idx,

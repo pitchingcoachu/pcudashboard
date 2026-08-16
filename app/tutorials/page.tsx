@@ -4,6 +4,7 @@ import { resolveDashboardSchoolCode } from '../../lib/dashboard-access';
 import { resolveSchoolBrand, schoolBrandCssVars } from '../../lib/school-brand';
 import LogoutButton from '../portal/logout-button';
 import PortalUserMenu from '../portal/user-menu';
+import PortalChrome from '../portal/portal-chrome';
 
 const tutorialVideos = [
   {
@@ -22,33 +23,37 @@ export default async function TutorialsPage() {
   const brand = resolveSchoolBrand(selectedSchool);
 
   return (
-    <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
-      <header className="portal-header">
-        <div className="portal-header-left">
+    <PortalChrome
+      schoolBrandStyle={schoolBrandCssVars(selectedSchool)}
+      left={
+        <>
           <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="Pearl home">
             <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" className="portal-header-logo" />
           </Link>
           {brand.logoSrc ? <img src={brand.logoSrc} alt={brand.logoAlt} className="portal-header-logo portal-header-logo--school" /> : null}
-        </div>
-        <div className="portal-header-center">
-          <nav className="portal-nav" aria-label="Portal Navigation">
-            <Link href="/portal/dashboard" className="portal-nav-link">
-              PCU Dashboard
+        </>
+      }
+      navLinks={
+        <>
+          <Link href="/portal/dashboard" className="portal-nav-link">
+            PCU Dashboard
+          </Link>
+          {(session.role === 'admin' || session.role === 'coach') && (
+            <Link href="/portal/admin" className="portal-nav-link">
+              Admin
             </Link>
-            {(session.role === 'admin' || session.role === 'coach') && (
-              <Link href="/portal/admin" className="portal-nav-link">
-                Admin
-              </Link>
-            )}
-            <Link href="/portal/player" className="portal-nav-link">
-              Player View
-            </Link>
-            <Link href="/tutorials" className="portal-nav-link active">
-              Tutorials
-            </Link>
-          </nav>
-        </div>
-        <div className="portal-header-right">
+          )}
+          <Link href="/portal/player" className="portal-nav-link">
+            Player View
+          </Link>
+          <Link href="/tutorials" className="portal-nav-link active">
+            Tutorials
+          </Link>
+        </>
+      }
+      mobileNavItems={[]}
+      right={
+        <>
           {session.role === 'admin' || session.role === 'coach' ? (
             <PortalUserMenu displayName={session.name ?? session.email} />
           ) : (
@@ -58,31 +63,30 @@ export default async function TutorialsPage() {
             </div>
           )}
           {session.role === 'player' ? <LogoutButton /> : null}
-        </div>
-      </header>
-
-      <section className="portal-panel">
-        <h2>Tutorials</h2>
-        <p>Watch quick walkthroughs of key dashboard workflows.</p>
-        <div className="tutorial-video-grid">
-          {tutorialVideos.map((video) => (
-            <article key={video.embedUrl} className="tutorial-video-card">
-              <h3>{video.title}</h3>
-              <div className="tutorial-video-frame-wrap">
-                <iframe
-                  src={video.embedUrl}
-                  title={video.title}
-                  loading="lazy"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                  referrerPolicy="strict-origin-when-cross-origin"
-                  allowFullScreen
-                  className="tutorial-video-frame"
-                />
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-    </div>
+        </>
+      }
+      sectionClassName="portal-panel"
+    >
+      <h2>Tutorials</h2>
+      <p>Watch quick walkthroughs of key dashboard workflows.</p>
+      <div className="tutorial-video-grid">
+        {tutorialVideos.map((video) => (
+          <article key={video.embedUrl} className="tutorial-video-card">
+            <h3>{video.title}</h3>
+            <div className="tutorial-video-frame-wrap">
+              <iframe
+                src={video.embedUrl}
+                title={video.title}
+                loading="lazy"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+                className="tutorial-video-frame"
+              />
+            </div>
+          </article>
+        ))}
+      </div>
+    </PortalChrome>
   );
 }

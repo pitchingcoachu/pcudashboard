@@ -39,6 +39,15 @@ export type MessageAttachment = {
   sizeBytes: number;
 };
 
+export const MESSAGE_REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥'] as const;
+
+export type MessageReaction = {
+  emoji: string;
+  count: number;
+  reactedByCurrentUser: boolean;
+  reactors: Array<{ userId: number; name: string }>;
+};
+
 export type Message = {
   id: number;
   senderUserId: number | null;
@@ -47,6 +56,7 @@ export type Message = {
   createdAt: string;
   deletedAt: string | null;
   attachments: MessageAttachment[];
+  reactions: MessageReaction[];
 };
 
 export type ConversationMeta = {
@@ -149,6 +159,16 @@ export function deleteGroupConversation(conversationId: string) {
 
 export function deleteMessage(conversationId: string, messageId: number) {
   return api<{ ok: true }>(`/api/messaging/conversations/${conversationId}/messages?messageId=${messageId}`, { method: 'DELETE' });
+}
+
+export function toggleMessageReaction(conversationId: string, messageId: number, emoji: string) {
+  return api<{ ok: true; active: boolean }>(
+    `/api/messaging/conversations/${conversationId}/messages/${messageId}/reactions`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ emoji }),
+    }
+  );
 }
 
 export function setConversationPhoto(conversationId: string, photoDataUrl: string | null) {

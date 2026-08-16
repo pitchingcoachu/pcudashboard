@@ -16,7 +16,7 @@ export function MessagesShell({
   const router = useRouter();
 
   return (
-    <div className="portal-messages-shell">
+    <div className={`portal-messages-shell${selectedConversationId ? ' portal-messages-shell--detail-active' : ''}`}>
       <div className="portal-messages-list-pane">
         <div className="portal-messages-list-pane-header">
           <h3>Messages</h3>
@@ -33,7 +33,11 @@ export function MessagesShell({
       </div>
       <div className="portal-messages-detail-pane">
         {selectedConversationId ? (
-          <ConversationThreadPanel conversationId={selectedConversationId} currentUserId={currentUserId} />
+          <ConversationThreadPanel
+            conversationId={selectedConversationId}
+            currentUserId={currentUserId}
+            onBack={() => router.push('/portal/messages')}
+          />
         ) : (
           <p className="portal-muted-text" style={{ padding: '2rem', textAlign: 'center' }}>
             Select a conversation

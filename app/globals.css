@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Manrope:wght@400;500;700;800&display=swap');
+@import './pearl-mobile.css';
 
 :root {
   --bg: #090909;
@@ -13024,12 +13025,21 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 .portal-messages-bubble-actions {
   position: absolute;
   top: -10px;
-  right: 8px;
   display: none;
   gap: 4px;
+  z-index: 3;
 }
 
-.portal-messages-bubble-wrap.is-own:hover .portal-messages-bubble-actions {
+.portal-messages-bubble-wrap.is-own .portal-messages-bubble-actions {
+  right: 8px;
+}
+
+.portal-messages-bubble-wrap.is-other .portal-messages-bubble-actions {
+  left: 8px;
+}
+
+.portal-messages-bubble-wrap:hover .portal-messages-bubble-actions,
+.portal-messages-bubble-actions:focus-within {
   display: flex;
 }
 
@@ -13049,8 +13059,87 @@ body.biomechanics-suite-active .portal-dashboard-suite-tabs {
 }
 
 .portal-messages-bubble-action-btn:hover {
-  color: #e0685a;
-  border-color: #e0685a;
+  color: rgb(var(--portal-accent-rgb, 220, 193, 161));
+  border-color: rgb(var(--portal-accent-rgb, 220, 193, 161));
+}
+
+.portal-messages-reaction-picker {
+  position: absolute;
+  top: -38px;
+  display: flex;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: #191919;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+
+.portal-messages-bubble-wrap.is-own .portal-messages-reaction-picker {
+  right: 0;
+}
+
+.portal-messages-bubble-wrap.is-other .portal-messages-reaction-picker {
+  left: 0;
+}
+
+.portal-messages-reaction-option {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1.05rem;
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.portal-messages-reaction-option:hover,
+.portal-messages-reaction-option:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  transform: scale(1.14);
+  outline: none;
+}
+
+.portal-messages-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.portal-messages-reaction-chip {
+  min-width: 40px;
+  height: 25px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 1px 7px;
+  color: var(--text-muted, #aaa);
+  background: #171717;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.76rem;
+}
+
+.portal-messages-reaction-chip.is-active {
+  color: var(--text-main, #fff);
+  border-color: rgb(var(--portal-accent-rgb, 220, 193, 161));
+  background: rgba(var(--portal-accent-rgb, 220, 193, 161), 0.12);
+}
+
+.portal-messages-reaction-chip:hover:not(:disabled) {
+  border-color: rgba(var(--portal-accent-rgb, 220, 193, 161), 0.75);
+}
+
+.portal-messages-reaction-chip:disabled {
+  cursor: default;
 }
 
 /* Game Tracker */

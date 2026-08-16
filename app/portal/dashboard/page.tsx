@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../lib/portal-session';
-import MobileNavSelect from '../mobile-nav-select';
+import PortalChrome from '../portal-chrome';
 import LogoutButton from '../logout-button';
 import PortalUserMenu from '../user-menu';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
@@ -81,63 +81,60 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
   const isProSchool = String(selectedSchool ?? '').trim().toUpperCase() === 'PRO';
 
   return (
-    <div className={`portal-shell${isProSchool ? ' portal-shell--pro' : ''}`} style={schoolBrandCssVars(selectedSchool)}>
-      <header className="portal-header">
-        <div className="portal-header-left">
-          <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
-        </div>
-        <div className="portal-header-center">
-          <div className="portal-header-nav-stack">
-            <nav className="portal-nav" aria-label="Portal Navigation">
-              {(session.role === 'admin' || session.role === 'coach') && (
-                <Link href="/portal/admin" className="portal-nav-link">
-                  Home
-                </Link>
-              )}
-              {session.role === 'player' ? (
+    <PortalChrome
+      extraShellClass={isProSchool ? 'portal-shell--pro' : ''}
+      schoolBrandStyle={schoolBrandCssVars(selectedSchool)}
+      wrapNavInStack
+      left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
+      navLinks={
+        <>
+          {(session.role === 'admin' || session.role === 'coach') && (
+            <Link href="/portal/admin" className="portal-nav-link">
+              Home
+            </Link>
+          )}
+          {session.role === 'player' ? (
+            <>
+              {canAccessProgramming ? (
                 <>
-                  {canAccessProgramming ? (
-                    <>
-                      <Link href="/portal/player" className="portal-nav-link">
-                        Profile
-                      </Link>
-                      <Link href="/portal/player/program" className="portal-nav-link">
-                        Program
-                      </Link>
-                    </>
-                  ) : null}
-                </>
-              ) : (
-                canAccessProgramming ? (
-                  <Link href="/portal/admin/schedule" className="portal-nav-link">
-                    Schedule
+                  <Link href="/portal/player" className="portal-nav-link">
+                    Profile
                   </Link>
-                ) : null
-              )}
-              <Link href="/portal/dashboard" className="portal-nav-link active">
-                Dashboard
+                  <Link href="/portal/player/program" className="portal-nav-link">
+                    Program
+                  </Link>
+                </>
+              ) : null}
+            </>
+          ) : (
+            canAccessProgramming ? (
+              <Link href="/portal/admin/schedule" className="portal-nav-link">
+                Schedule
               </Link>
-              {(session.role === 'admin' || session.role === 'coach') && (
-                <Link href="/profiles" className="portal-nav-link">
-                  Profiles
-                </Link>
-              )}
-            </nav>
-          </div>
-          <MobileNavSelect
-            currentHref="/portal/dashboard"
-            loggedInAs={session.name ?? session.email}
-            items={[
-              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Home' }] : []),
-              ...(session.role === 'player'
-                ? [...(canAccessProgramming ? [{ href: '/portal/player', label: 'Profile' }, { href: '/portal/player/program', label: 'Program' }] : [])]
-                : [...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : [])]),
-              { href: '/portal/dashboard', label: 'Dashboard' },
-              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/profiles', label: 'Profiles' }] : []),
-            ]}
-          />
-        </div>
-        <div className="portal-header-right">
+            ) : null
+          )}
+          <Link href="/portal/dashboard" className="portal-nav-link active">
+            Dashboard
+          </Link>
+          {(session.role === 'admin' || session.role === 'coach') && (
+            <Link href="/profiles" className="portal-nav-link">
+              Profiles
+            </Link>
+          )}
+        </>
+      }
+      mobileNavCurrentHref="/portal/dashboard"
+      mobileNavLoggedInAs={session.name ?? session.email}
+      mobileNavItems={[
+        ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Home' }] : []),
+        ...(session.role === 'player'
+          ? [...(canAccessProgramming ? [{ href: '/portal/player', label: 'Profile' }, { href: '/portal/player/program', label: 'Program' }] : [])]
+          : [...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : [])]),
+        { href: '/portal/dashboard', label: 'Dashboard' },
+        ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/profiles', label: 'Profiles' }] : []),
+      ]}
+      right={
+        <>
           {session.role === 'admin' || session.role === 'coach' ? (
             <PortalUserMenu displayName={session.name ?? session.email} />
           ) : (
@@ -170,9 +167,11 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
           <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="Pearl home">
             <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" className="portal-header-logo portal-header-logo--pcu-right" />
           </Link>
-        </div>
-      </header>
-
+        </>
+      }
+      sectionClassName={canAccessDashboard ? undefined : 'portal-panel'}
+      tabBarRole={session.role}
+    >
       {canAccessDashboard ? (
         <DashboardShell
           key={`dashboard-shell-${selectedSchool}`}
@@ -182,11 +181,11 @@ export default async function PortalDashboardPage({ searchParams }: PortalDashbo
           initialSuite={initialSuite}
         />
       ) : (
-        <section className="portal-panel">
+        <>
           <h2>Dashboard Access</h2>
           <p>Dashboard access is not enabled for the selected school.</p>
-        </section>
+        </>
       )}
-    </div>
+    </PortalChrome>
   );
 }

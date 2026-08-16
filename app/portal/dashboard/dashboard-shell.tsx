@@ -7,6 +7,7 @@ import ComparisonToolSuite from './comparison-tool-suite';
 import CustomReportsSuite from './custom-reports-suite';
 import HittingSuite from './hitting-suite';
 import HomeSuite from './home-suite';
+import MobileDashboardHome from './mobile-dashboard-home';
 import PlayerPlansSuite from './player-plans-suite';
 import PitchingSuite from './pitching-suite';
 import { LEAGUE_TEAM_NAME_BY_CODE } from '../../../lib/league-team-name-map';
@@ -525,14 +526,17 @@ export default function DashboardShell({ role, selectedSchoolCode, forceHome = f
       {activeSuite !== 'Home' && navSearchError ? <p className="auth-error" style={{ margin: 0 }}>{navSearchError}</p> : null}
       {mountedSuites.Home ? (
         <div style={{ display: showSuite('Home') ? 'block' : 'none' }}>
-          <HomeSuite
-            role={role}
-            selectedSchoolCode={selectedSchoolCode}
-            activeSuite={activeSuite}
-            suiteOptions={suiteOptions}
-            onOpenSuite={activateSuite}
-            onNavigate={handleHomeNavigate}
-          />
+          <div className="portal-desktop-dashboard-home">
+            <HomeSuite
+              role={role}
+              selectedSchoolCode={selectedSchoolCode}
+              activeSuite={activeSuite}
+              suiteOptions={suiteOptions}
+              onOpenSuite={activateSuite}
+              onNavigate={handleHomeNavigate}
+            />
+          </div>
+          <MobileDashboardHome suiteOptions={suiteOptions} onOpenSuite={activateSuite} />
         </div>
       ) : null}
       {mountedSuites.Pitching ? (

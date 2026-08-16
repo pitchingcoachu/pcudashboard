@@ -1,0 +1,375 @@
+/* Pearl-app-like mobile web styles.
+   Everything in this file that changes layout must be scoped under the
+   guarded media query below so desktop and forced-desktop-mode output are
+   never affected:
+
+   @media (max-width: 780px) {
+     .portal-shell.portal-shell--viewmode-auto { ... }
+   }
+
+   The desktop-site toggle strip and the settings-page view-mode toggle are
+   small enough to style unconditionally here since they only ever render
+   when relevant (forced-desktop strip only renders in desktop mode; the
+   settings toggle is a normal control on its own page). */
+
+.portal-viewmode-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  background: var(--panel-strong, rgba(16, 16, 16, 0.95));
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  color: var(--text-muted, #c9c9c9);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.portal-viewmode-strip-btn {
+  color: var(--accent, #c8102e);
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.portal-viewmode-toggle {
+  display: inline-flex;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  overflow: hidden;
+}
+
+.portal-viewmode-toggle-btn {
+  padding: 0.5rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-muted, #c9c9c9);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.portal-viewmode-toggle-btn.active {
+  color: var(--portal-accent-contrast, #ffffff);
+  background: var(--accent, #c8102e);
+}
+
+/* Bottom tab bar: rendered in the DOM on every route (when tabBarRole is
+   set) but hidden by default. Only shown at phone width in auto view-mode,
+   never in forced-desktop mode -- see the guarded block below. Defense in
+   depth: hidden here unconditionally so a missing/late CSS load never
+   shows it on desktop. */
+.portal-tabbar {
+  display: none;
+}
+
+@media (max-width: 780px) {
+  .portal-shell.portal-shell--viewmode-auto {
+    /* Reserve space at the bottom of the viewport for the fixed tab bar so
+       page content (and the desktop-site strip, when shown) isn't hidden
+       behind it. */
+    padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-tabbar {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    align-items: center;
+    justify-content: space-around;
+    height: 56px;
+    padding-bottom: env(safe-area-inset-bottom);
+    background: #0a0a0a;
+    border-top: 1px solid #1a1a1a;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-tabbar-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    color: var(--text-muted, #c9c2bb);
+    text-decoration: none;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-tabbar-item.active {
+    color: var(--accent, #dcc1a1);
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-tabbar-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-tabbar-icon svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-tab-icon-wrap {
+    position: relative;
+    display: block;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-tab-icon-lock {
+    position: absolute;
+    right: -4px;
+    bottom: -2px;
+    width: 12px;
+    height: 12px;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-tabbar-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent, #dcc1a1);
+    color: #000000;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 16px;
+    text-align: center;
+  }
+
+  /* Flatten the desktop "marketing site" button style (gradient fill +
+     colored glow) to match Pearl's flatter mobile buttons -- solid fill,
+     no shadow, no letter-spacing/uppercase. */
+  .portal-shell.portal-shell--viewmode-auto .btn {
+    letter-spacing: normal;
+    text-transform: none;
+    box-shadow: none;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .btn-primary,
+  .portal-shell.portal-shell--viewmode-auto.portal-shell .btn-primary {
+    background: var(--accent, #dcc1a1);
+    box-shadow: none;
+  }
+
+  /* Pearl is dark-only. Force the dark token set inside the mobile shell
+     regardless of the user's light/dark preference (which still fully
+     works in forced-desktop mode), and hide the now-inert theme toggle. */
+  .portal-shell.portal-shell--viewmode-auto {
+    --bg: #090909;
+    --panel: rgba(10, 10, 10, 0.9);
+    --panel-strong: rgba(16, 16, 16, 0.95);
+    --border: rgba(255, 255, 255, 0.15);
+    --text-main: #f4f7ff;
+    --text-muted: #c9c9c9;
+    --highlight: #ffffff;
+    color: var(--text-main);
+    background: #090909;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-theme-toggle {
+    display: none;
+  }
+
+  /* Messages: match Pearl's Messages tab -- single-column push navigation
+     instead of both panes stacked. Only one of list/detail shows at a
+     time, selected by whether a conversation is active. The desktop
+     >900px two-pane layout (globals.css) is untouched; this only overrides
+     the existing <=900px single-column collapse. */
+  .portal-shell.portal-shell--viewmode-auto .portal-messages-shell {
+    display: block;
+    height: auto;
+    min-height: 0;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-messages-list-pane {
+    display: block;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-messages-detail-pane {
+    display: none;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-messages-shell--detail-active .portal-messages-list-pane {
+    display: none;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-messages-shell--detail-active .portal-messages-detail-pane {
+    display: flex;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-messages-list-pane,
+  .portal-shell.portal-shell--viewmode-auto .portal-messages-detail-pane {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    height: calc(100dvh - 56px - 56px - env(safe-area-inset-bottom));
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-messages-thread-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-right: 0.25rem;
+    color: var(--text-main, #fff);
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-messages-thread-back svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  /* Admin home + card-grid pages: Pearl's screens are a single-column
+     vertical stack of full-width rows, not a 2-column grid. Card look
+     (radius/border/fill) already lines up closely with Pearl's spec, so
+     only the layout and title treatment need overriding. */
+  .portal-shell.portal-shell--viewmode-auto .portal-admin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-admin-card-wide {
+    grid-column: auto;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-admin-card {
+    border-radius: 12px;
+    border-color: #1a1a1a;
+    background: #0a0a0a;
+    padding: 14px;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-admin-headline h2,
+  .portal-shell.portal-shell--viewmode-auto .portal-admin-card h2 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.35rem;
+    letter-spacing: 0.02em;
+    text-transform: none;
+  }
+
+  /* Roster (Players) card list -- Pearl's Players tab shows avatar-circle
+     rows, not a wide data table. Desktop's <table> stays untouched (it is
+     hidden here, not restyled); PlayerRosterCards renders the same data as
+     tappable full-width rows instead. */
+  .portal-shell.portal-shell--viewmode-auto .portal-roster-table-wrap {
+    display: none;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-roster-cards {
+    display: grid;
+    gap: 8px;
+  }
+
+  .portal-roster-card {
+    display: none;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-roster-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid #1a1a1a;
+    background: #0a0a0a;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .portal-roster-card-avatar {
+    display: none;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-roster-card-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 999px;
+    border: 2px solid var(--accent, #dcc1a1);
+    color: var(--accent, #dcc1a1);
+    font-weight: 800;
+    font-size: 0.85rem;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-roster-card-body {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-roster-card-name {
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-roster-card-meta {
+    font-size: 0.78rem;
+    color: var(--text-muted, #c9c2bb);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-roster-card-status {
+    flex-shrink: 0;
+    font-size: 0.7rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #a8f0bf;
+  }
+
+  .portal-shell.portal-shell--viewmode-auto .portal-roster-card-status.is-inactive {
+    color: #ff8799;
+  }
+
+  /* Dashboard tab: match Pearl's thin report-link list instead of the
+     desktop Home suite's full search/leaderboard experience. The desktop
+     HomeSuite still fully renders (just hidden) so nothing is lost -- the
+     "Open Full Dashboard" card flips to forced-desktop mode. */
+  .portal-desktop-dashboard-home {
+    display: none;
+  }
+
+  .portal-mobile-dashboard-home {
+    display: grid;
+    gap: 8px;
+  }
+
+  .portal-mobile-dashboard-home-card {
+    width: 100%;
+    text-align: left;
+    cursor: pointer;
+  }
+}
+
+.portal-mobile-dashboard-home {
+  display: none;
+}
+
+/* Back button is desktop-hidden by default (both panes always visible
+   there, so "back" has no meaning); shown only inside the mobile-app
+   single-pane layout above. */
+.portal-messages-thread-back {
+  display: none;
+}

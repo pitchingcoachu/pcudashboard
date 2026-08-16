@@ -36,6 +36,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ conv
   const limit = Number(url.searchParams.get('limit') ?? '30') || 30;
   const { messages, hasMore } = await listMessages({
     conversationId,
+    currentUserId: allowed.session.userId ?? 0,
     beforeMessageId: before ? Number(before) : null,
     limit,
   });

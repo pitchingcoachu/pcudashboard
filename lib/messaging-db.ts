@@ -54,6 +54,18 @@ async function createMessagingTables(): Promise<void> {
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;`);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS message_reactions (
+      id BIGSERIAL PRIMARY KEY,
+      message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+      emoji TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_message_reactions_unique ON message_reactions (message_id, user_id, emoji);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions (message_id);`);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS message_attachments (
       id BIGSERIAL PRIMARY KEY,
       message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -116,6 +128,13 @@ export type MessageAttachmentRow = {
   sizeBytes: number;
 };
 
+export type MessageReactionRow = {
+  emoji: string;
+  count: number;
+  reactedByCurrentUser: boolean;
+  reactors: Array<{ userId: number; name: string }>;
+};
+
 export type MessageRow = {
   id: number;
   senderUserId: number | null;
@@ -124,6 +143,7 @@ export type MessageRow = {
   createdAt: string;
   deletedAt: string | null;
   attachments: MessageAttachmentRow[];
+  reactions: MessageReactionRow[];
 };
 
 export type ConversationMeta = {
@@ -369,6 +389,7 @@ export async function getConversationMeta(conversationId: number): Promise<Conve
 
 export async function listMessages(input: {
   conversationId: number;
+  currentUserId: number;
   beforeMessageId?: number | null;
   limit: number;
 }): Promise<{ messages: MessageRow[]; hasMore: boolean }> {
@@ -400,6 +421,7 @@ export async function listMessages(input: {
   const messageIds = page.map((row) => row.id);
 
   const attachmentsByMessage = new Map<number, MessageAttachmentRow[]>();
+  const reactionsByMessage = new Map<number, MessageReactionRow[]>();
   if (messageIds.length > 0) {
     const attachmentsResult = await pool.query<{
       id: number;
@@ -423,6 +445,44 @@ export async function listMessages(input: {
       });
       attachmentsByMessage.set(row.message_id, list);
     }
+
+    const reactionsResult = await pool.query<{
+      message_id: number;
+      emoji: string;
+      user_id: number;
+      user_name: string;
+    }>(
+      `
+        SELECT
+          mr.message_id,
+          mr.emoji,
+          mr.user_id,
+          COALESCE(NULLIF(u.name, ''), u.email) AS user_name
+        FROM message_reactions mr
+        JOIN auth_users u ON u.id = mr.user_id
+        WHERE mr.message_id = ANY($1::bigint[])
+        ORDER BY mr.message_id, mr.created_at, mr.id
+      `,
+      [messageIds]
+    );
+    const grouped = new Map<number, Map<string, MessageReactionRow>>();
+    for (const row of reactionsResult.rows) {
+      const messageId = Number(row.message_id);
+      const userId = Number(row.user_id);
+      const byEmoji = grouped.get(messageId) ?? new Map<string, MessageReactionRow>();
+      const reaction = byEmoji.get(row.emoji) ?? {
+        emoji: row.emoji,
+        count: 0,
+        reactedByCurrentUser: false,
+        reactors: [],
+      };
+      reaction.count += 1;
+      reaction.reactedByCurrentUser ||= userId === input.currentUserId;
+      reaction.reactors.push({ userId, name: row.user_name });
+      byEmoji.set(row.emoji, reaction);
+      grouped.set(messageId, byEmoji);
+    }
+    for (const [messageId, byEmoji] of grouped) reactionsByMessage.set(messageId, Array.from(byEmoji.values()));
   }
 
   const messages = page
@@ -434,6 +494,7 @@ export async function listMessages(input: {
       createdAt: row.created_at,
       deletedAt: row.deleted_at,
       attachments: attachmentsByMessage.get(row.id) ?? [],
+      reactions: reactionsByMessage.get(Number(row.id)) ?? [],
     }))
     .reverse();
 
@@ -492,7 +553,7 @@ export async function listAttachmentsForConversation(conversationId: number): Pr
   }));
 }
 
-export async function getMessageById(messageId: number): Promise<MessageRow | null> {
+export async function getMessageById(messageId: number, currentUserId?: number): Promise<MessageRow | null> {
   await ensureMessagingTablesReady();
   const pool = getDbPool();
   const result = await pool.query<{
@@ -526,6 +587,35 @@ export async function getMessageById(messageId: number): Promise<MessageRow | nu
     [messageId]
   );
 
+  const reactionsResult = await pool.query<{
+    emoji: string;
+    user_id: number;
+    user_name: string;
+  }>(
+    `
+      SELECT mr.emoji, mr.user_id, COALESCE(NULLIF(u.name, ''), u.email) AS user_name
+      FROM message_reactions mr
+      JOIN auth_users u ON u.id = mr.user_id
+      WHERE mr.message_id = $1
+      ORDER BY mr.created_at, mr.id
+    `,
+    [messageId]
+  );
+  const reactions = new Map<string, MessageReactionRow>();
+  for (const reactionRow of reactionsResult.rows) {
+    const userId = Number(reactionRow.user_id);
+    const reaction = reactions.get(reactionRow.emoji) ?? {
+      emoji: reactionRow.emoji,
+      count: 0,
+      reactedByCurrentUser: false,
+      reactors: [],
+    };
+    reaction.count += 1;
+    reaction.reactedByCurrentUser ||= currentUserId !== undefined && userId === currentUserId;
+    reaction.reactors.push({ userId, name: reactionRow.user_name });
+    reactions.set(reactionRow.emoji, reaction);
+  }
+
   return {
     id: row.id,
     senderUserId: row.sender_user_id,
@@ -540,7 +630,49 @@ export async function getMessageById(messageId: number): Promise<MessageRow | nu
       contentType: a.content_type,
       sizeBytes: Number(a.size_bytes ?? '0') || 0,
     })),
+    reactions: Array.from(reactions.values()),
   };
+}
+
+export async function toggleMessageReaction(input: {
+  conversationId: number;
+  messageId: number;
+  userId: number;
+  emoji: string;
+}): Promise<{ active: boolean } | null> {
+  await ensureMessagingTablesReady();
+  const pool = getDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const message = await client.query(
+      `SELECT 1 FROM messages WHERE id = $1 AND conversation_id = $2 AND deleted_at IS NULL FOR UPDATE`,
+      [input.messageId, input.conversationId]
+    );
+    if (!message.rowCount) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const deleted = await client.query(
+      `DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3 RETURNING id`,
+      [input.messageId, input.userId, input.emoji]
+    );
+    if (deleted.rowCount) {
+      await client.query('COMMIT');
+      return { active: false };
+    }
+    await client.query(
+      `INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+      [input.messageId, input.userId, input.emoji]
+    );
+    await client.query('COMMIT');
+    return { active: true };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createMessage(input: {
@@ -634,6 +766,7 @@ export async function unsendMessage(input: { messageId: number }): Promise<{ ok:
       return { ok: false, error: 'Message not found or already deleted.' };
     }
     await client.query(`DELETE FROM message_attachments WHERE message_id = $1`, [input.messageId]);
+    await client.query(`DELETE FROM message_reactions WHERE message_id = $1`, [input.messageId]);
     await client.query('COMMIT');
     return { ok: true, r2Keys: attachmentsResult.rows.map((row) => row.r2_key) };
   } catch (err) {

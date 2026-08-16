@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { requirePortalSession } from '../../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../../lib/dashboard-access';
 import { schoolBrandCssVars } from '../../../../lib/school-brand';
-import MobileNavSelect from '../../mobile-nav-select';
+import PortalChrome from '../../portal-chrome';
 import LogoutButton from '../../logout-button';
 import PortalUserMenu from '../../user-menu';
 import PortalNotificationsBell from '../../notifications-bell';
@@ -22,44 +22,43 @@ export default async function MessageThreadPage({
   const selectedConversationId = Number.isFinite(parsedConversationId) && parsedConversationId > 0 ? parsedConversationId : null;
 
   return (
-    <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
-      <header className="portal-header">
-        <div className="portal-header-left" />
-        <div className="portal-header-center">
-          <nav className="portal-nav" aria-label="Portal Navigation">
-            {isStaff ? (
-              <Link href="/portal/admin" className="portal-nav-link">
-                Admin
-              </Link>
-            ) : null}
-            <Link href="/portal/player" className="portal-nav-link">
-              Profile
+    <PortalChrome
+      schoolBrandStyle={schoolBrandCssVars(selectedSchool)}
+      left={null}
+      navLinks={
+        <>
+          {isStaff ? (
+            <Link href="/portal/admin" className="portal-nav-link">
+              Admin
             </Link>
-            <Link href="/portal/messages" className="portal-nav-link active">
-              Messages
+          ) : null}
+          <Link href="/portal/player" className="portal-nav-link">
+            Profile
+          </Link>
+          <Link href="/portal/messages" className="portal-nav-link active">
+            Messages
+          </Link>
+          {session.role === 'player' ? (
+            <Link href="/portal/dashboard" className="portal-nav-link">
+              Dashboard
             </Link>
-            {session.role === 'player' ? (
-              <Link href="/portal/dashboard" className="portal-nav-link">
-                Dashboard
-              </Link>
-            ) : (
-              <Link href="/profiles" className="portal-nav-link">
-                Profiles
-              </Link>
-            )}
-          </nav>
-          <MobileNavSelect
-            currentHref="/portal/messages"
-            loggedInAs={session.name ?? session.email}
-            items={[
-              ...(isStaff ? [{ href: '/portal/admin', label: 'Admin' }] : []),
-              { href: '/portal/player', label: 'Profile' },
-              { href: '/portal/messages', label: 'Messages' },
-              session.role === 'player' ? { href: '/portal/dashboard', label: 'Dashboard' } : { href: '/profiles', label: 'Profiles' },
-            ]}
-          />
-        </div>
-        <div className="portal-header-right">
+          ) : (
+            <Link href="/profiles" className="portal-nav-link">
+              Profiles
+            </Link>
+          )}
+        </>
+      }
+      mobileNavCurrentHref="/portal/messages"
+      mobileNavLoggedInAs={session.name ?? session.email}
+      mobileNavItems={[
+        ...(isStaff ? [{ href: '/portal/admin', label: 'Admin' }] : []),
+        { href: '/portal/player', label: 'Profile' },
+        { href: '/portal/messages', label: 'Messages' },
+        session.role === 'player' ? { href: '/portal/dashboard', label: 'Dashboard' } : { href: '/profiles', label: 'Profiles' },
+      ]}
+      right={
+        <>
           {isStaff ? (
             <PortalUserMenu displayName={session.name ?? session.email} />
           ) : (
@@ -71,11 +70,12 @@ export default async function MessageThreadPage({
           <PortalNotificationsBell />
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
-        </div>
-      </header>
-      <section className="portal-messages-page">
-        <MessagesShell currentUserId={session.userId ?? 0} currentUserRole={session.role} selectedConversationId={selectedConversationId} />
-      </section>
-    </div>
+        </>
+      }
+      sectionClassName="portal-messages-page"
+      tabBarRole={session.role}
+    >
+      <MessagesShell currentUserId={session.userId ?? 0} currentUserRole={session.role} selectedConversationId={selectedConversationId} />
+    </PortalChrome>
   );
 }

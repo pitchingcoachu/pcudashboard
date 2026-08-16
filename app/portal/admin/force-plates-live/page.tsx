@@ -30,7 +30,7 @@ export default async function ForcePlatesLivePage() {
       ) : null}
       <div className="portal-admin-headline">
         <h2>Force Plate Live Search</h2>
-        <p>Search a player and pull their ForceDecks data straight from VALD, on demand -- no sync required.</p>
+        <p>Search a player and pull their ForceDecks data straight from VALD, on demand -- no sync required. Looks back 30 days.</p>
       </div>
       {programmingOrganizationId > 0 ? (
         <article className="portal-admin-card">

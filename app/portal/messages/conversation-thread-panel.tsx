@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { deleteMessage, getConversation, markRead, setConversationPhoto, type ConversationMeta, type Message } from '../../../lib/messages-client';
+import { deleteMessage, getConversation, markRead, setConversationPhoto, toggleMessageReaction, type ConversationMeta, type Message } from '../../../lib/messages-client';
 import { conversationTitle, conversationPhoto } from './messages-helpers';
 import { MessagesAvatar } from './messages-avatar';
 import { MessageBubble } from './message-bubble';
@@ -13,9 +13,11 @@ const MAX_GROUP_PHOTO_BYTES = 2_000_000;
 export function ConversationThreadPanel({
   conversationId,
   currentUserId,
+  onBack,
 }: {
   conversationId: number;
   currentUserId: number;
+  onBack?: () => void;
 }) {
   const [conversation, setConversation] = useState<ConversationMeta | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -64,6 +66,57 @@ export function ConversationThreadPanel({
     } catch (err) {
       setMessages(previous);
       window.alert(err instanceof Error ? err.message : 'Failed to delete message.');
+    }
+  }
+
+  async function handleReaction(messageId: number, emoji: string) {
+    let snapshot: Message[] = [];
+    setMessages((current) => {
+      snapshot = current;
+      return current.map((message) => {
+        if (message.id !== messageId || message.deletedAt) return message;
+        const existing = message.reactions.find((reaction) => reaction.emoji === emoji);
+        if (existing?.reactedByCurrentUser) {
+          const count = Math.max(0, existing.count - 1);
+          return {
+            ...message,
+            reactions: count === 0
+              ? message.reactions.filter((reaction) => reaction.emoji !== emoji)
+              : message.reactions.map((reaction) => reaction.emoji === emoji ? {
+                ...reaction,
+                count,
+                reactedByCurrentUser: false,
+                reactors: reaction.reactors.filter((reactor) => reactor.userId !== currentUserId),
+              } : reaction),
+          };
+        }
+        if (existing) {
+          return {
+            ...message,
+            reactions: message.reactions.map((reaction) => reaction.emoji === emoji ? {
+              ...reaction,
+              count: reaction.count + 1,
+              reactedByCurrentUser: true,
+              reactors: [...reaction.reactors, { userId: currentUserId, name: 'You' }],
+            } : reaction),
+          };
+        }
+        return {
+          ...message,
+          reactions: [...message.reactions, {
+            emoji,
+            count: 1,
+            reactedByCurrentUser: true,
+            reactors: [{ userId: currentUserId, name: 'You' }],
+          }],
+        };
+      });
+    });
+    try {
+      await toggleMessageReaction(String(conversationId), messageId, emoji);
+    } catch (err) {
+      setMessages(snapshot);
+      window.alert(err instanceof Error ? err.message : 'Failed to update reaction.');
     }
   }
 
@@ -121,6 +174,13 @@ export function ConversationThreadPanel({
             event.target.value = '';
           }}
         />
+        {onBack ? (
+          <button type="button" className="portal-messages-thread-back" aria-label="Back to messages" onClick={onBack}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        ) : null}
         <button
           type="button"
           className="portal-messages-thread-avatar-button"
@@ -145,6 +205,7 @@ export function ConversationThreadPanel({
               isOwn={isOwn}
               showSenderName={showSenderName}
               onDelete={handleDeleteMessage}
+              onReact={handleReaction}
             />
           );
         })}

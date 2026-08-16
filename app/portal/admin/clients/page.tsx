@@ -8,6 +8,7 @@ import {
   resolveClientManagementOrganizationId,
   resolveProgrammingSchoolCode,
 } from '../../../../lib/programming-scope';
+import PlayerRosterCards from './player-roster-cards';
 
 type ClientPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -205,7 +206,16 @@ export default async function AdminClientsPage({ searchParams }: ClientPageProps
             <p className="portal-muted-text" style={{ margin: 0 }}>
               Showing {pageStart + 1}-{Math.min(pageStart + pageSize, visibleClientCount)} of {visibleClientCount}
             </p>
-            <div className="portal-table-wrap">
+            <PlayerRosterCards
+              players={pagedClients.map((client) => ({
+                playerId: client.playerId,
+                fullName: client.fullName,
+                email: client.email,
+                assignedCoachName: client.assignedCoachName,
+                status: client.status,
+              }))}
+            />
+            <div className="portal-roster-table-wrap portal-table-wrap">
               <table className="portal-table">
                 <thead>
                   <tr>

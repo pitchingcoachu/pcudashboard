@@ -2,9 +2,19 @@ import Link from 'next/link';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { requirePortalSession } from '../../../../../lib/portal-session';
-import { canUseProgrammingData, resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
-import { resolveSchoolBrand } from '../../../../../lib/school-brand';
-import { getPlayerForUser } from '../../../../../lib/training-db';
+import { resolveDashboardSchoolCode } from '../../../../../lib/dashboard-access';
+import { resolveSessionDashboardSchoolOptions } from '../../../../../lib/dashboard-school-options';
+import { canUseProgrammingData, resolveProgrammingOrganizationId, resolveProgrammingSchoolCode } from '../../../../../lib/programming-scope';
+import { resolveSchoolBrand, schoolBrandCssVars } from '../../../../../lib/school-brand';
+import { getPlayerForUser, listPlayerChoicesByOrganization } from '../../../../../lib/training-db';
+import PortalChrome from '../../../portal-chrome';
+import DashboardSchoolSelector from '../../../dashboard/dashboard-school-selector';
+import PreviewAthleteSelect from '../../../preview-athlete-select';
+import LogoutButton from '../../../logout-button';
+import PortalUserMenu from '../../../user-menu';
+import PortalThemeToggle from '../../../theme-toggle';
+import PortalNotificationsBell from '../../../notifications-bell';
+import PortalMessagesNavButton from '../../../messages-nav-button';
 import BullpenEntry from './bullpen-entry';
 
 type BullpensPageProps = {
@@ -15,6 +25,8 @@ export default async function PlayerBullpensPage({ searchParams }: BullpensPageP
   const session = await requirePortalSession();
   if (!(await canUseProgrammingData(session))) redirect('/portal/player/program');
   const schoolBrand = resolveSchoolBrand(resolveProgrammingSchoolCode(session));
+  const selectedSchool = resolveDashboardSchoolCode(session);
+  const schoolOptions = await resolveSessionDashboardSchoolOptions(session);
   const canPreview = session.role === 'admin' || session.role === 'coach';
   const params = await searchParams;
   const previewPlayerIdRaw = typeof params.previewPlayerId === 'string' ? params.previewPlayerId : '';
@@ -51,33 +63,98 @@ export default async function PlayerBullpensPage({ searchParams }: BullpensPageP
     bullpenState?: { selectedTemplateId: string; visibleTemplateIds: string[]; notes?: string }
   }).bullpenState ?? { selectedTemplateId: '', visibleTemplateIds: [], notes: '' };
 
+  const programmingOrganizationId = await resolveProgrammingOrganizationId(session);
+  const previewClients = canPreview && programmingOrganizationId > 0
+    ? await listPlayerChoicesByOrganization({ organizationId: programmingOrganizationId })
+    : [];
+  const backHref = canPreview && previewPlayerId > 0 ? `/portal/player/program?previewPlayerId=${previewPlayerId}` : '/portal/player/program';
+  const profileHref = canPreview && previewPlayerId > 0 ? `/portal/player?previewPlayerId=${previewPlayerId}` : '/portal/player';
+
   return (
-    <div className="portal-shell">
-      <section className="portal-panel">
-        <div className="portal-row-between">
-          <h2 style={{ marginTop: 0 }}>Bullpen Scripts</h2>
-          <Link
-            href={canPreview && previewPlayerId > 0 ? `/portal/player/program?previewPlayerId=${previewPlayerId}` : '/portal/player/program'}
-            className="btn btn-ghost as-link"
-          >
-            Back to Program
+    <PortalChrome
+      schoolBrandStyle={schoolBrandCssVars(selectedSchool)}
+      left={
+        <>
+          <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
+          {canPreview ? (
+            <PreviewAthleteSelect basePath="/portal/player/program/bullpens" selectedPlayerId={previewPlayerId} players={previewClients} />
+          ) : null}
+        </>
+      }
+      navLinks={
+        <>
+          {canPreview ? (
+            <Link href="/portal/admin" className="portal-nav-link">
+              Admin
+            </Link>
+          ) : null}
+          <Link href={profileHref} className="portal-nav-link">
+            Profile
           </Link>
+          <Link href={backHref} className="portal-nav-link active">
+            Program
+          </Link>
+          {session.role === 'player' ? (
+            <Link href="/portal/dashboard" className="portal-nav-link">
+              Dashboard
+            </Link>
+          ) : (
+            <Link href="/profiles" className="portal-nav-link">
+              Profiles
+            </Link>
+          )}
+        </>
+      }
+      mobileNavCurrentHref="/portal/player/program"
+      mobileNavLoggedInAs={session.name ?? session.email}
+      mobileNavItems={[
+        ...(canPreview ? [{ href: '/portal/admin', label: 'Admin' }] : []),
+        { href: profileHref, label: 'Profile' },
+        { href: backHref, label: 'Program' },
+        ...(session.role === 'player'
+          ? [{ href: '/portal/dashboard', label: 'Dashboard' }]
+          : [{ href: '/profiles', label: 'Profiles' }]),
+      ]}
+      right={
+        <>
+          {canPreview ? (
+            <PortalUserMenu displayName={session.name ?? session.email} />
+          ) : (
+            <div className="portal-user-meta" aria-label="Logged in user">
+              <p>Logged In As</p>
+              <h1>{session.name ?? session.email}</h1>
+            </div>
+          )}
+          <PortalMessagesNavButton />
+          <PortalNotificationsBell />
+          {session.role === 'player' ? <LogoutButton /> : null}
+          <PortalThemeToggle />
+        </>
+      }
+      sectionClassName="portal-panel"
+      tabBarRole={session.role}
+      tabBarPreviewPlayerId={canPreview ? previewPlayerId || null : null}
+    >
+      <div className="portal-row-between">
+        <h2 style={{ marginTop: 0 }}>Bullpen Scripts</h2>
+        <Link href={backHref} className="btn btn-ghost as-link">
+          Back to Program
+        </Link>
+      </div>
+      {bullpenState.notes?.trim() ? (
+        <div className="portal-panel" style={{ minHeight: 'unset', marginBottom: 12 }}>
+          <h4 style={{ marginTop: 0 }}>Notes</h4>
+          <p className="portal-muted-text" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{bullpenState.notes.trim()}</p>
         </div>
-        {bullpenState.notes?.trim() ? (
-          <div className="portal-panel" style={{ minHeight: 'unset', marginBottom: 12 }}>
-            <h4 style={{ marginTop: 0 }}>Notes</h4>
-            <p className="portal-muted-text" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{bullpenState.notes.trim()}</p>
-          </div>
-        ) : null}
-        <BullpenEntry
-          templates={bullpenTemplates}
-          state={bullpenState}
-          playerId={resolvedPlayerId}
-          previewQuery={playerIdQuery}
-          schoolLogoSrc={schoolBrand.logoSrc}
-          schoolLogoAlt={schoolBrand.logoAlt}
-        />
-      </section>
-    </div>
+      ) : null}
+      <BullpenEntry
+        templates={bullpenTemplates}
+        state={bullpenState}
+        playerId={resolvedPlayerId}
+        previewQuery={playerIdQuery}
+        schoolLogoSrc={schoolBrand.logoSrc}
+        schoolLogoAlt={schoolBrand.logoAlt}
+      />
+    </PortalChrome>
   );
 }

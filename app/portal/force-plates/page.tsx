@@ -11,7 +11,7 @@ import { loadForcePlateSnapshot } from '../../../lib/force-plate-cache-db';
 import { loadForcePlateSnapshotFromNeon } from '../../../lib/force-plate-neon-db';
 import type { ValdSnapshot } from '../../../lib/vald-forceplates';
 import ForcePlatesDashboard from './force-plates-dashboard';
-import MobileNavSelect from '../mobile-nav-select';
+import PortalChrome from '../portal-chrome';
 import LogoutButton from '../logout-button';
 import PortalUserMenu from '../user-menu';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
@@ -161,48 +161,44 @@ export default async function ForcePlatesPage({
   }
 
   return (
-    <div className="portal-shell">
-      <header className="portal-header">
-        <div className="portal-header-left">
-          <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
-        </div>
-        <div className="portal-header-center">
-          <nav className="portal-nav" aria-label="Portal Navigation">
-            {(session.role === 'admin' || session.role === 'coach') && (
-              <Link href="/portal/admin" className="portal-nav-link">
-                Home
-              </Link>
-            )}
-            {session.role === 'player' && canAccessProgramming ? (
-              <>
-                <Link href="/portal/player" className="portal-nav-link">
-                  Profile
-                </Link>
-                <Link href="/portal/player/program" className="portal-nav-link">
-                  Program
-                </Link>
-              </>
-            ) : null}
-            <Link href="/portal/dashboard" className="portal-nav-link">
-              Dashboard
+    <PortalChrome
+      left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
+      navLinks={
+        <>
+          {(session.role === 'admin' || session.role === 'coach') && (
+            <Link href="/portal/admin" className="portal-nav-link">
+              Home
             </Link>
-          </nav>
-          <MobileNavSelect
-            currentHref="/portal/force-plates"
-            loggedInAs={session.name ?? session.email}
-            items={[
-              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Home' }] : []),
-              ...(session.role === 'player' && canAccessProgramming
-                ? [
-                    { href: '/portal/player', label: 'Profile' },
-                    { href: '/portal/player/program', label: 'Program' },
-                  ]
-                : []),
-              { href: '/portal/dashboard', label: 'Dashboard' },
-            ]}
-          />
-        </div>
-        <div className="portal-header-right">
+          )}
+          {session.role === 'player' && canAccessProgramming ? (
+            <>
+              <Link href="/portal/player" className="portal-nav-link">
+                Profile
+              </Link>
+              <Link href="/portal/player/program" className="portal-nav-link">
+                Program
+              </Link>
+            </>
+          ) : null}
+          <Link href="/portal/dashboard" className="portal-nav-link">
+            Dashboard
+          </Link>
+        </>
+      }
+      mobileNavCurrentHref="/portal/force-plates"
+      mobileNavLoggedInAs={session.name ?? session.email}
+      mobileNavItems={[
+        ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Home' }] : []),
+        ...(session.role === 'player' && canAccessProgramming
+          ? [
+              { href: '/portal/player', label: 'Profile' },
+              { href: '/portal/player/program', label: 'Program' },
+            ]
+          : []),
+        { href: '/portal/dashboard', label: 'Dashboard' },
+      ]}
+      right={
+        <>
           {session.role === 'admin' || session.role === 'coach' ? (
             <PortalUserMenu displayName={session.name ?? session.email} />
           ) : (
@@ -215,40 +211,39 @@ export default async function ForcePlatesPage({
           {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
-        </div>
-      </header>
-
-      <section className="portal-panel portal-admin-panel">
-        <div className="portal-admin-stack">
-          <div className="portal-admin-headline" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <h2 style={{ margin: 0 }}>VALD Force Plate Data</h2>
-              {session.role !== 'player' ? <SyncForcePlatesButton /> : null}
-            </div>
-            <div style={{ position: 'relative', width: '220px', height: '56px', overflow: 'hidden', flexShrink: 0 }}>
-              <Image src="/vald.webp" alt="VALD" fill style={{ objectFit: 'cover', objectPosition: 'center' }} />
-            </div>
+        </>
+      }
+      sectionClassName="portal-panel portal-admin-panel"
+    >
+      <div className="portal-admin-stack">
+        <div className="portal-admin-headline" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <h2 style={{ margin: 0 }}>VALD Force Plate Data</h2>
+            {session.role !== 'player' ? <SyncForcePlatesButton /> : null}
           </div>
-          {error ? (
+          <div style={{ position: 'relative', width: '220px', height: '56px', overflow: 'hidden', flexShrink: 0 }}>
+            <Image src="/vald.webp" alt="VALD" fill style={{ objectFit: 'cover', objectPosition: 'center' }} />
+          </div>
+        </div>
+        {error ? (
+          <article className="portal-admin-card">
+            <p className="auth-error" style={{ margin: 0 }}>
+              {error}
+            </p>
+          </article>
+        ) : null}
+
+        {snapshot ? (
+          <>
+            <ForcePlatesDashboard snapshot={snapshot} />
             <article className="portal-admin-card">
-              <p className="auth-error" style={{ margin: 0 }}>
-                {error}
+              <p className="portal-muted-text" style={{ margin: 0 }}>
+                Last sync: {formatShortDateTime(snapshot.fetchedAt)}
               </p>
             </article>
-          ) : null}
-
-          {snapshot ? (
-            <>
-              <ForcePlatesDashboard snapshot={snapshot} />
-              <article className="portal-admin-card">
-                <p className="portal-muted-text" style={{ margin: 0 }}>
-                  Last sync: {formatShortDateTime(snapshot.fetchedAt)}
-                </p>
-              </article>
-            </>
-          ) : null}
-        </div>
-      </section>
-    </div>
+          </>
+        ) : null}
+      </div>
+    </PortalChrome>
   );
 }

@@ -7,7 +7,7 @@ import { getPlayerForUser } from '../../../lib/training-db';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import LogoutButton from '../logout-button';
 import PortalUserMenu from '../user-menu';
-import MobileNavSelect from '../mobile-nav-select';
+import PortalChrome from '../portal-chrome';
 import PortalNotificationsBell from '../notifications-bell';
 import PortalThemeToggle from '../theme-toggle';
 import PortalMessagesNavButton from '../messages-nav-button';
@@ -29,48 +29,44 @@ export default async function MotionCapturePage() {
       : '';
 
   return (
-    <div className="portal-shell">
-      <header className="portal-header">
-        <div className="portal-header-left">
-          <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
-        </div>
-        <div className="portal-header-center">
-          <nav className="portal-nav" aria-label="Portal Navigation">
-            {(session.role === 'admin' || session.role === 'coach') && (
-              <Link href="/portal/admin" className="portal-nav-link">
-                Home
-              </Link>
-            )}
-            {session.role === 'player' && canAccessProgramming ? (
-              <>
-                <Link href="/portal/player" className="portal-nav-link">
-                  Profile
-                </Link>
-                <Link href="/portal/player/program" className="portal-nav-link">
-                  Program
-                </Link>
-              </>
-            ) : null}
-            <Link href="/portal/dashboard" className="portal-nav-link">
-              Dashboard
+    <PortalChrome
+      left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
+      navLinks={
+        <>
+          {(session.role === 'admin' || session.role === 'coach') && (
+            <Link href="/portal/admin" className="portal-nav-link">
+              Home
             </Link>
-          </nav>
-          <MobileNavSelect
-            currentHref="/portal/motion-capture"
-            loggedInAs={session.name ?? session.email}
-            items={[
-              ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Home' }] : []),
-              ...(session.role === 'player' && canAccessProgramming
-                ? [
-                    { href: '/portal/player', label: 'Profile' },
-                    { href: '/portal/player/program', label: 'Program' },
-                  ]
-                : []),
-              { href: '/portal/dashboard', label: 'Dashboard' },
-            ]}
-          />
-        </div>
-        <div className="portal-header-right">
+          )}
+          {session.role === 'player' && canAccessProgramming ? (
+            <>
+              <Link href="/portal/player" className="portal-nav-link">
+                Profile
+              </Link>
+              <Link href="/portal/player/program" className="portal-nav-link">
+                Program
+              </Link>
+            </>
+          ) : null}
+          <Link href="/portal/dashboard" className="portal-nav-link">
+            Dashboard
+          </Link>
+        </>
+      }
+      mobileNavCurrentHref="/portal/motion-capture"
+      mobileNavLoggedInAs={session.name ?? session.email}
+      mobileNavItems={[
+        ...(session.role === 'admin' || session.role === 'coach' ? [{ href: '/portal/admin', label: 'Home' }] : []),
+        ...(session.role === 'player' && canAccessProgramming
+          ? [
+              { href: '/portal/player', label: 'Profile' },
+              { href: '/portal/player/program', label: 'Program' },
+            ]
+          : []),
+        { href: '/portal/dashboard', label: 'Dashboard' },
+      ]}
+      right={
+        <>
           {session.role === 'admin' || session.role === 'coach' ? (
             <PortalUserMenu displayName={session.name ?? session.email} />
           ) : (
@@ -83,28 +79,27 @@ export default async function MotionCapturePage() {
           {(session.role === 'admin' || session.role === 'coach') ? <PortalNotificationsBell /> : null}
           {session.role === 'player' ? <LogoutButton /> : null}
           <PortalThemeToggle />
+        </>
+      }
+      sectionClassName="portal-panel portal-admin-panel"
+    >
+      <div className="portal-admin-stack">
+        <div className="portal-admin-headline">
+          <h2 style={{ margin: 0 }}>Motion Capture</h2>
+          <p className="portal-muted-text" style={{ margin: 0 }}>
+            Upload phone video, link it to TrackMan when available, and review motion-capture outputs by player and date.
+          </p>
         </div>
-      </header>
-
-      <section className="portal-panel portal-admin-panel">
-        <div className="portal-admin-stack">
-          <div className="portal-admin-headline">
-            <h2 style={{ margin: 0 }}>Motion Capture</h2>
-            <p className="portal-muted-text" style={{ margin: 0 }}>
-              Upload phone video, link it to TrackMan when available, and review motion-capture outputs by player and date.
+        {error ? (
+          <article className="portal-admin-card">
+            <p className="auth-error" style={{ margin: 0 }}>
+              {error}
             </p>
-          </div>
-          {error ? (
-            <article className="portal-admin-card">
-              <p className="auth-error" style={{ margin: 0 }}>
-                {error}
-              </p>
-            </article>
-          ) : (
-            <MotionCaptureDashboard initialPlayerId={ownPlayer?.id ?? null} />
-          )}
-        </div>
-      </section>
-    </div>
+          </article>
+        ) : (
+          <MotionCaptureDashboard initialPlayerId={ownPlayer?.id ?? null} />
+        )}
+      </div>
+    </PortalChrome>
   );
 }

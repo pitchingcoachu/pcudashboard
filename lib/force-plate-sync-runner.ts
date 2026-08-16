@@ -43,11 +43,12 @@ export async function runForcePlateSync(args: {
   const maxIncrementalLookbackDays = Math.max(7, Number(process.env.FORCE_PLATE_SYNC_MAX_INCREMENTAL_LOOKBACK_DAYS ?? 180));
   const syncRecentTestLimit = Math.max(25, Number(args.recentTestLimitOverride ?? process.env.FORCE_PLATE_SYNC_RECENT_TEST_LIMIT ?? 10000));
   const syncWindowDays = Math.max(1, Number(args.testsWindowDaysOverride ?? process.env.FORCE_PLATE_SYNC_WINDOW_DAYS ?? 60));
-  const playerBatchSize = Math.max(1, Number(args.playerBatchSizeOverride ?? process.env.FORCE_PLATE_SYNC_PLAYER_BATCH_SIZE ?? 6));
+  const playerBatchSize = Math.max(1, Number(args.playerBatchSizeOverride ?? process.env.FORCE_PLATE_SYNC_PLAYER_BATCH_SIZE ?? 3));
   const maxRunSeconds = Math.max(10, Number(args.maxRunSecondsOverride ?? process.env.FORCE_PLATE_SYNC_MAX_RUN_SECONDS ?? 90));
   const forceFullSync = Boolean(args.forceFullSync);
 
   await markForcePlateSyncRunStarted({ organizationId: args.organizationId, schoolCode: args.schoolCode });
+  let lastKnownCursor: number | null = null;
   try {
     const playerChoices = await listPlayerChoicesByOrganization({
       organizationId: args.organizationId,
@@ -74,6 +75,7 @@ export async function runForcePlateSync(args: {
 
     const orderedNames = [...names].sort((a, b) => a.localeCompare(b));
     const startCursor = Math.max(0, Number(syncState?.playerCursor ?? 0)) % orderedNames.length;
+    lastKnownCursor = startCursor;
     const effectiveBatchSize = forceFullSync ? orderedNames.length : Math.min(playerBatchSize, orderedNames.length);
     const batchNames: string[] = [];
     for (let i = 0; i < effectiveBatchSize; i += 1) {
@@ -134,6 +136,7 @@ export async function runForcePlateSync(args: {
       players: snapshotPlayers,
     };
     const progressedCursor = (startCursor + Math.max(1, processed)) % orderedNames.length;
+    lastKnownCursor = progressedCursor;
 
     const write = await saveForcePlateSnapshot({
       organizationId: args.organizationId,
@@ -183,6 +186,7 @@ export async function runForcePlateSync(args: {
       schoolCode: args.schoolCode,
       ok: false,
       error: message,
+      nextPlayerCursor: lastKnownCursor ?? undefined,
     });
     return { ok: false, error: message };
   }

@@ -90,7 +90,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ con
     });
   }
 
-  const message = await getMessageById(created.id);
+  const message = await getMessageById(created.id, senderUserId);
   return NextResponse.json({ ok: true, message });
 }
 

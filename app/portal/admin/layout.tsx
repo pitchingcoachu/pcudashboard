@@ -4,7 +4,7 @@ import { requirePortalSession } from '../../../lib/portal-session';
 import { resolveDashboardSchoolCode } from '../../../lib/dashboard-access';
 import { canUseClientManagement, canUseProgrammingData, getSchoolProductAccess } from '../../../lib/programming-scope';
 import { resolveSchoolBrand, schoolBrandCssVars } from '../../../lib/school-brand';
-import MobileNavSelect from '../mobile-nav-select';
+import PortalChrome from '../portal-chrome';
 import PortalUserMenu from '../user-menu';
 import DashboardSchoolSelector from '../dashboard/dashboard-school-selector';
 import PortalNotificationsBell from '../notifications-bell';
@@ -91,89 +91,86 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   ];
 
   return (
-    <div className={`portal-shell${isProSchool ? ' portal-shell--pro' : ''}`} style={schoolBrandCssVars(selectedSchool)}>
-      <header className="portal-header">
-        <div className="portal-header-left">
-          {session.role === 'admin' || session.role === 'coach' ? (
-            <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
-          ) : (
-            <Link href="/portal/admin" className="portal-header-logo-link" aria-label={`${brand.schoolCode} Home`}>
-              <img
-                src={brand.logoSrc ?? '/pearl-clam-transparent.png'}
-                alt={brand.logoSrc ? brand.logoAlt : 'Pearl Player Development'}
-                className={`portal-header-logo${brand.logoSrc ? ' portal-header-logo--school' : ''}`}
-              />
+    <PortalChrome
+      extraShellClass={isProSchool ? 'portal-shell--pro' : ''}
+      schoolBrandStyle={schoolBrandCssVars(selectedSchool)}
+      wrapNavInStack
+      left={
+        session.role === 'admin' || session.role === 'coach' ? (
+          <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
+        ) : (
+          <Link href="/portal/admin" className="portal-header-logo-link" aria-label={`${brand.schoolCode} Home`}>
+            <img
+              src={brand.logoSrc ?? '/pearl-clam-transparent.png'}
+              alt={brand.logoSrc ? brand.logoAlt : 'Pearl Player Development'}
+              className={`portal-header-logo${brand.logoSrc ? ' portal-header-logo--school' : ''}`}
+            />
+          </Link>
+        )
+      }
+      navLinks={
+        useCompactProgrammingNav ? (
+          <>
+            <Link href="/portal/admin" className="portal-nav-link">
+              Home
             </Link>
-          )}
-        </div>
-        <div className="portal-header-center">
-          <div className="portal-header-nav-stack">
-            <nav className="portal-nav" aria-label="Portal Navigation">
-              {useCompactProgrammingNav ? (
-                <>
-                  <Link href="/portal/admin" className="portal-nav-link">
-                    Home
-                  </Link>
-                  <Link href="/portal/dashboard" className="portal-nav-link">
-                    Dashboard
-                  </Link>
-                  <Link href="/portal/admin/game-tracker" className="portal-nav-link">
-                    Game Tracker
-                  </Link>
-                  <Link href="/portal/admin/schedule" className="portal-nav-link">
-                    Schedule
-                  </Link>
-                  {canAccessPlayerNotes && (
-                    <Link href="/portal/admin/player-notes" className="portal-nav-link">
-                      Player Notes
-                    </Link>
-                  )}
-                  <PortalNavOverflowMenu items={moreItemsCompact} />
-                </>
-              ) : (
-                <>
-                  <Link href="/portal/admin" className="portal-nav-link">
-                    Home
-                  </Link>
-                  <Link href="/portal/dashboard" className="portal-nav-link">
-                    Dashboard
-                  </Link>
-                  <Link href="/portal/admin/game-tracker" className="portal-nav-link">
-                    Game Tracker
-                  </Link>
-                  {canAccessPlayerNotes && (
-                    <Link href="/portal/admin/player-notes" className="portal-nav-link">
-                      Player Notes
-                    </Link>
-                  )}
-                  <PortalNavOverflowMenu items={moreItemsClientManagement} />
-                </>
-              )}
-            </nav>
-          </div>
-          <MobileNavSelect
-            loggedInAs={session.name ?? session.email}
-            items={
-              useCompactProgrammingNav
-                ? [
-                    { href: '/portal/admin', label: 'Home' },
-                    { href: '/portal/dashboard', label: 'Dashboard' },
-                    { href: '/portal/admin/game-tracker', label: 'Game Tracker' },
-                    { href: '/portal/admin/schedule', label: 'Schedule' },
-                    ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
-                    ...moreItemsCompact,
-                  ]
-                : [
-                    { href: '/portal/admin', label: 'Home' },
-                    { href: '/portal/dashboard', label: 'Dashboard' },
-                    { href: '/portal/admin/game-tracker', label: 'Game Tracker' },
-                    ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
-                    ...moreItemsClientManagement,
-                  ]
-            }
-          />
-        </div>
-        <div className="portal-header-right">
+            <Link href="/portal/dashboard" className="portal-nav-link">
+              Dashboard
+            </Link>
+            <Link href="/portal/admin/game-tracker" className="portal-nav-link">
+              Game Tracker
+            </Link>
+            <Link href="/portal/admin/schedule" className="portal-nav-link">
+              Schedule
+            </Link>
+            {canAccessPlayerNotes && (
+              <Link href="/portal/admin/player-notes" className="portal-nav-link">
+                Player Notes
+              </Link>
+            )}
+            <PortalNavOverflowMenu items={moreItemsCompact} />
+          </>
+        ) : (
+          <>
+            <Link href="/portal/admin" className="portal-nav-link">
+              Home
+            </Link>
+            <Link href="/portal/dashboard" className="portal-nav-link">
+              Dashboard
+            </Link>
+            <Link href="/portal/admin/game-tracker" className="portal-nav-link">
+              Game Tracker
+            </Link>
+            {canAccessPlayerNotes && (
+              <Link href="/portal/admin/player-notes" className="portal-nav-link">
+                Player Notes
+              </Link>
+            )}
+            <PortalNavOverflowMenu items={moreItemsClientManagement} />
+          </>
+        )
+      }
+      mobileNavLoggedInAs={session.name ?? session.email}
+      mobileNavItems={
+        useCompactProgrammingNav
+          ? [
+              { href: '/portal/admin', label: 'Home' },
+              { href: '/portal/dashboard', label: 'Dashboard' },
+              { href: '/portal/admin/game-tracker', label: 'Game Tracker' },
+              { href: '/portal/admin/schedule', label: 'Schedule' },
+              ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
+              ...moreItemsCompact,
+            ]
+          : [
+              { href: '/portal/admin', label: 'Home' },
+              { href: '/portal/dashboard', label: 'Dashboard' },
+              { href: '/portal/admin/game-tracker', label: 'Game Tracker' },
+              ...(canAccessPlayerNotes ? [{ href: '/portal/admin/player-notes', label: 'Player Notes' }] : []),
+              ...moreItemsClientManagement,
+            ]
+      }
+      right={
+        <>
           <PortalUserMenu displayName={session.name ?? session.email} />
           <PortalMessagesNavButton />
           <PortalNotificationsBell />
@@ -198,9 +195,14 @@ export default async function AdminLayout({ children }: { children: React.ReactN
           <Link href="/portal/dashboard" className="portal-header-logo-link" aria-label="Pearl home">
             <img src="/pearl-clam-transparent.png" alt="Pearl Player Development" className="portal-header-logo portal-header-logo--pcu-right" />
           </Link>
-        </div>
-      </header>
-      <section className="portal-panel portal-admin-panel">{children}</section>
-    </div>
+        </>
+      }
+      sectionClassName="portal-panel portal-admin-panel"
+      tabBarRole={session.role}
+      tabBarScheduleLocked={session.role === 'admin' ? schoolAccess?.mobileSchedule === false : false}
+      tabBarWorkoutsLocked={session.role === 'admin' ? schoolAccess?.mobileWorkouts === false : false}
+    >
+      {children}
+    </PortalChrome>
   );
 }

@@ -180,17 +180,18 @@ export async function upsertForcePlateSnapshotToNeon(args: {
           [args.organizationId, args.schoolCode, syncedTestIds]
         );
       }
-      for (const row of player.metricRows) {
-        metricRowCount += 1;
-        await client.query(
-          `
-            INSERT INTO force_plate_metric_rows (
-              organization_id, school_code, test_id, trial_id, player_name_norm, player_name, date_short, date_time_utc,
-              test_type, metric_id, metric_name, metric_unit, value, point_type, point_label, updated_at
-            )
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,NOW())
-          `,
-          [
+      const METRIC_ROW_BATCH_SIZE = 200;
+      for (let start = 0; start < player.metricRows.length; start += METRIC_ROW_BATCH_SIZE) {
+        const chunk = player.metricRows.slice(start, start + METRIC_ROW_BATCH_SIZE);
+        metricRowCount += chunk.length;
+        const values: unknown[] = [];
+        const placeholders: string[] = [];
+        chunk.forEach((row, idx) => {
+          const base = idx * 15;
+          placeholders.push(
+            `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10},$${base + 11},$${base + 12},$${base + 13},$${base + 14},$${base + 15},NOW())`
+          );
+          values.push(
             args.organizationId,
             args.schoolCode,
             row.testId,
@@ -205,18 +206,48 @@ export async function upsertForcePlateSnapshotToNeon(args: {
             row.metricUnit ?? '',
             row.value,
             row.pointType ?? 'average',
-            row.pointLabel ?? null,
-          ]
+            row.pointLabel ?? null
+          );
+        });
+        await client.query(
+          `
+            INSERT INTO force_plate_metric_rows (
+              organization_id, school_code, test_id, trial_id, player_name_norm, player_name, date_short, date_time_utc,
+              test_type, metric_id, metric_name, metric_unit, value, point_type, point_label, updated_at
+            )
+            VALUES ${placeholders.join(',')}
+          `,
+          values
         );
       }
     }
     await client.query('COMMIT');
+    client.release();
     return { ok: true, playerCount, testCount, metricRowCount };
   } catch (error) {
-    await client.query('ROLLBACK');
+    // A connection whose ROLLBACK itself fails (e.g. because the original
+    // error already broke the connection, or the ROLLBACK hits the same
+    // query_timeout under load) must not be handed back to the pool as if
+    // nothing happened -- confirmed via a real production incident: an
+    // earlier sync run's connection was found still "idle in transaction"
+    // in pg_stat_activity minutes later, holding a lock that made a
+    // completely unrelated later query (markForcePlateSyncRunCompleted's
+    // trivial single-row UPSERT) hang for 20+ seconds until timeout. Pass
+    // an Error to client.release() so node-postgres destroys the
+    // connection instead of returning a possibly-still-transactional one
+    // to the pool for reuse.
+    let rollbackFailed = false;
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      rollbackFailed = true;
+    }
+    if (rollbackFailed) {
+      client.release(new Error('force_plate_neon_db: rollback failed, destroying connection'));
+    } else {
+      client.release();
+    }
     return { ok: false, error: error instanceof Error ? error.message : 'Failed to write force plate tables.' };
-  } finally {
-    client.release();
   }
 }
 
@@ -429,7 +460,7 @@ export async function markForcePlateSyncRunCompleted(args: {
       syncedAt,
       args.ok ? 'ok' : 'error',
       args.ok ? null : String(args.error ?? 'Sync failed.'),
-      Number.isFinite(Number(args.nextPlayerCursor)) ? Math.max(0, Number(args.nextPlayerCursor)) : null,
+      Number.isFinite(Number(args.nextPlayerCursor)) ? Math.max(0, Number(args.nextPlayerCursor)) : 0,
     ]
   );
 }

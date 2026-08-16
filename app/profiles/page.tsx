@@ -9,7 +9,7 @@ import { schoolBrandCssVars } from '../../lib/school-brand';
 import { listPlayerProfilesWithPlanGoals } from '../../lib/training-db';
 import DashboardSchoolSelector from '../portal/dashboard/dashboard-school-selector';
 import PortalUserMenu from '../portal/user-menu';
-import MobileNavSelect from '../portal/mobile-nav-select';
+import PortalChrome from '../portal/portal-chrome';
 import PortalNotificationsBell from '../portal/notifications-bell';
 import PortalThemeToggle from '../portal/theme-toggle';
 import ProfilesList from './profiles-list';
@@ -57,56 +57,52 @@ export default async function ProfilesPage() {
   }));
 
   return (
-    <>
-      <div className="portal-shell" style={schoolBrandCssVars(selectedSchool)}>
-        <header className="portal-header">
-        <div className="portal-header-left">
-          <DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />
-        </div>
-        <div className="portal-header-center">
-          <nav className="portal-nav" aria-label="Portal Navigation">
-            <Link href="/portal/admin" className="portal-nav-link">
-              Home
+    <PortalChrome
+      schoolBrandStyle={schoolBrandCssVars(selectedSchool)}
+      left={<DashboardSchoolSelector options={schoolOptions} initialValue={selectedSchool} logoOnly />}
+      navLinks={
+        <>
+          <Link href="/portal/admin" className="portal-nav-link">
+            Home
+          </Link>
+          <Link href="/portal/dashboard" className="portal-nav-link">
+            Dashboard
+          </Link>
+          {canAccessProgramming ? (
+            <Link href="/portal/admin/schedule" className="portal-nav-link">
+              Schedule
             </Link>
-            <Link href="/portal/dashboard" className="portal-nav-link">
-              Dashboard
-            </Link>
-            {canAccessProgramming ? (
-              <Link href="/portal/admin/schedule" className="portal-nav-link">
-                Schedule
-              </Link>
-            ) : null}
-            <Link href="/profiles" className="portal-nav-link active">
-              Profiles
-            </Link>
-          </nav>
-          <MobileNavSelect
-            currentHref="/profiles"
-            loggedInAs={session.name ?? session.email}
-            items={[
-              { href: '/portal/admin', label: 'Home' },
-              { href: '/portal/dashboard', label: 'Dashboard' },
-              ...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : []),
-              { href: '/profiles', label: 'Profiles' },
-            ]}
-          />
-        </div>
-        <div className="portal-header-right">
+          ) : null}
+          <Link href="/profiles" className="portal-nav-link active">
+            Profiles
+          </Link>
+        </>
+      }
+      mobileNavCurrentHref="/profiles"
+      mobileNavLoggedInAs={session.name ?? session.email}
+      mobileNavItems={[
+        { href: '/portal/admin', label: 'Home' },
+        { href: '/portal/dashboard', label: 'Dashboard' },
+        ...(canAccessProgramming ? [{ href: '/portal/admin/schedule', label: 'Schedule' }] : []),
+        { href: '/profiles', label: 'Profiles' },
+      ]}
+      right={
+        <>
           <PortalUserMenu displayName={session.name ?? session.email} />
           <PortalNotificationsBell />
           <PortalThemeToggle />
-        </div>
-        </header>
-
-        {canAccessProgramming ? (
-          <ProfilesList players={profileRows} />
-        ) : (
-          <section className="portal-panel">
-            <h2>Profiles</h2>
-            <p className="portal-muted-text">No profiles are available for this school.</p>
-          </section>
-        )}
-      </div>
-    </>
+        </>
+      }
+      sectionClassName={canAccessProgramming ? undefined : 'portal-panel'}
+    >
+      {canAccessProgramming ? (
+        <ProfilesList players={profileRows} />
+      ) : (
+        <>
+          <h2>Profiles</h2>
+          <p className="portal-muted-text">No profiles are available for this school.</p>
+        </>
+      )}
+    </PortalChrome>
   );
 }
