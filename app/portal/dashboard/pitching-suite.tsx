@@ -6063,21 +6063,15 @@ export default function PitchingSuite({
   const canRunGameLog = hasSpecificPitcherSelection || (teamType && teamType !== 'All');
   const canRunPitchLog = canRunGameLog;
   const [selectedPitcherLastGameDate, setSelectedPitcherLastGameDate] = useState('');
-  useEffect(() => {
-    // Game Log is specifically about games, so it defaults its own Session
-    // Type filter to 'Season' (games) rather than inheriting whatever was
-    // last selected elsewhere. Pitch Log is meant to show every pitch --
-    // bullpens included -- so it must NOT get this same forced default:
-    // '' is the real "All" option in the Session Type dropdown (see the
-    // SearchableSingleSelect below), and silently overwriting it here to
-    // 'Season' the moment the user opens Pitch Log excluded all bullpen
-    // data with no visible explanation (confirmed via a live PCU report --
-    // "no data" on Pitch Log despite real bullpen sessions existing).
-    if (dashboardPage !== 'Game Log') return;
-    if (isPro) return;
-    if (sessionType) return;
-    setSessionType('Season');
-  }, [dashboardPage, isPro, sessionType]);
+  // Neither Game Log nor Pitch Log force a Session Type default on entry --
+  // both start on whatever '' (the real "All" option in the Session Type
+  // dropdown below) already resolves to, which is every session type
+  // including bullpens and Live BP, not just real games. A prior version of
+  // this effect forced Game Log to 'Season' the moment it was opened,
+  // which silently hid all non-game sessions with no visible explanation.
+  // Session Type still works as an explicit filter -- picking 'Season' from
+  // the dropdown narrows either log down to real games only, same as
+  // before -- this only removes the forced default.
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
@@ -7254,9 +7248,9 @@ export default function PitchingSuite({
     const pinnedAllRow = decorate(pinnedAll, 'all_pinned');
     const allSummaryRow = decorate(allRow as Record<string, string | number | null | undefined> | null, 'all');
     return [
-      ...pinned,
-      ...(pinnedAllRow ? [pinnedAllRow] : []),
       ...(allSummaryRow ? [allSummaryRow] : []),
+      ...(pinnedAllRow ? [pinnedAllRow] : []),
+      ...pinned,
       ...unpinned,
     ];
   }, [sortedGameLogRows, pinnedGameLogKeys]);
@@ -7298,8 +7292,8 @@ export default function PitchingSuite({
         }
       : null;
     return [
-      ...pinnedPitchLogRows,
       ...(pinnedAllRow ? [pinnedAllRow] : []),
+      ...pinnedPitchLogRows,
       ...sortedPitchLogRows.filter((row) => !pinnedPitchLogKeys.has(String(row._pitch_pin_key ?? ''))),
     ];
   }, [sortedPitchLogRows, pinnedPitchLogRows, pinnedPitchLogKeys, pitchLogColumns]);
@@ -7400,6 +7394,43 @@ export default function PitchingSuite({
       });
       const payload = (await response.json().catch(() => ({}))) as OverviewPayload & { error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'Failed to load game log.');
+      // Session Type ("All" by default -- see the removed forced-Season
+      // effect above) doesn't reliably tag each row's own Game split-token
+      // as a bullpen: confirmed live that the exact same underlying
+      // session comes back as a plain game token ("date||...||g") when NO
+      // session_type filter is sent, but as "date||...||practice_..." when
+      // session_type=Bullpen IS sent for that same date/pitcher -- the
+      // token format itself is a side effect of the filter, not a stable
+      // property of the row. The only reliable way to know which dates are
+      // bullpens is to ask explicitly. This is safe as a DATE-based join
+      // only when exactly one specific pitcher is selected (one pitcher
+      // realistically has at most one session per day); for team-wide or
+      // multi-pitcher queries this second fetch is skipped and rows fall
+      // back to the best-effort string check in nonGameSessionLabel below.
+      let bullpenDates: Set<string> | null = null;
+      if (!isPro && !sessionType && selectedPitchers.length === 1 && pitchersParam) {
+        try {
+          const bullpenParams = new URLSearchParams(params);
+          bullpenParams.set('session_type', 'Bullpen');
+          const bullpenResponse = await fetch(`/api/dashboard/pitching/overview?${bullpenParams.toString()}`, {
+            signal: controller.signal,
+            cache: 'no-store',
+          });
+          if (bullpenResponse.ok) {
+            const bullpenPayload = (await bullpenResponse.json().catch(() => ({}))) as OverviewPayload;
+            const bullpenColumns = Array.isArray(bullpenPayload.table_columns) ? bullpenPayload.table_columns : [];
+            const bullpenSplitColumn = String(bullpenColumns[0] ?? 'Game').trim() || 'Game';
+            const bullpenRowsRaw = Array.isArray(bullpenPayload.table_rows) ? bullpenPayload.table_rows : [];
+            bullpenDates = new Set(
+              bullpenRowsRaw
+                .map((row) => parseGameSplitToken((row as Record<string, unknown>)[bullpenSplitColumn]).date)
+                .filter((date) => date && date !== '-')
+            );
+          }
+        } catch {
+          // Best-effort -- rows fall back to the string-based check below.
+        }
+      }
       const tableColumns = Array.isArray(payload.table_columns) ? payload.table_columns : [];
       const availableColumns = Array.isArray(payload.available_table_columns) ? payload.available_table_columns : [];
       const tableRowsRaw = Array.isArray(payload.table_rows) ? payload.table_rows : [];
@@ -7465,10 +7496,37 @@ export default function PitchingSuite({
         }
       }
       for (const key of ambiguousGameKey) opponentByGameKey.delete(key);
+      // Game Log now defaults to showing every session type (see the
+      // removed forced Session Type default above), not just real games.
+      // Prefer the authoritative bullpenDates set (a real second fetch with
+      // session_type=Bullpen explicitly applied -- see above) when
+      // available; a row's own Game split-token is NOT a reliable signal
+      // on its own (confirmed live: the exact same session's token comes
+      // back as plain "g" with no session_type filter, but as
+      // "practice_..." when session_type=Bullpen IS sent for that same
+      // date/pitcher -- the token format is a side effect of the filter,
+      // not a stable property of the row). The string check below is only
+      // a fallback for when bullpenDates isn't available (team-wide/multi-
+      // pitcher queries), and it does still catch it correctly whenever
+      // this SPECIFIC query happened to include a session_type filter.
+      const nonGameSessionLabel = (gameKey: string): string | null => {
+        if (!gameKey || gameKey === 'g' || gameKey === '-') return null;
+        const lower = gameKey.toLowerCase();
+        if (lower.includes('bullpen')) return 'Bullpen';
+        if (lower.includes('live_bp') || lower.includes('livebp') || lower.includes('live bp')) return 'Live BP';
+        if (lower.includes('practice') || lower.includes('bull') || lower.includes('bp')) return 'Bullpen';
+        return 'Non-Game';
+      };
       let rowsResolved = rows.map((row) => {
         if (isPcuBullpenSelection) return { ...row, Opponent: '' };
-        if (!isPlaceholderOpponent(row.Opponent)) return row;
+        const dateKeyForLabel = String(row.Date ?? '').trim();
+        if (bullpenDates && dateKeyForLabel && bullpenDates.has(dateKeyForLabel)) {
+          return { ...row, Opponent: 'Bullpen' };
+        }
         const gameKey = String(row._game_key ?? '').trim();
+        const sessionLabel = nonGameSessionLabel(gameKey);
+        if (sessionLabel) return { ...row, Opponent: sessionLabel };
+        if (!isPlaceholderOpponent(row.Opponent)) return row;
         const dateKey = String(row.Date ?? '').trim();
         const inferredFromGame = gameKey && gameKey !== '-' ? opponentByGameKey.get(gameKey) : undefined;
         if (inferredFromGame) return { ...row, Opponent: inferredFromGame };
@@ -16602,7 +16660,7 @@ export default function PitchingSuite({
                           {pitchLogDisplayColumns.map((column) => {
                             const rawValue = row[column];
                             const displayValue = column === 'Date' ? formatShortDate(String(rawValue ?? '')) : formatPitchLogCellDisplayValue(column, rawValue);
-                            const canOpenPitchVideo = column === '#' && (Boolean(rowPitch) || isPinnedAllRow);
+                            const canOpenPitchVideo = column === '#' && tableMode === 'Stuff' && (Boolean(rowPitch) || isPinnedAllRow);
                             const percentileValue = getCellPercentile(
                               row as Record<string, string | number | null>,
                               column,
