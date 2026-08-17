@@ -49,6 +49,12 @@ type OptionItem = { value: string; label: string; disabled?: boolean };
 const PITCHING_FILTER_CLIENT_CACHE_VERSION = 'league-level-filtering-2026-08-03-v1';
 const PRO_LEVEL_FILTER_OPTIONS = ['All', 'MLB', 'AAA'];
 const NCAA_LEVEL_FILTER_OPTIONS = ['All', 'D1', 'D2', 'D3', 'NAIA', 'JUCO'];
+// Break Lines reads from break_line_offsets_grid, which has real precomputed
+// data for every level regardless of the current site -- unlike the page's
+// main "Level" filter (site-scoped, see PRO_LEVEL_FILTER_OPTIONS /
+// NCAA_LEVEL_FILTER_OPTIONS above), so its own picker always offers the
+// full set.
+const BREAK_LINES_LEVEL_OPTIONS = ['MLB', 'D1', 'D2', 'D3', 'JUCO', 'NAIA', 'ALL'];
 const DEFAULT_COLLEGE_PERCENTILE_SCOPE = 'D1';
 
 function dashboardPageSlug(value: string): string {
@@ -1568,6 +1574,42 @@ const FALLBACK_AVAILABLE_CUSTOM_COLUMNS = [
   'EV',
   'LA',
   'Stuff+',
+  'fbCHivbSEP',
+  'fbSPivbSEP',
+  'fbCTivbSEP',
+  'fbSLivbSEP',
+  'fbCBivbSEP',
+  'fbSWivbSEP',
+  'fbCHhbSEP',
+  'fbSPhbSEP',
+  'fbCThbSEP',
+  'fbSLhbSEP',
+  'fbCBhbSEP',
+  'fbSWhbSEP',
+  'siCHivbSEP',
+  'siSPivbSEP',
+  'siCTivbSEP',
+  'siSLivbSEP',
+  'siCBivbSEP',
+  'siSWivbSEP',
+  'siCHhbSEP',
+  'siSPhbSEP',
+  'siCThbSEP',
+  'siSLhbSEP',
+  'siCBhbSEP',
+  'siSWhbSEP',
+  'fbCHtotSEP',
+  'fbSPtotSEP',
+  'fbCTtotSEP',
+  'fbSLtotSEP',
+  'fbCBtotSEP',
+  'fbSWtotSEP',
+  'siCHtotSEP',
+  'siSPtotSEP',
+  'siCTtotSEP',
+  'siSLtotSEP',
+  'siCBtotSEP',
+  'siSWtotSEP',
   'Ctrl+',
   'QP+',
   'Pitching+',
@@ -5033,6 +5075,24 @@ export default function PitchingSuite({
   const [level, setLevel] = useState(
     initialSchoolCode === 'LEAGUE' ? 'D1' : initialSchoolCode === 'PRO' ? 'MLB' : 'All'
   );
+  // Break Lines has its own level picker, independent of the page-wide
+  // "Level" filter above -- that filter only ever offers the levels
+  // relevant to the current site's own data (e.g. D1/D2/D3/JUCO/NAIA on a
+  // college site, MLB/AAA on the pro site), but break_line_offsets_grid has
+  // real precomputed data for every level regardless of which site you're
+  // viewing, so this should never be constrained by site context.
+  const [breakLinesLevel, setBreakLinesLevel] = useState(
+    initialSchoolCode === 'PRO' ? 'MLB' : 'D1'
+  );
+  type BreakLineOffset = {
+    offspeed_pitch_type: string;
+    avg_ivb_offset: number;
+    avg_hb_offset: number;
+    sample_size: number;
+    used_fallback: boolean;
+  };
+  const [breakLineOffsets, setBreakLineOffsets] = useState<BreakLineOffset[]>([]);
+  const [breakLineOffsetsFallback, setBreakLineOffsetsFallback] = useState(false);
   const [qpLocations, setQpLocations] = useState('All');
   const [tableMode, setTableMode] = useState(shouldUsePcuDefaults ? 'Bullpen' : 'Live');
   const [splitBy, setSplitBy] = useState('Pitch Types');
@@ -7524,9 +7584,14 @@ export default function PitchingSuite({
           return { ...row, Opponent: 'Bullpen' };
         }
         const gameKey = String(row._game_key ?? '').trim();
+        // A real opponent (e.g. PRO rows, which always carry a genuine
+        // batter team even for a bare numeric game_pk gameKey) always wins
+        // over the best-effort session-type guess below -- nonGameSessionLabel
+        // exists to label rows that have NO real opponent, not to override
+        // ones that do.
+        if (!isPlaceholderOpponent(row.Opponent)) return row;
         const sessionLabel = nonGameSessionLabel(gameKey);
         if (sessionLabel) return { ...row, Opponent: sessionLabel };
-        if (!isPlaceholderOpponent(row.Opponent)) return row;
         const dateKey = String(row.Date ?? '').trim();
         const inferredFromGame = gameKey && gameKey !== '-' ? opponentByGameKey.get(gameKey) : undefined;
         if (inferredFromGame) return { ...row, Opponent: inferredFromGame };
@@ -11224,6 +11289,50 @@ export default function PitchingSuite({
       count: pts.length,
     }));
   }, [summaryPoints]);
+
+  // Break lines: fetch the fastball-shape-conditioned offset grid for
+  // whichever base pitch (Fastball or Sinker) is selected, keyed on this
+  // pitcher's own average movement location -- so e.g. a Changeup line
+  // reflects real Changeup movement for pitchers who share this shape of
+  // fastball, not a single population-wide average offset.
+  useEffect(() => {
+    const baseType = breakLines === 'Fastball' || breakLines === 'Sinker' ? breakLines : '';
+    if (!baseType) {
+      setBreakLineOffsets([]);
+      setBreakLineOffsetsFallback(false);
+      return;
+    }
+    const base = avgByType.find((p) => p.pitch_type === baseType);
+    if (!base || base.hb === null || base.ivb === null) {
+      setBreakLineOffsets([]);
+      setBreakLineOffsetsFallback(false);
+      return;
+    }
+    let active = true;
+    const params = new URLSearchParams({
+      level: breakLinesLevel,
+      base_pitch_type: baseType,
+      fb_ivb: String(base.ivb),
+      fb_hb: String(plottedPitcherHand === 'Left' ? -base.hb : base.hb),
+    });
+    fetch(`/api/dashboard/pitching/break-line-offsets?${params.toString()}`, { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { offsets?: BreakLineOffset[] } | null) => {
+        if (!active) return;
+        const offsets = payload?.offsets ?? [];
+        setBreakLineOffsets(offsets);
+        setBreakLineOffsetsFallback(offsets.some((row) => row.used_fallback));
+      })
+      .catch(() => {
+        if (!active) return;
+        setBreakLineOffsets([]);
+        setBreakLineOffsetsFallback(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [breakLines, breakLinesLevel, avgByType, plottedPitcherHand]);
+
   const expectedMovementData = useMemo(() => {
     const eligiblePoints: OverviewPayload['chart_points'] = [];
     const grouped = new Map<
@@ -12038,34 +12147,26 @@ export default function PitchingSuite({
     const showExpectedPitches = movementView === 'Expected vs Actual — Individual Pitches';
     const showTargets = movementView === 'Target Shapes Only' || movementView === 'Target Shapes and Pitches';
     const ticks = [-20, -10, 0, 10, 20];
-    const breakMapFastball: Record<string, { ivb: number; hb: number }> = {
-      Cutter: { ivb: -7, hb: 10 },
-      Slider: { ivb: -15, hb: 12 },
-      Sweeper: { ivb: -16, hb: 22 },
-      Curveball: { ivb: -27, hb: 18 },
-      ChangeUp: { ivb: -12, hb: -7 },
-      Splitter: { ivb: -13, hb: -4 },
-    };
-    const breakMapSinker: Record<string, { ivb: number; hb: number }> = {
-      Cutter: { ivb: 2, hb: 18 },
-      Slider: { ivb: -6, hb: 20 },
-      Sweeper: { ivb: -7, hb: 30 },
-      Curveball: { ivb: -18, hb: 25 },
-      ChangeUp: { ivb: -4, hb: 1 },
-      Splitter: { ivb: -5, hb: 2 },
-    };
+    // Break lines: offsets come from break_line_offsets_grid, a precomputed
+    // table of "what does an average off-speed pitch look like relative to
+    // THIS shape of fastball/sinker" (see scripts/refresh_break_line_offsets_grid.py),
+    // replacing the old flat population-wide offset constants. Grid offsets
+    // are stored in "righty space" (LHP horizontal break mirrored before
+    // aggregation, matching normalizeForHandedness()'s -value-for-LHP
+    // convention) -- so un-mirror avg_hb_offset back to this pitcher's own
+    // hand for display by negating it only when plottedPitcherHand is Left.
     const baseType = breakLines === 'Fastball' || breakLines === 'Sinker' ? breakLines : '';
     const base = avgByType.find((p) => p.pitch_type === baseType);
-    const direction = plottedPitcherHand === 'Right' ? -1 : 1;
+    const handSign = plottedPitcherHand === 'Left' ? -1 : 1;
     const breakRows = base && base.hb !== null && base.ivb !== null
-      ? Object.entries(baseType === 'Sinker' ? breakMapSinker : breakMapFastball)
-          .filter(([pt]) => avgByType.some((a) => a.pitch_type === pt))
-          .map(([pt, sep]) => ({
-            pitch_type: pt,
+      ? breakLineOffsets
+          .filter((row) => avgByType.some((a) => a.pitch_type === row.offspeed_pitch_type))
+          .map((row) => ({
+            pitch_type: row.offspeed_pitch_type,
             x1: Number(base.hb),
             y1: Number(base.ivb),
-            x2: Number(base.hb) + sep.hb * direction,
-            y2: Number(base.ivb) + sep.ivb,
+            x2: Number(base.hb) + row.avg_hb_offset * handSign,
+            y2: Number(base.ivb) + row.avg_ivb_offset,
           }))
       : [];
     const plottedPitches = (
@@ -12575,7 +12676,7 @@ export default function PitchingSuite({
         ) : null}
       </svg>
     );
-  }, [summaryPoints, avgByType, expectedMovementData, fullMagnusAveragesByPitchType, movementComparisonAveragesByPitchType, showComparisonDots, showComparisonMagnusLine, comparisonScopeLabel, movementView, magnusLine, showMagnusAngle, breakLines, plottedPitcherHand, targetShapes, isPitchEditLassoEnabled, movementLasso, visualOption, canUsePitchEdits]);
+  }, [summaryPoints, avgByType, expectedMovementData, fullMagnusAveragesByPitchType, movementComparisonAveragesByPitchType, showComparisonDots, showComparisonMagnusLine, comparisonScopeLabel, movementView, magnusLine, showMagnusAngle, breakLines, breakLineOffsets, plottedPitcherHand, targetShapes, isPitchEditLassoEnabled, movementLasso, visualOption, canUsePitchEdits]);
 
   const locationSvg = useMemo(() => {
     const w = 520;
@@ -14774,6 +14875,17 @@ export default function PitchingSuite({
                     placeholder="None"
                   />
                 </label>
+                {breakLines === 'Fastball' || breakLines === 'Sinker' ? (
+                  <label>
+                    Break Lines Level
+                    <SearchableSingleSelect
+                      options={toOptions(BREAK_LINES_LEVEL_OPTIONS)}
+                      value={breakLinesLevel}
+                      onChange={setBreakLinesLevel}
+                      placeholder="MLB"
+                    />
+                  </label>
+                ) : null}
                 <label>
                   Zone Location
                   <SearchableMultiSelect
@@ -15240,6 +15352,14 @@ export default function PitchingSuite({
                       >
                         {movementHover.text}
                       </div>
+                    ) : null}
+                    {(breakLines === 'Fastball' || breakLines === 'Sinker') && breakLineOffsetsFallback ? (
+                      <p
+                        className="portal-muted-text"
+                        style={{ textAlign: 'center', fontSize: '0.72rem', margin: '0.35rem 0 0' }}
+                      >
+                        Limited {breakLinesLevel === 'ALL' ? '' : `${breakLinesLevel} `}sample for this fastball shape — break lines blended with all levels.
+                      </p>
                     ) : null}
                     {showComparisonDots || (showComparisonMagnusLine && magnusLine !== 'Off') ? (
                       <div

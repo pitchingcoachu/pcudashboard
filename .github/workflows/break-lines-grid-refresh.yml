@@ -1,0 +1,43 @@
+name: Break Lines Grid Refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute and print summary without writing rows"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+concurrency:
+  group: break-lines-grid-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DASHBOARD_DATABASE_URL: ${{ secrets.DASHBOARD_DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r dashboard_api/requirements.txt
+
+      - name: Refresh break_line_offsets_grid
+        run: |
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            python scripts/refresh_break_line_offsets_grid.py --dry-run
+          else
+            python scripts/refresh_break_line_offsets_grid.py
+          fi

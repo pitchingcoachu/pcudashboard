@@ -396,7 +396,7 @@ export default async function PlayerProgramPage({ searchParams }: PlayerProgramP
           initialItems={items}
           initialStartDate={initialRange.startDate}
           initialEndDate={initialRange.endDate}
-          initialView="month"
+          initialView="plan"
           initialAnchorDate={initialRange.startDate}
           previewPlayerId={session.role === 'admin' || session.role === 'coach' ? effectivePlayerId : null}
         />

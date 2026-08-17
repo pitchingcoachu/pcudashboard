@@ -492,7 +492,7 @@ export default function ProfileDashboard({
   const [scheduleItems, setScheduleItems] = useState<ProgramItemRow[]>(todayItems);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleMessage, setScheduleMessage] = useState('');
-  const [scheduleWidgetView, setScheduleWidgetView] = useState<'day' | 'plan'>('day');
+  const [scheduleWidgetView, setScheduleWidgetView] = useState<'day' | 'plan'>('plan');
   const [planItems, setPlanItems] = useState<ProgramItemRow[]>([]);
   const [planSectionNotes, setPlanSectionNotes] = useState<Record<string, string> | null>(null);
   const [planLoading, setPlanLoading] = useState(false);

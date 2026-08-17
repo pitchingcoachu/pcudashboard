@@ -21,6 +21,11 @@ const TWO_DECIMAL_STAT_COLUMNS = new Set([
   'SIERA',
   'WHIP',
 ]);
+const SEP_STAT_ABBRS = ['CH', 'SP', 'CT', 'SL', 'CB', 'SW'];
+const SEP_STAT_COLUMNS = ['fb', 'si'].flatMap((base) =>
+  SEP_STAT_ABBRS.flatMap((abbr) => [`${base}${abbr}ivbSEP`, `${base}${abbr}hbSEP`, `${base}${abbr}totSEP`])
+).map((key) => key.toUpperCase());
+
 const ONE_DECIMAL_STAT_COLUMNS = new Set([
   'VELO',
   'MAX',
@@ -37,6 +42,7 @@ const ONE_DECIMAL_STAT_COLUMNS = new Set([
   'VAA',
   'NVAA',
   'HAA',
+  ...SEP_STAT_COLUMNS,
 ]);
 
 function formatTiltClock(value: string): string {

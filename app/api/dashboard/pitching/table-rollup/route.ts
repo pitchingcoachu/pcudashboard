@@ -61,6 +61,87 @@ const VALID_PITCH_TYPE_SQL = "regexp_replace(lower(COALESCE(NULLIF(TRIM(pitch_ty
 const LEAGUE_SCHOOL_EXCLUSION_SQL = "school_code NOT IN ('PRO', 'LEAGUE', 'TRIAL')";
 const LEAGUE_ROLLUP_SCOPE_SQL = "school_code = 'LEAGUE'";
 const LEAGUE_TEAM_EXCLUSION_SQL = "UPPER(regexp_replace(COALESCE(NULLIF(TRIM(pitcher_team_norm), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL') AND UPPER(regexp_replace(COALESCE(NULLIF(TRIM(batter_team_norm_eff), ''), ''), '[^A-Za-z0-9]', '', 'g')) NOT IN ('TRIAL', 'DASHBOARDTRIAL')";
+
+// Movement-separation stats (fbCHivbSEP, siSLhbSEP, fbCBtotSEP, etc.) each
+// need this pitcher's own average IVB/HB for one specific off-speed pitch
+// type relative to their own Fastball or Sinker -- not the row's pooled
+// ivb_sum/hb_sum (which mixes every pitch type together). abbr is the short
+// code used in the stat key; sqlValues lists every raw pitch_type string
+// this abbreviation should match (rollup tables are already normalized to
+// these exact names, per a direct DB check, with one legacy league typo
+// ('FourSeamFourSeamFastBall') folded into Fastball defensively).
+const SEP_PITCH_TYPES: Array<{ abbr: string; sqlValues: string[] }> = [
+  { abbr: 'CH', sqlValues: ['ChangeUp'] },
+  { abbr: 'SP', sqlValues: ['Splitter'] },
+  { abbr: 'CT', sqlValues: ['Cutter'] },
+  { abbr: 'SL', sqlValues: ['Slider'] },
+  { abbr: 'CB', sqlValues: ['Curveball'] },
+  { abbr: 'SW', sqlValues: ['Sweeper'] },
+];
+const SEP_BASE_TYPES: Array<{ prefix: string; sqlValues: string[] }> = [
+  { prefix: 'fb', sqlValues: ['Fastball', 'FourSeamFourSeamFastBall'] },
+  { prefix: 'si', sqlValues: ['Sinker'] },
+];
+// Every AggRow field the SEP stats need, for the allAgg reducer -- kept in
+// sync with sepSelectExprsSql()'s column names since both are generated
+// from the same SEP_BASE_TYPES/SEP_PITCH_TYPES lists.
+const SEP_AGG_FIELD_NAMES: string[] = SEP_BASE_TYPES.flatMap((base) => [
+  `sep_${base.prefix}_base_ivb_sum`, `sep_${base.prefix}_base_ivb_n`,
+  `sep_${base.prefix}_base_hb_sum`, `sep_${base.prefix}_base_hb_n`,
+  sepLeftCountCol(base.prefix, ''), sepRightCountCol(base.prefix, ''),
+  ...SEP_PITCH_TYPES.flatMap((off) => [
+    `sep_${base.prefix}_${off.abbr.toLowerCase()}_ivb_sum`, `sep_${base.prefix}_${off.abbr.toLowerCase()}_ivb_n`,
+    `sep_${base.prefix}_${off.abbr.toLowerCase()}_hb_sum`, `sep_${base.prefix}_${off.abbr.toLowerCase()}_hb_n`,
+    sepLeftCountCol(base.prefix, off.abbr), sepRightCountCol(base.prefix, off.abbr),
+  ]),
+]);
+function sepIvbSumCol(prefix: string, abbr: string): string { return `sep_${prefix}_${abbr.toLowerCase()}_ivb_sum`; }
+function sepIvbCountCol(prefix: string, abbr: string): string { return `sep_${prefix}_${abbr.toLowerCase()}_ivb_n`; }
+function sepHbSumCol(prefix: string, abbr: string): string { return `sep_${prefix}_${abbr.toLowerCase()}_hb_sum`; }
+function sepHbCountCol(prefix: string, abbr: string): string { return `sep_${prefix}_${abbr.toLowerCase()}_hb_n`; }
+function sepLeftCountCol(prefix: string, abbr: string): string { return `sep_${prefix}_${abbr ? abbr.toLowerCase() : 'base'}_left_n`; }
+function sepRightCountCol(prefix: string, abbr: string): string { return `sep_${prefix}_${abbr ? abbr.toLowerCase() : 'base'}_right_n`; }
+// One conditional-sum SELECT expression per (base, off-speed) pair, e.g.
+// `SUM(ivb_sum) FILTER (WHERE pitch_type = ANY(ARRAY['ChangeUp'])) AS sep_fb_ch_ivb_sum`.
+// Shared by every SQL block below so the column set/order can't drift.
+//
+// handColumn/pitchCountColumn: HB is mirrored (negated for Right, passed
+// through for Left) BEFORE the FILTER/SUM -- matching the sign convention
+// already established in dashboard_api/app/main.py's hb_adj_sum ("SUM(CASE
+// WHEN pitcherthrows_norm = 'Left' THEN hb_sum ELSE -hb_sum END)"). Without
+// this, a row that pools pitches from both lefties and righties (Team
+// split, or any split coarser than one row per pitcher) would sum HB values
+// with opposite real-world sign for a same-shaped pitch, producing
+// meaningless separation numbers.
+//
+// left_n/right_n (per bucket) let the caller detect a single-hand bucket
+// and un-mirror back to that pitcher's own natural-hand HB for display --
+// mirroring is correct for POOLING across hands, but a lefty's own
+// single-pitcher row should still show HB-SEP in their own true release
+// direction, not flipped into "righty space".
+function sepSelectExprsSql(handColumn: string, pitchCountColumn: string): string {
+  const mirroredHb = `(CASE WHEN ${handColumn} = 'Left' THEN hb_sum ELSE -hb_sum END)`;
+  const lines: string[] = [];
+  for (const base of SEP_BASE_TYPES) {
+    const baseList = base.sqlValues.map((v) => `'${v}'`).join(', ');
+    lines.push(`SUM(ivb_sum) FILTER (WHERE pitch_type = ANY(ARRAY[${baseList}]))::double precision AS sep_${base.prefix}_base_ivb_sum`);
+    lines.push(`SUM(ivb_n) FILTER (WHERE pitch_type = ANY(ARRAY[${baseList}]))::int AS sep_${base.prefix}_base_ivb_n`);
+    lines.push(`SUM(${mirroredHb}) FILTER (WHERE pitch_type = ANY(ARRAY[${baseList}]))::double precision AS sep_${base.prefix}_base_hb_sum`);
+    lines.push(`SUM(hb_n) FILTER (WHERE pitch_type = ANY(ARRAY[${baseList}]))::int AS sep_${base.prefix}_base_hb_n`);
+    lines.push(`SUM(${pitchCountColumn}) FILTER (WHERE pitch_type = ANY(ARRAY[${baseList}]) AND ${handColumn} = 'Left')::int AS ${sepLeftCountCol(base.prefix, '')}`);
+    lines.push(`SUM(${pitchCountColumn}) FILTER (WHERE pitch_type = ANY(ARRAY[${baseList}]) AND ${handColumn} = 'Right')::int AS ${sepRightCountCol(base.prefix, '')}`);
+    for (const off of SEP_PITCH_TYPES) {
+      const offList = off.sqlValues.map((v) => `'${v}'`).join(', ');
+      lines.push(`SUM(ivb_sum) FILTER (WHERE pitch_type = ANY(ARRAY[${offList}]))::double precision AS ${sepIvbSumCol(base.prefix, off.abbr)}`);
+      lines.push(`SUM(ivb_n) FILTER (WHERE pitch_type = ANY(ARRAY[${offList}]))::int AS ${sepIvbCountCol(base.prefix, off.abbr)}`);
+      lines.push(`SUM(${mirroredHb}) FILTER (WHERE pitch_type = ANY(ARRAY[${offList}]))::double precision AS ${sepHbSumCol(base.prefix, off.abbr)}`);
+      lines.push(`SUM(hb_n) FILTER (WHERE pitch_type = ANY(ARRAY[${offList}]))::int AS ${sepHbCountCol(base.prefix, off.abbr)}`);
+      lines.push(`SUM(${pitchCountColumn}) FILTER (WHERE pitch_type = ANY(ARRAY[${offList}]) AND ${handColumn} = 'Left')::int AS ${sepLeftCountCol(base.prefix, off.abbr)}`);
+      lines.push(`SUM(${pitchCountColumn}) FILTER (WHERE pitch_type = ANY(ARRAY[${offList}]) AND ${handColumn} = 'Right')::int AS ${sepRightCountCol(base.prefix, off.abbr)}`);
+    }
+  }
+  return lines.join(',\n        ');
+}
 function normalizeHand(value: string): string {
   const raw = String(value ?? '').trim().toLowerCase();
   if (raw === 'right' || raw === 'r') return 'Right';
@@ -180,6 +261,36 @@ type AggRow = {
   xwoba_n: number;
   ev_sum: number;
   ev_n: number;
+  // Movement-separation base points (fastball/sinker's own avg IVB/HB for
+  // this same row) plus one ivb/hb sum+count pair per off-speed pitch type,
+  // for fbCHivbSEP/siSLhbSEP/fbCBtotSEP-style stats. Keys generated by
+  // sepIvbSumCol/sepIvbCountCol/sepHbSumCol/sepHbCountCol above.
+  sep_fb_base_ivb_sum: number;
+  sep_fb_base_ivb_n: number;
+  sep_fb_base_hb_sum: number;
+  sep_fb_base_hb_n: number;
+  sep_si_base_ivb_sum: number;
+  sep_si_base_ivb_n: number;
+  sep_si_base_hb_sum: number;
+  sep_si_base_hb_n: number;
+  sep_fb_ch_ivb_sum: number; sep_fb_ch_ivb_n: number; sep_fb_ch_hb_sum: number; sep_fb_ch_hb_n: number;
+  sep_fb_sp_ivb_sum: number; sep_fb_sp_ivb_n: number; sep_fb_sp_hb_sum: number; sep_fb_sp_hb_n: number;
+  sep_fb_ct_ivb_sum: number; sep_fb_ct_ivb_n: number; sep_fb_ct_hb_sum: number; sep_fb_ct_hb_n: number;
+  sep_fb_sl_ivb_sum: number; sep_fb_sl_ivb_n: number; sep_fb_sl_hb_sum: number; sep_fb_sl_hb_n: number;
+  sep_fb_cb_ivb_sum: number; sep_fb_cb_ivb_n: number; sep_fb_cb_hb_sum: number; sep_fb_cb_hb_n: number;
+  sep_fb_sw_ivb_sum: number; sep_fb_sw_ivb_n: number; sep_fb_sw_hb_sum: number; sep_fb_sw_hb_n: number;
+  sep_si_ch_ivb_sum: number; sep_si_ch_ivb_n: number; sep_si_ch_hb_sum: number; sep_si_ch_hb_n: number;
+  sep_si_sp_ivb_sum: number; sep_si_sp_ivb_n: number; sep_si_sp_hb_sum: number; sep_si_sp_hb_n: number;
+  sep_si_ct_ivb_sum: number; sep_si_ct_ivb_n: number; sep_si_ct_hb_sum: number; sep_si_ct_hb_n: number;
+  sep_si_sl_ivb_sum: number; sep_si_sl_ivb_n: number; sep_si_sl_hb_sum: number; sep_si_sl_hb_n: number;
+  sep_si_cb_ivb_sum: number; sep_si_cb_ivb_n: number; sep_si_cb_hb_sum: number; sep_si_cb_hb_n: number;
+  sep_si_sw_ivb_sum: number; sep_si_sw_ivb_n: number; sep_si_sw_hb_sum: number; sep_si_sw_hb_n: number;
+  // sep_{prefix}_{base|abbr}_left_n / _right_n: per-bucket pitch counts by
+  // hand, used to detect a single-hand row and un-mirror HB-SEP back to
+  // that pitcher's own natural release direction for display (see
+  // sepSelectExprsSql's handColumn/pitchCountColumn params). Accessed
+  // dynamically like the sum/count fields above, not hand-typed here.
+  [sepHandCountKey: `sep_${string}_left_n` | `sep_${string}_right_n`]: number;
 };
 type PlusMetricKey = 'Stuff+' | 'QP+' | 'Ctrl+' | 'Pitching+';
 
@@ -312,6 +423,39 @@ function toCell(metric: string, row: AggRow): number | string {
     return toRate(chase, outOfZone) ?? '-';
   }
   if (metric === 'EV') return evN > 0 ? Number((evSum / evN).toFixed(1)) : '-';
+  for (const base of SEP_BASE_TYPES) {
+    for (const off of SEP_PITCH_TYPES) {
+      if (metric !== `${base.prefix}${off.abbr}ivbSEP` && metric !== `${base.prefix}${off.abbr}hbSEP` && metric !== `${base.prefix}${off.abbr}totSEP`) continue;
+      const baseIvbSum = Number((row as unknown as Record<string, number>)[`sep_${base.prefix}_base_ivb_sum`] || 0);
+      const baseIvbN = Number((row as unknown as Record<string, number>)[`sep_${base.prefix}_base_ivb_n`] || 0);
+      const baseHbSum = Number((row as unknown as Record<string, number>)[`sep_${base.prefix}_base_hb_sum`] || 0);
+      const baseHbN = Number((row as unknown as Record<string, number>)[`sep_${base.prefix}_base_hb_n`] || 0);
+      const offIvbSum = Number((row as unknown as Record<string, number>)[sepIvbSumCol(base.prefix, off.abbr)] || 0);
+      const offIvbN = Number((row as unknown as Record<string, number>)[sepIvbCountCol(base.prefix, off.abbr)] || 0);
+      const offHbSum = Number((row as unknown as Record<string, number>)[sepHbSumCol(base.prefix, off.abbr)] || 0);
+      const offHbN = Number((row as unknown as Record<string, number>)[sepHbCountCol(base.prefix, off.abbr)] || 0);
+      if (baseIvbN <= 0 || baseHbN <= 0 || offIvbN <= 0 || offHbN <= 0) return '-';
+      const ivbDiff = (baseIvbSum / baseIvbN) - (offIvbSum / offIvbN);
+      let hbDiff = (baseHbSum / baseHbN) - (offHbSum / offHbN);
+      // hbDiff above is in mirrored space (see sepSelectExprsSql: Left
+      // passes through unchanged, Right is negated), correct for pooling
+      // across both hands. But if every pitch in both buckets came from the
+      // same hand, un-mirror back to that pitcher's own natural release
+      // direction for display -- mirroring should only affect POOLED
+      // (mixed-hand) rows, not a single pitcher's/single-hand row's own
+      // HB-SEP sign. Left is already the natural reference space in this
+      // convention, so only an all-RIGHT bucket needs un-flipping.
+      const baseLeftN = Number((row as unknown as Record<string, number>)[sepLeftCountCol(base.prefix, '')] || 0);
+      const baseRightN = Number((row as unknown as Record<string, number>)[sepRightCountCol(base.prefix, '')] || 0);
+      const offLeftN = Number((row as unknown as Record<string, number>)[sepLeftCountCol(base.prefix, off.abbr)] || 0);
+      const offRightN = Number((row as unknown as Record<string, number>)[sepRightCountCol(base.prefix, off.abbr)] || 0);
+      const allRight = baseLeftN === 0 && offLeftN === 0 && baseRightN > 0 && offRightN > 0;
+      if (allRight) hbDiff = -hbDiff;
+      if (metric === `${base.prefix}${off.abbr}ivbSEP`) return Number(ivbDiff.toFixed(1));
+      if (metric === `${base.prefix}${off.abbr}hbSEP`) return Number(hbDiff.toFixed(1));
+      return Number(Math.sqrt((ivbDiff * ivbDiff) + (hbDiff * hbDiff)).toFixed(1));
+    }
+  }
   if (metric === 'Stuff+') return stuffPlusN > 0 ? Number((stuffPlusSum / stuffPlusN).toFixed(1)) : '-';
   if (metric === 'QP+') return qpPlusN > 0 ? Number((qpPlusSum / qpPlusN).toFixed(1)) : '-';
   if (metric === 'Ctrl+') return ctrlPlusN > 0 ? Number((ctrlPlusSum / ctrlPlusN).toFixed(1)) : '-';
@@ -423,6 +567,11 @@ export async function GET(request: Request) {
     'EV', 'Barrel%', 'xWOBA', 'xISO', 'RV/100', 'PV/100',
     'Stuff+', 'QP+', 'Ctrl+', 'Pitching+',
     'ERA', 'FIP', 'xFIP', 'SIERA', 'WHIP',
+    ...SEP_BASE_TYPES.flatMap((base) => SEP_PITCH_TYPES.flatMap((off) => [
+      `${base.prefix}${off.abbr}ivbSEP`,
+      `${base.prefix}${off.abbr}hbSEP`,
+      `${base.prefix}${off.abbr}totSEP`,
+    ])),
   ]);
   if (columns.length && columns.some((col) => !supportedColumns.has(col))) {
     return NextResponse.json({ table_rows: [], table_columns: [] });
@@ -709,7 +858,8 @@ export async function GET(request: Request) {
         SUM(xwoba_sum)::double precision AS xwoba_sum,
         SUM(xwoba_n)::int AS xwoba_n,
         SUM(ev_sum)::double precision AS ev_sum,
-        SUM(ev_n)::int AS ev_n
+        SUM(ev_n)::int AS ev_n,
+        ${sepSelectExprsSql('pitcherthrows_norm', 'pitches')}
       FROM public.pro_pitch_events_daily_rollup
       WHERE ${eventWhere.join(' AND ')}
       GROUP BY ${splitGroupExpr}${isPitcherArsenalSplit ? ', pitch_type' : ''}
@@ -833,7 +983,8 @@ export async function GET(request: Request) {
         0::double precision AS xwoba_sum,
         0::int AS xwoba_n,
         SUM(ev_sum)::double precision AS ev_sum,
-        SUM(ev_n)::int AS ev_n
+        SUM(ev_n)::int AS ev_n,
+        ${sepSelectExprsSql('pitcherthrows_norm', 'pitches')}
       FROM public.pitch_events_daily_rollup_league
       WHERE ${eventWhere.join(' AND ')}
       GROUP BY ${splitGroupExpr}${isPitcherArsenalSplit ? ', pitch_type' : ''}
@@ -926,7 +1077,8 @@ export async function GET(request: Request) {
         SUM(xwoba_sum)::double precision AS xwoba_sum,
         SUM(xwoba_n)::int AS xwoba_n,
         SUM(ev_sum)::double precision AS ev_sum,
-        SUM(ev_n)::int AS ev_n
+        SUM(ev_n)::int AS ev_n,
+        ${sepSelectExprsSql('pitcherhand_norm', 'pitch_n')}
       FROM ${tableRef}
       WHERE ${where.join(' AND ')}
       GROUP BY split_value, pitch_type
@@ -1021,7 +1173,8 @@ export async function GET(request: Request) {
         SUM(xwoba_sum)::double precision AS xwoba_sum,
         SUM(xwoba_n)::int AS xwoba_n,
         SUM(ev_sum)::double precision AS ev_sum,
-        SUM(ev_n)::int AS ev_n
+        SUM(ev_n)::int AS ev_n,
+        ${sepSelectExprsSql('pitcherhand_norm', 'pitch_n')}
       FROM public.pitching_heatmap_daily_bins
       WHERE ${where.join(' AND ')}
       GROUP BY split_value, pitch_type
@@ -1147,7 +1300,10 @@ export async function GET(request: Request) {
       xwoba_n: acc.xwoba_n + Number(row.xwoba_n || 0),
       ev_sum: acc.ev_sum + Number(row.ev_sum || 0),
       ev_n: acc.ev_n + Number(row.ev_n || 0),
-    }),
+      ...Object.fromEntries(
+        SEP_AGG_FIELD_NAMES.map((field) => [field, Number((acc as unknown as Record<string, number>)[field] || 0) + Number((row as unknown as Record<string, number>)[field] || 0)])
+      ),
+    } as AggRow),
     {
       split_value: 'All',
       pitch_type: 'All',
@@ -1159,7 +1315,8 @@ export async function GET(request: Request) {
       barrel_n: 0, xiso_sum: 0, xiso_n: 0, relspeed_sum: 0, relspeed_n: 0, relspeed_max: 0, ivb_sum: 0, ivb_n: 0, hb_sum: 0, hb_n: 0, xivb_sum: 0, xhb_sum: 0, expected_move_n: 0, divb_sum: 0, dhb_sum: 0, tilt_dev_minutes_sum: 0, tilt_dev_n: 0, spin_sum: 0, spin_n: 0, relheight_sum: 0, relheight_n: 0, relside_sum: 0, relside_n: 0, extension_sum: 0, extension_n: 0, releasetilt_sum: 0, releasetilt_n: 0, stuff_plus_sum: 0, stuff_plus_n: 0, qp_plus_sum: 0, qp_plus_n: 0, ctrl_plus_sum: 0, ctrl_plus_n: 0, pitching_plus_sum: 0, pitching_plus_n: 0,
       k_n: 0, bb_n: 0,
       rv_sum: 0, pv_sum: 0, xwoba_sum: 0, xwoba_n: 0, ev_sum: 0, ev_n: 0,
-    }
+      ...Object.fromEntries(SEP_AGG_FIELD_NAMES.map((field) => [field, 0])),
+    } as AggRow
   );
   const allRow: Record<string, string | number | null> = { [splitColumn]: 'All' };
   for (const metric of tableColumns.slice(1)) {

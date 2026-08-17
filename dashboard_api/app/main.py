@@ -3208,6 +3208,171 @@ def _valid_pitch_types(values: List[str]) -> List[str]:
     return [value for value in values if str(value or "").strip() and str(value).strip() != "Undefined"]
 
 
+_SEP_OFFSPEED_TYPES: List[tuple[str, str]] = [
+    ("CH", "ChangeUp"),
+    ("SP", "Splitter"),
+    ("CT", "Cutter"),
+    ("SL", "Slider"),
+    ("CB", "Curveball"),
+    ("SW", "Sweeper"),
+]
+_SEP_BASE_TYPES: List[tuple[str, str]] = [
+    ("fb", "Fastball"),
+    ("si", "Sinker"),
+]
+SEP_STAT_COLUMNS: List[str] = [
+    f"{base_prefix}{abbr}{suffix}SEP"
+    for base_prefix, _ in _SEP_BASE_TYPES
+    for abbr, _ in _SEP_OFFSPEED_TYPES
+    for suffix in ("ivb", "hb", "tot")
+]
+
+
+def _sep_pitch_type_ivb_hb(rows_for_split: List[Dict[str, Any]], family: str) -> tuple[Optional[float], Optional[float], int, int]:
+    """Average IVB/HB for one canonical pitch-type family (per _pitch_type_family)
+    within this split's rows -- mirrors the fps_fb_num/fps_fb_den filter-by-family
+    pattern used for FPS(FB)% elsewhere in this file, applied to
+    ivb_sum/hb_adj_sum/ivb_n/hb_n. _pitch_type_family is defined later in this
+    module but that's fine -- it's only referenced here at call time, well
+    after the whole module has finished loading.
+
+    Uses hb_adj_sum (HB mirrored: negated for Right, passed through for
+    Left, computed at the SQL level -- see the "hb_adj_sum" CASE WHEN in
+    both rollup queries) rather than raw hb_sum. A split row can pool pitches
+    from multiple pitchers of different handedness (Team split, or any split
+    coarser than one row per pitcher) -- without mirroring, a same-shaped
+    pitch's HB would have opposite real-world sign for a lefty vs a righty,
+    and summing them would produce meaningless/cancelled-out separation
+    numbers.
+
+    Also returns (left_n, right_n) -- summed from the SQL-side left_n/right_n
+    columns (also computed alongside hb_adj_sum) -- so the caller can
+    un-mirror HB back to natural hand-space when every contributing row
+    turns out to be single-handed (see _sep_stat_columns_for_split)."""
+    ivb_sum = 0.0
+    ivb_n = 0
+    hb_adj_sum = 0.0
+    hb_n = 0
+    left_n = 0
+    right_n = 0
+    for r in rows_for_split:
+        if _pitch_type_family(r.get("pitch_type")) != family:
+            continue
+        ivb_sum += float(r.get("ivb_sum") or 0.0)
+        ivb_n += int(r.get("ivb_n") or 0)
+        hb_adj_sum += float(r.get("hb_adj_sum") or 0.0)
+        hb_n += int(r.get("hb_n") or 0)
+        left_n += int(r.get("left_n") or 0)
+        right_n += int(r.get("right_n") or 0)
+    avg_ivb = (ivb_sum / ivb_n) if ivb_n > 0 else None
+    avg_hb = (hb_adj_sum / hb_n) if hb_n > 0 else None
+    return avg_ivb, avg_hb, left_n, right_n
+
+
+def _sep_pitch_type_ivb_hb_raw(grp: List[Dict[str, Any]], family: str) -> tuple[Optional[float], Optional[float], int, int]:
+    """Same as _sep_pitch_type_ivb_hb but for the raw-per-pitch group shape
+    used by _row_for_group (individual pitch rows with scalar ivb/hb, not
+    pre-aggregated ivb_sum/ivb_n). HB is mirrored (negated for Right, passed
+    through for Left) before averaging, same convention as hb_adj_sum in the
+    rollup path -- otherwise a group pooling pitches from both lefties and
+    righties would average HB values with opposite real-world sign for a
+    same-shaped pitch. Also returns (left_n, right_n) for this family so the
+    caller can un-mirror back to a single hand's natural space when the
+    group turns out to be single-handed (see _sep_stat_columns_for_raw_group)."""
+    matching = [r for r in grp if _pitch_type_family(r.get("pitch_type")) == family]
+    ivb_vals = [float(r.get("ivb")) for r in matching if _is_num(r.get("ivb"))]
+    hb_adj_vals = [
+        float(r.get("hb")) if _norm_hand(r.get("pitcherthrows")) == "Left" else -float(r.get("hb"))
+        for r in matching
+        if _is_num(r.get("hb"))
+    ]
+    left_n = sum(1 for r in matching if _norm_hand(r.get("pitcherthrows")) == "Left")
+    right_n = sum(1 for r in matching if _norm_hand(r.get("pitcherthrows")) == "Right")
+    avg_ivb = (sum(ivb_vals) / len(ivb_vals)) if ivb_vals else None
+    avg_hb_adj = (sum(hb_adj_vals) / len(hb_adj_vals)) if hb_adj_vals else None
+    return avg_ivb, avg_hb_adj, left_n, right_n
+
+
+def _sep_stat_columns_for_raw_group(grp: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Raw-per-pitch-group counterpart of _sep_stat_columns_for_split, used
+    by _row_for_group (the shared raw-fallback path for both college and PRO)."""
+    out: Dict[str, Any] = {}
+    base_cache: Dict[str, tuple[Optional[float], Optional[float], int, int]] = {}
+    for base_prefix, base_family in _SEP_BASE_TYPES:
+        base_cache[base_family] = _sep_pitch_type_ivb_hb_raw(grp, base_family)
+    for base_prefix, base_family in _SEP_BASE_TYPES:
+        base_ivb, base_hb_adj, base_left_n, base_right_n = base_cache[base_family]
+        for abbr, off_family in _SEP_OFFSPEED_TYPES:
+            off_ivb, off_hb_adj, off_left_n, off_right_n = _sep_pitch_type_ivb_hb_raw(grp, off_family)
+            ivb_key = f"{base_prefix}{abbr}ivbSEP"
+            hb_key = f"{base_prefix}{abbr}hbSEP"
+            tot_key = f"{base_prefix}{abbr}totSEP"
+            if base_ivb is None or base_hb_adj is None or off_ivb is None or off_hb_adj is None:
+                out[ivb_key] = "-"
+                out[hb_key] = "-"
+                out[tot_key] = "-"
+                continue
+            ivb_diff = base_ivb - off_ivb
+            hb_diff = base_hb_adj - off_hb_adj
+            # Un-mirror back to natural hand-space when every contributing
+            # pitch (base AND off-speed) came from the same hand -- mirroring
+            # is only needed to pool across hands correctly, it shouldn't
+            # flip the displayed sign for an already-single-hand group. Left
+            # passes through unmirrored (see _sep_pitch_type_ivb_hb_raw), so
+            # only an all-RIGHT group needs un-flipping.
+            all_right = base_left_n == 0 and off_left_n == 0 and base_right_n > 0 and off_right_n > 0
+            if all_right:
+                hb_diff = -hb_diff
+            out[ivb_key] = round(ivb_diff, 1)
+            out[hb_key] = round(hb_diff, 1)
+            out[tot_key] = round(((ivb_diff ** 2) + (hb_diff ** 2)) ** 0.5, 1)
+    return out
+
+
+def _sep_stat_columns_for_split(rows_for_split: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Movement-separation stats (fbCHivbSEP, siSLhbSEP, fbCBtotSEP, etc.) --
+    base pitch's own avg IVB/HB minus each off-speed pitch type's avg IVB/HB
+    within this same split's rows, rounded to 1 decimal. Total-SEP is the
+    Euclidean distance between the IVB-diff and HB-diff. Returns '-' when
+    either the base or off-speed pitch type has no pitches in this split,
+    matching the TypeScript table-rollup/route.ts convention for the same
+    stats on the League/PRO leaderboard's Pitcher split."""
+    out: Dict[str, Any] = {}
+    base_cache: Dict[str, tuple[Optional[float], Optional[float], int, int]] = {}
+    for base_prefix, base_family in _SEP_BASE_TYPES:
+        base_cache[base_family] = _sep_pitch_type_ivb_hb(rows_for_split, base_family)
+    for base_prefix, base_family in _SEP_BASE_TYPES:
+        base_ivb, base_hb, base_left_n, base_right_n = base_cache[base_family]
+        for abbr, off_family in _SEP_OFFSPEED_TYPES:
+            off_ivb, off_hb, off_left_n, off_right_n = _sep_pitch_type_ivb_hb(rows_for_split, off_family)
+            ivb_key = f"{base_prefix}{abbr}ivbSEP"
+            hb_key = f"{base_prefix}{abbr}hbSEP"
+            tot_key = f"{base_prefix}{abbr}totSEP"
+            if base_ivb is None or base_hb is None or off_ivb is None or off_hb is None:
+                out[ivb_key] = "-"
+                out[hb_key] = "-"
+                out[tot_key] = "-"
+                continue
+            ivb_diff = base_ivb - off_ivb
+            hb_diff = base_hb - off_hb
+            # Un-mirror back to natural hand-space when every contributing
+            # pitch (base AND off-speed) came from the same hand -- mirroring
+            # is only needed to pool across hands correctly in this split
+            # row, it shouldn't flip the displayed sign for an
+            # already-single-hand row (e.g. a Pitcher-split row, or a Team
+            # split where the whole roster happens to throw one way). The
+            # mirror convention passes Left through unchanged and negates
+            # Right (see hb_adj_sum), so Left is already the natural
+            # reference space -- only an all-RIGHT row needs un-flipping.
+            all_right = base_left_n == 0 and off_left_n == 0 and base_right_n > 0 and off_right_n > 0
+            if all_right:
+                hb_diff = -hb_diff
+            out[ivb_key] = round(ivb_diff, 1)
+            out[hb_key] = round(hb_diff, 1)
+            out[tot_key] = round(((ivb_diff ** 2) + (hb_diff ** 2)) ** 0.5, 1)
+    return out
+
+
 ALL_TABLE_COLUMNS: List[str] = [
     "#",
     "Usage",
@@ -3338,6 +3503,7 @@ ALL_TABLE_COLUMNS: List[str] = [
     "EdgeSwings",
     "PosSD",
     "GoZoneSw",
+    *SEP_STAT_COLUMNS,
 ]
 
 
@@ -4994,6 +5160,7 @@ def _build_dynamic_table(
             "ISO": iso,
             "xISO": xiso,
             "BABIP": babip,
+            **_sep_stat_columns_for_raw_group(grp),
         }
         if _is_num(row_out.get("Stuff+")) and row_out.get("QP+"):
             try:
@@ -10388,6 +10555,8 @@ def _try_pitching_overview_daily_rollup(
                   SUM(hb_sum)::double precision AS hb_sum,
                   SUM(CASE WHEN pitcherthrows_norm = 'Left' THEN hb_sum ELSE -hb_sum END)::double precision AS hb_adj_sum,
                   SUM(hb_n)::int AS hb_n,
+                  SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Left')::int AS left_n,
+                  SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Right')::int AS right_n,
                   SUM(in_zone_n)::int AS in_zone_n,
                   SUM(loc_n)::int AS loc_n,
                   SUM(strike_n)::int AS strike_n,
@@ -11025,6 +11194,7 @@ def _try_pitching_overview_daily_rollup(
             "xFIP": round(x_fip_val, 2) if _is_num(x_fip_val) else None,
             "SIERA": siera_val,
             "WHIP": round((bb_n + hits_n) / ip_num, 2) if ip_num > 0 else None,
+            **_sep_stat_columns_for_split(rows_for_split),
         }
 
     for split_value, rows_for_split in split_items:
@@ -12710,6 +12880,7 @@ def _try_pro_pitching_overview_rollup(
         "ISO",
         "xISO",
         "BABIP",
+        *SEP_STAT_COLUMNS,
     }
     if mode_clean == "Custom":
         if not normalized_custom_columns:
@@ -12991,7 +13162,10 @@ def _try_pro_pitching_overview_rollup(
                   SUM(ivb_sum)::double precision AS ivb_sum,
                   SUM(ivb_n)::int AS ivb_n,
                   SUM(hb_sum)::double precision AS hb_sum,
+                  SUM(CASE WHEN pitcherthrows_norm = 'Left' THEN hb_sum ELSE -hb_sum END)::double precision AS hb_adj_sum,
                   SUM(hb_n)::int AS hb_n,
+                  SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Left')::int AS left_n,
+                  SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Right')::int AS right_n,
                   SUM(in_zone_n)::int AS in_zone_n,
                   SUM(loc_n)::int AS loc_n,
                   SUM(strike_n)::int AS strike_n,
@@ -13745,6 +13919,7 @@ def _try_pro_pitching_overview_rollup(
             "FIP": round(fip_val, 2) if _is_num(fip_val) else None,
             "xFIP": round(x_fip_val, 2) if _is_num(x_fip_val) else None,
             "SIERA": siera_val,
+            **_sep_stat_columns_for_split(rows_for_split),
         }
 
     for split_value, rows_for_split in split_items:
