@@ -46,7 +46,7 @@ export function loadRosterVectorsFromConfig(schoolCode: string): { allowedPitche
       allowedHitters: extractRVector(text, 'allowed_hitters'),
     };
     if (upper === 'PCU') {
-      const additions = ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke', 'Hicks, Jackson'];
+      const additions = ['Heather, Connor', 'Carr, Jordan', 'King, Stan', 'Jones, Grady', 'Birt, Henry', 'Clark, Hunter', 'Luna, Cael', 'Rodriguez, Diego', 'Jensen, Tyler', 'Liguori, Luke', 'Hicks, Jackson', 'O’Brasky, Jack'];
       const pitcherAdditions = [...additions, 'Masi, Jack', 'Jacobs, Brody', 'Stevenson, Townsend', 'Bates, Tyler'];
       return {
         allowedPitchers: uniqueNames([...base.allowedPitchers, ...pitcherAdditions]),
