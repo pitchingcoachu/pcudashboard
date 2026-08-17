@@ -3373,6 +3373,97 @@ def _sep_stat_columns_for_split(rows_for_split: List[Dict[str, Any]]) -> Dict[st
     return out
 
 
+def _requested_sep_columns(selected_custom_columns: Optional[List[str]]) -> List[str]:
+    if not selected_custom_columns:
+        return []
+    requested = set(SEP_STAT_COLUMNS)
+    return [c for c in selected_custom_columns if c in requested]
+
+
+def _sep_overrides_by_pitcher(
+    *,
+    rollup_table: str,
+    school_code_where: str,
+    school_code_params: Dict[str, Any],
+    start_date: Optional[date],
+    end_date: Optional[date],
+    hand: Optional[str],
+    batter_side: Optional[str],
+    pitcher_column: str,
+    pitcher_names: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Per-pitcher SEP stats computed WITHOUT the pitch_types filter applied.
+
+    The normal SEP computation reads whatever pitch-level rows already made
+    it into a response row -- correct for every OTHER column (K%, Whiff%,
+    etc., which SHOULD reflect an active "Pitch Type" filter), but wrong for
+    SEP: if the leaderboard is filtered to `pitch_types=ChangeUp` (e.g. "only
+    show pitchers who've thrown enough changeups"), that filter also strips
+    every OTHER pitch type out of the underlying data, so there's no
+    fastball/sinker data left for the SEP base -- every SEP stat comes back
+    "-" even for a pitcher who obviously throws both. This queries the same
+    rollup table with the same date/hand/batter_side scoping but WITHOUT the
+    pitch_types clause, grouped by pitcher + pitch_type, so SEP has each
+    pitcher's real full-arsenal data to work with regardless of what pitch
+    type the rest of the table is filtered to. Callers overlay this onto
+    already-built rows -- it never affects row inclusion or any non-SEP
+    column, only the SEP columns themselves.
+
+    Returns {pitcher_key: {sep_column_name: value_or_dash}}, keyed by
+    whatever `pitcher_column` identifies a pitcher in `rollup_table` (e.g.
+    "pitcher_name" for PRO, "pitcher_name" for LEAGUE too).
+
+    pitcher_names scopes the query to just the pitchers already in the
+    response (required, not optional -- an unscoped scan of a full-league
+    rollup table grouped by pitcher+pitch_type is a real, measured multi-
+    minute query, not just "slower than ideal")."""
+    if not pitcher_names:
+        return {}
+    where = [school_code_where, f"{pitcher_column} = ANY(%(pitcher_names)s::text[])"]
+    params: Dict[str, Any] = dict(school_code_params)
+    params["pitcher_names"] = pitcher_names
+    params["start_date"] = start_date
+    params["end_date"] = end_date
+    where.append("(%(start_date)s::date IS NULL OR session_date >= %(start_date)s::date)")
+    where.append("(%(end_date)s::date IS NULL OR session_date <= %(end_date)s::date)")
+    hand_norm = _norm_hand(hand) if hand else ""
+    if hand_norm in ("Left", "Right"):
+        params["hand"] = hand_norm
+        where.append("pitcherthrows_norm = %(hand)s")
+    batter_side_norm = _norm_hand(batter_side) if batter_side else ""
+    if batter_side_norm in ("Left", "Right"):
+        params["batter_side"] = batter_side_norm
+        where.append("batterside_norm = %(batter_side)s")
+    where_sql = " AND ".join(where)
+    sql = f"""
+        SELECT
+          {pitcher_column} AS pitcher_key,
+          pitch_type,
+          SUM(ivb_sum)::double precision AS ivb_sum,
+          SUM(ivb_n)::int AS ivb_n,
+          SUM(CASE WHEN pitcherthrows_norm = 'Left' THEN hb_sum ELSE -hb_sum END)::double precision AS hb_adj_sum,
+          SUM(hb_n)::int AS hb_n,
+          SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Left')::int AS left_n,
+          SUM(pitches) FILTER (WHERE pitcherthrows_norm = 'Right')::int AS right_n
+        FROM {rollup_table}
+        WHERE {where_sql}
+        GROUP BY {pitcher_column}, pitch_type
+    """
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            raw_rows = [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return {}
+    by_pitcher: Dict[str, List[Dict[str, Any]]] = {}
+    for r in raw_rows:
+        key = str(r.get("pitcher_key") or "").strip()
+        if not key:
+            continue
+        by_pitcher.setdefault(key, []).append(r)
+    return {key: _sep_stat_columns_for_split(rows) for key, rows in by_pitcher.items()}
+
+
 ALL_TABLE_COLUMNS: List[str] = [
     "#",
     "Usage",
@@ -11225,6 +11316,39 @@ def _try_pitching_overview_daily_rollup(
         parsed_ip_max,
     )
 
+    # SEP stats (fbCHivbSEP etc.) computed above are wrong when a
+    # pitch_types filter is active -- see _sep_overrides_by_pitcher's
+    # docstring. Only kicks in when both conditions hold, so a normal
+    # (unfiltered) request never pays for the extra query.
+    _requested_sep = _requested_sep_columns(selected_custom_columns) if split_clean == "Pitcher" else []
+    if _requested_sep and selected_pitch_types:
+        _sep_pitcher_names = list({str(r.get("Pitcher") or "").strip() for r in table_rows if str(r.get("Pitcher") or "").strip()})
+        _sep_level = _college_level_norm(college_level_filter)
+        _sep_where_parts = [school_rollup_scope_sql]
+        if school_code == "LEAGUE":
+            _sep_where_parts.append(LEAGUE_ROLLUP_TEAM_EXCLUSION_SQL)
+        if _sep_level != "All":
+            _sep_where_parts.append("level_bucket = %(sep_level)s")
+        _sep_overrides = _sep_overrides_by_pitcher(
+            rollup_table="public.pitch_events_daily_rollup_league",
+            school_code_where=" AND ".join(_sep_where_parts),
+            school_code_params={"school_code": school_code, **({"sep_level": _sep_level} if _sep_level != "All" else {})},
+            start_date=start_date,
+            end_date=end_date,
+            hand=hand,
+            batter_side=batter_side,
+            pitcher_column="pitcher_name",
+            pitcher_names=_sep_pitcher_names,
+        )
+        for out_row in table_rows:
+            pitcher_key = str(out_row.get("Pitcher") or "").strip()
+            override = _sep_overrides.get(pitcher_key)
+            if not override:
+                continue
+            for col in _requested_sep:
+                if col in override:
+                    out_row[col] = override[col]
+
     chart_points: List[Dict[str, Any]] = []
     heatmap_points: List[Dict[str, Any]] = []
     if include_chart_points:
@@ -13936,6 +14060,39 @@ def _try_pro_pitching_overview_rollup(
         parsed_ip_min,
         parsed_ip_max,
     )
+
+    # SEP stats (fbCHivbSEP etc.) computed above are wrong when a
+    # pitch_types filter is active -- see _sep_overrides_by_pitcher's
+    # docstring. Only kicks in when both conditions hold, so a normal
+    # (unfiltered) request never pays for the extra query.
+    _requested_sep = _requested_sep_columns(selected_custom_columns) if split_clean == "Pitcher" else []
+    if _requested_sep and selected_pitch_types:
+        _sep_pitcher_names = list({str(r.get("Pitcher") or "").strip() for r in table_rows if str(r.get("Pitcher") or "").strip()})
+        _sep_overrides = _sep_overrides_by_pitcher(
+            rollup_table="public.pro_pitch_events_daily_rollup",
+            school_code_where=(
+                "school_code = 'PRO'"
+                + (" AND level_bucket = %(sep_level)s" if _pro_level_norm(level_filter) != "All" else "")
+            ),
+            school_code_params=(
+                {"sep_level": _pro_level_norm(level_filter)} if _pro_level_norm(level_filter) != "All" else {}
+            ),
+            start_date=start_date,
+            end_date=end_date,
+            hand=hand,
+            batter_side=batter_side,
+            pitcher_column="pitcher_name",
+            pitcher_names=_sep_pitcher_names,
+        )
+        for out_row in table_rows:
+            pitcher_key = str(out_row.get("Pitcher") or "").strip()
+            override = _sep_overrides.get(pitcher_key)
+            if not override:
+                continue
+            for col in _requested_sep:
+                if col in override:
+                    out_row[col] = override[col]
+
     def _pct_to_float(value: Any) -> Optional[float]:
         if value is None:
             return None
@@ -18815,6 +18972,38 @@ def _pro_pitching_overview(
         avg_stuff_by_pitch_type,
         selected_custom_columns,
     )
+
+    # SEP stats (fbCHivbSEP etc.) computed from `rows` above are wrong when
+    # a pitch_types filter is active -- see _sep_overrides_by_pitcher's
+    # docstring. Only kicks in when both conditions hold, so a normal
+    # (unfiltered) request never pays for the extra query.
+    _requested_sep = _requested_sep_columns(selected_custom_columns) if split_by == "Pitcher" else []
+    if _requested_sep and selected_pitch_types:
+        _sep_pitcher_names = list({str(r.get("Pitcher") or "").strip() for r in table_rows if str(r.get("Pitcher") or "").strip()})
+        _sep_overrides = _sep_overrides_by_pitcher(
+            rollup_table="public.pro_pitch_events_daily_rollup",
+            school_code_where=(
+                "school_code = 'PRO'"
+                + (" AND level_bucket = %(sep_level)s" if _pro_level_norm(level_filter) != "All" else "")
+            ),
+            school_code_params=(
+                {"sep_level": _pro_level_norm(level_filter)} if _pro_level_norm(level_filter) != "All" else {}
+            ),
+            start_date=start_date,
+            end_date=end_date,
+            hand=hand,
+            batter_side=batter_side,
+            pitcher_column="pitcher_name",
+            pitcher_names=_sep_pitcher_names,
+        )
+        for out_row in table_rows:
+            pitcher_key = str(out_row.get("Pitcher") or "").strip()
+            override = _sep_overrides.get(pitcher_key)
+            if not override:
+                continue
+            for col in _requested_sep:
+                if col in override:
+                    out_row[col] = override[col]
 
     # PRO-specific table metric rules from user:
     # BF: count 0-0 rows, except consecutive 0-0 where previous row has blank events.
