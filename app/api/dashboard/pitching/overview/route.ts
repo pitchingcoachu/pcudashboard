@@ -226,12 +226,12 @@ function hasValue(value: string): boolean {
 }
 
 function normalizeBallTypesParam(value: string): string {
+  // Baseball is a real filter value. Only "All" should clear this filter.
   const selected = String(value ?? '')
     .split(/[;,]/)
     .map((part) => part.trim())
     .filter(Boolean)
     .filter((part) => part.toLowerCase() !== 'all');
-  if (selected.length === 1 && selected[0].toLowerCase() === 'baseball') return '';
   return selected.join(';');
 }
 

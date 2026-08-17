@@ -1251,8 +1251,8 @@ function toParamValue(values: string[]): string {
 }
 
 function toBallTypesParamValue(values: string[]): string {
+  // Baseball is a real filter value. Only "All" should clear this filter.
   const selected = values.filter((value) => value !== 'All');
-  if (selected.length === 1 && selected[0] === 'Baseball') return '';
   return selected.join(';');
 }
 
