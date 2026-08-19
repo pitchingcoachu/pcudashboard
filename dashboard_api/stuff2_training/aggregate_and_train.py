@@ -63,6 +63,52 @@ MIN_PITCHES_BY_TYPE = {
 }
 MIN_PITCHERS_TO_TRAIN = 100
 
+# How many Stuff+ points one standard deviation of predicted whiff-rate
+# spread is worth -- see the long comment at its point of use in main()
+# below for why 12 (the original value) was too gentle in practice.
+POINTS_PER_SD = 30.0
+
+# MLB-only: pro_pitch_events has no position/role column, so a position
+# player's mop-up-duty "pitching" appearance (e.g. a shortstop lobbing a
+# 60mph fastball in a blowout) is indistinguishable from a real pitcher's
+# row by any single column except velocity. Verified against the actual
+# training data: real MLB pitchers' own average Fastball/Sinker velocity
+# never drops below ~85mph (softest legitimate arms -- Kyle Hendricks
+# 86.5, Alek Jacob 85.2 -- start right there), while every pitcher below
+# that is a recognizable position player (Gary Sanchez, Jose Trevino,
+# Austin Hedges, etc.), with a clean ~2.5mph gap separating the two
+# groups. Scoped to a pitcher's OWN Fastball-or-Sinker velocity (not a
+# blanket per-pitch-type cutoff) so a legitimate extreme-low-velo
+# specialist who doesn't throw a fastball/sinker in that range at all
+# (e.g. submarine sinkerballer Tyler Rogers, whose actual Sinker sits at
+# 83.4mph but who has only 1 tracked Fastball pitch -- never reaches the
+# 20-pitch minimum to even form a Fastball row) is judged by his real
+# pitch, not misclassified by a pitch type he barely throws.
+MLB_REAL_PITCHER_VELO_FLOOR = 84.0
+
+
+def _mlb_real_pitchers(data_dir: str) -> set[str]:
+    """(pitcher, level) pairs -- keyed as f"{pitcher}||{level}" -- whose own
+    average Fastball or Sinker velocity at that level clears
+    MLB_REAL_PITCHER_VELO_FLOOR. Only MLB rows are checked (this is an
+    MLB-specific data quality issue); every non-MLB (pitcher, level) pair
+    is always considered real, since college/LEAGUE data doesn't have this
+    position-player-appearance problem."""
+    real: set[str] = set()
+    for fname in ("fastball.parquet", "sinker.parquet"):
+        path = os.path.join(data_dir, fname)
+        if not os.path.exists(path):
+            continue
+        df = pd.read_parquet(path, columns=["pitcher", "level", "relspeed"])
+        mlb = df[df["level"] == "MLB"]
+        if mlb.empty:
+            continue
+        avg_velo = mlb.groupby("pitcher")["relspeed"].mean()
+        for pitcher, velo in avg_velo.items():
+            if velo >= MLB_REAL_PITCHER_VELO_FLOOR:
+                real.add(f"{pitcher}||MLB")
+    return real
+
 _LEAGUE_SWING_CALLS = {"StrikeSwinging", "FoulBallNotFieldable", "FoulBallFieldable", "InPlay"}
 _LEAGUE_WHIFF_CALLS = {"StrikeSwinging"}
 _PRO_SWING_CALLS = {
@@ -87,12 +133,20 @@ def _feature_columns(pitch_type: str) -> list[str]:
     return cols
 
 
-def _aggregate(df: pd.DataFrame, pitch_type: str) -> pd.DataFrame:
+def _aggregate(df: pd.DataFrame, pitch_type: str, mlb_real_pitchers: set[str]) -> pd.DataFrame:
     swing_calls = _LEAGUE_SWING_CALLS | _PRO_SWING_CALLS
     whiff_calls = _LEAGUE_WHIFF_CALLS | _PRO_WHIFF_CALLS
     df = df.copy()
     df["is_swing"] = df["pitchcall"].isin(swing_calls)
     df["is_whiff"] = df["pitchcall"].isin(whiff_calls)
+
+    # Drop MLB position-player mop-up appearances (see MLB_REAL_PITCHER_VELO_FLOOR
+    # above) before aggregating -- across ALL pitch types, not just Fastball/Sinker,
+    # since a position player's slider/curveball rows are just as unrepresentative
+    # of real MLB pitch quality as their fastball rows.
+    is_mlb = df["level"] == "MLB"
+    is_real_pitcher = (df["pitcher"] + "||" + df["level"]).isin(mlb_real_pitchers)
+    df = df[~is_mlb | is_real_pitcher]
 
     feature_cols = _feature_columns(pitch_type)
     min_pitches = MIN_PITCHES_BY_TYPE[pitch_type]
@@ -204,13 +258,13 @@ def _prep_frame(df: pd.DataFrame, pitch_type: str) -> tuple[pd.DataFrame, list[s
     return df, all_cols
 
 
-def _train_one(pitch_type: str) -> TrainResult | None:
+def _train_one(pitch_type: str, mlb_real_pitchers: set[str]) -> TrainResult | None:
     path = os.path.join(DATA_DIR, f"{pitch_type.lower()}.parquet")
     if not os.path.exists(path):
         print(f"[agg] {pitch_type}: no data file, skipping")
         return None
     raw = pd.read_parquet(path)
-    agg = _aggregate(raw, pitch_type)
+    agg = _aggregate(raw, pitch_type, mlb_real_pitchers)
     n_pitchers = agg["pitcher"].nunique()
     print(f"[agg] {pitch_type}: {len(agg)} aggregate rows from {n_pitchers} distinct pitchers")
     if n_pitchers < MIN_PITCHERS_TO_TRAIN:
@@ -281,9 +335,12 @@ def _train_one(pitch_type: str) -> TrainResult | None:
 
 
 def main() -> int:
+    mlb_real_pitchers = _mlb_real_pitchers(DATA_DIR)
+    print(f"[agg] MLB real-pitcher filter: {len(mlb_real_pitchers)} (pitcher, level) rows kept")
+
     results: list[TrainResult] = []
     for pitch_type in PITCH_TYPES:
-        result = _train_one(pitch_type)
+        result = _train_one(pitch_type, mlb_real_pitchers)
         if result is not None:
             results.append(result)
 
@@ -302,15 +359,29 @@ def main() -> int:
                 "avg_pred": avg,
                 "n": r.level_n.get(lvl, 0),
                 "shift": -avg,
-                # 12 points per 1 SD of whiff-rate spread at this level --
-                # (pred + shift) is in raw whiff-rate units (e.g. 0.10), so
-                # this must be 12 / target_std, NOT 0.12 / target_std, or
-                # the scale ends up ~100x too small and Stuff+ 2.0 barely
-                # moves off 100 regardless of how good/bad the pitch is
-                # (caught via a smoke test: an elite 98mph/19"IVB fastball
-                # and a well-below-average 88mph/8"IVB fastball both scored
-                # ~100.0 with the bug in place).
-                "scale": (12.0 / max(r.target_std, 1e-6)) if r.target_std > 0 else 1.0,
+                # POINTS_PER_SD points per 1 SD of whiff-rate spread at this
+                # level -- (pred + shift) is in raw whiff-rate units (e.g.
+                # 0.10), so this must be POINTS_PER_SD / target_std, NOT
+                # (POINTS_PER_SD/100) / target_std, or the scale ends up
+                # ~100x too small and Stuff+ 2.0 barely moves off 100
+                # regardless of how good/bad the pitch is (caught via a
+                # smoke test: an elite 98mph/19"IVB fastball and a
+                # well-below-average 88mph/8"IVB fastball both scored ~100.0
+                # with the bug in place). 12 (the original value) turned out
+                # to still be too gentle in practice -- verified against a
+                # real complaint: an 85mph MLB fastball (a genuinely poor
+                # velocity for that level; real MLB average is ~94.5mph)
+                # scored 96.4, barely below "average," at 12 pts/SD. Model
+                # RMSE (~0.097) is nearly as large as target_std (~0.102) for
+                # Fastball -- i.e. real predictive signal from pitch-shape
+                # alone is modest (whiff rate is also driven by sequencing,
+                # deception, command -- not measurable here) -- but the
+                # calibration was compressing what signal DOES exist too
+                # tightly around 100. 30 pts/SD spreads the same underlying
+                # predictions out to a more legible range (that same 85mph
+                # fastball -> ~91, a 100mph fastball -> ~112) without
+                # retraining or changing what the model has actually learned.
+                "scale": (POINTS_PER_SD / max(r.target_std, 1e-6)) if r.target_std > 0 else 1.0,
             }
         calibration["per_pitch_type"][r.pitch_type] = {
             "n_rows": r.n_rows,
