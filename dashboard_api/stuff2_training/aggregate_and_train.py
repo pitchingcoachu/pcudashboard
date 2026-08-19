@@ -243,6 +243,7 @@ class TrainResult:
     target_std: float
     corr: float
     level_avg_pred: dict
+    level_pred_std: dict
     level_n: dict
 
 
@@ -311,13 +312,28 @@ def _train_one(pitch_type: str, mlb_real_pitchers: set[str]) -> TrainResult | No
     print(f"[train] {pitch_type}: n_valid={len(y_valid)} RMSE={rmse:.4f} target_std={target_std:.4f} corr(pred,actual)={corr:.4f}")
 
     level_avg_pred: dict[str, float] = {}
+    level_pred_std: dict[str, float] = {}
     level_n: dict[str, int] = {}
     for level in LEVELS:
         level_rows = df[(df["level"] == level) & (df["batterside_norm"] == "")]
         if len(level_rows) < 20:
             continue
-        medians = level_rows[feature_cols].median()
-        level_avg_pred[level] = float(model.predict(pd.DataFrame([medians]))[0])
+        # Predict on every REAL aggregate row for this level and average
+        # the predictions -- NOT predict once on a single synthetic row
+        # built from each feature's median independently. The latter (the
+        # original approach here) silently assumes the median of every
+        # feature co-occurs in one real pitcher, which doesn't generally
+        # hold when features are correlated -- verified directly: for
+        # Fastball/MLB the median-row prediction was 0.194 vs. the true
+        # mean-of-real-rows prediction of 0.214, a ~10% relative gap (see
+        # command_training/aggregate_and_train.py for a case, same root
+        # bug, where this produced a much larger and more visible error).
+        preds = model.predict(level_rows[feature_cols].astype(float))
+        level_avg_pred[level] = float(preds.mean())
+        # Also capture the model's OWN prediction spread at this level (not
+        # just its mean) -- see main()'s calibration-scale comment for why
+        # this replaces target_std as the scale denominator.
+        level_pred_std[level] = float(preds.std())
         level_n[level] = int(len(level_rows))
 
     model.save_model(os.path.join(MODEL_DIR, f"{pitch_type.lower()}.json"))
@@ -330,6 +346,7 @@ def _train_one(pitch_type: str, mlb_real_pitchers: set[str]) -> TrainResult | No
         target_std=target_std,
         corr=corr,
         level_avg_pred=level_avg_pred,
+        level_pred_std=level_pred_std,
         level_n=level_n,
     )
 
@@ -355,33 +372,32 @@ def main() -> int:
     for r in results:
         level_calibration = {}
         for lvl, avg in r.level_avg_pred.items():
+            pred_std = r.level_pred_std.get(lvl, 0.0)
+            # Scale denominator is the GEOMETRIC MEAN of pred_std (the
+            # model's own prediction spread) and target_std (the raw
+            # target's spread) -- not either alone. Dividing by target_std
+            # (the original approach) silently compressed the visible
+            # score spread: most of target_std is real per-pitcher noise
+            # the model correctly does NOT predict (corr~0.33 for
+            # Fastball), so "30 points per SD" was only worth ~11-12
+            # points per SD of what the model actually outputs. But
+            # dividing by pred_std alone (tried first) overcorrected --
+            # verified directly: real MLB pitchers ranged from 37.7 to
+            # 229.9, far wider than any public Stuff+-style model shows,
+            # because pred_std is the spread across already-averaged
+            # PITCHER rows, and applying that raw scale to noisier
+            # individual real-pitcher estimates blows up small-sample
+            # variance along with genuine signal. The geometric mean is a
+            # standard, principled middle ground between "trust the
+            # model's full achievable spread" and "trust the raw
+            # (noise-inflated) target spread," landing the calibration
+            # between the two failure modes observed on either side.
+            std_for_scale = (pred_std * r.target_std) ** 0.5 if pred_std > 0 and r.target_std > 0 else max(pred_std, r.target_std, 1e-6)
             level_calibration[lvl] = {
                 "avg_pred": avg,
                 "n": r.level_n.get(lvl, 0),
                 "shift": -avg,
-                # POINTS_PER_SD points per 1 SD of whiff-rate spread at this
-                # level -- (pred + shift) is in raw whiff-rate units (e.g.
-                # 0.10), so this must be POINTS_PER_SD / target_std, NOT
-                # (POINTS_PER_SD/100) / target_std, or the scale ends up
-                # ~100x too small and Stuff+ 2.0 barely moves off 100
-                # regardless of how good/bad the pitch is (caught via a
-                # smoke test: an elite 98mph/19"IVB fastball and a
-                # well-below-average 88mph/8"IVB fastball both scored ~100.0
-                # with the bug in place). 12 (the original value) turned out
-                # to still be too gentle in practice -- verified against a
-                # real complaint: an 85mph MLB fastball (a genuinely poor
-                # velocity for that level; real MLB average is ~94.5mph)
-                # scored 96.4, barely below "average," at 12 pts/SD. Model
-                # RMSE (~0.097) is nearly as large as target_std (~0.102) for
-                # Fastball -- i.e. real predictive signal from pitch-shape
-                # alone is modest (whiff rate is also driven by sequencing,
-                # deception, command -- not measurable here) -- but the
-                # calibration was compressing what signal DOES exist too
-                # tightly around 100. 30 pts/SD spreads the same underlying
-                # predictions out to a more legible range (that same 85mph
-                # fastball -> ~91, a 100mph fastball -> ~112) without
-                # retraining or changing what the model has actually learned.
-                "scale": (POINTS_PER_SD / max(r.target_std, 1e-6)) if r.target_std > 0 else 1.0,
+                "scale": (POINTS_PER_SD / max(std_for_scale, 1e-6)),
             }
         calibration["per_pitch_type"][r.pitch_type] = {
             "n_rows": r.n_rows,

@@ -9592,7 +9592,22 @@ export default function PitchingSuite({
   };
 
   const runActionVideoExport = async () => {
-    const scopedPitches = actionExportScope === 'all' ? actionPitches : currentActionPitch ? [currentActionPitch] : [];
+    // actionPitches inherits whatever order populated the modal (e.g. the
+    // Pitch Log's newest-first display order) -- a full-session export
+    // should always play back chronologically regardless of that, so
+    // re-sort ascending by date -> game -> in-game pitch number -> event id
+    // (the exact inverse of the Pitch Log's own newest-first comparator)
+    // right before building the export request.
+    const chronologicalPitches = [...actionPitches].sort((a, b) => {
+      const dateCmp = String(a.session_date ?? '').localeCompare(String(b.session_date ?? ''));
+      if (dateCmp !== 0) return dateCmp;
+      const gameCmp = String(a.game_uid ?? a.game_id ?? '').localeCompare(String(b.game_uid ?? b.game_id ?? ''));
+      if (gameCmp !== 0) return gameCmp;
+      const noCmp = (Number(a.pitch_number ?? a.pitch_no ?? a.pitch_event_id ?? 0) || 0) - (Number(b.pitch_number ?? b.pitch_no ?? b.pitch_event_id ?? 0) || 0);
+      if (noCmp !== 0) return noCmp;
+      return (Number(a.pitch_event_id ?? 0) || 0) - (Number(b.pitch_event_id ?? 0) || 0);
+    });
+    const scopedPitches = actionExportScope === 'all' ? chronologicalPitches : currentActionPitch ? [currentActionPitch] : [];
     const pitchEventIds = Array.from(
       new Set(
         scopedPitches
